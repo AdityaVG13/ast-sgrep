@@ -1,7 +1,12 @@
 pub(crate) mod sql;
+mod read;
+mod rows;
+mod schema;
 mod sqlite;
+mod upsert;
 
-pub use sqlite::{CallerRow, ImportRow, IndexStore, SymbolRow};
+pub use rows::{CallerRow, ImportRow, SymbolRow};
+pub use sqlite::IndexStore;
 
 use std::path::Path;
 
