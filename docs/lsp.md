@@ -1,6 +1,6 @@
 # asgrep-lsp — Language Server
 
-Phase 6 full LSP implementation for ast-sgrep.
+Full LSP implementation for ast-sgrep.
 
 ## Install
 
@@ -25,19 +25,21 @@ cargo install ast-sgrep-lsp
 |------------|-------------------|
 | `workspace/symbol` | Hybrid search across workspace |
 | `textDocument/documentSymbol` | AST symbol index per file |
-| `textDocument/definition` | `defs:` query at cursor |
+| `textDocument/definition` | `defs:` query at cursor (UTF-16 aware) |
 | `textDocument/references` | `callers:` + defs at cursor |
 | `callHierarchy/prepareCallHierarchy` | Symbol at cursor |
 | `callHierarchy/incomingCalls` | Caller graph (who calls this) |
 | `callHierarchy/outgoingCalls` | Callee graph (what this calls) |
 | `workspace/executeCommand` | `asgrep.search`, `asgrep.reindex`, `asgrep.callers`, `asgrep.defs` |
-| `textDocument/didSave` | Incremental single-file reindex |
+| `textDocument/didSave` | Incremental single-file reindex from disk |
+| `textDocument/didChange` | Index unsaved buffer content (full-sync) |
 
 ## Protocol
 
 - JSON-RPC 2.0 over stdio
-- **Content-Length** framing (spec-compliant)
-- Index built on `initialize`, updated on save
+- **Content-Length** framing (50 MB max message size)
+- **Non-blocking** `initialize`: workspace index runs on a background thread
+- Index updated on save and on full-buffer `didChange` events
 
 ## Execute commands
 

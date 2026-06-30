@@ -1,6 +1,6 @@
 # ast-sgrep
 
-**Polyglot hybrid code search** — find intent across Rust, TypeScript, JavaScript, Python, and Go with lexical search, AST symbol graphs, and optional semantic embeddings.
+**Polyglot hybrid code search** — find intent across **8 languages** (Rust, TypeScript, JavaScript, Python, Go, Java, C#, Ruby) with lexical search, AST symbol graphs, and optional semantic embeddings.
 
 ```bash
 cargo install ast-sgrep-cli
@@ -28,7 +28,8 @@ Code search tools solve different problems. **ast-sgrep takes a different approa
 | **Import tracking** | Yes (`imports:serde`) | No | No |
 | **Structural patterns** | Yes (`pattern:fn $NAME($$$)`) — delegates to ast-grep | Native | No |
 | **Semantic similarity** | Optional (`--embed`, `--cloud-embed`) | No | No |
-| **Polyglot (Rust/TS/Py/Go)** | Yes, unified index | Yes | Yes (text only) |
+| **Polyglot (8 languages)** | Yes, unified index | Yes | Yes (text only) |
+| **CI / API JSON plugins** | GitHub & GitLab (`--format`) | No | No |
 | **LSP integration** | `asgrep-lsp` (symbols, defs, refs, call hierarchy) | Separate ecosystem | No |
 | **JSON output for agents** | Yes (`--json`) | Yes | Yes (`--json`) |
 | **Typical latency** | ~0.3 ms/search (indexed) | Pattern-dependent | ~ms–s per scan |
@@ -127,7 +128,7 @@ Measured on the polyglot sample fixture (5 files, 25 symbols, 26 caller edges) w
 | Index 5 files | **0.19 ms** | — |
 | Avg hybrid search (`process_request`, 100 iter) | **0.29 ms** | < 20 ms |
 | False-positive caller rate (regression suite) | **0%** | 0% |
-| Test suite | **52 tests** | all passing |
+| Test suite | **62 tests** | all passing |
 
 ```bash
 asgrep bench . --iterations 100
@@ -179,6 +180,10 @@ asgrep --tantivy index .
 # JSON for agents / automation
 asgrep --json --limit 32 "process_request"
 
+# GitHub / GitLab code-search shaped JSON
+asgrep --json --format github "auth refresh"
+asgrep --json --format gitlab "process_request"
+
 # Index management
 asgrep status .
 asgrep reindex .          # force full re-parse (bypasses hash skip)
@@ -206,6 +211,7 @@ asgrep bench .
 | `--root` | Project root (default: `.`) |
 | `--limit` | Max results (default: 16, env: `ASGREP_LIMIT`) |
 | `--json` | JSON output |
+| `--format` | JSON shape: `native`, `github`, `gitlab` |
 | `--index-path` | Custom index DB path (`ASGREP_INDEX_PATH`) |
 | `--lang` | Filter by language (`rust`, `typescript`, `javascript`, `python`, `go`) |
 | `--embed` | Enable embeddings at index + search time (`ASGREP_EMBED=1`) |
@@ -286,6 +292,7 @@ ast-sgrep/
 ├── crates/ast-sgrep-cli/     # asgrep / ast-sgrep binaries
 ├── crates/ast-sgrep-lang/    # tree-sitter parsers (Rust, TS, JS, Python, Go)
 ├── crates/ast-sgrep-embed/   # Local + cloud embedding plugins
+├── crates/ast-sgrep-plugins/ # GitHub / GitLab JSON output adapters
 ├── crates/ast-sgrep-lsp/     # LSP server (asgrep-lsp)
 ├── tests/fixtures/           # Polyglot sample + regression fixtures
 └── docs/                     # LSP, publishing, architecture notes
@@ -319,6 +326,7 @@ let mut indexer = Indexer::new(IndexOptions {
     respect_gitignore: true,
     use_tantivy: false,
     embed_lines: false,
+    embed_backend: ast_sgrep_core::EmbedBackend::Local,
     force_reindex: false,
 })?;
 indexer.index_all()?;

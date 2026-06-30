@@ -18,8 +18,8 @@ Phase 6: Content-Length JSON-RPC, cursor-aware symbol resolution, incremental re
 
 ## Deliverables
 
-- **Polyglot:** Rust, TS/JS, Python, Go
-- **Search:** keyword/NL, RRF lexical fusion, hybrid rank (lexical + defs + callers + graph + anchor)
+- **Polyglot:** Rust, TS/JS, Python, Go, Java, C#, Ruby (8 languages)
+- **Search:** keyword/NL, RRF lexical fusion, SQL-bounded hybrid rank
 - **Queries:** `callers:`, `defs:`, `imports:`, `pattern:`
 - **Embeddings:** local (`--embed`) + cloud (`--cloud-embed`, OpenAI-compatible API)
 - **Scale:** lexical sidecar at `.asgrep/lexical.db` (`--tantivy`, auto at 1000+ files)
@@ -27,7 +27,8 @@ Phase 6: Content-Length JSON-RPC, cursor-aware symbol resolution, incremental re
 - **Output:** line + JSON
 - **CLI:** `index`, `status`, `reindex`, `bench`
 - **LSP:** full `asgrep-lsp` — see [docs/lsp.md](docs/lsp.md)
-- **Tests:** 52 unit/integration/e2e tests (incl. CLI subprocess + 6 LSP tests) + false-positive regression suite
+- **Tests:** 62 unit/integration/e2e tests + false-positive regression suite
+- **Plugins:** `ast-sgrep-plugins` — GitHub/GitLab JSON (`--format`)
 - **Publish:** crates.io metadata + `scripts/publish.sh` (no CI — publish manually)
 
 ## CLI
