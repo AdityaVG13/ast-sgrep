@@ -97,6 +97,14 @@ impl IndexStore {
                 line_no UNINDEXED,
                 tokenize = 'porter unicode61'
             );
+
+            CREATE TABLE IF NOT EXISTS embeddings (
+                file_id INTEGER NOT NULL,
+                line_no INTEGER NOT NULL,
+                vector BLOB NOT NULL,
+                PRIMARY KEY (file_id, line_no),
+                FOREIGN KEY (file_id) REFERENCES files(id) ON DELETE CASCADE
+            );
             ",
         )?;
         Ok(())
@@ -158,6 +166,7 @@ impl IndexStore {
             self.conn.execute("DELETE FROM symbols WHERE file_id = ?1", params![id])?;
             self.conn.execute("DELETE FROM callers WHERE file_id = ?1", params![id])?;
             self.conn.execute("DELETE FROM imports WHERE file_id = ?1", params![id])?;
+            self.conn.execute("DELETE FROM embeddings WHERE file_id = ?1", params![id])?;
             self.conn.execute(
                 "UPDATE files SET language = ?1, mtime_secs = ?2, mtime_nanos = ?3, content_hash = ?4 WHERE id = ?5",
                 params![language, mtime_secs, mtime_nanos, content_hash, id],
@@ -182,6 +191,20 @@ impl IndexStore {
             for (line_no, content) in lines {
                 line_stmt.execute(params![file_id, line_no, content])?;
                 fts_stmt.execute(params![content, file_id, line_no])?;
+            }
+        }
+
+        {
+            let mut emb_stmt = self.conn.prepare(
+                "INSERT INTO embeddings(file_id, line_no, vector) VALUES(?1, ?2, ?3)",
+            )?;
+            for (line_no, content) in lines {
+                if content.trim().is_empty() {
+                    continue;
+                }
+                let vec = ast_sgrep_embed::embed_line(content);
+                let bytes = ast_sgrep_embed::embed_to_bytes(&vec);
+                emb_stmt.execute(params![file_id, line_no, bytes])?;
             }
         }
 
@@ -243,6 +266,7 @@ impl IndexStore {
             self.conn.execute("DELETE FROM symbols WHERE file_id = ?1", params![file_id])?;
             self.conn.execute("DELETE FROM callers WHERE file_id = ?1", params![file_id])?;
             self.conn.execute("DELETE FROM imports WHERE file_id = ?1", params![file_id])?;
+            self.conn.execute("DELETE FROM embeddings WHERE file_id = ?1", params![file_id])?;
             self.conn.execute("DELETE FROM files WHERE id = ?1", params![file_id])?;
         }
         Ok(())

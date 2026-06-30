@@ -1,3 +1,8 @@
+//! Reciprocal Rank Fusion and PRD scoring functions.
+
+/// RRF constant (standard default).
+pub const RRF_K: f64 = 60.0;
+
 /// Ranking scores per PRD.
 pub const SCORE_GRAPH: f64 = 5.0;
 pub const SCORE_ANCHOR: f64 = 6.0;
@@ -5,11 +10,28 @@ pub const SCORE_DEF_BASE: f64 = 3.0;
 pub const SCORE_CALLER_BASE: f64 = 1.5;
 pub const SCORE_EXACT_SYMBOL: f64 = 5.0;
 pub const SCORE_SUBSTRING_SYMBOL: f64 = 2.0;
+pub const SCORE_PATTERN: f64 = 7.0;
+pub const SCORE_EMBED: f64 = 4.0;
 pub const LEXICAL_RANK_DIVISOR: f64 = 60.0;
 
-/// BM25-like lexical score from rank position.
+/// Reciprocal rank fusion score for a single ranked list.
+pub fn rrf_score(rank: usize, k: f64) -> f64 {
+    1.0 / (k + rank as f64 + 1.0)
+}
+
+/// Fuse multiple rank positions (one per query term list) via RRF.
+pub fn fuse_rrf(ranks: &[usize], k: f64) -> f64 {
+    ranks.iter().map(|r| rrf_score(*r, k)).sum()
+}
+
+/// BM25-like lexical score from rank position (PRD formula).
 pub fn score_lexical(rank: usize) -> f64 {
     1.0 / (LEXICAL_RANK_DIVISOR + rank as f64 + 1.0)
+}
+
+/// Combined lexical score using RRF across per-term ranks, scaled to PRD range.
+pub fn score_lexical_rrf(per_term_ranks: &[usize]) -> f64 {
+    fuse_rrf(per_term_ranks, RRF_K)
 }
 
 /// Symbol term match score.
@@ -55,5 +77,11 @@ mod tests {
     #[test]
     fn exact_symbol_scores_higher() {
         assert!(score_symbol("foo", "foo") > score_symbol("foo", "foobar"));
+    }
+
+    #[test]
+    fn rrf_fuses_multiple_lists() {
+        let fused = fuse_rrf(&[0, 2], RRF_K);
+        assert!(fused > rrf_score(0, RRF_K));
     }
 }

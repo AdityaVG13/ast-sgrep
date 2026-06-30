@@ -50,6 +50,24 @@ pub fn format_hit_line(hit: &SearchHit) -> String {
                 hit.file, hit.line_start, hit.excerpt
             )
         }
+        HitKind::Pattern => {
+            format!(
+                "PATTERN: {}:{}-{}: {}",
+                hit.file,
+                hit.line_start,
+                hit.line_end,
+                truncate_excerpt(&hit.excerpt, 120)
+            )
+        }
+        HitKind::Embed => {
+            format!(
+                "EMBED: {}:{}-{}: {}",
+                hit.file,
+                hit.line_start,
+                hit.line_end,
+                truncate_excerpt(&hit.excerpt, 120)
+            )
+        }
     }
 }
 

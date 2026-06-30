@@ -1,0 +1,12 @@
+[package]
+name = "ast-sgrep-embed"
+description = "Optional offline embedding plugin for ast-sgrep"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+readme = "../../README.md"
+keywords = ["search", "embedding", "code-search"]
+categories = ["development-tools"]
+
+[dependencies]
+blake3.workspace = true

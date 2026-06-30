@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 fn main() {
     let _ = process_request("hello");
     auth_refresh();

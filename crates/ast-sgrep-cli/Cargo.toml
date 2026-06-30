@@ -9,6 +9,10 @@ license.workspace = true
 name = "asgrep"
 path = "src/main.rs"
 
+[[bin]]
+name = "ast-sgrep"
+path = "src/main.rs"
+
 [dependencies]
 anyhow.workspace = true
 ast-sgrep-core = { path = "../ast-sgrep-core" }

@@ -5,8 +5,10 @@ use rusqlite::params;
 
 use crate::query::{ParsedQuery, QueryMode};
 use crate::rank::{
-    best_symbol_score, score_caller, score_def, score_lexical, SCORE_ANCHOR, SCORE_GRAPH,
+    best_symbol_score, score_caller, score_def, score_lexical_rrf, SCORE_ANCHOR, SCORE_EMBED,
+    SCORE_GRAPH,
 };
+use ast_sgrep_embed::{embed_from_bytes, rank_by_similarity};
 use crate::store::IndexStore;
 use crate::Result;
 
@@ -20,6 +22,10 @@ pub enum HitKind {
     Graph,
     Anchor,
     Import,
+    /// Structural pattern match via ast-grep delegation.
+    Pattern,
+    /// Semantic similarity via local embedding plugin.
+    Embed,
 }
 
 impl HitKind {
@@ -31,6 +37,8 @@ impl HitKind {
             HitKind::Graph => "graph",
             HitKind::Anchor => "anchor",
             HitKind::Import => "import",
+            HitKind::Pattern => "pattern",
+            HitKind::Embed => "embed",
         }
     }
 }
@@ -61,6 +69,20 @@ pub struct SearchOptions {
     pub index_path: Option<PathBuf>,
     pub limit: usize,
     pub lang_filter: Option<String>,
+    /// Enable local embedding semantic search pass.
+    pub use_embed: bool,
+}
+
+impl Default for SearchOptions {
+    fn default() -> Self {
+        Self {
+            root: PathBuf::from("."),
+            index_path: None,
+            limit: Self::default_limit(),
+            lang_filter: None,
+            use_embed: std::env::var("ASGREP_EMBED").ok().as_deref() == Some("1"),
+        }
+    }
 }
 
 impl SearchOptions {
@@ -100,6 +122,14 @@ impl Searcher {
             QueryMode::Callers => self.search_callers(&parsed)?,
             QueryMode::Defs => self.search_defs(&parsed)?,
             QueryMode::Imports => self.search_imports(&parsed)?,
+            QueryMode::Pattern => {
+                let pattern = parsed.terms.first().map(|s| s.as_str()).unwrap_or("");
+                crate::pattern::search_pattern(
+                    pattern,
+                    &self.options.root,
+                    self.options.lang_filter.as_deref(),
+                )?
+            }
             QueryMode::Hybrid => self.search_hybrid(&parsed)?,
         };
 
@@ -123,7 +153,55 @@ impl Searcher {
         hits.extend(self.lexical_pass(parsed)?);
         hits.extend(self.symbol_pass(parsed)?);
         hits.extend(self.anchor_pass(parsed)?);
+        if self.options.use_embed {
+            hits.extend(self.embed_pass(parsed)?);
+        }
         Ok(hits)
+    }
+
+    fn embed_pass(&self, parsed: &ParsedQuery) -> Result<Vec<SearchHit>> {
+        if parsed.terms.is_empty() {
+            return Ok(Vec::new());
+        }
+        let query = parsed.terms.join(" ");
+        let conn = self.store.connection();
+        let mut stmt = conn.prepare(
+            "SELECT f.path, l.line_no, l.content, f.language, e.vector
+             FROM embeddings e
+             JOIN lines l ON l.file_id = e.file_id AND l.line_no = e.line_no
+             JOIN files f ON f.id = e.file_id",
+        )?;
+        let mut rows = stmt.query([])?;
+        let mut lines = Vec::new();
+        while let Some(row) = rows.next()? {
+            let file: String = row.get(0)?;
+            let line_no: u32 = row.get(1)?;
+            let content: String = row.get(2)?;
+            let lang: Option<String> = row.get(3)?;
+            let vector: Vec<u8> = row.get(4)?;
+            if let Some(ref lang_filter) = self.options.lang_filter {
+                if lang.as_deref() != Some(lang_filter.as_str()) {
+                    continue;
+                }
+            }
+            lines.push((file, line_no, content, embed_from_bytes(&vector)));
+        }
+        let ranked = rank_by_similarity(&query, &lines, 50);
+        Ok(ranked
+            .into_iter()
+            .map(|(sim, file, line_no, content)| SearchHit {
+                kind: HitKind::Embed,
+                file,
+                line_start: line_no,
+                line_end: line_no,
+                symbol: None,
+                caller: None,
+                callee: None,
+                language: None,
+                score: SCORE_EMBED * f64::from(sim),
+                excerpt: content,
+            })
+            .collect())
     }
 
     fn lexical_pass(&self, parsed: &ParsedQuery) -> Result<Vec<SearchHit>> {
@@ -131,48 +209,70 @@ impl Searcher {
             return Ok(Vec::new());
         }
 
-        let fts_query = parsed.terms.join(" OR ");
         let conn = self.store.connection();
-        let mut stmt = conn.prepare(
-            "SELECT f.path, f.language, l.line_no, l.content, bm25(lines_fts) as rank
-             FROM lines_fts
-             JOIN files f ON f.id = lines_fts.file_id
-             JOIN lines l ON l.file_id = lines_fts.file_id AND l.line_no = lines_fts.line_no
-             WHERE lines_fts MATCH ?1
-             ORDER BY rank
-             LIMIT 100",
-        )?;
+        // Per-term FTS with RRF fusion across ranked lists
+        let mut line_ranks: std::collections::HashMap<(String, u32), Vec<usize>> =
+            std::collections::HashMap::new();
+        let mut line_meta: std::collections::HashMap<(String, u32), (Option<String>, String)> =
+            std::collections::HashMap::new();
 
-        let rows = stmt.query_map(params![fts_query], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, Option<String>>(1)?,
-                row.get::<_, u32>(2)?,
-                row.get::<_, String>(3)?,
-            ))
-        })?;
-
-        let mut hits = Vec::new();
-        for (rank, row) in rows.enumerate() {
-            let (path, language, line_no, content) = row?;
-            if let Some(ref lang_filter) = self.options.lang_filter {
-                if language.as_deref() != Some(lang_filter.as_str()) {
-                    continue;
+        for term in &parsed.terms {
+            let mut stmt = conn.prepare(
+                "SELECT f.path, f.language, l.line_no, l.content
+                 FROM lines_fts
+                 JOIN files f ON f.id = lines_fts.file_id
+                 JOIN lines l ON l.file_id = lines_fts.file_id AND l.line_no = lines_fts.line_no
+                 WHERE lines_fts MATCH ?1
+                 ORDER BY bm25(lines_fts)
+                 LIMIT 100",
+            )?;
+            let rows = stmt.query_map(params![term], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                    row.get::<_, u32>(2)?,
+                    row.get::<_, String>(3)?,
+                ))
+            })?;
+            for (rank, row) in rows.enumerate() {
+                let (path, language, line_no, content) = row?;
+                if let Some(ref lang_filter) = self.options.lang_filter {
+                    if language.as_deref() != Some(lang_filter.as_str()) {
+                        continue;
+                    }
                 }
+                let key = (path.clone(), line_no);
+                line_ranks.entry(key.clone()).or_default().push(rank);
+                line_meta.insert(key, (language, content));
             }
-            hits.push(SearchHit {
-                kind: HitKind::Asgrep,
-                file: path,
-                line_start: line_no,
-                line_end: line_no,
-                symbol: None,
-                caller: None,
-                callee: None,
-                language,
-                score: score_lexical(rank),
-                excerpt: content,
-            });
         }
+
+        let mut hits: Vec<SearchHit> = line_ranks
+            .into_iter()
+            .map(|((path, line_no), ranks)| {
+                let (language, content) = line_meta
+                    .get(&(path.clone(), line_no))
+                    .cloned()
+                    .unwrap_or((None, String::new()));
+                SearchHit {
+                    kind: HitKind::Asgrep,
+                    file: path,
+                    line_start: line_no,
+                    line_end: line_no,
+                    symbol: None,
+                    caller: None,
+                    callee: None,
+                    language,
+                    score: score_lexical_rrf(&ranks),
+                    excerpt: content,
+                }
+            })
+            .collect();
+        hits.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         Ok(hits)
     }
 

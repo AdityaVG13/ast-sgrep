@@ -17,6 +17,8 @@ pub enum QueryMode {
     Defs,
     /// `imports:module` — import statements.
     Imports,
+    /// `pattern:...` — structural search via ast-grep.
+    Pattern,
 }
 
 impl ParsedQuery {
@@ -41,6 +43,13 @@ impl ParsedQuery {
                 raw: trimmed.to_string(),
                 mode: QueryMode::Imports,
                 terms: tokenize(rest),
+            };
+        }
+        if let Some(rest) = trimmed.strip_prefix("pattern:") {
+            return Self {
+                raw: trimmed.to_string(),
+                mode: QueryMode::Pattern,
+                terms: vec![rest.trim().to_string()],
             };
         }
 

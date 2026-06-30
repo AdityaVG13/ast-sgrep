@@ -31,11 +31,20 @@ impl LanguageParser for GoParser {
                             ext.add_call(node, source, &func);
                         }
                     }
-                    "import_declaration" => {
-                        if let Some(path_node) = node.child_by_field_name("path") {
+                    "import_declaration" | "import_spec" => {
+                        if let Some(path_node) = field_child(node, "path") {
                             if let Some(path) = node_text(&path_node, source) {
                                 let cleaned = path.trim_matches('"');
                                 ext.add_import(node, source, cleaned);
+                            }
+                        } else if node.kind() == "import_spec" {
+                            let mut cursor = node.walk();
+                            for child in node.children(&mut cursor) {
+                                if child.kind() == "interpreted_string_literal" {
+                                    if let Some(path) = node_text(&child, source) {
+                                        ext.add_import(node, source, path.trim_matches('"'));
+                                    }
+                                }
                             }
                         } else {
                             let ids = crate::extract::collect_identifiers(node, source);

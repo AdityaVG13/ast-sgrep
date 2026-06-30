@@ -1,6 +1,6 @@
 # ast-sgrep
 
-Polyglot hybrid code search.
+Polyglot hybrid code search — **v1.0**
 
 ```bash
 cargo install --path crates/ast-sgrep-cli
@@ -10,9 +10,11 @@ asgrep "where is auth refreshed"
 
 **Not** [ast-grep](https://github.com/ast-grep/ast-grep) (codemods). **Not** ripgrep (raw text).
 
-**Is:** keyword search + AST symbol graph context.
+**Is:** keyword search + AST symbol graph context + optional local embeddings.
 
 Supports **Rust**, **TypeScript**, **JavaScript**, **Python**, and **Go**.
+
+Binaries: `asgrep` and `ast-sgrep` (aliases).
 
 ## Tagline
 
@@ -42,6 +44,13 @@ asgrep "how does process_request work"
 asgrep "callers:main"
 asgrep "defs:Handler::serve"
 asgrep "imports:serde"
+asgrep "pattern:fn $NAME($$$)"   # delegates to ast-grep if installed
+
+# Semantic search (local embeddings, no API keys)
+asgrep --embed "auth refresh"
+
+# Benchmarks
+asgrep bench .
 
 # JSON output for agents / CI
 asgrep --json --limit 32 "process_request"
@@ -60,6 +69,9 @@ asgrep reindex .
 | `--json` | JSON output |
 | `--index-path` | Custom index DB path |
 | `--lang` | Filter by language (`rust`, `typescript`, `javascript`, `python`, `go`) |
+| `--embed` | Enable local embedding semantic search (`ASGREP_EMBED=1`) |
+| `ASGREP_INDEX_PATH` | Custom index DB path |
+| `ASGREP_USE_CACHE=1` | Store index in `~/.cache/asgrep/` |
 
 ## Output kinds
 
@@ -71,6 +83,8 @@ asgrep reindex .
 | `GRAPH` | Graph neighborhood |
 | `ANCHOR` | Anchor excerpt around known symbol |
 | `IMPORT` | Import statement |
+| `PATTERN` | Structural match via ast-grep |
+| `EMBED` | Semantic similarity (local plugin) |
 
 ### Line output example
 
@@ -106,9 +120,10 @@ ANCHOR: src/main.rs:6-12: fn process_request(...) { ... }
 ```
 ast-sgrep/
   crates/ast-sgrep-core/   # Index + hybrid search engine
-  crates/ast-sgrep-cli/    # asgrep binary
+  crates/ast-sgrep-cli/    # asgrep / ast-sgrep binaries
   crates/ast-sgrep-lang/   # tree-sitter parsers (Rust, TS, JS, Python, Go)
-  tests/fixtures/          # Polyglot test fixtures
+  crates/ast-sgrep-embed/  # Optional offline embedding plugin
+  tests/fixtures/          # Polyglot + false-positive test fixtures
 ```
 
 ### Search passes

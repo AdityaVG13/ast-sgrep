@@ -1,3 +1,5 @@
+import { validateInput } from "./lib";
+
 export function main() {
   processRequest("hello");
   authRefresh();

@@ -34,6 +34,7 @@ fn indexes_and_searches_polyglot_fixture() {
         index_path: Some(index_path),
         limit: 16,
         lang_filter: None,
+        use_embed: false,
     })
     .unwrap();
 
