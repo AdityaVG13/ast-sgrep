@@ -2,6 +2,9 @@
 
 use std::io::{self, BufRead, Write};
 
+/// Maximum LSP message body size (50 MB).
+pub const MAX_MESSAGE_BYTES: usize = 50 * 1024 * 1024;
+
 /// Read one LSP message from stdin (Content-Length header + JSON body).
 pub fn read_message(reader: &mut impl BufRead) -> io::Result<Option<String>> {
     let mut content_length: Option<usize> = None;
@@ -24,6 +27,12 @@ pub fn read_message(reader: &mut impl BufRead) -> io::Result<Option<String>> {
     let len = content_length.ok_or_else(|| {
         io::Error::new(io::ErrorKind::InvalidData, "missing Content-Length header")
     })?;
+    if len > MAX_MESSAGE_BYTES {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("Content-Length {len} exceeds max {MAX_MESSAGE_BYTES}"),
+        ));
+    }
     let mut buf = vec![0u8; len];
     reader.read_exact(&mut buf)?;
     Ok(Some(String::from_utf8(buf).map_err(|e| {

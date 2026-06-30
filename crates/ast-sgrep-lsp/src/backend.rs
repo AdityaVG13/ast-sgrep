@@ -34,6 +34,8 @@ impl LspBackend {
             lang_filter: None,
             respect_gitignore: true,
             use_tantivy: false,
+            embed_lines: false,
+            force_reindex: false,
         }
     }
 
@@ -290,9 +292,21 @@ impl LspBackend {
             .and_then(|s| s.lines().nth(params.position.line as usize).map(|l| l.to_string()))
             .unwrap_or_default();
 
-        extract_identifier_at(&content, params.position.character as usize)
+        extract_identifier_at(&content, utf16_char_to_byte(&content, params.position.character))
             .ok_or_else(|| anyhow::anyhow!("no symbol at cursor"))
     }
+}
+
+/// Convert LSP UTF-16 code unit offset to byte offset within a line.
+pub fn utf16_char_to_byte(line: &str, utf16_offset: u32) -> usize {
+    let mut utf16_count = 0u32;
+    for (byte_idx, ch) in line.char_indices() {
+        if utf16_count >= utf16_offset {
+            return byte_idx;
+        }
+        utf16_count += ch.len_utf16() as u32;
+    }
+    line.len()
 }
 
 fn symbol_information(root: &Path, file: &str, hit: &ast_sgrep_core::SearchHit) -> Option<Value> {
@@ -367,8 +381,6 @@ fn extract_identifier_at(line: &str, byte_offset: usize) -> Option<String> {
     if !is_ident_char(chars[idx].1) {
         return None;
     }
-    let start = idx;
-    let _ = start;
     let mut lo = idx;
     let mut hi = idx;
     while lo > 0 && is_ident_char(chars[lo - 1].1) {
@@ -398,6 +410,12 @@ fn is_ident_char(c: char) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn utf16_offset_handles_multibyte() {
+        let line = "fn café() {}";
+        assert!(utf16_char_to_byte(line, 0) < utf16_char_to_byte(line, 5));
+    }
 
     #[test]
     fn extracts_identifier_at_cursor() {

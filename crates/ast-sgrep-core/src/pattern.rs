@@ -9,18 +9,9 @@ use crate::Result;
 pub fn search_pattern(pattern: &str, root: &Path, lang_filter: Option<&str>) -> Result<Vec<SearchHit>> {
     let binary = find_ast_grep_binary();
     let Some(ast_grep) = binary else {
-        return Ok(vec![SearchHit {
-            kind: HitKind::Pattern,
-            file: String::new(),
-            line_start: 0,
-            line_end: 0,
-            symbol: None,
-            caller: None,
-            callee: None,
-            language: None,
-            score: 0.0,
-            excerpt: "ast-grep not found: install from https://github.com/ast-grep/ast-grep".to_string(),
-        }]);
+        return Err(crate::StoreError::Other(
+            "ast-grep not found: install from https://github.com/ast-grep/ast-grep".to_string(),
+        ));
     };
 
     let mut cmd = Command::new(&ast_grep);
