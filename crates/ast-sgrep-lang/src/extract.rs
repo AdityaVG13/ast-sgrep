@@ -92,6 +92,32 @@ pub fn is_in_comment_or_string(node: &Node) -> bool {
     false
 }
 
+/// Check if a node has an ancestor of the given kind.
+pub fn is_inside_kind(node: &Node, kind: &str) -> bool {
+    let mut current = node.parent();
+    while let Some(n) = current {
+        if n.kind() == kind {
+            return true;
+        }
+        current = n.parent();
+    }
+    false
+}
+
+/// Add a symbol when the node has a `name` field.
+pub fn add_named_symbol(
+    ext: &mut Extractor,
+    node: &Node,
+    source: &str,
+    kind: SymbolKind,
+) {
+    if let Some(name_node) = node.child_by_field_name("name") {
+        if let Some(name) = node_text(&name_node, source) {
+            ext.add_symbol(node, source, name, kind);
+        }
+    }
+}
+
 /// Find the enclosing function/method name for a node.
 pub fn enclosing_symbol_name(node: &Node, source: &str) -> Option<String> {
     let mut current = node.parent();
@@ -212,9 +238,7 @@ impl NodeHandlers {
             on_node: Box::new(f),
         }
     }
-}
 
-impl NodeHandlers {
     pub fn handle(&self, extractor: &mut Extractor, node: &Node, source: &str) {
         (self.on_node)(extractor, node, source);
     }

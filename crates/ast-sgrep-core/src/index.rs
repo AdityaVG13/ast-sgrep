@@ -92,7 +92,6 @@ pub struct Indexer {
     store: IndexStore,
     parsers: ParserRegistry,
     options: IndexOptions,
-    ignore_patterns: Vec<String>,
 }
 
 impl Indexer {
@@ -103,16 +102,10 @@ impl Indexer {
             .unwrap_or(options.root.clone());
         let store = IndexStore::open(&options.root, options.index_path.as_deref())?;
         store.set_meta("root", &options.root.display().to_string())?;
-        let ignore_patterns = if options.respect_gitignore {
-            load_ignore_patterns(&options.root)
-        } else {
-            Vec::new()
-        };
         Ok(Self {
             store,
             parsers: ParserRegistry::new(),
             options,
-            ignore_patterns,
         })
     }
 
@@ -148,7 +141,7 @@ impl Indexer {
             };
             let rel_str = rel.to_string_lossy().replace('\\', "/");
 
-            if is_ignored(rel, &self.ignore_patterns) {
+            if self.options.respect_gitignore && crate::gitignore::is_ignored(&self.options.root, rel) {
                 stats.files_skipped += 1;
                 continue;
             }
@@ -439,105 +432,9 @@ fn should_skip_dir(path: &Path) -> bool {
     }
 }
 
-fn load_ignore_patterns(root: &Path) -> Vec<String> {
-    let mut patterns = vec![
-        "target/".to_string(),
-        "node_modules/".to_string(),
-        ".git/".to_string(),
-        ".asgrep/".to_string(),
-    ];
-
-    for name in [".gitignore", ".asgrepignore"] {
-        let path = root.join(name);
-        if let Ok(content) = fs::read_to_string(path) {
-            for line in content.lines() {
-                let line = line.trim();
-                if line.is_empty() || line.starts_with('#') {
-                    continue;
-                }
-                patterns.push(line.to_string());
-            }
-        }
-    }
-
-    patterns
-}
-
-fn is_ignored(rel: &Path, patterns: &[String]) -> bool {
-    let rel_str = rel.to_string_lossy().replace('\\', "/");
-    let mut ignored = false;
-    for pattern in patterns {
-        let pat = pattern.trim();
-        if pat.is_empty() {
-            continue;
-        }
-        let (negate, glob_pat) = if let Some(rest) = pat.strip_prefix('!') {
-            (true, rest.trim())
-        } else {
-            (false, pat)
-        };
-        if glob_matches(glob_pat, &rel_str) {
-            ignored = !negate;
-        }
-    }
-    ignored
-}
-
-fn glob_matches(pattern: &str, text: &str) -> bool {
-    let pat = pattern.trim_end_matches('/');
-    if pat.contains("**/") {
-        if let Some(rest) = pat.split("**/").nth(1) {
-            return glob_matches(rest, text)
-                || text.split('/').any(|seg| glob_matches(rest, seg));
-        }
-    }
-    if let Some(suffix) = pat.strip_prefix('*') {
-        return text.ends_with(suffix) || text.split('/').any(|seg| seg.ends_with(suffix));
-    }
-    if let Some(prefix) = pat.strip_suffix('*') {
-        return text.starts_with(prefix)
-            || text.split('/').any(|seg| seg.starts_with(prefix));
-    }
-    text == pat || text.starts_with(&format!("{pat}/"))
-}
-
-/// Load additional ignore patterns from .asgrepignore
-pub fn load_asgrepignore(root: &Path) -> Vec<String> {
-    let path = root.join(".asgrepignore");
-    if let Ok(content) = fs::read_to_string(path) {
-        content
-            .lines()
-            .map(|l| l.trim().to_string())
-            .filter(|l| !l.is_empty() && !l.starts_with('#'))
-            .collect()
-    } else {
-        Vec::new()
-    }
-}
-
 #[cfg(test)]
-mod glob_tests {
-    use std::path::Path;
-
-    use super::{glob_matches, is_ignored, split_content_lines};
-
-    #[test]
-    fn star_suffix_matches_extension() {
-        assert!(glob_matches("*.pyc", "foo/bar.pyc"));
-        assert!(!glob_matches("*.pyc", "foo/bar.py"));
-    }
-
-    #[test]
-    fn double_star_prefix() {
-        assert!(glob_matches("**/*.log", "deep/nested/app.log"));
-    }
-
-    #[test]
-    fn gitignore_negation_unignores_matching_files() {
-        let patterns = vec!["*.log".into(), "!important.log".into()];
-        assert!(is_ignored(Path::new("app.log"), &patterns));
-        assert!(!is_ignored(Path::new("important.log"), &patterns));
-    }
+mod line_tests {
+    use super::split_content_lines;
 
     #[test]
     fn crlf_lines_strip_carriage_return_and_record_eol() {

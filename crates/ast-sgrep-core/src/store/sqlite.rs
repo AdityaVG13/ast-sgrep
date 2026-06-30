@@ -245,13 +245,7 @@ impl IndexStore {
         ).ok();
 
         let file_id = if let Some(id) = file_id {
-            self.conn.execute("DELETE FROM lines WHERE file_id = ?1", params![id])?;
-            self.conn.execute("DELETE FROM lines_fts WHERE file_id = ?1", params![id])?;
-            self.conn.execute("DELETE FROM symbols WHERE file_id = ?1", params![id])?;
-            self.conn.execute("DELETE FROM callers WHERE file_id = ?1", params![id])?;
-            self.conn.execute("DELETE FROM imports WHERE file_id = ?1", params![id])?;
-            self.conn.execute("DELETE FROM embeddings WHERE file_id = ?1", params![id])?;
-            self.conn.execute("DELETE FROM semantic_chunks WHERE file_id = ?1", params![id])?;
+            delete_file_children(&self.conn, id)?;
             self.conn.execute(
                 "UPDATE files SET language = ?1, mtime_secs = ?2, mtime_nanos = ?3, content_hash = ?4 WHERE id = ?5",
                 params![language, mtime_secs, mtime_nanos, content_hash, id],
@@ -378,13 +372,7 @@ impl IndexStore {
             params![rel_path],
             |row| row.get::<_, i64>(0),
         ) {
-            self.conn.execute("DELETE FROM lines WHERE file_id = ?1", params![file_id])?;
-            self.conn.execute("DELETE FROM lines_fts WHERE file_id = ?1", params![file_id])?;
-            self.conn.execute("DELETE FROM symbols WHERE file_id = ?1", params![file_id])?;
-            self.conn.execute("DELETE FROM callers WHERE file_id = ?1", params![file_id])?;
-            self.conn.execute("DELETE FROM imports WHERE file_id = ?1", params![file_id])?;
-            self.conn.execute("DELETE FROM embeddings WHERE file_id = ?1", params![file_id])?;
-            self.conn.execute("DELETE FROM semantic_chunks WHERE file_id = ?1", params![file_id])?;
+            delete_file_children(&self.conn, file_id)?;
             self.conn.execute("DELETE FROM files WHERE id = ?1", params![file_id])?;
             self.delete_meta(&format!("eol:{rel_path}"))?;
             let _ = crate::semantic_ivf::invalidate_semantic_ivf(&self.db_path);
@@ -639,6 +627,24 @@ impl IndexStore {
             Err(e) => Err(e.into()),
         }
     }
+}
+
+fn delete_file_children(conn: &Connection, file_id: i64) -> Result<()> {
+    for table in [
+        "lines",
+        "lines_fts",
+        "symbols",
+        "callers",
+        "imports",
+        "embeddings",
+        "semantic_chunks",
+    ] {
+        conn.execute(
+            &format!("DELETE FROM {table} WHERE file_id = ?1"),
+            params![file_id],
+        )?;
+    }
+    Ok(())
 }
 
 fn read_semantic_chunk_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ast_sgrep_embed::SemanticChunkRow> {

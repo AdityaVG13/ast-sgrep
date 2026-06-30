@@ -1,9 +1,12 @@
 //! Embedding plugins for ast-sgrep: semantic local, Ollama, and cloud APIs.
 
 mod cloud;
+mod math;
 mod ollama;
 mod provider;
 mod semantic;
+
+pub use math::{cosine_similarity, MIN_SIMILARITY};
 
 pub use cloud::{embed_via_api, rank_by_vector, CloudEmbeddingConfig};
 pub use ollama::{embed_via_ollama, OllamaEmbeddingConfig};
@@ -99,15 +102,8 @@ pub fn rank_chunks_by_vector(
     scored
         .into_iter()
         .take(limit)
-        .filter(|(sim, _, _, _, _, _)| *sim > 0.08)
+        .filter(|(sim, _, _, _, _, _)| *sim > MIN_SIMILARITY)
         .collect()
-}
-
-fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
-    if a.len() != b.len() || a.is_empty() {
-        return 0.0;
-    }
-    a.iter().zip(b.iter()).map(|(x, y)| x * y).sum()
 }
 
 #[cfg(test)]

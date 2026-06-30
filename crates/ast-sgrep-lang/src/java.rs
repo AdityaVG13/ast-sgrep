@@ -1,4 +1,7 @@
-use crate::extract::{field_child, node_text, parse_and_extract, walk_tree, NodeHandlers};
+use crate::extract::{
+    add_named_symbol, field_child, is_inside_kind, node_text, parse_and_extract, walk_tree,
+    NodeHandlers,
+};
 use crate::{ExtractionResult, Language, LanguageParser, SymbolKind};
 
 pub struct JavaParser;
@@ -12,44 +15,19 @@ impl LanguageParser for JavaParser {
         parse_and_extract(tree_sitter_java::LANGUAGE.into(), source, |tree, src| {
             let handlers = NodeHandlers::new(|ext, node, source| {
                 match node.kind() {
-                    "method_declaration" => {
-                        if let Some(name_node) = field_child(node, "name") {
-                            if let Some(name) = node_text(&name_node, source) {
-                                let kind = if is_inside_class(node) {
-                                    SymbolKind::Method
-                                } else {
-                                    SymbolKind::Function
-                                };
-                                ext.add_symbol(node, source, name, kind);
-                            }
-                        }
-                    }
-                    "constructor_declaration" => {
-                        if let Some(name_node) = field_child(node, "name") {
-                            if let Some(name) = node_text(&name_node, source) {
-                                let kind = if is_inside_class(node) {
-                                    SymbolKind::Method
-                                } else {
-                                    SymbolKind::Function
-                                };
-                                ext.add_symbol(node, source, name, kind);
-                            }
-                        }
+                    "method_declaration" | "constructor_declaration" => {
+                        let kind = if is_inside_kind(node, "class_declaration") {
+                            SymbolKind::Method
+                        } else {
+                            SymbolKind::Function
+                        };
+                        add_named_symbol(ext, node, source, kind);
                     }
                     "field_declaration" => {
                         let mut cursor = node.walk();
                         for child in node.children(&mut cursor) {
                             if child.kind() == "variable_declarator" {
-                                if let Some(name_node) = field_child(&child, "name") {
-                                    if let Some(name) = node_text(&name_node, source) {
-                                        ext.add_symbol(
-                                            &child,
-                                            source,
-                                            name,
-                                            SymbolKind::Method,
-                                        );
-                                    }
-                                }
+                                add_named_symbol(ext, &child, source, SymbolKind::Method);
                             }
                         }
                     }
@@ -94,17 +72,6 @@ fn java_import_path(node: &tree_sitter::Node, source: &str) -> Option<String> {
     } else {
         Some(ids.join("."))
     }
-}
-
-fn is_inside_class(node: &tree_sitter::Node) -> bool {
-    let mut current = node.parent();
-    while let Some(n) = current {
-        if n.kind() == "class_declaration" {
-            return true;
-        }
-        current = n.parent();
-    }
-    false
 }
 
 #[cfg(test)]

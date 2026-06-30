@@ -7,7 +7,7 @@
 use std::io::{Read, Write};
 use std::sync::{Arc, Mutex};
 
-use ast_sgrep_embed::SemanticChunkRow;
+use ast_sgrep_embed::{cosine_similarity, SemanticChunkRow, MIN_SIMILARITY};
 
 use crate::semantic_ivf::{
     compute_ann_fingerprint, invalidate_semantic_ivf, load_semantic_ivf, save_semantic_ivf,
@@ -21,8 +21,6 @@ pub const DEFAULT_ANN_THRESHOLD: usize = 2_000;
 
 /// Number of centroid clusters to probe per query.
 const DEFAULT_NPROBE: usize = 8;
-
-const MIN_SIMILARITY: f32 = 0.08;
 
 /// IVF index over normalized semantic chunk vectors.
 #[derive(Debug, Clone)]
@@ -147,7 +145,7 @@ impl SemanticAnnIndex {
             .centroids
             .iter()
             .enumerate()
-            .map(|(i, c)| (i, cosine(&q, c)))
+            .map(|(i, c)| (i, cosine_similarity(&q, c)))
             .collect();
         centroid_scores.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
@@ -165,7 +163,7 @@ impl SemanticAnnIndex {
                     continue;
                 }
                 let row = &flat[start..start + dim];
-                let sim = cosine(&q, row);
+                let sim = cosine_similarity(&q, row);
                 if sim > MIN_SIMILARITY {
                     candidates.push((idx, sim));
                 }
@@ -228,20 +226,13 @@ fn normalize_vec(vec: &[f32]) -> Vec<f32> {
     out
 }
 
-fn cosine(a: &[f32], b: &[f32]) -> f32 {
-    if a.len() != b.len() || a.is_empty() {
-        return 0.0;
-    }
-    a.iter().zip(b.iter()).map(|(x, y)| x * y).sum()
-}
-
 fn brute_force_flat(flat: &[f32], dim: usize, query: &[f32], limit: usize) -> Vec<(usize, f32)> {
     let n = flat.len() / dim;
     let q = normalize_vec(query);
     let mut scored: Vec<(usize, f32)> = (0..n)
         .map(|i| {
             let start = i * dim;
-            let sim = cosine(&q, &flat[start..start + dim]);
+            let sim = cosine_similarity(&q, &flat[start..start + dim]);
             (i, sim)
         })
         .filter(|(_, sim)| *sim > MIN_SIMILARITY)
@@ -264,7 +255,7 @@ fn kmeans(vectors: &[Vec<f32>], k: usize, max_iters: usize) -> (Vec<Vec<f32>>, V
         for (i, v) in vectors.iter().enumerate() {
             let min_sim = centroids
                 .iter()
-                .map(|c| cosine(v, c))
+                .map(|c| cosine_similarity(v, c))
                 .fold(f32::INFINITY, f32::min);
             let dist = 1.0 - min_sim;
             if dist > best_dist {
@@ -282,7 +273,7 @@ fn kmeans(vectors: &[Vec<f32>], k: usize, max_iters: usize) -> (Vec<Vec<f32>>, V
             let (best, _) = centroids
                 .iter()
                 .enumerate()
-                .map(|(ci, c)| (ci, cosine(v, c)))
+                .map(|(ci, c)| (ci, cosine_similarity(v, c)))
                 .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
                 .unwrap_or((0, 0.0));
             if assignments[i] != best {

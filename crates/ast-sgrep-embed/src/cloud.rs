@@ -1,5 +1,7 @@
 //! Cloud embedding provider (OpenAI-compatible API).
 
+use crate::cosine_similarity;
+
 #[cfg(feature = "cloud")]
 use serde::{Deserialize, Serialize};
 
@@ -88,13 +90,6 @@ pub fn rank_by_vector(
         .collect();
     scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
     scored.into_iter().take(limit).collect()
-}
-
-fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
-    if a.len() != b.len() || a.is_empty() {
-        return 0.0;
-    }
-    a.iter().zip(b.iter()).map(|(x, y)| x * y).sum()
 }
 
 #[cfg(test)]

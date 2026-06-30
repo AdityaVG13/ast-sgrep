@@ -26,32 +26,21 @@ pub enum QueryMode {
 impl ParsedQuery {
     pub fn parse(input: &str) -> Self {
         let trimmed = input.trim();
-        if let Some(rest) = trimmed.strip_prefix("callers:") {
-            let target = rest.trim().to_string();
-            return Self {
-                raw: trimmed.to_string(),
-                mode: QueryMode::Callers,
-                target: Some(target.clone()),
-                terms: tokenize_for_scoring(&target),
-            };
-        }
-        if let Some(rest) = trimmed.strip_prefix("defs:") {
-            let target = rest.trim().to_string();
-            return Self {
-                raw: trimmed.to_string(),
-                mode: QueryMode::Defs,
-                target: Some(target.clone()),
-                terms: tokenize_for_scoring(&target),
-            };
-        }
-        if let Some(rest) = trimmed.strip_prefix("imports:") {
-            let target = rest.trim().to_string();
-            return Self {
-                raw: trimmed.to_string(),
-                mode: QueryMode::Imports,
-                target: Some(target.clone()),
-                terms: tokenize_for_scoring(&target),
-            };
+        const PREFIXES: &[(&str, QueryMode)] = &[
+            ("callers:", QueryMode::Callers),
+            ("defs:", QueryMode::Defs),
+            ("imports:", QueryMode::Imports),
+        ];
+        for (prefix, mode) in PREFIXES {
+            if let Some(rest) = trimmed.strip_prefix(prefix) {
+                let target = rest.trim().to_string();
+                return Self {
+                    raw: trimmed.to_string(),
+                    mode: *mode,
+                    target: Some(target.clone()),
+                    terms: tokenize_for_scoring(&target),
+                };
+            }
         }
         if let Some(rest) = trimmed.strip_prefix("pattern:") {
             return Self {

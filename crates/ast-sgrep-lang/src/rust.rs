@@ -1,4 +1,7 @@
-use crate::extract::{field_child, node_text, parse_and_extract, walk_tree, NodeHandlers};
+use crate::extract::{
+    add_named_symbol, field_child, is_inside_kind, parse_and_extract, walk_tree,
+    NodeHandlers,
+};
 use crate::{ExtractionResult, Language, LanguageParser, SymbolKind};
 
 pub struct RustParser;
@@ -13,16 +16,12 @@ impl LanguageParser for RustParser {
             let handlers = NodeHandlers::new(|ext, node, source| {
                 match node.kind() {
                     "function_item" => {
-                        if let Some(name_node) = field_child(node, "name") {
-                            if let Some(name) = node_text(&name_node, source) {
-                                let kind = if is_inside_impl(node) {
-                                    SymbolKind::Method
-                                } else {
-                                    SymbolKind::Function
-                                };
-                                ext.add_symbol(node, source, name, kind);
-                            }
-                        }
+                        let kind = if is_inside_kind(node, "impl_item") {
+                            SymbolKind::Method
+                        } else {
+                            SymbolKind::Function
+                        };
+                        add_named_symbol(ext, node, source, kind);
                     }
                     "call_expression" => {
                         if let Some(func) = field_child(node, "function") {
@@ -41,15 +40,4 @@ impl LanguageParser for RustParser {
             walk_tree(tree, src, &handlers)
         })
     }
-}
-
-fn is_inside_impl(node: &tree_sitter::Node) -> bool {
-    let mut current = node.parent();
-    while let Some(n) = current {
-        if n.kind() == "impl_item" {
-            return true;
-        }
-        current = n.parent();
-    }
-    false
 }

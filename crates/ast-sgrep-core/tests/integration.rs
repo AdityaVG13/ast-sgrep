@@ -58,6 +58,12 @@ fn indexes_and_searches_polyglot_fixture() {
 
     let nl = searcher.search("how does auth refresh work").unwrap();
     assert!(!nl.hits.is_empty());
+
+    let imports = searcher.search("imports:json").unwrap();
+    assert!(
+        imports.hits.iter().any(|h| h.excerpt.contains("json")),
+        "fixture ruby require json should be indexed"
+    );
 }
 
 #[test]

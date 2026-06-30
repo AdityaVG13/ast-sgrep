@@ -1,6 +1,7 @@
 use thiserror::Error;
 
 pub mod fts;
+pub mod gitignore;
 pub mod index;
 pub mod output;
 pub mod pattern;

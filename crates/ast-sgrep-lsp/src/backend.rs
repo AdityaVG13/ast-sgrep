@@ -686,19 +686,4 @@ mod tests {
             Some("process_request".to_string())
         );
     }
-
-    #[test]
-    fn uri_roundtrip() {
-        let root = std::fs::canonicalize("/tmp").unwrap_or_else(|_| PathBuf::from("/tmp"));
-        let uri = path_to_uri(&root.join("src/main.rs"));
-        let rel = uri_to_rel_path(&uri, &root).unwrap();
-        assert_eq!(rel, "src/main.rs");
-    }
-
-    #[test]
-    fn uri_rejects_path_traversal() {
-        let root = std::fs::canonicalize("/tmp").unwrap_or_else(|_| PathBuf::from("/tmp"));
-        let evil = format!("file://{}/../etc/passwd", root.display());
-        assert!(uri_to_rel_path(&evil, &root).is_err());
-    }
 }

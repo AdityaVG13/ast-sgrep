@@ -1,3 +1,5 @@
+require "json"
+
 def main
   process_request("hello")
   auth_refresh

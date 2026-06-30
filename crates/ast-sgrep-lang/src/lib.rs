@@ -141,16 +141,12 @@ pub struct ParserRegistry {
 
 impl ParserRegistry {
     pub fn new() -> Self {
-        let mut parsers: HashMap<Language, Box<dyn LanguageParser>> = HashMap::new();
-        parsers.insert(Language::Rust, Box::new(RustParser));
-        parsers.insert(Language::TypeScript, Box::new(TypeScriptParser));
-        parsers.insert(Language::JavaScript, Box::new(JavaScriptParser));
-        parsers.insert(Language::Python, Box::new(PythonParser));
-        parsers.insert(Language::Go, Box::new(GoParser));
-        parsers.insert(Language::Java, Box::new(JavaParser));
-        parsers.insert(Language::CSharp, Box::new(CSharpParser));
-        parsers.insert(Language::Ruby, Box::new(RubyParser));
-        Self { parsers }
+        Self {
+            parsers: Language::all()
+                .iter()
+                .map(|&lang| (lang, make_parser(lang)))
+                .collect(),
+        }
     }
 
     pub fn parse(&self, language: Language, source: &str) -> anyhow::Result<ExtractionResult> {
@@ -187,6 +183,19 @@ use python::PythonParser;
 use ruby::RubyParser;
 use rust::RustParser;
 use typescript::{JavaScriptParser, TypeScriptParser};
+
+fn make_parser(lang: Language) -> Box<dyn LanguageParser> {
+    match lang {
+        Language::Rust => Box::new(RustParser),
+        Language::TypeScript => Box::new(TypeScriptParser),
+        Language::JavaScript => Box::new(JavaScriptParser),
+        Language::Python => Box::new(PythonParser),
+        Language::Go => Box::new(GoParser),
+        Language::Java => Box::new(JavaParser),
+        Language::CSharp => Box::new(CSharpParser),
+        Language::Ruby => Box::new(RubyParser),
+    }
+}
 
 #[cfg(test)]
 mod tests {

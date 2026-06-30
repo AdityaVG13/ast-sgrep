@@ -1,18 +1,12 @@
 //! Hardening tests from thermo-nuclear review rounds.
 
-use std::path::PathBuf;
+mod common;
 
 use ast_sgrep_core::store::IndexStore;
 use ast_sgrep_core::{IndexOptions, Indexer, SearchOptions, Searcher};
 use ast_sgrep_embed::SemanticLocalEmbedding;
+use common::fixture;
 use tempfile::TempDir;
-
-fn fixture() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../tests/fixtures/sample")
-        .canonicalize()
-        .expect("fixture")
-}
 
 #[test]
 fn semantic_chunks_map_to_correct_symbol_ids() {

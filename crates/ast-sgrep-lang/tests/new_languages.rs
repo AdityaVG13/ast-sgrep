@@ -19,12 +19,13 @@ fn csharp_extracts_methods() {
 }
 
 #[test]
-fn ruby_extracts_defs_and_calls() {
+fn ruby_extracts_defs_calls_and_requires() {
     let src = include_str!("../../../tests/fixtures/sample/src/app.rb");
     let reg = ParserRegistry::new();
     let result = reg.parse(Language::Ruby, src).unwrap();
     assert!(result.symbols.iter().any(|s| s.name == "process_request"));
     assert!(result.calls.iter().any(|c| c.callee == "process_request"));
+    assert!(result.imports.iter().any(|i| i.module_path == "json"));
 }
 
 #[test]

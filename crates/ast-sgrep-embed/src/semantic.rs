@@ -6,6 +6,8 @@
 
 use std::collections::HashSet;
 
+use crate::cosine_similarity;
+
 /// Vector dimension for local semantic embeddings.
 pub const SEMANTIC_DIM: usize = 256;
 
@@ -189,18 +191,6 @@ impl SemanticLocalEmbedding {
     pub fn similarity(&self, a: &[f32], b: &[f32]) -> f32 {
         cosine_similarity(a, b)
     }
-}
-
-fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
-    let len = a.len().min(b.len());
-    if len == 0 {
-        return 0.0;
-    }
-    a.iter()
-        .zip(b.iter())
-        .take(len)
-        .map(|(x, y)| x * y)
-        .sum()
 }
 
 #[cfg(test)]
