@@ -27,6 +27,7 @@ thiserror.workspace = true
 walkdir.workspace = true
 
 [dev-dependencies]
+ast-sgrep-testkit = { path = "../ast-sgrep-testkit" }
 criterion = "=0.5.1"
 tempfile.workspace = true
 

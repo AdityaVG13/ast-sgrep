@@ -71,27 +71,11 @@ pub fn to_agent_json(response: &SearchResponse) -> serde_json::Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ast_sgrep_core::search::{HitKind, SearchHit};
+    use ast_sgrep_testkit::sample_embed_response;
 
     #[test]
     fn agent_json_includes_follow_ups_and_semantic_flag() {
-        let response = SearchResponse {
-            query: "credential renewal".into(),
-            limit: 16,
-            hits: vec![SearchHit {
-                kind: HitKind::Embed,
-                file: "src/main.rs".into(),
-                line_start: 19,
-                line_end: 22,
-                symbol: Some("auth_refresh".into()),
-                caller: None,
-                callee: None,
-                language: Some("rust".into()),
-                score: 3.5,
-                excerpt: "fn auth_refresh() {}".into(),
-            }],
-        };
-        let json = to_agent_json(&response);
+        let json = to_agent_json(&sample_embed_response());
         assert_eq!(json["has_semantic_hits"], true);
         assert_eq!(json["hits"][0]["semantic"], true);
         assert!(json["hits"][0]["follow_up_queries"]

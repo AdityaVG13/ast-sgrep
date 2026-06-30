@@ -1,72 +1,54 @@
-//! Hardening tests from thermo-nuclear review rounds.
-
-mod common;
+//! Adversarial regression tests for indexing edge cases.
 
 use ast_sgrep_core::store::IndexStore;
 use ast_sgrep_core::{IndexOptions, Indexer, SearchOptions, Searcher};
 use ast_sgrep_embed::SemanticLocalEmbedding;
-use common::fixture;
-use tempfile::TempDir;
+use ast_sgrep_testkit::{index_repo, index_sample, sample_root, temp_repo};
 
 #[test]
-fn semantic_chunks_map_to_correct_symbol_ids() {
-    let temp = TempDir::new().unwrap();
-    let index_path = temp.path().join("index.db");
-    let root = fixture();
-
-    let mut indexer = Indexer::new(IndexOptions {
-        root: root.clone(),
-        index_path: Some(index_path.clone()),
+fn semantic_chunks_reference_their_symbols() {
+    let indexed = index_sample(IndexOptions {
         force_reindex: true,
         ..IndexOptions::default()
-    })
+    });
+    let store = IndexStore::open(
+        indexed.indexer.store().root(),
+        Some(indexed.indexer.store().db_path()),
+    )
     .unwrap();
-    indexer.index_all().unwrap();
-
-    let store = IndexStore::open(&root, Some(&index_path)).unwrap();
-    let chunks = store.all_semantic_chunks(None).unwrap();
-    assert!(!chunks.is_empty());
-    for (file, _, _, symbol, text, _) in &chunks {
+    for (file, _, _, symbol, text, _) in store.all_semantic_chunks(None).unwrap() {
         assert!(!symbol.is_empty(), "chunk in {file} must have symbol_name");
-        assert!(
-            text.contains(symbol),
-            "chunk text must reference its symbol {symbol}"
-        );
+        assert!(text.contains(&symbol), "chunk text must reference {symbol}");
     }
 }
 
 #[test]
-fn incremental_skip_uses_content_hash_not_mtime() {
-    let temp = TempDir::new().unwrap();
-    let index_path = temp.path().join("index.db");
-    let root = fixture();
-
-    let mut opts = IndexOptions {
-        root: root.clone(),
-        index_path: Some(index_path),
+fn incremental_skip_uses_content_hash() {
+    let indexed = index_sample(IndexOptions {
         force_reindex: true,
         ..IndexOptions::default()
+    });
+    let opts = IndexOptions {
+        root: indexed.indexer.store().root().to_path_buf(),
+        index_path: Some(indexed.indexer.store().db_path().to_path_buf()),
+        force_reindex: false,
+        ..IndexOptions::default()
     };
-    let mut indexer = Indexer::new(opts.clone()).unwrap();
-    indexer.index_all().unwrap();
-
-    opts.force_reindex = false;
     let mut indexer = Indexer::new(opts).unwrap();
     let stats = indexer.index_all().unwrap();
-    assert_eq!(stats.files_indexed, 0, "unchanged files should not re-index");
+    assert_eq!(stats.files_indexed, 0);
     assert!(stats.files_skipped > 0);
 }
 
 #[test]
 fn lexical_sidecar_follows_custom_index_path() {
-    let temp = TempDir::new().unwrap();
+    let temp = tempfile::TempDir::new().unwrap();
     let custom_dir = temp.path().join("custom");
     std::fs::create_dir_all(&custom_dir).unwrap();
     let index_path = custom_dir.join("index.db");
-    let root = fixture();
 
     let mut indexer = Indexer::new(IndexOptions {
-        root: root.clone(),
+        root: sample_root(),
         index_path: Some(index_path.clone()),
         use_tantivy: true,
         force_reindex: true,
@@ -74,31 +56,25 @@ fn lexical_sidecar_follows_custom_index_path() {
     })
     .unwrap();
     indexer.index_all().unwrap();
-
-    let lexical = custom_dir.join("lexical.db");
-    assert!(
-        lexical.exists(),
-        "lexical sidecar must live beside custom index.db"
-    );
+    assert!(custom_dir.join("lexical.db").exists());
 
     let searcher = Searcher::new(SearchOptions {
-        root,
+        root: sample_root(),
         index_path: Some(index_path),
         use_tantivy: true,
         limit: 8,
         ..SearchOptions::default()
     })
     .unwrap();
-    let hits = searcher.search("process_request").unwrap();
-    assert!(!hits.hits.is_empty());
+    assert!(!searcher.search("process_request").unwrap().hits.is_empty());
 }
 
 #[test]
 fn corrupt_ivf_sidecar_is_rejected() {
-    use ast_sgrep_core::semantic_ivf::{compute_ann_fingerprint, load_semantic_ivf, save_semantic_ivf};
     use ast_sgrep_core::semantic_ann::SemanticAnnIndex;
+    use ast_sgrep_core::semantic_ivf::{compute_ann_fingerprint, load_semantic_ivf, save_semantic_ivf};
 
-    let temp = TempDir::new().unwrap();
+    let temp = tempfile::TempDir::new().unwrap();
     let path = temp.path().join("semantic.ivf");
     let dim = 16;
     let vectors = vec![0.0f32; 50 * dim];
@@ -109,17 +85,14 @@ fn corrupt_ivf_sidecar_is_rejected() {
     let mut bytes = std::fs::read(&path).unwrap();
     bytes.truncate(bytes.len() / 2);
     std::fs::write(&path, &bytes).unwrap();
-
-    let loaded = load_semantic_ivf(&path, fp).unwrap();
-    assert!(loaded.is_none(), "tampered IVF must not load");
+    assert!(load_semantic_ivf(&path, fp).unwrap().is_none());
 }
 
 #[test]
 fn embedding_dim_mismatch_scores_zero() {
-    let embedder = SemanticLocalEmbedding;
-    let chunk_vec = embedder.embed_text("auth refresh");
+    let chunk_vec = SemanticLocalEmbedding.embed_text("auth refresh");
     let wrong_dim_query = vec![1.0f32; chunk_vec.len() + 10];
-    let sim = ast_sgrep_embed::rank_chunks_by_vector(
+    assert!(ast_sgrep_embed::rank_chunks_by_vector(
         &wrong_dim_query,
         &[(
             "a.rs".into(),
@@ -130,79 +103,64 @@ fn embedding_dim_mismatch_scores_zero() {
             chunk_vec,
         )],
         1,
-    );
-    assert!(sim.is_empty(), "dimension mismatch must not produce hits");
-}
-
-#[test]
-fn gitignore_star_patterns_work() {
-    let temp = TempDir::new().unwrap();
-    let root = temp.path().to_path_buf();
-    std::fs::write(root.join(".gitignore"), "*.pyc\n").unwrap();
-    std::fs::write(root.join("keep.py"), "print('ok')\n").unwrap();
-    std::fs::write(root.join("skip.pyc"), "compiled\n").unwrap();
-
-    let mut indexer = Indexer::new(IndexOptions {
-        root: root.clone(),
-        index_path: Some(temp.path().join("index.db")),
-        force_reindex: true,
-        ..IndexOptions::default()
-    })
-    .unwrap();
-    let stats = indexer.index_all().unwrap();
-    assert!(stats.files_indexed >= 1);
-    let paths = indexer.store().all_file_paths().unwrap();
-    assert!(paths.iter().any(|p| p.ends_with("keep.py")));
-    assert!(!paths.iter().any(|p| p.ends_with("skip.pyc")));
+    )
+    .is_empty());
 }
 
 #[test]
 fn embed_from_bytes_rejects_trailing_bytes() {
-    let bad = vec![0u8, 0u8, 0u8];
-    assert!(ast_sgrep_embed::embed_from_bytes(&bad).is_err());
+    assert!(ast_sgrep_embed::embed_from_bytes(&[0u8, 0u8, 0u8]).is_err());
 }
 
 #[test]
-fn crlf_file_text_round_trips_through_index() {
-    let temp = TempDir::new().unwrap();
-    let root = temp.path().to_path_buf();
+fn crlf_file_text_round_trips() {
+    let repo = temp_repo(&[(
+        "main.rs",
+        "fn main() {\r\n    println!(\"hi\");\r\n}\r\n",
+    )]);
+    let (_temp, indexer) = index_repo(
+        &repo,
+        IndexOptions {
+            force_reindex: true,
+            embed_semantic: false,
+            ..IndexOptions::default()
+        },
+    );
     let original = "fn main() {\r\n    println!(\"hi\");\r\n}\r\n";
-    std::fs::write(root.join("main.rs"), original).unwrap();
-
-    let index_path = temp.path().join("index.db");
-    let mut indexer = Indexer::new(IndexOptions {
-        root: root.clone(),
-        index_path: Some(index_path.clone()),
-        force_reindex: true,
-        embed_semantic: false,
-        ..IndexOptions::default()
-    })
-    .unwrap();
-    indexer.index_all().unwrap();
-
-    let store = IndexStore::open(&root, Some(&index_path)).unwrap();
-    let reconstructed = store.file_text("main.rs").unwrap().unwrap();
-    assert_eq!(reconstructed, original);
+    assert_eq!(indexer.store().file_text("main.rs").unwrap().unwrap(), original);
 }
 
 #[test]
-fn gitignore_negation_keeps_exception_files() {
-    let temp = TempDir::new().unwrap();
-    let root = temp.path().to_path_buf();
-    std::fs::write(root.join(".gitignore"), "*.txt\n!important.txt\n").unwrap();
-    std::fs::write(root.join("skip.txt"), "noise\n").unwrap();
-    std::fs::write(root.join("important.txt"), "keep\n").unwrap();
+fn gitignore_patterns() {
+    let cases: &[(&[&str], &[&str], &[&str])] = &[
+        (&["*.pyc"], &["keep.py"], &["skip.pyc"]),
+        (&["*.txt", "!important.txt"], &["important.txt"], &["skip.txt"]),
+    ];
 
-    let mut indexer = Indexer::new(IndexOptions {
-        root: root.clone(),
-        index_path: Some(temp.path().join("index.db")),
-        force_reindex: true,
-        ..IndexOptions::default()
-    })
-    .unwrap();
-    indexer.index_all().unwrap();
-
-    let paths = indexer.store().all_file_paths().unwrap();
-    assert!(paths.iter().any(|p| p.ends_with("important.txt")));
-    assert!(!paths.iter().any(|p| p.ends_with("skip.txt")));
+    for (ignore_lines, kept, skipped) in cases {
+        let mut files: Vec<(&str, String)> =
+            vec![(".gitignore", ignore_lines.join("\n"))];
+        for name in *kept {
+            files.push((name, "ok\n".into()));
+        }
+        for name in *skipped {
+            files.push((name, "no\n".into()));
+        }
+        let file_refs: Vec<(&str, &str)> = files.iter().map(|(p, c)| (*p, c.as_str())).collect();
+        let repo = temp_repo(&file_refs);
+        let (_temp, indexer) = index_repo(
+            &repo,
+            IndexOptions {
+                force_reindex: true,
+                ..IndexOptions::default()
+            },
+        );
+        let paths = indexer.store().all_file_paths().unwrap();
+        for name in *kept {
+            assert!(paths.iter().any(|p| p.ends_with(name)), "keep {name}");
+        }
+        for name in *skipped {
+            assert!(!paths.iter().any(|p| p.ends_with(name)), "skip {name}");
+        }
+    }
 }

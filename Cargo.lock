@@ -117,6 +117,7 @@ dependencies = [
  "anyhow",
  "ast-sgrep-embed",
  "ast-sgrep-lang",
+ "ast-sgrep-testkit",
  "blake3",
  "criterion",
  "rusqlite",
@@ -143,6 +144,7 @@ name = "ast-sgrep-lang"
 version = "1.0.0-alpha.0"
 dependencies = [
  "anyhow",
+ "ast-sgrep-testkit",
  "regex",
  "serde",
  "tree-sitter",
@@ -161,6 +163,7 @@ version = "1.0.0-alpha.0"
 dependencies = [
  "anyhow",
  "ast-sgrep-core",
+ "ast-sgrep-testkit",
  "serde",
  "serde_json",
  "tempfile",
@@ -171,8 +174,21 @@ name = "ast-sgrep-plugins"
 version = "1.0.0-alpha.0"
 dependencies = [
  "ast-sgrep-core",
+ "ast-sgrep-testkit",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "ast-sgrep-testkit"
+version = "1.0.0-alpha.0"
+dependencies = [
+ "ast-sgrep-core",
+ "ast-sgrep-embed",
+ "ast-sgrep-lang",
+ "ast-sgrep-lsp",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]

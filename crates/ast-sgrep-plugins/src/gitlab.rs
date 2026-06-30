@@ -37,28 +37,12 @@ pub fn to_gitlab_json(response: &SearchResponse) -> serde_json::Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ast_sgrep_core::search::{HitKind, SearchHit};
+    use ast_sgrep_testkit::sample_search_response;
 
     #[test]
     fn gitlab_shape_has_data_array() {
-        let response = SearchResponse {
-            query: "process".into(),
-            limit: 8,
-            hits: vec![SearchHit {
-                kind: HitKind::Caller,
-                file: "src/lib.rs".into(),
-                line_start: 10,
-                line_end: 10,
-                symbol: None,
-                caller: Some("main".into()),
-                callee: Some("process_request".into()),
-                language: Some("rust".into()),
-                score: 8.0,
-                excerpt: "process_request(x)".into(),
-            }],
-        };
-        let json = to_gitlab_json(&response);
+        let json = to_gitlab_json(&sample_search_response());
         assert_eq!(json["data"].as_array().unwrap().len(), 1);
-        assert_eq!(json["data"][0]["startline"], 10);
+        assert_eq!(json["data"][0]["startline"], 1);
     }
 }

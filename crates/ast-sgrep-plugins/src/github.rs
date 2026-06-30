@@ -43,27 +43,11 @@ pub fn to_github_json(response: &SearchResponse) -> serde_json::Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ast_sgrep_core::search::{HitKind, SearchHit};
+    use ast_sgrep_testkit::sample_search_response;
 
     #[test]
     fn github_shape_has_items() {
-        let response = SearchResponse {
-            query: "auth".into(),
-            limit: 16,
-            hits: vec![SearchHit {
-                kind: HitKind::Def,
-                file: "src/main.rs".into(),
-                line_start: 1,
-                line_end: 3,
-                symbol: Some("auth_refresh".into()),
-                caller: None,
-                callee: None,
-                language: Some("rust".into()),
-                score: 10.0,
-                excerpt: "fn auth_refresh() {}".into(),
-            }],
-        };
-        let json = to_github_json(&response);
+        let json = to_github_json(&sample_search_response());
         assert_eq!(json["total_count"], 1);
         assert_eq!(json["items"][0]["path"], "src/main.rs");
     }

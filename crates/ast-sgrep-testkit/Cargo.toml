@@ -1,0 +1,16 @@
+[package]
+name = "ast-sgrep-testkit"
+description = "Shared test harness for ast-sgrep integration tests"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+ast-sgrep-core = { path = "../ast-sgrep-core" }
+ast-sgrep-embed = { path = "../ast-sgrep-embed" }
+ast-sgrep-lang = { path = "../ast-sgrep-lang" }
+ast-sgrep-lsp = { path = "../ast-sgrep-lsp" }
+serde_json.workspace = true
+tempfile.workspace = true
