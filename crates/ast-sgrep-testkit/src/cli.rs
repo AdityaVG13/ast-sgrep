@@ -1,0 +1,71 @@
+use std::path::{Path, PathBuf};
+use std::process::{Command, Output};
+
+use serde_json::Value;
+use tempfile::TempDir;
+
+use crate::fixture::sample_root;
+
+/// Indexed CLI session over the sample fixture.
+pub struct CliSession {
+    pub _temp: TempDir,
+    pub root: PathBuf,
+    pub index_path: PathBuf,
+    pub bin: PathBuf,
+}
+
+impl CliSession {
+    pub fn sample(bin: PathBuf) -> Self {
+        let temp = TempDir::new().expect("tempdir");
+        let root = sample_root();
+        let index_path = temp.path().join("index.db");
+        let session = Self {
+            _temp: temp,
+            root,
+            index_path,
+            bin,
+        };
+        session.index().expect("index sample fixture");
+        session
+    }
+
+    pub fn index(&self) -> Result<Output, String> {
+        self.run(&[
+            "--index-path",
+            self.index_path.to_str().unwrap(),
+            "index",
+            self.root.to_str().unwrap(),
+        ])
+    }
+
+    pub fn search_json(&self, query: &str, extra: &[&str]) -> Value {
+        let mut args = vec!["--index-path", self.index_path.to_str().unwrap(), "--json"];
+        args.extend(extra);
+        if !query.is_empty() {
+            args.push(query);
+        }
+        args.push(self.root.to_str().unwrap());
+        let out = self.run(&args).expect("search");
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        serde_json::from_slice(&out.stdout).expect("search json")
+    }
+
+    pub fn run(&self, args: &[&str]) -> Result<Output, String> {
+        Command::new(&self.bin)
+            .args(args)
+            .output()
+            .map_err(|e| e.to_string())
+    }
+}
+
+/// Run a one-shot CLI command against a path.
+pub fn run_cli(bin: &Path, args: &[&str]) -> Output {
+    Command::new(bin)
+        .args(args)
+        .output()
+        .expect("spawn cli")
+}

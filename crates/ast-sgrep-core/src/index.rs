@@ -31,6 +31,29 @@ impl EmbedBackend {
             EmbedBackend::Semantic => ast_sgrep_embed::EmbedPreference::Semantic,
         }
     }
+
+    /// Parse backend name from config strings (`cloud`, `ollama`, `semantic`, `local`).
+    pub fn parse(s: &str) -> Self {
+        match s.to_lowercase().as_str() {
+            "cloud" => EmbedBackend::Cloud,
+            "ollama" => EmbedBackend::Ollama,
+            "semantic" | "local" => EmbedBackend::Semantic,
+            _ => EmbedBackend::Auto,
+        }
+    }
+
+    /// Map CLI/LSP boolean flags to a single backend preference.
+    pub fn from_flags(cloud: bool, ollama: bool, semantic_only: bool) -> Self {
+        if cloud {
+            EmbedBackend::Cloud
+        } else if ollama {
+            EmbedBackend::Ollama
+        } else if semantic_only {
+            EmbedBackend::Semantic
+        } else {
+            EmbedBackend::Auto
+        }
+    }
 }
 
 /// Options for indexing a repository.

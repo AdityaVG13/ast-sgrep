@@ -3,7 +3,7 @@ use std::time::Instant;
 
 use anyhow::Context;
 use ast_sgrep_core::{
-    format_hit_line, IndexOptions, IndexStats, Indexer, SearchOptions, Searcher,
+    format_hit_line, EmbedBackend, IndexOptions, IndexStats, Indexer, SearchOptions, Searcher,
 };
 use clap::{Parser, Subcommand};
 
@@ -222,21 +222,9 @@ fn index_options(root: &std::path::Path, cli: &Cli) -> IndexOptions {
         respect_gitignore: true,
         use_tantivy: cli.tantivy,
         embed_semantic: !cli.no_embed,
-        embed_backend: embed_backend_from_cli(cli),
+        embed_backend: EmbedBackend::from_flags(cli.cloud_embed, cli.ollama_embed, cli.semantic_only),
         force_reindex: false,
         ann_threshold: cli.ann_threshold,
-    }
-}
-
-fn embed_backend_from_cli(cli: &Cli) -> ast_sgrep_core::EmbedBackend {
-    if cli.cloud_embed {
-        ast_sgrep_core::EmbedBackend::Cloud
-    } else if cli.ollama_embed {
-        ast_sgrep_core::EmbedBackend::Ollama
-    } else if cli.semantic_only {
-        ast_sgrep_core::EmbedBackend::Semantic
-    } else {
-        ast_sgrep_core::EmbedBackend::Auto
     }
 }
 

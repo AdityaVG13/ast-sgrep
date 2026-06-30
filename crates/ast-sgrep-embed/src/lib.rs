@@ -6,7 +6,7 @@ mod ollama;
 mod provider;
 mod semantic;
 
-pub use math::{cosine_similarity, MIN_SIMILARITY};
+pub use math::{cosine_similarity, cosine_scores_for, top_by_similarity, MIN_SIMILARITY};
 
 pub use cloud::{embed_via_api, rank_by_vector, CloudEmbeddingConfig};
 pub use ollama::{embed_via_ollama, OllamaEmbeddingConfig};
@@ -83,11 +83,21 @@ pub fn rank_chunks_by_vector(
     chunks: &[SemanticChunkRow],
     limit: usize,
 ) -> Vec<(f32, String, u32, u32, String, String)> {
-    let mut scored: Vec<(f32, String, u32, u32, String, String)> = chunks
-        .iter()
-        .filter(|(_, _, _, _, _, emb)| emb.len() == query_vec.len())
-        .map(|(file, line_start, line_end, symbol, excerpt, emb)| {
-            let sim = cosine_similarity(query_vec, emb);
+    let scored = top_by_similarity(
+        cosine_scores_for(
+            query_vec,
+            chunks
+                .iter()
+                .enumerate()
+                .map(|(idx, (_, _, _, _, _, emb))| (idx, emb.as_slice())),
+        ),
+        limit,
+        Some(MIN_SIMILARITY),
+    );
+    scored
+        .into_iter()
+        .map(|(idx, sim)| {
+            let (file, line_start, line_end, symbol, excerpt, _) = &chunks[idx];
             (
                 sim,
                 file.clone(),
@@ -97,12 +107,6 @@ pub fn rank_chunks_by_vector(
                 excerpt.clone(),
             )
         })
-        .collect();
-    scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
-    scored
-        .into_iter()
-        .take(limit)
-        .filter(|(sim, _, _, _, _, _)| *sim > MIN_SIMILARITY)
         .collect()
 }
 

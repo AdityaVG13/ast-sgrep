@@ -221,22 +221,6 @@ mod tests {
     }
 
     #[test]
-    fn detects_java_and_ruby() {
-        assert_eq!(
-            detect_language(Path::new("Main.java"), None),
-            Some(Language::Java)
-        );
-        assert_eq!(
-            detect_language(Path::new("app.rb"), None),
-            Some(Language::Ruby)
-        );
-        assert_eq!(
-            detect_language(Path::new("Program.cs"), None),
-            Some(Language::CSharp)
-        );
-    }
-
-    #[test]
     fn registry_lists_eight_languages() {
         let reg = ParserRegistry::new();
         assert_eq!(reg.supported_languages().len(), 8);

@@ -1,154 +1,51 @@
 //! Plugin format output tests via CLI.
 
+use ast_sgrep_testkit::CliSession;
+use serde_json::Value;
 use std::path::PathBuf;
-use std::process::Command;
 
-#[test]
-fn cli_github_json_format() {
-    let bin = PathBuf::from(env!("CARGO_BIN_EXE_asgrep"));
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../tests/fixtures/sample")
-        .canonicalize()
-        .unwrap();
-    let temp = tempfile::TempDir::new().unwrap();
-    let index = temp.path().join("index.db");
+fn asgrep_bin() -> PathBuf {
+    PathBuf::from(env!("CARGO_BIN_EXE_asgrep"))
+}
 
-    Command::new(&bin)
-        .args([
-            "--index-path",
-            index.to_str().unwrap(),
-            "index",
-            root.to_str().unwrap(),
-        ])
-        .output()
-        .unwrap();
-
-    let out = Command::new(&bin)
-        .args([
-            "--index-path",
-            index.to_str().unwrap(),
-            "--json",
-            "--format",
-            "github",
-            "process_request",
-            root.to_str().unwrap(),
-        ])
-        .output()
-        .unwrap();
-    assert!(out.status.success());
-    let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+fn assert_github(json: &Value) {
     assert!(json["items"].is_array());
     assert_eq!(json["provider"], "ast-sgrep");
 }
 
-#[test]
-fn cli_gitlab_json_format() {
-    let bin = PathBuf::from(env!("CARGO_BIN_EXE_asgrep"));
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../tests/fixtures/sample")
-        .canonicalize()
-        .unwrap();
-    let temp = tempfile::TempDir::new().unwrap();
-    let index = temp.path().join("index.db");
-
-    Command::new(&bin)
-        .args([
-            "--index-path",
-            index.to_str().unwrap(),
-            "index",
-            root.to_str().unwrap(),
-        ])
-        .output()
-        .unwrap();
-
-    let out = Command::new(&bin)
-        .args([
-            "--index-path",
-            index.to_str().unwrap(),
-            "--json",
-            "--format",
-            "gitlab",
-            "auth_refresh",
-            root.to_str().unwrap(),
-        ])
-        .output()
-        .unwrap();
-    assert!(out.status.success());
-    let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+fn assert_gitlab(json: &Value) {
     assert!(json["data"].is_array());
 }
 
-#[test]
-fn cli_agent_json_format() {
-    let bin = PathBuf::from(env!("CARGO_BIN_EXE_asgrep"));
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../tests/fixtures/sample")
-        .canonicalize()
-        .unwrap();
-    let temp = tempfile::TempDir::new().unwrap();
-    let index = temp.path().join("index.db");
-
-    Command::new(&bin)
-        .args([
-            "--index-path",
-            index.to_str().unwrap(),
-            "index",
-            root.to_str().unwrap(),
-        ])
-        .output()
-        .unwrap();
-
-    let out = Command::new(&bin)
-        .args([
-            "--index-path",
-            index.to_str().unwrap(),
-            "--json",
-            "--format",
-            "agent",
-            "credential renewal",
-            root.to_str().unwrap(),
-        ])
-        .output()
-        .unwrap();
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
-    let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+fn assert_agent(json: &Value) {
     assert_eq!(json["provider"], "ast-sgrep");
     assert!(json["hits"].is_array());
     assert!(json["suggested_next"].is_array());
 }
 
-#[test]
-fn cli_semantic_subcommand() {
-    let bin = PathBuf::from(env!("CARGO_BIN_EXE_asgrep"));
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../tests/fixtures/sample")
-        .canonicalize()
-        .unwrap();
-    let temp = tempfile::TempDir::new().unwrap();
-    let index = temp.path().join("index.db");
-
-    Command::new(&bin)
-        .args([
-            "--index-path",
-            index.to_str().unwrap(),
-            "index",
-            root.to_str().unwrap(),
-        ])
-        .output()
-        .unwrap();
-
-    let out = Command::new(&bin)
-        .args([
-            "--index-path",
-            index.to_str().unwrap(),
-            "--json",
-            "semantic",
-            "credential renewal",
-            root.to_str().unwrap(),
-        ])
-        .output()
-        .unwrap();
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
-    let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+fn assert_semantic(json: &Value) {
     assert_eq!(json["has_semantic_hits"], true);
+}
+
+#[test]
+fn cli_plugin_formats() {
+    let session = CliSession::sample(asgrep_bin());
+
+    let cases: &[(&str, &str, &[&str], fn(&Value))] = &[
+        ("github", "process_request", &["--format", "github"], assert_github),
+        ("gitlab", "auth_refresh", &["--format", "gitlab"], assert_gitlab),
+        (
+            "agent",
+            "credential renewal",
+            &["--format", "agent"],
+            assert_agent,
+        ),
+        ("semantic", "credential renewal", &["semantic"], assert_semantic),
+    ];
+
+    for (name, query, extra, assert_shape) in cases {
+        let json = session.search_json(query, extra);
+        assert_shape(&json);
+        let _ = name;
+    }
 }

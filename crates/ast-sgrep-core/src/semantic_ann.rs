@@ -7,7 +7,9 @@
 use std::io::{Read, Write};
 use std::sync::{Arc, Mutex};
 
-use ast_sgrep_embed::{cosine_similarity, SemanticChunkRow, MIN_SIMILARITY};
+use ast_sgrep_embed::{
+    cosine_similarity, cosine_scores_for, top_by_similarity, SemanticChunkRow, MIN_SIMILARITY,
+};
 
 use crate::semantic_ivf::{
     compute_ann_fingerprint, invalidate_semantic_ivf, load_semantic_ivf, save_semantic_ivf,
@@ -229,17 +231,17 @@ fn normalize_vec(vec: &[f32]) -> Vec<f32> {
 fn brute_force_flat(flat: &[f32], dim: usize, query: &[f32], limit: usize) -> Vec<(usize, f32)> {
     let n = flat.len() / dim;
     let q = normalize_vec(query);
-    let mut scored: Vec<(usize, f32)> = (0..n)
-        .map(|i| {
-            let start = i * dim;
-            let sim = cosine_similarity(&q, &flat[start..start + dim]);
-            (i, sim)
-        })
-        .filter(|(_, sim)| *sim > MIN_SIMILARITY)
-        .collect();
-    scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-    scored.truncate(limit);
-    scored
+    top_by_similarity(
+        cosine_scores_for(
+            &q,
+            (0..n).map(|i| {
+                let start = i * dim;
+                (i, &flat[start..start + dim])
+            }),
+        ),
+        limit,
+        Some(MIN_SIMILARITY),
+    )
 }
 
 fn kmeans(vectors: &[Vec<f32>], k: usize, max_iters: usize) -> (Vec<Vec<f32>>, Vec<usize>) {

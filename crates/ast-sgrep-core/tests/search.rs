@@ -4,7 +4,7 @@ use ast_sgrep_core::search::HitKind;
 use ast_sgrep_core::{IndexOptions, SearchOptions};
 use ast_sgrep_testkit::{
     assert_excerpt_contains, assert_has_embed_hits, assert_no_embed_hits, assert_query_finds,
-    hybrid_searcher, index_sample, searcher_from, semantic_searcher, top_symbols,
+    assert_semantic_finds, hybrid_searcher, index_sample, searcher_from, semantic_searcher,
 };
 
 #[test]
@@ -57,16 +57,7 @@ fn semantic_synonym_queries() {
     ];
 
     for (query, symbols) in cases {
-        let response = searcher.search(query).unwrap();
-        assert!(
-            symbols.iter().any(|sym| {
-                response.hits.iter().any(|h| {
-                    h.symbol.as_deref() == Some(*sym) || h.excerpt.contains(sym)
-                })
-            }),
-            "query {query:?} expected one of {symbols:?}; hits: {:?}",
-            top_symbols(&response)
-        );
+        assert_semantic_finds(&searcher, query, symbols);
     }
 }
 

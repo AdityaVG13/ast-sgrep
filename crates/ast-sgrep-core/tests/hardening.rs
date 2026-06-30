@@ -3,7 +3,7 @@
 use ast_sgrep_core::store::IndexStore;
 use ast_sgrep_core::{IndexOptions, Indexer, SearchOptions, Searcher};
 use ast_sgrep_embed::SemanticLocalEmbedding;
-use ast_sgrep_testkit::{index_repo, index_sample, sample_root, temp_repo};
+use ast_sgrep_testkit::{index_repo, index_sample, reopen_indexer, sample_root, temp_repo};
 
 #[test]
 fn semantic_chunks_reference_their_symbols() {
@@ -28,13 +28,13 @@ fn incremental_skip_uses_content_hash() {
         force_reindex: true,
         ..IndexOptions::default()
     });
-    let opts = IndexOptions {
-        root: indexed.indexer.store().root().to_path_buf(),
-        index_path: Some(indexed.indexer.store().db_path().to_path_buf()),
-        force_reindex: false,
-        ..IndexOptions::default()
-    };
-    let mut indexer = Indexer::new(opts).unwrap();
+    let mut indexer = reopen_indexer(
+        &indexed,
+        IndexOptions {
+            force_reindex: false,
+            ..IndexOptions::default()
+        },
+    );
     let stats = indexer.index_all().unwrap();
     assert_eq!(stats.files_indexed, 0);
     assert!(stats.files_skipped > 0);

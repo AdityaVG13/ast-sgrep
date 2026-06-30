@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use rusqlite::params;
 
 use crate::query::ParsedQuery;
@@ -6,6 +8,9 @@ use crate::store::IndexStore;
 use crate::Result;
 use crate::search::hits::matches_lang;
 use crate::search::types::{HitKind, SearchHit, SearchOptions};
+
+type LineRanks = HashMap<(String, u32), Vec<usize>>;
+type LineMeta = HashMap<(String, u32), (Option<String>, String)>;
 
 pub fn lexical_pass(
     store: &IndexStore,
@@ -35,25 +40,20 @@ fn lexical_from_sidecar(
     sidecar: &crate::tantivy_index::TantivySidecar,
 ) -> Result<Vec<SearchHit>> {
     let results = sidecar.search(&parsed.terms, 100)?;
-    let mut line_ranks: std::collections::HashMap<(String, u32), Vec<usize>> =
-        std::collections::HashMap::new();
-    let mut line_meta: std::collections::HashMap<(String, u32), (Option<String>, String)> =
-        std::collections::HashMap::new();
+    let (mut line_ranks, mut line_meta) = empty_lexical_maps();
     for (file, line_no, content, language, rank) in results {
-        if !matches_lang(language.as_deref(), options.lang_filter.as_deref()) {
-            continue;
-        }
-        let key = (file.clone(), line_no);
-        line_ranks.entry(key.clone()).or_default().push(rank);
-        line_meta.insert(key, (language, content));
+        accumulate_lexical_line(
+            options,
+            &mut line_ranks,
+            &mut line_meta,
+            file,
+            line_no,
+            language,
+            content,
+            rank,
+        );
     }
-    let mut hits = hits_from_ranks(line_ranks, line_meta);
-    hits.sort_by(|a, b| {
-        b.score
-            .partial_cmp(&a.score)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-    Ok(hits)
+    Ok(finalize_lexical_hits(line_ranks, line_meta))
 }
 
 fn lexical_from_fts(
@@ -62,10 +62,7 @@ fn lexical_from_fts(
     parsed: &ParsedQuery,
 ) -> Result<Vec<SearchHit>> {
     let conn = store.connection();
-    let mut line_ranks: std::collections::HashMap<(String, u32), Vec<usize>> =
-        std::collections::HashMap::new();
-    let mut line_meta: std::collections::HashMap<(String, u32), (Option<String>, String)> =
-        std::collections::HashMap::new();
+    let (mut line_ranks, mut line_meta) = empty_lexical_maps();
 
     for term in &parsed.terms {
         let fts_term = crate::fts::escape_fts_term(term);
@@ -88,28 +85,55 @@ fn lexical_from_fts(
         })?;
         for (rank, row) in rows.enumerate() {
             let (path, language, line_no, content) = row?;
-            if !matches_lang(language.as_deref(), options.lang_filter.as_deref()) {
-                continue;
-            }
-            let key = (path.clone(), line_no);
-            line_ranks.entry(key.clone()).or_default().push(rank);
-            line_meta.insert(key, (language, content));
+            accumulate_lexical_line(
+                options,
+                &mut line_ranks,
+                &mut line_meta,
+                path,
+                line_no,
+                language,
+                content,
+                rank,
+            );
         }
     }
 
+    Ok(finalize_lexical_hits(line_ranks, line_meta))
+}
+
+fn empty_lexical_maps() -> (LineRanks, LineMeta) {
+    (HashMap::new(), HashMap::new())
+}
+
+fn accumulate_lexical_line(
+    options: &SearchOptions,
+    line_ranks: &mut LineRanks,
+    line_meta: &mut LineMeta,
+    path: String,
+    line_no: u32,
+    language: Option<String>,
+    content: String,
+    rank: usize,
+) {
+    if !matches_lang(language.as_deref(), options.lang_filter.as_deref()) {
+        return;
+    }
+    let key = (path.clone(), line_no);
+    line_ranks.entry(key.clone()).or_default().push(rank);
+    line_meta.insert(key, (language, content));
+}
+
+fn finalize_lexical_hits(line_ranks: LineRanks, line_meta: LineMeta) -> Vec<SearchHit> {
     let mut hits = hits_from_ranks(line_ranks, line_meta);
     hits.sort_by(|a, b| {
         b.score
             .partial_cmp(&a.score)
             .unwrap_or(std::cmp::Ordering::Equal)
     });
-    Ok(hits)
+    hits
 }
 
-fn hits_from_ranks(
-    line_ranks: std::collections::HashMap<(String, u32), Vec<usize>>,
-    line_meta: std::collections::HashMap<(String, u32), (Option<String>, String)>,
-) -> Vec<SearchHit> {
+fn hits_from_ranks(line_ranks: LineRanks, line_meta: LineMeta) -> Vec<SearchHit> {
     line_ranks
         .into_iter()
         .map(|((path, line_no), ranks)| {

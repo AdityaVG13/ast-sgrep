@@ -33,7 +33,7 @@ impl AsgrepSettings {
             opts.embed_semantic = !no;
         }
         if let Some(ref backend) = self.embed_backend {
-            opts.embed_backend = parse_embed_backend(backend);
+            opts.embed_backend = EmbedBackend::parse(backend);
         }
         if self.cloud_embed == Some(true) {
             opts.embed_backend = EmbedBackend::Cloud;
@@ -71,15 +71,6 @@ impl AsgrepSettings {
         if let Some(ref p) = self.index_path {
             opts.index_path = Some(std::path::PathBuf::from(p));
         }
-    }
-}
-
-fn parse_embed_backend(s: &str) -> EmbedBackend {
-    match s.to_lowercase().as_str() {
-        "cloud" => EmbedBackend::Cloud,
-        "ollama" => EmbedBackend::Ollama,
-        "semantic" | "local" => EmbedBackend::Semantic,
-        _ => EmbedBackend::Auto,
     }
 }
 

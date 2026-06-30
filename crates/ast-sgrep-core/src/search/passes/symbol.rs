@@ -17,8 +17,20 @@ pub fn symbol_pass(
     excerpt: &dyn Fn(&str, u32, u32) -> Result<String>,
 ) -> Result<Vec<SearchHit>> {
     let mut hits = Vec::new();
-    hits.extend(def_hits_for_terms(store, options, parsed, excerpt)?);
-    hits.extend(caller_hits_for_terms(store, options, parsed, excerpt)?);
+    hits.extend(def_hits_for_terms(
+        store,
+        options,
+        parsed,
+        excerpt,
+        SYMBOL_SQL_LIMIT,
+    )?);
+    hits.extend(caller_hits_for_terms(
+        store,
+        options,
+        parsed,
+        excerpt,
+        CALLER_SQL_LIMIT,
+    )?);
     Ok(hits)
 }
 
@@ -86,11 +98,12 @@ pub fn anchor_pass(
     Ok(hits)
 }
 
-fn def_hits_for_terms(
+pub(crate) fn def_hits_for_terms(
     store: &IndexStore,
     options: &SearchOptions,
     parsed: &ParsedQuery,
     excerpt: &dyn Fn(&str, u32, u32) -> Result<String>,
+    limit: usize,
 ) -> Result<Vec<SearchHit>> {
     if parsed.terms.is_empty() {
         return Ok(Vec::new());
@@ -110,7 +123,7 @@ fn def_hits_for_terms(
     let mut hits = Vec::new();
     let mut params_vec: Vec<Box<dyn rusqlite::types::ToSql>> =
         bind.into_iter().map(|s| Box::new(s) as _).collect();
-    params_vec.push(Box::new(SYMBOL_SQL_LIMIT as i64));
+    params_vec.push(Box::new(limit as i64));
     let params_refs: Vec<&dyn rusqlite::types::ToSql> =
         params_vec.iter().map(|p| p.as_ref()).collect();
 
@@ -148,11 +161,12 @@ fn def_hits_for_terms(
     Ok(hits)
 }
 
-fn caller_hits_for_terms(
+pub(crate) fn caller_hits_for_terms(
     store: &IndexStore,
     options: &SearchOptions,
     parsed: &ParsedQuery,
     excerpt: &dyn Fn(&str, u32, u32) -> Result<String>,
+    limit: usize,
 ) -> Result<Vec<SearchHit>> {
     if parsed.terms.is_empty() {
         return Ok(Vec::new());
@@ -170,7 +184,7 @@ fn caller_hits_for_terms(
     let mut stmt = conn.prepare(&format!("{sql} LIMIT ?{}", bind.len() + 1))?;
     let mut params_vec: Vec<Box<dyn rusqlite::types::ToSql>> =
         bind.into_iter().map(|s| Box::new(s) as _).collect();
-    params_vec.push(Box::new(CALLER_SQL_LIMIT as i64));
+    params_vec.push(Box::new(limit as i64));
     let params_refs: Vec<&dyn rusqlite::types::ToSql> =
         params_vec.iter().map(|p| p.as_ref()).collect();
 

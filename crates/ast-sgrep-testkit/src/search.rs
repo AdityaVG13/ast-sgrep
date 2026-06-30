@@ -22,16 +22,21 @@ pub fn assert_excerpt_contains(searcher: &Searcher, query: &str, needle: &str) {
     assert_query_finds(searcher, query, |h| h.excerpt.contains(needle));
 }
 
-pub fn assert_has_embed_hits(searcher: &Searcher, query: &str) {
+pub fn assert_semantic_finds(searcher: &Searcher, query: &str, symbols: &[&str]) {
     let response = searcher.search(query).expect("search");
     assert!(
-        response.hits.iter().any(|h| h.kind == HitKind::Embed)
-            || response
-                .hits
-                .iter()
-                .any(|h| h.excerpt.contains("auth_refresh") || h.excerpt.contains("authRefresh")),
-        "expected embed or semantic excerpt hits for {query:?}"
+        symbols.iter().any(|sym| {
+            response.hits.iter().any(|h| {
+                h.symbol.as_deref() == Some(*sym) || h.excerpt.contains(sym)
+            })
+        }),
+        "query {query:?} expected one of {symbols:?}; hits: {:?}",
+        top_symbols(&response)
     );
+}
+
+pub fn assert_has_embed_hits(searcher: &Searcher, query: &str) {
+    assert_semantic_finds(searcher, query, &["auth_refresh", "authRefresh"]);
 }
 
 pub fn assert_no_embed_hits(searcher: &Searcher, query: &str) {

@@ -9,6 +9,20 @@ pub struct IndexedFixture {
     pub indexer: Indexer,
 }
 
+/// Build index options that reopen an existing indexed fixture.
+pub fn index_options_from(indexed: &IndexedFixture, overrides: IndexOptions) -> IndexOptions {
+    IndexOptions {
+        root: indexed.indexer.store().root().to_path_buf(),
+        index_path: Some(indexed.indexer.store().db_path().to_path_buf()),
+        ..overrides
+    }
+}
+
+/// Reopen an indexer against a previously indexed fixture.
+pub fn reopen_indexer(indexed: &IndexedFixture, overrides: IndexOptions) -> Indexer {
+    Indexer::new(index_options_from(indexed, overrides)).expect("indexer")
+}
+
 /// Index the sample fixture with optional overrides.
 pub fn index_sample(mut opts: IndexOptions) -> IndexedFixture {
     let temp = TempDir::new().expect("tempdir");

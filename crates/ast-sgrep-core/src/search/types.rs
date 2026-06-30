@@ -1,5 +1,7 @@
 use std::path::PathBuf;
 
+use crate::EmbedBackend;
+
 /// Kind of search hit in output.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -91,6 +93,15 @@ impl SearchOptions {
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or(16)
+    }
+
+    pub fn embed_preference(&self) -> ast_sgrep_embed::EmbedPreference {
+        EmbedBackend::from_flags(
+            self.use_cloud_embed,
+            self.use_ollama_embed,
+            self.use_semantic_only,
+        )
+        .to_preference()
     }
 }
 

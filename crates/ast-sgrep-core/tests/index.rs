@@ -2,8 +2,8 @@
 
 use ast_sgrep_core::semantic_ann::{ann_threshold, should_use_ann};
 use ast_sgrep_core::semantic_ivf::{load_semantic_ivf, semantic_ivf_path};
-use ast_sgrep_core::{IndexOptions, Indexer, SearchOptions};
-use ast_sgrep_testkit::{index_sample, searcher_from};
+use ast_sgrep_core::{IndexOptions, SearchOptions};
+use ast_sgrep_testkit::{assert_semantic_finds, index_options_from, index_sample, reopen_indexer, searcher_from};
 
 #[test]
 fn incremental_reindex_is_stable() {
@@ -11,12 +11,10 @@ fn incremental_reindex_is_stable() {
     let first = indexed.indexer.store().status().unwrap().file_count;
     assert!(first >= 4);
 
-    let mut second_pass = Indexer::new(IndexOptions {
-        root: indexed.indexer.store().root().to_path_buf(),
-        index_path: Some(indexed.indexer.store().db_path().to_path_buf()),
-        ..IndexOptions::default()
-    })
-    .unwrap();
+    let mut second_pass = reopen_indexer(
+        &indexed,
+        IndexOptions::default(),
+    );
     let stats = second_pass.index_all().unwrap();
     assert_eq!(stats.files_indexed, 0);
     assert_eq!(stats.files_removed, 0);
@@ -25,20 +23,18 @@ fn incremental_reindex_is_stable() {
 #[test]
 fn force_reindex_reextracts_symbols() {
     let indexed = index_sample(IndexOptions::default());
-    let opts = IndexOptions {
-        root: indexed.indexer.store().root().to_path_buf(),
-        index_path: Some(indexed.indexer.store().db_path().to_path_buf()),
-        ..IndexOptions::default()
-    };
+    let opts = index_options_from(&indexed, IndexOptions::default());
 
-    let mut indexer = Indexer::new(opts.clone()).unwrap();
+    let mut indexer = reopen_indexer(&indexed, opts.clone());
     assert_eq!(indexer.index_all().unwrap().symbols_extracted, 0);
 
-    let mut force = Indexer::new(IndexOptions {
-        force_reindex: true,
-        ..opts
-    })
-    .unwrap();
+    let mut force = reopen_indexer(
+        &indexed,
+        IndexOptions {
+            force_reindex: true,
+            ..opts
+        },
+    );
     assert!(force.reindex_all().unwrap().symbols_extracted > 0);
 }
 
@@ -134,10 +130,7 @@ fn ivf_backed_search_finds_synonyms() {
             ..SearchOptions::default()
         },
     );
-    let response = searcher.search("credential renewal").unwrap();
-    assert!(response.hits.iter().any(|h| {
-        h.symbol.as_deref() == Some("auth_refresh") || h.excerpt.contains("auth_refresh")
-    }));
+    assert_semantic_finds(&searcher, "credential renewal", &["auth_refresh"]);
 }
 
 #[test]

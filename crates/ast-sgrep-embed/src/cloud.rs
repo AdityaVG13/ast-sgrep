@@ -1,7 +1,5 @@
 //! Cloud embedding provider (OpenAI-compatible API).
 
-use crate::cosine_similarity;
-
 #[cfg(feature = "cloud")]
 use serde::{Deserialize, Serialize};
 
@@ -74,22 +72,31 @@ pub fn embed_via_api(_text: &str, _config: &CloudEmbeddingConfig) -> Result<Vec<
     Err("cloud embedding feature not enabled; rebuild with --features cloud".to_string())
 }
 
+use crate::{cosine_scores_for, top_by_similarity};
+
 /// Rank lines using a precomputed query embedding vector.
 pub fn rank_by_vector(
     query_vec: &[f32],
     lines: &[(String, u32, String, Vec<f32>)],
     limit: usize,
 ) -> Vec<(f32, String, u32, String)> {
-    let mut scored: Vec<(f32, String, u32, String)> = lines
-        .iter()
-        .filter(|(_, _, _, emb)| emb.len() == query_vec.len())
-        .map(|(file, line_no, content, emb)| {
-            let sim = cosine_similarity(query_vec, emb);
-            (sim, file.clone(), *line_no, content.clone())
-        })
-        .collect();
-    scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
-    scored.into_iter().take(limit).collect()
+    top_by_similarity(
+        cosine_scores_for(
+            query_vec,
+            lines
+                .iter()
+                .enumerate()
+                .map(|(idx, (_, _, _, emb))| (idx, emb.as_slice())),
+        ),
+        limit,
+        None,
+    )
+    .into_iter()
+    .map(|(idx, sim)| {
+        let (file, line_no, content, _) = &lines[idx];
+        (sim, file.clone(), *line_no, content.clone())
+    })
+    .collect()
 }
 
 #[cfg(test)]

@@ -104,6 +104,7 @@ dependencies = [
  "anyhow",
  "ast-sgrep-core",
  "ast-sgrep-plugins",
+ "ast-sgrep-testkit",
  "clap",
  "serde",
  "serde_json",

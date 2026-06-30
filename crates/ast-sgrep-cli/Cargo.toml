@@ -28,5 +28,6 @@ serde.workspace = true
 serde_json.workspace = true
 
 [dev-dependencies]
+ast-sgrep-testkit = { path = "../ast-sgrep-testkit" }
 serde_json.workspace = true
 tempfile.workspace = true
