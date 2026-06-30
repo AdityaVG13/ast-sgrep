@@ -9,6 +9,8 @@ use crate::rank::{
     SCORE_GRAPH,
 };
 use ast_sgrep_embed::{embed_from_bytes, rank_by_similarity};
+#[cfg(feature = "cloud-embed")]
+use ast_sgrep_embed::{rank_by_vector, CloudEmbeddingConfig};
 use crate::store::IndexStore;
 use crate::Result;
 
@@ -71,6 +73,10 @@ pub struct SearchOptions {
     pub lang_filter: Option<String>,
     /// Enable local embedding semantic search pass.
     pub use_embed: bool,
+    /// Use tantivy sidecar for lexical search (large repos).
+    pub use_tantivy: bool,
+    /// Use cloud API for query embeddings (requires ASGREP_EMBED_API_KEY).
+    pub use_cloud_embed: bool,
 }
 
 impl Default for SearchOptions {
@@ -81,6 +87,8 @@ impl Default for SearchOptions {
             limit: Self::default_limit(),
             lang_filter: None,
             use_embed: std::env::var("ASGREP_EMBED").ok().as_deref() == Some("1"),
+            use_tantivy: std::env::var("ASGREP_TANTIVY").ok().as_deref() == Some("1"),
+            use_cloud_embed: std::env::var("ASGREP_CLOUD_EMBED").ok().as_deref() == Some("1"),
         }
     }
 }
@@ -186,7 +194,25 @@ impl Searcher {
             }
             lines.push((file, line_no, content, embed_from_bytes(&vector)));
         }
-        let ranked = rank_by_similarity(&query, &lines, 50);
+        let ranked = if self.options.use_cloud_embed {
+            #[cfg(feature = "cloud-embed")]
+            {
+                if let Some(config) = CloudEmbeddingConfig::from_env() {
+                    match ast_sgrep_embed::embed_via_api(&query, &config) {
+                        Ok(query_vec) => rank_by_vector(&query_vec, &lines, 50),
+                        Err(_) => rank_by_similarity(&query, &lines, 50),
+                    }
+                } else {
+                    rank_by_similarity(&query, &lines, 50)
+                }
+            }
+            #[cfg(not(feature = "cloud-embed"))]
+            {
+                rank_by_similarity(&query, &lines, 50)
+            }
+        } else {
+            rank_by_similarity(&query, &lines, 50)
+        };
         Ok(ranked
             .into_iter()
             .map(|(sim, file, line_no, content)| SearchHit {
@@ -207,6 +233,54 @@ impl Searcher {
     fn lexical_pass(&self, parsed: &ParsedQuery) -> Result<Vec<SearchHit>> {
         if parsed.terms.is_empty() {
             return Ok(Vec::new());
+        }
+
+        if self.options.use_tantivy {
+            let sidecar = crate::tantivy_index::TantivySidecar::open(&self.options.root)?;
+            if sidecar.exists() {
+                let results = sidecar.search(&parsed.terms, 100)?;
+                let mut line_ranks: std::collections::HashMap<(String, u32), Vec<usize>> =
+                    std::collections::HashMap::new();
+                let mut line_meta: std::collections::HashMap<(String, u32), (Option<String>, String)> =
+                    std::collections::HashMap::new();
+                for (file, line_no, content, language, rank) in results {
+                    if let Some(ref lang_filter) = self.options.lang_filter {
+                        if language.as_deref() != Some(lang_filter.as_str()) {
+                            continue;
+                        }
+                    }
+                    let key = (file.clone(), line_no);
+                    line_ranks.entry(key.clone()).or_default().push(rank);
+                    line_meta.insert(key, (language, content));
+                }
+                let mut hits: Vec<SearchHit> = line_ranks
+                    .into_iter()
+                    .map(|((path, line_no), ranks)| {
+                        let (language, content) = line_meta
+                            .get(&(path.clone(), line_no))
+                            .cloned()
+                            .unwrap_or((None, String::new()));
+                        SearchHit {
+                            kind: HitKind::Asgrep,
+                            file: path,
+                            line_start: line_no,
+                            line_end: line_no,
+                            symbol: None,
+                            caller: None,
+                            callee: None,
+                            language,
+                            score: score_lexical_rrf(&ranks),
+                            excerpt: content,
+                        }
+                    })
+                    .collect();
+                hits.sort_by(|a, b| {
+                    b.score
+                        .partial_cmp(&a.score)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                });
+                return Ok(hits);
+            }
         }
 
         let conn = self.store.connection();

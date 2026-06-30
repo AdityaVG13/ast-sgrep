@@ -23,9 +23,9 @@ ast-grep finds shapes. **ast-sgrep** finds intent with graph context.
 ## Install
 
 ```bash
-git clone https://github.com/ast-sgrep/ast-sgrep
-cd ast-sgrep
-cargo install --path crates/ast-sgrep-cli
+cargo install ast-sgrep-cli
+# optional LSP server
+cargo install ast-sgrep-lsp
 ```
 
 Binary name: `asgrep`
@@ -48,6 +48,13 @@ asgrep "pattern:fn $NAME($$$)"   # delegates to ast-grep if installed
 
 # Semantic search (local embeddings, no API keys)
 asgrep --embed "auth refresh"
+
+# Cloud embeddings (OpenAI-compatible API)
+export ASGREP_EMBED_API_KEY=sk-...
+asgrep --cloud-embed "auth refresh"
+
+# Large monorepos: lexical FTS sidecar
+asgrep --tantivy index .
 
 # Benchmarks
 asgrep bench .
@@ -122,8 +129,10 @@ ast-sgrep/
   crates/ast-sgrep-core/   # Index + hybrid search engine
   crates/ast-sgrep-cli/    # asgrep / ast-sgrep binaries
   crates/ast-sgrep-lang/   # tree-sitter parsers (Rust, TS, JS, Python, Go)
-  crates/ast-sgrep-embed/  # Optional offline embedding plugin
+  crates/ast-sgrep-embed/  # Local + cloud embedding plugins
+  crates/ast-sgrep-lsp/    # LSP server (asgrep-lsp)
   tests/fixtures/          # Polyglot + false-positive test fixtures
+  .github/workflows/       # CI + crates.io publish
 ```
 
 ### Search passes

@@ -4,6 +4,16 @@ description = "CLI for ast-sgrep hybrid code search"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "../../README.md"
+keywords = ["cli", "code-search", "asgrep"]
+categories = ["command-line-utilities", "development-tools"]
+documentation = "https://docs.rs/ast-sgrep-cli"
+
+[features]
+default = []
+cloud-embed = ["ast-sgrep-core/cloud-embed"]
 
 [[bin]]
 name = "asgrep"

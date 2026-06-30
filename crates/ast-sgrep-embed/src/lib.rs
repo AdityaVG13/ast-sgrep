@@ -1,4 +1,8 @@
-//! Optional offline embedding search (no API keys).
+//! Embedding plugins for ast-sgrep: local (offline) and cloud (API).
+
+mod cloud;
+
+pub use cloud::{embed_via_api, rank_by_vector, CloudEmbeddingConfig};
 
 /// Embedding vector dimension for local hash embeddings.
 pub const EMBED_DIM: usize = 64;

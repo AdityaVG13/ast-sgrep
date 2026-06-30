@@ -41,6 +41,14 @@ struct Cli {
     #[arg(long, global = true, env = "ASGREP_EMBED")]
     embed: bool,
 
+    /// Build/use tantivy sidecar for large-repo lexical search
+    #[arg(long, global = true, env = "ASGREP_TANTIVY")]
+    tantivy: bool,
+
+    /// Use cloud API for query embeddings (ASGREP_EMBED_API_KEY)
+    #[arg(long, global = true, env = "ASGREP_CLOUD_EMBED")]
+    cloud_embed: bool,
+
     /// Root path positional for search
     #[arg(value_name = "ROOT", default_value = ".")]
     search_root: PathBuf,
@@ -148,6 +156,7 @@ fn index_options(root: &std::path::Path, cli: &Cli) -> IndexOptions {
         index_path: cli.index_path.clone(),
         lang_filter: cli.lang.clone(),
         respect_gitignore: true,
+        use_tantivy: cli.tantivy,
     }
 }
 
@@ -158,6 +167,8 @@ fn search_options(root: &std::path::Path, cli: &Cli) -> SearchOptions {
         limit: cli.limit.unwrap_or_else(SearchOptions::default_limit),
         lang_filter: cli.lang.clone(),
         use_embed: cli.embed,
+        use_tantivy: cli.tantivy,
+        use_cloud_embed: cli.cloud_embed,
     }
 }
 

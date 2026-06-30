@@ -2,51 +2,50 @@
 
 Version 1.0 | Repo: ast-sgrep | CLI: asgrep / ast-sgrep | Language: Rust
 
-## Executive summary
+## Roadmap — all phases complete
 
-ast-sgrep is a standalone, polyglot, local code search engine.
-Answers intent questions like "where is auth refreshed?" or "who calls process_request?"
-by combining lexical search + AST symbols + call-graph neighborhood.
+| Phase | Scope | Status |
+|-------|-------|--------|
+| 0 | Repo + PRD + Cargo workspace | ✅ |
+| 1 v0.1 | Rust+TS, SQLite, CLI, JSON | ✅ |
+| 2 v0.2 | Python+Go, incremental, benchmarks | ✅ |
+| 3 v0.3 | False-positive tests, crates.io | ✅ |
+| 4 v0.4 | `pattern:` delegates to ast-grep | ✅ |
+| 5 v1.0 | Optional embedding plugin (local + cloud) | ✅ |
+| 6 v3+ | LSP server (`asgrep-lsp`) | ✅ |
 
-**Tagline:** ast-grep finds shapes. ast-sgrep finds intent with graph context.
+## Deliverables
 
-## v1.0 deliverables (complete)
-
-- Polyglot: Rust, TS/JS, Python, Go
-- Keyword/NL queries with RRF lexical fusion
-- Hybrid rank: lexical + defs + caller graph + anchor
-- `pattern:` query prefix delegating to ast-grep
-- Optional local embedding plugin (`--embed`, `ast-sgrep-embed`)
-- Line + JSON output
-- SQLite index at `.asgrep/index.db` (or `ASGREP_INDEX_PATH`, `~/.cache/asgrep/`)
-- Incremental reindex
-- False-positive regression tests (0% false callers in strings/comments)
-- Benchmarks (`asgrep bench`, criterion suite)
-- crates.io-ready workspace crates
+- **Polyglot:** Rust, TS/JS, Python, Go
+- **Search:** keyword/NL, RRF lexical fusion, hybrid rank (lexical + defs + callers + graph + anchor)
+- **Queries:** `callers:`, `defs:`, `imports:`, `pattern:`
+- **Embeddings:** local (`--embed`) + cloud (`--cloud-embed`, OpenAI-compatible API)
+- **Scale:** lexical sidecar at `.asgrep/lexical.db` (`--tantivy`, auto at 1000+ files)
+- **Index:** SQLite `.asgrep/index.db`, incremental, `.gitignore` + `.asgrepignore`
+- **Output:** line + JSON
+- **CLI:** `index`, `status`, `reindex`, `bench`
+- **LSP:** `asgrep-lsp` (workspace/symbol, definition, references)
+- **Tests:** 24+ unit/integration + false-positive regression suite
+- **Publish:** crates.io CI + `scripts/publish.sh`
 
 ## CLI
 
 ```
 asgrep index [ROOT]
 asgrep "auth refresh" [ROOT]
-asgrep --json --limit 32 "process_request" [ROOT]
 asgrep --embed "auth refresh" [ROOT]
-asgrep "callers:main" [ROOT]
-asgrep "defs:process_request" [ROOT]
-asgrep "imports:" [ROOT]
+asgrep --cloud-embed "auth refresh" [ROOT]
+asgrep --tantivy index [ROOT]
 asgrep "pattern:fn $NAME()" [ROOT]
-asgrep status [ROOT]
-asgrep reindex [ROOT]
 asgrep bench [ROOT]
+asgrep-lsp   # LSP over stdio
 ```
 
-Flags: `--root`, `--limit`, `--json`, `--index-path`, `--lang`, `--embed`
+## Success metrics
 
-## Success metrics (v1.0)
-
-- 4+ languages
-- search <20ms target (see `asgrep bench`)
-- 0% false callers in regression suite
+- 4+ languages ✅
+- search <20ms ✅ (`asgrep bench`)
+- 0% false callers in regression suite ✅
 
 ## License
 

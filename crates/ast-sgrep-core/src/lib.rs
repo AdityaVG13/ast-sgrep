@@ -7,6 +7,7 @@ pub mod query;
 pub mod rank;
 pub mod search;
 pub mod store;
+pub mod tantivy_index;
 
 pub use index::{IndexOptions, IndexStats, Indexer};
 pub use output::format_hit_line;

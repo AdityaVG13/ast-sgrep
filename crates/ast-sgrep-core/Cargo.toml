@@ -4,6 +4,16 @@ description = "Core indexing and hybrid search engine for ast-sgrep"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "../../README.md"
+keywords = ["code-search", "call-graph", "sqlite", "hybrid-search"]
+categories = ["development-tools"]
+documentation = "https://docs.rs/ast-sgrep-core"
+
+[features]
+default = []
+cloud-embed = ["ast-sgrep-embed/cloud"]
 
 [dependencies]
 ast-sgrep-embed = { path = "../ast-sgrep-embed" }

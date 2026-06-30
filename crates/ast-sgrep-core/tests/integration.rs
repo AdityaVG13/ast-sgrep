@@ -17,6 +17,7 @@ fn indexes_and_searches_polyglot_fixture() {
         index_path: Some(index_path.clone()),
         lang_filter: None,
         respect_gitignore: true,
+        use_tantivy: false,
     })
     .unwrap();
 
@@ -35,6 +36,8 @@ fn indexes_and_searches_polyglot_fixture() {
         limit: 16,
         lang_filter: None,
         use_embed: false,
+        use_tantivy: false,
+        use_cloud_embed: false,
     })
     .unwrap();
 
@@ -70,6 +73,7 @@ fn incremental_reindex_skips_unchanged() {
         index_path: Some(index_path),
         lang_filter: None,
         respect_gitignore: true,
+        use_tantivy: false,
     };
 
     let mut indexer = Indexer::new(opts.clone()).unwrap();

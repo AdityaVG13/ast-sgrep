@@ -1,12 +1,23 @@
 [package]
 name = "ast-sgrep-embed"
-description = "Optional offline embedding plugin for ast-sgrep"
+description = "Offline and cloud embedding plugins for ast-sgrep"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
+homepage.workspace = true
 readme = "../../README.md"
-keywords = ["search", "embedding", "code-search"]
+keywords = ["embedding", "code-search", "semantic-search"]
 categories = ["development-tools"]
+documentation = "https://docs.rs/ast-sgrep-embed"
+
+[features]
+default = ["local"]
+local = []
+cloud = ["ureq"]
 
 [dependencies]
 blake3.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+ureq = { workspace = true, optional = true }

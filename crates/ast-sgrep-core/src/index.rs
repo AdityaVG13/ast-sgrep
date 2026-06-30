@@ -16,6 +16,8 @@ pub struct IndexOptions {
     pub index_path: Option<PathBuf>,
     pub lang_filter: Option<String>,
     pub respect_gitignore: bool,
+    /// Build tantivy sidecar for large-repo lexical search.
+    pub use_tantivy: bool,
 }
 
 /// Statistics from an indexing run.
@@ -117,7 +119,19 @@ impl Indexer {
             }
         }
 
+        if self.options.use_tantivy
+            || crate::tantivy_index::should_use_tantivy(stats.files_indexed, false)
+        {
+            self.rebuild_tantivy_sidecar()?;
+        }
+
         Ok(stats)
+    }
+
+    fn rebuild_tantivy_sidecar(&self) -> Result<()> {
+        let lines = self.store.all_indexed_lines()?;
+        let sidecar = crate::tantivy_index::TantivySidecar::open(&self.options.root)?;
+        sidecar.rebuild_from_lines(&lines)
     }
 
     pub fn reindex_all(&mut self) -> Result<IndexStats> {

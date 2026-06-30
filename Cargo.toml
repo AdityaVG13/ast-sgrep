@@ -5,6 +5,7 @@ members = [
     "crates/ast-sgrep-cli",
     "crates/ast-sgrep-lang",
     "crates/ast-sgrep-embed",
+    "crates/ast-sgrep-lsp",
 ]
 default-members = ["crates/ast-sgrep-cli"]
 
@@ -12,19 +13,21 @@ default-members = ["crates/ast-sgrep-cli"]
 version = "1.0.0"
 edition = "2021"
 license = "MIT"
-repository = "https://github.com/ast-sgrep/ast-sgrep"
+repository = "https://github.com/AdityaVG13/ast-sgrep"
+homepage = "https://github.com/AdityaVG13/ast-sgrep"
 authors = ["ast-sgrep contributors"]
 
 [workspace.dependencies]
 anyhow = "1"
 blake3 = "=1.5.5"
 clap = { version = "=4.5.23", features = ["derive", "env"] }
+criterion = "=0.5.1"
 rusqlite = { version = "0.32", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tempfile = "=3.14.0"
 thiserror = "2"
-criterion = "=0.5.1"
+ureq = { version = "=2.9.7", default-features = false, features = ["tls", "json"] }
 tree-sitter = "0.24"
 tree-sitter-go = "0.23"
 tree-sitter-javascript = "0.23"

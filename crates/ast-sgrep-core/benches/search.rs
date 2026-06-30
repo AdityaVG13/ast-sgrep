@@ -17,6 +17,7 @@ fn setup_index() -> (TempDir, PathBuf, PathBuf) {
         index_path: Some(index_path.clone()),
         lang_filter: None,
         respect_gitignore: true,
+        use_tantivy: false,
     })
     .unwrap();
     indexer.index_all().unwrap();
@@ -31,6 +32,8 @@ fn bench_search(c: &mut Criterion) {
         limit: 16,
         lang_filter: None,
         use_embed: false,
+        use_tantivy: false,
+        use_cloud_embed: false,
     })
     .unwrap();
 

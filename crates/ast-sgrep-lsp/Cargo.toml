@@ -1,0 +1,22 @@
+[package]
+name = "ast-sgrep-lsp"
+description = "LSP server for ast-sgrep code search and navigation"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "../../README.md"
+keywords = ["lsp", "language-server", "code-search"]
+categories = ["development-tools"]
+documentation = "https://docs.rs/ast-sgrep-lsp"
+
+[[bin]]
+name = "asgrep-lsp"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+ast-sgrep-core = { path = "../ast-sgrep-core" }
+serde.workspace = true
+serde_json.workspace = true

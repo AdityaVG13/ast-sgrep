@@ -337,6 +337,21 @@ impl IndexStore {
     pub fn connection(&self) -> &Connection {
         &self.conn
     }
+
+    /// All lines for tantivy sidecar rebuild.
+    pub fn all_indexed_lines(&self) -> Result<Vec<(String, u32, String, Option<String>)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT f.path, l.line_no, l.content, f.language
+             FROM lines l JOIN files f ON f.id = l.file_id
+             ORDER BY f.path, l.line_no",
+        )?;
+        let mut rows = stmt.query([])?;
+        let mut out = Vec::new();
+        while let Some(row) = rows.next()? {
+            out.push((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?));
+        }
+        Ok(out)
+    }
 }
 
 #[derive(Debug, Clone)]

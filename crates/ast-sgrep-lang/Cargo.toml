@@ -4,10 +4,16 @@ description = "Polyglot tree-sitter parsers and symbol extractors for ast-sgrep"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "../../README.md"
+keywords = ["ast", "tree-sitter", "code-search", "polyglot"]
+categories = ["development-tools", "parsing"]
+documentation = "https://docs.rs/ast-sgrep-lang"
 
 [dependencies]
 anyhow.workspace = true
-serde = { version = "1", features = ["derive"] }
+serde.workspace = true
 tree-sitter.workspace = true
 tree-sitter-go.workspace = true
 tree-sitter-javascript.workspace = true
