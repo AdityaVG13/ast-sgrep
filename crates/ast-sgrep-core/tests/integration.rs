@@ -15,11 +15,7 @@ fn indexes_and_searches_polyglot_fixture() {
     let mut indexer = Indexer::new(IndexOptions {
         root: fixture.clone(),
         index_path: Some(index_path.clone()),
-        lang_filter: None,
-        respect_gitignore: true,
-        use_tantivy: false,
-        embed_lines: false,
-        force_reindex: false,
+        ..IndexOptions::default()
     })
     .unwrap();
 
@@ -73,11 +69,7 @@ fn incremental_reindex_skips_unchanged() {
     let opts = IndexOptions {
         root: fixture,
         index_path: Some(index_path),
-        lang_filter: None,
-        respect_gitignore: true,
-        use_tantivy: false,
-        embed_lines: false,
-        force_reindex: false,
+        ..IndexOptions::default()
     };
 
     let mut indexer = Indexer::new(opts.clone()).unwrap();

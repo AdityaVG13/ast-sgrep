@@ -21,11 +21,8 @@ fn indexed_searcher(embed: bool) -> (TempDir, Searcher) {
     let mut indexer = Indexer::new(IndexOptions {
         root: root.clone(),
         index_path: Some(index_path.clone()),
-        lang_filter: None,
-        respect_gitignore: true,
-        use_tantivy: false,
         embed_lines: embed,
-        force_reindex: false,
+        ..IndexOptions::default()
     })
     .unwrap();
     indexer.index_all().unwrap();
@@ -101,11 +98,7 @@ fn force_reindex_reextracts_symbols() {
     let opts = IndexOptions {
         root: root.clone(),
         index_path: Some(index_path.clone()),
-        lang_filter: None,
-        respect_gitignore: true,
-        use_tantivy: false,
-        embed_lines: false,
-        force_reindex: false,
+        ..IndexOptions::default()
     };
 
     let mut indexer = Indexer::new(opts.clone()).unwrap();
@@ -136,11 +129,7 @@ fn lang_filter_removes_stale_files_from_index() {
     let mut full = Indexer::new(IndexOptions {
         root: root.clone(),
         index_path: Some(index_path.clone()),
-        lang_filter: None,
-        respect_gitignore: true,
-        use_tantivy: false,
-        embed_lines: false,
-        force_reindex: false,
+        ..IndexOptions::default()
     })
     .unwrap();
     full.index_all().unwrap();
@@ -151,10 +140,8 @@ fn lang_filter_removes_stale_files_from_index() {
         root: root.clone(),
         index_path: Some(index_path.clone()),
         lang_filter: Some("rust".into()),
-        respect_gitignore: true,
-        use_tantivy: false,
-        embed_lines: false,
         force_reindex: true,
+        ..IndexOptions::default()
     })
     .unwrap();
     rust_only.index_all().unwrap();
@@ -193,11 +180,8 @@ fn lexical_sidecar_search_works() {
     let mut indexer = Indexer::new(IndexOptions {
         root: root.clone(),
         index_path: Some(index_path.clone()),
-        lang_filter: None,
-        respect_gitignore: true,
         use_tantivy: true,
-        embed_lines: false,
-        force_reindex: false,
+        ..IndexOptions::default()
     })
     .unwrap();
     indexer.index_all().unwrap();
