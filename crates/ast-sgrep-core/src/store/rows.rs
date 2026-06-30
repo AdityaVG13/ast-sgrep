@@ -41,3 +41,21 @@ pub(crate) fn read_semantic_chunk_row(
         ast_sgrep_embed::embed_from_bytes(&vector).unwrap_or_default(),
     ))
 }
+
+pub(crate) fn read_legacy_embedding_row(
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<ast_sgrep_embed::SemanticChunkRow> {
+    let file: String = row.get(0)?;
+    let line_no: u32 = row.get(1)?;
+    let content: String = row.get(2)?;
+    let symbol: String = row.get::<_, Option<String>>(3)?.unwrap_or_default();
+    let vector: Vec<u8> = row.get(4)?;
+    Ok((
+        file,
+        line_no,
+        line_no,
+        symbol,
+        content,
+        ast_sgrep_embed::embed_from_bytes(&vector).unwrap_or_default(),
+    ))
+}

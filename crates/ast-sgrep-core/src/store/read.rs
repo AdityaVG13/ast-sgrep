@@ -1,6 +1,6 @@
 use rusqlite::params;
 
-use super::rows::{read_semantic_chunk_row, SymbolRow};
+use super::rows::{read_legacy_embedding_row, read_semantic_chunk_row, SymbolRow};
 use super::sql::{calls_matching, like_terms_filter, optional_row, query_limit_map, query_map_rows};
 use super::IndexStore;
 use crate::{IndexStatus, Result};
@@ -221,6 +221,28 @@ impl IndexStore {
         query_limit_map(&self.conn, &sql, bind, limit, |row| {
             Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
         })
+    }
+
+    /// Per-line embeddings from legacy indexes (pre-semantic-chunk schema).
+    pub fn all_legacy_embeddings(
+        &self,
+        lang_filter: Option<&str>,
+    ) -> Result<Vec<ast_sgrep_embed::SemanticChunkRow>> {
+        let lang_clause = if lang_filter.is_some() {
+            " AND f.language = ?1"
+        } else {
+            ""
+        };
+        let sql = format!(
+            "SELECT f.path, l.line_no, l.content, sc.symbol_name, e.vector
+             FROM embeddings e
+             JOIN lines l ON l.file_id = e.file_id AND l.line_no = e.line_no
+             JOIN files f ON f.id = e.file_id
+             LEFT JOIN semantic_chunks sc ON sc.file_id = f.id AND sc.line_start = l.line_no
+             WHERE 1=1{lang_clause}
+             LIMIT 5000"
+        );
+        query_map_rows(&self.conn, &sql, lang_filter, read_legacy_embedding_row)
     }
 
     pub fn excerpt_span(&self, rel_path: &str, line_start: u32, line_end: u32) -> Result<String> {
