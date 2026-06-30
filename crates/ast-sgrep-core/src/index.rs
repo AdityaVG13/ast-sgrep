@@ -45,6 +45,8 @@ pub struct IndexOptions {
     pub embed_semantic: bool,
     pub embed_backend: EmbedBackend,
     pub force_reindex: bool,
+    /// Override ANN threshold (`ASGREP_ANN_THRESHOLD` when unset).
+    pub ann_threshold: Option<usize>,
 }
 
 impl Default for IndexOptions {
@@ -58,6 +60,7 @@ impl Default for IndexOptions {
             embed_semantic: true,
             embed_backend: EmbedBackend::Auto,
             force_reindex: false,
+            ann_threshold: None,
         }
     }
 }
@@ -167,7 +170,20 @@ impl Indexer {
             self.rebuild_tantivy_sidecar()?;
         }
 
+        if self.options.embed_semantic {
+            self.rebuild_semantic_ivf_sidecar()?;
+        }
+
         Ok(stats)
+    }
+
+    fn rebuild_semantic_ivf_sidecar(&self) -> Result<()> {
+        let chunks = self.store.all_semantic_chunks(None)?;
+        crate::semantic_ann::rebuild_semantic_ivf_sidecar(
+            self.store(),
+            &chunks,
+            self.options.ann_threshold,
+        )
     }
 
     fn rebuild_tantivy_sidecar(&self) -> Result<()> {

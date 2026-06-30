@@ -306,6 +306,8 @@ impl IndexStore {
             }
         }
 
+        let _ = crate::semantic_ivf::invalidate_semantic_ivf(&self.db_path);
+
         Ok(file_id)
     }
 
@@ -323,6 +325,7 @@ impl IndexStore {
             self.conn.execute("DELETE FROM embeddings WHERE file_id = ?1", params![file_id])?;
             self.conn.execute("DELETE FROM semantic_chunks WHERE file_id = ?1", params![file_id])?;
             self.conn.execute("DELETE FROM files WHERE id = ?1", params![file_id])?;
+            let _ = crate::semantic_ivf::invalidate_semantic_ivf(&self.db_path);
         }
         Ok(())
     }
@@ -413,6 +416,54 @@ impl IndexStore {
         &self.conn
     }
 
+    /// Max `semantic_chunks.id` for IVF fingerprinting.
+    pub fn semantic_chunk_max_id(&self) -> Result<Option<i64>> {
+        let result = self.conn.query_row(
+            "SELECT MAX(id) FROM semantic_chunks",
+            [],
+            |row| row.get(0),
+        );
+        match result {
+            Ok(id) => Ok(id),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// All semantic chunks in stable id order (for IVF sidecar alignment).
+    pub fn all_semantic_chunks(
+        &self,
+        lang_filter: Option<&str>,
+    ) -> Result<Vec<ast_sgrep_embed::SemanticChunkRow>> {
+        let lang_clause = if lang_filter.is_some() {
+            " AND f.language = ?1"
+        } else {
+            ""
+        };
+        let sql = format!(
+            "SELECT f.path, sc.line_start, sc.line_end, sc.symbol_name, sc.text, sc.vector
+             FROM semantic_chunks sc
+             JOIN files f ON f.id = sc.file_id
+             WHERE 1=1{lang_clause}
+             ORDER BY sc.id"
+        );
+        let mut out = Vec::new();
+        if let Some(lang) = lang_filter {
+            let mut stmt = self.conn.prepare(&sql)?;
+            let mut rows = stmt.query(rusqlite::params![lang])?;
+            while let Some(row) = rows.next()? {
+                out.push(read_semantic_chunk_row(row)?);
+            }
+        } else {
+            let mut stmt = self.conn.prepare(&sql)?;
+            let mut rows = stmt.query([])?;
+            while let Some(row) = rows.next()? {
+                out.push(read_semantic_chunk_row(row)?);
+            }
+        }
+        Ok(out)
+    }
+
     /// Symbols defined in a single file.
     pub fn symbols_in_file(&self, rel_path: &str) -> Result<Vec<SymbolRow>> {
         let mut stmt = self.conn.prepare(
@@ -485,6 +536,23 @@ impl IndexStore {
             Err(e) => Err(e.into()),
         }
     }
+}
+
+fn read_semantic_chunk_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ast_sgrep_embed::SemanticChunkRow> {
+    let file: String = row.get(0)?;
+    let line_start: u32 = row.get(1)?;
+    let line_end: u32 = row.get(2)?;
+    let symbol: String = row.get(3)?;
+    let excerpt: String = row.get(4)?;
+    let vector: Vec<u8> = row.get(5)?;
+    Ok((
+        file,
+        line_start,
+        line_end,
+        symbol,
+        excerpt,
+        ast_sgrep_embed::embed_from_bytes(&vector),
+    ))
 }
 
 #[derive(Debug, Clone)]

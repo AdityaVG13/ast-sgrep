@@ -9,6 +9,7 @@ pub mod rank;
 pub mod search;
 pub mod semantic_ann;
 pub mod semantic_chunk;
+pub mod semantic_ivf;
 pub mod store;
 pub mod tantivy_index;
 

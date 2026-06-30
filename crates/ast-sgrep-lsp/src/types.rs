@@ -26,6 +26,8 @@ pub struct InitializeParams {
     pub root_path: Option<String>,
     #[serde(rename = "workspaceFolders")]
     pub workspace_folders: Option<Vec<WorkspaceFolder>>,
+    #[serde(rename = "initializationOptions")]
+    pub initialization_options: Option<Value>,
 }
 
 #[derive(Debug, Deserialize)]

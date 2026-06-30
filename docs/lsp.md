@@ -14,10 +14,33 @@ cargo install ast-sgrep-lsp
 {
   "asgrep-lsp": {
     "command": "asgrep-lsp",
-    "transport": "stdio"
+    "transport": "stdio",
+    "initializationOptions": {
+      "asgrep": {
+        "cloudEmbed": false,
+        "ollamaEmbed": false,
+        "semanticOnly": false,
+        "annThreshold": 2000,
+        "embedBackend": "auto"
+      }
+    }
   }
 }
 ```
+
+### `initializationOptions` (all optional)
+
+| Key | Type | Description |
+|-----|------|-------------|
+| `noEmbed` | bool | Disable semantic indexing and search |
+| `cloudEmbed` | bool | Prefer OpenAI-compatible cloud embeddings |
+| `ollamaEmbed` | bool | Prefer local Ollama embeddings |
+| `semanticOnly` | bool | Offline code-aware semantic only |
+| `annThreshold` | number | Symbol count before IVF-ANN kicks in (default 2000) |
+| `embedBackend` | string | `auto`, `cloud`, `ollama`, or `semantic` |
+| `indexPath` | string | Custom path to `index.db` |
+
+Settings may be nested under `"asgrep"` or provided at the top level of `initializationOptions`.
 
 ## Capabilities
 

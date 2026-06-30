@@ -46,7 +46,25 @@ Code search tools solve different problems. **ast-sgrep takes a different approa
 | Grep logs, configs, or any file type fast | **ripgrep** |
 | One-off regex across unindexed files | **ripgrep** |
 
-ast-sgrep **complements** ast-grep and ripgrep — it does not replace them. Use `pattern:` to delegate structural queries to ast-grep when installed; use ripgrep when you need raw speed over files ast-sgrep does not index.
+ast-sgrep **complements** ast-grep and ripgrep — it does not replace them. Think of it as the **navigation + intent layer** you add on top:
+
+| Tool | Role in your stack |
+|------|-------------------|
+| **ripgrep** | Fast scan of logs, configs, any file type |
+| **ast-grep** | Structural patterns and codemods |
+| **ast-sgrep** | Persistent index: NL queries, defs/callers/graph, semantic hits, agent JSON |
+
+Use `pattern:` to delegate structural queries to ast-grep when installed; use ripgrep when you need raw speed over unindexed files. Use **asgrep** when you (or an AI agent) need *“where does credential renewal happen?”* with ranked context.
+
+### Scale: small and large repos
+
+| Corpus size | Strategy |
+|-------------|----------|
+| **&lt; 2k symbols** (default) | Brute-force cosine over symbol vectors — sub-millisecond |
+| **≥ 2k symbols** | IVF-ANN with persisted `.asgrep/semantic.ivf` sidecar — no k-means rebuild on restart |
+| **≥ 1k files** | Optional lexical FTS sidecar (`--tantivy`) for BM25 at scale |
+
+Tune with `--ann-threshold` / `ASGREP_ANN_THRESHOLD` or LSP `annThreshold`.
 
 ---
 
@@ -316,7 +334,10 @@ ast-sgrep/
 | `callers` | Caller → callee edges (AST-derived, string/comment-safe) |
 | `imports` | Import/module paths |
 | `semantic_chunks` | Symbol-level vectors with call-graph context (default on) |
+| `semantic.ivf` | Persisted IVF-ANN sidecar (auto-built at index time for large repos) |
 | `embeddings` | Legacy per-line vectors (pre-v1.1 indexes) |
+
+Semantic search uses brute-force cosine below the ANN threshold; above it, vectors and cluster structure load from `semantic.ivf` (fingerprint-invalidated on reindex).
 
 Incremental indexing uses blake3 content hashes + mtime. Respects `.gitignore` and `.asgrepignore`.
 
@@ -349,6 +370,7 @@ let searcher = Searcher::new(SearchOptions {
     use_cloud_embed: false,
     use_ollama_embed: false,
     use_semantic_only: false,
+    ann_threshold: None,
 })?;
 let response = searcher.search("auth refresh")?;
 ```

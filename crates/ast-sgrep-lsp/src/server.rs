@@ -91,6 +91,9 @@ impl LspServer {
                 let params: InitializeParams = serde_json::from_value(params.clone())?;
                 let root = resolve_root(&params);
                 let mut backend = LspBackend::new(root);
+                if let Some(ref opts) = params.initialization_options {
+                    backend.apply_settings(crate::settings::AsgrepSettings::from_initialization_options(opts));
+                }
                 backend.start_background_index();
                 let result = backend.initialize_result();
                 self.backend = Some(backend);

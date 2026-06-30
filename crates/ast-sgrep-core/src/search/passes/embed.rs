@@ -1,8 +1,8 @@
-use ast_sgrep_embed::{embed_from_bytes, embed_query, EmbedPreference};
+use ast_sgrep_embed::{embed_query, EmbedPreference};
 
 use crate::query::ParsedQuery;
 use crate::rank::SCORE_EMBED;
-use crate::semantic_ann::{ann_rank_indices, should_use_ann};
+use crate::semantic_ann::rank_chunk_indices;
 use crate::store::IndexStore;
 use crate::Result;
 use crate::search::types::{HitKind, SearchHit, SearchOptions};
@@ -17,7 +17,7 @@ pub fn embed_pass(
     }
 
     let query = parsed.terms.join(" ");
-    let chunks = load_semantic_chunks(store, options)?;
+    let chunks = store.all_semantic_chunks(options.lang_filter.as_deref())?;
 
     if chunks.is_empty() {
         return Ok(fallback_line_embeddings(store, options, parsed)?);
@@ -30,116 +30,39 @@ pub fn embed_pass(
     let embed_backend = store.get_meta("embed_backend").unwrap_or(None);
     let preference = search_embed_preference(options);
 
-    let ranked = if should_use_ann(chunks.len()) {
-        rank_with_ann(
-            store,
-            &query,
-            &chunks,
-            50,
-            embed_backend.as_deref(),
-            stored_dim,
-            preference,
-        )
-    } else {
-        ast_sgrep_embed::rank_semantic_chunks(
-            &query,
-            &chunks,
-            50,
-            embed_backend.as_deref(),
-            stored_dim,
-            preference,
-        )
-    };
-
-    Ok(ranked
-        .into_iter()
-        .map(|(sim, file, line_start, line_end, symbol, excerpt)| SearchHit {
-            kind: HitKind::Embed,
-            file,
-            line_start,
-            line_end,
-            symbol: Some(symbol),
-            caller: None,
-            callee: None,
-            language: None,
-            score: SCORE_EMBED * f64::from(sim),
-            excerpt,
-        })
-        .collect())
-}
-
-fn rank_with_ann(
-    store: &IndexStore,
-    query: &str,
-    chunks: &[ast_sgrep_embed::SemanticChunkRow],
-    limit: usize,
-    stored_backend: Option<&str>,
-    stored_dim: usize,
-    preference: EmbedPreference,
-) -> Vec<(f32, String, u32, u32, String, String)> {
-    let query_result = embed_query(query, stored_backend, stored_dim, preference);
-    let db_key = store.db_path().to_string_lossy().to_string();
-
-    if let Some(indices) = ann_rank_indices(&db_key, &query_result.vector, chunks, limit) {
-        return indices
-            .into_iter()
-            .map(|(idx, sim)| {
-                let (file, line_start, line_end, symbol, excerpt, _) = &chunks[idx];
-                (
-                    sim,
-                    file.clone(),
-                    *line_start,
-                    *line_end,
-                    symbol.clone(),
-                    excerpt.clone(),
-                )
-            })
-            .collect();
-    }
-
-    ast_sgrep_embed::rank_semantic_chunks(
-        query,
-        chunks,
-        limit,
-        stored_backend,
+    let query_result = embed_query(
+        &query,
+        embed_backend.as_deref(),
         stored_dim,
         preference,
-    )
-}
-
-fn load_semantic_chunks(
-    store: &IndexStore,
-    options: &SearchOptions,
-) -> Result<Vec<ast_sgrep_embed::SemanticChunkRow>> {
-    let conn = store.connection();
-    let lang_clause = if options.lang_filter.is_some() {
-        " AND f.language = ?1"
-    } else {
-        ""
-    };
-    // No SQL LIMIT — ANN needs the full corpus; chunk count is bounded by symbol count.
-    let sql = format!(
-        "SELECT f.path, sc.line_start, sc.line_end, sc.symbol_name, sc.text, sc.vector
-         FROM semantic_chunks sc
-         JOIN files f ON f.id = sc.file_id
-         WHERE 1=1{lang_clause}"
     );
 
-    let mut chunks = Vec::new();
-    if let Some(ref lang) = options.lang_filter {
-        let mut stmt = conn.prepare(&sql)?;
-        let mut rows = stmt.query(rusqlite::params![lang])?;
-        while let Some(row) = rows.next()? {
-            push_semantic_row(&mut chunks, row)?;
-        }
-    } else {
-        let mut stmt = conn.prepare(&sql)?;
-        let mut rows = stmt.query([])?;
-        while let Some(row) = rows.next()? {
-            push_semantic_row(&mut chunks, row)?;
-        }
-    }
-    Ok(chunks)
+    let indices = rank_chunk_indices(
+        store,
+        &query_result.vector,
+        &chunks,
+        50,
+        options.ann_threshold,
+    )?;
+
+    Ok(indices
+        .into_iter()
+        .map(|(idx, sim)| {
+            let (file, line_start, line_end, symbol, excerpt, _) = &chunks[idx];
+            SearchHit {
+                kind: HitKind::Embed,
+                file: file.clone(),
+                line_start: *line_start,
+                line_end: *line_end,
+                symbol: Some(symbol.clone()),
+                caller: None,
+                callee: None,
+                language: None,
+                score: SCORE_EMBED * f64::from(sim),
+                excerpt: excerpt.clone(),
+            }
+        })
+        .collect())
 }
 
 fn search_embed_preference(options: &SearchOptions) -> EmbedPreference {
@@ -152,27 +75,6 @@ fn search_embed_preference(options: &SearchOptions) -> EmbedPreference {
     } else {
         EmbedPreference::Auto
     }
-}
-
-fn push_semantic_row(
-    chunks: &mut Vec<ast_sgrep_embed::SemanticChunkRow>,
-    row: &rusqlite::Row<'_>,
-) -> rusqlite::Result<()> {
-    let file: String = row.get(0)?;
-    let line_start: u32 = row.get(1)?;
-    let line_end: u32 = row.get(2)?;
-    let symbol: String = row.get(3)?;
-    let excerpt: String = row.get(4)?;
-    let vector: Vec<u8> = row.get(5)?;
-    chunks.push((
-        file,
-        line_start,
-        line_end,
-        symbol,
-        excerpt,
-        embed_from_bytes(&vector),
-    ));
-    Ok(())
 }
 
 /// Legacy per-line embeddings for indexes built before semantic chunks.
@@ -275,7 +177,7 @@ fn push_legacy_row(
         line_no,
         symbol.unwrap_or_default(),
         content,
-        embed_from_bytes(&vector),
+        ast_sgrep_embed::embed_from_bytes(&vector),
     ));
     Ok(())
 }

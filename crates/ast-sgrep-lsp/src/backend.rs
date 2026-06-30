@@ -8,6 +8,8 @@ use std::thread::JoinHandle;
 use ast_sgrep_core::{IndexOptions, Indexer, SearchOptions, Searcher};
 use serde_json::{json, Value};
 
+use crate::settings::AsgrepSettings;
+
 use crate::types::{
     CallHierarchyItem, DocumentSymbolParams, ExecuteCommandParams, Position, Range,
     TextDocumentContentChangeEvent, SYMBOL_KIND_FUNCTION, SYMBOL_KIND_METHOD,
@@ -17,6 +19,7 @@ use crate::types::{
 pub struct LspBackend {
     root: PathBuf,
     index_path: Option<PathBuf>,
+    settings: AsgrepSettings,
     index_ready: Arc<AtomicBool>,
     index_thread: Option<JoinHandle<()>>,
 }
@@ -26,9 +29,17 @@ impl LspBackend {
         Self {
             root,
             index_path: None,
+            settings: AsgrepSettings::default(),
             index_ready: Arc::new(AtomicBool::new(false)),
             index_thread: None,
         }
+    }
+
+    pub fn apply_settings(&mut self, settings: AsgrepSettings) {
+        if let Some(ref p) = settings.index_path {
+            self.index_path = Some(PathBuf::from(p));
+        }
+        self.settings = settings;
     }
 
     pub fn root(&self) -> &Path {
@@ -44,20 +55,24 @@ impl LspBackend {
     }
 
     fn index_options(&self) -> IndexOptions {
-        IndexOptions {
+        let mut opts = IndexOptions {
             root: self.root.clone(),
             index_path: self.index_path.clone(),
             ..IndexOptions::default()
-        }
+        };
+        self.settings.apply_to_index_options(&mut opts);
+        opts
     }
 
     fn search_options(&self, limit: usize) -> SearchOptions {
-        SearchOptions {
+        let mut opts = SearchOptions {
             root: self.root.clone(),
             index_path: self.index_path.clone(),
             limit,
             ..SearchOptions::default()
-        }
+        };
+        self.settings.apply_to_search_options(&mut opts);
+        opts
     }
 
     /// Start full-workspace indexing on a background thread (non-blocking).

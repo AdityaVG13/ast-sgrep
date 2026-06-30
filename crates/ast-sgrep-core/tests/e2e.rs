@@ -38,6 +38,7 @@ fn indexed_searcher(no_embed: bool) -> (TempDir, Searcher) {
         use_cloud_embed: false,
         use_ollama_embed: false,
         use_semantic_only: false,
+        ann_threshold: None,
     })
     .unwrap();
 
@@ -201,6 +202,7 @@ fn lexical_sidecar_search_works() {
         use_cloud_embed: false,
         use_ollama_embed: false,
         use_semantic_only: false,
+        ann_threshold: None,
     })
     .unwrap();
 

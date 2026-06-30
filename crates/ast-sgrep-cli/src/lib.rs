@@ -57,6 +57,10 @@ struct Cli {
     #[arg(long, global = true, env = "ASGREP_TANTIVY")]
     tantivy: bool,
 
+    /// Semantic IVF ANN threshold in symbol chunks (default 2000, env: ASGREP_ANN_THRESHOLD)
+    #[arg(long, global = true, env = "ASGREP_ANN_THRESHOLD")]
+    ann_threshold: Option<usize>,
+
     /// JSON output format: native, github, gitlab
     #[arg(long, global = true, value_name = "FORMAT")]
     format: Option<String>,
@@ -180,6 +184,7 @@ fn index_options(root: &std::path::Path, cli: &Cli) -> IndexOptions {
         embed_semantic: !cli.no_embed,
         embed_backend: embed_backend_from_cli(cli),
         force_reindex: false,
+        ann_threshold: cli.ann_threshold,
     }
 }
 
@@ -206,6 +211,7 @@ fn search_options(root: &std::path::Path, cli: &Cli) -> SearchOptions {
         use_cloud_embed: cli.cloud_embed,
         use_ollama_embed: cli.ollama_embed,
         use_semantic_only: cli.semantic_only,
+        ann_threshold: cli.ann_threshold,
     }
 }
 

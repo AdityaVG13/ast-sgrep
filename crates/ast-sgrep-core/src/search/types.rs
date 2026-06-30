@@ -61,6 +61,8 @@ pub struct SearchOptions {
     pub use_cloud_embed: bool,
     pub use_ollama_embed: bool,
     pub use_semantic_only: bool,
+    /// Override ANN IVF threshold (`ASGREP_ANN_THRESHOLD` when unset).
+    pub ann_threshold: Option<usize>,
 }
 
 impl Default for SearchOptions {
@@ -76,6 +78,9 @@ impl Default for SearchOptions {
             use_cloud_embed: std::env::var("ASGREP_CLOUD_EMBED").ok().as_deref() == Some("1"),
             use_ollama_embed: std::env::var("ASGREP_OLLAMA_EMBED").ok().as_deref() == Some("1"),
             use_semantic_only: std::env::var("ASGREP_SEMANTIC_ONLY").ok().as_deref() == Some("1"),
+            ann_threshold: std::env::var("ASGREP_ANN_THRESHOLD")
+                .ok()
+                .and_then(|v| v.parse().ok()),
         }
     }
 }
