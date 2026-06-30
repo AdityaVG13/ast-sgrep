@@ -49,6 +49,10 @@ struct Cli {
     #[arg(long, global = true, env = "ASGREP_CLOUD_EMBED")]
     cloud_embed: bool,
 
+    /// JSON output format: native, github, gitlab
+    #[arg(long, global = true, value_name = "FORMAT")]
+    format: Option<String>,
+
     /// Root path positional for search
     #[arg(value_name = "ROOT", default_value = ".")]
     search_root: PathBuf,
@@ -140,7 +144,13 @@ pub fn run() -> anyhow::Result<()> {
             .context("failed to open index")?;
             let response = searcher.search(&query).context("search failed")?;
             if cli.json {
-                println!("{}", serde_json::to_string_pretty(&response)?);
+                let format = cli
+                    .format
+                    .as_deref()
+                    .and_then(ast_sgrep_plugins::OutputFormat::parse)
+                    .unwrap_or(ast_sgrep_plugins::OutputFormat::Native);
+                let value = ast_sgrep_plugins::format_response(&response, format);
+                println!("{}", serde_json::to_string_pretty(&value)?);
             } else {
                 for hit in &response.hits {
                     println!("{}", format_hit_line(hit));
@@ -160,6 +170,11 @@ fn index_options(root: &std::path::Path, cli: &Cli) -> IndexOptions {
         respect_gitignore: true,
         use_tantivy: cli.tantivy,
         embed_lines: cli.embed,
+        embed_backend: if cli.cloud_embed {
+            ast_sgrep_core::EmbedBackend::Cloud
+        } else {
+            ast_sgrep_core::EmbedBackend::Local
+        },
         force_reindex: false,
     }
 }

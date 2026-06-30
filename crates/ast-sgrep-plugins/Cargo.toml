@@ -1,0 +1,19 @@
+[package]
+name = "ast-sgrep-plugins"
+description = "Output format adapters for ast-sgrep (GitHub, GitLab code search JSON)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "../../README.md"
+keywords = ["code-search", "github", "gitlab", "json"]
+categories = ["development-tools"]
+
+[dependencies]
+ast-sgrep-core = { path = "../ast-sgrep-core" }
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
