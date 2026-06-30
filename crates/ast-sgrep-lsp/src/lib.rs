@@ -1,8 +1,11 @@
 //! ast-sgrep LSP server — Phase 6 full implementation.
 
 pub mod backend;
+pub mod convert;
 pub mod server;
 pub mod settings;
+pub mod symbols;
+pub mod text_edit;
 pub mod transport;
 pub mod types;
 pub mod uri;

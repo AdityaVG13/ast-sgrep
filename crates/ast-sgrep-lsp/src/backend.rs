@@ -2,22 +2,25 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread::JoinHandle;
 
-use ast_sgrep_core::store::SymbolRow;
 use ast_sgrep_core::{IndexOptions, Indexer, SearchOptions, Searcher};
 use serde_json::{json, Value};
 
+use crate::convert::{
+    call_hierarchy_endpoint, line_range, line_range_ext, location_value, workspace_symbol,
+};
 use crate::settings::AsgrepSettings;
+use crate::symbols::{innermost_symbol, line_at_index};
+use crate::text_edit::{apply_text_edit, extract_identifier_at, utf16_char_to_byte};
 use crate::uri::{self};
 
 pub use uri::{path_to_file_uri as path_to_uri, uri_to_rel_path};
 
 use crate::types::{
-    CallHierarchyItem, DocumentSymbolParams, ExecuteCommandParams, Position, Range,
-    TextDocumentContentChangeEvent, SYMBOL_KIND_FUNCTION, SYMBOL_KIND_METHOD,
-    SYMBOL_KIND_STRING, TextDocumentPositionParams,
+    CallHierarchyItem, DocumentSymbolParams, ExecuteCommandParams,
+    TextDocumentContentChangeEvent, SYMBOL_KIND_FUNCTION, TextDocumentPositionParams,
 };
 
 pub struct LspBackend {
@@ -82,6 +85,29 @@ impl LspBackend {
         opts
     }
 
+    fn index_guard(&self) -> anyhow::Result<MutexGuard<'_, ()>> {
+        self.index_lock
+            .lock()
+            .map_err(|e| anyhow::anyhow!("index lock poisoned: {e}"))
+    }
+
+    fn with_locked_indexer<F, T>(&self, f: F) -> anyhow::Result<T>
+    where
+        F: FnOnce(&mut Indexer) -> anyhow::Result<T>,
+    {
+        let _guard = self.index_guard()?;
+        let mut indexer = Indexer::new(self.index_options())?;
+        f(&mut indexer)
+    }
+
+    fn with_store<F, T>(&self, f: F) -> anyhow::Result<T>
+    where
+        F: FnOnce(&ast_sgrep_core::IndexStore) -> anyhow::Result<T>,
+    {
+        let indexer = Indexer::new(self.index_options())?;
+        f(indexer.store())
+    }
+
     /// Start full-workspace indexing on a background thread (non-blocking).
     pub fn start_background_index(&mut self) {
         if self.index_thread.is_some() {
@@ -108,36 +134,27 @@ impl LspBackend {
     }
 
     pub fn ensure_index(&self) -> anyhow::Result<()> {
-        let _guard = self
-            .index_lock
-            .lock()
-            .map_err(|e| anyhow::anyhow!("index lock poisoned: {e}"))?;
-        let mut indexer = Indexer::new(self.index_options())?;
-        indexer.index_all()?;
-        Ok(())
+        self.with_locked_indexer(|indexer| {
+            indexer.index_all()?;
+            Ok(())
+        })
     }
 
     pub fn reindex_file(&self, rel_path: &str) -> anyhow::Result<()> {
-        let _guard = self
-            .index_lock
-            .lock()
-            .map_err(|e| anyhow::anyhow!("index lock poisoned: {e}"))?;
-        let abs = self.root.join(rel_path);
-        if abs.is_file() {
-            let mut indexer = Indexer::new(self.index_options())?;
-            indexer.index_file(&abs, rel_path)?;
-        }
-        Ok(())
+        self.with_locked_indexer(|indexer| {
+            let abs = self.root.join(rel_path);
+            if abs.is_file() {
+                indexer.index_file(&abs, rel_path)?;
+            }
+            Ok(())
+        })
     }
 
     pub fn index_content(&self, rel_path: &str, content: &str) -> anyhow::Result<()> {
-        let _guard = self
-            .index_lock
-            .lock()
-            .map_err(|e| anyhow::anyhow!("index lock poisoned: {e}"))?;
-        let mut indexer = Indexer::new(self.index_options())?;
-        indexer.index_content(rel_path, content)?;
-        Ok(())
+        self.with_locked_indexer(|indexer| {
+            indexer.index_content(rel_path, content)?;
+            Ok(())
+        })
     }
 
     pub fn apply_document_changes(
@@ -145,31 +162,25 @@ impl LspBackend {
         uri: &str,
         changes: &[TextDocumentContentChangeEvent],
     ) -> anyhow::Result<()> {
-        let _guard = self
-            .index_lock
-            .lock()
-            .map_err(|e| anyhow::anyhow!("index lock poisoned: {e}"))?;
-        let rel = uri_to_rel_path(uri, &self.root)?;
-        let mut content = {
-            let indexer = Indexer::new(self.index_options())?;
-            indexer
+        self.with_locked_indexer(|indexer| {
+            let rel = uri_to_rel_path(uri, &self.root)?;
+            let mut content = indexer
                 .store()
                 .file_text(&rel)?
                 .or_else(|| std::fs::read_to_string(self.root.join(&rel)).ok())
-                .unwrap_or_default()
-        };
+                .unwrap_or_default();
 
-        for change in changes {
-            if change.range.is_some() {
-                content = apply_text_edit(&content, change);
-            } else {
-                content = change.text.clone();
+            for change in changes {
+                content = if change.range.is_some() {
+                    apply_text_edit(&content, change)
+                } else {
+                    change.text.clone()
+                };
             }
-        }
 
-        let mut indexer = Indexer::new(self.index_options())?;
-        indexer.index_content(&rel, &content)?;
-        Ok(())
+            indexer.index_content(&rel, &content)?;
+            Ok(())
+        })
     }
 
     pub fn initialize_result(&self) -> Value {
@@ -218,28 +229,28 @@ impl LspBackend {
 
     pub fn document_symbols(&self, params: &DocumentSymbolParams) -> anyhow::Result<Value> {
         let rel = uri_to_rel_path(&params.text_document.uri, &self.root)?;
-        let indexer = Indexer::new(self.index_options())?;
-        let store = indexer.store();
-        let symbols = store.symbols_in_file(&rel)?;
-        let items: Vec<Value> = symbols
-            .iter()
-            .map(|sym| {
-                let kind = if sym.kind.contains("method") {
-                    SYMBOL_KIND_METHOD
-                } else {
-                    SYMBOL_KIND_FUNCTION
-                };
-                let end_line = store.line_content(&rel, sym.line_end).ok().flatten();
-                json!({
-                    "name": sym.name,
-                    "kind": kind,
-                    "range": line_range_ext(sym.line_start, sym.line_end, end_line.as_deref()),
-                    "selectionRange": line_range(sym.line_start, sym.line_start),
-                    "detail": sym.kind
+        self.with_store(|store| {
+            let symbols = store.symbols_in_file(&rel)?;
+            let items: Vec<Value> = symbols
+                .iter()
+                .map(|sym| {
+                    let kind = if sym.kind.contains("method") {
+                        crate::types::SYMBOL_KIND_METHOD
+                    } else {
+                        SYMBOL_KIND_FUNCTION
+                    };
+                    let end_line = store.line_content(&rel, sym.line_end).ok().flatten();
+                    json!({
+                        "name": sym.name,
+                        "kind": kind,
+                        "range": line_range_ext(sym.line_start, sym.line_end, end_line.as_deref()),
+                        "selectionRange": line_range(sym.line_start, sym.line_start),
+                        "detail": sym.kind
+                    })
                 })
-            })
-            .collect();
-        Ok(Value::Array(items))
+                .collect();
+            Ok(Value::Array(items))
+        })
     }
 
     pub fn goto_definition(&self, params: &TextDocumentPositionParams) -> anyhow::Result<Value> {
@@ -251,12 +262,10 @@ impl LspBackend {
             .iter()
             .map(|hit| location_value(&self.root, &hit.file, hit.line_start, hit.line_end))
             .collect();
-        Ok(if locations.len() == 1 {
-            locations.into_iter().next().unwrap_or(Value::Null)
-        } else if locations.is_empty() {
-            Value::Null
-        } else {
-            Value::Array(locations)
+        Ok(match locations.len() {
+            0 => Value::Null,
+            1 => locations.into_iter().next().unwrap_or(Value::Null),
+            _ => Value::Array(locations),
         })
     }
 
@@ -268,8 +277,7 @@ impl LspBackend {
         let searcher = Searcher::new(self.search_options(128))?;
         let mut locations = Vec::new();
 
-        let callers = searcher.search(&format!("callers:{symbol}"))?;
-        for hit in callers.hits {
+        for hit in searcher.search(&format!("callers:{symbol}"))?.hits {
             locations.push(location_value(&self.root, &hit.file, hit.line_start, hit.line_end));
         }
 
@@ -279,8 +287,7 @@ impl LspBackend {
             .map(|c| c.include_declaration)
             .unwrap_or(true)
         {
-            let defs = searcher.search(&format!("defs:{symbol}"))?;
-            for hit in defs.hits {
+            for hit in searcher.search(&format!("defs:{symbol}"))?.hits {
                 locations.push(location_value(&self.root, &hit.file, hit.line_start, hit.line_end));
             }
         }
@@ -294,11 +301,10 @@ impl LspBackend {
     ) -> anyhow::Result<Value> {
         let symbol = self.symbol_at_position(params)?;
         let rel = uri_to_rel_path(&params.text_document.uri, &self.root)?;
-        let uri = path_to_uri(&self.root.join(&rel));
         let item = CallHierarchyItem {
             name: symbol.clone(),
             kind: SYMBOL_KIND_FUNCTION,
-            uri,
+            uri: path_to_uri(&self.root.join(&rel)),
             range: line_range(params.position.line + 1, params.position.line + 1),
             selection_range: line_range(params.position.line + 1, params.position.line + 1),
             detail: Some("ast-sgrep".to_string()),
@@ -307,45 +313,36 @@ impl LspBackend {
     }
 
     pub fn incoming_calls(&self, item: &CallHierarchyItem) -> anyhow::Result<Value> {
-        let indexer = Indexer::new(self.index_options())?;
-        let calls = indexer.store().incoming_calls(&item.name)?;
-        let result: Vec<Value> = calls
-            .iter()
-            .map(|(file, line, caller, _callee)| {
-                json!({
-                    "from": {
-                        "name": caller,
-                        "kind": SYMBOL_KIND_FUNCTION,
-                        "uri": path_to_uri(&self.root.join(file)),
-                        "range": line_range(*line, *line),
-                        "selectionRange": line_range(*line, *line)
-                    },
-                    "fromRanges": [line_range(*line, *line)]
+        self.with_store(|store| {
+            let calls = store.incoming_calls(&item.name)?;
+            let result: Vec<Value> = calls
+                .iter()
+                .map(|(file, line, caller, _callee)| {
+                    json!({
+                        "from": call_hierarchy_endpoint(&self.root, file, *line, caller),
+                        "fromRanges": [line_range(*line, *line)]
+                    })
                 })
-            })
-            .collect();
-        Ok(Value::Array(result))
+                .collect();
+            Ok(Value::Array(result))
+        })
     }
 
     pub fn outgoing_calls(&self, item: &CallHierarchyItem) -> anyhow::Result<Value> {
-        let indexer = Indexer::new(self.index_options())?;
-        let calls = indexer.store().outgoing_calls(&item.name)?;
-        let result: Vec<Value> = calls
-            .iter()
-            .map(|(file, line, _caller, callee)| {
-                json!({
-                    "to": {
-                        "name": callee,
-                        "kind": SYMBOL_KIND_FUNCTION,
-                        "uri": path_to_uri(&self.root.join(file)),
-                        "range": line_range(*line, *line),
-                        "selectionRange": line_range(*line, *line)
-                    },
-                    "fromRanges": [line_range(item.range.start.line + 1, item.range.start.line + 1)]
+        self.with_store(|store| {
+            let calls = store.outgoing_calls(&item.name)?;
+            let from_line = item.range.start.line + 1;
+            let result: Vec<Value> = calls
+                .iter()
+                .map(|(file, line, _caller, callee)| {
+                    json!({
+                        "to": call_hierarchy_endpoint(&self.root, file, *line, callee),
+                        "fromRanges": [line_range(from_line, from_line)]
+                    })
                 })
-            })
-            .collect();
-        Ok(Value::Array(result))
+                .collect();
+            Ok(Value::Array(result))
+        })
     }
 
     pub fn execute_command(&self, params: &ExecuteCommandParams) -> anyhow::Result<Value> {
@@ -356,334 +353,48 @@ impl LspBackend {
                 Ok(json!({ "status": "reindexed" }))
             }
             "asgrep.search" => {
-                let query = params
-                    .arguments
-                    .first()
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
-                let response = searcher.search(query)?;
-                Ok(serde_json::to_value(response)?)
+                let query = params.arguments.first().and_then(|v| v.as_str()).unwrap_or("");
+                Ok(serde_json::to_value(searcher.search(query)?)?)
             }
             "asgrep.search.semantic" => {
-                let query = params
-                    .arguments
-                    .first()
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
-                let response = searcher.search_semantic(query)?;
-                Ok(serde_json::to_value(response)?)
+                let query = params.arguments.first().and_then(|v| v.as_str()).unwrap_or("");
+                Ok(serde_json::to_value(searcher.search_semantic(query)?)?)
             }
             "asgrep.callers" => {
-                let sym = params
-                    .arguments
-                    .first()
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
-                let response = searcher.search(&format!("callers:{sym}"))?;
-                Ok(serde_json::to_value(response)?)
+                let sym = params.arguments.first().and_then(|v| v.as_str()).unwrap_or("");
+                Ok(serde_json::to_value(searcher.search(&format!("callers:{sym}"))?)?)
             }
             "asgrep.defs" => {
-                let sym = params
-                    .arguments
-                    .first()
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
-                let response = searcher.search(&format!("defs:{sym}"))?;
-                Ok(serde_json::to_value(response)?)
+                let sym = params.arguments.first().and_then(|v| v.as_str()).unwrap_or("");
+                Ok(serde_json::to_value(searcher.search(&format!("defs:{sym}"))?)?)
             }
             other => Err(anyhow::anyhow!("unknown command: {other}")),
         }
     }
 
-    /// Resolve identifier at cursor using index line content + symbol table.
     pub fn symbol_at_position(&self, params: &TextDocumentPositionParams) -> anyhow::Result<String> {
         let rel = uri_to_rel_path(&params.text_document.uri, &self.root)?;
         let line_no = params.position.line + 1;
-        let indexer = Indexer::new(self.index_options())?;
-        let store = indexer.store();
+        self.with_store(|store| {
+            let line_content = store
+                .line_content(&rel, line_no)?
+                .or_else(|| {
+                    std::fs::read_to_string(self.root.join(&rel))
+                        .ok()
+                        .and_then(|s| line_at_index(&s, params.position.line as usize))
+                })
+                .unwrap_or_default();
 
-        let line_content = store
-            .line_content(&rel, line_no)?
-            .or_else(|| {
-                std::fs::read_to_string(self.root.join(&rel))
-                    .ok()
-                    .and_then(|s| line_at_index(&s, params.position.line as usize))
-            })
-            .unwrap_or_default();
+            let byte_in_line = utf16_char_to_byte(&line_content, params.position.character);
 
-        let byte_in_line = utf16_char_to_byte(&line_content, params.position.character);
-
-        if let Ok(symbols) = store.symbols_in_file(&rel) {
-            if let Some(sym) = innermost_symbol(&symbols, line_no, byte_in_line) {
-                return Ok(sym.name.clone());
+            if let Ok(symbols) = store.symbols_in_file(&rel) {
+                if let Some(sym) = innermost_symbol(&symbols, line_no, byte_in_line) {
+                    return Ok(sym.name.clone());
+                }
             }
-        }
 
-        extract_identifier_at(&line_content, byte_in_line)
-            .ok_or_else(|| anyhow::anyhow!("no symbol at cursor"))
-    }
-}
-
-/// Convert LSP UTF-16 code unit offset to byte offset within a line.
-pub fn utf16_char_to_byte(line: &str, utf16_offset: u32) -> usize {
-    let mut utf16 = 0u32;
-    for (byte_idx, ch) in line.char_indices() {
-        let units = ch.len_utf16() as u32;
-        if utf16_offset < utf16 + units {
-            return byte_idx;
-        }
-        utf16 += units;
-    }
-    line.len()
-}
-
-fn workspace_symbol(root: &Path, file: &str, hit: &ast_sgrep_core::SearchHit) -> Option<Value> {
-    let name = hit
-        .symbol
-        .clone()
-        .or_else(|| hit.callee.clone())
-        .unwrap_or_else(|| hit.excerpt.chars().take(60).collect());
-
-    let kind = match hit.kind {
-        ast_sgrep_core::search::HitKind::Embed => SYMBOL_KIND_STRING,
-        ast_sgrep_core::search::HitKind::Def => SYMBOL_KIND_FUNCTION,
-        ast_sgrep_core::search::HitKind::Caller | ast_sgrep_core::search::HitKind::Graph => {
-            SYMBOL_KIND_METHOD
-        }
-        _ => SYMBOL_KIND_FUNCTION,
-    };
-
-    let detail = match hit.kind {
-        ast_sgrep_core::search::HitKind::Embed => {
-            format!("semantic · score {:.2}", hit.score)
-        }
-        other => format!("{} · score {:.2}", other.as_str(), hit.score),
-    };
-
-    let excerpt: String = hit.excerpt.chars().take(120).collect();
-    let container = file.to_string();
-
-    Some(json!({
-        "name": name,
-        "kind": kind,
-        "location": location_value(root, file, hit.line_start, hit.line_end),
-        "containerName": container,
-        "detail": detail,
-        "data": {
-            "asgrepKind": hit.kind.as_str(),
-            "score": hit.score,
-            "excerpt": excerpt,
-            "semantic": hit.kind == ast_sgrep_core::search::HitKind::Embed,
-        }
-    }))
-}
-
-fn location_value(root: &Path, file: &str, line_start: u32, line_end: u32) -> Value {
-    json!({
-        "uri": path_to_uri(&root.join(file)),
-        "range": line_range(line_start, line_end)
-    })
-}
-
-fn line_utf16_len(line: &str) -> u32 {
-    line.chars().map(|c| c.len_utf16() as u32).sum()
-}
-
-fn line_range(line_start: u32, line_end: u32) -> Range {
-    line_range_ext(line_start, line_end, None)
-}
-
-fn line_range_ext(line_start: u32, line_end: u32, end_line_text: Option<&str>) -> Range {
-    let end_char = end_line_text.map(line_utf16_len).unwrap_or(0);
-    Range {
-        start: Position {
-            line: line_start.saturating_sub(1),
-            character: 0,
-        },
-        end: Position {
-            line: line_end.saturating_sub(1),
-            character: end_char,
-        },
-    }
-}
-
-fn line_at_index(content: &str, line_index: usize) -> Option<String> {
-    content.split('\n').nth(line_index).map(|l| l.to_string())
-}
-
-fn innermost_symbol<'a>(
-    symbols: &'a [SymbolRow],
-    line_no: u32,
-    byte_in_line: usize,
-) -> Option<&'a SymbolRow> {
-    symbols
-        .iter()
-        .filter(|sym| line_no >= sym.line_start && line_no <= sym.line_end)
-        .min_by(|a, b| {
-            symbol_tightness(a, line_no, byte_in_line).cmp(&symbol_tightness(b, line_no, byte_in_line))
+            extract_identifier_at(&line_content, byte_in_line)
+                .ok_or_else(|| anyhow::anyhow!("no symbol at cursor"))
         })
-}
-
-fn symbol_tightness(sym: &SymbolRow, _line_no: u32, byte_in_line: usize) -> (u32, usize) {
-    let line_span = sym.line_end - sym.line_start;
-    if sym.line_start == sym.line_end && sym.byte_end > sym.byte_start {
-        if byte_in_line >= sym.byte_start && byte_in_line <= sym.byte_end {
-            return (0, sym.byte_end - sym.byte_start);
-        }
-    }
-    (line_span, sym.byte_end.saturating_sub(sym.byte_start))
-}
-
-fn apply_text_edit(content: &str, change: &TextDocumentContentChangeEvent) -> String {
-    let range = match &change.range {
-        Some(r) => r,
-        None => return change.text.clone(),
-    };
-    let start = lsp_position_to_byte_offset(content, &range.start);
-    let end = if let Some(len) = change.range_length {
-        utf16_span_to_byte_end(content, &range.start, len)
-    } else {
-        lsp_position_to_byte_offset(content, &range.end)
-    };
-    if start > end || end > content.len() {
-        return content.to_string();
-    }
-    let mut out = String::with_capacity(content.len().saturating_add(change.text.len()));
-    out.push_str(&content[..start]);
-    out.push_str(&change.text);
-    out.push_str(&content[end..]);
-    out
-}
-
-fn utf16_span_to_byte_end(content: &str, start: &Position, utf16_len: u32) -> usize {
-    let start_byte = lsp_position_to_byte_offset(content, start);
-    let tail = &content[start_byte..];
-    let mut utf16 = 0u32;
-    for (byte_idx, ch) in tail.char_indices() {
-        utf16 += ch.len_utf16() as u32;
-        if utf16 >= utf16_len {
-            return start_byte + byte_idx + ch.len_utf8();
-        }
-    }
-    content.len()
-}
-
-fn lsp_position_to_byte_offset(content: &str, pos: &Position) -> usize {
-    let mut line_no = 0u32;
-    let mut offset = 0usize;
-    for line in content.split_inclusive('\n') {
-        let line_body = line.strip_suffix('\n').unwrap_or(line);
-        if line_no == pos.line {
-            return offset + utf16_char_to_byte(line_body, pos.character);
-        }
-        offset += line.len();
-        line_no += 1;
-    }
-    content.len()
-}
-
-fn extract_identifier_at(line: &str, byte_offset: usize) -> Option<String> {
-    let chars: Vec<(usize, char)> = line.char_indices().collect();
-    if chars.is_empty() {
-        return None;
-    }
-    let mut idx = 0;
-    while idx < chars.len() && chars[idx].0 < byte_offset {
-        idx += 1;
-    }
-    if idx >= chars.len() {
-        idx = chars.len().saturating_sub(1);
-    }
-    if !is_ident_char(chars[idx].1) {
-        if idx > 0 {
-            idx -= 1;
-        }
-    }
-    if !is_ident_char(chars[idx].1) {
-        return None;
-    }
-    let mut lo = idx;
-    let mut hi = idx;
-    while lo > 0 && is_ident_char(chars[lo - 1].1) {
-        lo -= 1;
-    }
-    while hi + 1 < chars.len() && is_ident_char(chars[hi + 1].1) {
-        hi += 1;
-    }
-    let start_byte = chars[lo].0;
-    let end_byte = if hi + 1 < chars.len() {
-        chars[hi + 1].0
-    } else {
-        line.len()
-    };
-    let ident = line.get(start_byte..end_byte)?.trim();
-    if ident.is_empty() {
-        None
-    } else {
-        Some(ident.to_string())
-    }
-}
-
-fn is_ident_char(c: char) -> bool {
-    c.is_alphanumeric() || c == '_'
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn utf16_offset_handles_multibyte() {
-        let line = "fn café() {}";
-        assert!(utf16_char_to_byte(line, 0) < utf16_char_to_byte(line, 5));
-    }
-
-    #[test]
-    fn utf16_offset_handles_emoji_interior() {
-        let line = "🙂abc";
-        let emoji_byte = utf16_char_to_byte(line, 0);
-        let interior = utf16_char_to_byte(line, 1);
-        assert_eq!(emoji_byte, interior);
-        assert_eq!(utf16_char_to_byte(line, 2), "🙂".len());
-    }
-
-    #[test]
-    fn apply_incremental_text_edit() {
-        let content = "fn main() {\n    old();\n}\n";
-        let change = TextDocumentContentChangeEvent {
-            range: Some(Range {
-                start: Position { line: 1, character: 4 },
-                end: Position { line: 1, character: 7 },
-            }),
-            range_length: None,
-            text: "new".to_string(),
-        };
-        let edited = apply_text_edit(content, &change);
-        assert!(edited.contains("new();"));
-        assert!(!edited.contains("old();"));
-    }
-
-    #[test]
-    fn apply_edit_honors_range_length() {
-        let content = "fn main() {\n    old();\n}\n";
-        let change = TextDocumentContentChangeEvent {
-            range: Some(Range {
-                start: Position { line: 1, character: 4 },
-                end: Position { line: 1, character: 4 },
-            }),
-            range_length: Some(3),
-            text: "new".to_string(),
-        };
-        let edited = apply_text_edit(content, &change);
-        assert!(edited.contains("new();"));
-    }
-
-    #[test]
-    fn extracts_identifier_at_cursor() {
-        let line = "    process_request(\"x\");";
-        assert_eq!(
-            extract_identifier_at(line, 6),
-            Some("process_request".to_string())
-        );
     }
 }
