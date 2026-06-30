@@ -104,8 +104,18 @@ impl LspBackend {
     where
         F: FnOnce(&ast_sgrep_core::IndexStore) -> anyhow::Result<T>,
     {
+        let _guard = self.index_guard()?;
         let indexer = Indexer::new(self.index_options())?;
         f(indexer.store())
+    }
+
+    fn with_locked_searcher<F, T>(&self, limit: usize, f: F) -> anyhow::Result<T>
+    where
+        F: FnOnce(&Searcher) -> anyhow::Result<T>,
+    {
+        let _guard = self.index_guard()?;
+        let searcher = Searcher::new(self.search_options(limit))?;
+        f(&searcher)
     }
 
     /// Start full-workspace indexing on a background thread (non-blocking).
@@ -216,15 +226,16 @@ impl LspBackend {
         if self.index_thread.is_some() && !self.is_index_ready() {
             return Ok(json!([]));
         }
-        let searcher = Searcher::new(self.search_options(50))?;
-        let response = searcher.search(query)?;
-        Ok(Value::Array(
-            response
-                .hits
-                .into_iter()
-                .filter_map(|hit| workspace_symbol(&self.root, &hit.file, &hit))
-                .collect(),
-        ))
+        self.with_locked_searcher(50, |searcher| {
+            let response = searcher.search(query)?;
+            Ok(Value::Array(
+                response
+                    .hits
+                    .into_iter()
+                    .filter_map(|hit| workspace_symbol(&self.root, &hit.file, &hit))
+                    .collect(),
+            ))
+        })
     }
 
     pub fn document_symbols(&self, params: &DocumentSymbolParams) -> anyhow::Result<Value> {
@@ -255,17 +266,18 @@ impl LspBackend {
 
     pub fn goto_definition(&self, params: &TextDocumentPositionParams) -> anyhow::Result<Value> {
         let symbol = self.symbol_at_position(params)?;
-        let searcher = Searcher::new(self.search_options(16))?;
-        let response = searcher.search(&format!("defs:{symbol}"))?;
-        let locations: Vec<Value> = response
-            .hits
-            .iter()
-            .map(|hit| location_value(&self.root, &hit.file, hit.line_start, hit.line_end))
-            .collect();
-        Ok(match locations.len() {
-            0 => Value::Null,
-            1 => locations.into_iter().next().unwrap_or(Value::Null),
-            _ => Value::Array(locations),
+        self.with_locked_searcher(16, |searcher| {
+            let response = searcher.search(&format!("defs:{symbol}"))?;
+            let locations: Vec<Value> = response
+                .hits
+                .iter()
+                .map(|hit| location_value(&self.root, &hit.file, hit.line_start, hit.line_end))
+                .collect();
+            Ok(match locations.len() {
+                0 => Value::Null,
+                1 => locations.into_iter().next().unwrap_or(Value::Null),
+                _ => Value::Array(locations),
+            })
         })
     }
 
@@ -274,25 +286,26 @@ impl LspBackend {
             text_document: params.text_document.clone(),
             position: params.position.clone(),
         })?;
-        let searcher = Searcher::new(self.search_options(128))?;
-        let mut locations = Vec::new();
+        self.with_locked_searcher(128, |searcher| {
+            let mut locations = Vec::new();
 
-        for hit in searcher.search(&format!("callers:{symbol}"))?.hits {
-            locations.push(location_value(&self.root, &hit.file, hit.line_start, hit.line_end));
-        }
-
-        if params
-            .context
-            .as_ref()
-            .map(|c| c.include_declaration)
-            .unwrap_or(true)
-        {
-            for hit in searcher.search(&format!("defs:{symbol}"))?.hits {
+            for hit in searcher.search(&format!("callers:{symbol}"))?.hits {
                 locations.push(location_value(&self.root, &hit.file, hit.line_start, hit.line_end));
             }
-        }
 
-        Ok(Value::Array(locations))
+            if params
+                .context
+                .as_ref()
+                .map(|c| c.include_declaration)
+                .unwrap_or(true)
+            {
+                for hit in searcher.search(&format!("defs:{symbol}"))?.hits {
+                    locations.push(location_value(&self.root, &hit.file, hit.line_start, hit.line_end));
+                }
+            }
+
+            Ok(Value::Array(locations))
+        })
     }
 
     pub fn prepare_call_hierarchy(
@@ -346,7 +359,6 @@ impl LspBackend {
     }
 
     pub fn execute_command(&self, params: &ExecuteCommandParams) -> anyhow::Result<Value> {
-        let searcher = Searcher::new(self.search_options(32))?;
         match params.command.as_str() {
             "asgrep.reindex" => {
                 self.ensure_index()?;
@@ -354,19 +366,27 @@ impl LspBackend {
             }
             "asgrep.search" => {
                 let query = params.arguments.first().and_then(|v| v.as_str()).unwrap_or("");
-                Ok(serde_json::to_value(searcher.search(query)?)?)
+                self.with_locked_searcher(32, |searcher| {
+                    Ok(serde_json::to_value(searcher.search(query)?)?)
+                })
             }
             "asgrep.search.semantic" => {
                 let query = params.arguments.first().and_then(|v| v.as_str()).unwrap_or("");
-                Ok(serde_json::to_value(searcher.search_semantic(query)?)?)
+                self.with_locked_searcher(32, |searcher| {
+                    Ok(serde_json::to_value(searcher.search_semantic(query)?)?)
+                })
             }
             "asgrep.callers" => {
                 let sym = params.arguments.first().and_then(|v| v.as_str()).unwrap_or("");
-                Ok(serde_json::to_value(searcher.search(&format!("callers:{sym}"))?)?)
+                self.with_locked_searcher(32, |searcher| {
+                    Ok(serde_json::to_value(searcher.search(&format!("callers:{sym}"))?)?)
+                })
             }
             "asgrep.defs" => {
                 let sym = params.arguments.first().and_then(|v| v.as_str()).unwrap_or("");
-                Ok(serde_json::to_value(searcher.search(&format!("defs:{sym}"))?)?)
+                self.with_locked_searcher(32, |searcher| {
+                    Ok(serde_json::to_value(searcher.search(&format!("defs:{sym}"))?)?)
+                })
             }
             other => Err(anyhow::anyhow!("unknown command: {other}")),
         }
