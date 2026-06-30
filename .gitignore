@@ -1,0 +1,5 @@
+/target/
+**/.asgrep/
+Cargo.lock
+*.db
+*.db-*

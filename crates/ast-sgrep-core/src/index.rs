@@ -1,0 +1,329 @@
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::time::SystemTime;
+
+use ast_sgrep_lang::{detect_language, ParserRegistry};
+use blake3::Hasher;
+use walkdir::WalkDir;
+
+use crate::store::{CallerRow, ImportRow, IndexStore, SymbolRow};
+use crate::Result;
+
+/// Options for indexing a repository.
+#[derive(Debug, Clone)]
+pub struct IndexOptions {
+    pub root: PathBuf,
+    pub index_path: Option<PathBuf>,
+    pub lang_filter: Option<String>,
+    pub respect_gitignore: bool,
+}
+
+/// Statistics from an indexing run.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct IndexStats {
+    pub files_indexed: usize,
+    pub files_skipped: usize,
+    pub files_removed: usize,
+    pub symbols_extracted: usize,
+    pub callers_extracted: usize,
+    pub imports_extracted: usize,
+}
+
+/// Indexes source files into the SQLite store.
+pub struct Indexer {
+    store: IndexStore,
+    parsers: ParserRegistry,
+    options: IndexOptions,
+    ignore_patterns: Vec<String>,
+}
+
+impl Indexer {
+    pub fn new(options: IndexOptions) -> Result<Self> {
+        let store = IndexStore::open(&options.root, options.index_path.as_deref())?;
+        store.set_meta("root", &options.root.display().to_string())?;
+        let ignore_patterns = if options.respect_gitignore {
+            load_ignore_patterns(&options.root)
+        } else {
+            Vec::new()
+        };
+        Ok(Self {
+            store,
+            parsers: ParserRegistry::new(),
+            options,
+            ignore_patterns,
+        })
+    }
+
+    pub fn store(&self) -> &IndexStore {
+        &self.store
+    }
+
+    pub fn index_all(&mut self) -> Result<IndexStats> {
+        let mut stats = IndexStats::default();
+        let mut seen_paths = Vec::new();
+
+        for entry in WalkDir::new(&self.options.root)
+            .follow_links(false)
+            .into_iter()
+            .filter_entry(|e| !should_skip_dir(e.path()))
+        {
+            let entry = match entry {
+                Ok(e) => e,
+                Err(_) => continue,
+            };
+            if !entry.file_type().is_file() {
+                continue;
+            }
+            let path = entry.path();
+            let rel = match path.strip_prefix(&self.options.root) {
+                Ok(r) => r,
+                Err(_) => continue,
+            };
+            let rel_str = rel.to_string_lossy().replace('\\', "/");
+
+            if is_ignored(rel, &self.ignore_patterns) {
+                stats.files_skipped += 1;
+                continue;
+            }
+
+            seen_paths.push(rel_str.clone());
+
+            if self.should_skip_file(path) {
+                stats.files_skipped += 1;
+                continue;
+            }
+
+            match self.index_file(path, &rel_str) {
+                Ok(file_stats) => {
+                    if file_stats.0 == 0 && file_stats.1 == 0 && file_stats.2 == 0 {
+                        // might be unchanged skip - still count if file exists in index
+                    }
+                    stats.files_indexed += 1;
+                    stats.symbols_extracted += file_stats.0;
+                    stats.callers_extracted += file_stats.1;
+                    stats.imports_extracted += file_stats.2;
+                }
+                Err(_) => {
+                    stats.files_skipped += 1;
+                }
+            }
+        }
+
+        let indexed = self.store.all_file_paths()?;
+        for path in indexed {
+            if !seen_paths.contains(&path) {
+                self.store.remove_file(&path)?;
+                stats.files_removed += 1;
+            }
+        }
+
+        Ok(stats)
+    }
+
+    pub fn reindex_all(&mut self) -> Result<IndexStats> {
+        self.index_all()
+    }
+
+    pub fn index_file(&mut self, abs_path: &Path, rel_path: &str) -> Result<(usize, usize, usize)> {
+        let metadata = fs::metadata(abs_path)?;
+        let mtime = metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH);
+        let (mtime_secs, mtime_nanos) = system_time_to_parts(mtime);
+
+        let content = match fs::read_to_string(abs_path) {
+            Ok(c) => c,
+            Err(e) if e.kind() == std::io::ErrorKind::InvalidData => {
+                return Err(crate::StoreError::Other(format!("binary file: {rel_path}")));
+            }
+            Err(e) => return Err(e.into()),
+        };
+
+        let hash = hash_content(&content);
+
+        if let Some(stored_hash) = self.store.file_hash(rel_path)? {
+            if stored_hash == hash {
+                if let Some((s, n)) = self.store.file_mtime(rel_path)? {
+                    if s == mtime_secs && n == mtime_nanos {
+                        return Ok((0, 0, 0));
+                    }
+                }
+            }
+        }
+
+        let language = detect_language(abs_path, Some(&content));
+        if let Some(ref lang_filter) = self.options.lang_filter {
+            match language {
+                Some(lang) if lang.as_str() == lang_filter.as_str() => {}
+                _ => return Ok((0, 0, 0)),
+            }
+        }
+
+        let lines: Vec<(u32, String)> = content
+            .lines()
+            .enumerate()
+            .map(|(i, line)| ((i + 1) as u32, line.to_string()))
+            .collect();
+
+        let (symbols, callers, imports) = if let Some(lang) = language {
+            match self.parsers.parse(lang, &content) {
+                Ok(extraction) => {
+                    let symbols: Vec<SymbolRow> = extraction
+                        .symbols
+                        .iter()
+                        .map(|s| SymbolRow {
+                            name: s.name.clone(),
+                            kind: format!("{:?}", s.kind).to_lowercase(),
+                            line_start: s.line_start,
+                            line_end: s.line_end,
+                            byte_start: s.byte_start,
+                            byte_end: s.byte_end,
+                        })
+                        .collect();
+                    let callers: Vec<CallerRow> = extraction
+                        .calls
+                        .iter()
+                        .map(|c| CallerRow {
+                            caller: c.caller.clone(),
+                            callee: c.callee.clone(),
+                            line_no: c.line,
+                            byte_start: c.byte_start,
+                            byte_end: c.byte_end,
+                        })
+                        .collect();
+                    let imports: Vec<ImportRow> = extraction
+                        .imports
+                        .iter()
+                        .map(|i| ImportRow {
+                            module_path: i.module_path.clone(),
+                            line_no: i.line,
+                        })
+                        .collect();
+                    (symbols, callers, imports)
+                }
+                Err(_) => (Vec::new(), Vec::new(), Vec::new()),
+            }
+        } else {
+            (Vec::new(), Vec::new(), Vec::new())
+        };
+
+        let sym_count = symbols.len();
+        let caller_count = callers.len();
+        let import_count = imports.len();
+
+        self.store.upsert_file(
+            rel_path,
+            language.map(|l| l.as_str()),
+            mtime_secs,
+            mtime_nanos,
+            &hash,
+            &lines,
+            &symbols,
+            &callers,
+            &imports,
+        )?;
+
+        Ok((sym_count, caller_count, import_count))
+    }
+
+    fn should_skip_file(&self, path: &Path) -> bool {
+        if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+            if name.starts_with('.') {
+                return true;
+            }
+        }
+
+        if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+            let ext = ext.to_lowercase();
+            !matches!(
+                ext.as_str(),
+                "rs" | "ts" | "tsx" | "js" | "jsx" | "mjs" | "cjs" | "py" | "pyi" | "go"
+                    | "toml" | "md" | "txt" | "json" | "yaml" | "yml"
+            )
+        } else {
+            true
+        }
+    }
+}
+
+fn hash_content(content: &str) -> String {
+    let mut hasher = Hasher::new();
+    hasher.update(content.as_bytes());
+    hasher.finalize().to_hex().to_string()
+}
+
+fn system_time_to_parts(time: SystemTime) -> (i64, u32) {
+    let duration = time
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap_or_default();
+    (duration.as_secs() as i64, duration.subsec_nanos())
+}
+
+fn should_skip_dir(path: &Path) -> bool {
+    if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+        matches!(
+            name,
+            ".git" | ".asgrep" | "target" | "node_modules" | "dist" | "build" | ".cargo"
+        )
+    } else {
+        false
+    }
+}
+
+fn load_ignore_patterns(root: &Path) -> Vec<String> {
+    let mut patterns = vec![
+        "target/".to_string(),
+        "node_modules/".to_string(),
+        ".git/".to_string(),
+        ".asgrep/".to_string(),
+    ];
+
+    for name in [".gitignore", ".asgrepignore"] {
+        let path = root.join(name);
+        if let Ok(content) = fs::read_to_string(path) {
+            for line in content.lines() {
+                let line = line.trim();
+                if line.is_empty() || line.starts_with('#') {
+                    continue;
+                }
+                patterns.push(line.to_string());
+            }
+        }
+    }
+
+    patterns
+}
+
+fn is_ignored(rel: &Path, patterns: &[String]) -> bool {
+    let rel_str = rel.to_string_lossy().replace('\\', "/");
+    for pattern in patterns {
+        let pat = pattern.trim_end_matches('/');
+        if pat.contains('*') {
+            if simple_glob_match(pat, &rel_str) {
+                return true;
+            }
+        } else if rel_str == pat || rel_str.starts_with(&format!("{pat}/")) {
+            return true;
+        }
+    }
+    false
+}
+
+fn simple_glob_match(pattern: &str, text: &str) -> bool {
+    if let Some(prefix) = pattern.strip_suffix('*') {
+        return text.starts_with(prefix) || text.contains(prefix);
+    }
+    pattern == text
+}
+
+/// Load additional ignore patterns from .asgrepignore
+pub fn load_asgrepignore(root: &Path) -> Vec<String> {
+    let path = root.join(".asgrepignore");
+    if let Ok(content) = fs::read_to_string(path) {
+        content
+            .lines()
+            .map(|l| l.trim().to_string())
+            .filter(|l| !l.is_empty() && !l.starts_with('#'))
+            .collect()
+    } else {
+        Vec::new()
+    }
+}

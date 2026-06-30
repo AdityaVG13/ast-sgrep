@@ -1,0 +1,16 @@
+[package]
+name = "ast-sgrep-lang"
+description = "Polyglot tree-sitter parsers and symbol extractors for ast-sgrep"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+serde = { version = "1", features = ["derive"] }
+tree-sitter.workspace = true
+tree-sitter-go.workspace = true
+tree-sitter-javascript.workspace = true
+tree-sitter-python.workspace = true
+tree-sitter-rust.workspace = true
+tree-sitter-typescript.workspace = true
