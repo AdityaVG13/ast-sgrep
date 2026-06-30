@@ -334,10 +334,6 @@ impl IndexStore {
         })
     }
 
-    pub fn connection(&self) -> &Connection {
-        &self.conn
-    }
-
     /// All lines for tantivy sidecar rebuild.
     pub fn all_indexed_lines(&self) -> Result<Vec<(String, u32, String, Option<String>)>> {
         let mut stmt = self.conn.prepare(
@@ -351,6 +347,83 @@ impl IndexStore {
             out.push((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?));
         }
         Ok(out)
+    }
+
+    pub fn connection(&self) -> &Connection {
+        &self.conn
+    }
+
+    /// Symbols defined in a single file.
+    pub fn symbols_in_file(&self, rel_path: &str) -> Result<Vec<SymbolRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT s.name, s.kind, s.line_start, s.line_end, s.byte_start, s.byte_end
+             FROM symbols s JOIN files f ON f.id = s.file_id
+             WHERE f.path = ?1 ORDER BY s.line_start",
+        )?;
+        let rows = stmt.query_map(params![rel_path], |row| {
+            Ok(SymbolRow {
+                name: row.get(0)?,
+                kind: row.get(1)?,
+                line_start: row.get(2)?,
+                line_end: row.get(3)?,
+                byte_start: row.get(4)?,
+                byte_end: row.get(5)?,
+            })
+        })?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    }
+
+    /// Incoming calls: (file, line, caller, callee) for a callee name.
+    pub fn incoming_calls(
+        &self,
+        callee: &str,
+    ) -> Result<Vec<(String, u32, String, String)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT f.path, c.line_no, c.caller, c.callee
+             FROM callers c JOIN files f ON f.id = c.file_id
+             WHERE lower(c.callee) = lower(?1)
+             ORDER BY f.path, c.line_no",
+        )?;
+        let rows = stmt.query_map(params![callee], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+        })?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    }
+
+    /// Outgoing calls: (file, line, caller, callee) for a caller name.
+    pub fn outgoing_calls(
+        &self,
+        caller: &str,
+    ) -> Result<Vec<(String, u32, String, String)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT f.path, c.line_no, c.caller, c.callee
+             FROM callers c JOIN files f ON f.id = c.file_id
+             WHERE lower(c.caller) = lower(?1)
+             ORDER BY f.path, c.line_no",
+        )?;
+        let rows = stmt.query_map(params![caller], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+        })?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    }
+
+    /// Get a single line of text from the index.
+    pub fn line_content(&self, rel_path: &str, line_no: u32) -> Result<Option<String>> {
+        let result = self.conn.query_row(
+            "SELECT l.content FROM lines l
+             JOIN files f ON f.id = l.file_id
+             WHERE f.path = ?1 AND l.line_no = ?2",
+            params![rel_path, line_no],
+            |row| row.get(0),
+        );
+        match result {
+            Ok(s) => Ok(Some(s)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
     }
 }
 

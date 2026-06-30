@@ -4,22 +4,29 @@
 
 ```bash
 cargo install ast-sgrep-cli
-```
-
-Binaries: `asgrep`, `ast-sgrep`
-
-Optional LSP server:
-
-```bash
 cargo install ast-sgrep-lsp
 ```
+
+Binaries: `asgrep`, `ast-sgrep`, `asgrep-lsp`
 
 ## Publish a release (maintainers)
 
 1. Bump version in root `Cargo.toml` `[workspace.package]`
-2. Tag: `git tag v1.0.0 && git push origin v1.0.0`
-3. GitHub Actions `publish.yml` publishes all crates in order
-4. Or manually: `./scripts/publish.sh`
+2. Publish in dependency order:
+
+```bash
+./scripts/publish.sh
+```
+
+Or manually:
+
+```bash
+cargo publish -p ast-sgrep-lang
+cargo publish -p ast-sgrep-embed
+cargo publish -p ast-sgrep-core
+cargo publish -p ast-sgrep-cli
+cargo publish -p ast-sgrep-lsp
+```
 
 ## Crate dependency order
 
@@ -29,6 +36,4 @@ cargo install ast-sgrep-lsp
 4. `ast-sgrep-cli`
 5. `ast-sgrep-lsp`
 
-## Required secret
-
-Set `CARGO_REGISTRY_TOKEN` in GitHub repository secrets.
+Requires `cargo login <token>`.

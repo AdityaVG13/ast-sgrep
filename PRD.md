@@ -24,9 +24,9 @@ Version 1.0 | Repo: ast-sgrep | CLI: asgrep / ast-sgrep | Language: Rust
 - **Index:** SQLite `.asgrep/index.db`, incremental, `.gitignore` + `.asgrepignore`
 - **Output:** line + JSON
 - **CLI:** `index`, `status`, `reindex`, `bench`
-- **LSP:** `asgrep-lsp` (workspace/symbol, definition, references)
-- **Tests:** 24+ unit/integration + false-positive regression suite
-- **Publish:** crates.io CI + `scripts/publish.sh`
+- **LSP:** full `asgrep-lsp` — see [docs/lsp.md](docs/lsp.md)
+- **Tests:** 33+ unit/integration (incl. 9 LSP tests) + false-positive regression suite
+- **Publish:** crates.io metadata + `scripts/publish.sh` (no CI — publish manually)
 
 ## CLI
 

@@ -122,6 +122,15 @@ ANCHOR: src/main.rs:6-12: fn process_request(...) { ... }
 }
 ```
 
+## LSP server (Phase 6)
+
+```bash
+cargo install ast-sgrep-lsp
+asgrep-lsp   # stdio, Content-Length framed JSON-RPC
+```
+
+Capabilities: workspace symbols, go-to-definition, find references, call hierarchy, `asgrep.search` / `asgrep.reindex` commands. See [docs/lsp.md](docs/lsp.md).
+
 ## Architecture
 
 ```
@@ -132,7 +141,7 @@ ast-sgrep/
   crates/ast-sgrep-embed/  # Local + cloud embedding plugins
   crates/ast-sgrep-lsp/    # LSP server (asgrep-lsp)
   tests/fixtures/          # Polyglot + false-positive test fixtures
-  .github/workflows/       # CI + crates.io publish
+  .github/workflows/       # (removed — no CI to save Actions budget)
 ```
 
 ### Search passes
