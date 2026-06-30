@@ -117,6 +117,52 @@ fn did_change_applies_incremental_range_edit() {
 }
 
 #[test]
+fn read_paths_see_edits_after_did_change() {
+    let (_indexed, backend) = sample_backend();
+    let uri = path_to_uri(&backend.root().join("src/main.rs"));
+    let changes = vec![ast_sgrep_lsp::types::TextDocumentContentChangeEvent {
+        range: None,
+        range_length: None,
+        text: "fn main() {\n    process_request(\"lock-smoke\");\n}\n\nfn process_request(input: &str) {}\n"
+            .to_string(),
+    }];
+    backend.apply_document_changes(&uri, &changes).unwrap();
+
+    let search = ExecuteCommandParams {
+        command: "asgrep.search".to_string(),
+        arguments: vec![serde_json::json!("lock-smoke")],
+    };
+    assert!(backend.execute_command(&search).unwrap()["hits"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|h| h["excerpt"].as_str().unwrap_or("").contains("lock-smoke")));
+
+    let params = DocumentSymbolParams {
+        text_document: TextDocumentIdentifier { uri: uri.clone() },
+    };
+    assert!(backend.document_symbols(&params).unwrap().as_array().unwrap().iter().any(
+        |s| s["name"].as_str().unwrap_or("").contains("process")
+    ));
+
+    let incoming = CallHierarchyItem {
+        name: "process_request".to_string(),
+        kind: 12,
+        uri: uri.clone(),
+        range: Range {
+            start: Position { line: 5, character: 0 },
+            end: Position { line: 8, character: 0 },
+        },
+        selection_range: Range {
+            start: Position { line: 5, character: 0 },
+            end: Position { line: 5, character: 0 },
+        },
+        detail: None,
+    };
+    assert!(backend.incoming_calls(&incoming).unwrap().as_array().map(|a| !a.is_empty()).unwrap_or(false));
+}
+
+#[test]
 fn goto_definition_for_symbol() {
     let (_indexed, backend) = sample_backend();
     let params = TextDocumentPositionParams {

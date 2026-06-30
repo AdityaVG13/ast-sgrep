@@ -3,7 +3,8 @@ use std::time::Instant;
 
 use anyhow::Context;
 use ast_sgrep_core::{
-    format_hit_line, EmbedBackend, IndexOptions, IndexStats, Indexer, SearchOptions, Searcher,
+    format_hit_line, EmbedBackend, IndexOptions, IndexStats, Indexer, SearchOptions, SearchResponse,
+    Searcher,
 };
 use clap::{Parser, Subcommand};
 
@@ -136,63 +137,56 @@ pub fn run() -> anyhow::Result<()> {
             run_bench(root, &cli, query, iterations)?;
         }
         Some(Commands::Semantic { ref query, ref root }) => {
-            run_semantic_search(root, &cli, query)?;
+            run_search(root, &cli, query, true)?;
         }
         None => {
-            let search_opts = search_options(
-                &cli.root.clone().unwrap_or_else(|| cli.search_root.clone()),
-                &cli,
-            );
+            let root = effective_root(&cli, &cli.search_root);
             let query = cli
                 .query
+                .as_deref()
                 .context("search query required (e.g. asgrep \"auth refresh\")")?;
-            let root = cli.root.clone().unwrap_or(cli.search_root);
-            let searcher = Searcher::new(SearchOptions {
-                root,
-                ..search_opts
-            })
-            .context("failed to open index")?;
-            let response = searcher.search(&query).context("search failed")?;
-            if cli.json {
-                let format = cli
-                    .format
-                    .as_deref()
-                    .and_then(ast_sgrep_plugins::OutputFormat::parse)
-                    .unwrap_or(ast_sgrep_plugins::OutputFormat::Native);
-                let value = ast_sgrep_plugins::format_response(&response, format);
-                println!("{}", serde_json::to_string_pretty(&value)?);
-            } else {
-                for hit in &response.hits {
-                    println!("{}", format_hit_line(hit));
-                }
-            }
+            run_search(&root, &cli, query, false)?;
         }
     }
 
     Ok(())
 }
 
-fn run_semantic_search(
-    root: &std::path::Path,
-    cli: &Cli,
-    query: &str,
-) -> anyhow::Result<()> {
-    let search_opts = search_options(root, cli);
+fn effective_root(cli: &Cli, fallback: &std::path::Path) -> PathBuf {
+    cli.root.clone().unwrap_or_else(|| fallback.to_path_buf())
+}
+
+fn run_search(root: &std::path::Path, cli: &Cli, query: &str, semantic: bool) -> anyhow::Result<()> {
     let searcher = Searcher::new(SearchOptions {
-        root: cli.root.clone().unwrap_or_else(|| root.to_path_buf()),
-        ..search_opts
+        root: effective_root(cli, root),
+        ..search_options(root, cli)
     })
     .context("failed to open index")?;
-    let response = searcher
-        .search_semantic(query)
-        .context("semantic search failed")?;
+    let response = if semantic {
+        searcher.search_semantic(query).context("semantic search failed")?
+    } else {
+        searcher.search(query).context("search failed")?
+    };
+    print_search_response(cli, &response, semantic)
+}
+
+fn print_search_response(
+    cli: &Cli,
+    response: &SearchResponse,
+    semantic: bool,
+) -> anyhow::Result<()> {
     if cli.json {
+        let default_format = if semantic {
+            ast_sgrep_plugins::OutputFormat::Agent
+        } else {
+            ast_sgrep_plugins::OutputFormat::Native
+        };
         let format = cli
             .format
             .as_deref()
             .and_then(ast_sgrep_plugins::OutputFormat::parse)
-            .unwrap_or(ast_sgrep_plugins::OutputFormat::Agent);
-        let value = ast_sgrep_plugins::format_response(&response, format);
+            .unwrap_or(default_format);
+        let value = ast_sgrep_plugins::format_response(response, format);
         println!("{}", serde_json::to_string_pretty(&value)?);
     } else {
         for hit in &response.hits {
@@ -217,7 +211,7 @@ fn print_json_or<T: serde::Serialize>(
 
 fn index_options(root: &std::path::Path, cli: &Cli) -> IndexOptions {
     IndexOptions {
-        root: cli.root.clone().unwrap_or_else(|| root.to_path_buf()),
+        root: effective_root(cli, root),
         index_path: cli.index_path.clone(),
         lang_filter: cli.lang.clone(),
         respect_gitignore: true,

@@ -28,6 +28,19 @@ impl AsgrepSettings {
         serde_json::from_value(value.clone()).unwrap_or_default()
     }
 
+    fn apply_path_and_ann(
+        &self,
+        index_path: &mut Option<std::path::PathBuf>,
+        ann_threshold: &mut Option<usize>,
+    ) {
+        if let Some(t) = self.ann_threshold {
+            *ann_threshold = Some(t);
+        }
+        if let Some(ref p) = self.index_path {
+            *index_path = Some(std::path::PathBuf::from(p));
+        }
+    }
+
     pub fn apply_to_index_options(&self, opts: &mut IndexOptions) {
         if let Some(no) = self.no_embed {
             opts.embed_semantic = !no;
@@ -44,12 +57,7 @@ impl AsgrepSettings {
         if self.semantic_only == Some(true) {
             opts.embed_backend = EmbedBackend::Semantic;
         }
-        if let Some(t) = self.ann_threshold {
-            opts.ann_threshold = Some(t);
-        }
-        if let Some(ref p) = self.index_path {
-            opts.index_path = Some(std::path::PathBuf::from(p));
-        }
+        self.apply_path_and_ann(&mut opts.index_path, &mut opts.ann_threshold);
     }
 
     pub fn apply_to_search_options(&self, opts: &mut SearchOptions) {
@@ -65,12 +73,7 @@ impl AsgrepSettings {
         if let Some(s) = self.semantic_only {
             opts.use_semantic_only = s;
         }
-        if let Some(t) = self.ann_threshold {
-            opts.ann_threshold = Some(t);
-        }
-        if let Some(ref p) = self.index_path {
-            opts.index_path = Some(std::path::PathBuf::from(p));
-        }
+        self.apply_path_and_ann(&mut opts.index_path, &mut opts.ann_threshold);
     }
 }
 
