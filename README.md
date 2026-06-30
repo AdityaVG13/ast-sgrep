@@ -1,6 +1,6 @@
 # ast-sgrep
 
-**Polyglot hybrid code search** — find intent across **8 languages** (Rust, TypeScript, JavaScript, Python, Go, Java, C#, Ruby) with lexical search, AST symbol graphs, and **symbol-level semantic retrieval** (on by default).
+**v1.0.0-alpha** — polyglot hybrid code search across **8 languages** with lexical search, AST symbol graphs, and **symbol-level semantic retrieval** (on by default). Pre-release: see [docs/testing.md](docs/testing.md).
 
 ```bash
 cargo install ast-sgrep-cli
@@ -307,7 +307,7 @@ cargo install ast-sgrep-lsp
 | `workspace/executeCommand` | `asgrep.search`, `asgrep.reindex`, `asgrep.callers`, `asgrep.defs` |
 | `textDocument/didSave` | Incremental single-file reindex |
 
-See [docs/lsp.md](docs/lsp.md) for editor configuration.
+See [docs/lsp.md](docs/lsp.md) for editor configuration and [docs/agent.md](docs/agent.md) for AI/agent integration.
 
 ---
 

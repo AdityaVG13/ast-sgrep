@@ -20,7 +20,7 @@ asgrep --json --format agent "where is auth refreshed"
 ```json
 {
   "provider": "ast-sgrep",
-  "version": "1.1",
+  "version": "1.0.0-alpha",
   "query": "credential renewal",
   "hit_count": 3,
   "has_semantic_hits": true,

@@ -1,6 +1,8 @@
 # ast-sgrep PRD
 
-Version 1.1 | Repo: ast-sgrep | CLI: asgrep / ast-sgrep | Language: Rust
+Version 1.0.0-alpha | Repo: ast-sgrep | CLI: asgrep / ast-sgrep | Language: Rust
+
+> **Pre-release.** Semantic layer, IVF persistence, and agent JSON are in place — validate with `cargo test` before tagging `v1.0.0-alpha.0`.
 
 ## Roadmap — all phases complete
 

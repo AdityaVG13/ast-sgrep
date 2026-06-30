@@ -57,7 +57,7 @@ pub fn to_agent_json(response: &SearchResponse) -> serde_json::Value {
 
     serde_json::json!({
         "provider": "ast-sgrep",
-        "version": "1.1",
+        "version": "1.0.0-alpha",
         "query": response.query,
         "limit": response.limit,
         "hit_count": hits.len(),
