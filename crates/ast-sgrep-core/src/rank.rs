@@ -1,9 +1,5 @@
-//! Reciprocal Rank Fusion and PRD scoring functions.
-
-/// RRF constant (standard default).
 pub const RRF_K: f64 = 60.0;
 
-/// Ranking scores per PRD.
 pub const SCORE_GRAPH: f64 = 5.0;
 pub const SCORE_ANCHOR: f64 = 6.0;
 pub const SCORE_DEF_BASE: f64 = 3.0;
@@ -14,27 +10,22 @@ pub const SCORE_PATTERN: f64 = 7.0;
 pub const SCORE_EMBED: f64 = 4.0;
 pub const LEXICAL_RANK_DIVISOR: f64 = 60.0;
 
-/// Reciprocal rank fusion score for a single ranked list.
 pub fn rrf_score(rank: usize, k: f64) -> f64 {
     1.0 / (k + rank as f64 + 1.0)
 }
 
-/// Fuse multiple rank positions (one per query term list) via RRF.
 pub fn fuse_rrf(ranks: &[usize], k: f64) -> f64 {
     ranks.iter().map(|r| rrf_score(*r, k)).sum()
 }
 
-/// BM25-like lexical score from rank position (PRD formula).
 pub fn score_lexical(rank: usize) -> f64 {
     1.0 / (LEXICAL_RANK_DIVISOR + rank as f64 + 1.0)
 }
 
-/// Combined lexical score using RRF across per-term ranks, scaled to PRD range.
 pub fn score_lexical_rrf(per_term_ranks: &[usize]) -> f64 {
     fuse_rrf(per_term_ranks, RRF_K)
 }
 
-/// Symbol term match score.
 pub fn score_symbol(term: &str, symbol: &str) -> f64 {
     let term_lower = term.to_lowercase();
     let sym_lower = symbol.to_lowercase();
@@ -47,7 +38,6 @@ pub fn score_symbol(term: &str, symbol: &str) -> f64 {
     }
 }
 
-/// Best symbol score across all query terms.
 pub fn best_symbol_score(terms: &[String], symbol: &str) -> f64 {
     terms
         .iter()
@@ -55,12 +45,10 @@ pub fn best_symbol_score(terms: &[String], symbol: &str) -> f64 {
         .fold(0.0_f64, f64::max)
 }
 
-/// Definition hit score.
 pub fn score_def(terms: &[String], symbol: &str) -> f64 {
     best_symbol_score(terms, symbol) * 2.0 + SCORE_DEF_BASE
 }
 
-/// Caller hit score.
 pub fn score_caller(terms: &[String], callee: &str) -> f64 {
     best_symbol_score(terms, callee) * 2.0 + SCORE_CALLER_BASE
 }

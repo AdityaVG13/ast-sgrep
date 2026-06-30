@@ -141,18 +141,16 @@ fn hits_from_ranks(line_ranks: LineRanks, line_meta: LineMeta) -> Vec<SearchHit>
                 .get(&(path.clone(), line_no))
                 .cloned()
                 .unwrap_or((None, String::new()));
-            SearchHit {
-                kind: HitKind::Asgrep,
-                file: path,
-                line_start: line_no,
-                line_end: line_no,
-                symbol: None,
-                caller: None,
-                callee: None,
+            SearchHit::span(
+                HitKind::Asgrep,
+                path,
+                line_no,
+                line_no,
+                score_lexical_rrf(&ranks),
+                content,
+                None,
                 language,
-                score: score_lexical_rrf(&ranks),
-                excerpt: content,
-            }
+            )
         })
         .collect()
 }

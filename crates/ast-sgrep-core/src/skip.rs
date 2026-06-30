@@ -1,5 +1,3 @@
-//! Default directory and extension skip rules for indexing walks.
-
 use std::path::Path;
 
 pub const DEFAULT_SKIP_DIR_NAMES: &[&str] = &[

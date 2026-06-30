@@ -140,21 +140,19 @@ fn parse_ast_grep_json(stdout: &[u8], pattern: &str, root: &Path) -> Result<Vec<
             .unwrap_or(pattern)
             .to_string();
 
-        hits.push(SearchHit {
-            kind: HitKind::Pattern,
+        hits.push(SearchHit::span(
+            HitKind::Pattern,
             file,
-            line_start: start_line,
-            line_end: end_line,
-            symbol: Some(pattern.to_string()),
-            caller: None,
-            callee: None,
-            language: value
+            start_line,
+            end_line,
+            SCORE_PATTERN,
+            excerpt,
+            Some(pattern.to_string()),
+            value
                 .get("language")
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string()),
-            score: SCORE_PATTERN,
-            excerpt,
-        });
+        ));
     }
 
     Ok(hits)

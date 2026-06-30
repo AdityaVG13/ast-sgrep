@@ -14,7 +14,6 @@ use passes::lexical::lexical_pass;
 use passes::modes::{search_callers, search_defs, search_imports};
 use passes::symbol::{anchor_pass, symbol_pass};
 
-/// Hybrid search engine over the index.
 pub struct Searcher {
     store: IndexStore,
     options: SearchOptions,
@@ -59,7 +58,6 @@ impl Searcher {
         Ok(finish_response(&parsed, self.options.limit, hits, true))
     }
 
-    /// Semantic-only search — runs the embed pass without lexical/symbol fusion.
     pub fn search_semantic(&self, query_str: &str) -> Result<SearchResponse> {
         let parsed = ParsedQuery::parse(query_str);
         let hits = embed_pass(&self.store, &self.options, &parsed)?;

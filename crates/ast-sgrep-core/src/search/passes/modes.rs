@@ -1,7 +1,6 @@
 use crate::query::ParsedQuery;
 use crate::store::IndexStore;
 use crate::Result;
-use crate::search::hits::import_hit;
 use crate::search::types::SearchHit;
 
 use super::symbol::{callee_hits_for_terms, def_hits_for_terms};
@@ -57,7 +56,7 @@ pub fn search_imports(store: &IndexStore, parsed: &ParsedQuery) -> Result<Vec<Se
         .query_imports(module, MODE_SQL_LIMIT)?
         .into_iter()
         .map(|(path, language, module_path, line_no)| {
-            import_hit(path, language, module_path, line_no)
+            SearchHit::import(path, language, module_path, line_no)
         })
         .collect())
 }

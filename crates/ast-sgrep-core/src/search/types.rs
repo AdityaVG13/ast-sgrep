@@ -2,7 +2,6 @@ use std::path::PathBuf;
 
 use crate::EmbedBackend;
 
-/// Kind of search hit in output.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum HitKind {
@@ -31,7 +30,6 @@ impl HitKind {
     }
 }
 
-/// A single search result.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SearchHit {
     pub kind: HitKind,
@@ -50,20 +48,93 @@ pub struct SearchHit {
     pub excerpt: String,
 }
 
-/// Search options.
+impl SearchHit {
+    fn base(kind: HitKind, file: String, line_start: u32, line_end: u32, score: f64, excerpt: String) -> Self {
+        Self {
+            kind,
+            file,
+            line_start,
+            line_end,
+            symbol: None,
+            caller: None,
+            callee: None,
+            language: None,
+            score,
+            excerpt,
+        }
+    }
+
+    pub fn span(
+        kind: HitKind,
+        file: String,
+        line_start: u32,
+        line_end: u32,
+        score: f64,
+        excerpt: String,
+        symbol: Option<String>,
+        language: Option<String>,
+    ) -> Self {
+        Self { symbol, language, ..Self::base(kind, file, line_start, line_end, score, excerpt) }
+    }
+
+    pub fn import(file: String, language: Option<String>, module_path: String, line_no: u32) -> Self {
+        Self {
+            symbol: Some(module_path.clone()),
+            language,
+            excerpt: format!("import {module_path}"),
+            ..Self::base(HitKind::Import, file, line_no, line_no, 2.0, String::new())
+        }
+    }
+
+    pub fn caller(
+        file: String,
+        language: Option<String>,
+        caller: String,
+        callee: String,
+        line_no: u32,
+        excerpt: String,
+        score: f64,
+    ) -> Self {
+        Self {
+            caller: Some(caller),
+            callee: Some(callee),
+            language,
+            excerpt,
+            ..Self::base(HitKind::Caller, file, line_no, line_no, score, String::new())
+        }
+    }
+
+    pub fn graph(
+        file: String,
+        language: Option<String>,
+        caller: String,
+        callee: String,
+        line_no: u32,
+    ) -> Self {
+        let excerpt = format!("{caller} calls {callee}");
+        Self {
+            symbol: Some(callee.clone()),
+            caller: Some(caller),
+            callee: Some(callee),
+            language,
+            excerpt,
+            score: crate::rank::SCORE_GRAPH,
+            ..Self::base(HitKind::Graph, file, line_no, line_no, crate::rank::SCORE_GRAPH, String::new())
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct SearchOptions {
     pub root: PathBuf,
     pub index_path: Option<PathBuf>,
     pub limit: usize,
     pub lang_filter: Option<String>,
-    /// Run semantic embedding pass (default on).
     pub use_embed: bool,
     pub use_tantivy: bool,
     pub use_cloud_embed: bool,
     pub use_ollama_embed: bool,
     pub use_semantic_only: bool,
-    /// Override ANN IVF threshold (`ASGREP_ANN_THRESHOLD` when unset).
     pub ann_threshold: Option<usize>,
 }
 
@@ -105,7 +176,6 @@ impl SearchOptions {
     }
 }
 
-/// Search response wrapper for JSON output.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SearchResponse {
     pub query: String,

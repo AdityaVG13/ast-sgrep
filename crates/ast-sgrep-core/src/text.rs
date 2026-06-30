@@ -1,5 +1,3 @@
-//! Line splitting and excerpt helpers shared by indexing.
-
 #[derive(Debug, Clone)]
 pub struct SplitLines {
     pub lines: Vec<(u32, String)>,

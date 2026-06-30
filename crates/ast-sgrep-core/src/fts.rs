@@ -1,12 +1,8 @@
-//! FTS5 query term escaping for safe MATCH clauses.
-
-/// Escape a single term for SQLite FTS5 MATCH (wrap in double quotes, escape internal quotes).
 pub fn escape_fts_term(term: &str) -> String {
     let escaped = term.replace('"', "\"\"");
     format!("\"{escaped}\"")
 }
 
-/// Build an OR-joined FTS5 query from multiple terms.
 pub fn escape_fts_query(terms: &[String]) -> String {
     terms
         .iter()

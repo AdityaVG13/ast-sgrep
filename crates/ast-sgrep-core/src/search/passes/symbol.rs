@@ -3,7 +3,7 @@ use crate::rank::{best_symbol_score, score_caller, score_def, SCORE_ANCHOR};
 use crate::store::sql::{callee_terms_filter, caller_terms_filter, like_terms_filter, query_limit_map};
 use crate::store::IndexStore;
 use crate::Result;
-use crate::search::hits::{matches_lang, push_caller_and_graph, symbol_span_hit};
+use crate::search::hits::matches_lang;
 use crate::search::types::{HitKind, SearchHit, SearchOptions};
 
 const SYMBOL_SQL_LIMIT: usize = 500;
@@ -76,17 +76,18 @@ fn caller_rows_to_hits(
                         .is_some_and(|s| callee.to_lowercase().contains(&s.to_lowercase()))
             }
         };
-        push_caller_and_graph(
-            &mut hits,
-            path,
-            language,
-            caller,
-            callee,
+        hits.push(SearchHit::caller(
+            path.clone(),
+            language.clone(),
+            caller.clone(),
+            callee.clone(),
             line_no,
             text,
             score,
-            include_graph,
-        );
+        ));
+        if include_graph {
+            hits.push(SearchHit::graph(path, language, caller, callee, line_no));
+        }
     }
     Ok(hits)
 }
@@ -107,15 +108,8 @@ fn symbol_span_rows_to_hits(
         }
         let text = excerpt(&path, line_start, line_end)?;
         let score = score_for(&name);
-        hits.push(symbol_span_hit(
-            kind,
-            path,
-            line_start,
-            line_end,
-            name,
-            language,
-            score,
-            text,
+        hits.push(SearchHit::span(
+            kind, path, line_start, line_end, score, text, Some(name), language,
         ));
     }
     Ok(hits)

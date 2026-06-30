@@ -1,25 +1,17 @@
-/// Parsed user query with mode and search terms.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParsedQuery {
     pub raw: String,
     pub mode: QueryMode,
-    /// Exact lookup string for prefixed modes (`callers:`, `defs:`, `imports:`).
     pub target: Option<String>,
     pub terms: Vec<String>,
 }
 
-/// Query mode derived from prefix or natural language.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum QueryMode {
-    /// Default hybrid search across all passes.
     Hybrid,
-    /// `callers:symbol` — who calls this symbol.
     Callers,
-    /// `defs:symbol` — definition sites.
     Defs,
-    /// `imports:module` — import statements.
     Imports,
-    /// `pattern:...` — structural search via ast-grep.
     Pattern,
 }
 

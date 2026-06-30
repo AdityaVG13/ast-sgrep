@@ -1,6 +1,5 @@
 use crate::search::{HitKind, SearchHit};
 
-/// Format a search hit as a line per PRD spec.
 pub fn format_hit_line(hit: &SearchHit) -> String {
     match hit.kind {
         HitKind::Asgrep => {
