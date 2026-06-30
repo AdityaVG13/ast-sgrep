@@ -1,399 +1,155 @@
 # ast-sgrep
 
-**v1.0.0-alpha** — polyglot hybrid code search across **8 languages** with lexical search, AST symbol graphs, and **symbol-level semantic retrieval** (on by default). Pre-release: see [docs/testing.md](docs/testing.md).
+**Hybrid code search that understands intent** — not just text or syntax.
+
+**v1.0.0-alpha.0** · 8 languages · lexical + AST graph + **semantic symbol search** (on by default, no API key)
 
 ```bash
 cargo install ast-sgrep-cli
 asgrep index .
 asgrep "where is auth refreshed"
+# → defs, callers, excerpts, and semantic hits in one ranked result set
 ```
 
-> **ast-grep finds shapes. ast-sgrep finds intent with graph context.**
+> **ast-grep finds shapes. ripgrep finds strings. ast-sgrep finds intent.**
 
 ---
 
-## Why ast-sgrep?
+## Why this exists
 
-Code search tools solve different problems. **ast-sgrep takes a different approach** from both [ast-grep](https://github.com/ast-grep/ast-grep) and [ripgrep](https://github.com/BurntSushi/ripgrep): it builds a persistent, queryable index that fuses text search with AST-derived symbol and call-graph context — so you can ask *“where is auth refreshed?”* and get definitions, callers, and anchor excerpts in one ranked result set.
+Most code search is either **fast text** (ripgrep) or **pattern matching** (ast-grep). Neither answers questions like *“where does credential renewal happen?”* or *“who calls this before the token is stored?”* — especially when the words in your question do not appear in the code.
 
-### How the tools compare
+**ast-sgrep** builds a **persistent index** of your repo: symbols, caller/callee edges, imports, lexical FTS, and **symbol-level semantic vectors** enriched with call-graph context. You query in natural language or with graph prefixes; it returns ranked hits with excerpts — ready for humans or AI agents.
 
-| | **ast-sgrep** | **ast-grep** | **ripgrep** |
-|---|:---:|:---:|:---:|
-| **Primary goal** | Navigate & understand codebases | Structural search & codemods | Fast text search |
-| **Search model** | Persistent SQLite index + hybrid ranking | Pattern match per run | Streaming regex scan |
-| **Natural-language queries** | Yes (`"how does auth refresh work"`) | No | No |
-| **Symbol definitions** | Yes (`defs:process_request`) | Via pattern only | No |
-| **Caller / callee graph** | Yes (`callers:main`) | No | No |
-| **Import tracking** | Yes (`imports:serde`) | No | No |
-| **Structural patterns** | Yes (`pattern:fn $NAME($$$)`) — delegates to ast-grep | Native | No |
-| **Semantic similarity** | **On by default** — symbol chunks + concept expansion; cloud/Ollama optional | No | No |
-| **Polyglot (8 languages)** | Yes, unified index | Yes | Yes (text only) |
-| **CI / API JSON plugins** | GitHub & GitLab (`--format`) | No | No |
-| **LSP integration** | `asgrep-lsp` (symbols, defs, refs, call hierarchy) | Separate ecosystem | No |
-| **JSON output for agents** | Yes (`--json`) | Yes | Yes (`--json`) |
-| **Typical latency** | ~0.3 ms/search (indexed) | Pattern-dependent | ~ms–s per scan |
+**No API key required.** Offline semantic search works out of the box. Cloud and Ollama embeddings are optional upgrades.
 
-### When to use which
+| You need… | ast-sgrep gives you… |
+|-----------|----------------------|
+| *“Where is X defined?”* | `defs:` + ranked hybrid hits |
+| *“Who calls this?”* | `callers:` + call hierarchy (LSP) |
+| *“How does auth refresh work?”* | NL query → symbols + anchors + semantic similarity |
+| *“credential renewal”* (no token overlap) | Semantic hit on `auth_refresh` |
+| Structured JSON for an agent | `--json --format agent` with follow-up query hints |
+| Structural rewrite / codemod | `pattern:` delegates to ast-grep |
 
-| You want to… | Reach for |
-|---|---|
-| Ask *“where does X happen?”* across a whole repo | **ast-sgrep** |
-| Find who calls a function or where a symbol is defined | **ast-sgrep** |
-| Feed ranked, structured hits to an AI agent | **ast-sgrep** (`--json`) |
-| Rewrite code with AST-aware rules | **ast-grep** |
-| Match a syntactic shape (`class $C { $$$ }`) | **ast-grep** or `asgrep "pattern:…"` |
-| Grep logs, configs, or any file type fast | **ripgrep** |
-| One-off regex across unindexed files | **ripgrep** |
-
-ast-sgrep **complements** ast-grep and ripgrep — it does not replace them. Think of it as the **navigation + intent layer** you add on top:
-
-| Tool | Role in your stack |
-|------|-------------------|
-| **ripgrep** | Fast scan of logs, configs, any file type |
-| **ast-grep** | Structural patterns and codemods |
-| **ast-sgrep** | Persistent index: NL queries, defs/callers/graph, semantic hits, agent JSON |
-
-Use `pattern:` to delegate structural queries to ast-grep when installed; use ripgrep when you need raw speed over unindexed files. Use **asgrep** when you (or an AI agent) need *“where does credential renewal happen?”* with ranked context.
-
-### Scale: small and large repos
-
-| Corpus size | Strategy |
-|-------------|----------|
-| **&lt; 2k symbols** (default) | Brute-force cosine over symbol vectors — sub-millisecond |
-| **≥ 2k symbols** | IVF-ANN with persisted `.asgrep/semantic.ivf` sidecar — no k-means rebuild on restart |
-| **≥ 1k files** | Optional lexical FTS sidecar (`--tantivy`) for BM25 at scale |
-
-Tune with `--ann-threshold` / `ASGREP_ANN_THRESHOLD` or LSP `annThreshold`.
+[Full comparison with ast-grep and ripgrep →](docs/comparison.md)
 
 ---
 
-## Architecture
+## Where it fits in your stack
 
-```mermaid
-flowchart TB
-    subgraph Input
-        CLI["asgrep CLI"]
-        LSP["asgrep-lsp"]
-    end
+ast-sgrep **complements** ripgrep and ast-grep — it does not replace them.
 
-    subgraph Index["Index layer (.asgrep/)"]
-        DB["index.db — SQLite"]
-        LEX["lexical.db — FTS5 sidecar"]
-    end
+| Tool | Role |
+|------|------|
+| **[ripgrep](https://github.com/BurntSushi/ripgrep)** | Fast scan of logs, configs, any file — no index |
+| **[ast-grep](https://github.com/ast-grep/ast-grep)** | Structural patterns and codemods |
+| **ast-sgrep** | Persistent **navigation + intent** layer: NL queries, defs/callers/graph, semantic hits, agent JSON |
 
-    subgraph Parse["AST extraction"]
-        TS["tree-sitter parsers"]
-        SYM["symbols · callers · imports"]
-    end
-
-    subgraph Search["Hybrid search engine"]
-        L1["① Lexical — FTS5 BM25 + RRF"]
-        L2["② Symbol + graph — defs, callers"]
-        L3["③ Anchor — excerpt around symbol"]
-        L4["④ Semantic — symbol-chunk vectors (default on)"]
-        RANK["Fuse · dedupe · rank"]
-    end
-
-    CLI --> Index
-    LSP --> Index
-    Index --> Parse
-    TS --> SYM
-    SYM --> DB
-    DB --> Search
-    LEX --> L1
-    L1 --> RANK
-    L2 --> RANK
-    L3 --> RANK
-    L4 --> RANK
-    RANK --> OUT["Line or JSON output"]
-```
-
-### Search pipeline
-
-```mermaid
-flowchart LR
-    Q["Query"] --> P{"Prefix?"}
-    P -->|callers:| C["Caller graph SQL"]
-    P -->|defs:| D["Symbol lookup SQL"]
-    P -->|imports:| I["Import lookup SQL"]
-    P -->|pattern:| AG["ast-grep delegate"]
-    P -->|hybrid| H["Multi-pass fusion"]
-    H --> L["Lexical FTS5"]
-    H --> S["Symbol match"]
-    H --> G["Graph edges"]
-    H --> A["Anchor excerpts"]
-    H --> E["Semantic chunks"]
-    C --> R["Ranked hits"]
-    D --> R
-    I --> R
-    AG --> R
-    L --> R
-    S --> R
-    G --> R
-    A --> R
-    E --> R
-```
-
----
-
-## Benchmarks
-
-Measured on the polyglot sample fixture (5 files, 25 symbols, 26 caller edges) with `cargo build --release`:
-
-| Metric | Result | Target |
-|--------|--------|--------|
-| Index 5 files | **0.19 ms** | — |
-| Avg hybrid search (`process_request`, 100 iter) | **0.29 ms** | < 20 ms |
-| False-positive caller rate (regression suite) | **0%** | 0% |
-| Test suite | **62 tests** | all passing |
-
-```bash
-asgrep bench . --iterations 100
-# Benchmark (v1.0 targets: search <20ms, 0% false callers)
-# Indexed 5 files in 0.19ms
-# Query: process_request
-# Avg search: 0.29ms over 100 iterations (16 hits)
-```
-
----
-
-## Install
-
-```bash
-# CLI
-cargo install ast-sgrep-cli
-
-# LSP server (editor integration)
-cargo install ast-sgrep-lsp
-```
-
-Binaries: `asgrep` and `ast-sgrep` (aliases).
+Use **asgrep** when you (or an agent) need to *navigate and understand* a codebase. Use **ast-grep** for shape-based rewrites. Use **ripgrep** for raw speed over unindexed files.
 
 ---
 
 ## Quick start
 
 ```bash
-# Build index (stored in .asgrep/index.db)
-asgrep index .
+asgrep index .                              # .asgrep/index.db (incremental, respects .gitignore)
 
-# Natural-language / keyword search
-asgrep "auth refresh"
-asgrep "how does process_request work"
+asgrep "auth refresh"                       # hybrid: lexical + symbols + graph + semantic
+asgrep "credential renewal"                 # synonym → auth_refresh (semantic, no shared tokens)
+asgrep "callers:process_request"            # who calls process_request?
+asgrep "defs:auth_refresh"                  # definition sites
+asgrep "pattern:fn $NAME($$$)"              # structural — delegates to ast-grep if installed
 
-# Prefixed graph queries
-asgrep "callers:process_request"    # who calls process_request?
-asgrep "defs:auth_refresh"          # where is auth_refresh defined?
-asgrep "imports:serde"              # import statements mentioning serde
-asgrep "pattern:fn $NAME($$$)"      # structural — delegates to ast-grep
+asgrep --json --format agent "where is auth refreshed"   # agent-ready JSON
+asgrep semantic "persist access token" --json              # semantic-only search
 
-# Synonym queries work without token overlap (semantic on by default)
-asgrep "credential renewal"          # → auth_refresh
-asgrep "sanitize user input"         # → validate_input
-
-# Neural backends (optional upgrade over offline semantic)
-asgrep --cloud-embed index .         # OpenAI-compatible API at index time
-asgrep --ollama-embed index .        # Ollama (nomic-embed-text, etc.)
-asgrep --no-embed index .            # disable semantic indexing + search pass
-
-# Large monorepos: lexical FTS sidecar (auto at 1000+ files)
-asgrep --tantivy index .
-
-# JSON for agents / automation
-asgrep --json --format agent "credential renewal"
-asgrep semantic "persist access token" --json   # semantic-only, agent JSON default
-
-# GitHub / GitLab code-search shaped JSON
-asgrep --json --format github "auth refresh"
-asgrep --json --format gitlab "process_request"
-
-# Index management
-asgrep status .
-asgrep reindex .          # force full re-parse (bypasses hash skip)
-asgrep bench .
+asgrep status .                             # files, symbols, embed backend, IVF sidecar
 ```
 
----
-
-## CLI reference
-
-### Commands
-
-| Command | Description |
-|---------|-------------|
-| `asgrep index [ROOT]` | Build or incrementally update the index |
-| `asgrep reindex [ROOT]` | Force full reindex (re-parse every file) |
-| `asgrep status [ROOT]` | Show index statistics |
-| `asgrep semantic "QUERY" [ROOT]` | Semantic-only search (synonym / NL) |
-| `asgrep bench [ROOT]` | Run search latency benchmarks |
-| `asgrep "QUERY" [ROOT]` | Hybrid search (default) |
-
-### Flags
-
-| Flag | Description |
-|------|-------------|
-| `--root` | Project root (default: `.`) |
-| `--limit` | Max results (default: 16, env: `ASGREP_LIMIT`) |
-| `--json` | JSON output |
-| `--format` | JSON shape: `native`, `agent`, `github`, `gitlab` |
-| `--index-path` | Custom index DB path (`ASGREP_INDEX_PATH`) |
-| `--lang` | Filter by language (`rust`, `typescript`, `javascript`, `python`, `go`) |
-| `--no-embed` | Disable semantic indexing + search (`ASGREP_NO_EMBED=1`) |
-| `--tantivy` | Build/use lexical FTS sidecar (`ASGREP_TANTIVY=1`) |
-| `--cloud-embed` | Prefer cloud neural embeddings (`ASGREP_CLOUD_EMBED=1`, needs API key) |
-| `--ollama-embed` | Prefer Ollama neural embeddings (`ASGREP_OLLAMA_EMBED=1`) |
-| `--semantic-only` | Force offline code-aware semantic only (`ASGREP_SEMANTIC_ONLY=1`) |
-| `ASGREP_USE_CACHE=1` | Store index in `~/.cache/asgrep/` |
-
-### Output kinds
-
-| Kind | Meaning |
-|------|---------|
-| `ASGREP` | Lexical line hit (FTS5) |
-| `DEF` | Symbol definition |
-| `CALLER` | Caller → callee edge |
-| `GRAPH` | Graph neighborhood summary |
-| `ANCHOR` | Excerpt around a matched symbol |
-| `IMPORT` | Import statement |
-| `PATTERN` | Structural match via ast-grep |
-| `EMBED` | Semantic symbol-chunk hit (synonym / NL similarity) |
-
-### Example output
-
-```
-DEF: src/main.rs: auth_refresh span=19..22 | fn auth_refresh() { ... }
-CALLER: src/main.rs: main -> auth_refresh
-GRAPH: src/main.rs: main calls auth_refresh
-ANCHOR: src/main.rs:19-22: fn auth_refresh() { ... }
-```
-
-### JSON example
-
-```json
-{
-  "query": "how does process_request work",
-  "limit": 16,
-  "hits": [{
-    "kind": "anchor",
-    "file": "src/main.rs",
-    "line_start": 6,
-    "line_end": 12,
-    "symbol": "process_request",
-    "language": "rust",
-    "score": 6.0,
-    "excerpt": "fn process_request(...) { ... }"
-  }]
-}
-```
-
----
-
-## LSP server
-
-Full Phase 6 implementation — `asgrep-lsp` over stdio with Content-Length framed JSON-RPC.
+Optional backends and scale knobs:
 
 ```bash
-cargo install ast-sgrep-lsp
+asgrep --no-embed index .       # disable semantic layer
+asgrep --ollama-embed index .   # local neural embeddings (Ollama)
+asgrep --cloud-embed index .    # OpenAI-compatible API (ASGREP_EMBED_API_KEY)
+asgrep --tantivy index .        # lexical FTS sidecar for large repos (auto at 1000+ files)
 ```
 
-| LSP method | Feature |
-|------------|---------|
-| `workspace/symbol` | Hybrid search across workspace |
-| `textDocument/documentSymbol` | AST symbols per file |
-| `textDocument/definition` | Go-to-definition at cursor |
-| `textDocument/references` | Find references + callers |
-| `callHierarchy/*` | Incoming/outgoing call graph |
-| `workspace/executeCommand` | `asgrep.search`, `asgrep.reindex`, `asgrep.callers`, `asgrep.defs` |
-| `textDocument/didSave` | Incremental single-file reindex |
-
-See [docs/lsp.md](docs/lsp.md) for editor configuration and [docs/agent.md](docs/agent.md) for AI/agent integration.
+[Getting started guide →](docs/getting-started.md) · [How it works →](docs/how-it-works.md) · [Semantic search (the S) →](docs/semantic-search.md)
 
 ---
 
-## Crate layout
+## What “semantic” means here
+
+Unlike line-level hash embeddings, ast-sgrep embeds **symbol chunks** — each function/method/type with name, kind, callers, callees, and an excerpt — then expands with code-domain concept groups (auth ↔ credential ↔ token, refresh ↔ renewal, etc.).
 
 ```
-ast-sgrep/
-├── crates/ast-sgrep-core/    # Index + hybrid search engine
-├── crates/ast-sgrep-cli/     # asgrep / ast-sgrep binaries
-├── crates/ast-sgrep-lang/    # tree-sitter parsers (Rust, TS, JS, Python, Go)
-├── crates/ast-sgrep-embed/   # Semantic local + Ollama + cloud embedding chain
-├── crates/ast-sgrep-plugins/ # GitHub / GitLab JSON output adapters
-├── crates/ast-sgrep-lsp/     # LSP server (asgrep-lsp)
-├── tests/fixtures/           # Polyglot sample + regression fixtures
-└── docs/                     # LSP, agents, publishing
+Query: "credential renewal"
+  → semantic pass ranks auth_refresh (zero token overlap, regression-tested)
 ```
 
-### Index schema (`.asgrep/index.db`)
+Provider chain at index and search time: **Cloud** (if API key) → **Ollama** (if running) → **semantic local** (always available). Large repos (≥2k symbols) use a persisted **IVF-ANN** sidecar (`.asgrep/semantic.ivf`) so restarts do not rebuild clusters.
 
-| Table | Contents |
-|-------|----------|
-| `files` | Path, language, content hash, mtime |
-| `lines` | Per-line text content |
-| `lines_fts` | FTS5 virtual table for lexical search |
-| `symbols` | Function/method/type definitions |
-| `callers` | Caller → callee edges (AST-derived, string/comment-safe) |
-| `imports` | Import/module paths |
-| `semantic_chunks` | Symbol-level vectors with call-graph context (default on) |
-| `semantic.ivf` | Persisted IVF-ANN sidecar (auto-built at index time for large repos) |
-| `embeddings` | Legacy per-line vectors (pre-v1.1 indexes) |
-
-Semantic search uses brute-force cosine below the ANN threshold; above it, vectors and cluster structure load from `semantic.ivf` (fingerprint-invalidated on reindex).
-
-Incremental indexing uses blake3 content hashes + mtime. Respects `.gitignore` and `.asgrepignore`.
+[Deep dive: semantic layer →](docs/semantic-search.md)
 
 ---
 
-## Library usage
+## At a glance
 
-```rust
-use ast_sgrep_core::{IndexOptions, Indexer, SearchOptions, Searcher};
-
-let mut indexer = Indexer::new(IndexOptions {
-    root: ".".into(),
-    index_path: None,
-    lang_filter: None,
-    respect_gitignore: true,
-    use_tantivy: false,
-    embed_semantic: true,
-    embed_backend: ast_sgrep_core::EmbedBackend::Auto,
-    force_reindex: false,
-})?;
-indexer.index_all()?;
-
-let searcher = Searcher::new(SearchOptions {
-    root: ".".into(),
-    index_path: None,
-    limit: 16,
-    lang_filter: None,
-    use_embed: true,
-    use_tantivy: false,
-    use_cloud_embed: false,
-    use_ollama_embed: false,
-    use_semantic_only: false,
-    ann_threshold: None,
-})?;
-let response = searcher.search("auth refresh")?;
+```mermaid
+flowchart LR
+    Q[Query] --> H[Hybrid engine]
+    H --> L[Lexical FTS]
+    H --> S[Symbols + graph]
+    H --> A[Anchor excerpts]
+    H --> E[Semantic chunks]
+    L & S & A & E --> R[Ranked hits]
 ```
+
+| | ast-sgrep | ast-grep | ripgrep |
+|---|:---:|:---:|:---:|
+| Persistent index | ✓ | — | — |
+| Natural-language / synonym queries | ✓ | — | — |
+| Caller / callee graph | ✓ | — | — |
+| Semantic similarity (default on) | ✓ | — | — |
+| Structural patterns | via `pattern:` | ✓ | — |
+| Typical indexed search | ~0.3 ms | per-run | per-scan |
+
+Polyglot: **Rust, TypeScript, JavaScript, Python, Go, Java, C#, Ruby.**
 
 ---
 
-## Roadmap
+## Interfaces
 
-All phases complete (v1.0). See [PRD.md](PRD.md) for the full specification.
+| Interface | Install | Use case |
+|-----------|---------|----------|
+| **CLI** | `cargo install ast-sgrep-cli` | Terminal, scripts, CI |
+| **LSP** | `cargo install ast-sgrep-lsp` | Editor symbols, defs, refs, call hierarchy |
+| **Library** | `ast-sgrep-core` crate | Embed search in Rust tools |
+| **JSON plugins** | `--format agent\|github\|gitlab` | LLM agents, platform-shaped output |
 
-| Phase | Scope | Status |
-|-------|-------|--------|
-| 0 | Repo + Cargo workspace | Done |
-| 1 | Rust+TS, SQLite, CLI, JSON | Done |
-| 2 | Python+Go, incremental, benchmarks | Done |
-| 3 | False-positive tests, crates.io metadata | Done |
-| 4 | `pattern:` ast-grep delegation | Done |
-| 5 | Symbol-chunk semantic search (local + Ollama + cloud) | Done |
-| 6 | Full LSP server | Done |
+Binaries: `asgrep` and `ast-sgrep` (aliases).
 
-Publishing: `scripts/publish.sh` (manual, no CI). See [docs/publishing.md](docs/publishing.md).
+[Use cases: agents, LSP, plugins →](docs/use-cases.md)
+
+---
+
+## Documentation
+
+| Doc | Contents |
+|-----|----------|
+| [Getting started](docs/getting-started.md) | Install, index, queries, flags, troubleshooting |
+| [How it works](docs/how-it-works.md) | Architecture, search pipeline, index schema, incremental indexing |
+| [Semantic search](docs/semantic-search.md) | Symbol chunks, provider chain, IVF-ANN, tuning |
+| [Comparison](docs/comparison.md) | ast-sgrep vs ast-grep vs ripgrep — when to use which |
+| [Use cases](docs/use-cases.md) | AI agents, LSP setup, JSON formats, CI patterns |
+
+---
+
+## Project status
+
+**v1.0.0-alpha.0** — feature-complete for alpha: hybrid search, semantic layer, LSP, agent JSON, IVF persistence. Validate locally with `cargo test --workspace` before relying on production workflows.
 
 ---
 
