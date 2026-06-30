@@ -157,6 +157,12 @@ impl IndexStore {
         }
     }
 
+    pub fn delete_meta(&self, key: &str) -> Result<()> {
+        self.conn
+            .execute("DELETE FROM meta WHERE key = ?1", params![key])?;
+        Ok(())
+    }
+
     pub fn begin_file_tx(&self) -> Result<()> {
         self.conn.execute_batch("BEGIN IMMEDIATE")?;
         Ok(())
@@ -180,6 +186,7 @@ impl IndexStore {
         mtime_nanos: u32,
         content_hash: &str,
         lines: &[(u32, String)],
+        eol: &str,
         symbols: &[SymbolRow],
         callers: &[CallerRow],
         imports: &[ImportRow],
@@ -195,6 +202,7 @@ impl IndexStore {
             mtime_nanos,
             content_hash,
             lines,
+            eol,
             symbols,
             callers,
             imports,
@@ -222,6 +230,7 @@ impl IndexStore {
         mtime_nanos: u32,
         content_hash: &str,
         lines: &[(u32, String)],
+        eol: &str,
         symbols: &[SymbolRow],
         callers: &[CallerRow],
         imports: &[ImportRow],
@@ -269,6 +278,8 @@ impl IndexStore {
                 fts_stmt.execute(params![content, file_id, line_no])?;
             }
         }
+
+        self.set_meta(&format!("eol:{rel_path}"), eol)?;
 
         let mut symbol_ids: Vec<i64> = Vec::with_capacity(symbols.len());
         {
@@ -375,6 +386,7 @@ impl IndexStore {
             self.conn.execute("DELETE FROM embeddings WHERE file_id = ?1", params![file_id])?;
             self.conn.execute("DELETE FROM semantic_chunks WHERE file_id = ?1", params![file_id])?;
             self.conn.execute("DELETE FROM files WHERE id = ?1", params![file_id])?;
+            self.delete_meta(&format!("eol:{rel_path}"))?;
             let _ = crate::semantic_ivf::invalidate_semantic_ivf(&self.db_path);
         }
         Ok(())
@@ -585,12 +597,16 @@ impl IndexStore {
         if lines.is_empty() {
             return Ok(None);
         }
+        let sep = match self.get_meta(&format!("eol:{rel_path}"))? {
+            Some(v) if v == "crlf" => "\r\n",
+            _ => "\n",
+        };
         Ok(Some(
             lines
                 .iter()
                 .map(|(_, content)| content.as_str())
                 .collect::<Vec<_>>()
-                .join("\n"),
+                .join(sep),
         ))
     }
 

@@ -285,7 +285,8 @@ impl Indexer {
             }
         }
 
-        let lines = split_content_lines(content);
+        let split = split_content_lines(content);
+        let lines = &split.lines;
 
         let (symbols, callers, imports) = if let Some(lang) = language {
             let extraction = self.parsers.parse(lang, content).map_err(|e| {
@@ -346,7 +347,8 @@ impl Indexer {
             mtime_secs,
             mtime_nanos,
             &hash,
-            &lines,
+            lines,
+            split.eol,
             &symbols,
             &callers,
             &imports,
@@ -384,15 +386,33 @@ impl Indexer {
     }
 }
 
-fn split_content_lines(content: &str) -> Vec<(u32, String)> {
+#[derive(Debug, Clone)]
+struct SplitLines {
+    lines: Vec<(u32, String)>,
+    eol: &'static str,
+}
+
+fn split_content_lines(content: &str) -> SplitLines {
     if content.is_empty() {
-        return vec![(1, String::new())];
+        return SplitLines {
+            lines: vec![(1, String::new())],
+            eol: "lf",
+        };
     }
-    content
+    let eol = if content.contains("\r\n") {
+        "crlf"
+    } else {
+        "lf"
+    };
+    let lines = content
         .split('\n')
         .enumerate()
-        .map(|(i, line)| ((i + 1) as u32, line.to_string()))
-        .collect()
+        .map(|(i, line)| {
+            let stripped = line.strip_suffix('\r').unwrap_or(line);
+            ((i + 1) as u32, stripped.to_string())
+        })
+        .collect();
+    SplitLines { lines, eol }
 }
 
 fn hash_content(content: &str) -> String {
@@ -445,12 +465,22 @@ fn load_ignore_patterns(root: &Path) -> Vec<String> {
 
 fn is_ignored(rel: &Path, patterns: &[String]) -> bool {
     let rel_str = rel.to_string_lossy().replace('\\', "/");
+    let mut ignored = false;
     for pattern in patterns {
-        if glob_matches(pattern.trim(), &rel_str) {
-            return true;
+        let pat = pattern.trim();
+        if pat.is_empty() {
+            continue;
+        }
+        let (negate, glob_pat) = if let Some(rest) = pat.strip_prefix('!') {
+            (true, rest.trim())
+        } else {
+            (false, pat)
+        };
+        if glob_matches(glob_pat, &rel_str) {
+            ignored = !negate;
         }
     }
-    false
+    ignored
 }
 
 fn glob_matches(pattern: &str, text: &str) -> bool {
@@ -487,7 +517,9 @@ pub fn load_asgrepignore(root: &Path) -> Vec<String> {
 
 #[cfg(test)]
 mod glob_tests {
-    use super::glob_matches;
+    use std::path::Path;
+
+    use super::{glob_matches, is_ignored, split_content_lines};
 
     #[test]
     fn star_suffix_matches_extension() {
@@ -498,5 +530,19 @@ mod glob_tests {
     #[test]
     fn double_star_prefix() {
         assert!(glob_matches("**/*.log", "deep/nested/app.log"));
+    }
+
+    #[test]
+    fn gitignore_negation_unignores_matching_files() {
+        let patterns = vec!["*.log".into(), "!important.log".into()];
+        assert!(is_ignored(Path::new("app.log"), &patterns));
+        assert!(!is_ignored(Path::new("important.log"), &patterns));
+    }
+
+    #[test]
+    fn crlf_lines_strip_carriage_return_and_record_eol() {
+        let split = split_content_lines("a\r\nb\r\n");
+        assert_eq!(split.eol, "crlf");
+        assert_eq!(split.lines, vec![(1, "a".into()), (2, "b".into()), (3, "".into())]);
     }
 }

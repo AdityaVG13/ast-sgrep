@@ -167,3 +167,48 @@ fn embed_from_bytes_rejects_trailing_bytes() {
     let bad = vec![0u8, 0u8, 0u8];
     assert!(ast_sgrep_embed::embed_from_bytes(&bad).is_err());
 }
+
+#[test]
+fn crlf_file_text_round_trips_through_index() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path().to_path_buf();
+    let original = "fn main() {\r\n    println!(\"hi\");\r\n}\r\n";
+    std::fs::write(root.join("main.rs"), original).unwrap();
+
+    let index_path = temp.path().join("index.db");
+    let mut indexer = Indexer::new(IndexOptions {
+        root: root.clone(),
+        index_path: Some(index_path.clone()),
+        force_reindex: true,
+        embed_semantic: false,
+        ..IndexOptions::default()
+    })
+    .unwrap();
+    indexer.index_all().unwrap();
+
+    let store = IndexStore::open(&root, Some(&index_path)).unwrap();
+    let reconstructed = store.file_text("main.rs").unwrap().unwrap();
+    assert_eq!(reconstructed, original);
+}
+
+#[test]
+fn gitignore_negation_keeps_exception_files() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path().to_path_buf();
+    std::fs::write(root.join(".gitignore"), "*.txt\n!important.txt\n").unwrap();
+    std::fs::write(root.join("skip.txt"), "noise\n").unwrap();
+    std::fs::write(root.join("important.txt"), "keep\n").unwrap();
+
+    let mut indexer = Indexer::new(IndexOptions {
+        root: root.clone(),
+        index_path: Some(temp.path().join("index.db")),
+        force_reindex: true,
+        ..IndexOptions::default()
+    })
+    .unwrap();
+    indexer.index_all().unwrap();
+
+    let paths = indexer.store().all_file_paths().unwrap();
+    assert!(paths.iter().any(|p| p.ends_with("important.txt")));
+    assert!(!paths.iter().any(|p| p.ends_with("skip.txt")));
+}

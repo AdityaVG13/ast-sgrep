@@ -100,8 +100,9 @@ pub fn enclosing_symbol_name(node: &Node, source: &str) -> Option<String> {
             "function_item"
             | "function_declaration"
             | "function_definition"
+            |             "method_declaration"
             | "method_definition"
-            | "method_declaration" => {
+            | "method" => {
                 if let Some(name_node) = n.child_by_field_name("name") {
                     return node_text(&name_node, source).map(|s| s.to_string());
                 }
