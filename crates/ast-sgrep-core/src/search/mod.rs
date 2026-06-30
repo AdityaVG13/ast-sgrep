@@ -84,19 +84,7 @@ impl Searcher {
         line_start: u32,
         line_end: u32,
     ) -> Result<String> {
-        let conn = self.store.connection();
-        let mut stmt = conn.prepare(
-            "SELECT l.content FROM lines l
-             JOIN files f ON f.id = l.file_id
-             WHERE f.path = ?1 AND l.line_no >= ?2 AND l.line_no <= ?3
-             ORDER BY l.line_no",
-        )?;
-        let rows = stmt.query_map(
-            rusqlite::params![rel_path, line_start, line_end],
-            |row| row.get::<_, String>(0),
-        )?;
-        let lines: Vec<String> = rows.collect::<std::result::Result<_, _>>()?;
-        Ok(lines.join("\n"))
+        self.store.excerpt_span(rel_path, line_start, line_end)
     }
 }
 

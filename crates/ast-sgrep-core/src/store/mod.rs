@@ -1,3 +1,4 @@
+pub(crate) mod sql;
 mod sqlite;
 
 pub use sqlite::{CallerRow, ImportRow, IndexStore, SymbolRow};

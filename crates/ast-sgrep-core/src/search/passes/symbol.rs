@@ -2,6 +2,7 @@ use rusqlite::params;
 
 use crate::query::ParsedQuery;
 use crate::rank::{best_symbol_score, score_caller, score_def, SCORE_ANCHOR};
+use crate::store::sql::{caller_terms_filter, like_terms_filter};
 use crate::store::IndexStore;
 use crate::Result;
 use crate::search::hits::{matches_lang, push_caller_and_graph};
@@ -9,6 +10,14 @@ use crate::search::types::{HitKind, SearchHit, SearchOptions};
 
 const SYMBOL_SQL_LIMIT: usize = 500;
 const CALLER_SQL_LIMIT: usize = 500;
+
+const SYMBOL_SELECT: &str = "SELECT f.path, f.language, s.name, s.kind, s.line_start, s.line_end, s.byte_start, s.byte_end
+         FROM symbols s
+         JOIN files f ON f.id = s.file_id";
+
+const CALLER_SELECT: &str = "SELECT f.path, f.language, c.caller, c.callee, c.line_no, c.byte_start, c.byte_end
+         FROM callers c
+         JOIN files f ON f.id = c.file_id";
 
 pub fn symbol_pass(
     store: &IndexStore,
@@ -109,18 +118,14 @@ pub(crate) fn def_hits_for_terms(
         return Ok(Vec::new());
     }
 
-    let (sql, bind): (String, Vec<String>) = build_term_filter_sql(
-        "SELECT f.path, f.language, s.name, s.kind, s.line_start, s.line_end, s.byte_start, s.byte_end
-         FROM symbols s
-         JOIN files f ON f.id = s.file_id",
+    let (where_clause, bind) = like_terms_filter(
         "s.name",
         &parsed.terms,
         options.lang_filter.as_deref(),
     );
-
+    let sql = format!("{SYMBOL_SELECT}{where_clause} LIMIT ?{}", bind.len() + 1);
     let conn = store.connection();
-    let mut stmt = conn.prepare(&format!("{sql} LIMIT ?{}", bind.len() + 1))?;
-    let mut hits = Vec::new();
+    let mut stmt = conn.prepare(&sql)?;
     let mut params_vec: Vec<Box<dyn rusqlite::types::ToSql>> =
         bind.into_iter().map(|s| Box::new(s) as _).collect();
     params_vec.push(Box::new(limit as i64));
@@ -134,13 +139,12 @@ pub(crate) fn def_hits_for_terms(
             row.get::<_, String>(2)?,
             row.get::<_, u32>(4)?,
             row.get::<_, u32>(5)?,
-            row.get::<_, usize>(6)?,
-            row.get::<_, usize>(7)?,
         ))
     })?;
 
+    let mut hits = Vec::new();
     for row in rows {
-        let (path, language, name, line_start, line_end, _byte_start, _byte_end) = row?;
+        let (path, language, name, line_start, line_end) = row?;
         if !matches_lang(language.as_deref(), options.lang_filter.as_deref()) {
             continue;
         }
@@ -172,16 +176,11 @@ pub(crate) fn caller_hits_for_terms(
         return Ok(Vec::new());
     }
 
-    let (sql, bind): (String, Vec<String>) = build_caller_filter_sql(
-        "SELECT f.path, f.language, c.caller, c.callee, c.line_no, c.byte_start, c.byte_end
-         FROM callers c
-         JOIN files f ON f.id = c.file_id",
-        &parsed.terms,
-        options.lang_filter.as_deref(),
-    );
-
+    let (where_clause, bind) =
+        caller_terms_filter(&parsed.terms, options.lang_filter.as_deref());
+    let sql = format!("{CALLER_SELECT}{where_clause} LIMIT ?{}", bind.len() + 1);
     let conn = store.connection();
-    let mut stmt = conn.prepare(&format!("{sql} LIMIT ?{}", bind.len() + 1))?;
+    let mut stmt = conn.prepare(&sql)?;
     let mut params_vec: Vec<Box<dyn rusqlite::types::ToSql>> =
         bind.into_iter().map(|s| Box::new(s) as _).collect();
     params_vec.push(Box::new(limit as i64));
@@ -227,63 +226,4 @@ pub(crate) fn caller_hits_for_terms(
         );
     }
     Ok(hits)
-}
-
-fn build_term_filter_sql(
-    base: &str,
-    column: &str,
-    terms: &[String],
-    lang_filter: Option<&str>,
-) -> (String, Vec<String>) {
-    let mut bind: Vec<String> = terms.to_vec();
-    let mut parts: Vec<String> = Vec::new();
-    if !terms.is_empty() {
-        let term_conds: Vec<String> = terms
-            .iter()
-            .map(|_| format!("lower({column}) LIKE '%' || lower(?) || '%'"))
-            .collect();
-        parts.push(format!("({})", term_conds.join(" OR ")));
-    }
-    if let Some(lang) = lang_filter {
-        parts.push("f.language = ?".to_string());
-        bind.push(lang.to_string());
-    }
-    let where_clause = if parts.is_empty() {
-        String::new()
-    } else {
-        format!(" WHERE {}", parts.join(" AND "))
-    };
-    (format!("{base}{where_clause}"), bind)
-}
-
-fn build_caller_filter_sql(
-    base: &str,
-    terms: &[String],
-    lang_filter: Option<&str>,
-) -> (String, Vec<String>) {
-    let mut bind: Vec<String> = Vec::new();
-    let mut parts: Vec<String> = Vec::new();
-    if !terms.is_empty() {
-        let term_conds: Vec<String> = terms
-            .iter()
-            .map(|_| {
-                "(lower(c.callee) LIKE '%' || lower(?) || '%' OR lower(c.caller) LIKE '%' || lower(?) || '%')".to_string()
-            })
-            .collect();
-        for term in terms {
-            bind.push(term.clone());
-            bind.push(term.clone());
-        }
-        parts.push(format!("({})", term_conds.join(" OR ")));
-    }
-    if let Some(lang) = lang_filter {
-        parts.push("f.language = ?".to_string());
-        bind.push(lang.to_string());
-    }
-    let where_clause = if parts.is_empty() {
-        String::new()
-    } else {
-        format!(" WHERE {}", parts.join(" AND "))
-    };
-    (format!("{base}{where_clause}"), bind)
 }

@@ -3,6 +3,8 @@ use std::path::Path;
 
 use rusqlite::{params, Connection};
 
+use super::sql::{calls_matching, optional_row, query_map_rows};
+
 use super::index_db_path;
 use crate::{IndexStatus, Result};
 
@@ -145,16 +147,9 @@ impl IndexStore {
     }
 
     pub fn get_meta(&self, key: &str) -> Result<Option<String>> {
-        let result = self.conn.query_row(
-            "SELECT value FROM meta WHERE key = ?1",
-            params![key],
-            |row| row.get(0),
-        );
-        match result {
-            Ok(v) => Ok(Some(v)),
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(e.into()),
-        }
+        optional_row(&self.conn, "SELECT value FROM meta WHERE key = ?1", &[&key], |row| {
+            row.get(0)
+        })
     }
 
     pub fn delete_meta(&self, key: &str) -> Result<()> {
@@ -381,29 +376,21 @@ impl IndexStore {
     }
 
     pub fn file_hash(&self, rel_path: &str) -> Result<Option<String>> {
-        let result = self.conn.query_row(
+        optional_row(
+            &self.conn,
             "SELECT content_hash FROM files WHERE path = ?1",
-            params![rel_path],
+            &[&rel_path],
             |row| row.get(0),
-        );
-        match result {
-            Ok(hash) => Ok(Some(hash)),
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(e.into()),
-        }
+        )
     }
 
     pub fn file_mtime(&self, rel_path: &str) -> Result<Option<(i64, u32)>> {
-        let result = self.conn.query_row(
+        optional_row(
+            &self.conn,
             "SELECT mtime_secs, mtime_nanos FROM files WHERE path = ?1",
-            params![rel_path],
+            &[&rel_path],
             |row| Ok((row.get(0)?, row.get(1)?)),
-        );
-        match result {
-            Ok(mtime) => Ok(Some(mtime)),
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(e.into()),
-        }
+        )
     }
 
     pub fn all_file_paths(&self) -> Result<Vec<String>> {
@@ -415,25 +402,33 @@ impl IndexStore {
     }
 
     pub fn status(&self) -> Result<IndexStatus> {
-        let file_count: usize = self
-            .conn
-            .query_row("SELECT COUNT(*) FROM files", [], |row| row.get(0))?;
-        let line_count: usize = self
-            .conn
-            .query_row("SELECT COUNT(*) FROM lines", [], |row| row.get(0))?;
-        let symbol_count: usize = self
-            .conn
-            .query_row("SELECT COUNT(*) FROM symbols", [], |row| row.get(0))?;
-        let caller_count: usize = self
-            .conn
-            .query_row("SELECT COUNT(*) FROM callers", [], |row| row.get(0))?;
-        let import_count: usize = self
-            .conn
-            .query_row("SELECT COUNT(*) FROM imports", [], |row| row.get(0))?;
-        let semantic_chunk_count: usize = self
-            .conn
-            .query_row("SELECT COUNT(*) FROM semantic_chunks", [], |row| row.get(0))
-            .unwrap_or(0);
+        let (
+            file_count,
+            line_count,
+            symbol_count,
+            caller_count,
+            import_count,
+            semantic_chunk_count,
+        ): (usize, usize, usize, usize, usize, usize) = self.conn.query_row(
+            "SELECT
+                (SELECT COUNT(*) FROM files),
+                (SELECT COUNT(*) FROM lines),
+                (SELECT COUNT(*) FROM symbols),
+                (SELECT COUNT(*) FROM callers),
+                (SELECT COUNT(*) FROM imports),
+                (SELECT COUNT(*) FROM semantic_chunks)",
+            [],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                ))
+            },
+        )?;
         let embed_backend = self.get_meta("embed_backend")?;
         let embed_dim = self
             .get_meta("embed_dim")?
@@ -476,16 +471,12 @@ impl IndexStore {
 
     /// Max `semantic_chunks.id` for IVF fingerprinting.
     pub fn semantic_chunk_max_id(&self) -> Result<Option<i64>> {
-        let result = self.conn.query_row(
+        optional_row(
+            &self.conn,
             "SELECT MAX(id) FROM semantic_chunks",
-            [],
+            &[],
             |row| row.get(0),
-        );
-        match result {
-            Ok(id) => Ok(id),
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(e.into()),
-        }
+        )
     }
 
     /// All semantic chunks in stable id order (for IVF sidecar alignment).
@@ -505,21 +496,7 @@ impl IndexStore {
              WHERE 1=1{lang_clause}
              ORDER BY sc.id"
         );
-        let mut out = Vec::new();
-        if let Some(lang) = lang_filter {
-            let mut stmt = self.conn.prepare(&sql)?;
-            let mut rows = stmt.query(rusqlite::params![lang])?;
-            while let Some(row) = rows.next()? {
-                out.push(read_semantic_chunk_row(row)?);
-            }
-        } else {
-            let mut stmt = self.conn.prepare(&sql)?;
-            let mut rows = stmt.query([])?;
-            while let Some(row) = rows.next()? {
-                out.push(read_semantic_chunk_row(row)?);
-            }
-        }
-        Ok(out)
+        query_map_rows(&self.conn, &sql, lang_filter, read_semantic_chunk_row)
     }
 
     /// Symbols defined in a single file.
@@ -548,17 +525,7 @@ impl IndexStore {
         &self,
         callee: &str,
     ) -> Result<Vec<(String, u32, String, String)>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT f.path, c.line_no, c.caller, c.callee
-             FROM callers c JOIN files f ON f.id = c.file_id
-             WHERE lower(c.callee) = lower(?1)
-             ORDER BY f.path, c.line_no",
-        )?;
-        let rows = stmt.query_map(params![callee], |row| {
-            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
-        })?;
-        rows.collect::<std::result::Result<Vec<_>, _>>()
-            .map_err(Into::into)
+        calls_matching(&self.conn, "callee", callee)
     }
 
     /// Outgoing calls: (file, line, caller, callee) for a caller name.
@@ -566,17 +533,7 @@ impl IndexStore {
         &self,
         caller: &str,
     ) -> Result<Vec<(String, u32, String, String)>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT f.path, c.line_no, c.caller, c.callee
-             FROM callers c JOIN files f ON f.id = c.file_id
-             WHERE lower(c.caller) = lower(?1)
-             ORDER BY f.path, c.line_no",
-        )?;
-        let rows = stmt.query_map(params![caller], |row| {
-            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
-        })?;
-        rows.collect::<std::result::Result<Vec<_>, _>>()
-            .map_err(Into::into)
+        calls_matching(&self.conn, "caller", caller)
     }
 
     /// Reconstruct file text from indexed lines (for LSP incremental edits).
@@ -614,18 +571,29 @@ impl IndexStore {
 
     /// Get a single line of text from the index.
     pub fn line_content(&self, rel_path: &str, line_no: u32) -> Result<Option<String>> {
-        let result = self.conn.query_row(
+        optional_row(
+            &self.conn,
             "SELECT l.content FROM lines l
              JOIN files f ON f.id = l.file_id
              WHERE f.path = ?1 AND l.line_no = ?2",
-            params![rel_path, line_no],
+            &[&rel_path, &line_no],
             |row| row.get(0),
-        );
-        match result {
-            Ok(s) => Ok(Some(s)),
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(e.into()),
-        }
+        )
+    }
+
+    /// Join indexed lines into an excerpt for a line span.
+    pub fn excerpt_span(&self, rel_path: &str, line_start: u32, line_end: u32) -> Result<String> {
+        let mut stmt = self.conn.prepare(
+            "SELECT l.content FROM lines l
+             JOIN files f ON f.id = l.file_id
+             WHERE f.path = ?1 AND l.line_no >= ?2 AND l.line_no <= ?3
+             ORDER BY l.line_no",
+        )?;
+        let rows = stmt.query_map(params![rel_path, line_start, line_end], |row| {
+            row.get::<_, String>(0)
+        })?;
+        let lines: Vec<String> = rows.collect::<std::result::Result<_, _>>()?;
+        Ok(lines.join("\n"))
     }
 }
 
