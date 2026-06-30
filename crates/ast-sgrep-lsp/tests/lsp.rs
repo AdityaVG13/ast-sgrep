@@ -57,6 +57,25 @@ fn execute_command_search() {
 }
 
 #[test]
+fn did_change_indexes_unsaved_buffer() {
+    let backend = fixture_backend();
+    let uri = path_to_uri(&backend.root().join("src/main.rs"));
+    let changes = vec![ast_sgrep_lsp::types::TextDocumentContentChangeEvent {
+        range: None,
+        range_length: None,
+        text: "fn main() {\n    process_request(\"edited\");\n}\n\nfn process_request(input: &str) {}\n".to_string(),
+    }];
+    backend.apply_document_changes(&uri, &changes).unwrap();
+    let params = ExecuteCommandParams {
+        command: "asgrep.search".to_string(),
+        arguments: vec![serde_json::json!("edited")],
+    };
+    let result = backend.execute_command(&params).unwrap();
+    let hits = result["hits"].as_array().unwrap();
+    assert!(hits.iter().any(|h| h["excerpt"].as_str().unwrap_or("").contains("edited")));
+}
+
+#[test]
 fn goto_definition_for_symbol() {
     let backend = fixture_backend();
     let params = TextDocumentPositionParams {

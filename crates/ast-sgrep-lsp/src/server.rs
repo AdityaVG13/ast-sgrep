@@ -67,6 +67,18 @@ impl LspServer {
                     }
                 }
             }
+            "textDocument/didChange" => {
+                if let Some(backend) = &self.backend {
+                    if let Ok(params) =
+                        serde_json::from_value::<crate::types::DidChangeTextDocumentParams>(notif.params)
+                    {
+                        let _ = backend.apply_document_changes(
+                            &params.text_document.uri,
+                            &params.content_changes,
+                        );
+                    }
+                }
+            }
             "exit" => self.shutdown = true,
             _ => {}
         }
@@ -78,8 +90,8 @@ impl LspServer {
             "initialize" => {
                 let params: InitializeParams = serde_json::from_value(params.clone())?;
                 let root = resolve_root(&params);
-                let backend = LspBackend::new(root);
-                let _ = backend.ensure_index();
+                let mut backend = LspBackend::new(root);
+                backend.start_background_index();
                 let result = backend.initialize_result();
                 self.backend = Some(backend);
                 Ok(result)

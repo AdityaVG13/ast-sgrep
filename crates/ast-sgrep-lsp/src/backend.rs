@@ -1,18 +1,24 @@
 //! Full LSP backend backed by ast-sgrep index.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::thread::JoinHandle;
 
 use ast_sgrep_core::{IndexOptions, Indexer, SearchOptions, Searcher};
 use serde_json::{json, Value};
 
 use crate::types::{
     CallHierarchyItem, DocumentSymbolParams, ExecuteCommandParams, Position, Range,
-    SYMBOL_KIND_FUNCTION, SYMBOL_KIND_METHOD, TextDocumentPositionParams,
+    TextDocumentContentChangeEvent, SYMBOL_KIND_FUNCTION, SYMBOL_KIND_METHOD,
+    TextDocumentPositionParams,
 };
 
 pub struct LspBackend {
     root: PathBuf,
     index_path: Option<PathBuf>,
+    index_ready: Arc<AtomicBool>,
+    index_thread: Option<JoinHandle<()>>,
 }
 
 impl LspBackend {
@@ -20,6 +26,8 @@ impl LspBackend {
         Self {
             root,
             index_path: None,
+            index_ready: Arc::new(AtomicBool::new(false)),
+            index_thread: None,
         }
     }
 
@@ -27,15 +35,15 @@ impl LspBackend {
         &self.root
     }
 
+    pub fn is_index_ready(&self) -> bool {
+        self.index_ready.load(Ordering::SeqCst)
+    }
+
     fn index_options(&self) -> IndexOptions {
         IndexOptions {
             root: self.root.clone(),
             index_path: self.index_path.clone(),
-            lang_filter: None,
-            respect_gitignore: true,
-            use_tantivy: false,
-            embed_lines: false,
-            force_reindex: false,
+            ..IndexOptions::default()
         }
     }
 
@@ -44,11 +52,23 @@ impl LspBackend {
             root: self.root.clone(),
             index_path: self.index_path.clone(),
             limit,
-            lang_filter: None,
-            use_embed: false,
-            use_tantivy: false,
-            use_cloud_embed: false,
+            ..SearchOptions::default()
         }
+    }
+
+    /// Start full-workspace indexing on a background thread (non-blocking).
+    pub fn start_background_index(&mut self) {
+        if self.index_thread.is_some() {
+            return;
+        }
+        let opts = self.index_options();
+        let ready = Arc::clone(&self.index_ready);
+        self.index_thread = Some(std::thread::spawn(move || {
+            if let Ok(mut indexer) = Indexer::new(opts) {
+                let _ = indexer.index_all();
+            }
+            ready.store(true, Ordering::SeqCst);
+        }));
     }
 
     pub fn ensure_index(&self) -> anyhow::Result<()> {
@@ -59,18 +79,32 @@ impl LspBackend {
 
     pub fn reindex_file(&self, rel_path: &str) -> anyhow::Result<()> {
         let abs = self.root.join(rel_path);
-        if !abs.is_file() {
-            return Ok(());
+        if abs.is_file() {
+            let mut indexer = Indexer::new(self.index_options())?;
+            indexer.index_file(&abs, rel_path)?;
         }
-        let mut indexer = Indexer::new(self.index_options())?;
-        indexer.index_file(&abs, rel_path)?;
+        Ok(())
+    }
+
+    pub fn apply_document_changes(
+        &self,
+        uri: &str,
+        changes: &[TextDocumentContentChangeEvent],
+    ) -> anyhow::Result<()> {
+        let rel = uri_to_rel_path(uri, &self.root)?;
+        if let Some(change) = changes.last() {
+            if change.range.is_none() {
+                let mut indexer = Indexer::new(self.index_options())?;
+                indexer.index_content(&rel, &change.text)?;
+            }
+        }
         Ok(())
     }
 
     pub fn initialize_result(&self) -> Value {
         json!({
             "capabilities": {
-                "textDocumentSync": { "openClose": true, "change": 0, "save": { "includeText": false } },
+                "textDocumentSync": { "openClose": true, "change": 2, "save": { "includeText": false } },
                 "workspaceSymbolProvider": true,
                 "definitionProvider": true,
                 "referencesProvider": true,

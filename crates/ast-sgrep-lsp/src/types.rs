@@ -120,6 +120,30 @@ pub struct DidSaveTextDocumentParams {
     pub text_document: TextDocumentIdentifier,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct DidChangeTextDocumentParams {
+    #[serde(rename = "textDocument")]
+    pub text_document: VersionedTextDocumentIdentifier,
+    #[serde(rename = "contentChanges")]
+    pub content_changes: Vec<TextDocumentContentChangeEvent>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct VersionedTextDocumentIdentifier {
+    pub uri: String,
+    #[serde(default)]
+    pub version: Option<i32>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct TextDocumentContentChangeEvent {
+    #[serde(default)]
+    pub range: Option<Range>,
+    #[serde(rename = "rangeLength", default)]
+    pub range_length: Option<u32>,
+    pub text: String,
+}
+
 /// LSP SymbolKind for functions.
 pub const SYMBOL_KIND_FUNCTION: u32 = 12;
 /// LSP SymbolKind for methods.
