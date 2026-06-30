@@ -119,6 +119,12 @@ impl SemanticAnnIndex {
         Ok(Self { centroids, clusters })
     }
 
+    pub fn validate_member_indices(&self, chunk_count: usize) -> bool {
+        self.clusters
+            .iter()
+            .all(|cluster| cluster.iter().all(|&idx| idx < chunk_count))
+    }
+
     pub fn search_flat(
         &self,
         flat: &[f32],
@@ -147,8 +153,17 @@ impl SemanticAnnIndex {
 
         let mut candidates = Vec::new();
         for (cluster_id, _) in centroid_scores.into_iter().take(nprobe) {
+            if cluster_id >= self.clusters.len() {
+                continue;
+            }
             for &idx in &self.clusters[cluster_id] {
+                if idx >= n {
+                    continue;
+                }
                 let start = idx * dim;
+                if start + dim > flat.len() {
+                    continue;
+                }
                 let row = &flat[start..start + dim];
                 let sim = cosine(&q, row);
                 if sim > MIN_SIMILARITY {
@@ -214,15 +229,10 @@ fn normalize_vec(vec: &[f32]) -> Vec<f32> {
 }
 
 fn cosine(a: &[f32], b: &[f32]) -> f32 {
-    let len = a.len().min(b.len());
-    if len == 0 {
+    if a.len() != b.len() || a.is_empty() {
         return 0.0;
     }
-    a.iter()
-        .zip(b.iter())
-        .take(len)
-        .map(|(x, y)| x * y)
-        .sum()
+    a.iter().zip(b.iter()).map(|(x, y)| x * y).sum()
 }
 
 fn brute_force_flat(flat: &[f32], dim: usize, query: &[f32], limit: usize) -> Vec<(usize, f32)> {

@@ -130,6 +130,34 @@ fn did_change_indexes_unsaved_buffer() {
 }
 
 #[test]
+fn did_change_applies_incremental_range_edit() {
+    let (_temp, backend) = fixture_backend();
+    let uri = path_to_uri(&backend.root().join("src/main.rs"));
+    let changes = vec![
+        ast_sgrep_lsp::types::TextDocumentContentChangeEvent {
+            range: Some(Range {
+                start: Position { line: 1, character: 4 },
+                end: Position { line: 1, character: 19 },
+            }),
+            range_length: Some(15),
+            text: "process_request(\"range-edited\")".to_string(),
+        },
+    ];
+    backend.apply_document_changes(&uri, &changes).unwrap();
+    let params = ExecuteCommandParams {
+        command: "asgrep.search".to_string(),
+        arguments: vec![serde_json::json!("range-edited")],
+    };
+    let result = backend.execute_command(&params).unwrap();
+    let hits = result["hits"].as_array().unwrap();
+    assert!(
+        hits.iter()
+            .any(|h| h["excerpt"].as_str().unwrap_or("").contains("range-edited")),
+        "incremental didChange should update indexed buffer"
+    );
+}
+
+#[test]
 fn goto_definition_for_symbol() {
     let (_temp, backend) = fixture_backend();
     let params = TextDocumentPositionParams {

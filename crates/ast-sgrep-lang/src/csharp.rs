@@ -21,6 +21,15 @@ impl LanguageParser for CSharpParser {
         let mut current_fn: Option<String> = None;
         for (i, line) in source.lines().enumerate() {
             let line_no = (i + 1) as u32;
+            let trimmed = line.trim();
+            if trimmed == "}" || trimmed.starts_with('}') {
+                if let Some(ref name) = current_fn {
+                    if let Some(sym) = result.symbols.iter_mut().rev().find(|s| &s.name == name) {
+                        sym.line_end = line_no;
+                    }
+                }
+                current_fn = None;
+            }
             if let Some(cap) = method_re.captures(line) {
                 let name = cap.get(1).map(|m| m.as_str()).unwrap_or("").to_string();
                 if !name.is_empty() && name != "if" && name != "for" {
@@ -64,13 +73,37 @@ fn is_callable_name(name: &str) -> bool {
     !matches!(
         name,
         "if" | "for" | "while" | "switch" | "catch" | "return" | "new" | "typeof" | "public"
-            | "private" | "static" | "void" | "string" | "int" | "var"
+            | "private" | "static" | "void" | "string" | "int" | "var" | "foreach" | "lock"
+            | "using" | "throw" | "await" | "async" | "get" | "set"
     )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+#[test]
+fn csharp_clears_function_scope_on_close_brace() {
+    let src = r#"
+public class Program {
+    public static void Main() { Helper(); }
+    public static void Helper() { }
+    public static void Other() { Run(); }
+    static void Run() { }
+}"#;
+    let result = CSharpParser.parse(src).unwrap();
+    let main_calls: Vec<_> = result
+        .calls
+        .iter()
+        .filter(|c| c.caller == "Main")
+        .collect();
+    assert_eq!(main_calls.len(), 1);
+    assert_eq!(main_calls[0].callee, "Helper");
+    assert!(
+        !result.calls.iter().any(|c| c.caller == "Helper" && c.callee == "Run"),
+        "calls after closing brace must not attribute to Helper"
+    );
+}
 
     #[test]
     fn extracts_csharp_methods() {

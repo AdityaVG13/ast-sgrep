@@ -76,6 +76,15 @@ pub struct IndexStats {
     pub imports_extracted: usize,
 }
 
+/// Per-file indexing outcome.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct FileIndexStats {
+    pub symbols: usize,
+    pub callers: usize,
+    pub imports: usize,
+    pub skipped: bool,
+}
+
 /// Indexes source files into the SQLite store.
 pub struct Indexer {
     store: IndexStore,
@@ -142,13 +151,14 @@ impl Indexer {
 
             match self.index_file(path, &rel_str) {
                 Ok(file_stats) => {
-                    if file_stats.0 == 0 && file_stats.1 == 0 && file_stats.2 == 0 {
-                        // might be unchanged skip - still count if file exists in index
+                    if file_stats.skipped {
+                        stats.files_skipped += 1;
+                    } else {
+                        stats.files_indexed += 1;
+                        stats.symbols_extracted += file_stats.symbols;
+                        stats.callers_extracted += file_stats.callers;
+                        stats.imports_extracted += file_stats.imports;
                     }
-                    stats.files_indexed += 1;
-                    stats.symbols_extracted += file_stats.0;
-                    stats.callers_extracted += file_stats.1;
-                    stats.imports_extracted += file_stats.2;
                 }
                 Err(_) => {
                     stats.files_skipped += 1;
@@ -188,7 +198,10 @@ impl Indexer {
 
     fn rebuild_tantivy_sidecar(&self) -> Result<()> {
         let lines = self.store.all_indexed_lines()?;
-        let sidecar = crate::tantivy_index::TantivySidecar::open(&self.options.root)?;
+        let sidecar = crate::tantivy_index::TantivySidecar::open_for_index(
+            &self.options.root,
+            self.options.index_path.as_deref(),
+        )?;
         sidecar.rebuild_from_lines(&lines)
     }
 
@@ -200,7 +213,7 @@ impl Indexer {
         stats
     }
 
-    pub fn index_file(&mut self, abs_path: &Path, rel_path: &str) -> Result<(usize, usize, usize)> {
+    pub fn index_file(&mut self, abs_path: &Path, rel_path: &str) -> Result<FileIndexStats> {
         let metadata = fs::metadata(abs_path)?;
         let mtime = metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH);
         let (mtime_secs, mtime_nanos) = system_time_to_parts(mtime);
@@ -217,7 +230,7 @@ impl Indexer {
     }
 
     /// Index in-memory content (LSP `didChange` / unsaved buffers).
-    pub fn index_content(&mut self, rel_path: &str, content: &str) -> Result<(usize, usize, usize)> {
+    pub fn index_content(&mut self, rel_path: &str, content: &str) -> Result<FileIndexStats> {
         let now = SystemTime::now();
         let (mtime_secs, mtime_nanos) = system_time_to_parts(now);
         self.index_content_at(rel_path, content, Path::new(rel_path), mtime_secs, mtime_nanos)
@@ -230,17 +243,16 @@ impl Indexer {
         lang_path: &Path,
         mtime_secs: i64,
         mtime_nanos: u32,
-    ) -> Result<(usize, usize, usize)> {
+    ) -> Result<FileIndexStats> {
         let hash = hash_content(content);
 
         if !self.options.force_reindex {
             if let Some(stored_hash) = self.store.file_hash(rel_path)? {
                 if stored_hash == hash {
-                    if let Some((s, n)) = self.store.file_mtime(rel_path)? {
-                        if s == mtime_secs && n == mtime_nanos {
-                            return Ok((0, 0, 0));
-                        }
-                    }
+                    return Ok(FileIndexStats {
+                        skipped: true,
+                        ..Default::default()
+                    });
                 }
             }
         }
@@ -253,16 +265,12 @@ impl Indexer {
                     if self.store.file_hash(rel_path)?.is_some() {
                         self.store.remove_file(rel_path)?;
                     }
-                    return Ok((0, 0, 0));
+                    return Ok(FileIndexStats::default());
                 }
             }
         }
 
-        let lines: Vec<(u32, String)> = content
-            .lines()
-            .enumerate()
-            .map(|(i, line)| ((i + 1) as u32, line.to_string()))
-            .collect();
+        let lines = split_content_lines(content);
 
         let (symbols, callers, imports) = if let Some(lang) = language {
             match self.parsers.parse(lang, content) {
@@ -331,7 +339,12 @@ impl Indexer {
             self.options.embed_backend.to_preference(),
         )?;
 
-        Ok((sym_count, caller_count, import_count))
+        Ok(FileIndexStats {
+            symbols: sym_count,
+            callers: caller_count,
+            imports: import_count,
+            skipped: false,
+        })
     }
 
     fn should_skip_file(&self, path: &Path) -> bool {
@@ -353,6 +366,17 @@ impl Indexer {
             true
         }
     }
+}
+
+fn split_content_lines(content: &str) -> Vec<(u32, String)> {
+    if content.is_empty() {
+        return vec![(1, String::new())];
+    }
+    content
+        .split('\n')
+        .enumerate()
+        .map(|(i, line)| ((i + 1) as u32, line.to_string()))
+        .collect()
 }
 
 fn hash_content(content: &str) -> String {

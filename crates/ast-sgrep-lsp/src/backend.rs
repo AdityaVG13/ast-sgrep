@@ -5,6 +5,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread::JoinHandle;
 
+use ast_sgrep_core::store::SymbolRow;
 use ast_sgrep_core::{IndexOptions, Indexer, SearchOptions, Searcher};
 use serde_json::{json, Value};
 
@@ -83,10 +84,12 @@ impl LspBackend {
         let opts = self.index_options();
         let ready = Arc::clone(&self.index_ready);
         self.index_thread = Some(std::thread::spawn(move || {
-            if let Ok(mut indexer) = Indexer::new(opts) {
-                let _ = indexer.index_all();
+            let ok = Indexer::new(opts)
+                .and_then(|mut indexer| indexer.index_all().map(|_| ()))
+                .is_ok();
+            if ok {
+                ready.store(true, Ordering::SeqCst);
             }
-            ready.store(true, Ordering::SeqCst);
         }));
     }
 
@@ -111,12 +114,25 @@ impl LspBackend {
         changes: &[TextDocumentContentChangeEvent],
     ) -> anyhow::Result<()> {
         let rel = uri_to_rel_path(uri, &self.root)?;
-        if let Some(change) = changes.last() {
-            if change.range.is_none() {
-                let mut indexer = Indexer::new(self.index_options())?;
-                indexer.index_content(&rel, &change.text)?;
+        let mut content = {
+            let indexer = Indexer::new(self.index_options())?;
+            indexer
+                .store()
+                .file_text(&rel)?
+                .or_else(|| std::fs::read_to_string(self.root.join(&rel)).ok())
+                .unwrap_or_default()
+        };
+
+        for change in changes {
+            if let Some(range) = &change.range {
+                content = apply_text_edit(&content, range, &change.text);
+            } else {
+                content = change.text.clone();
             }
         }
+
+        let mut indexer = Indexer::new(self.index_options())?;
+        indexer.index_content(&rel, &content)?;
         Ok(())
     }
 
@@ -177,10 +193,11 @@ impl LspBackend {
                 } else {
                     SYMBOL_KIND_FUNCTION
                 };
+                let end_line = store.line_content(&rel, sym.line_end).ok().flatten();
                 json!({
                     "name": sym.name,
                     "kind": kind,
-                    "range": line_range(sym.line_start, sym.line_end),
+                    "range": line_range_ext(sym.line_start, sym.line_end, end_line.as_deref()),
                     "selectionRange": line_range(sym.line_start, sym.line_start),
                     "detail": sym.kind
                 })
@@ -349,21 +366,24 @@ impl LspBackend {
         let indexer = Indexer::new(self.index_options())?;
         let store = indexer.store();
 
-        if let Some(symbols) = store.symbols_in_file(&rel).ok() {
-            for sym in &symbols {
-                if line_no >= sym.line_start && line_no <= sym.line_end {
-                    return Ok(sym.name.clone());
-                }
+        let line_content = store
+            .line_content(&rel, line_no)?
+            .or_else(|| {
+                std::fs::read_to_string(self.root.join(&rel))
+                    .ok()
+                    .and_then(|s| line_at_index(&s, params.position.line as usize))
+            })
+            .unwrap_or_default();
+
+        let byte_in_line = utf16_char_to_byte(&line_content, params.position.character);
+
+        if let Ok(symbols) = store.symbols_in_file(&rel) {
+            if let Some(sym) = innermost_symbol(&symbols, line_no, byte_in_line) {
+                return Ok(sym.name.clone());
             }
         }
 
-        let content = store
-            .line_content(&rel, line_no)?
-            .or_else(|| std::fs::read_to_string(self.root.join(&rel)).ok())
-            .and_then(|s| s.lines().nth(params.position.line as usize).map(|l| l.to_string()))
-            .unwrap_or_default();
-
-        extract_identifier_at(&content, utf16_char_to_byte(&content, params.position.character))
+        extract_identifier_at(&line_content, byte_in_line)
             .ok_or_else(|| anyhow::anyhow!("no symbol at cursor"))
     }
 }
@@ -428,7 +448,16 @@ fn location_value(root: &Path, file: &str, line_start: u32, line_end: u32) -> Va
     })
 }
 
+fn line_utf16_len(line: &str) -> u32 {
+    line.chars().map(|c| c.len_utf16() as u32).sum()
+}
+
 fn line_range(line_start: u32, line_end: u32) -> Range {
+    line_range_ext(line_start, line_end, None)
+}
+
+fn line_range_ext(line_start: u32, line_end: u32, end_line_text: Option<&str>) -> Range {
+    let end_char = end_line_text.map(line_utf16_len).unwrap_or(0);
     Range {
         start: Position {
             line: line_start.saturating_sub(1),
@@ -436,9 +465,63 @@ fn line_range(line_start: u32, line_end: u32) -> Range {
         },
         end: Position {
             line: line_end.saturating_sub(1),
-            character: 0,
+            character: end_char,
         },
     }
+}
+
+fn line_at_index(content: &str, line_index: usize) -> Option<String> {
+    content.split('\n').nth(line_index).map(|l| l.to_string())
+}
+
+fn innermost_symbol<'a>(
+    symbols: &'a [SymbolRow],
+    line_no: u32,
+    byte_in_line: usize,
+) -> Option<&'a SymbolRow> {
+    symbols
+        .iter()
+        .filter(|sym| line_no >= sym.line_start && line_no <= sym.line_end)
+        .min_by(|a, b| {
+            symbol_tightness(a, line_no, byte_in_line).cmp(&symbol_tightness(b, line_no, byte_in_line))
+        })
+}
+
+fn symbol_tightness(sym: &SymbolRow, _line_no: u32, byte_in_line: usize) -> (u32, usize) {
+    let line_span = sym.line_end - sym.line_start;
+    if sym.line_start == sym.line_end && sym.byte_end > sym.byte_start {
+        if byte_in_line >= sym.byte_start && byte_in_line <= sym.byte_end {
+            return (0, sym.byte_end - sym.byte_start);
+        }
+    }
+    (line_span, sym.byte_end.saturating_sub(sym.byte_start))
+}
+
+fn apply_text_edit(content: &str, range: &Range, new_text: &str) -> String {
+    let start = lsp_position_to_byte_offset(content, &range.start);
+    let end = lsp_position_to_byte_offset(content, &range.end);
+    if start > end || end > content.len() {
+        return content.to_string();
+    }
+    let mut out = String::with_capacity(content.len().saturating_add(new_text.len()));
+    out.push_str(&content[..start]);
+    out.push_str(new_text);
+    out.push_str(&content[end..]);
+    out
+}
+
+fn lsp_position_to_byte_offset(content: &str, pos: &Position) -> usize {
+    let mut line_no = 0u32;
+    let mut offset = 0usize;
+    for line in content.split_inclusive('\n') {
+        let line_body = line.strip_suffix('\n').unwrap_or(line);
+        if line_no == pos.line {
+            return offset + utf16_char_to_byte(line_body, pos.character);
+        }
+        offset += line.len();
+        line_no += 1;
+    }
+    content.len()
 }
 
 pub fn path_to_uri(path: &Path) -> String {
@@ -451,12 +534,27 @@ pub fn path_to_uri(path: &Path) -> String {
 }
 
 pub fn uri_to_rel_path(uri: &str, root: &Path) -> anyhow::Result<String> {
-    let path = uri
+    let path_str = uri
         .strip_prefix("file://")
         .or_else(|| uri.strip_prefix("file:///"))
         .unwrap_or(uri);
-    let path = PathBuf::from(path);
-    let rel = path.strip_prefix(root).unwrap_or(&path);
+    let path = PathBuf::from(path_str);
+    let canonical_root = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+    let abs = if path.is_absolute() {
+        path
+    } else {
+        canonical_root.join(path)
+    };
+    let canonical_abs = std::fs::canonicalize(&abs).unwrap_or(abs);
+    if !canonical_abs.starts_with(&canonical_root) {
+        anyhow::bail!("document URI outside workspace root");
+    }
+    let rel = canonical_abs
+        .strip_prefix(&canonical_root)
+        .map_err(|_| anyhow::anyhow!("document URI outside workspace root"))?;
+    if rel.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
+        anyhow::bail!("path traversal in document URI");
+    }
     Ok(rel.to_string_lossy().replace('\\', "/"))
 }
 
@@ -527,9 +625,28 @@ mod tests {
 
     #[test]
     fn uri_roundtrip() {
-        let root = PathBuf::from("/proj");
+        let root = std::fs::canonicalize("/tmp").unwrap_or_else(|_| PathBuf::from("/tmp"));
         let uri = path_to_uri(&root.join("src/main.rs"));
         let rel = uri_to_rel_path(&uri, &root).unwrap();
         assert_eq!(rel, "src/main.rs");
+    }
+
+    #[test]
+    fn uri_rejects_path_traversal() {
+        let root = std::fs::canonicalize("/tmp").unwrap_or_else(|_| PathBuf::from("/tmp"));
+        let evil = format!("file://{}/../etc/passwd", root.display());
+        assert!(uri_to_rel_path(&evil, &root).is_err());
+    }
+
+    #[test]
+    fn apply_incremental_text_edit() {
+        let content = "fn main() {\n    old();\n}\n";
+        let range = Range {
+            start: Position { line: 1, character: 4 },
+            end: Position { line: 1, character: 7 },
+        };
+        let edited = apply_text_edit(content, &range, "new");
+        assert!(edited.contains("new();"));
+        assert!(!edited.contains("old();"));
     }
 }

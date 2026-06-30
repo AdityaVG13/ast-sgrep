@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 
 use rusqlite::{params, Connection};
 
+use crate::store::{index_db_path, INDEX_DIR};
 use crate::Result;
 
 pub const LEXICAL_DB: &str = "lexical.db";
@@ -22,7 +23,14 @@ pub struct TantivySidecar {
 
 impl TantivySidecar {
     pub fn open(root: &Path) -> Result<Self> {
-        let dir = root.join(".asgrep");
+        Self::open_for_index(root, None)
+    }
+
+    pub fn open_for_index(root: &Path, index_path: Option<&Path>) -> Result<Self> {
+        let dir = index_db_path(root, index_path)
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| root.join(INDEX_DIR));
         std::fs::create_dir_all(&dir)?;
         let db_path = dir.join(LEXICAL_DB);
         let conn = Connection::open(&db_path)?;

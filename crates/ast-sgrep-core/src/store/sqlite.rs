@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::Path;
 
 use rusqlite::{params, Connection};
@@ -186,6 +187,48 @@ impl IndexStore {
         embed_semantic: bool,
         embed_backend: ast_sgrep_embed::EmbedPreference,
     ) -> Result<i64> {
+        self.begin_file_tx()?;
+        let result = self.upsert_file_inner(
+            rel_path,
+            language,
+            mtime_secs,
+            mtime_nanos,
+            content_hash,
+            lines,
+            symbols,
+            callers,
+            imports,
+            semantic_chunks,
+            embed_semantic,
+            embed_backend,
+        );
+        match result {
+            Ok(file_id) => {
+                self.commit_file_tx()?;
+                Ok(file_id)
+            }
+            Err(e) => {
+                self.rollback_file_tx()?;
+                Err(e)
+            }
+        }
+    }
+
+    fn upsert_file_inner(
+        &self,
+        rel_path: &str,
+        language: Option<&str>,
+        mtime_secs: i64,
+        mtime_nanos: u32,
+        content_hash: &str,
+        lines: &[(u32, String)],
+        symbols: &[SymbolRow],
+        callers: &[CallerRow],
+        imports: &[ImportRow],
+        semantic_chunks: &[crate::semantic_chunk::SemanticChunkInput],
+        embed_semantic: bool,
+        embed_backend: ast_sgrep_embed::EmbedPreference,
+    ) -> Result<i64> {
         let file_id: Option<i64> = self.conn.query_row(
             "SELECT id FROM files WHERE path = ?1",
             params![rel_path],
@@ -248,6 +291,11 @@ impl IndexStore {
         }
 
         if embed_semantic && !semantic_chunks.is_empty() {
+            let name_to_id: HashMap<&str, i64> = symbols
+                .iter()
+                .zip(symbol_ids.iter())
+                .map(|(sym, id)| (sym.name.as_str(), *id))
+                .collect();
             let mut chunk_stmt = self.conn.prepare(
                 "INSERT INTO semantic_chunks(
                     file_id, symbol_id, chunk_kind, line_start, line_end, symbol_name, text, vector
@@ -255,7 +303,8 @@ impl IndexStore {
             )?;
             let mut embed_dim: Option<usize> = None;
             let mut backend_kind: Option<ast_sgrep_embed::EmbedBackendKind> = None;
-            for (chunk, symbol_id) in semantic_chunks.iter().zip(symbol_ids.iter()) {
+            for chunk in semantic_chunks {
+                let symbol_id = name_to_id.get(chunk.symbol_name.as_str()).copied();
                 let text = crate::semantic_chunk::render_chunk_text(chunk);
                 let result = ast_sgrep_embed::embed_with_chain(&text, embed_backend);
                 embed_dim = Some(result.vector.len());
@@ -529,6 +578,35 @@ impl IndexStore {
             .map_err(Into::into)
     }
 
+    /// Reconstruct file text from indexed lines (for LSP incremental edits).
+    pub fn file_text(&self, rel_path: &str) -> Result<Option<String>> {
+        let lines = self.file_lines(rel_path)?;
+        if lines.is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(
+            lines
+                .iter()
+                .map(|(_, content)| content.as_str())
+                .collect::<Vec<_>>()
+                .join("\n"),
+        ))
+    }
+
+    /// All lines for a file in order.
+    pub fn file_lines(&self, rel_path: &str) -> Result<Vec<(u32, String)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT l.line_no, l.content FROM lines l
+             JOIN files f ON f.id = l.file_id
+             WHERE f.path = ?1 ORDER BY l.line_no",
+        )?;
+        let rows = stmt.query_map(params![rel_path], |row| {
+            Ok((row.get::<_, u32>(0)?, row.get::<_, String>(1)?))
+        })?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    }
+
     /// Get a single line of text from the index.
     pub fn line_content(&self, rel_path: &str, line_no: u32) -> Result<Option<String>> {
         let result = self.conn.query_row(
@@ -550,7 +628,7 @@ fn read_semantic_chunk_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ast_sgre
     let file: String = row.get(0)?;
     let line_start: u32 = row.get(1)?;
     let line_end: u32 = row.get(2)?;
-    let symbol: String = row.get(3)?;
+    let symbol: String = row.get::<_, Option<String>>(3)?.unwrap_or_default();
     let excerpt: String = row.get(4)?;
     let vector: Vec<u8> = row.get(5)?;
     Ok((

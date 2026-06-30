@@ -27,8 +27,6 @@ impl LanguageParser for RubyParser {
                     "call" => {
                         if let Some(method) = field_child(node, "method") {
                             ext.add_call(node, source, &method);
-                        } else if let Some(receiver) = field_child(node, "receiver") {
-                            ext.add_call(node, source, &receiver);
                         }
                     }
                     _ => {}

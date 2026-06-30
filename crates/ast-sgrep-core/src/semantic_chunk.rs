@@ -128,4 +128,35 @@ mod tests {
         assert!(text.contains("fetch_token"));
         assert!(text.contains("main"));
     }
+
+    #[test]
+    fn skips_symbols_with_empty_excerpt() {
+        let symbols = vec![
+            SymbolRow {
+                name: "empty_fn".into(),
+                kind: "function".into(),
+                line_start: 1,
+                line_end: 1,
+                byte_start: 0,
+                byte_end: 0,
+            },
+            SymbolRow {
+                name: "real_fn".into(),
+                kind: "function".into(),
+                line_start: 3,
+                line_end: 4,
+                byte_start: 0,
+                byte_end: 0,
+            },
+        ];
+        let lines = vec![
+            (1, "   ".into()),
+            (2, "".into()),
+            (3, "fn real_fn() {".into()),
+            (4, "}".into()),
+        ];
+        let chunks = build_semantic_chunks(&symbols, &[], &lines);
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0].symbol_name, "real_fn");
+    }
 }

@@ -16,7 +16,10 @@ pub fn lexical_pass(
     }
 
     if options.use_tantivy {
-        let sidecar = crate::tantivy_index::TantivySidecar::open(&options.root)?;
+        let sidecar = crate::tantivy_index::TantivySidecar::open_for_index(
+            &options.root,
+            options.index_path.as_deref(),
+        )?;
         if sidecar.exists() {
             return lexical_from_sidecar(options, parsed, &sidecar);
         }
