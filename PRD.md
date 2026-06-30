@@ -32,7 +32,7 @@ Phase 6: Content-Length JSON-RPC, cursor-aware symbol resolution, incremental re
 - **CLI:** `index`, `status`, `reindex`, `bench`
 - **LSP:** full `asgrep-lsp` — see [docs/lsp.md](docs/lsp.md)
 - **Tests:** semantic regression suite (zero token-overlap synonym queries) + e2e/LSP
-- **Plugins:** `ast-sgrep-plugins` — GitHub/GitLab JSON (`--format`)
+- **Plugins:** `ast-sgrep-plugins` — GitHub/GitLab/Agent JSON (`--format`)
 - **Publish:** crates.io metadata + `scripts/publish.sh` (no CI — publish manually)
 
 ## Semantic layer (v1.1)
@@ -63,7 +63,9 @@ Hybrid fusion includes semantic pass by default. Query `"credential renewal"` mu
 ```
 asgrep index [ROOT]                    # semantic chunks indexed by default
 asgrep "credential renewal" [ROOT]     # synonym NL query
-asgrep --no-embed index [ROOT]       # disable semantic
+asgrep semantic "credential renewal"   # embed-only + agent JSON with --json
+asgrep --json --format agent "QUERY"   # LLM tool-calling shape
+asgrep --no-embed index [ROOT]         # disable semantic
 asgrep --cloud-embed index [ROOT]    # neural cloud embeddings
 asgrep --ollama-embed index [ROOT]   # neural Ollama embeddings
 asgrep --tantivy index [ROOT]

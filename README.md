@@ -201,7 +201,8 @@ asgrep --no-embed index .            # disable semantic indexing + search pass
 asgrep --tantivy index .
 
 # JSON for agents / automation
-asgrep --json --limit 32 "process_request"
+asgrep --json --format agent "credential renewal"
+asgrep semantic "persist access token" --json   # semantic-only, agent JSON default
 
 # GitHub / GitLab code-search shaped JSON
 asgrep --json --format github "auth refresh"
@@ -224,6 +225,7 @@ asgrep bench .
 | `asgrep index [ROOT]` | Build or incrementally update the index |
 | `asgrep reindex [ROOT]` | Force full reindex (re-parse every file) |
 | `asgrep status [ROOT]` | Show index statistics |
+| `asgrep semantic "QUERY" [ROOT]` | Semantic-only search (synonym / NL) |
 | `asgrep bench [ROOT]` | Run search latency benchmarks |
 | `asgrep "QUERY" [ROOT]` | Hybrid search (default) |
 
@@ -234,7 +236,7 @@ asgrep bench .
 | `--root` | Project root (default: `.`) |
 | `--limit` | Max results (default: 16, env: `ASGREP_LIMIT`) |
 | `--json` | JSON output |
-| `--format` | JSON shape: `native`, `github`, `gitlab` |
+| `--format` | JSON shape: `native`, `agent`, `github`, `gitlab` |
 | `--index-path` | Custom index DB path (`ASGREP_INDEX_PATH`) |
 | `--lang` | Filter by language (`rust`, `typescript`, `javascript`, `python`, `go`) |
 | `--no-embed` | Disable semantic indexing + search (`ASGREP_NO_EMBED=1`) |
@@ -320,7 +322,7 @@ ast-sgrep/
 ├── crates/ast-sgrep-plugins/ # GitHub / GitLab JSON output adapters
 ├── crates/ast-sgrep-lsp/     # LSP server (asgrep-lsp)
 ├── tests/fixtures/           # Polyglot sample + regression fixtures
-└── docs/                     # LSP, publishing, architecture notes
+└── docs/                     # LSP, agents, publishing
 ```
 
 ### Index schema (`.asgrep/index.db`)

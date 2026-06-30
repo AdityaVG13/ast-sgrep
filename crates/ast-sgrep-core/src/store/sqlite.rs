@@ -384,6 +384,11 @@ impl IndexStore {
             .conn
             .query_row("SELECT COUNT(*) FROM semantic_chunks", [], |row| row.get(0))
             .unwrap_or(0);
+        let embed_backend = self.get_meta("embed_backend")?;
+        let embed_dim = self
+            .get_meta("embed_dim")?
+            .and_then(|d| d.parse().ok());
+        let semantic_ivf_present = crate::semantic_ivf::semantic_ivf_path(&self.db_path).exists();
 
         Ok(IndexStatus {
             root: self.root.display().to_string(),
@@ -394,6 +399,9 @@ impl IndexStore {
             caller_count,
             import_count,
             semantic_chunk_count,
+            embed_backend,
+            embed_dim,
+            semantic_ivf_present,
         })
     }
 

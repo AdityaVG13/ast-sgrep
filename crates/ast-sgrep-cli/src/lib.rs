@@ -61,7 +61,7 @@ struct Cli {
     #[arg(long, global = true, env = "ASGREP_ANN_THRESHOLD")]
     ann_threshold: Option<usize>,
 
-    /// JSON output format: native, github, gitlab
+    /// JSON output format: native, github, gitlab, agent
     #[arg(long, global = true, value_name = "FORMAT")]
     format: Option<String>,
 
@@ -95,6 +95,13 @@ enum Commands {
         query: String,
         #[arg(long, default_value = "100")]
         iterations: u32,
+    },
+    /// Semantic-only search (embed pass, synonym / NL queries)
+    Semantic {
+        /// Natural-language or synonym query
+        query: String,
+        #[arg(default_value = ".")]
+        root: PathBuf,
     },
 }
 
@@ -140,6 +147,9 @@ pub fn run() -> anyhow::Result<()> {
         }) => {
             run_bench(root, &cli, query, iterations)?;
         }
+        Some(Commands::Semantic { ref query, ref root }) => {
+            run_semantic_search(root, &cli, query)?;
+        }
         None => {
             let search_opts = search_options(
                 &cli.root.clone().unwrap_or_else(|| cli.search_root.clone()),
@@ -171,6 +181,36 @@ pub fn run() -> anyhow::Result<()> {
         }
     }
 
+    Ok(())
+}
+
+fn run_semantic_search(
+    root: &std::path::Path,
+    cli: &Cli,
+    query: &str,
+) -> anyhow::Result<()> {
+    let search_opts = search_options(root, cli);
+    let searcher = Searcher::new(SearchOptions {
+        root: cli.root.clone().unwrap_or_else(|| root.to_path_buf()),
+        ..search_opts
+    })
+    .context("failed to open index")?;
+    let response = searcher
+        .search_semantic(query)
+        .context("semantic search failed")?;
+    if cli.json {
+        let format = cli
+            .format
+            .as_deref()
+            .and_then(ast_sgrep_plugins::OutputFormat::parse)
+            .unwrap_or(ast_sgrep_plugins::OutputFormat::Agent);
+        let value = ast_sgrep_plugins::format_response(&response, format);
+        println!("{}", serde_json::to_string_pretty(&value)?);
+    } else {
+        for hit in &response.hits {
+            println!("{}", format_hit_line(hit));
+        }
+    }
     Ok(())
 }
 
@@ -280,4 +320,18 @@ fn print_status(status: &ast_sgrep_core::IndexStatus) {
     println!("Callers: {}", status.caller_count);
     println!("Imports: {}", status.import_count);
     println!("Semantic chunks: {}", status.semantic_chunk_count);
+    if let Some(ref backend) = status.embed_backend {
+        println!("Embed backend: {backend}");
+    }
+    if let Some(dim) = status.embed_dim {
+        println!("Embed dim: {dim}");
+    }
+    println!(
+        "Semantic IVF sidecar: {}",
+        if status.semantic_ivf_present {
+            "present"
+        } else {
+            "not built (below ANN threshold or not indexed)"
+        }
+    );
 }

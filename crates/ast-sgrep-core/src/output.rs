@@ -60,11 +60,17 @@ pub fn format_hit_line(hit: &SearchHit) -> String {
             )
         }
         HitKind::Embed => {
+            let sym = hit
+                .symbol
+                .as_deref()
+                .map(|s| format!("{s} | "))
+                .unwrap_or_default();
             format!(
-                "EMBED: {}:{}-{}: {}",
+                "EMBED: {}:{}-{}: {}{}",
                 hit.file,
                 hit.line_start,
                 hit.line_end,
+                sym,
                 truncate_excerpt(&hit.excerpt, 120)
             )
         }

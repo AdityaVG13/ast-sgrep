@@ -1,5 +1,6 @@
 //! Output format adapters for CI, GitHub, and GitLab integrations.
 
+pub mod agent;
 pub mod github;
 pub mod gitlab;
 
@@ -14,6 +15,8 @@ pub enum OutputFormat {
     GitHub,
     /// GitLab code search API shape.
     GitLab,
+    /// LLM / agent tool-calling shape with follow-up query hints.
+    Agent,
 }
 
 impl OutputFormat {
@@ -22,6 +25,7 @@ impl OutputFormat {
             "native" | "asgrep" => Some(Self::Native),
             "github" | "gh" => Some(Self::GitHub),
             "gitlab" | "gl" => Some(Self::GitLab),
+            "agent" | "llm" | "ai" => Some(Self::Agent),
             _ => None,
         }
     }
@@ -33,5 +37,6 @@ pub fn format_response(response: &SearchResponse, format: OutputFormat) -> serde
         OutputFormat::Native => serde_json::to_value(response).unwrap_or_default(),
         OutputFormat::GitHub => github::to_github_json(response),
         OutputFormat::GitLab => gitlab::to_gitlab_json(response),
+        OutputFormat::Agent => agent::to_agent_json(response),
     }
 }

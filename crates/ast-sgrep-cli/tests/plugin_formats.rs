@@ -77,3 +77,78 @@ fn cli_gitlab_json_format() {
     let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert!(json["data"].is_array());
 }
+
+#[test]
+fn cli_agent_json_format() {
+    let bin = PathBuf::from(env!("CARGO_BIN_EXE_asgrep"));
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/sample")
+        .canonicalize()
+        .unwrap();
+    let temp = tempfile::TempDir::new().unwrap();
+    let index = temp.path().join("index.db");
+
+    Command::new(&bin)
+        .args([
+            "--index-path",
+            index.to_str().unwrap(),
+            "index",
+            root.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    let out = Command::new(&bin)
+        .args([
+            "--index-path",
+            index.to_str().unwrap(),
+            "--json",
+            "--format",
+            "agent",
+            "credential renewal",
+            root.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(json["provider"], "ast-sgrep");
+    assert!(json["hits"].is_array());
+    assert!(json["suggested_next"].is_array());
+}
+
+#[test]
+fn cli_semantic_subcommand() {
+    let bin = PathBuf::from(env!("CARGO_BIN_EXE_asgrep"));
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/sample")
+        .canonicalize()
+        .unwrap();
+    let temp = tempfile::TempDir::new().unwrap();
+    let index = temp.path().join("index.db");
+
+    Command::new(&bin)
+        .args([
+            "--index-path",
+            index.to_str().unwrap(),
+            "index",
+            root.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    let out = Command::new(&bin)
+        .args([
+            "--index-path",
+            index.to_str().unwrap(),
+            "--json",
+            "semantic",
+            "credential renewal",
+            root.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(json["has_semantic_hits"], true);
+}

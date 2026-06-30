@@ -58,4 +58,9 @@ pub struct IndexStatus {
     pub caller_count: usize,
     pub import_count: usize,
     pub semantic_chunk_count: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub embed_backend: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub embed_dim: Option<usize>,
+    pub semantic_ivf_present: bool,
 }
