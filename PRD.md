@@ -12,7 +12,9 @@ Version 1.0 | Repo: ast-sgrep | CLI: asgrep / ast-sgrep | Language: Rust
 | 3 v0.3 | False-positive tests, crates.io | ✅ |
 | 4 v0.4 | `pattern:` delegates to ast-grep | ✅ |
 | 5 v1.0 | Optional embedding plugin (local + cloud) | ✅ |
-| 6 v3+ | LSP server (`asgrep-lsp`) | ✅ |
+| 6 v3+ | Full LSP server — symbols, defs, refs, call hierarchy, executeCommand | ✅ |
+
+Phase 6: Content-Length JSON-RPC, cursor-aware symbol resolution, incremental reindex on save.
 
 ## Deliverables
 
