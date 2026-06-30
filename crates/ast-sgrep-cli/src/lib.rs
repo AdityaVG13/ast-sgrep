@@ -114,31 +114,19 @@ pub fn run() -> anyhow::Result<()> {
             let opts = index_options(root, &cli);
             let mut indexer = Indexer::new(opts).context("failed to open index")?;
             let stats = indexer.index_all().context("indexing failed")?;
-            if cli.json {
-                println!("{}", serde_json::to_string_pretty(&stats)?);
-            } else {
-                print_index_stats(&stats);
-            }
+            print_json_or(cli.json, &stats, || print_index_stats(&stats))?;
         }
         Some(Commands::Status { ref root }) => {
             let opts = index_options(root, &cli);
             let indexer = Indexer::new(opts).context("failed to open index")?;
             let status = indexer.store().status().context("failed to read status")?;
-            if cli.json {
-                println!("{}", serde_json::to_string_pretty(&status)?);
-            } else {
-                print_status(&status);
-            }
+            print_json_or(cli.json, &status, || print_status(&status))?;
         }
         Some(Commands::Reindex { ref root }) => {
             let opts = index_options(root, &cli);
             let mut indexer = Indexer::new(opts).context("failed to open index")?;
             let stats = indexer.reindex_all().context("reindex failed")?;
-            if cli.json {
-                println!("{}", serde_json::to_string_pretty(&stats)?);
-            } else {
-                print_index_stats(&stats);
-            }
+            print_json_or(cli.json, &stats, || print_index_stats(&stats))?;
         }
         Some(Commands::Bench {
             ref root,
@@ -210,6 +198,19 @@ fn run_semantic_search(
         for hit in &response.hits {
             println!("{}", format_hit_line(hit));
         }
+    }
+    Ok(())
+}
+
+fn print_json_or<T: serde::Serialize>(
+    json: bool,
+    value: &T,
+    human: impl FnOnce(),
+) -> anyhow::Result<()> {
+    if json {
+        println!("{}", serde_json::to_string_pretty(value)?);
+    } else {
+        human();
     }
     Ok(())
 }

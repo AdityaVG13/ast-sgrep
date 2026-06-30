@@ -581,6 +581,40 @@ impl IndexStore {
         )
     }
 
+    pub fn query_imports(
+        &self,
+        module: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<(String, Option<String>, String, u32)>> {
+        let conn = self.connection();
+        if module.is_none_or(|m| m.is_empty()) {
+            let mut stmt = conn.prepare(
+                "SELECT f.path, f.language, i.module_path, i.line_no
+                 FROM imports i
+                 JOIN files f ON f.id = i.file_id
+                 LIMIT ?1",
+            )?;
+            let rows = stmt.query_map(rusqlite::params![limit as i64], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+            })?;
+            return rows.collect::<std::result::Result<Vec<_>, _>>().map_err(Into::into);
+        }
+
+        let module = module.unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT f.path, f.language, i.module_path, i.line_no
+             FROM imports i
+             JOIN files f ON f.id = i.file_id
+             WHERE lower(i.module_path) LIKE '%' || lower(?1) || '%'
+             LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(rusqlite::params![module, limit as i64], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+        })?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    }
+
     /// Join indexed lines into an excerpt for a line span.
     pub fn excerpt_span(&self, rel_path: &str, line_start: u32, line_end: u32) -> Result<String> {
         let mut stmt = self.conn.prepare(
