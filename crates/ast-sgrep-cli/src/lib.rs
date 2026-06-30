@@ -37,11 +37,11 @@ struct Cli {
     #[arg(long, global = true)]
     lang: Option<String>,
 
-    /// Enable local embedding semantic search pass
+    /// Enable local embedding semantic search pass (also stores embeddings at index time)
     #[arg(long, global = true, env = "ASGREP_EMBED")]
     embed: bool,
 
-    /// Build/use tantivy sidecar for large-repo lexical search
+    /// Build/use lexical FTS sidecar for large-repo search (`--tantivy`)
     #[arg(long, global = true, env = "ASGREP_TANTIVY")]
     tantivy: bool,
 
@@ -66,7 +66,7 @@ enum Commands {
         #[arg(default_value = ".")]
         root: PathBuf,
     },
-    /// Force full reindex
+    /// Force full reindex (bypass hash/mtime skip)
     Reindex {
         #[arg(default_value = ".")]
         root: PathBuf,
@@ -82,7 +82,8 @@ enum Commands {
     },
 }
 
-fn main() -> anyhow::Result<()> {
+/// Entry point for `asgrep` / `ast-sgrep` binaries.
+pub fn run() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
@@ -135,7 +136,8 @@ fn main() -> anyhow::Result<()> {
             let searcher = Searcher::new(SearchOptions {
                 root,
                 ..search_opts
-            }).context("failed to open index")?;
+            })
+            .context("failed to open index")?;
             let response = searcher.search(&query).context("search failed")?;
             if cli.json {
                 println!("{}", serde_json::to_string_pretty(&response)?);
@@ -157,6 +159,8 @@ fn index_options(root: &std::path::Path, cli: &Cli) -> IndexOptions {
         lang_filter: cli.lang.clone(),
         respect_gitignore: true,
         use_tantivy: cli.tantivy,
+        embed_lines: cli.embed,
+        force_reindex: false,
     }
 }
 
@@ -172,7 +176,12 @@ fn search_options(root: &std::path::Path, cli: &Cli) -> SearchOptions {
     }
 }
 
-fn run_bench(root: &std::path::Path, cli: &Cli, query: &str, iterations: u32) -> anyhow::Result<()> {
+fn run_bench(
+    root: &std::path::Path,
+    cli: &Cli,
+    query: &str,
+    iterations: u32,
+) -> anyhow::Result<()> {
     let opts = index_options(root, cli);
     let mut indexer = Indexer::new(opts.clone()).context("failed to open index")?;
     let index_start = Instant::now();

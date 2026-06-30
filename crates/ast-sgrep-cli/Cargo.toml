@@ -15,13 +15,9 @@ documentation = "https://docs.rs/ast-sgrep-cli"
 default = []
 cloud-embed = ["ast-sgrep-core/cloud-embed"]
 
-[[bin]]
-name = "asgrep"
-path = "src/main.rs"
-
-[[bin]]
-name = "ast-sgrep"
-path = "src/main.rs"
+[lib]
+name = "ast_sgrep_cli"
+path = "src/lib.rs"
 
 [dependencies]
 anyhow.workspace = true
@@ -29,3 +25,7 @@ ast-sgrep-core = { path = "../ast-sgrep-core" }
 clap.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+tempfile.workspace = true
