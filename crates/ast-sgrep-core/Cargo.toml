@@ -12,7 +12,7 @@ categories = ["development-tools"]
 documentation = "https://docs.rs/ast-sgrep-core"
 
 [features]
-default = []
+default = ["cloud-embed"]
 cloud-embed = ["ast-sgrep-embed/cloud"]
 
 [dependencies]

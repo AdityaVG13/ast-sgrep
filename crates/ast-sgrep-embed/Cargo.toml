@@ -14,10 +14,11 @@ documentation = "https://docs.rs/ast-sgrep-embed"
 [features]
 default = ["local"]
 local = []
-cloud = ["ureq"]
+cloud = ["ureq", "idna"]
 
 [dependencies]
 blake3.workspace = true
+idna = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true
 ureq = { workspace = true, optional = true }
