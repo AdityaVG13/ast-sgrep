@@ -25,16 +25,6 @@ pub fn split_content_lines(content: &str) -> SplitLines {
     SplitLines { lines, eol }
 }
 
-pub fn line_start_offsets(source: &str) -> Vec<usize> {
-    let mut offsets = vec![0];
-    for (i, b) in source.bytes().enumerate() {
-        if b == b'\n' {
-            offsets.push(i + 1);
-        }
-    }
-    offsets
-}
-
 #[cfg(test)]
 mod tests {
     use super::split_content_lines;
