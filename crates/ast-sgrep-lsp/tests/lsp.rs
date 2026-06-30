@@ -163,6 +163,44 @@ fn read_paths_see_edits_after_did_change() {
 }
 
 #[test]
+fn concurrent_did_change_and_search_do_not_deadlock() {
+    use std::sync::Arc;
+
+    let (_indexed, backend) = sample_backend();
+    let backend = Arc::new(backend);
+    let uri = path_to_uri(&backend.root().join("src/main.rs"));
+
+    std::thread::scope(|scope| {
+        let writer = Arc::clone(&backend);
+        let uri_writer = uri.clone();
+        scope.spawn(move || {
+            for i in 0..8 {
+                let text = format!(
+                    "fn main() {{\n    process_request(\"concurrent-{i}\");\n}}\n\nfn process_request(input: &str) {{}}\n"
+                );
+                let changes = vec![ast_sgrep_lsp::types::TextDocumentContentChangeEvent {
+                    range: None,
+                    range_length: None,
+                    text,
+                }];
+                writer.apply_document_changes(&uri_writer, &changes).ok();
+            }
+        });
+
+        let reader = Arc::clone(&backend);
+        scope.spawn(move || {
+            for i in 0..8 {
+                let params = ExecuteCommandParams {
+                    command: "asgrep.search".to_string(),
+                    arguments: vec![serde_json::json!(format!("concurrent-{i}"))],
+                };
+                reader.execute_command(&params).ok();
+            }
+        });
+    });
+}
+
+#[test]
 fn goto_definition_for_symbol() {
     let (_indexed, backend) = sample_backend();
     let params = TextDocumentPositionParams {

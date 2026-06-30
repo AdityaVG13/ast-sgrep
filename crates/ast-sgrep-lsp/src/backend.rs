@@ -3,7 +3,6 @@
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
-use std::thread::JoinHandle;
 
 use ast_sgrep_core::{IndexOptions, Indexer, SearchOptions, Searcher};
 use serde_json::{json, Value};
@@ -28,7 +27,7 @@ pub struct LspBackend {
     index_path: Option<PathBuf>,
     settings: AsgrepSettings,
     index_ready: Arc<AtomicBool>,
-    index_thread: Option<JoinHandle<()>>,
+    background_index_started: bool,
     index_lock: Arc<Mutex<()>>,
 }
 
@@ -40,7 +39,7 @@ impl LspBackend {
             index_path: None,
             settings: AsgrepSettings::default(),
             index_ready: Arc::new(AtomicBool::new(false)),
-            index_thread: None,
+            background_index_started: false,
             index_lock: Arc::new(Mutex::new(())),
         }
     }
@@ -120,13 +119,14 @@ impl LspBackend {
 
     /// Start full-workspace indexing on a background thread (non-blocking).
     pub fn start_background_index(&mut self) {
-        if self.index_thread.is_some() {
+        if self.background_index_started {
             return;
         }
+        self.background_index_started = true;
         let opts = self.index_options();
         let ready = Arc::clone(&self.index_ready);
         let lock = Arc::clone(&self.index_lock);
-        self.index_thread = Some(std::thread::spawn(move || {
+        std::thread::spawn(move || {
             let _guard = match lock.lock() {
                 Ok(g) => g,
                 Err(_) => return,
@@ -140,7 +140,7 @@ impl LspBackend {
             if ok {
                 ready.store(true, Ordering::SeqCst);
             }
-        }));
+        });
     }
 
     pub fn ensure_index(&self) -> anyhow::Result<()> {
@@ -223,7 +223,7 @@ impl LspBackend {
         if query.is_empty() {
             return Ok(json!([]));
         }
-        if self.index_thread.is_some() && !self.is_index_ready() {
+        if self.background_index_started && !self.is_index_ready() {
             return Ok(json!([]));
         }
         self.with_locked_searcher(50, |searcher| {
