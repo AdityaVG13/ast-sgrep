@@ -6,6 +6,7 @@ members = [
     "crates/ast-sgrep-lang",
     "crates/ast-sgrep-embed",
     "crates/ast-sgrep-lsp",
+    "crates/ast-sgrep-plugins",
 ]
 default-members = ["crates/ast-sgrep-cli"]
 
@@ -22,6 +23,8 @@ anyhow = "1"
 blake3 = "=1.5.5"
 clap = { version = "=4.5.23", features = ["derive", "env"] }
 criterion = "=0.5.1"
+idna = "=1.0.3"
+idna_adapter = "=1.0.0"
 rusqlite = { version = "0.32", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -30,8 +33,12 @@ thiserror = "2"
 ureq = { version = "=2.9.7", default-features = false, features = ["tls", "json"] }
 tree-sitter = "0.24"
 tree-sitter-go = "0.23"
+tree-sitter-java = "0.23"
 tree-sitter-javascript = "0.23"
 tree-sitter-python = "0.23"
+tree-sitter-ruby = "0.23"
 tree-sitter-rust = "0.23"
 tree-sitter-typescript = "0.23"
+regex = "1"
+zeroize = "=1.8.1"
 walkdir = "2"

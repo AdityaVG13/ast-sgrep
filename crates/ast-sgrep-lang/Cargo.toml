@@ -14,9 +14,12 @@ documentation = "https://docs.rs/ast-sgrep-lang"
 [dependencies]
 anyhow.workspace = true
 serde.workspace = true
+regex = "1"
 tree-sitter.workspace = true
 tree-sitter-go.workspace = true
+tree-sitter-java = "0.23"
 tree-sitter-javascript.workspace = true
 tree-sitter-python.workspace = true
+tree-sitter-ruby = "0.23"
 tree-sitter-rust.workspace = true
 tree-sitter-typescript.workspace = true
