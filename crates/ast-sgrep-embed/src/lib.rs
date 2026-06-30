@@ -1,11 +1,20 @@
-//! Embedding plugins for ast-sgrep: local (offline) and cloud (API).
+//! Embedding plugins for ast-sgrep: semantic local, Ollama, and cloud APIs.
 
 mod cloud;
+mod ollama;
+mod provider;
+mod semantic;
 
 pub use cloud::{embed_via_api, rank_by_vector, CloudEmbeddingConfig};
+pub use ollama::{embed_via_ollama, OllamaEmbeddingConfig};
+pub use provider::{
+    embed_query, embed_with_chain, default_semantic_dim, EmbedBackendKind, EmbedPreference,
+    EmbedResult,
+};
+pub use semantic::{expand_concepts, tokenize, SemanticLocalEmbedding, SEMANTIC_DIM};
 
-/// Embedding vector dimension for local hash embeddings.
-pub const EMBED_DIM: usize = 64;
+/// Legacy dimension constant — prefer [`SEMANTIC_DIM`] for local semantic embeddings.
+pub const EMBED_DIM: usize = SEMANTIC_DIM;
 
 /// Trait for embedding providers (plugin interface).
 pub trait EmbeddingProvider: Send + Sync {
@@ -13,44 +22,14 @@ pub trait EmbeddingProvider: Send + Sync {
     fn similarity(&self, a: &[f32], b: &[f32]) -> f32;
 }
 
-/// Local bag-of-words hash embedding — fully offline.
-#[derive(Debug, Clone, Default)]
-pub struct LocalEmbedding;
-
-impl EmbeddingProvider for LocalEmbedding {
+impl EmbeddingProvider for SemanticLocalEmbedding {
     fn embed_text(&self, text: &str) -> Vec<f32> {
-        let mut vec = vec![0.0_f32; EMBED_DIM];
-        for token in text.split(|c: char| !c.is_alphanumeric() && c != '_') {
-            if token.len() < 2 {
-                continue;
-            }
-            let hash = blake3::hash(token.to_lowercase().as_bytes());
-            let bytes = hash.as_bytes();
-            for i in 0..EMBED_DIM {
-                let b = bytes[i % bytes.len()];
-                vec[i] += if b & 1 == 0 { 1.0 } else { -1.0 };
-            }
-        }
-        normalize(&mut vec);
-        vec
+        SemanticLocalEmbedding::embed_text(self, text)
     }
 
     fn similarity(&self, a: &[f32], b: &[f32]) -> f32 {
-        cosine_similarity(a, b)
+        SemanticLocalEmbedding::similarity(self, a, b)
     }
-}
-
-fn normalize(vec: &mut [f32]) {
-    let norm: f32 = vec.iter().map(|x| x * x).sum::<f32>().sqrt();
-    if norm > 0.0 {
-        for x in vec.iter_mut() {
-            *x /= norm;
-        }
-    }
-}
-
-fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
-    a.iter().zip(b.iter()).map(|(x, y)| x * y).sum()
 }
 
 /// Serialize embedding to bytes for SQLite storage.
@@ -66,32 +45,70 @@ pub fn embed_from_bytes(bytes: &[u8]) -> Vec<f32> {
         .collect()
 }
 
-/// Compute embedding for a line of text.
-pub fn embed_line(text: &str) -> Vec<f32> {
-    LocalEmbedding.embed_text(text)
+/// A semantic chunk candidate for ranking.
+pub type SemanticChunkRow = (
+    String,  // file
+    u32,     // line_start
+    u32,     // line_end
+    String,  // symbol
+    String,  // excerpt
+    Vec<f32>, // vector
+);
+
+/// Rank semantic symbol chunks by cosine similarity to the query text.
+pub fn rank_semantic_chunks(
+    query: &str,
+    chunks: &[SemanticChunkRow],
+    limit: usize,
+    stored_backend: Option<&str>,
+    stored_dim: usize,
+    preference: EmbedPreference,
+) -> Vec<(f32, String, u32, u32, String, String)> {
+    if chunks.is_empty() {
+        return Vec::new();
+    }
+    let query_result = embed_query(query, stored_backend, stored_dim, preference);
+    rank_chunks_by_vector(&query_result.vector, chunks, limit)
 }
 
-/// Rank lines by semantic similarity to query.
-pub fn rank_by_similarity(
-    query: &str,
-    lines: &[(String, u32, String, Vec<f32>)],
+/// Rank chunks using a precomputed query embedding vector.
+pub fn rank_chunks_by_vector(
+    query_vec: &[f32],
+    chunks: &[SemanticChunkRow],
     limit: usize,
-) -> Vec<(f32, String, u32, String)> {
-    let provider = LocalEmbedding;
-    let query_vec = provider.embed_text(query);
-    let mut scored: Vec<(f32, String, u32, String)> = lines
+) -> Vec<(f32, String, u32, u32, String, String)> {
+    let mut scored: Vec<(f32, String, u32, u32, String, String)> = chunks
         .iter()
-        .map(|(file, line_no, content, emb)| {
-            let sim = provider.similarity(&query_vec, emb);
-            (sim, file.clone(), *line_no, content.clone())
+        .map(|(file, line_start, line_end, symbol, excerpt, emb)| {
+            let sim = cosine_similarity(query_vec, emb);
+            (
+                sim,
+                file.clone(),
+                *line_start,
+                *line_end,
+                symbol.clone(),
+                excerpt.clone(),
+            )
         })
         .collect();
     scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
     scored
         .into_iter()
         .take(limit)
-        .filter(|(sim, _, _, _)| *sim > 0.05)
+        .filter(|(sim, _, _, _, _, _)| *sim > 0.08)
         .collect()
+}
+
+fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
+    let len = a.len().min(b.len());
+    if len == 0 {
+        return 0.0;
+    }
+    a.iter()
+        .zip(b.iter())
+        .take(len)
+        .map(|(x, y)| x * y)
+        .sum()
 }
 
 #[cfg(test)]
@@ -99,11 +116,33 @@ mod tests {
     use super::*;
 
     #[test]
-    fn similar_texts_score_higher() {
-        let p = LocalEmbedding;
-        let a = p.embed_text("auth refresh token");
-        let b = p.embed_text("refresh auth token");
-        let c = p.embed_text("unrelated database schema");
-        assert!(p.similarity(&a, &b) > p.similarity(&a, &c));
+    fn rank_semantic_chunks_orders_by_similarity() {
+        let embedder = SemanticLocalEmbedding;
+        let chunk_a = (
+            "a.rs".into(),
+            1,
+            3,
+            "auth_refresh".into(),
+            "fn auth_refresh() {}".into(),
+            embedder.embed_text("auth refresh token"),
+        );
+        let chunk_b = (
+            "b.rs".into(),
+            10,
+            12,
+            "migrate_db".into(),
+            "fn migrate_db() {}".into(),
+            embedder.embed_text("database migration"),
+        );
+        let ranked = rank_semantic_chunks(
+            "credential renewal",
+            &[chunk_a, chunk_b],
+            2,
+            Some("semantic"),
+            SEMANTIC_DIM,
+            EmbedPreference::Semantic,
+        );
+        assert!(!ranked.is_empty());
+        assert_eq!(ranked[0].4, "auth_refresh");
     }
 }

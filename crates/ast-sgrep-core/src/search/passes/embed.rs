@@ -1,6 +1,4 @@
-use ast_sgrep_embed::{embed_from_bytes, rank_by_similarity};
-#[cfg(feature = "cloud-embed")]
-use ast_sgrep_embed::{rank_by_vector, CloudEmbeddingConfig};
+use ast_sgrep_embed::{embed_from_bytes, rank_semantic_chunks, EmbedPreference};
 
 use crate::query::ParsedQuery;
 use crate::rank::SCORE_EMBED;
@@ -8,7 +6,7 @@ use crate::store::IndexStore;
 use crate::Result;
 use crate::search::types::{HitKind, SearchHit, SearchOptions};
 
-const EMBED_SQL_LIMIT: usize = 10_000;
+const SEMANTIC_SQL_LIMIT: usize = 5_000;
 
 pub fn embed_pass(
     store: &IndexStore,
@@ -27,26 +25,133 @@ pub fn embed_pass(
         ""
     };
     let sql = format!(
-        "SELECT f.path, l.line_no, l.content, f.language, e.vector
-         FROM embeddings e
-         JOIN lines l ON l.file_id = e.file_id AND l.line_no = e.line_no
-         JOIN files f ON f.id = e.file_id
+        "SELECT f.path, sc.line_start, sc.line_end, sc.symbol_name, sc.text, sc.vector
+         FROM semantic_chunks sc
+         JOIN files f ON f.id = sc.file_id
          WHERE 1=1{lang_clause}
-         LIMIT {EMBED_SQL_LIMIT}"
+         LIMIT {SEMANTIC_SQL_LIMIT}"
     );
 
-    let mut lines = Vec::new();
+    let mut chunks = Vec::new();
     if let Some(ref lang) = options.lang_filter {
         let mut stmt = conn.prepare(&sql)?;
         let mut rows = stmt.query(rusqlite::params![lang])?;
         while let Some(row) = rows.next()? {
-            push_embed_row(&mut lines, row)?;
+            push_semantic_row(&mut chunks, row)?;
         }
     } else {
         let mut stmt = conn.prepare(&sql)?;
         let mut rows = stmt.query([])?;
         while let Some(row) = rows.next()? {
-            push_embed_row(&mut lines, row)?;
+            push_semantic_row(&mut chunks, row)?;
+        }
+    }
+
+    if chunks.is_empty() {
+        return Ok(fallback_line_embeddings(store, options, parsed)?);
+    }
+
+    let stored_dim = chunks
+        .first()
+        .map(|c| c.5.len())
+        .unwrap_or(ast_sgrep_embed::default_semantic_dim());
+    let embed_backend = store.get_meta("embed_backend").unwrap_or(None);
+    let preference = search_embed_preference(options);
+
+    let ranked = rank_semantic_chunks(
+        &query,
+        &chunks,
+        50,
+        embed_backend.as_deref(),
+        stored_dim,
+        preference,
+    );
+
+    Ok(ranked
+        .into_iter()
+        .map(|(sim, file, line_start, line_end, symbol, excerpt)| SearchHit {
+            kind: HitKind::Embed,
+            file,
+            line_start,
+            line_end,
+            symbol: Some(symbol),
+            caller: None,
+            callee: None,
+            language: None,
+            score: SCORE_EMBED * f64::from(sim),
+            excerpt,
+        })
+        .collect())
+}
+
+fn search_embed_preference(options: &SearchOptions) -> EmbedPreference {
+    if options.use_cloud_embed {
+        EmbedPreference::Cloud
+    } else if options.use_ollama_embed {
+        EmbedPreference::Ollama
+    } else if options.use_semantic_only {
+        EmbedPreference::Semantic
+    } else {
+        EmbedPreference::Auto
+    }
+}
+
+fn push_semantic_row(
+    chunks: &mut Vec<ast_sgrep_embed::SemanticChunkRow>,
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<()> {
+    let file: String = row.get(0)?;
+    let line_start: u32 = row.get(1)?;
+    let line_end: u32 = row.get(2)?;
+    let symbol: String = row.get(3)?;
+    let excerpt: String = row.get(4)?;
+    let vector: Vec<u8> = row.get(5)?;
+    chunks.push((
+        file,
+        line_start,
+        line_end,
+        symbol,
+        excerpt,
+        embed_from_bytes(&vector),
+    ));
+    Ok(())
+}
+
+/// Legacy per-line embeddings for indexes built before semantic chunks.
+fn fallback_line_embeddings(
+    store: &IndexStore,
+    options: &SearchOptions,
+    parsed: &ParsedQuery,
+) -> Result<Vec<SearchHit>> {
+    let query = parsed.terms.join(" ");
+    let conn = store.connection();
+    let lang_clause = if options.lang_filter.is_some() {
+        " AND f.language = ?1"
+    } else {
+        ""
+    };
+    let sql = format!(
+        "SELECT f.path, l.line_no, l.content, sc.symbol_name, e.vector
+         FROM embeddings e
+         JOIN lines l ON l.file_id = e.file_id AND l.line_no = e.line_no
+         JOIN files f ON f.id = e.file_id
+         LEFT JOIN semantic_chunks sc ON sc.file_id = f.id AND sc.line_start = l.line_no
+         WHERE 1=1{lang_clause}
+         LIMIT 5000"
+    );
+
+    let mut lines: Vec<(String, u32, u32, String, String, Vec<f32>)> = Vec::new();
+    if let Some(ref lang) = options.lang_filter {
+        let mut stmt = conn.prepare(&sql)?;
+        let mut rows = stmt.query(rusqlite::params![lang])?;
+        while let Some(row) = rows.next()? {
+            push_legacy_row(&mut lines, row)?;
+        }
+    } else {
+        let mut stmt = conn.prepare(&sql)?;
+        let mut rows = stmt.query([])?;
+        while let Some(row) = rows.next()? {
+            push_legacy_row(&mut lines, row)?;
         }
     }
 
@@ -54,59 +159,65 @@ pub fn embed_pass(
         return Ok(Vec::new());
     }
 
-    let stored_dim = lines.first().map(|l| l.3.len()).unwrap_or(0);
+    let stored_dim = lines.first().map(|l| l.5.len()).unwrap_or(0);
     let embed_backend = store.get_meta("embed_backend").unwrap_or(None);
-    let use_cloud = options.use_cloud_embed && embed_backend.as_deref() == Some("cloud");
+    let preference = search_embed_preference(options);
+    let chunk_rows: Vec<ast_sgrep_embed::SemanticChunkRow> = lines
+        .iter()
+        .map(|(file, line_no, line_end, symbol, content, vec)| {
+            (
+                file.clone(),
+                *line_no,
+                *line_end,
+                symbol.clone(),
+                content.clone(),
+                vec.clone(),
+            )
+        })
+        .collect();
 
-    let ranked = if use_cloud {
-        rank_with_cloud(&query, &lines, stored_dim)
-    } else {
-        rank_by_similarity(&query, &lines, 50)
-    };
+    let ranked = rank_semantic_chunks(
+        &query,
+        &chunk_rows,
+        50,
+        embed_backend.as_deref(),
+        stored_dim,
+        preference,
+    );
 
     Ok(ranked
         .into_iter()
-        .map(|(sim, file, line_no, content)| SearchHit {
+        .map(|(sim, file, line_start, line_end, symbol, excerpt)| SearchHit {
             kind: HitKind::Embed,
             file,
-            line_start: line_no,
-            line_end: line_no,
-            symbol: None,
+            line_start,
+            line_end,
+            symbol: if symbol.is_empty() { None } else { Some(symbol) },
             caller: None,
             callee: None,
             language: None,
             score: SCORE_EMBED * f64::from(sim),
-            excerpt: content,
+            excerpt,
         })
         .collect())
 }
 
-fn push_embed_row(
-    lines: &mut Vec<(String, u32, String, Vec<f32>)>,
+fn push_legacy_row(
+    lines: &mut Vec<(String, u32, u32, String, String, Vec<f32>)>,
     row: &rusqlite::Row<'_>,
 ) -> rusqlite::Result<()> {
     let file: String = row.get(0)?;
     let line_no: u32 = row.get(1)?;
     let content: String = row.get(2)?;
+    let symbol: Option<String> = row.get(3)?;
     let vector: Vec<u8> = row.get(4)?;
-    lines.push((file, line_no, content, embed_from_bytes(&vector)));
+    lines.push((
+        file,
+        line_no,
+        line_no,
+        symbol.unwrap_or_default(),
+        content,
+        embed_from_bytes(&vector),
+    ));
     Ok(())
-}
-
-fn rank_with_cloud(
-    query: &str,
-    lines: &[(String, u32, String, Vec<f32>)],
-    stored_dim: usize,
-) -> Vec<(f32, String, u32, String)> {
-    #[cfg(feature = "cloud-embed")]
-    {
-        if let Some(config) = CloudEmbeddingConfig::from_env() {
-            if let Ok(query_vec) = ast_sgrep_embed::embed_via_api(query, &config) {
-                if stored_dim > 0 && stored_dim == query_vec.len() {
-                    return rank_by_vector(&query_vec, lines, 50);
-                }
-            }
-        }
-    }
-    rank_by_similarity(query, lines, 50)
 }

@@ -55,21 +55,27 @@ pub struct SearchOptions {
     pub index_path: Option<PathBuf>,
     pub limit: usize,
     pub lang_filter: Option<String>,
+    /// Run semantic embedding pass (default on).
     pub use_embed: bool,
     pub use_tantivy: bool,
     pub use_cloud_embed: bool,
+    pub use_ollama_embed: bool,
+    pub use_semantic_only: bool,
 }
 
 impl Default for SearchOptions {
     fn default() -> Self {
+        let no_embed = std::env::var("ASGREP_NO_EMBED").ok().as_deref() == Some("1");
         Self {
             root: PathBuf::from("."),
             index_path: None,
             limit: Self::default_limit(),
             lang_filter: None,
-            use_embed: std::env::var("ASGREP_EMBED").ok().as_deref() == Some("1"),
+            use_embed: !no_embed,
             use_tantivy: std::env::var("ASGREP_TANTIVY").ok().as_deref() == Some("1"),
             use_cloud_embed: std::env::var("ASGREP_CLOUD_EMBED").ok().as_deref() == Some("1"),
+            use_ollama_embed: std::env::var("ASGREP_OLLAMA_EMBED").ok().as_deref() == Some("1"),
+            use_semantic_only: std::env::var("ASGREP_SEMANTIC_ONLY").ok().as_deref() == Some("1"),
         }
     }
 }

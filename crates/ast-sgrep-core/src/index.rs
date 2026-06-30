@@ -10,12 +10,27 @@ use walkdir::WalkDir;
 use crate::store::{CallerRow, ImportRow, IndexStore, SymbolRow};
 use crate::Result;
 
-/// Embedding backend used when `embed_lines` is enabled.
+/// Embedding backend preference for symbol-level semantic chunks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum EmbedBackend {
+    /// Cloud API → Ollama → semantic local (default).
     #[default]
-    Local,
+    Auto,
     Cloud,
+    Ollama,
+    /// Offline code-aware semantic embeddings only.
+    Semantic,
+}
+
+impl EmbedBackend {
+    pub fn to_preference(self) -> ast_sgrep_embed::EmbedPreference {
+        match self {
+            EmbedBackend::Auto => ast_sgrep_embed::EmbedPreference::Auto,
+            EmbedBackend::Cloud => ast_sgrep_embed::EmbedPreference::Cloud,
+            EmbedBackend::Ollama => ast_sgrep_embed::EmbedPreference::Ollama,
+            EmbedBackend::Semantic => ast_sgrep_embed::EmbedPreference::Semantic,
+        }
+    }
 }
 
 /// Options for indexing a repository.
@@ -26,7 +41,8 @@ pub struct IndexOptions {
     pub lang_filter: Option<String>,
     pub respect_gitignore: bool,
     pub use_tantivy: bool,
-    pub embed_lines: bool,
+    /// Index symbol-level semantic chunks (default on).
+    pub embed_semantic: bool,
     pub embed_backend: EmbedBackend,
     pub force_reindex: bool,
 }
@@ -39,8 +55,8 @@ impl Default for IndexOptions {
             lang_filter: None,
             respect_gitignore: true,
             use_tantivy: false,
-            embed_lines: false,
-            embed_backend: EmbedBackend::Local,
+            embed_semantic: true,
+            embed_backend: EmbedBackend::Auto,
             force_reindex: false,
         }
     }
@@ -278,6 +294,12 @@ impl Indexer {
         let caller_count = callers.len();
         let import_count = imports.len();
 
+        let semantic_chunks = if self.options.embed_semantic {
+            crate::semantic_chunk::build_semantic_chunks(&symbols, &callers, &lines)
+        } else {
+            Vec::new()
+        };
+
         self.store.upsert_file(
             rel_path,
             language.map(|l| l.as_str()),
@@ -288,8 +310,9 @@ impl Indexer {
             &symbols,
             &callers,
             &imports,
-            self.options.embed_lines,
-            self.options.embed_lines && self.options.embed_backend == EmbedBackend::Cloud,
+            &semantic_chunks,
+            self.options.embed_semantic,
+            self.options.embed_backend.to_preference(),
         )?;
 
         Ok((sym_count, caller_count, import_count))

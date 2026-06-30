@@ -106,6 +106,21 @@ impl IndexStore {
                 PRIMARY KEY (file_id, line_no),
                 FOREIGN KEY (file_id) REFERENCES files(id) ON DELETE CASCADE
             );
+
+            CREATE TABLE IF NOT EXISTS semantic_chunks (
+                id INTEGER PRIMARY KEY,
+                file_id INTEGER NOT NULL,
+                symbol_id INTEGER,
+                chunk_kind TEXT NOT NULL,
+                line_start INTEGER NOT NULL,
+                line_end INTEGER NOT NULL,
+                symbol_name TEXT,
+                text TEXT NOT NULL,
+                vector BLOB NOT NULL,
+                FOREIGN KEY (file_id) REFERENCES files(id) ON DELETE CASCADE,
+                FOREIGN KEY (symbol_id) REFERENCES symbols(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_semantic_chunks_symbol ON semantic_chunks(symbol_name);
             ",
         )?;
         Ok(())
@@ -167,8 +182,9 @@ impl IndexStore {
         symbols: &[SymbolRow],
         callers: &[CallerRow],
         imports: &[ImportRow],
-        embed_lines: bool,
-        cloud_embed: bool,
+        semantic_chunks: &[crate::semantic_chunk::SemanticChunkInput],
+        embed_semantic: bool,
+        embed_backend: ast_sgrep_embed::EmbedPreference,
     ) -> Result<i64> {
         let file_id: Option<i64> = self.conn.query_row(
             "SELECT id FROM files WHERE path = ?1",
@@ -183,6 +199,7 @@ impl IndexStore {
             self.conn.execute("DELETE FROM callers WHERE file_id = ?1", params![id])?;
             self.conn.execute("DELETE FROM imports WHERE file_id = ?1", params![id])?;
             self.conn.execute("DELETE FROM embeddings WHERE file_id = ?1", params![id])?;
+            self.conn.execute("DELETE FROM semantic_chunks WHERE file_id = ?1", params![id])?;
             self.conn.execute(
                 "UPDATE files SET language = ?1, mtime_secs = ?2, mtime_nanos = ?3, content_hash = ?4 WHERE id = ?5",
                 params![language, mtime_secs, mtime_nanos, content_hash, id],
@@ -210,33 +227,7 @@ impl IndexStore {
             }
         }
 
-        if embed_lines {
-            let mut emb_stmt = self.conn.prepare(
-                "INSERT INTO embeddings(file_id, line_no, vector) VALUES(?1, ?2, ?3)",
-            )?;
-            let mut embed_dim: Option<usize> = None;
-            let mut used_cloud = false;
-            for (line_no, content) in lines {
-                if content.trim().is_empty() {
-                    continue;
-                }
-                let vec = compute_line_embedding(content, cloud_embed);
-                if cloud_embed && vec.len() != ast_sgrep_embed::EMBED_DIM {
-                    used_cloud = true;
-                }
-                embed_dim = Some(vec.len());
-                let bytes = ast_sgrep_embed::embed_to_bytes(&vec);
-                emb_stmt.execute(params![file_id, line_no, bytes])?;
-            }
-            if embed_lines {
-                let backend = if used_cloud { "cloud" } else { "local" };
-                self.set_meta("embed_backend", backend)?;
-                if let Some(dim) = embed_dim {
-                    self.set_meta("embed_dim", &dim.to_string())?;
-                }
-            }
-        }
-
+        let mut symbol_ids: Vec<i64> = Vec::with_capacity(symbols.len());
         {
             let mut sym_stmt = self.conn.prepare(
                 "INSERT INTO symbols(file_id, name, kind, line_start, line_end, byte_start, byte_end)
@@ -252,6 +243,40 @@ impl IndexStore {
                     sym.byte_start,
                     sym.byte_end,
                 ])?;
+                symbol_ids.push(self.conn.last_insert_rowid());
+            }
+        }
+
+        if embed_semantic && !semantic_chunks.is_empty() {
+            let mut chunk_stmt = self.conn.prepare(
+                "INSERT INTO semantic_chunks(
+                    file_id, symbol_id, chunk_kind, line_start, line_end, symbol_name, text, vector
+                 ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            )?;
+            let mut embed_dim: Option<usize> = None;
+            let mut backend_kind: Option<ast_sgrep_embed::EmbedBackendKind> = None;
+            for (chunk, symbol_id) in semantic_chunks.iter().zip(symbol_ids.iter()) {
+                let text = crate::semantic_chunk::render_chunk_text(chunk);
+                let result = ast_sgrep_embed::embed_with_chain(&text, embed_backend);
+                embed_dim = Some(result.vector.len());
+                backend_kind = Some(result.backend);
+                let bytes = ast_sgrep_embed::embed_to_bytes(&result.vector);
+                chunk_stmt.execute(params![
+                    file_id,
+                    symbol_id,
+                    "symbol",
+                    chunk.line_start,
+                    chunk.line_end,
+                    chunk.symbol_name,
+                    text,
+                    bytes,
+                ])?;
+            }
+            if let Some(kind) = backend_kind {
+                self.set_meta("embed_backend", kind.as_meta_str())?;
+            }
+            if let Some(dim) = embed_dim {
+                self.set_meta("embed_dim", &dim.to_string())?;
             }
         }
 
@@ -296,6 +321,7 @@ impl IndexStore {
             self.conn.execute("DELETE FROM callers WHERE file_id = ?1", params![file_id])?;
             self.conn.execute("DELETE FROM imports WHERE file_id = ?1", params![file_id])?;
             self.conn.execute("DELETE FROM embeddings WHERE file_id = ?1", params![file_id])?;
+            self.conn.execute("DELETE FROM semantic_chunks WHERE file_id = ?1", params![file_id])?;
             self.conn.execute("DELETE FROM files WHERE id = ?1", params![file_id])?;
         }
         Ok(())
@@ -351,6 +377,10 @@ impl IndexStore {
         let import_count: usize = self
             .conn
             .query_row("SELECT COUNT(*) FROM imports", [], |row| row.get(0))?;
+        let semantic_chunk_count: usize = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM semantic_chunks", [], |row| row.get(0))
+            .unwrap_or(0);
 
         Ok(IndexStatus {
             root: self.root.display().to_string(),
@@ -360,6 +390,7 @@ impl IndexStore {
             symbol_count,
             caller_count,
             import_count,
+            semantic_chunk_count,
         })
     }
 
@@ -454,20 +485,6 @@ impl IndexStore {
             Err(e) => Err(e.into()),
         }
     }
-}
-
-fn compute_line_embedding(content: &str, cloud_embed: bool) -> Vec<f32> {
-    if cloud_embed {
-        #[cfg(feature = "cloud-embed")]
-        {
-            if let Some(config) = ast_sgrep_embed::CloudEmbeddingConfig::from_env() {
-                if let Ok(vec) = ast_sgrep_embed::embed_via_api(content, &config) {
-                    return vec;
-                }
-            }
-        }
-    }
-    ast_sgrep_embed::embed_line(content)
 }
 
 #[derive(Debug, Clone)]

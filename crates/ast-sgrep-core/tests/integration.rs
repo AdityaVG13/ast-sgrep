@@ -36,6 +36,8 @@ fn indexes_and_searches_polyglot_fixture() {
         use_embed: false,
         use_tantivy: false,
         use_cloud_embed: false,
+        use_ollama_embed: false,
+        use_semantic_only: false,
     })
     .unwrap();
 

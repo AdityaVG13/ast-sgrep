@@ -1,6 +1,6 @@
 # ast-sgrep
 
-**Polyglot hybrid code search** — find intent across **8 languages** (Rust, TypeScript, JavaScript, Python, Go, Java, C#, Ruby) with lexical search, AST symbol graphs, and optional semantic embeddings.
+**Polyglot hybrid code search** — find intent across **8 languages** (Rust, TypeScript, JavaScript, Python, Go, Java, C#, Ruby) with lexical search, AST symbol graphs, and **symbol-level semantic retrieval** (on by default).
 
 ```bash
 cargo install ast-sgrep-cli
@@ -27,7 +27,7 @@ Code search tools solve different problems. **ast-sgrep takes a different approa
 | **Caller / callee graph** | Yes (`callers:main`) | No | No |
 | **Import tracking** | Yes (`imports:serde`) | No | No |
 | **Structural patterns** | Yes (`pattern:fn $NAME($$$)`) — delegates to ast-grep | Native | No |
-| **Semantic similarity** | Optional (`--embed`, `--cloud-embed`) | No | No |
+| **Semantic similarity** | **On by default** — symbol chunks + concept expansion; cloud/Ollama optional | No | No |
 | **Polyglot (8 languages)** | Yes, unified index | Yes | Yes (text only) |
 | **CI / API JSON plugins** | GitHub & GitLab (`--format`) | No | No |
 | **LSP integration** | `asgrep-lsp` (symbols, defs, refs, call hierarchy) | Separate ecosystem | No |
@@ -73,7 +73,7 @@ flowchart TB
         L1["① Lexical — FTS5 BM25 + RRF"]
         L2["② Symbol + graph — defs, callers"]
         L3["③ Anchor — excerpt around symbol"]
-        L4["④ Embed — optional semantic pass"]
+        L4["④ Semantic — symbol-chunk vectors (default on)"]
         RANK["Fuse · dedupe · rank"]
     end
 
@@ -105,7 +105,7 @@ flowchart LR
     H --> S["Symbol match"]
     H --> G["Graph edges"]
     H --> A["Anchor excerpts"]
-    H --> E["Embeddings"]
+    H --> E["Semantic chunks"]
     C --> R["Ranked hits"]
     D --> R
     I --> R
@@ -170,9 +170,14 @@ asgrep "defs:auth_refresh"          # where is auth_refresh defined?
 asgrep "imports:serde"              # import statements mentioning serde
 asgrep "pattern:fn $NAME($$$)"      # structural — delegates to ast-grep
 
-# Semantic search (index with --embed first)
-asgrep --embed index .
-asgrep --embed "auth refresh"
+# Synonym queries work without token overlap (semantic on by default)
+asgrep "credential renewal"          # → auth_refresh
+asgrep "sanitize user input"         # → validate_input
+
+# Neural backends (optional upgrade over offline semantic)
+asgrep --cloud-embed index .         # OpenAI-compatible API at index time
+asgrep --ollama-embed index .        # Ollama (nomic-embed-text, etc.)
+asgrep --no-embed index .            # disable semantic indexing + search pass
 
 # Large monorepos: lexical FTS sidecar (auto at 1000+ files)
 asgrep --tantivy index .
@@ -214,9 +219,11 @@ asgrep bench .
 | `--format` | JSON shape: `native`, `github`, `gitlab` |
 | `--index-path` | Custom index DB path (`ASGREP_INDEX_PATH`) |
 | `--lang` | Filter by language (`rust`, `typescript`, `javascript`, `python`, `go`) |
-| `--embed` | Enable embeddings at index + search time (`ASGREP_EMBED=1`) |
+| `--no-embed` | Disable semantic indexing + search (`ASGREP_NO_EMBED=1`) |
 | `--tantivy` | Build/use lexical FTS sidecar (`ASGREP_TANTIVY=1`) |
-| `--cloud-embed` | Cloud query embeddings (`ASGREP_CLOUD_EMBED=1`, needs API key) |
+| `--cloud-embed` | Prefer cloud neural embeddings (`ASGREP_CLOUD_EMBED=1`, needs API key) |
+| `--ollama-embed` | Prefer Ollama neural embeddings (`ASGREP_OLLAMA_EMBED=1`) |
+| `--semantic-only` | Force offline code-aware semantic only (`ASGREP_SEMANTIC_ONLY=1`) |
 | `ASGREP_USE_CACHE=1` | Store index in `~/.cache/asgrep/` |
 
 ### Output kinds
@@ -230,7 +237,7 @@ asgrep bench .
 | `ANCHOR` | Excerpt around a matched symbol |
 | `IMPORT` | Import statement |
 | `PATTERN` | Structural match via ast-grep |
-| `EMBED` | Semantic similarity hit |
+| `EMBED` | Semantic symbol-chunk hit (synonym / NL similarity) |
 
 ### Example output
 
@@ -291,7 +298,7 @@ ast-sgrep/
 ├── crates/ast-sgrep-core/    # Index + hybrid search engine
 ├── crates/ast-sgrep-cli/     # asgrep / ast-sgrep binaries
 ├── crates/ast-sgrep-lang/    # tree-sitter parsers (Rust, TS, JS, Python, Go)
-├── crates/ast-sgrep-embed/   # Local + cloud embedding plugins
+├── crates/ast-sgrep-embed/   # Semantic local + Ollama + cloud embedding chain
 ├── crates/ast-sgrep-plugins/ # GitHub / GitLab JSON output adapters
 ├── crates/ast-sgrep-lsp/     # LSP server (asgrep-lsp)
 ├── tests/fixtures/           # Polyglot sample + regression fixtures
@@ -308,7 +315,8 @@ ast-sgrep/
 | `symbols` | Function/method/type definitions |
 | `callers` | Caller → callee edges (AST-derived, string/comment-safe) |
 | `imports` | Import/module paths |
-| `embeddings` | Optional per-line vectors (`--embed`) |
+| `semantic_chunks` | Symbol-level vectors with call-graph context (default on) |
+| `embeddings` | Legacy per-line vectors (pre-v1.1 indexes) |
 
 Incremental indexing uses blake3 content hashes + mtime. Respects `.gitignore` and `.asgrepignore`.
 
@@ -325,8 +333,8 @@ let mut indexer = Indexer::new(IndexOptions {
     lang_filter: None,
     respect_gitignore: true,
     use_tantivy: false,
-    embed_lines: false,
-    embed_backend: ast_sgrep_core::EmbedBackend::Local,
+    embed_semantic: true,
+    embed_backend: ast_sgrep_core::EmbedBackend::Auto,
     force_reindex: false,
 })?;
 indexer.index_all()?;
@@ -336,9 +344,11 @@ let searcher = Searcher::new(SearchOptions {
     index_path: None,
     limit: 16,
     lang_filter: None,
-    use_embed: false,
+    use_embed: true,
     use_tantivy: false,
     use_cloud_embed: false,
+    use_ollama_embed: false,
+    use_semantic_only: false,
 })?;
 let response = searcher.search("auth refresh")?;
 ```
@@ -356,7 +366,7 @@ All phases complete (v1.0). See [PRD.md](PRD.md) for the full specification.
 | 2 | Python+Go, incremental, benchmarks | Done |
 | 3 | False-positive tests, crates.io metadata | Done |
 | 4 | `pattern:` ast-grep delegation | Done |
-| 5 | Local + cloud embedding plugins | Done |
+| 5 | Symbol-chunk semantic search (local + Ollama + cloud) | Done |
 | 6 | Full LSP server | Done |
 
 Publishing: `scripts/publish.sh` (manual, no CI). See [docs/publishing.md](docs/publishing.md).

@@ -37,17 +37,25 @@ struct Cli {
     #[arg(long, global = true)]
     lang: Option<String>,
 
-    /// Enable local embedding semantic search pass (also stores embeddings at index time)
-    #[arg(long, global = true, env = "ASGREP_EMBED")]
-    embed: bool,
+    /// Disable semantic embedding at index and search time
+    #[arg(long, global = true, env = "ASGREP_NO_EMBED")]
+    no_embed: bool,
+
+    /// Use cloud API for neural embeddings (ASGREP_EMBED_API_KEY)
+    #[arg(long, global = true, env = "ASGREP_CLOUD_EMBED")]
+    cloud_embed: bool,
+
+    /// Use Ollama for local neural embeddings (ASGREP_OLLAMA_URL)
+    #[arg(long, global = true, env = "ASGREP_OLLAMA_EMBED")]
+    ollama_embed: bool,
+
+    /// Force offline code-aware semantic embeddings only (no cloud/Ollama)
+    #[arg(long, global = true, env = "ASGREP_SEMANTIC_ONLY")]
+    semantic_only: bool,
 
     /// Build/use lexical FTS sidecar for large-repo search (`--tantivy`)
     #[arg(long, global = true, env = "ASGREP_TANTIVY")]
     tantivy: bool,
-
-    /// Use cloud API for query embeddings (ASGREP_EMBED_API_KEY)
-    #[arg(long, global = true, env = "ASGREP_CLOUD_EMBED")]
-    cloud_embed: bool,
 
     /// JSON output format: native, github, gitlab
     #[arg(long, global = true, value_name = "FORMAT")]
@@ -169,13 +177,21 @@ fn index_options(root: &std::path::Path, cli: &Cli) -> IndexOptions {
         lang_filter: cli.lang.clone(),
         respect_gitignore: true,
         use_tantivy: cli.tantivy,
-        embed_lines: cli.embed,
-        embed_backend: if cli.cloud_embed {
-            ast_sgrep_core::EmbedBackend::Cloud
-        } else {
-            ast_sgrep_core::EmbedBackend::Local
-        },
+        embed_semantic: !cli.no_embed,
+        embed_backend: embed_backend_from_cli(cli),
         force_reindex: false,
+    }
+}
+
+fn embed_backend_from_cli(cli: &Cli) -> ast_sgrep_core::EmbedBackend {
+    if cli.cloud_embed {
+        ast_sgrep_core::EmbedBackend::Cloud
+    } else if cli.ollama_embed {
+        ast_sgrep_core::EmbedBackend::Ollama
+    } else if cli.semantic_only {
+        ast_sgrep_core::EmbedBackend::Semantic
+    } else {
+        ast_sgrep_core::EmbedBackend::Auto
     }
 }
 
@@ -185,9 +201,11 @@ fn search_options(root: &std::path::Path, cli: &Cli) -> SearchOptions {
         index_path: cli.index_path.clone(),
         limit: cli.limit.unwrap_or_else(SearchOptions::default_limit),
         lang_filter: cli.lang.clone(),
-        use_embed: cli.embed,
+        use_embed: !cli.no_embed,
         use_tantivy: cli.tantivy,
         use_cloud_embed: cli.cloud_embed,
+        use_ollama_embed: cli.ollama_embed,
+        use_semantic_only: cli.semantic_only,
     }
 }
 
@@ -255,4 +273,5 @@ fn print_status(status: &ast_sgrep_core::IndexStatus) {
     println!("Symbols: {}", status.symbol_count);
     println!("Callers: {}", status.caller_count);
     println!("Imports: {}", status.import_count);
+    println!("Semantic chunks: {}", status.semantic_chunk_count);
 }

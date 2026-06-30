@@ -13,7 +13,7 @@ fn fixture() -> PathBuf {
         .expect("fixture")
 }
 
-fn indexed_searcher(embed: bool) -> (TempDir, Searcher) {
+fn indexed_searcher(no_embed: bool) -> (TempDir, Searcher) {
     let temp = TempDir::new().unwrap();
     let index_path = temp.path().join("index.db");
     let root = fixture();
@@ -21,7 +21,8 @@ fn indexed_searcher(embed: bool) -> (TempDir, Searcher) {
     let mut indexer = Indexer::new(IndexOptions {
         root: root.clone(),
         index_path: Some(index_path.clone()),
-        embed_lines: embed,
+        embed_semantic: !no_embed,
+        force_reindex: true,
         ..IndexOptions::default()
     })
     .unwrap();
@@ -32,9 +33,11 @@ fn indexed_searcher(embed: bool) -> (TempDir, Searcher) {
         index_path: Some(index_path),
         limit: 32,
         lang_filter: None,
-        use_embed: embed,
+        use_embed: !no_embed,
         use_tantivy: false,
         use_cloud_embed: false,
+        use_ollama_embed: false,
+        use_semantic_only: false,
     })
     .unwrap();
 
@@ -151,23 +154,25 @@ fn lang_filter_removes_stale_files_from_index() {
 }
 
 #[test]
-fn embed_pass_empty_without_indexed_embeddings() {
+fn embed_pass_runs_by_default() {
     let (_temp, searcher) = indexed_searcher(false);
-    let response = searcher.search("auth refresh").unwrap();
+    let response = searcher.search("credential renewal").unwrap();
     assert!(
-        !response.hits.iter().any(|h| h.kind == HitKind::Embed),
-        "embeddings not stored without --embed at index time"
+        response.hits.iter().any(|h| h.kind == HitKind::Embed)
+            || response.hits.iter().any(|h| {
+                h.excerpt.contains("auth_refresh") || h.excerpt.contains("authRefresh")
+            }),
+        "semantic embed or hybrid hits expected by default"
     );
 }
 
 #[test]
-fn embed_pass_runs_when_indexed_with_embed() {
+fn embed_pass_empty_when_disabled() {
     let (_temp, searcher) = indexed_searcher(true);
-    let response = searcher.search("auth refresh").unwrap();
+    let response = searcher.search("credential renewal").unwrap();
     assert!(
-        response.hits.iter().any(|h| h.kind == HitKind::Embed)
-            || !response.hits.is_empty(),
-        "embed or hybrid hits expected"
+        !response.hits.iter().any(|h| h.kind == HitKind::Embed),
+        "embed pass should be off with --no-embed"
     );
 }
 
@@ -194,6 +199,8 @@ fn lexical_sidecar_search_works() {
         use_embed: false,
         use_tantivy: true,
         use_cloud_embed: false,
+        use_ollama_embed: false,
+        use_semantic_only: false,
     })
     .unwrap();
 

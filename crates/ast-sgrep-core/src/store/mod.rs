@@ -57,4 +57,5 @@ pub struct IndexStatus {
     pub symbol_count: usize,
     pub caller_count: usize,
     pub import_count: usize,
+    pub semantic_chunk_count: usize,
 }
