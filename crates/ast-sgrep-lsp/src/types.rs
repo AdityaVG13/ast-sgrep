@@ -146,6 +146,21 @@ pub struct TextDocumentContentChangeEvent {
     pub text: String,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct DidOpenTextDocumentParams {
+    #[serde(rename = "textDocument")]
+    pub text_document: TextDocumentItem,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct TextDocumentItem {
+    pub uri: String,
+    #[serde(rename = "languageId", default)]
+    pub language_id: Option<String>,
+    pub version: i32,
+    pub text: String,
+}
+
 /// LSP SymbolKind for functions.
 pub const SYMBOL_KIND_FUNCTION: u32 = 12;
 /// LSP SymbolKind for methods.

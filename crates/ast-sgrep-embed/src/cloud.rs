@@ -80,6 +80,7 @@ pub fn rank_by_vector(
 ) -> Vec<(f32, String, u32, String)> {
     let mut scored: Vec<(f32, String, u32, String)> = lines
         .iter()
+        .filter(|(_, _, _, emb)| emb.len() == query_vec.len())
         .map(|(file, line_no, content, emb)| {
             let sim = cosine_similarity(query_vec, emb);
             (sim, file.clone(), *line_no, content.clone())
@@ -90,15 +91,10 @@ pub fn rank_by_vector(
 }
 
 fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
-    let len = a.len().min(b.len());
-    if len == 0 {
+    if a.len() != b.len() || a.is_empty() {
         return 0.0;
     }
-    a.iter()
-        .zip(b.iter())
-        .take(len)
-        .map(|(x, y)| x * y)
-        .sum()
+    a.iter().zip(b.iter()).map(|(x, y)| x * y).sum()
 }
 
 #[cfg(test)]

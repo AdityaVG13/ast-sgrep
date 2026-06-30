@@ -139,3 +139,31 @@ fn embedding_dim_mismatch_scores_zero() {
     );
     assert!(sim.is_empty(), "dimension mismatch must not produce hits");
 }
+
+#[test]
+fn gitignore_star_patterns_work() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path().to_path_buf();
+    std::fs::write(root.join(".gitignore"), "*.pyc\n").unwrap();
+    std::fs::write(root.join("keep.py"), "print('ok')\n").unwrap();
+    std::fs::write(root.join("skip.pyc"), "compiled\n").unwrap();
+
+    let mut indexer = Indexer::new(IndexOptions {
+        root: root.clone(),
+        index_path: Some(temp.path().join("index.db")),
+        force_reindex: true,
+        ..IndexOptions::default()
+    })
+    .unwrap();
+    let stats = indexer.index_all().unwrap();
+    assert!(stats.files_indexed >= 1);
+    let paths = indexer.store().all_file_paths().unwrap();
+    assert!(paths.iter().any(|p| p.ends_with("keep.py")));
+    assert!(!paths.iter().any(|p| p.ends_with("skip.pyc")));
+}
+
+#[test]
+fn embed_from_bytes_rejects_trailing_bytes() {
+    let bad = vec![0u8, 0u8, 0u8];
+    assert!(ast_sgrep_embed::embed_from_bytes(&bad).is_err());
+}

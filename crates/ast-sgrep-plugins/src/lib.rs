@@ -34,7 +34,8 @@ impl OutputFormat {
 /// Format a search response for the chosen integration.
 pub fn format_response(response: &SearchResponse, format: OutputFormat) -> serde_json::Value {
     match format {
-        OutputFormat::Native => serde_json::to_value(response).unwrap_or_default(),
+        OutputFormat::Native => serde_json::to_value(response)
+            .unwrap_or_else(|e| serde_json::json!({ "error": e.to_string() })),
         OutputFormat::GitHub => github::to_github_json(response),
         OutputFormat::GitLab => gitlab::to_gitlab_json(response),
         OutputFormat::Agent => agent::to_agent_json(response),

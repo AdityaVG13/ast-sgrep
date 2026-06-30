@@ -38,11 +38,14 @@ pub fn embed_to_bytes(vec: &[f32]) -> Vec<u8> {
 }
 
 /// Deserialize embedding from bytes.
-pub fn embed_from_bytes(bytes: &[u8]) -> Vec<f32> {
-    bytes
+pub fn embed_from_bytes(bytes: &[u8]) -> Result<Vec<f32>, &'static str> {
+    if bytes.len() % 4 != 0 {
+        return Err("embedding byte length is not a multiple of 4");
+    }
+    Ok(bytes
         .chunks_exact(4)
         .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
-        .collect()
+        .collect())
 }
 
 /// A semantic chunk candidate for ranking.

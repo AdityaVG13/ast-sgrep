@@ -17,6 +17,11 @@ impl OllamaEmbeddingConfig {
         if std::env::var("ASGREP_NO_OLLAMA").ok().as_deref() == Some("1") {
             return None;
         }
+        let explicit = std::env::var("ASGREP_OLLAMA_EMBED").ok().as_deref() == Some("1");
+        let url_set = std::env::var("ASGREP_OLLAMA_URL").is_ok();
+        if !explicit && !url_set {
+            return None;
+        }
         let api_url = std::env::var("ASGREP_OLLAMA_URL")
             .unwrap_or_else(|_| "http://127.0.0.1:11434".to_string());
         let model = std::env::var("ASGREP_OLLAMA_MODEL")

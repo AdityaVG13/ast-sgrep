@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
 use ast_sgrep_core::store::SymbolRow;
@@ -10,6 +10,9 @@ use ast_sgrep_core::{IndexOptions, Indexer, SearchOptions, Searcher};
 use serde_json::{json, Value};
 
 use crate::settings::AsgrepSettings;
+use crate::uri::{self};
+
+pub use uri::{path_to_file_uri as path_to_uri, uri_to_rel_path};
 
 use crate::types::{
     CallHierarchyItem, DocumentSymbolParams, ExecuteCommandParams, Position, Range,
@@ -23,16 +26,19 @@ pub struct LspBackend {
     settings: AsgrepSettings,
     index_ready: Arc<AtomicBool>,
     index_thread: Option<JoinHandle<()>>,
+    index_lock: Arc<Mutex<()>>,
 }
 
 impl LspBackend {
     pub fn new(root: PathBuf) -> Self {
+        let root = crate::uri::canonicalize_workspace_root(root);
         Self {
             root,
             index_path: None,
             settings: AsgrepSettings::default(),
             index_ready: Arc::new(AtomicBool::new(false)),
             index_thread: None,
+            index_lock: Arc::new(Mutex::new(())),
         }
     }
 
@@ -83,10 +89,18 @@ impl LspBackend {
         }
         let opts = self.index_options();
         let ready = Arc::clone(&self.index_ready);
+        let lock = Arc::clone(&self.index_lock);
         self.index_thread = Some(std::thread::spawn(move || {
+            let _guard = match lock.lock() {
+                Ok(g) => g,
+                Err(_) => return,
+            };
             let ok = Indexer::new(opts)
                 .and_then(|mut indexer| indexer.index_all().map(|_| ()))
                 .is_ok();
+            if !ok {
+                crate::server::log("background index failed");
+            }
             if ok {
                 ready.store(true, Ordering::SeqCst);
             }
@@ -94,12 +108,20 @@ impl LspBackend {
     }
 
     pub fn ensure_index(&self) -> anyhow::Result<()> {
+        let _guard = self
+            .index_lock
+            .lock()
+            .map_err(|e| anyhow::anyhow!("index lock poisoned: {e}"))?;
         let mut indexer = Indexer::new(self.index_options())?;
         indexer.index_all()?;
         Ok(())
     }
 
     pub fn reindex_file(&self, rel_path: &str) -> anyhow::Result<()> {
+        let _guard = self
+            .index_lock
+            .lock()
+            .map_err(|e| anyhow::anyhow!("index lock poisoned: {e}"))?;
         let abs = self.root.join(rel_path);
         if abs.is_file() {
             let mut indexer = Indexer::new(self.index_options())?;
@@ -108,11 +130,25 @@ impl LspBackend {
         Ok(())
     }
 
+    pub fn index_content(&self, rel_path: &str, content: &str) -> anyhow::Result<()> {
+        let _guard = self
+            .index_lock
+            .lock()
+            .map_err(|e| anyhow::anyhow!("index lock poisoned: {e}"))?;
+        let mut indexer = Indexer::new(self.index_options())?;
+        indexer.index_content(rel_path, content)?;
+        Ok(())
+    }
+
     pub fn apply_document_changes(
         &self,
         uri: &str,
         changes: &[TextDocumentContentChangeEvent],
     ) -> anyhow::Result<()> {
+        let _guard = self
+            .index_lock
+            .lock()
+            .map_err(|e| anyhow::anyhow!("index lock poisoned: {e}"))?;
         let rel = uri_to_rel_path(uri, &self.root)?;
         let mut content = {
             let indexer = Indexer::new(self.index_options())?;
@@ -124,8 +160,8 @@ impl LspBackend {
         };
 
         for change in changes {
-            if let Some(range) = &change.range {
-                content = apply_text_edit(&content, range, &change.text);
+            if change.range.is_some() {
+                content = apply_text_edit(&content, change);
             } else {
                 content = change.text.clone();
             }
@@ -390,12 +426,13 @@ impl LspBackend {
 
 /// Convert LSP UTF-16 code unit offset to byte offset within a line.
 pub fn utf16_char_to_byte(line: &str, utf16_offset: u32) -> usize {
-    let mut utf16_count = 0u32;
+    let mut utf16 = 0u32;
     for (byte_idx, ch) in line.char_indices() {
-        if utf16_count >= utf16_offset {
+        let units = ch.len_utf16() as u32;
+        if utf16_offset < utf16 + units {
             return byte_idx;
         }
-        utf16_count += ch.len_utf16() as u32;
+        utf16 += units;
     }
     line.len()
 }
@@ -497,17 +534,38 @@ fn symbol_tightness(sym: &SymbolRow, _line_no: u32, byte_in_line: usize) -> (u32
     (line_span, sym.byte_end.saturating_sub(sym.byte_start))
 }
 
-fn apply_text_edit(content: &str, range: &Range, new_text: &str) -> String {
+fn apply_text_edit(content: &str, change: &TextDocumentContentChangeEvent) -> String {
+    let range = match &change.range {
+        Some(r) => r,
+        None => return change.text.clone(),
+    };
     let start = lsp_position_to_byte_offset(content, &range.start);
-    let end = lsp_position_to_byte_offset(content, &range.end);
+    let end = if let Some(len) = change.range_length {
+        utf16_span_to_byte_end(content, &range.start, len)
+    } else {
+        lsp_position_to_byte_offset(content, &range.end)
+    };
     if start > end || end > content.len() {
         return content.to_string();
     }
-    let mut out = String::with_capacity(content.len().saturating_add(new_text.len()));
+    let mut out = String::with_capacity(content.len().saturating_add(change.text.len()));
     out.push_str(&content[..start]);
-    out.push_str(new_text);
+    out.push_str(&change.text);
     out.push_str(&content[end..]);
     out
+}
+
+fn utf16_span_to_byte_end(content: &str, start: &Position, utf16_len: u32) -> usize {
+    let start_byte = lsp_position_to_byte_offset(content, start);
+    let tail = &content[start_byte..];
+    let mut utf16 = 0u32;
+    for (byte_idx, ch) in tail.char_indices() {
+        utf16 += ch.len_utf16() as u32;
+        if utf16 >= utf16_len {
+            return start_byte + byte_idx + ch.len_utf8();
+        }
+    }
+    content.len()
 }
 
 fn lsp_position_to_byte_offset(content: &str, pos: &Position) -> usize {
@@ -522,40 +580,6 @@ fn lsp_position_to_byte_offset(content: &str, pos: &Position) -> usize {
         line_no += 1;
     }
     content.len()
-}
-
-pub fn path_to_uri(path: &Path) -> String {
-    let path_str = path.to_string_lossy().replace('\\', "/");
-    if path_str.starts_with('/') {
-        format!("file://{path_str}")
-    } else {
-        format!("file:///{path_str}")
-    }
-}
-
-pub fn uri_to_rel_path(uri: &str, root: &Path) -> anyhow::Result<String> {
-    let path_str = uri
-        .strip_prefix("file://")
-        .or_else(|| uri.strip_prefix("file:///"))
-        .unwrap_or(uri);
-    let path = PathBuf::from(path_str);
-    let canonical_root = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
-    let abs = if path.is_absolute() {
-        path
-    } else {
-        canonical_root.join(path)
-    };
-    let canonical_abs = std::fs::canonicalize(&abs).unwrap_or(abs);
-    if !canonical_abs.starts_with(&canonical_root) {
-        anyhow::bail!("document URI outside workspace root");
-    }
-    let rel = canonical_abs
-        .strip_prefix(&canonical_root)
-        .map_err(|_| anyhow::anyhow!("document URI outside workspace root"))?;
-    if rel.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
-        anyhow::bail!("path traversal in document URI");
-    }
-    Ok(rel.to_string_lossy().replace('\\', "/"))
 }
 
 fn extract_identifier_at(line: &str, byte_offset: usize) -> Option<String> {
@@ -615,6 +639,46 @@ mod tests {
     }
 
     #[test]
+    fn utf16_offset_handles_emoji_interior() {
+        let line = "🙂abc";
+        let emoji_byte = utf16_char_to_byte(line, 0);
+        let interior = utf16_char_to_byte(line, 1);
+        assert_eq!(emoji_byte, interior);
+        assert_eq!(utf16_char_to_byte(line, 2), "🙂".len());
+    }
+
+    #[test]
+    fn apply_incremental_text_edit() {
+        let content = "fn main() {\n    old();\n}\n";
+        let change = TextDocumentContentChangeEvent {
+            range: Some(Range {
+                start: Position { line: 1, character: 4 },
+                end: Position { line: 1, character: 7 },
+            }),
+            range_length: None,
+            text: "new".to_string(),
+        };
+        let edited = apply_text_edit(content, &change);
+        assert!(edited.contains("new();"));
+        assert!(!edited.contains("old();"));
+    }
+
+    #[test]
+    fn apply_edit_honors_range_length() {
+        let content = "fn main() {\n    old();\n}\n";
+        let change = TextDocumentContentChangeEvent {
+            range: Some(Range {
+                start: Position { line: 1, character: 4 },
+                end: Position { line: 1, character: 4 },
+            }),
+            range_length: Some(3),
+            text: "new".to_string(),
+        };
+        let edited = apply_text_edit(content, &change);
+        assert!(edited.contains("new();"));
+    }
+
+    #[test]
     fn extracts_identifier_at_cursor() {
         let line = "    process_request(\"x\");";
         assert_eq!(
@@ -636,17 +700,5 @@ mod tests {
         let root = std::fs::canonicalize("/tmp").unwrap_or_else(|_| PathBuf::from("/tmp"));
         let evil = format!("file://{}/../etc/passwd", root.display());
         assert!(uri_to_rel_path(&evil, &root).is_err());
-    }
-
-    #[test]
-    fn apply_incremental_text_edit() {
-        let content = "fn main() {\n    old();\n}\n";
-        let range = Range {
-            start: Position { line: 1, character: 4 },
-            end: Position { line: 1, character: 7 },
-        };
-        let edited = apply_text_edit(content, &range, "new");
-        assert!(edited.contains("new();"));
-        assert!(!edited.contains("old();"));
     }
 }

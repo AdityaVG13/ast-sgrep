@@ -177,7 +177,7 @@ fn push_legacy_row(
         line_no,
         symbol.unwrap_or_default(),
         content,
-        ast_sgrep_embed::embed_from_bytes(&vector),
+        ast_sgrep_embed::embed_from_bytes(&vector).unwrap_or_default(),
     ));
     Ok(())
 }

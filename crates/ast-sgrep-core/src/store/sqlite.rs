@@ -291,10 +291,10 @@ impl IndexStore {
         }
 
         if embed_semantic && !semantic_chunks.is_empty() {
-            let name_to_id: HashMap<&str, i64> = symbols
+            let name_to_id: HashMap<String, i64> = symbols
                 .iter()
                 .zip(symbol_ids.iter())
-                .map(|(sym, id)| (sym.name.as_str(), *id))
+                .map(|(sym, id)| (format!("{}:{}", sym.name, sym.line_start), *id))
                 .collect();
             let mut chunk_stmt = self.conn.prepare(
                 "INSERT INTO semantic_chunks(
@@ -304,7 +304,8 @@ impl IndexStore {
             let mut embed_dim: Option<usize> = None;
             let mut backend_kind: Option<ast_sgrep_embed::EmbedBackendKind> = None;
             for chunk in semantic_chunks {
-                let symbol_id = name_to_id.get(chunk.symbol_name.as_str()).copied();
+                let key = format!("{}:{}", chunk.symbol_name, chunk.line_start);
+                let symbol_id = name_to_id.get(&key).copied();
                 let text = crate::semantic_chunk::render_chunk_text(chunk);
                 let result = ast_sgrep_embed::embed_with_chain(&text, embed_backend);
                 embed_dim = Some(result.vector.len());
@@ -637,7 +638,7 @@ fn read_semantic_chunk_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ast_sgre
         line_end,
         symbol,
         excerpt,
-        ast_sgrep_embed::embed_from_bytes(&vector),
+        ast_sgrep_embed::embed_from_bytes(&vector).unwrap_or_default(),
     ))
 }
 

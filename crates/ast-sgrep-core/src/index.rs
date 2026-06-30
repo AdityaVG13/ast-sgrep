@@ -71,6 +71,8 @@ pub struct IndexStats {
     pub files_indexed: usize,
     pub files_skipped: usize,
     pub files_removed: usize,
+    pub files_failed: usize,
+    pub walk_errors: bool,
     pub symbols_extracted: usize,
     pub callers_extracted: usize,
     pub imports_extracted: usize,
@@ -94,7 +96,11 @@ pub struct Indexer {
 }
 
 impl Indexer {
-    pub fn new(options: IndexOptions) -> Result<Self> {
+    pub fn new(mut options: IndexOptions) -> Result<Self> {
+        options.root = options
+            .root
+            .canonicalize()
+            .unwrap_or(options.root.clone());
         let store = IndexStore::open(&options.root, options.index_path.as_deref())?;
         store.set_meta("root", &options.root.display().to_string())?;
         let ignore_patterns = if options.respect_gitignore {
@@ -117,6 +123,7 @@ impl Indexer {
     pub fn index_all(&mut self) -> Result<IndexStats> {
         let mut stats = IndexStats::default();
         let mut seen_paths = HashSet::new();
+        let mut walk_errors = false;
 
         for entry in WalkDir::new(&self.options.root)
             .follow_links(false)
@@ -125,7 +132,11 @@ impl Indexer {
         {
             let entry = match entry {
                 Ok(e) => e,
-                Err(_) => continue,
+                Err(e) => {
+                    eprintln!("[asgrep] walk error: {e}");
+                    walk_errors = true;
+                    continue;
+                }
             };
             if !entry.file_type().is_file() {
                 continue;
@@ -160,17 +171,21 @@ impl Indexer {
                         stats.imports_extracted += file_stats.imports;
                     }
                 }
-                Err(_) => {
-                    stats.files_skipped += 1;
+                Err(e) => {
+                    eprintln!("[asgrep] failed to index {rel_str}: {e}");
+                    stats.files_failed += 1;
                 }
             }
         }
 
-        let indexed = self.store.all_file_paths()?;
-        for path in indexed {
-            if !seen_paths.contains(&path) {
-                self.store.remove_file(&path)?;
-                stats.files_removed += 1;
+        stats.walk_errors = walk_errors;
+        if !walk_errors {
+            let indexed = self.store.all_file_paths()?;
+            for path in indexed {
+                if !seen_paths.contains(&path) {
+                    self.store.remove_file(&path)?;
+                    stats.files_removed += 1;
+                }
             }
         }
 
@@ -273,43 +288,44 @@ impl Indexer {
         let lines = split_content_lines(content);
 
         let (symbols, callers, imports) = if let Some(lang) = language {
-            match self.parsers.parse(lang, content) {
-                Ok(extraction) => {
-                    let symbols: Vec<SymbolRow> = extraction
-                        .symbols
-                        .iter()
-                        .map(|s| SymbolRow {
-                            name: s.name.clone(),
-                            kind: format!("{:?}", s.kind).to_lowercase(),
-                            line_start: s.line_start,
-                            line_end: s.line_end,
-                            byte_start: s.byte_start,
-                            byte_end: s.byte_end,
-                        })
-                        .collect();
-                    let callers: Vec<CallerRow> = extraction
-                        .calls
-                        .iter()
-                        .map(|c| CallerRow {
-                            caller: c.caller.clone(),
-                            callee: c.callee.clone(),
-                            line_no: c.line,
-                            byte_start: c.byte_start,
-                            byte_end: c.byte_end,
-                        })
-                        .collect();
-                    let imports: Vec<ImportRow> = extraction
-                        .imports
-                        .iter()
-                        .map(|i| ImportRow {
-                            module_path: i.module_path.clone(),
-                            line_no: i.line,
-                        })
-                        .collect();
-                    (symbols, callers, imports)
-                }
-                Err(_) => (Vec::new(), Vec::new(), Vec::new()),
-            }
+            let extraction = self.parsers.parse(lang, content).map_err(|e| {
+                crate::StoreError::Other(format!(
+                    "failed to parse {rel_path} as {}: {e}",
+                    lang.as_str()
+                ))
+            })?;
+            let symbols: Vec<SymbolRow> = extraction
+                .symbols
+                .iter()
+                .map(|s| SymbolRow {
+                    name: s.name.clone(),
+                    kind: format!("{:?}", s.kind).to_lowercase(),
+                    line_start: s.line_start,
+                    line_end: s.line_end,
+                    byte_start: s.byte_start,
+                    byte_end: s.byte_end,
+                })
+                .collect();
+            let callers: Vec<CallerRow> = extraction
+                .calls
+                .iter()
+                .map(|c| CallerRow {
+                    caller: c.caller.clone(),
+                    callee: c.callee.clone(),
+                    line_no: c.line,
+                    byte_start: c.byte_start,
+                    byte_end: c.byte_end,
+                })
+                .collect();
+            let imports: Vec<ImportRow> = extraction
+                .imports
+                .iter()
+                .map(|i| ImportRow {
+                    module_path: i.module_path.clone(),
+                    line_no: i.line,
+                })
+                .collect();
+            (symbols, callers, imports)
         } else {
             (Vec::new(), Vec::new(), Vec::new())
         };
@@ -430,26 +446,29 @@ fn load_ignore_patterns(root: &Path) -> Vec<String> {
 fn is_ignored(rel: &Path, patterns: &[String]) -> bool {
     let rel_str = rel.to_string_lossy().replace('\\', "/");
     for pattern in patterns {
-        let pat = pattern.trim_end_matches('/');
-        if pat.contains('*') {
-            if simple_glob_match(pat, &rel_str) {
-                return true;
-            }
-        } else if rel_str == pat || rel_str.starts_with(&format!("{pat}/")) {
+        if glob_matches(pattern.trim(), &rel_str) {
             return true;
         }
     }
     false
 }
 
-fn simple_glob_match(pattern: &str, text: &str) -> bool {
-    if let Some(prefix) = pattern.strip_suffix('*') {
-        return text.starts_with(prefix)
-            || text
-                .split('/')
-                .any(|segment| segment.starts_with(prefix));
+fn glob_matches(pattern: &str, text: &str) -> bool {
+    let pat = pattern.trim_end_matches('/');
+    if pat.contains("**/") {
+        if let Some(rest) = pat.split("**/").nth(1) {
+            return glob_matches(rest, text)
+                || text.split('/').any(|seg| glob_matches(rest, seg));
+        }
     }
-    pattern == text
+    if let Some(suffix) = pat.strip_prefix('*') {
+        return text.ends_with(suffix) || text.split('/').any(|seg| seg.ends_with(suffix));
+    }
+    if let Some(prefix) = pat.strip_suffix('*') {
+        return text.starts_with(prefix)
+            || text.split('/').any(|seg| seg.starts_with(prefix));
+    }
+    text == pat || text.starts_with(&format!("{pat}/"))
 }
 
 /// Load additional ignore patterns from .asgrepignore
@@ -463,5 +482,21 @@ pub fn load_asgrepignore(root: &Path) -> Vec<String> {
             .collect()
     } else {
         Vec::new()
+    }
+}
+
+#[cfg(test)]
+mod glob_tests {
+    use super::glob_matches;
+
+    #[test]
+    fn star_suffix_matches_extension() {
+        assert!(glob_matches("*.pyc", "foo/bar.pyc"));
+        assert!(!glob_matches("*.pyc", "foo/bar.py"));
+    }
+
+    #[test]
+    fn double_star_prefix() {
+        assert!(glob_matches("**/*.log", "deep/nested/app.log"));
     }
 }

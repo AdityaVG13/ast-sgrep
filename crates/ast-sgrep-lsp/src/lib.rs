@@ -5,6 +5,8 @@ pub mod server;
 pub mod settings;
 pub mod transport;
 pub mod types;
+pub mod uri;
 
 pub use backend::LspBackend;
 pub use server::LspServer;
+pub use uri::path_to_file_uri;

@@ -11,6 +11,7 @@ use crate::types::{
     ExecuteCommandParams, InitializeParams, NotificationMessage, ReferenceParams, RequestMessage,
     TextDocumentPositionParams, WorkspaceSymbolParams,
 };
+use crate::uri::{canonicalize_workspace_root, file_uri_to_path};
 
 pub struct LspServer {
     backend: Option<LspBackend>,
@@ -47,7 +48,14 @@ impl LspServer {
         let result = self.dispatch(&req.method, &req.params);
         match result {
             Ok(value) => send_response(stdout, &req.id, value)?,
-            Err(e) => send_error(stdout, &req.id, -32603, &e.to_string())?,
+            Err(e) => {
+                let code = if e.to_string().contains("not found") {
+                    -32601
+                } else {
+                    -32603
+                };
+                send_error(stdout, &req.id, code, &e.to_string())?;
+            }
         }
         Ok(())
     }
@@ -55,10 +63,24 @@ impl LspServer {
     fn handle_notification(&mut self, notif: NotificationMessage) -> io::Result<()> {
         match notif.method.as_str() {
             "initialized" => {}
+            "textDocument/didOpen" => {
+                if let Some(backend) = &self.backend {
+                    if let Ok(params) =
+                        serde_json::from_value::<crate::types::DidOpenTextDocumentParams>(notif.params)
+                    {
+                        if let Ok(rel) = crate::uri::uri_to_rel_path(
+                            &params.text_document.uri,
+                            backend.root(),
+                        ) {
+                            let _ = backend.index_content(&rel, &params.text_document.text);
+                        }
+                    }
+                }
+            }
             "textDocument/didSave" => {
                 if let Some(backend) = &self.backend {
                     if let Ok(params) = serde_json::from_value::<crate::types::DidSaveTextDocumentParams>(notif.params) {
-                        if let Ok(rel) = crate::backend::uri_to_rel_path(
+                        if let Ok(rel) = crate::uri::uri_to_rel_path(
                             &params.text_document.uri,
                             backend.root(),
                         ) {
@@ -89,7 +111,7 @@ impl LspServer {
         match method {
             "initialize" => {
                 let params: InitializeParams = serde_json::from_value(params.clone())?;
-                let root = resolve_root(&params);
+                let root = canonicalize_workspace_root(resolve_root(&params));
                 let mut backend = LspBackend::new(root);
                 if let Some(ref opts) = params.initialization_options {
                     backend.apply_settings(crate::settings::AsgrepSettings::from_initialization_options(opts));
@@ -147,7 +169,7 @@ impl LspServer {
                 let params: ExecuteCommandParams = serde_json::from_value(params.clone())?;
                 backend.execute_command(&params)
             }
-            _ => Ok(Value::Null),
+            other => Err(anyhow::anyhow!("Method not found: {other}")),
         }
     }
 
@@ -161,13 +183,13 @@ impl LspServer {
 fn resolve_root(params: &InitializeParams) -> std::path::PathBuf {
     if let Some(folders) = &params.workspace_folders {
         if let Some(first) = folders.first() {
-            if let Ok(p) = uri_to_path(&first.uri) {
+            if let Ok(p) = file_uri_to_path(&first.uri) {
                 return p;
             }
         }
     }
     if let Some(uri) = &params.root_uri {
-        if let Ok(p) = uri_to_path(uri) {
+        if let Ok(p) = file_uri_to_path(uri) {
             return p;
         }
     }
@@ -175,14 +197,6 @@ fn resolve_root(params: &InitializeParams) -> std::path::PathBuf {
         return std::path::PathBuf::from(path);
     }
     std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
-}
-
-fn uri_to_path(uri: &str) -> anyhow::Result<std::path::PathBuf> {
-    let stripped = uri
-        .strip_prefix("file://")
-        .or_else(|| uri.strip_prefix("file:///"))
-        .unwrap_or(uri);
-    Ok(std::path::PathBuf::from(stripped))
 }
 
 /// Log to stderr (LSP allows logging without breaking protocol).

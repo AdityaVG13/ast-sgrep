@@ -2,8 +2,8 @@
 
 use std::io::{self, BufRead, Write};
 
-/// Maximum LSP message body size (50 MB).
-pub const MAX_MESSAGE_BYTES: usize = 50 * 1024 * 1024;
+/// Maximum LSP message body size (8 MB).
+pub const MAX_MESSAGE_BYTES: usize = 8 * 1024 * 1024;
 
 /// Read one LSP message from stdin (Content-Length header + JSON body).
 pub fn read_message(reader: &mut impl BufRead) -> io::Result<Option<String>> {
