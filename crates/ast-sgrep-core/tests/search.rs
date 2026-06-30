@@ -29,18 +29,12 @@ fn polyglot_search_smoke() {
     assert_query_finds(&searcher, "defs:auth_refresh", |h| h.kind == HitKind::Def);
     assert_query_finds(&searcher, "how does auth refresh work", |_| true);
     assert_excerpt_contains(&searcher, "imports:json", "json");
-}
-
-#[test]
-fn query_modes_resolve_symbols() {
-    let (_indexed, searcher) = hybrid_searcher(false);
 
     assert_query_finds(&searcher, "callers:process_request", |h| {
         h.kind == HitKind::Caller
             && h.callee.as_deref() == Some("process_request")
             && h.caller.as_deref() == Some("main")
     });
-
     assert_query_finds(&searcher, "defs:process_request", |h| {
         h.kind == HitKind::Def && h.symbol.as_deref() == Some("process_request")
     });

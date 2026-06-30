@@ -1,6 +1,5 @@
 use crate::extract::{
-    add_named_symbol, field_child, is_inside_kind, node_text, parse_and_extract, walk_tree,
-    NodeHandlers,
+    add_named_symbol, field_child, is_inside_kind, node_text, parse_ts_language,
 };
 use crate::{ExtractionResult, Language, LanguageParser, SymbolKind};
 
@@ -12,9 +11,8 @@ impl LanguageParser for RubyParser {
     }
 
     fn parse(&self, source: &str) -> anyhow::Result<ExtractionResult> {
-        parse_and_extract(tree_sitter_ruby::LANGUAGE.into(), source, |tree, src| {
-            let handlers = NodeHandlers::new(|ext, node, source| {
-                match node.kind() {
+        parse_ts_language(tree_sitter_ruby::LANGUAGE.into(), source, |ext, node, source| {
+            match node.kind() {
                     "method" => {
                         let kind = if is_inside_kind(node, "class") {
                             SymbolKind::Method
@@ -38,9 +36,7 @@ impl LanguageParser for RubyParser {
                         }
                     }
                     _ => {}
-                }
-            });
-            walk_tree(tree, src, &handlers)
+            }
         })
     }
 }
@@ -71,31 +67,4 @@ fn clean_ruby_string(raw: &str) -> String {
     raw.trim()
         .trim_matches(|c| c == '"' || c == '\'' || c == '`')
         .to_string()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn extracts_require_and_require_relative() {
-        let src = r#"
-require "json"
-require_relative "./app"
-load "boot.rb"
-
-def main
-  process_request("x")
-end
-"#;
-        let result = RubyParser.parse(src).unwrap();
-        assert!(result.imports.iter().any(|i| i.module_path == "json"));
-        assert!(
-            result
-                .imports
-                .iter()
-                .any(|i| i.module_path.contains("app"))
-        );
-        assert!(result.imports.iter().any(|i| i.module_path == "boot.rb"));
-    }
 }

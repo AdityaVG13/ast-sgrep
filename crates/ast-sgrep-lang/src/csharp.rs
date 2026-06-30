@@ -16,7 +16,7 @@ impl LanguageParser for CSharpParser {
         )?;
         let call_re = Regex::new(r"(\w+)\s*\(")?;
         let using_re = Regex::new(r"(?m)^\s*using\s+([\w.]+)\s*;")?;
-        let line_starts = line_start_offsets(source);
+        let line_starts = crate::extract::line_start_offsets(source);
 
         let mut result = ExtractionResult::default();
         let mut current_fn: Option<String> = None;
@@ -76,16 +76,6 @@ impl LanguageParser for CSharpParser {
         }
         Ok(result)
     }
-}
-
-fn line_start_offsets(source: &str) -> Vec<usize> {
-    let mut starts = vec![0];
-    for (i, b) in source.bytes().enumerate() {
-        if b == b'\n' {
-            starts.push(i + 1);
-        }
-    }
-    starts
 }
 
 fn line_byte_span(line_starts: &[usize], line_no: u32, source_len: usize) -> (usize, usize) {

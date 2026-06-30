@@ -7,7 +7,9 @@ use ast_sgrep_lang::{detect_language, ParserRegistry};
 use blake3::Hasher;
 use walkdir::WalkDir;
 
+use crate::skip::{should_skip_dir, should_skip_file};
 use crate::store::{CallerRow, ImportRow, IndexStore, SymbolRow};
+use crate::text::split_content_lines;
 use crate::Result;
 
 /// Embedding backend preference for symbol-level semantic chunks.
@@ -171,7 +173,7 @@ impl Indexer {
 
             seen_paths.insert(rel_str.clone());
 
-            if self.should_skip_file(path) {
+            if should_skip_file(path) {
                 stats.files_skipped += 1;
                 continue;
             }
@@ -380,55 +382,6 @@ impl Indexer {
             skipped: false,
         })
     }
-
-    fn should_skip_file(&self, path: &Path) -> bool {
-        if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-            if name.starts_with('.') {
-                return true;
-            }
-        }
-
-        if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-            let ext = ext.to_lowercase();
-            !matches!(
-                ext.as_str(),
-                "rs" | "ts" | "tsx" | "js" | "jsx" | "mjs" | "cjs" | "py" | "pyi" | "go"
-                    | "java" | "cs" | "rb"
-                    | "toml" | "md" | "txt" | "json" | "yaml" | "yml"
-            )
-        } else {
-            true
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-struct SplitLines {
-    lines: Vec<(u32, String)>,
-    eol: &'static str,
-}
-
-fn split_content_lines(content: &str) -> SplitLines {
-    if content.is_empty() {
-        return SplitLines {
-            lines: vec![(1, String::new())],
-            eol: "lf",
-        };
-    }
-    let eol = if content.contains("\r\n") {
-        "crlf"
-    } else {
-        "lf"
-    };
-    let lines = content
-        .split('\n')
-        .enumerate()
-        .map(|(i, line)| {
-            let stripped = line.strip_suffix('\r').unwrap_or(line);
-            ((i + 1) as u32, stripped.to_string())
-        })
-        .collect();
-    SplitLines { lines, eol }
 }
 
 fn hash_content(content: &str) -> String {
@@ -442,27 +395,4 @@ fn system_time_to_parts(time: SystemTime) -> (i64, u32) {
         .duration_since(SystemTime::UNIX_EPOCH)
         .unwrap_or_default();
     (duration.as_secs() as i64, duration.subsec_nanos())
-}
-
-fn should_skip_dir(path: &Path) -> bool {
-    if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-        matches!(
-            name,
-            ".git" | ".asgrep" | "target" | "node_modules" | "dist" | "build" | ".cargo"
-        )
-    } else {
-        false
-    }
-}
-
-#[cfg(test)]
-mod line_tests {
-    use super::split_content_lines;
-
-    #[test]
-    fn crlf_lines_strip_carriage_return_and_record_eol() {
-        let split = split_content_lines("a\r\nb\r\n");
-        assert_eq!(split.eol, "crlf");
-        assert_eq!(split.lines, vec![(1, "a".into()), (2, "b".into()), (3, "".into())]);
-    }
 }

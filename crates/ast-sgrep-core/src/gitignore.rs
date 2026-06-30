@@ -52,9 +52,9 @@ fn collect_rules(root: &Path, rel: &Path) -> Vec<Rule> {
 }
 
 fn default_rules() -> Vec<Rule> {
-    ["target/", "node_modules/", ".git/", ".asgrep/"]
-        .into_iter()
-        .map(|p| parse_rule("", p))
+    crate::skip::DEFAULT_SKIP_DIR_NAMES
+        .iter()
+        .map(|p| parse_rule("", &format!("{p}/")))
         .collect()
 }
 

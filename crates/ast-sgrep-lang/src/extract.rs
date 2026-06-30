@@ -275,6 +275,29 @@ pub fn field_child<'a>(node: &'a Node, name: &str) -> Option<Node<'a>> {
     node.child_by_field_name(name)
 }
 
+/// Parse source with tree-sitter and run a per-node handler.
+pub fn parse_ts_language(
+    language: tree_sitter::Language,
+    source: &str,
+    on_node: impl Fn(&mut Extractor, &Node, &str) + 'static,
+) -> anyhow::Result<ExtractionResult> {
+    parse_and_extract(language, source, |tree, src| {
+        let handlers = NodeHandlers::new(on_node);
+        walk_tree(tree, src, &handlers)
+    })
+}
+
+/// Byte offsets of each line start in `source` (line 1 starts at 0).
+pub fn line_start_offsets(source: &str) -> Vec<usize> {
+    let mut offsets = vec![0];
+    for (i, b) in source.bytes().enumerate() {
+        if b == b'\n' {
+            offsets.push(i + 1);
+        }
+    }
+    offsets
+}
+
 /// Walk tree with a simple visitor and return extraction results.
 pub fn walk_tree(tree: &Tree, source: &str, handlers: &NodeHandlers) -> ExtractionResult {
     let mut extractor = Extractor::new();

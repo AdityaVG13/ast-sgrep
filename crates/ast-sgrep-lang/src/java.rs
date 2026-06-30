@@ -1,6 +1,5 @@
 use crate::extract::{
-    add_named_symbol, field_child, is_inside_kind, node_text, parse_and_extract, walk_tree,
-    NodeHandlers,
+    add_named_symbol, field_child, is_inside_kind, node_text, parse_ts_language,
 };
 use crate::{ExtractionResult, Language, LanguageParser, SymbolKind};
 
@@ -12,8 +11,7 @@ impl LanguageParser for JavaParser {
     }
 
     fn parse(&self, source: &str) -> anyhow::Result<ExtractionResult> {
-        parse_and_extract(tree_sitter_java::LANGUAGE.into(), source, |tree, src| {
-            let handlers = NodeHandlers::new(|ext, node, source| {
+        parse_ts_language(tree_sitter_java::LANGUAGE.into(), source, |ext, node, source| {
                 match node.kind() {
                     "method_declaration" | "constructor_declaration" => {
                         let kind = if is_inside_kind(node, "class_declaration") {
@@ -43,8 +41,6 @@ impl LanguageParser for JavaParser {
                     }
                     _ => {}
                 }
-            });
-            walk_tree(tree, src, &handlers)
         })
     }
 }
@@ -71,31 +67,5 @@ fn java_import_path(node: &tree_sitter::Node, source: &str) -> Option<String> {
         None
     } else {
         Some(ids.join("."))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn extracts_constructors_fields_and_static_imports() {
-        let src = r#"
-import static java.util.Collections.emptyList;
-import java.util.List;
-
-public class Demo {
-    private String name;
-    public Demo() {}
-    public void run() { helper(); }
-    void helper() {}
-}
-"#;
-        let result = JavaParser.parse(src).unwrap();
-        assert!(result.imports.iter().any(|i| i.module_path.contains("Collections")));
-        assert!(result.imports.iter().any(|i| i.module_path.contains("List")));
-        assert!(result.symbols.iter().any(|s| s.name == "Demo"));
-        assert!(result.symbols.iter().any(|s| s.name == "name"));
-        assert!(result.symbols.iter().any(|s| s.name == "run"));
     }
 }

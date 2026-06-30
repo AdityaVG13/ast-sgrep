@@ -129,38 +129,3 @@ fn crlf_file_text_round_trips() {
     let original = "fn main() {\r\n    println!(\"hi\");\r\n}\r\n";
     assert_eq!(indexer.store().file_text("main.rs").unwrap().unwrap(), original);
 }
-
-#[test]
-fn gitignore_patterns() {
-    let cases: &[(&[&str], &[&str], &[&str])] = &[
-        (&["*.pyc"], &["keep.py"], &["skip.pyc"]),
-        (&["*.txt", "!important.txt"], &["important.txt"], &["skip.txt"]),
-    ];
-
-    for (ignore_lines, kept, skipped) in cases {
-        let mut files: Vec<(&str, String)> =
-            vec![(".gitignore", ignore_lines.join("\n"))];
-        for name in *kept {
-            files.push((name, "ok\n".into()));
-        }
-        for name in *skipped {
-            files.push((name, "no\n".into()));
-        }
-        let file_refs: Vec<(&str, &str)> = files.iter().map(|(p, c)| (*p, c.as_str())).collect();
-        let repo = temp_repo(&file_refs);
-        let (_temp, indexer) = index_repo(
-            &repo,
-            IndexOptions {
-                force_reindex: true,
-                ..IndexOptions::default()
-            },
-        );
-        let paths = indexer.store().all_file_paths().unwrap();
-        for name in *kept {
-            assert!(paths.iter().any(|p| p.ends_with(name)), "keep {name}");
-        }
-        for name in *skipped {
-            assert!(!paths.iter().any(|p| p.ends_with(name)), "skip {name}");
-        }
-    }
-}

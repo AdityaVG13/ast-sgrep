@@ -11,8 +11,10 @@ pub mod search;
 pub mod semantic_ann;
 pub mod semantic_chunk;
 pub mod semantic_ivf;
+pub mod skip;
 pub mod store;
 pub mod tantivy_index;
+pub mod text;
 
 pub use index::{EmbedBackend, FileIndexStats, IndexOptions, IndexStats, Indexer};
 pub use output::format_hit_line;
