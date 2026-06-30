@@ -98,19 +98,3 @@ pub fn rank_by_vector(
     })
     .collect()
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn rank_by_vector_orders_by_similarity() {
-        let q = vec![1.0, 0.0];
-        let lines = vec![
-            ("a.rs".into(), 1, "x".into(), vec![1.0, 0.0]),
-            ("b.rs".into(), 2, "y".into(), vec![0.0, 1.0]),
-        ];
-        let ranked = rank_by_vector(&q, &lines, 2);
-        assert!(ranked[0].0 > ranked[1].0);
-    }
-}

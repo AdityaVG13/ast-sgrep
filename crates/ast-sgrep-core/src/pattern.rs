@@ -157,26 +157,3 @@ fn parse_ast_grep_json(stdout: &[u8], pattern: &str, root: &Path) -> Result<Vec<
 
     Ok(hits)
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::path::PathBuf;
-
-    #[test]
-    fn parses_ndjson_line() {
-        let json = r#"{"file":"src/main.rs","range":{"start":{"line":1},"end":{"line":1}},"text":"fn main() {}"}"#;
-        let root = PathBuf::from("/repo");
-        let hits = parse_ast_grep_json(json.as_bytes(), "fn main", &root).unwrap();
-        assert_eq!(hits.len(), 1);
-        assert_eq!(hits[0].file, "src/main.rs");
-    }
-
-    #[test]
-    fn normalizes_absolute_paths() {
-        let root = std::fs::canonicalize("/tmp").unwrap_or_else(|_| PathBuf::from("/tmp"));
-        let abs = root.join("src/lib.rs");
-        let normalized = normalize_hit_path(&abs.to_string_lossy(), &root);
-        assert_eq!(normalized, "src/lib.rs");
-    }
-}

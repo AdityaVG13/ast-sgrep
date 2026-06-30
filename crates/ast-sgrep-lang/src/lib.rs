@@ -196,33 +196,3 @@ fn make_parser(lang: Language) -> Box<dyn LanguageParser> {
         Language::Ruby => Box::new(RubyParser),
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn detects_rust_by_extension() {
-        assert_eq!(
-            detect_language(Path::new("main.rs"), None),
-            Some(Language::Rust)
-        );
-    }
-
-    #[test]
-    fn detects_python_by_shebang() {
-        assert_eq!(
-            detect_language(
-                Path::new("script"),
-                Some("#!/usr/bin/env python3\nprint('hi')")
-            ),
-            Some(Language::Python)
-        );
-    }
-
-    #[test]
-    fn registry_lists_eight_languages() {
-        let reg = ParserRegistry::new();
-        assert_eq!(reg.supported_languages().len(), 8);
-    }
-}

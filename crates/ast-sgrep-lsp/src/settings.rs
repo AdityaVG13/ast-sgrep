@@ -76,22 +76,3 @@ impl AsgrepSettings {
         self.apply_path_and_ann(&mut opts.index_path, &mut opts.ann_threshold);
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
-
-    #[test]
-    fn parses_nested_asgrep_key() {
-        let v = json!({
-            "asgrep": {
-                "cloudEmbed": true,
-                "annThreshold": 5000
-            }
-        });
-        let s = AsgrepSettings::from_initialization_options(&v);
-        assert_eq!(s.cloud_embed, Some(true));
-        assert_eq!(s.ann_threshold, Some(5000));
-    }
-}

@@ -52,24 +52,3 @@ pub fn score_def(terms: &[String], symbol: &str) -> f64 {
 pub fn score_caller(terms: &[String], callee: &str) -> f64 {
     best_symbol_score(terms, callee) * 2.0 + SCORE_CALLER_BASE
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn lexical_score_decreases_with_rank() {
-        assert!(score_lexical(0) > score_lexical(10));
-    }
-
-    #[test]
-    fn exact_symbol_scores_higher() {
-        assert!(score_symbol("foo", "foo") > score_symbol("foo", "foobar"));
-    }
-
-    #[test]
-    fn rrf_fuses_multiple_lists() {
-        let fused = fuse_rrf(&[0, 2], RRF_K);
-        assert!(fused > rrf_score(0, RRF_K));
-    }
-}

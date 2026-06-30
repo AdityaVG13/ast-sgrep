@@ -175,7 +175,6 @@ name = "ast-sgrep-plugins"
 version = "1.0.0-alpha.0"
 dependencies = [
  "ast-sgrep-core",
- "ast-sgrep-testkit",
  "serde",
  "serde_json",
 ]

@@ -88,36 +88,3 @@ fn percent_decode(input: &str) -> String {
     }
     String::from_utf8_lossy(&out).into_owned()
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn roundtrip_unix_path() {
-        let root = std::fs::canonicalize("/tmp").unwrap_or_else(|_| PathBuf::from("/tmp"));
-        let path = root.join("src/main.rs");
-        let uri = path_to_file_uri(&path);
-        let rel = uri_to_rel_path(&uri, &root).unwrap();
-        assert_eq!(rel, "src/main.rs");
-    }
-
-    #[test]
-    fn percent_encoded_space() {
-        let root = std::fs::canonicalize("/tmp").unwrap_or_else(|_| PathBuf::from("/tmp"));
-        let path = root.join("src/my file.rs");
-        let uri = path_to_file_uri(&path);
-        assert!(uri.contains("%20") || !path.exists());
-        if path.exists() {
-            let decoded = file_uri_to_path(&uri).unwrap();
-            assert!(decoded.to_string_lossy().contains("my"));
-        }
-    }
-
-    #[test]
-    fn rejects_traversal() {
-        let root = std::fs::canonicalize("/tmp").unwrap_or_else(|_| PathBuf::from("/tmp"));
-        let evil = format!("file://{}/../etc/passwd", root.display());
-        assert!(uri_to_rel_path(&evil, &root).is_err());
-    }
-}

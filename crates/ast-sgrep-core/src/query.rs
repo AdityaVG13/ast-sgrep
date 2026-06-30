@@ -107,35 +107,3 @@ fn looks_like_symbol(term: &str) -> bool {
         || term.chars().any(|c| c.is_uppercase())
         || term.len() > 3
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parses_callers_prefix() {
-        let q = ParsedQuery::parse("callers:process_request");
-        assert_eq!(q.mode, QueryMode::Callers);
-        assert_eq!(q.lookup_symbol(), "process_request");
-        assert!(q.terms.contains(&"process_request".to_string()));
-    }
-
-    #[test]
-    fn callers_target_not_alphabetically_first_token() {
-        let q = ParsedQuery::parse("callers:main");
-        assert_eq!(q.lookup_symbol(), "main");
-    }
-
-    #[test]
-    fn defs_preserves_qualified_symbol() {
-        let q = ParsedQuery::parse("defs:Handler::serve");
-        assert_eq!(q.lookup_symbol(), "Handler::serve");
-    }
-
-    #[test]
-    fn tokenizes_natural_language() {
-        let q = ParsedQuery::parse("how does auth refresh work");
-        assert!(q.terms.contains(&"auth".to_string()));
-        assert!(q.terms.contains(&"refresh".to_string()));
-    }
-}

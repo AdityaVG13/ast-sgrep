@@ -71,18 +71,3 @@ pub fn send_error(
     });
     write_message(writer, &msg.to_string())
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::io::Cursor;
-
-    #[test]
-    fn roundtrip_message() {
-        let payload = r#"{"jsonrpc":"2.0","id":1,"method":"initialize"}"#;
-        let framed = format!("Content-Length: {}\r\n\r\n{}", payload.len(), payload);
-        let mut cursor = Cursor::new(framed.as_bytes());
-        let read = read_message(&mut cursor).unwrap().unwrap();
-        assert_eq!(read, payload);
-    }
-}

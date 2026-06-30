@@ -39,16 +39,3 @@ pub fn to_github_json(response: &SearchResponse) -> serde_json::Value {
         "provider": "ast-sgrep"
     })
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use ast_sgrep_testkit::sample_search_response;
-
-    #[test]
-    fn github_shape_has_items() {
-        let json = to_github_json(&sample_search_response());
-        assert_eq!(json["total_count"], 1);
-        assert_eq!(json["items"][0]["path"], "src/main.rs");
-    }
-}

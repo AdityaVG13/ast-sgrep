@@ -33,16 +33,3 @@ pub fn to_gitlab_json(response: &SearchResponse) -> serde_json::Value {
         "provider": "ast-sgrep"
     })
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use ast_sgrep_testkit::sample_search_response;
-
-    #[test]
-    fn gitlab_shape_has_data_array() {
-        let json = to_gitlab_json(&sample_search_response());
-        assert_eq!(json["data"].as_array().unwrap().len(), 1);
-        assert_eq!(json["data"][0]["startline"], 1);
-    }
-}

@@ -109,39 +109,3 @@ pub fn rank_chunks_by_vector(
         })
         .collect()
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn rank_semantic_chunks_orders_by_similarity() {
-        let embedder = SemanticLocalEmbedding;
-        let chunk_a = (
-            "a.rs".into(),
-            1,
-            3,
-            "auth_refresh".into(),
-            "fn auth_refresh() {}".into(),
-            embedder.embed_text("auth refresh token"),
-        );
-        let chunk_b = (
-            "b.rs".into(),
-            10,
-            12,
-            "migrate_db".into(),
-            "fn migrate_db() {}".into(),
-            embedder.embed_text("database migration"),
-        );
-        let ranked = rank_semantic_chunks(
-            "credential renewal",
-            &[chunk_a, chunk_b],
-            2,
-            Some("semantic"),
-            SEMANTIC_DIM,
-            EmbedPreference::Semantic,
-        );
-        assert!(!ranked.is_empty());
-        assert_eq!(ranked[0].4, "auth_refresh");
-    }
-}

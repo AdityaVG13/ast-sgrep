@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::{Command, Output};
 
 use serde_json::Value;
@@ -6,7 +6,6 @@ use tempfile::TempDir;
 
 use crate::fixture::sample_root;
 
-/// Indexed CLI session over the sample fixture.
 pub struct CliSession {
     pub _temp: TempDir,
     pub root: PathBuf,
@@ -27,15 +26,6 @@ impl CliSession {
         };
         session.index().expect("index sample fixture");
         session
-    }
-
-    pub fn index(&self) -> Result<Output, String> {
-        self.run(&[
-            "--index-path",
-            self.index_path.to_str().unwrap(),
-            "index",
-            self.root.to_str().unwrap(),
-        ])
     }
 
     pub fn search_json(&self, query: &str, extra: &[&str]) -> Value {
@@ -60,12 +50,13 @@ impl CliSession {
             .output()
             .map_err(|e| e.to_string())
     }
-}
 
-/// Run a one-shot CLI command against a path.
-pub fn run_cli(bin: &Path, args: &[&str]) -> Output {
-    Command::new(bin)
-        .args(args)
-        .output()
-        .expect("spawn cli")
+    fn index(&self) -> Result<Output, String> {
+        self.run(&[
+            "--index-path",
+            self.index_path.to_str().unwrap(),
+            "index",
+            self.root.to_str().unwrap(),
+        ])
+    }
 }

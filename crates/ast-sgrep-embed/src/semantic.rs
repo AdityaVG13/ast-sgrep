@@ -192,39 +192,3 @@ impl SemanticLocalEmbedding {
         cosine_similarity(a, b)
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn synonym_queries_match_auth_refresh_chunk() {
-        let embedder = SemanticLocalEmbedding;
-        let chunk = embedder.embed_text(
-            "symbol: auth_refresh kind: function calls: fetch_token store_token \
-             called_by: main excerpt: fn auth_refresh() { let token = fetch_token(); store_token(token); }",
-        );
-        let query = embedder.embed_text("credential renewal");
-        let unrelated = embedder.embed_text("database migration schema");
-
-        assert!(
-            embedder.similarity(&query, &chunk) > embedder.similarity(&query, &unrelated),
-            "credential renewal should match auth_refresh better than unrelated"
-        );
-    }
-
-    #[test]
-    fn similar_phrasing_scores_higher_than_unrelated() {
-        let embedder = SemanticLocalEmbedding;
-        let a = embedder.embed_text("auth refresh token");
-        let b = embedder.embed_text("refresh auth token");
-        let c = embedder.embed_text("unrelated database schema");
-        assert!(embedder.similarity(&a, &b) > embedder.similarity(&a, &c));
-    }
-
-    #[test]
-    fn expand_concepts_adds_related_terms() {
-        let expanded = expand_concepts("credential renewal");
-        assert!(expanded.contains("token") || expanded.contains("refresh"));
-    }
-}

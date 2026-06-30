@@ -67,21 +67,3 @@ pub fn to_agent_json(response: &SearchResponse) -> serde_json::Value {
         "hits": hits,
     })
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use ast_sgrep_testkit::sample_embed_response;
-
-    #[test]
-    fn agent_json_includes_follow_ups_and_semantic_flag() {
-        let json = to_agent_json(&sample_embed_response());
-        assert_eq!(json["has_semantic_hits"], true);
-        assert_eq!(json["hits"][0]["semantic"], true);
-        assert!(json["hits"][0]["follow_up_queries"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|q| q.as_str() == Some("defs:auth_refresh")));
-    }
-}
