@@ -8,18 +8,21 @@ use super::symbol::{callee_hits_for_terms, def_hits_for_terms};
 
 const MODE_SQL_LIMIT: usize = 200;
 
+fn prefixed_mode_query(parsed: &ParsedQuery) -> Option<ParsedQuery> {
+    let symbol = parsed.lookup_symbol();
+    (!symbol.is_empty()).then(|| ParsedQuery {
+        terms: vec![symbol],
+        ..parsed.clone()
+    })
+}
+
 pub fn search_callers(
     store: &IndexStore,
     parsed: &ParsedQuery,
     excerpt: &dyn Fn(&str, u32, u32) -> Result<String>,
 ) -> Result<Vec<SearchHit>> {
-    let symbol = parsed.lookup_symbol();
-    if symbol.is_empty() {
+    let Some(mode_query) = prefixed_mode_query(parsed) else {
         return Ok(Vec::new());
-    }
-    let mode_query = ParsedQuery {
-        terms: vec![symbol],
-        ..parsed.clone()
     };
     callee_hits_for_terms(
         store,
@@ -35,13 +38,8 @@ pub fn search_defs(
     parsed: &ParsedQuery,
     excerpt: &dyn Fn(&str, u32, u32) -> Result<String>,
 ) -> Result<Vec<SearchHit>> {
-    let symbol = parsed.lookup_symbol();
-    if symbol.is_empty() {
+    let Some(mode_query) = prefixed_mode_query(parsed) else {
         return Ok(Vec::new());
-    }
-    let mode_query = ParsedQuery {
-        terms: vec![symbol],
-        ..parsed.clone()
     };
     def_hits_for_terms(
         store,

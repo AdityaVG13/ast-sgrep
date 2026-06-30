@@ -1,5 +1,3 @@
-use rusqlite::params;
-
 use crate::query::ParsedQuery;
 use crate::rank::{best_symbol_score, score_caller, score_def, SCORE_ANCHOR};
 use crate::store::sql::{callee_terms_filter, caller_terms_filter, like_terms_filter, query_limit_map};
@@ -136,35 +134,26 @@ pub fn anchor_pass(
         return Ok(Vec::new());
     }
 
-    let conn = store.connection();
-    let mut stmt = conn.prepare(
-        "SELECT f.path, f.language, s.name, s.line_start, s.line_end, s.byte_start, s.byte_end
-         FROM symbols s
-         JOIN files f ON f.id = s.file_id
-         WHERE lower(s.name) = lower(?1) OR lower(s.name) LIKE '%' || lower(?1) || '%'
-         LIMIT ?2",
-    )?;
-
-    let rows = stmt.query_map(params![anchor_symbol, SYMBOL_SQL_LIMIT as i64], |row| {
+    let terms = vec![anchor_symbol];
+    let (where_clause, bind) =
+        like_terms_filter("s.name", &terms, options.lang_filter.as_deref());
+    let sql = format!("{SYMBOL_SELECT}{where_clause} LIMIT ?{}", bind.len() + 1);
+    let rows = query_limit_map(store.connection(), &sql, bind, SYMBOL_SQL_LIMIT, |row| {
         Ok((
             row.get::<_, String>(0)?,
             row.get::<_, Option<String>>(1)?,
             row.get::<_, String>(2)?,
-            row.get::<_, u32>(3)?,
             row.get::<_, u32>(4)?,
-            row.get::<_, usize>(5)?,
-            row.get::<_, usize>(6)?,
+            row.get::<_, u32>(5)?,
         ))
     })?;
 
     let mut hits = Vec::new();
-    for row in rows {
-        let (path, language, name, line_start, line_end, byte_start, byte_end) = row?;
+    for (path, language, name, line_start, line_end) in rows {
         if !matches_lang(language.as_deref(), options.lang_filter.as_deref()) {
             continue;
         }
         let text = excerpt(&path, line_start, line_end)?;
-        let _ = (byte_start, byte_end);
         hits.push(SearchHit {
             kind: HitKind::Anchor,
             file: path,

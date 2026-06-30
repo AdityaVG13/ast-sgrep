@@ -3,7 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use ast_sgrep_lang::{detect_language, ParserRegistry};
+use ast_sgrep_lang::{detect_language, ExtractionResult, ParserRegistry};
 use blake3::Hasher;
 use walkdir::WalkDir;
 
@@ -313,38 +313,7 @@ impl Indexer {
                     lang.as_str()
                 ))
             })?;
-            let symbols: Vec<SymbolRow> = extraction
-                .symbols
-                .iter()
-                .map(|s| SymbolRow {
-                    name: s.name.clone(),
-                    kind: format!("{:?}", s.kind).to_lowercase(),
-                    line_start: s.line_start,
-                    line_end: s.line_end,
-                    byte_start: s.byte_start,
-                    byte_end: s.byte_end,
-                })
-                .collect();
-            let callers: Vec<CallerRow> = extraction
-                .calls
-                .iter()
-                .map(|c| CallerRow {
-                    caller: c.caller.clone(),
-                    callee: c.callee.clone(),
-                    line_no: c.line,
-                    byte_start: c.byte_start,
-                    byte_end: c.byte_end,
-                })
-                .collect();
-            let imports: Vec<ImportRow> = extraction
-                .imports
-                .iter()
-                .map(|i| ImportRow {
-                    module_path: i.module_path.clone(),
-                    line_no: i.line,
-                })
-                .collect();
-            (symbols, callers, imports)
+            rows_from_extraction(&extraction)
         } else {
             (Vec::new(), Vec::new(), Vec::new())
         };
@@ -388,6 +357,43 @@ fn hash_content(content: &str) -> String {
     let mut hasher = Hasher::new();
     hasher.update(content.as_bytes());
     hasher.finalize().to_hex().to_string()
+}
+
+fn rows_from_extraction(
+    extraction: &ExtractionResult,
+) -> (Vec<SymbolRow>, Vec<CallerRow>, Vec<ImportRow>) {
+    let symbols = extraction
+        .symbols
+        .iter()
+        .map(|s| SymbolRow {
+            name: s.name.clone(),
+            kind: format!("{:?}", s.kind).to_lowercase(),
+            line_start: s.line_start,
+            line_end: s.line_end,
+            byte_start: s.byte_start,
+            byte_end: s.byte_end,
+        })
+        .collect();
+    let callers = extraction
+        .calls
+        .iter()
+        .map(|c| CallerRow {
+            caller: c.caller.clone(),
+            callee: c.callee.clone(),
+            line_no: c.line,
+            byte_start: c.byte_start,
+            byte_end: c.byte_end,
+        })
+        .collect();
+    let imports = extraction
+        .imports
+        .iter()
+        .map(|i| ImportRow {
+            module_path: i.module_path.clone(),
+            line_no: i.line,
+        })
+        .collect();
+    (symbols, callers, imports)
 }
 
 fn system_time_to_parts(time: SystemTime) -> (i64, u32) {
