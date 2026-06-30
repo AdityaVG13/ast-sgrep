@@ -12,15 +12,12 @@ use crate::store::{CallerRow, ImportRow, IndexStore, SymbolRow};
 use crate::text::split_content_lines;
 use crate::Result;
 
-/// Embedding backend preference for symbol-level semantic chunks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum EmbedBackend {
-    /// Cloud API → Ollama → semantic local (default).
     #[default]
     Auto,
     Cloud,
     Ollama,
-    /// Offline code-aware semantic embeddings only.
     Semantic,
 }
 
@@ -34,7 +31,6 @@ impl EmbedBackend {
         }
     }
 
-    /// Parse backend name from config strings (`cloud`, `ollama`, `semantic`, `local`).
     pub fn parse(s: &str) -> Self {
         match s.to_lowercase().as_str() {
             "cloud" => EmbedBackend::Cloud,
@@ -44,7 +40,6 @@ impl EmbedBackend {
         }
     }
 
-    /// Map CLI/LSP boolean flags to a single backend preference.
     pub fn from_flags(cloud: bool, ollama: bool, semantic_only: bool) -> Self {
         if cloud {
             EmbedBackend::Cloud
@@ -58,7 +53,6 @@ impl EmbedBackend {
     }
 }
 
-/// Options for indexing a repository.
 #[derive(Debug, Clone)]
 pub struct IndexOptions {
     pub root: PathBuf,
@@ -66,11 +60,9 @@ pub struct IndexOptions {
     pub lang_filter: Option<String>,
     pub respect_gitignore: bool,
     pub use_tantivy: bool,
-    /// Index symbol-level semantic chunks (default on).
     pub embed_semantic: bool,
     pub embed_backend: EmbedBackend,
     pub force_reindex: bool,
-    /// Override ANN threshold (`ASGREP_ANN_THRESHOLD` when unset).
     pub ann_threshold: Option<usize>,
 }
 
@@ -90,7 +82,6 @@ impl Default for IndexOptions {
     }
 }
 
-/// Statistics from an indexing run.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct IndexStats {
     pub files_indexed: usize,
@@ -103,7 +94,6 @@ pub struct IndexStats {
     pub imports_extracted: usize,
 }
 
-/// Per-file indexing outcome.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct FileIndexStats {
     pub symbols: usize,
@@ -112,7 +102,6 @@ pub struct FileIndexStats {
     pub skipped: bool,
 }
 
-/// Indexes source files into the SQLite store.
 pub struct Indexer {
     store: IndexStore,
     parsers: ParserRegistry,

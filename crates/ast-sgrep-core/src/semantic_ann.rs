@@ -1,9 +1,3 @@
-//! In-memory IVF-ANN index for large semantic chunk corpora.
-//!
-//! Below the threshold, brute-force cosine over flat vectors is used.
-//! Above it, vectors are clustered (k-means) and search probes nearest
-//! centroids. Structure is persisted to `.asgrep/semantic.ivf`.
-
 use std::io::{Read, Write};
 use std::sync::{Arc, Mutex};
 
@@ -18,13 +12,10 @@ use crate::semantic_ivf::{
 use crate::store::IndexStore;
 use crate::Result;
 
-/// Default chunk count above which IVF-ANN is used instead of brute force.
 pub const DEFAULT_ANN_THRESHOLD: usize = 2_000;
 
-/// Number of centroid clusters to probe per query.
 const DEFAULT_NPROBE: usize = 8;
 
-/// IVF index over normalized semantic chunk vectors.
 #[derive(Debug, Clone)]
 pub struct SemanticAnnIndex {
     centroids: Vec<Vec<f32>>,
@@ -309,7 +300,6 @@ fn kmeans(vectors: &[Vec<f32>], k: usize, max_iters: usize) -> (Vec<Vec<f32>>, V
     (centroids, assignments)
 }
 
-/// Effective ANN threshold (env `ASGREP_ANN_THRESHOLD` or override).
 pub fn ann_threshold(override_threshold: Option<usize>) -> usize {
     override_threshold.unwrap_or_else(|| {
         std::env::var("ASGREP_ANN_THRESHOLD")
@@ -330,7 +320,6 @@ struct SessionCache {
 
 static SESSION_CACHE: Mutex<Option<(String, SessionCache)>> = Mutex::new(None);
 
-/// Load or build persisted IVF for this store. Rebuilds and saves when stale.
 pub fn load_or_build_semantic_ivf(
     store: &IndexStore,
     chunks: &[SemanticChunkRow],
@@ -369,7 +358,6 @@ pub fn load_or_build_semantic_ivf(
     Ok(None)
 }
 
-/// Get cached IVF or None for brute-force path.
 pub fn cached_semantic_ivf(
     store: &IndexStore,
     chunks: &[SemanticChunkRow],
@@ -417,7 +405,6 @@ fn cache_session(db_key: &str, fingerprint: [u8; 32], ivf: &PersistedSemanticIvf
     ));
 }
 
-/// Rank chunk indices using the best strategy for corpus size.
 pub fn rank_chunk_indices(
     store: &IndexStore,
     query_vec: &[f32],
@@ -438,7 +425,6 @@ pub fn rank_chunk_indices(
     Ok(brute_force_flat(&flat, dim, query_vec, limit))
 }
 
-/// Rebuild on-disk IVF after indexing (no-op below threshold).
 pub fn rebuild_semantic_ivf_sidecar(
     store: &IndexStore,
     chunks: &[SemanticChunkRow],

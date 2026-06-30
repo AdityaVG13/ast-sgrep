@@ -1,5 +1,3 @@
-//! Search and query integration tests.
-
 use ast_sgrep_core::search::HitKind;
 use ast_sgrep_core::{IndexOptions, SearchOptions};
 use ast_sgrep_testkit::{
@@ -25,11 +23,9 @@ fn polyglot_search_smoke() {
     );
 
     assert_excerpt_contains(&searcher, "process_request", "process_request");
-    assert_query_finds(&searcher, "callers:process_request", |h| h.kind == HitKind::Caller);
     assert_query_finds(&searcher, "defs:auth_refresh", |h| h.kind == HitKind::Def);
     assert_query_finds(&searcher, "how does auth refresh work", |_| true);
     assert_excerpt_contains(&searcher, "imports:json", "json");
-
     assert_query_finds(&searcher, "callers:process_request", |h| {
         h.kind == HitKind::Caller
             && h.callee.as_deref() == Some("process_request")

@@ -453,7 +453,6 @@ impl IndexStore {
         })
     }
 
-    /// All lines for tantivy sidecar rebuild.
     pub fn all_indexed_lines(&self) -> Result<Vec<(String, u32, String, Option<String>)>> {
         let mut stmt = self.conn.prepare(
             "SELECT f.path, l.line_no, l.content, f.language
@@ -472,7 +471,6 @@ impl IndexStore {
         &self.conn
     }
 
-    /// Max `semantic_chunks.id` for IVF fingerprinting.
     pub fn semantic_chunk_max_id(&self) -> Result<Option<i64>> {
         optional_row(
             &self.conn,
@@ -482,7 +480,6 @@ impl IndexStore {
         )
     }
 
-    /// All semantic chunks in stable id order (for IVF sidecar alignment).
     pub fn all_semantic_chunks(
         &self,
         lang_filter: Option<&str>,
@@ -502,7 +499,6 @@ impl IndexStore {
         query_map_rows(&self.conn, &sql, lang_filter, read_semantic_chunk_row)
     }
 
-    /// Symbols defined in a single file.
     pub fn symbols_in_file(&self, rel_path: &str) -> Result<Vec<SymbolRow>> {
         let mut stmt = self.conn.prepare(
             "SELECT s.name, s.kind, s.line_start, s.line_end, s.byte_start, s.byte_end
@@ -523,7 +519,6 @@ impl IndexStore {
             .map_err(Into::into)
     }
 
-    /// Incoming calls: (file, line, caller, callee) for a callee name.
     pub fn incoming_calls(
         &self,
         callee: &str,
@@ -531,7 +526,6 @@ impl IndexStore {
         calls_matching(&self.conn, "callee", callee)
     }
 
-    /// Outgoing calls: (file, line, caller, callee) for a caller name.
     pub fn outgoing_calls(
         &self,
         caller: &str,
@@ -539,7 +533,6 @@ impl IndexStore {
         calls_matching(&self.conn, "caller", caller)
     }
 
-    /// Reconstruct file text from indexed lines (for LSP incremental edits).
     pub fn file_text(&self, rel_path: &str) -> Result<Option<String>> {
         let lines = self.file_lines(rel_path)?;
         if lines.is_empty() {
@@ -558,7 +551,6 @@ impl IndexStore {
         ))
     }
 
-    /// All lines for a file in order.
     pub fn file_lines(&self, rel_path: &str) -> Result<Vec<(u32, String)>> {
         let mut stmt = self.conn.prepare(
             "SELECT l.line_no, l.content FROM lines l
@@ -572,7 +564,6 @@ impl IndexStore {
             .map_err(Into::into)
     }
 
-    /// Get a single line of text from the index.
     pub fn line_content(&self, rel_path: &str, line_no: u32) -> Result<Option<String>> {
         optional_row(
             &self.conn,

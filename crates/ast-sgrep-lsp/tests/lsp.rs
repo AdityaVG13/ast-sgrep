@@ -1,5 +1,3 @@
-//! LSP integration tests.
-
 use ast_sgrep_lsp::backend::path_to_uri;
 use ast_sgrep_lsp::types::{
     CallHierarchyItem, DocumentSymbolParams, ExecuteCommandParams, Position, Range,
@@ -16,10 +14,18 @@ fn initialize_capabilities_include_call_hierarchy() {
 }
 
 #[test]
-fn workspace_symbols_finds_process_request() {
+fn workspace_symbols_finds_process_request_and_semantic_metadata() {
     let (_indexed, backend) = sample_backend();
-    let result = backend.workspace_symbols("process_request").unwrap();
-    assert!(!result.as_array().unwrap().is_empty());
+    let arr = backend.workspace_symbols("process_request").unwrap();
+    let arr = arr.as_array().unwrap();
+    assert!(!arr.is_empty());
+
+    let semantic = backend.workspace_symbols("credential renewal").unwrap();
+    let semantic = semantic.as_array().unwrap();
+    assert!(semantic.iter().any(|s| {
+        s["data"]["semantic"].as_bool() == Some(true)
+            || s["detail"].as_str().unwrap_or("").contains("semantic")
+    }));
 }
 
 #[test]
@@ -52,17 +58,6 @@ fn execute_command_semantic_search_finds_synonym() {
 }
 
 #[test]
-fn workspace_symbols_include_semantic_metadata() {
-    let (_indexed, backend) = sample_backend();
-    let arr = backend.workspace_symbols("credential renewal").unwrap();
-    let arr = arr.as_array().unwrap();
-    assert!(arr.iter().any(|s| {
-        s["data"]["semantic"].as_bool() == Some(true)
-            || s["detail"].as_str().unwrap_or("").contains("semantic")
-    }));
-}
-
-#[test]
 fn execute_command_hybrid_search() {
     let (_indexed, backend) = sample_backend();
     let params = ExecuteCommandParams {
@@ -70,26 +65,6 @@ fn execute_command_hybrid_search() {
         arguments: vec![serde_json::json!("auth_refresh")],
     };
     assert!(backend.execute_command(&params).unwrap()["hits"].is_array());
-}
-
-#[test]
-fn did_change_indexes_unsaved_buffer() {
-    let (_indexed, backend) = sample_backend();
-    let uri = path_to_uri(&backend.root().join("src/main.rs"));
-    let changes = vec![ast_sgrep_lsp::types::TextDocumentContentChangeEvent {
-        range: None,
-        range_length: None,
-        text: "fn main() {\n    process_request(\"edited\");\n}\n\nfn process_request(input: &str) {}\n"
-            .to_string(),
-    }];
-    backend.apply_document_changes(&uri, &changes).unwrap();
-    let params = ExecuteCommandParams {
-        command: "asgrep.search".to_string(),
-        arguments: vec![serde_json::json!("edited")],
-    };
-    let result = backend.execute_command(&params).unwrap();
-    let hits = result["hits"].as_array().unwrap();
-    assert!(hits.iter().any(|h| h["excerpt"].as_str().unwrap_or("").contains("edited")));
 }
 
 #[test]

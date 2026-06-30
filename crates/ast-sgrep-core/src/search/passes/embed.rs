@@ -91,7 +91,6 @@ fn chunk_indices_to_hits(
         .collect()
 }
 
-/// Legacy per-line embeddings for indexes built before semantic chunks.
 fn embed_legacy_hits(
     store: &IndexStore,
     options: &SearchOptions,

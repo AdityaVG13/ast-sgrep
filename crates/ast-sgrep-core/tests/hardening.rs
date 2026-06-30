@@ -1,5 +1,3 @@
-//! Adversarial regression tests for indexing edge cases.
-
 use ast_sgrep_core::store::IndexStore;
 use ast_sgrep_core::{IndexOptions, Indexer, SearchOptions, Searcher};
 use ast_sgrep_embed::SemanticLocalEmbedding;

@@ -1,5 +1,3 @@
-//! Indexing lifecycle, IVF persistence, and scale regression tests.
-
 use ast_sgrep_core::semantic_ann::{ann_threshold, should_use_ann};
 use ast_sgrep_core::semantic_ivf::{load_semantic_ivf, semantic_ivf_path};
 use ast_sgrep_core::{IndexOptions, SearchOptions};

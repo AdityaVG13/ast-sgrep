@@ -1,24 +1,4 @@
-//! Shared helpers for ast-sgrep integration and regression tests.
-//!
-//! Use this crate as a dev-dependency from integration test targets. Typical flow:
-//!
-//! ```ignore
-//! use ast_sgrep_testkit::{index_sample, searcher_from, assert_query_finds};
-//! use ast_sgrep_core::{IndexOptions, SearchOptions};
-//!
-//! let indexed = index_sample(IndexOptions::default());
-//! let searcher = searcher_from(&indexed, SearchOptions::default());
-//! assert_query_finds(&searcher, "auth_refresh", |h| h.symbol.as_deref() == Some("auth_refresh"));
-//! ```
-//!
-//! Modules:
-//! - [`fixture`] — sample repo paths and file contents
-//! - [`index`] — index the sample fixture, build searchers
-//! - [`search`] — assertion helpers for query results
-//! - [`repo`] — ephemeral temp repos for gitignore / hardening tests
-//! - [`lang`] — parse inline snippets, symbol/callee/import assertions
-//! - [`lsp`] — indexed LSP backend for protocol tests
-//! - [`plugins`] — canned search/embed JSON for plugin unit tests
+//! Shared helpers for ast-sgrep integration tests.
 
 mod cli;
 mod fixture;

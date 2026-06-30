@@ -1,5 +1,3 @@
-//! Shared SQLite query helpers.
-
 use rusqlite::{params, Connection, ToSql};
 
 use crate::Result;
@@ -54,7 +52,6 @@ pub fn where_clause(parts: &[String]) -> String {
     }
 }
 
-/// `lower(column) LIKE '%' || lower(?) || '%'` for each term, plus optional language filter.
 pub fn like_terms_filter(
     column: &str,
     terms: &[String],
@@ -73,12 +70,10 @@ pub fn like_terms_filter(
     (where_clause(&parts), bind)
 }
 
-/// Callee-only LIKE filter for `callers:` mode.
 pub fn callee_terms_filter(terms: &[String], lang_filter: Option<&str>) -> (String, Vec<String>) {
     like_terms_filter("c.callee", terms, lang_filter)
 }
 
-/// Caller/callee LIKE filter for hybrid symbol search.
 pub fn caller_terms_filter(terms: &[String], lang_filter: Option<&str>) -> (String, Vec<String>) {
     let mut bind: Vec<String> = Vec::new();
     let mut parts: Vec<String> = Vec::new();
@@ -125,7 +120,6 @@ where
     Ok(out)
 }
 
-/// Run a prepared statement with string binds plus a trailing LIMIT parameter.
 pub fn query_limit_map<T, F>(
     conn: &Connection,
     sql: &str,

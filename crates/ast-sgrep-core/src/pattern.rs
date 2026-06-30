@@ -10,7 +10,6 @@ use crate::Result;
 
 const PATTERN_TIMEOUT_SECS: u64 = 30;
 
-/// Run ast-grep/sg for structural pattern search when available.
 pub fn search_pattern(pattern: &str, root: &Path, lang_filter: Option<&str>) -> Result<Vec<SearchHit>> {
     let binary = find_ast_grep_binary();
     let Some(ast_grep) = binary else {

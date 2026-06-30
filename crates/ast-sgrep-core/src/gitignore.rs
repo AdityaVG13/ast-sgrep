@@ -1,5 +1,3 @@
-//! Gitignore-style path matching with directory-scoped rules and negation.
-
 use std::fs;
 use std::path::{Component, Path};
 
@@ -11,7 +9,6 @@ struct Rule {
     dir_only: bool,
 }
 
-/// Returns whether `rel` (relative to `root`) is ignored by gitignore rules.
 pub fn is_ignored(root: &Path, rel: &Path) -> bool {
     let rel_str = rel.to_string_lossy().replace('\\', "/");
     let rules = collect_rules(root, rel);
