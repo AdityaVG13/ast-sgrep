@@ -31,6 +31,7 @@ impl IndexStore {
     fn init_schema(&self) -> Result<()> {
         self.conn.execute_batch(
             "
+            PRAGMA foreign_keys = ON;
             PRAGMA journal_mode = WAL;
             PRAGMA synchronous = NORMAL;
 
@@ -153,6 +154,7 @@ impl IndexStore {
         symbols: &[SymbolRow],
         callers: &[CallerRow],
         imports: &[ImportRow],
+        embed_lines: bool,
     ) -> Result<i64> {
         let file_id: Option<i64> = self.conn.query_row(
             "SELECT id FROM files WHERE path = ?1",
@@ -194,7 +196,7 @@ impl IndexStore {
             }
         }
 
-        {
+        if embed_lines {
             let mut emb_stmt = self.conn.prepare(
                 "INSERT INTO embeddings(file_id, line_no, vector) VALUES(?1, ?2, ?3)",
             )?;

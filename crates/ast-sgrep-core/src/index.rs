@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
@@ -18,6 +19,10 @@ pub struct IndexOptions {
     pub respect_gitignore: bool,
     /// Build tantivy sidecar for large-repo lexical search.
     pub use_tantivy: bool,
+    /// Store line embeddings during indexing (required for `--embed` search).
+    pub embed_lines: bool,
+    /// Bypass hash/mtime skip and re-parse every file.
+    pub force_reindex: bool,
 }
 
 /// Statistics from an indexing run.
@@ -62,7 +67,7 @@ impl Indexer {
 
     pub fn index_all(&mut self) -> Result<IndexStats> {
         let mut stats = IndexStats::default();
-        let mut seen_paths = Vec::new();
+        let mut seen_paths = HashSet::new();
 
         for entry in WalkDir::new(&self.options.root)
             .follow_links(false)
@@ -88,7 +93,7 @@ impl Indexer {
                 continue;
             }
 
-            seen_paths.push(rel_str.clone());
+            seen_paths.insert(rel_str.clone());
 
             if self.should_skip_file(path) {
                 stats.files_skipped += 1;
@@ -135,7 +140,11 @@ impl Indexer {
     }
 
     pub fn reindex_all(&mut self) -> Result<IndexStats> {
-        self.index_all()
+        let prev = self.options.force_reindex;
+        self.options.force_reindex = true;
+        let stats = self.index_all();
+        self.options.force_reindex = prev;
+        stats
     }
 
     pub fn index_file(&mut self, abs_path: &Path, rel_path: &str) -> Result<(usize, usize, usize)> {
@@ -153,11 +162,13 @@ impl Indexer {
 
         let hash = hash_content(&content);
 
-        if let Some(stored_hash) = self.store.file_hash(rel_path)? {
-            if stored_hash == hash {
-                if let Some((s, n)) = self.store.file_mtime(rel_path)? {
-                    if s == mtime_secs && n == mtime_nanos {
-                        return Ok((0, 0, 0));
+        if !self.options.force_reindex {
+            if let Some(stored_hash) = self.store.file_hash(rel_path)? {
+                if stored_hash == hash {
+                    if let Some((s, n)) = self.store.file_mtime(rel_path)? {
+                        if s == mtime_secs && n == mtime_nanos {
+                            return Ok((0, 0, 0));
+                        }
                     }
                 }
             }
@@ -167,7 +178,12 @@ impl Indexer {
         if let Some(ref lang_filter) = self.options.lang_filter {
             match language {
                 Some(lang) if lang.as_str() == lang_filter.as_str() => {}
-                _ => return Ok((0, 0, 0)),
+                _ => {
+                    if self.store.file_hash(rel_path)?.is_some() {
+                        self.store.remove_file(rel_path)?;
+                    }
+                    return Ok((0, 0, 0));
+                }
             }
         }
 
@@ -233,6 +249,7 @@ impl Indexer {
             &symbols,
             &callers,
             &imports,
+            self.options.embed_lines,
         )?;
 
         Ok((sym_count, caller_count, import_count))
@@ -323,7 +340,10 @@ fn is_ignored(rel: &Path, patterns: &[String]) -> bool {
 
 fn simple_glob_match(pattern: &str, text: &str) -> bool {
     if let Some(prefix) = pattern.strip_suffix('*') {
-        return text.starts_with(prefix) || text.contains(prefix);
+        return text.starts_with(prefix)
+            || text
+                .split('/')
+                .any(|segment| segment.starts_with(prefix));
     }
     pattern == text
 }

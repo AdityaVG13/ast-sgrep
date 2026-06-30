@@ -3,6 +3,8 @@
 pub struct ParsedQuery {
     pub raw: String,
     pub mode: QueryMode,
+    /// Exact lookup string for prefixed modes (`callers:`, `defs:`, `imports:`).
+    pub target: Option<String>,
     pub terms: Vec<String>,
 }
 
@@ -25,30 +27,37 @@ impl ParsedQuery {
     pub fn parse(input: &str) -> Self {
         let trimmed = input.trim();
         if let Some(rest) = trimmed.strip_prefix("callers:") {
+            let target = rest.trim().to_string();
             return Self {
                 raw: trimmed.to_string(),
                 mode: QueryMode::Callers,
-                terms: tokenize(rest),
+                target: Some(target.clone()),
+                terms: tokenize_for_scoring(&target),
             };
         }
         if let Some(rest) = trimmed.strip_prefix("defs:") {
+            let target = rest.trim().to_string();
             return Self {
                 raw: trimmed.to_string(),
                 mode: QueryMode::Defs,
-                terms: tokenize(rest),
+                target: Some(target.clone()),
+                terms: tokenize_for_scoring(&target),
             };
         }
         if let Some(rest) = trimmed.strip_prefix("imports:") {
+            let target = rest.trim().to_string();
             return Self {
                 raw: trimmed.to_string(),
                 mode: QueryMode::Imports,
-                terms: tokenize(rest),
+                target: Some(target.clone()),
+                terms: tokenize_for_scoring(&target),
             };
         }
         if let Some(rest) = trimmed.strip_prefix("pattern:") {
             return Self {
                 raw: trimmed.to_string(),
                 mode: QueryMode::Pattern,
+                target: Some(rest.trim().to_string()),
                 terms: vec![rest.trim().to_string()],
             };
         }
@@ -56,8 +65,17 @@ impl ParsedQuery {
         Self {
             raw: trimmed.to_string(),
             mode: QueryMode::Hybrid,
-            terms: tokenize(trimmed),
+            target: None,
+            terms: tokenize_for_scoring(trimmed),
         }
+    }
+
+    /// Primary symbol for prefixed lookup (preserves `Handler::serve`, `process_request`, etc.).
+    pub fn lookup_symbol(&self) -> String {
+        self.target
+            .clone()
+            .filter(|t| !t.is_empty())
+            .unwrap_or_else(|| self.primary_symbol().unwrap_or_default().to_string())
     }
 
     pub fn primary_symbol(&self) -> Option<&str> {
@@ -65,7 +83,7 @@ impl ParsedQuery {
     }
 }
 
-fn tokenize(input: &str) -> Vec<String> {
+fn tokenize_for_scoring(input: &str) -> Vec<String> {
     let mut terms = Vec::new();
     for word in input.split(|c: char| !c.is_alphanumeric() && c != '_' && c != ':') {
         let w = word.trim();
@@ -80,7 +98,6 @@ fn tokenize(input: &str) -> Vec<String> {
                 }
             }
         }
-        // camelCase splitting
         let mut parts = Vec::new();
         let mut current = String::new();
         for ch in w.chars() {
@@ -106,9 +123,7 @@ fn tokenize(input: &str) -> Vec<String> {
 
 fn looks_like_symbol(term: &str) -> bool {
     term.contains('_')
-        || term
-            .chars()
-            .any(|c| c.is_uppercase())
+        || term.chars().any(|c| c.is_uppercase())
         || term.len() > 3
 }
 
@@ -120,7 +135,20 @@ mod tests {
     fn parses_callers_prefix() {
         let q = ParsedQuery::parse("callers:process_request");
         assert_eq!(q.mode, QueryMode::Callers);
+        assert_eq!(q.lookup_symbol(), "process_request");
         assert!(q.terms.contains(&"process_request".to_string()));
+    }
+
+    #[test]
+    fn callers_target_not_alphabetically_first_token() {
+        let q = ParsedQuery::parse("callers:main");
+        assert_eq!(q.lookup_symbol(), "main");
+    }
+
+    #[test]
+    fn defs_preserves_qualified_symbol() {
+        let q = ParsedQuery::parse("defs:Handler::serve");
+        assert_eq!(q.lookup_symbol(), "Handler::serve");
     }
 
     #[test]

@@ -177,7 +177,8 @@ impl Searcher {
             "SELECT f.path, l.line_no, l.content, f.language, e.vector
              FROM embeddings e
              JOIN lines l ON l.file_id = e.file_id AND l.line_no = e.line_no
-             JOIN files f ON f.id = e.file_id",
+             JOIN files f ON f.id = e.file_id
+             LIMIT 10000",
         )?;
         let mut rows = stmt.query([])?;
         let mut lines = Vec::new();
@@ -199,7 +200,14 @@ impl Searcher {
             {
                 if let Some(config) = CloudEmbeddingConfig::from_env() {
                     match ast_sgrep_embed::embed_via_api(&query, &config) {
-                        Ok(query_vec) => rank_by_vector(&query_vec, &lines, 50),
+                        Ok(query_vec) => {
+                            let stored_dim = lines.first().map(|l| l.3.len()).unwrap_or(0);
+                            if stored_dim > 0 && stored_dim == query_vec.len() {
+                                rank_by_vector(&query_vec, &lines, 50)
+                            } else {
+                                rank_by_similarity(&query, &lines, 50)
+                            }
+                        }
                         Err(_) => rank_by_similarity(&query, &lines, 50),
                     }
                 } else {
@@ -291,6 +299,7 @@ impl Searcher {
             std::collections::HashMap::new();
 
         for term in &parsed.terms {
+            let fts_term = crate::fts::escape_fts_term(term);
             let mut stmt = conn.prepare(
                 "SELECT f.path, f.language, l.line_no, l.content
                  FROM lines_fts
@@ -300,7 +309,7 @@ impl Searcher {
                  ORDER BY bm25(lines_fts)
                  LIMIT 100",
             )?;
-            let rows = stmt.query_map(params![term], |row| {
+            let rows = stmt.query_map(params![fts_term], |row| {
                 Ok((
                     row.get::<_, String>(0)?,
                     row.get::<_, Option<String>>(1)?,
@@ -529,11 +538,7 @@ impl Searcher {
     }
 
     fn search_callers(&self, parsed: &ParsedQuery) -> Result<Vec<SearchHit>> {
-        let symbol = parsed
-            .terms
-            .first()
-            .cloned()
-            .unwrap_or_default();
+        let symbol = parsed.lookup_symbol();
         let conn = self.store.connection();
         let mut stmt = conn.prepare(
             "SELECT f.path, f.language, c.caller, c.callee, c.line_no, c.byte_start, c.byte_end
@@ -587,11 +592,7 @@ impl Searcher {
     }
 
     fn search_defs(&self, parsed: &ParsedQuery) -> Result<Vec<SearchHit>> {
-        let symbol = parsed
-            .terms
-            .first()
-            .cloned()
-            .unwrap_or_default();
+        let symbol = parsed.lookup_symbol();
         let conn = self.store.connection();
         let mut stmt = conn.prepare(
             "SELECT f.path, f.language, s.name, s.line_start, s.line_end, s.byte_start, s.byte_end
@@ -633,7 +634,7 @@ impl Searcher {
     }
 
     fn search_imports(&self, parsed: &ParsedQuery) -> Result<Vec<SearchHit>> {
-        let module = parsed.terms.join(" ");
+        let module = parsed.lookup_symbol();
         let conn = self.store.connection();
 
         let mut hits = Vec::new();

@@ -18,6 +18,8 @@ fn indexes_and_searches_polyglot_fixture() {
         lang_filter: None,
         respect_gitignore: true,
         use_tantivy: false,
+        embed_lines: false,
+        force_reindex: false,
     })
     .unwrap();
 
@@ -74,6 +76,8 @@ fn incremental_reindex_skips_unchanged() {
         lang_filter: None,
         respect_gitignore: true,
         use_tantivy: false,
+        embed_lines: false,
+        force_reindex: false,
     };
 
     let mut indexer = Indexer::new(opts.clone()).unwrap();

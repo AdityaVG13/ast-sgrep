@@ -1,5 +1,6 @@
 //! Cloud embedding provider (OpenAI-compatible API).
 
+#[cfg(feature = "cloud")]
 use serde::{Deserialize, Serialize};
 
 /// Configuration for cloud embedding APIs (OpenAI-compatible).
@@ -26,17 +27,20 @@ impl CloudEmbeddingConfig {
 }
 
 #[derive(Serialize)]
+#[cfg(feature = "cloud")]
 struct EmbedRequest<'a> {
     model: &'a str,
     input: &'a str,
 }
 
 #[derive(Deserialize)]
+#[cfg(feature = "cloud")]
 struct EmbedResponse {
     data: Vec<EmbedData>,
 }
 
 #[derive(Deserialize)]
+#[cfg(feature = "cloud")]
 struct EmbedData {
     embedding: Vec<f32>,
 }

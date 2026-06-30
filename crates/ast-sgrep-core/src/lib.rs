@@ -1,5 +1,6 @@
 use thiserror::Error;
 
+pub mod fts;
 pub mod index;
 pub mod output;
 pub mod pattern;

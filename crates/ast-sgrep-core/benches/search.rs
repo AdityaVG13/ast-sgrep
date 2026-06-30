@@ -18,6 +18,8 @@ fn setup_index() -> (TempDir, PathBuf, PathBuf) {
         lang_filter: None,
         respect_gitignore: true,
         use_tantivy: false,
+        embed_lines: false,
+        force_reindex: false,
     })
     .unwrap();
     indexer.index_all().unwrap();

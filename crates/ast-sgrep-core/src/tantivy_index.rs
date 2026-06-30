@@ -89,7 +89,7 @@ impl TantivySidecar {
         if terms.is_empty() {
             return Ok(Vec::new());
         }
-        let fts_query = terms.join(" OR ");
+        let fts_query = crate::fts::escape_fts_query(terms);
         let mut stmt = self.conn.prepare(
             "SELECT file, line_no, content, language
              FROM lines_fts WHERE lines_fts MATCH ?1
