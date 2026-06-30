@@ -4,6 +4,7 @@ use crate::query::ParsedQuery;
 use crate::rank::score_lexical_rrf;
 use crate::store::IndexStore;
 use crate::Result;
+use crate::search::hits::matches_lang;
 use crate::search::types::{HitKind, SearchHit, SearchOptions};
 
 pub fn lexical_pass(
@@ -39,10 +40,8 @@ fn lexical_from_sidecar(
     let mut line_meta: std::collections::HashMap<(String, u32), (Option<String>, String)> =
         std::collections::HashMap::new();
     for (file, line_no, content, language, rank) in results {
-        if let Some(ref lang_filter) = options.lang_filter {
-            if language.as_deref() != Some(lang_filter.as_str()) {
-                continue;
-            }
+        if !matches_lang(language.as_deref(), options.lang_filter.as_deref()) {
+            continue;
         }
         let key = (file.clone(), line_no);
         line_ranks.entry(key.clone()).or_default().push(rank);
@@ -89,10 +88,8 @@ fn lexical_from_fts(
         })?;
         for (rank, row) in rows.enumerate() {
             let (path, language, line_no, content) = row?;
-            if let Some(ref lang_filter) = options.lang_filter {
-                if language.as_deref() != Some(lang_filter.as_str()) {
-                    continue;
-                }
+            if !matches_lang(language.as_deref(), options.lang_filter.as_deref()) {
+                continue;
             }
             let key = (path.clone(), line_no);
             line_ranks.entry(key.clone()).or_default().push(rank);

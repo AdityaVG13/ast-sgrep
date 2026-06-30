@@ -1,4 +1,6 @@
-use crate::extract::{field_child, node_text, parse_and_extract, walk_tree, NodeHandlers};
+use crate::extract::{
+    add_named_symbol, field_child, node_text, parse_and_extract, walk_tree, NodeHandlers,
+};
 use crate::{ExtractionResult, Language, LanguageParser, SymbolKind};
 
 pub struct TypeScriptParser;
@@ -33,28 +35,15 @@ fn extract_ts_js(tree: &tree_sitter::Tree, src: &str) -> ExtractionResult {
     let handlers = NodeHandlers::new(|ext, node, source| {
         match node.kind() {
             "function_declaration" | "generator_function_declaration" => {
-                if let Some(name_node) = field_child(node, "name") {
-                    if let Some(name) = node_text(&name_node, source) {
-                        ext.add_symbol(node, source, name, SymbolKind::Function);
-                    }
-                }
+                add_named_symbol(ext, node, source, SymbolKind::Function);
             }
             "method_definition" => {
-                if let Some(name_node) = field_child(node, "name") {
-                    if let Some(name) = node_text(&name_node, source) {
-                        ext.add_symbol(node, source, name, SymbolKind::Method);
-                    }
-                }
+                add_named_symbol(ext, node, source, SymbolKind::Method);
             }
             "function_expression" | "arrow_function" => {
-                // Named via variable declarator parent
                 if let Some(parent) = node.parent() {
                     if parent.kind() == "variable_declarator" {
-                        if let Some(name_node) = field_child(&parent, "name") {
-                            if let Some(name) = node_text(&name_node, source) {
-                                ext.add_symbol(node, source, name, SymbolKind::Function);
-                            }
-                        }
+                        add_named_symbol(ext, &parent, source, SymbolKind::Function);
                     }
                 }
             }

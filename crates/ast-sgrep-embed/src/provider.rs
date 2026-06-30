@@ -50,52 +50,27 @@ pub struct EmbedResult {
 
 /// Embed text using the provider chain.
 pub fn embed_with_chain(text: &str, preference: EmbedPreference) -> EmbedResult {
-    match preference {
-        EmbedPreference::Cloud => {
-            if let Some(vec) = try_cloud(text) {
-                return EmbedResult {
-                    vector: vec,
-                    backend: EmbedBackendKind::Cloud,
-                };
-            }
-            if let Some(vec) = try_ollama(text) {
-                return EmbedResult {
-                    vector: vec,
-                    backend: EmbedBackendKind::Ollama,
-                };
-            }
-        }
-        EmbedPreference::Ollama => {
-            if let Some(vec) = try_ollama(text) {
-                return EmbedResult {
-                    vector: vec,
-                    backend: EmbedBackendKind::Ollama,
-                };
-            }
-        }
-        EmbedPreference::Semantic | EmbedPreference::Auto => {}
-    }
+    let cloud_enabled = matches!(preference, EmbedPreference::Cloud | EmbedPreference::Auto);
+    let ollama_enabled = matches!(
+        preference,
+        EmbedPreference::Cloud | EmbedPreference::Ollama | EmbedPreference::Auto
+    );
 
-    if matches!(preference, EmbedPreference::Auto) {
-        if let Some(vec) = try_cloud(text) {
-            return EmbedResult {
-                vector: vec,
-                backend: EmbedBackendKind::Cloud,
-            };
+    if cloud_enabled {
+        if let Some(vector) = try_cloud(text) {
+            return embed_result(vector, EmbedBackendKind::Cloud);
         }
-        if let Some(vec) = try_ollama(text) {
-            return EmbedResult {
-                vector: vec,
-                backend: EmbedBackendKind::Ollama,
-            };
+    }
+    if ollama_enabled {
+        if let Some(vector) = try_ollama(text) {
+            return embed_result(vector, EmbedBackendKind::Ollama);
         }
     }
 
-    let embedder = SemanticLocalEmbedding;
-    EmbedResult {
-        vector: embedder.embed_text(text),
-        backend: EmbedBackendKind::Semantic,
-    }
+    embed_result(
+        SemanticLocalEmbedding.embed_text(text),
+        EmbedBackendKind::Semantic,
+    )
 }
 
 /// Embed a query vector, respecting stored index backend when possible.
@@ -107,13 +82,11 @@ pub fn embed_query(
 ) -> EmbedResult {
     if let Some(backend) = stored_backend.and_then(EmbedBackendKind::parse) {
         let result = match backend {
-            EmbedBackendKind::Cloud => try_cloud(text).map(|vector| EmbedResult {
-                vector,
-                backend: EmbedBackendKind::Cloud,
+            EmbedBackendKind::Cloud => try_cloud(text).map(|vector| {
+                embed_result(vector, EmbedBackendKind::Cloud)
             }),
-            EmbedBackendKind::Ollama => try_ollama(text).map(|vector| EmbedResult {
-                vector,
-                backend: EmbedBackendKind::Ollama,
+            EmbedBackendKind::Ollama => try_ollama(text).map(|vector| {
+                embed_result(vector, EmbedBackendKind::Ollama)
             }),
             EmbedBackendKind::Semantic => None,
         };
@@ -124,6 +97,10 @@ pub fn embed_query(
         }
     }
     embed_with_chain(text, preference)
+}
+
+fn embed_result(vector: Vec<f32>, backend: EmbedBackendKind) -> EmbedResult {
+    EmbedResult { vector, backend }
 }
 
 fn try_cloud(text: &str) -> Option<Vec<f32>> {

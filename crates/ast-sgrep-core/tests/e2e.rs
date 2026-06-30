@@ -4,7 +4,7 @@ mod common;
 
 use ast_sgrep_core::search::HitKind;
 use ast_sgrep_core::{IndexOptions, Indexer, SearchOptions, Searcher};
-use common::{fixture, indexed_searcher};
+use common::{fixture, index_fixture, indexed_searcher, searcher_for};
 use tempfile::TempDir;
 
 #[test]
@@ -180,4 +180,60 @@ fn json_output_shape() {
     assert_eq!(json["query"], "process_request");
     assert!(json["hits"].as_array().unwrap().len() > 0);
     assert!(json["hits"][0]["kind"].is_string());
+}
+
+#[test]
+fn indexes_and_searches_polyglot_fixture() {
+    let (_temp, indexer) = index_fixture(IndexOptions::default());
+    let stats = indexer.store().status().unwrap();
+    assert!(stats.file_count >= 4, "expected at least 4 files indexed");
+    assert!(stats.symbol_count > 0);
+    assert!(stats.caller_count > 0);
+
+    let searcher = searcher_for(
+        &indexer,
+        SearchOptions {
+            limit: 16,
+            use_embed: false,
+            ..SearchOptions::default()
+        },
+    );
+
+    let response = searcher.search("process_request").unwrap();
+    assert!(!response.hits.is_empty());
+    assert!(response.hits.iter().any(|h| {
+        h.symbol.as_deref() == Some("process_request")
+            || h.callee.as_deref() == Some("process_request")
+            || h.excerpt.contains("process_request")
+    }));
+
+    let callers = searcher.search("callers:process_request").unwrap();
+    assert!(callers.hits.iter().any(|h| h.kind == HitKind::Caller));
+
+    let defs = searcher.search("defs:auth_refresh").unwrap();
+    assert!(defs.hits.iter().any(|h| h.kind == HitKind::Def));
+
+    let nl = searcher.search("how does auth refresh work").unwrap();
+    assert!(!nl.hits.is_empty());
+
+    let imports = searcher.search("imports:json").unwrap();
+    assert!(
+        imports.hits.iter().any(|h| h.excerpt.contains("json")),
+        "fixture ruby require json should be indexed"
+    );
+}
+
+#[test]
+fn incremental_reindex_skips_unchanged() {
+    let temp = TempDir::new().unwrap();
+    let opts = IndexOptions {
+        root: fixture(),
+        index_path: Some(temp.path().join("index.db")),
+        ..IndexOptions::default()
+    };
+    let mut indexer = Indexer::new(opts).unwrap();
+    let first = indexer.index_all().unwrap();
+    let second = indexer.index_all().unwrap();
+    assert!(first.files_indexed >= 4);
+    assert_eq!(second.files_removed, 0);
 }

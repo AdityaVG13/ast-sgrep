@@ -4,7 +4,7 @@ use crate::query::ParsedQuery;
 use crate::rank::{best_symbol_score, score_caller, score_def, SCORE_ANCHOR};
 use crate::store::IndexStore;
 use crate::Result;
-use crate::search::hits::push_caller_and_graph;
+use crate::search::hits::{matches_lang, push_caller_and_graph};
 use crate::search::types::{HitKind, SearchHit, SearchOptions};
 
 const SYMBOL_SQL_LIMIT: usize = 500;
@@ -65,10 +65,8 @@ pub fn anchor_pass(
     let mut hits = Vec::new();
     for row in rows {
         let (path, language, name, line_start, line_end, byte_start, byte_end) = row?;
-        if let Some(ref lang_filter) = options.lang_filter {
-            if language.as_deref() != Some(lang_filter.as_str()) {
-                continue;
-            }
+        if !matches_lang(language.as_deref(), options.lang_filter.as_deref()) {
+            continue;
         }
         let text = excerpt(&path, line_start, line_end)?;
         let _ = (byte_start, byte_end);
@@ -130,10 +128,8 @@ fn def_hits_for_terms(
 
     for row in rows {
         let (path, language, name, line_start, line_end, _byte_start, _byte_end) = row?;
-        if let Some(ref lang_filter) = options.lang_filter {
-            if language.as_deref() != Some(lang_filter.as_str()) {
-                continue;
-            }
+        if !matches_lang(language.as_deref(), options.lang_filter.as_deref()) {
+            continue;
         }
         let text = excerpt(&path, line_start, line_end)?;
         hits.push(SearchHit {
@@ -191,10 +187,8 @@ fn caller_hits_for_terms(
     let mut hits = Vec::new();
     for row in rows {
         let (path, language, caller, callee, line_no) = row?;
-        if let Some(ref lang_filter) = options.lang_filter {
-            if language.as_deref() != Some(lang_filter.as_str()) {
-                continue;
-            }
+        if !matches_lang(language.as_deref(), options.lang_filter.as_deref()) {
+            continue;
         }
         let callee_score = best_symbol_score(&parsed.terms, &callee);
         let caller_score = best_symbol_score(&parsed.terms, &caller);

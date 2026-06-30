@@ -12,6 +12,23 @@ pub fn fixture() -> PathBuf {
         .expect("fixture")
 }
 
+pub fn index_fixture(mut opts: IndexOptions) -> (TempDir, Indexer) {
+    let temp = TempDir::new().unwrap();
+    opts.index_path = Some(temp.path().join("index.db"));
+    if opts.root.as_os_str() == "." {
+        opts.root = fixture();
+    }
+    let mut indexer = Indexer::new(opts).unwrap();
+    indexer.index_all().unwrap();
+    (temp, indexer)
+}
+
+pub fn searcher_for(indexer: &Indexer, mut opts: SearchOptions) -> Searcher {
+    opts.root = indexer.store().root().to_path_buf();
+    opts.index_path = Some(indexer.store().db_path().to_path_buf());
+    Searcher::new(opts).unwrap()
+}
+
 pub fn indexed_searcher(no_embed: bool) -> (TempDir, Searcher) {
     indexed_searcher_with(no_embed, false)
 }
@@ -21,33 +38,19 @@ pub fn semantic_searcher(no_embed: bool) -> (TempDir, Searcher) {
 }
 
 fn indexed_searcher_with(no_embed: bool, semantic_only: bool) -> (TempDir, Searcher) {
-    let temp = TempDir::new().unwrap();
-    let index_path = temp.path().join("index.db");
-    let root = fixture();
-
-    let mut indexer = Indexer::new(IndexOptions {
-        root: root.clone(),
-        index_path: Some(index_path.clone()),
+    let (temp, indexer) = index_fixture(IndexOptions {
         embed_semantic: !no_embed,
         force_reindex: true,
         ..IndexOptions::default()
-    })
-    .unwrap();
-    indexer.index_all().unwrap();
-
-    let searcher = Searcher::new(SearchOptions {
-        root,
-        index_path: Some(index_path),
-        limit: 32,
-        lang_filter: None,
-        use_embed: !no_embed,
-        use_tantivy: false,
-        use_cloud_embed: false,
-        use_ollama_embed: false,
-        use_semantic_only: semantic_only,
-        ann_threshold: None,
-    })
-    .unwrap();
-
+    });
+    let searcher = searcher_for(
+        &indexer,
+        SearchOptions {
+            limit: 32,
+            use_embed: !no_embed,
+            use_semantic_only: semantic_only,
+            ..SearchOptions::default()
+        },
+    );
     (temp, searcher)
 }

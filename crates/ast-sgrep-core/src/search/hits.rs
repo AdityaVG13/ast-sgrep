@@ -2,6 +2,32 @@ use std::collections::HashSet;
 
 use super::types::{HitKind, SearchHit};
 
+pub fn matches_lang(language: Option<&str>, filter: Option<&str>) -> bool {
+    filter.is_none_or(|lang| language == Some(lang))
+}
+
+pub fn embed_hit(
+    file: String,
+    line_start: u32,
+    line_end: u32,
+    symbol: Option<String>,
+    score: f64,
+    excerpt: String,
+) -> SearchHit {
+    SearchHit {
+        kind: HitKind::Embed,
+        file,
+        line_start,
+        line_end,
+        symbol,
+        caller: None,
+        callee: None,
+        language: None,
+        score,
+        excerpt,
+    }
+}
+
 pub fn import_hit(
     path: String,
     language: Option<String>,

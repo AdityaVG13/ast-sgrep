@@ -5,7 +5,8 @@ use crate::rank::SCORE_EMBED;
 use crate::semantic_ann::rank_chunk_indices;
 use crate::store::IndexStore;
 use crate::Result;
-use crate::search::types::{HitKind, SearchHit, SearchOptions};
+use crate::search::hits::embed_hit;
+use crate::search::types::{SearchHit, SearchOptions};
 
 pub fn embed_pass(
     store: &IndexStore,
@@ -20,7 +21,7 @@ pub fn embed_pass(
     let chunks = store.all_semantic_chunks(options.lang_filter.as_deref())?;
 
     if chunks.is_empty() {
-        return Ok(fallback_line_embeddings(store, options, parsed)?);
+        return Ok(fallback_line_embeddings(store, options, &query)?);
     }
 
     let stored_dim = chunks
@@ -28,13 +29,11 @@ pub fn embed_pass(
         .map(|c| c.5.len())
         .unwrap_or(ast_sgrep_embed::default_semantic_dim());
     let embed_backend = store.get_meta("embed_backend").unwrap_or(None);
-    let preference = search_embed_preference(options);
-
     let query_result = embed_query(
         &query,
         embed_backend.as_deref(),
         stored_dim,
-        preference,
+        search_embed_preference(options),
     );
 
     let indices = rank_chunk_indices(
@@ -49,18 +48,14 @@ pub fn embed_pass(
         .into_iter()
         .map(|(idx, sim)| {
             let (file, line_start, line_end, symbol, excerpt, _) = &chunks[idx];
-            SearchHit {
-                kind: HitKind::Embed,
-                file: file.clone(),
-                line_start: *line_start,
-                line_end: *line_end,
-                symbol: Some(symbol.clone()),
-                caller: None,
-                callee: None,
-                language: None,
-                score: SCORE_EMBED * f64::from(sim),
-                excerpt: excerpt.clone(),
-            }
+            embed_hit(
+                file.clone(),
+                *line_start,
+                *line_end,
+                Some(symbol.clone()),
+                SCORE_EMBED * f64::from(sim),
+                excerpt.clone(),
+            )
         })
         .collect())
 }
@@ -81,9 +76,8 @@ fn search_embed_preference(options: &SearchOptions) -> EmbedPreference {
 fn fallback_line_embeddings(
     store: &IndexStore,
     options: &SearchOptions,
-    parsed: &ParsedQuery,
+    query: &str,
 ) -> Result<Vec<SearchHit>> {
-    let query = parsed.terms.join(" ");
     let conn = store.connection();
     let lang_clause = if options.lang_filter.is_some() {
         " AND f.language = ?1"
@@ -101,18 +95,13 @@ fn fallback_line_embeddings(
     );
 
     let mut lines: Vec<(String, u32, u32, String, String, Vec<f32>)> = Vec::new();
-    if let Some(ref lang) = options.lang_filter {
-        let mut stmt = conn.prepare(&sql)?;
-        let mut rows = stmt.query(rusqlite::params![lang])?;
-        while let Some(row) = rows.next()? {
-            push_legacy_row(&mut lines, row)?;
-        }
-    } else {
-        let mut stmt = conn.prepare(&sql)?;
-        let mut rows = stmt.query([])?;
-        while let Some(row) = rows.next()? {
-            push_legacy_row(&mut lines, row)?;
-        }
+    let mut stmt = conn.prepare(&sql)?;
+    let mut rows = match options.lang_filter.as_deref() {
+        Some(lang) => stmt.query(rusqlite::params![lang])?,
+        None => stmt.query([])?,
+    };
+    while let Some(row) = rows.next()? {
+        push_legacy_row(&mut lines, row)?;
     }
 
     if lines.is_empty() {
@@ -121,7 +110,6 @@ fn fallback_line_embeddings(
 
     let stored_dim = lines.first().map(|l| l.5.len()).unwrap_or(0);
     let embed_backend = store.get_meta("embed_backend").unwrap_or(None);
-    let preference = search_embed_preference(options);
     let chunk_rows: Vec<ast_sgrep_embed::SemanticChunkRow> = lines
         .iter()
         .map(|(file, line_no, line_end, symbol, content, vec)| {
@@ -137,27 +125,25 @@ fn fallback_line_embeddings(
         .collect();
 
     let ranked = ast_sgrep_embed::rank_semantic_chunks(
-        &query,
+        query,
         &chunk_rows,
         50,
         embed_backend.as_deref(),
         stored_dim,
-        preference,
+        search_embed_preference(options),
     );
 
     Ok(ranked
         .into_iter()
-        .map(|(sim, file, line_start, line_end, symbol, excerpt)| SearchHit {
-            kind: HitKind::Embed,
-            file,
-            line_start,
-            line_end,
-            symbol: if symbol.is_empty() { None } else { Some(symbol) },
-            caller: None,
-            callee: None,
-            language: None,
-            score: SCORE_EMBED * f64::from(sim),
-            excerpt,
+        .map(|(sim, file, line_start, line_end, symbol, excerpt)| {
+            embed_hit(
+                file,
+                line_start,
+                line_end,
+                (!symbol.is_empty()).then_some(symbol),
+                SCORE_EMBED * f64::from(sim),
+                excerpt,
+            )
         })
         .collect())
 }

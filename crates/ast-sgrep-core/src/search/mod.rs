@@ -36,9 +36,8 @@ impl Searcher {
 
     pub fn search(&self, query_str: &str) -> Result<SearchResponse> {
         let parsed = ParsedQuery::parse(query_str);
-        let limit = self.options.limit;
 
-        let mut hits = match parsed.mode {
+        let hits = match parsed.mode {
             QueryMode::Callers => search_callers(&self.store, &parsed, &|p, s, e| {
                 self.excerpt_for_span(p, s, e)
             })?,
@@ -57,37 +56,14 @@ impl Searcher {
             QueryMode::Hybrid => self.search_hybrid(&parsed)?,
         };
 
-        hits.sort_by(|a, b| {
-            b.score
-                .partial_cmp(&a.score)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-        hits = dedup_hits(hits);
-        hits.truncate(limit);
-
-        Ok(SearchResponse {
-            query: parsed.raw,
-            limit,
-            hits,
-        })
+        Ok(finish_response(&parsed, self.options.limit, hits, true))
     }
 
     /// Semantic-only search — runs the embed pass without lexical/symbol fusion.
     pub fn search_semantic(&self, query_str: &str) -> Result<SearchResponse> {
         let parsed = ParsedQuery::parse(query_str);
-        let limit = self.options.limit;
-        let mut hits = embed_pass(&self.store, &self.options, &parsed)?;
-        hits.sort_by(|a, b| {
-            b.score
-                .partial_cmp(&a.score)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-        hits.truncate(limit);
-        Ok(SearchResponse {
-            query: parsed.raw,
-            limit,
-            hits,
-        })
+        let hits = embed_pass(&self.store, &self.options, &parsed)?;
+        Ok(finish_response(&parsed, self.options.limit, hits, false))
     }
 
     fn search_hybrid(&self, parsed: &ParsedQuery) -> Result<Vec<SearchHit>> {
@@ -121,5 +97,27 @@ impl Searcher {
         )?;
         let lines: Vec<String> = rows.collect::<std::result::Result<_, _>>()?;
         Ok(lines.join("\n"))
+    }
+}
+
+fn finish_response(
+    parsed: &ParsedQuery,
+    limit: usize,
+    mut hits: Vec<SearchHit>,
+    dedup: bool,
+) -> SearchResponse {
+    hits.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    if dedup {
+        hits = dedup_hits(hits);
+    }
+    hits.truncate(limit);
+    SearchResponse {
+        query: parsed.raw.clone(),
+        limit,
+        hits,
     }
 }

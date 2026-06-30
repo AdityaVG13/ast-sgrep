@@ -343,10 +343,7 @@ pub fn load_or_build_semantic_ivf(
         return Ok(None);
     }
 
-    let max_id = store.semantic_chunk_max_id()?.unwrap_or(0);
-    let backend = store.get_meta("embed_backend")?.unwrap_or_else(|| "semantic".to_string());
-    let fingerprint = compute_ann_fingerprint(chunk_count, max_id, dim, Some(&backend));
-    let db_key = store.db_path().to_string_lossy().to_string();
+    let (fingerprint, db_key) = ann_session_key(store, chunks)?;
     let ivf_path = semantic_ivf_path(store.db_path());
 
     if should_use_ann(chunk_count, override_threshold) {
@@ -379,12 +376,7 @@ pub fn cached_semantic_ivf(
     if !should_use_ann(chunks.len(), override_threshold) {
         return Ok(None);
     }
-    let chunk_count = chunks.len();
-    let dim = chunks.first().map(|c| c.5.len()).unwrap_or(0);
-    let max_id = store.semantic_chunk_max_id()?.unwrap_or(0);
-    let backend = store.get_meta("embed_backend")?.unwrap_or_else(|| "semantic".to_string());
-    let fingerprint = compute_ann_fingerprint(chunk_count, max_id, dim, Some(&backend));
-    let db_key = store.db_path().to_string_lossy().to_string();
+    let (fingerprint, db_key) = ann_session_key(store, chunks)?;
 
     {
         let guard = SESSION_CACHE.lock().unwrap_or_else(|e| e.into_inner());
@@ -396,6 +388,20 @@ pub fn cached_semantic_ivf(
     }
 
     load_or_build_semantic_ivf(store, chunks, override_threshold)
+}
+
+fn ann_session_key(
+    store: &IndexStore,
+    chunks: &[SemanticChunkRow],
+) -> Result<([u8; 32], String)> {
+    let chunk_count = chunks.len();
+    let dim = chunks.first().map(|c| c.5.len()).unwrap_or(0);
+    let max_id = store.semantic_chunk_max_id()?.unwrap_or(0);
+    let backend = store.get_meta("embed_backend")?.unwrap_or_else(|| "semantic".to_string());
+    Ok((
+        compute_ann_fingerprint(chunk_count, max_id, dim, Some(&backend)),
+        store.db_path().to_string_lossy().into_owned(),
+    ))
 }
 
 fn cache_session(db_key: &str, fingerprint: [u8; 32], ivf: &PersistedSemanticIvf) {
