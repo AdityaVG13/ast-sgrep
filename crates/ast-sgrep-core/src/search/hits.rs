@@ -48,6 +48,30 @@ pub fn import_hit(
     }
 }
 
+pub fn symbol_span_hit(
+    kind: HitKind,
+    file: String,
+    line_start: u32,
+    line_end: u32,
+    name: String,
+    language: Option<String>,
+    score: f64,
+    excerpt: String,
+) -> SearchHit {
+    SearchHit {
+        kind,
+        file,
+        line_start,
+        line_end,
+        symbol: Some(name),
+        caller: None,
+        callee: None,
+        language,
+        score,
+        excerpt,
+    }
+}
+
 pub fn push_caller_and_graph(
     hits: &mut Vec<SearchHit>,
     path: String,

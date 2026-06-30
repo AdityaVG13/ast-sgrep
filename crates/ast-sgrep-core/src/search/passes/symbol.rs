@@ -3,7 +3,7 @@ use crate::rank::{best_symbol_score, score_caller, score_def, SCORE_ANCHOR};
 use crate::store::sql::{callee_terms_filter, caller_terms_filter, like_terms_filter, query_limit_map};
 use crate::store::IndexStore;
 use crate::Result;
-use crate::search::hits::{matches_lang, push_caller_and_graph};
+use crate::search::hits::{matches_lang, push_caller_and_graph, symbol_span_hit};
 use crate::search::types::{HitKind, SearchHit, SearchOptions};
 
 const SYMBOL_SQL_LIMIT: usize = 500;
@@ -91,6 +91,36 @@ fn caller_rows_to_hits(
     Ok(hits)
 }
 
+type SymbolSpanRow = (String, Option<String>, String, u32, u32);
+
+fn symbol_span_rows_to_hits(
+    rows: Vec<SymbolSpanRow>,
+    options: &SearchOptions,
+    excerpt: &dyn Fn(&str, u32, u32) -> Result<String>,
+    kind: HitKind,
+    score_for: impl Fn(&str) -> f64,
+) -> Result<Vec<SearchHit>> {
+    let mut hits = Vec::new();
+    for (path, language, name, line_start, line_end) in rows {
+        if !matches_lang(language.as_deref(), options.lang_filter.as_deref()) {
+            continue;
+        }
+        let text = excerpt(&path, line_start, line_end)?;
+        let score = score_for(&name);
+        hits.push(symbol_span_hit(
+            kind,
+            path,
+            line_start,
+            line_end,
+            name,
+            language,
+            score,
+            text,
+        ));
+    }
+    Ok(hits)
+}
+
 pub fn symbol_pass(
     store: &IndexStore,
     options: &SearchOptions,
@@ -148,26 +178,13 @@ pub fn anchor_pass(
         ))
     })?;
 
-    let mut hits = Vec::new();
-    for (path, language, name, line_start, line_end) in rows {
-        if !matches_lang(language.as_deref(), options.lang_filter.as_deref()) {
-            continue;
-        }
-        let text = excerpt(&path, line_start, line_end)?;
-        hits.push(SearchHit {
-            kind: HitKind::Anchor,
-            file: path,
-            line_start,
-            line_end,
-            symbol: Some(name),
-            caller: None,
-            callee: None,
-            language,
-            score: SCORE_ANCHOR,
-            excerpt: text,
-        });
-    }
-    Ok(hits)
+    symbol_span_rows_to_hits(
+        rows,
+        options,
+        excerpt,
+        HitKind::Anchor,
+        |_| SCORE_ANCHOR,
+    )
 }
 
 pub(crate) fn def_hits_for_terms(
@@ -197,26 +214,9 @@ pub(crate) fn def_hits_for_terms(
         ))
     })?;
 
-    let mut hits = Vec::new();
-    for (path, language, name, line_start, line_end) in rows {
-        if !matches_lang(language.as_deref(), options.lang_filter.as_deref()) {
-            continue;
-        }
-        let text = excerpt(&path, line_start, line_end)?;
-        hits.push(SearchHit {
-            kind: HitKind::Def,
-            file: path,
-            line_start,
-            line_end,
-            symbol: Some(name.clone()),
-            caller: None,
-            callee: None,
-            language,
-            score: score_def(&parsed.terms, &name),
-            excerpt: text,
-        });
-    }
-    Ok(hits)
+    symbol_span_rows_to_hits(rows, options, excerpt, HitKind::Def, |name| {
+        score_def(&parsed.terms, name)
+    })
 }
 
 pub(crate) fn caller_hits_for_terms(
