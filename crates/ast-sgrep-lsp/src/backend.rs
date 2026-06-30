@@ -11,7 +11,7 @@ use serde_json::{json, Value};
 use crate::types::{
     CallHierarchyItem, DocumentSymbolParams, ExecuteCommandParams, Position, Range,
     TextDocumentContentChangeEvent, SYMBOL_KIND_FUNCTION, SYMBOL_KIND_METHOD,
-    TextDocumentPositionParams,
+    SYMBOL_KIND_STRING, TextDocumentPositionParams,
 };
 
 pub struct LspBackend {
@@ -33,6 +33,10 @@ impl LspBackend {
 
     pub fn root(&self) -> &Path {
         &self.root
+    }
+
+    pub fn set_index_path(&mut self, path: PathBuf) {
+        self.index_path = Some(path);
     }
 
     pub fn is_index_ready(&self) -> bool {
@@ -111,7 +115,13 @@ impl LspBackend {
                 "documentSymbolProvider": true,
                 "callHierarchyProvider": true,
                 "executeCommandProvider": {
-                    "commands": ["asgrep.search", "asgrep.reindex", "asgrep.callers", "asgrep.defs"]
+                    "commands": [
+                        "asgrep.search",
+                        "asgrep.search.semantic",
+                        "asgrep.reindex",
+                        "asgrep.callers",
+                        "asgrep.defs"
+                    ]
                 }
             },
             "serverInfo": {
@@ -125,13 +135,16 @@ impl LspBackend {
         if query.is_empty() {
             return Ok(json!([]));
         }
+        if self.index_thread.is_some() && !self.is_index_ready() {
+            return Ok(json!([]));
+        }
         let searcher = Searcher::new(self.search_options(50))?;
         let response = searcher.search(query)?;
         Ok(Value::Array(
             response
                 .hits
                 .into_iter()
-                .filter_map(|hit| symbol_information(&self.root, &hit.file, &hit))
+                .filter_map(|hit| workspace_symbol(&self.root, &hit.file, &hit))
                 .collect(),
         ))
     }
@@ -283,6 +296,15 @@ impl LspBackend {
                 let response = searcher.search(query)?;
                 Ok(serde_json::to_value(response)?)
             }
+            "asgrep.search.semantic" => {
+                let query = params
+                    .arguments
+                    .first()
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                let response = searcher.search_semantic(query)?;
+                Ok(serde_json::to_value(response)?)
+            }
             "asgrep.callers" => {
                 let sym = params
                     .arguments
@@ -343,16 +365,44 @@ pub fn utf16_char_to_byte(line: &str, utf16_offset: u32) -> usize {
     line.len()
 }
 
-fn symbol_information(root: &Path, file: &str, hit: &ast_sgrep_core::SearchHit) -> Option<Value> {
+fn workspace_symbol(root: &Path, file: &str, hit: &ast_sgrep_core::SearchHit) -> Option<Value> {
     let name = hit
         .symbol
         .clone()
         .or_else(|| hit.callee.clone())
         .unwrap_or_else(|| hit.excerpt.chars().take(60).collect());
+
+    let kind = match hit.kind {
+        ast_sgrep_core::search::HitKind::Embed => SYMBOL_KIND_STRING,
+        ast_sgrep_core::search::HitKind::Def => SYMBOL_KIND_FUNCTION,
+        ast_sgrep_core::search::HitKind::Caller | ast_sgrep_core::search::HitKind::Graph => {
+            SYMBOL_KIND_METHOD
+        }
+        _ => SYMBOL_KIND_FUNCTION,
+    };
+
+    let detail = match hit.kind {
+        ast_sgrep_core::search::HitKind::Embed => {
+            format!("semantic · score {:.2}", hit.score)
+        }
+        other => format!("{} · score {:.2}", other.as_str(), hit.score),
+    };
+
+    let excerpt: String = hit.excerpt.chars().take(120).collect();
+    let container = file.to_string();
+
     Some(json!({
         "name": name,
-        "kind": SYMBOL_KIND_FUNCTION,
-        "location": location_value(root, file, hit.line_start, hit.line_end)
+        "kind": kind,
+        "location": location_value(root, file, hit.line_start, hit.line_end),
+        "containerName": container,
+        "detail": detail,
+        "data": {
+            "asgrepKind": hit.kind.as_str(),
+            "score": hit.score,
+            "excerpt": excerpt,
+            "semantic": hit.kind == ast_sgrep_core::search::HitKind::Embed,
+        }
     }))
 }
 

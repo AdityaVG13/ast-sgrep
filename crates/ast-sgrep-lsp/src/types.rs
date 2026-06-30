@@ -148,3 +148,5 @@ pub struct TextDocumentContentChangeEvent {
 pub const SYMBOL_KIND_FUNCTION: u32 = 12;
 /// LSP SymbolKind for methods.
 pub const SYMBOL_KIND_METHOD: u32 = 6;
+/// LSP SymbolKind::String — used for semantic similarity hits.
+pub const SYMBOL_KIND_STRING: u32 = 15;

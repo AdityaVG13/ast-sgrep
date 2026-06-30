@@ -1,12 +1,11 @@
-use ast_sgrep_embed::{embed_from_bytes, rank_semantic_chunks, EmbedPreference};
+use ast_sgrep_embed::{embed_from_bytes, embed_query, EmbedPreference};
 
 use crate::query::ParsedQuery;
 use crate::rank::SCORE_EMBED;
+use crate::semantic_ann::{ann_rank_indices, should_use_ann};
 use crate::store::IndexStore;
 use crate::Result;
 use crate::search::types::{HitKind, SearchHit, SearchOptions};
-
-const SEMANTIC_SQL_LIMIT: usize = 5_000;
 
 pub fn embed_pass(
     store: &IndexStore,
@@ -18,34 +17,7 @@ pub fn embed_pass(
     }
 
     let query = parsed.terms.join(" ");
-    let conn = store.connection();
-    let lang_clause = if options.lang_filter.is_some() {
-        " AND f.language = ?1"
-    } else {
-        ""
-    };
-    let sql = format!(
-        "SELECT f.path, sc.line_start, sc.line_end, sc.symbol_name, sc.text, sc.vector
-         FROM semantic_chunks sc
-         JOIN files f ON f.id = sc.file_id
-         WHERE 1=1{lang_clause}
-         LIMIT {SEMANTIC_SQL_LIMIT}"
-    );
-
-    let mut chunks = Vec::new();
-    if let Some(ref lang) = options.lang_filter {
-        let mut stmt = conn.prepare(&sql)?;
-        let mut rows = stmt.query(rusqlite::params![lang])?;
-        while let Some(row) = rows.next()? {
-            push_semantic_row(&mut chunks, row)?;
-        }
-    } else {
-        let mut stmt = conn.prepare(&sql)?;
-        let mut rows = stmt.query([])?;
-        while let Some(row) = rows.next()? {
-            push_semantic_row(&mut chunks, row)?;
-        }
-    }
+    let chunks = load_semantic_chunks(store, options)?;
 
     if chunks.is_empty() {
         return Ok(fallback_line_embeddings(store, options, parsed)?);
@@ -58,14 +30,26 @@ pub fn embed_pass(
     let embed_backend = store.get_meta("embed_backend").unwrap_or(None);
     let preference = search_embed_preference(options);
 
-    let ranked = rank_semantic_chunks(
-        &query,
-        &chunks,
-        50,
-        embed_backend.as_deref(),
-        stored_dim,
-        preference,
-    );
+    let ranked = if should_use_ann(chunks.len()) {
+        rank_with_ann(
+            store,
+            &query,
+            &chunks,
+            50,
+            embed_backend.as_deref(),
+            stored_dim,
+            preference,
+        )
+    } else {
+        ast_sgrep_embed::rank_semantic_chunks(
+            &query,
+            &chunks,
+            50,
+            embed_backend.as_deref(),
+            stored_dim,
+            preference,
+        )
+    };
 
     Ok(ranked
         .into_iter()
@@ -82,6 +66,80 @@ pub fn embed_pass(
             excerpt,
         })
         .collect())
+}
+
+fn rank_with_ann(
+    store: &IndexStore,
+    query: &str,
+    chunks: &[ast_sgrep_embed::SemanticChunkRow],
+    limit: usize,
+    stored_backend: Option<&str>,
+    stored_dim: usize,
+    preference: EmbedPreference,
+) -> Vec<(f32, String, u32, u32, String, String)> {
+    let query_result = embed_query(query, stored_backend, stored_dim, preference);
+    let db_key = store.db_path().to_string_lossy().to_string();
+
+    if let Some(indices) = ann_rank_indices(&db_key, &query_result.vector, chunks, limit) {
+        return indices
+            .into_iter()
+            .map(|(idx, sim)| {
+                let (file, line_start, line_end, symbol, excerpt, _) = &chunks[idx];
+                (
+                    sim,
+                    file.clone(),
+                    *line_start,
+                    *line_end,
+                    symbol.clone(),
+                    excerpt.clone(),
+                )
+            })
+            .collect();
+    }
+
+    ast_sgrep_embed::rank_semantic_chunks(
+        query,
+        chunks,
+        limit,
+        stored_backend,
+        stored_dim,
+        preference,
+    )
+}
+
+fn load_semantic_chunks(
+    store: &IndexStore,
+    options: &SearchOptions,
+) -> Result<Vec<ast_sgrep_embed::SemanticChunkRow>> {
+    let conn = store.connection();
+    let lang_clause = if options.lang_filter.is_some() {
+        " AND f.language = ?1"
+    } else {
+        ""
+    };
+    // No SQL LIMIT — ANN needs the full corpus; chunk count is bounded by symbol count.
+    let sql = format!(
+        "SELECT f.path, sc.line_start, sc.line_end, sc.symbol_name, sc.text, sc.vector
+         FROM semantic_chunks sc
+         JOIN files f ON f.id = sc.file_id
+         WHERE 1=1{lang_clause}"
+    );
+
+    let mut chunks = Vec::new();
+    if let Some(ref lang) = options.lang_filter {
+        let mut stmt = conn.prepare(&sql)?;
+        let mut rows = stmt.query(rusqlite::params![lang])?;
+        while let Some(row) = rows.next()? {
+            push_semantic_row(&mut chunks, row)?;
+        }
+    } else {
+        let mut stmt = conn.prepare(&sql)?;
+        let mut rows = stmt.query([])?;
+        while let Some(row) = rows.next()? {
+            push_semantic_row(&mut chunks, row)?;
+        }
+    }
+    Ok(chunks)
 }
 
 fn search_embed_preference(options: &SearchOptions) -> EmbedPreference {
@@ -176,7 +234,7 @@ fn fallback_line_embeddings(
         })
         .collect();
 
-    let ranked = rank_semantic_chunks(
+    let ranked = ast_sgrep_embed::rank_semantic_chunks(
         &query,
         &chunk_rows,
         50,

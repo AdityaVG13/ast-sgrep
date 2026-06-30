@@ -163,6 +163,7 @@ dependencies = [
  "ast-sgrep-core",
  "serde",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]

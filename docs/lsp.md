@@ -30,7 +30,7 @@ cargo install ast-sgrep-lsp
 | `callHierarchy/prepareCallHierarchy` | Symbol at cursor |
 | `callHierarchy/incomingCalls` | Caller graph (who calls this) |
 | `callHierarchy/outgoingCalls` | Callee graph (what this calls) |
-| `workspace/executeCommand` | `asgrep.search`, `asgrep.reindex`, `asgrep.callers`, `asgrep.defs` |
+| `workspace/executeCommand` | `asgrep.search`, `asgrep.search.semantic`, `asgrep.reindex`, `asgrep.callers`, `asgrep.defs` |
 | `textDocument/didSave` | Incremental single-file reindex from disk |
 | `textDocument/didChange` | Index unsaved buffer content (full-sync) |
 
@@ -45,7 +45,29 @@ cargo install ast-sgrep-lsp
 
 ```json
 { "command": "asgrep.search", "arguments": ["auth refresh"] }
+{ "command": "asgrep.search.semantic", "arguments": ["credential renewal"] }
 { "command": "asgrep.callers", "arguments": ["process_request"] }
 { "command": "asgrep.defs", "arguments": ["main"] }
 { "command": "asgrep.reindex", "arguments": [] }
 ```
+
+### Workspace symbol semantic metadata
+
+`workspace/symbol` results include `detail` and `data` for editor extensions:
+
+```json
+{
+  "name": "auth_refresh",
+  "kind": 15,
+  "detail": "semantic · score 3.42",
+  "containerName": "src/main.rs",
+  "data": {
+    "asgrepKind": "embed",
+    "score": 3.42,
+    "excerpt": "fn auth_refresh() { ... }",
+    "semantic": true
+  }
+}
+```
+
+Kind `15` (`String`) marks semantic similarity hits; other hit kinds use function/method kinds.

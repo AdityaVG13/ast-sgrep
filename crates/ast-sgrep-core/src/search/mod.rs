@@ -72,6 +72,24 @@ impl Searcher {
         })
     }
 
+    /// Semantic-only search — runs the embed pass without lexical/symbol fusion.
+    pub fn search_semantic(&self, query_str: &str) -> Result<SearchResponse> {
+        let parsed = ParsedQuery::parse(query_str);
+        let limit = self.options.limit;
+        let mut hits = embed_pass(&self.store, &self.options, &parsed)?;
+        hits.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        hits.truncate(limit);
+        Ok(SearchResponse {
+            query: parsed.raw,
+            limit,
+            hits,
+        })
+    }
+
     fn search_hybrid(&self, parsed: &ParsedQuery) -> Result<Vec<SearchHit>> {
         let excerpt = |p: &str, s: u32, e: u32| self.excerpt_for_span(p, s, e);
         let mut hits = Vec::new();
