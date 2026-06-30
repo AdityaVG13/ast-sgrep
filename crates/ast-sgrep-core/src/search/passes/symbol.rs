@@ -2,7 +2,7 @@ use rusqlite::params;
 
 use crate::query::ParsedQuery;
 use crate::rank::{best_symbol_score, score_caller, score_def, SCORE_ANCHOR};
-use crate::store::sql::{caller_terms_filter, like_terms_filter};
+use crate::store::sql::{callee_terms_filter, caller_terms_filter, like_terms_filter, query_limit_map};
 use crate::store::IndexStore;
 use crate::Result;
 use crate::search::hits::{matches_lang, push_caller_and_graph};
@@ -18,6 +18,80 @@ const SYMBOL_SELECT: &str = "SELECT f.path, f.language, s.name, s.kind, s.line_s
 const CALLER_SELECT: &str = "SELECT f.path, f.language, c.caller, c.callee, c.line_no, c.byte_start, c.byte_end
          FROM callers c
          JOIN files f ON f.id = c.file_id";
+
+type CallerQueryRow = (String, Option<String>, String, String, u32);
+
+enum CallerMatchMode {
+    Hybrid,
+    CalleeOnly,
+}
+
+fn query_caller_rows(
+    store: &IndexStore,
+    filter: fn(&[String], Option<&str>) -> (String, Vec<String>),
+    terms: &[String],
+    lang_filter: Option<&str>,
+    limit: usize,
+) -> Result<Vec<CallerQueryRow>> {
+    let (where_clause, bind) = filter(terms, lang_filter);
+    let sql = format!("{CALLER_SELECT}{where_clause} LIMIT ?{}", bind.len() + 1);
+    query_limit_map(store.connection(), &sql, bind, limit, |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, Option<String>>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, String>(3)?,
+            row.get::<_, u32>(4)?,
+        ))
+    })
+}
+
+fn caller_rows_to_hits(
+    rows: Vec<CallerQueryRow>,
+    options: &SearchOptions,
+    parsed: &ParsedQuery,
+    excerpt: &dyn Fn(&str, u32, u32) -> Result<String>,
+    mode: CallerMatchMode,
+) -> Result<Vec<SearchHit>> {
+    let mut hits = Vec::new();
+    for (path, language, caller, callee, line_no) in rows {
+        if !matches_lang(language.as_deref(), options.lang_filter.as_deref()) {
+            continue;
+        }
+        let callee_score = best_symbol_score(&parsed.terms, &callee);
+        let caller_score = best_symbol_score(&parsed.terms, &caller);
+        let matched = match mode {
+            CallerMatchMode::Hybrid => callee_score > 0.0 || caller_score > 0.0,
+            CallerMatchMode::CalleeOnly => callee_score > 0.0,
+        };
+        if !matched {
+            continue;
+        }
+        let text = excerpt(&path, line_no, line_no)?;
+        let score = score_caller(&parsed.terms, &callee);
+        let include_graph = match mode {
+            CallerMatchMode::CalleeOnly => true,
+            CallerMatchMode::Hybrid => {
+                callee_score > 0.0
+                    || parsed
+                        .primary_symbol()
+                        .is_some_and(|s| callee.to_lowercase().contains(&s.to_lowercase()))
+            }
+        };
+        push_caller_and_graph(
+            &mut hits,
+            path,
+            language,
+            caller,
+            callee,
+            line_no,
+            text,
+            score,
+            include_graph,
+        );
+    }
+    Ok(hits)
+}
 
 pub fn symbol_pass(
     store: &IndexStore,
@@ -124,15 +198,7 @@ pub(crate) fn def_hits_for_terms(
         options.lang_filter.as_deref(),
     );
     let sql = format!("{SYMBOL_SELECT}{where_clause} LIMIT ?{}", bind.len() + 1);
-    let conn = store.connection();
-    let mut stmt = conn.prepare(&sql)?;
-    let mut params_vec: Vec<Box<dyn rusqlite::types::ToSql>> =
-        bind.into_iter().map(|s| Box::new(s) as _).collect();
-    params_vec.push(Box::new(limit as i64));
-    let params_refs: Vec<&dyn rusqlite::types::ToSql> =
-        params_vec.iter().map(|p| p.as_ref()).collect();
-
-    let rows = stmt.query_map(params_refs.as_slice(), |row| {
+    let rows = query_limit_map(store.connection(), &sql, bind, limit, |row| {
         Ok((
             row.get::<_, String>(0)?,
             row.get::<_, Option<String>>(1)?,
@@ -143,8 +209,7 @@ pub(crate) fn def_hits_for_terms(
     })?;
 
     let mut hits = Vec::new();
-    for row in rows {
-        let (path, language, name, line_start, line_end) = row?;
+    for (path, language, name, line_start, line_end) in rows {
         if !matches_lang(language.as_deref(), options.lang_filter.as_deref()) {
             continue;
         }
@@ -175,55 +240,32 @@ pub(crate) fn caller_hits_for_terms(
     if parsed.terms.is_empty() {
         return Ok(Vec::new());
     }
+    let rows = query_caller_rows(
+        store,
+        caller_terms_filter,
+        &parsed.terms,
+        options.lang_filter.as_deref(),
+        limit,
+    )?;
+    caller_rows_to_hits(rows, options, parsed, excerpt, CallerMatchMode::Hybrid)
+}
 
-    let (where_clause, bind) =
-        caller_terms_filter(&parsed.terms, options.lang_filter.as_deref());
-    let sql = format!("{CALLER_SELECT}{where_clause} LIMIT ?{}", bind.len() + 1);
-    let conn = store.connection();
-    let mut stmt = conn.prepare(&sql)?;
-    let mut params_vec: Vec<Box<dyn rusqlite::types::ToSql>> =
-        bind.into_iter().map(|s| Box::new(s) as _).collect();
-    params_vec.push(Box::new(limit as i64));
-    let params_refs: Vec<&dyn rusqlite::types::ToSql> =
-        params_vec.iter().map(|p| p.as_ref()).collect();
-
-    let rows = stmt.query_map(params_refs.as_slice(), |row| {
-        Ok((
-            row.get::<_, String>(0)?,
-            row.get::<_, Option<String>>(1)?,
-            row.get::<_, String>(2)?,
-            row.get::<_, String>(3)?,
-            row.get::<_, u32>(4)?,
-        ))
-    })?;
-
-    let mut hits = Vec::new();
-    for row in rows {
-        let (path, language, caller, callee, line_no) = row?;
-        if !matches_lang(language.as_deref(), options.lang_filter.as_deref()) {
-            continue;
-        }
-        let callee_score = best_symbol_score(&parsed.terms, &callee);
-        let caller_score = best_symbol_score(&parsed.terms, &caller);
-        if callee_score == 0.0 && caller_score == 0.0 {
-            continue;
-        }
-        let text = excerpt(&path, line_no, line_no)?;
-        let include_graph = callee_score > 0.0
-            || parsed
-                .primary_symbol()
-                .is_some_and(|s| callee.to_lowercase().contains(&s.to_lowercase()));
-        push_caller_and_graph(
-            &mut hits,
-            path,
-            language,
-            caller,
-            callee.clone(),
-            line_no,
-            text,
-            score_caller(&parsed.terms, &callee),
-            include_graph,
-        );
+pub(crate) fn callee_hits_for_terms(
+    store: &IndexStore,
+    options: &SearchOptions,
+    parsed: &ParsedQuery,
+    excerpt: &dyn Fn(&str, u32, u32) -> Result<String>,
+    limit: usize,
+) -> Result<Vec<SearchHit>> {
+    if parsed.terms.is_empty() {
+        return Ok(Vec::new());
     }
-    Ok(hits)
+    let rows = query_caller_rows(
+        store,
+        callee_terms_filter,
+        &parsed.terms,
+        options.lang_filter.as_deref(),
+        limit,
+    )?;
+    caller_rows_to_hits(rows, options, parsed, excerpt, CallerMatchMode::CalleeOnly)
 }

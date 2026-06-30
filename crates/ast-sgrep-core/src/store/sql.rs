@@ -73,6 +73,11 @@ pub fn like_terms_filter(
     (where_clause(&parts), bind)
 }
 
+/// Callee-only LIKE filter for `callers:` mode.
+pub fn callee_terms_filter(terms: &[String], lang_filter: Option<&str>) -> (String, Vec<String>) {
+    like_terms_filter("c.callee", terms, lang_filter)
+}
+
 /// Caller/callee LIKE filter for hybrid symbol search.
 pub fn caller_terms_filter(terms: &[String], lang_filter: Option<&str>) -> (String, Vec<String>) {
     let mut bind: Vec<String> = Vec::new();
@@ -118,4 +123,25 @@ where
         }
     }
     Ok(out)
+}
+
+/// Run a prepared statement with string binds plus a trailing LIMIT parameter.
+pub fn query_limit_map<T, F>(
+    conn: &Connection,
+    sql: &str,
+    bind: Vec<String>,
+    limit: usize,
+    map: F,
+) -> Result<Vec<T>>
+where
+    F: FnMut(&rusqlite::Row<'_>) -> rusqlite::Result<T>,
+{
+    let mut stmt = conn.prepare(sql)?;
+    let mut params_vec: Vec<Box<dyn ToSql>> =
+        bind.into_iter().map(|s| Box::new(s) as _).collect();
+    params_vec.push(Box::new(limit as i64));
+    let params_refs: Vec<&dyn ToSql> = params_vec.iter().map(|p| p.as_ref()).collect();
+    let rows = stmt.query_map(params_refs.as_slice(), map)?;
+    rows.collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(Into::into)
 }

@@ -4,7 +4,7 @@ use crate::Result;
 use crate::search::hits::import_hit;
 use crate::search::types::SearchHit;
 
-use super::symbol::{caller_hits_for_terms, def_hits_for_terms};
+use super::symbol::{callee_hits_for_terms, def_hits_for_terms};
 
 const MODE_SQL_LIMIT: usize = 200;
 
@@ -21,7 +21,7 @@ pub fn search_callers(
         terms: vec![symbol],
         ..parsed.clone()
     };
-    caller_hits_for_terms(
+    callee_hits_for_terms(
         store,
         &mode_search_options(),
         &mode_query,
