@@ -128,6 +128,19 @@ impl IndexStore {
         Ok(())
     }
 
+    pub fn get_meta(&self, key: &str) -> Result<Option<String>> {
+        let result = self.conn.query_row(
+            "SELECT value FROM meta WHERE key = ?1",
+            params![key],
+            |row| row.get(0),
+        );
+        match result {
+            Ok(v) => Ok(Some(v)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
     pub fn begin_file_tx(&self) -> Result<()> {
         self.conn.execute_batch("BEGIN IMMEDIATE")?;
         Ok(())
@@ -155,6 +168,7 @@ impl IndexStore {
         callers: &[CallerRow],
         imports: &[ImportRow],
         embed_lines: bool,
+        cloud_embed: bool,
     ) -> Result<i64> {
         let file_id: Option<i64> = self.conn.query_row(
             "SELECT id FROM files WHERE path = ?1",
@@ -200,13 +214,26 @@ impl IndexStore {
             let mut emb_stmt = self.conn.prepare(
                 "INSERT INTO embeddings(file_id, line_no, vector) VALUES(?1, ?2, ?3)",
             )?;
+            let mut embed_dim: Option<usize> = None;
+            let mut used_cloud = false;
             for (line_no, content) in lines {
                 if content.trim().is_empty() {
                     continue;
                 }
-                let vec = ast_sgrep_embed::embed_line(content);
+                let vec = compute_line_embedding(content, cloud_embed);
+                if cloud_embed && vec.len() != ast_sgrep_embed::EMBED_DIM {
+                    used_cloud = true;
+                }
+                embed_dim = Some(vec.len());
                 let bytes = ast_sgrep_embed::embed_to_bytes(&vec);
                 emb_stmt.execute(params![file_id, line_no, bytes])?;
+            }
+            if embed_lines {
+                let backend = if used_cloud { "cloud" } else { "local" };
+                self.set_meta("embed_backend", backend)?;
+                if let Some(dim) = embed_dim {
+                    self.set_meta("embed_dim", &dim.to_string())?;
+                }
             }
         }
 
@@ -427,6 +454,20 @@ impl IndexStore {
             Err(e) => Err(e.into()),
         }
     }
+}
+
+fn compute_line_embedding(content: &str, cloud_embed: bool) -> Vec<f32> {
+    if cloud_embed {
+        #[cfg(feature = "cloud-embed")]
+        {
+            if let Some(config) = ast_sgrep_embed::CloudEmbeddingConfig::from_env() {
+                if let Ok(vec) = ast_sgrep_embed::embed_via_api(content, &config) {
+                    return vec;
+                }
+            }
+        }
+    }
+    ast_sgrep_embed::embed_line(content)
 }
 
 #[derive(Debug, Clone)]

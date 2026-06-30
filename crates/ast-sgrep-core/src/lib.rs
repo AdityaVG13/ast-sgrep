@@ -10,7 +10,7 @@ pub mod search;
 pub mod store;
 pub mod tantivy_index;
 
-pub use index::{IndexOptions, IndexStats, Indexer};
+pub use index::{EmbedBackend, IndexOptions, IndexStats, Indexer};
 pub use output::format_hit_line;
 pub use pattern::search_pattern;
 pub use query::{ParsedQuery, QueryMode};

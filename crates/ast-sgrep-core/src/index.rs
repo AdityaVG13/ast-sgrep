@@ -10,6 +10,14 @@ use walkdir::WalkDir;
 use crate::store::{CallerRow, ImportRow, IndexStore, SymbolRow};
 use crate::Result;
 
+/// Embedding backend used when `embed_lines` is enabled.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum EmbedBackend {
+    #[default]
+    Local,
+    Cloud,
+}
+
 /// Options for indexing a repository.
 #[derive(Debug, Clone)]
 pub struct IndexOptions {
@@ -17,12 +25,25 @@ pub struct IndexOptions {
     pub index_path: Option<PathBuf>,
     pub lang_filter: Option<String>,
     pub respect_gitignore: bool,
-    /// Build tantivy sidecar for large-repo lexical search.
     pub use_tantivy: bool,
-    /// Store line embeddings during indexing (required for `--embed` search).
     pub embed_lines: bool,
-    /// Bypass hash/mtime skip and re-parse every file.
+    pub embed_backend: EmbedBackend,
     pub force_reindex: bool,
+}
+
+impl Default for IndexOptions {
+    fn default() -> Self {
+        Self {
+            root: PathBuf::from("."),
+            index_path: None,
+            lang_filter: None,
+            respect_gitignore: true,
+            use_tantivy: false,
+            embed_lines: false,
+            embed_backend: EmbedBackend::Local,
+            force_reindex: false,
+        }
+    }
 }
 
 /// Statistics from an indexing run.
@@ -160,7 +181,25 @@ impl Indexer {
             Err(e) => return Err(e.into()),
         };
 
-        let hash = hash_content(&content);
+        self.index_content_at(rel_path, &content, abs_path, mtime_secs, mtime_nanos)
+    }
+
+    /// Index in-memory content (LSP `didChange` / unsaved buffers).
+    pub fn index_content(&mut self, rel_path: &str, content: &str) -> Result<(usize, usize, usize)> {
+        let now = SystemTime::now();
+        let (mtime_secs, mtime_nanos) = system_time_to_parts(now);
+        self.index_content_at(rel_path, content, Path::new(rel_path), mtime_secs, mtime_nanos)
+    }
+
+    fn index_content_at(
+        &mut self,
+        rel_path: &str,
+        content: &str,
+        lang_path: &Path,
+        mtime_secs: i64,
+        mtime_nanos: u32,
+    ) -> Result<(usize, usize, usize)> {
+        let hash = hash_content(content);
 
         if !self.options.force_reindex {
             if let Some(stored_hash) = self.store.file_hash(rel_path)? {
@@ -174,7 +213,7 @@ impl Indexer {
             }
         }
 
-        let language = detect_language(abs_path, Some(&content));
+        let language = detect_language(lang_path, Some(content));
         if let Some(ref lang_filter) = self.options.lang_filter {
             match language {
                 Some(lang) if lang.as_str() == lang_filter.as_str() => {}
@@ -194,7 +233,7 @@ impl Indexer {
             .collect();
 
         let (symbols, callers, imports) = if let Some(lang) = language {
-            match self.parsers.parse(lang, &content) {
+            match self.parsers.parse(lang, content) {
                 Ok(extraction) => {
                     let symbols: Vec<SymbolRow> = extraction
                         .symbols
@@ -250,6 +289,7 @@ impl Indexer {
             &callers,
             &imports,
             self.options.embed_lines,
+            self.options.embed_lines && self.options.embed_backend == EmbedBackend::Cloud,
         )?;
 
         Ok((sym_count, caller_count, import_count))
@@ -267,6 +307,7 @@ impl Indexer {
             !matches!(
                 ext.as_str(),
                 "rs" | "ts" | "tsx" | "js" | "jsx" | "mjs" | "cjs" | "py" | "pyi" | "go"
+                    | "java" | "cs" | "rb"
                     | "toml" | "md" | "txt" | "json" | "yaml" | "yml"
             )
         } else {

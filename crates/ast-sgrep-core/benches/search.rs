@@ -15,11 +15,7 @@ fn setup_index() -> (TempDir, PathBuf, PathBuf) {
     let mut indexer = Indexer::new(IndexOptions {
         root: root.clone(),
         index_path: Some(index_path.clone()),
-        lang_filter: None,
-        respect_gitignore: true,
-        use_tantivy: false,
-        embed_lines: false,
-        force_reindex: false,
+        ..IndexOptions::default()
     })
     .unwrap();
     indexer.index_all().unwrap();
