@@ -27,7 +27,7 @@ Phase 6: Content-Length JSON-RPC, cursor-aware symbol resolution, incremental re
 - **Output:** line + JSON
 - **CLI:** `index`, `status`, `reindex`, `bench`
 - **LSP:** full `asgrep-lsp` — see [docs/lsp.md](docs/lsp.md)
-- **Tests:** 33+ unit/integration (incl. 9 LSP tests) + false-positive regression suite
+- **Tests:** 52 unit/integration/e2e tests (incl. CLI subprocess + 6 LSP tests) + false-positive regression suite
 - **Publish:** crates.io metadata + `scripts/publish.sh` (no CI — publish manually)
 
 ## CLI

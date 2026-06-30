@@ -1,34 +1,157 @@
 # ast-sgrep
 
-Polyglot hybrid code search — **v1.0**
+**Polyglot hybrid code search** — find intent across Rust, TypeScript, JavaScript, Python, and Go with lexical search, AST symbol graphs, and optional semantic embeddings.
 
 ```bash
-cargo install --path crates/ast-sgrep-cli
+cargo install ast-sgrep-cli
 asgrep index .
 asgrep "where is auth refreshed"
 ```
 
-**Not** [ast-grep](https://github.com/ast-grep/ast-grep) (codemods). **Not** ripgrep (raw text).
+> **ast-grep finds shapes. ast-sgrep finds intent with graph context.**
 
-**Is:** keyword search + AST symbol graph context + optional local embeddings.
+---
 
-Supports **Rust**, **TypeScript**, **JavaScript**, **Python**, and **Go**.
+## Why ast-sgrep?
 
-Binaries: `asgrep` and `ast-sgrep` (aliases).
+Code search tools solve different problems. **ast-sgrep takes a different approach** from both [ast-grep](https://github.com/ast-grep/ast-grep) and [ripgrep](https://github.com/BurntSushi/ripgrep): it builds a persistent, queryable index that fuses text search with AST-derived symbol and call-graph context — so you can ask *“where is auth refreshed?”* and get definitions, callers, and anchor excerpts in one ranked result set.
 
-## Tagline
+### How the tools compare
 
-ast-grep finds shapes. **ast-sgrep** finds intent with graph context.
+| | **ast-sgrep** | **ast-grep** | **ripgrep** |
+|---|:---:|:---:|:---:|
+| **Primary goal** | Navigate & understand codebases | Structural search & codemods | Fast text search |
+| **Search model** | Persistent SQLite index + hybrid ranking | Pattern match per run | Streaming regex scan |
+| **Natural-language queries** | Yes (`"how does auth refresh work"`) | No | No |
+| **Symbol definitions** | Yes (`defs:process_request`) | Via pattern only | No |
+| **Caller / callee graph** | Yes (`callers:main`) | No | No |
+| **Import tracking** | Yes (`imports:serde`) | No | No |
+| **Structural patterns** | Yes (`pattern:fn $NAME($$$)`) — delegates to ast-grep | Native | No |
+| **Semantic similarity** | Optional (`--embed`, `--cloud-embed`) | No | No |
+| **Polyglot (Rust/TS/Py/Go)** | Yes, unified index | Yes | Yes (text only) |
+| **LSP integration** | `asgrep-lsp` (symbols, defs, refs, call hierarchy) | Separate ecosystem | No |
+| **JSON output for agents** | Yes (`--json`) | Yes | Yes (`--json`) |
+| **Typical latency** | ~0.3 ms/search (indexed) | Pattern-dependent | ~ms–s per scan |
+
+### When to use which
+
+| You want to… | Reach for |
+|---|---|
+| Ask *“where does X happen?”* across a whole repo | **ast-sgrep** |
+| Find who calls a function or where a symbol is defined | **ast-sgrep** |
+| Feed ranked, structured hits to an AI agent | **ast-sgrep** (`--json`) |
+| Rewrite code with AST-aware rules | **ast-grep** |
+| Match a syntactic shape (`class $C { $$$ }`) | **ast-grep** or `asgrep "pattern:…"` |
+| Grep logs, configs, or any file type fast | **ripgrep** |
+| One-off regex across unindexed files | **ripgrep** |
+
+ast-sgrep **complements** ast-grep and ripgrep — it does not replace them. Use `pattern:` to delegate structural queries to ast-grep when installed; use ripgrep when you need raw speed over files ast-sgrep does not index.
+
+---
+
+## Architecture
+
+```mermaid
+flowchart TB
+    subgraph Input
+        CLI["asgrep CLI"]
+        LSP["asgrep-lsp"]
+    end
+
+    subgraph Index["Index layer (.asgrep/)"]
+        DB["index.db — SQLite"]
+        LEX["lexical.db — FTS5 sidecar"]
+    end
+
+    subgraph Parse["AST extraction"]
+        TS["tree-sitter parsers"]
+        SYM["symbols · callers · imports"]
+    end
+
+    subgraph Search["Hybrid search engine"]
+        L1["① Lexical — FTS5 BM25 + RRF"]
+        L2["② Symbol + graph — defs, callers"]
+        L3["③ Anchor — excerpt around symbol"]
+        L4["④ Embed — optional semantic pass"]
+        RANK["Fuse · dedupe · rank"]
+    end
+
+    CLI --> Index
+    LSP --> Index
+    Index --> Parse
+    TS --> SYM
+    SYM --> DB
+    DB --> Search
+    LEX --> L1
+    L1 --> RANK
+    L2 --> RANK
+    L3 --> RANK
+    L4 --> RANK
+    RANK --> OUT["Line or JSON output"]
+```
+
+### Search pipeline
+
+```mermaid
+flowchart LR
+    Q["Query"] --> P{"Prefix?"}
+    P -->|callers:| C["Caller graph SQL"]
+    P -->|defs:| D["Symbol lookup SQL"]
+    P -->|imports:| I["Import lookup SQL"]
+    P -->|pattern:| AG["ast-grep delegate"]
+    P -->|hybrid| H["Multi-pass fusion"]
+    H --> L["Lexical FTS5"]
+    H --> S["Symbol match"]
+    H --> G["Graph edges"]
+    H --> A["Anchor excerpts"]
+    H --> E["Embeddings"]
+    C --> R["Ranked hits"]
+    D --> R
+    I --> R
+    AG --> R
+    L --> R
+    S --> R
+    G --> R
+    A --> R
+    E --> R
+```
+
+---
+
+## Benchmarks
+
+Measured on the polyglot sample fixture (5 files, 25 symbols, 26 caller edges) with `cargo build --release`:
+
+| Metric | Result | Target |
+|--------|--------|--------|
+| Index 5 files | **0.19 ms** | — |
+| Avg hybrid search (`process_request`, 100 iter) | **0.29 ms** | < 20 ms |
+| False-positive caller rate (regression suite) | **0%** | 0% |
+| Test suite | **52 tests** | all passing |
+
+```bash
+asgrep bench . --iterations 100
+# Benchmark (v1.0 targets: search <20ms, 0% false callers)
+# Indexed 5 files in 0.19ms
+# Query: process_request
+# Avg search: 0.29ms over 100 iterations (16 hits)
+```
+
+---
 
 ## Install
 
 ```bash
+# CLI
 cargo install ast-sgrep-cli
-# optional LSP server
+
+# LSP server (editor integration)
 cargo install ast-sgrep-lsp
 ```
 
-Binary name: `asgrep`
+Binaries: `asgrep` and `ast-sgrep` (aliases).
+
+---
 
 ## Quick start
 
@@ -36,74 +159,83 @@ Binary name: `asgrep`
 # Build index (stored in .asgrep/index.db)
 asgrep index .
 
-# Keyword / natural-language search
+# Natural-language / keyword search
 asgrep "auth refresh"
 asgrep "how does process_request work"
 
-# Prefixed queries
-asgrep "callers:main"
-asgrep "defs:Handler::serve"
-asgrep "imports:serde"
-asgrep "pattern:fn $NAME($$$)"   # delegates to ast-grep if installed
+# Prefixed graph queries
+asgrep "callers:process_request"    # who calls process_request?
+asgrep "defs:auth_refresh"          # where is auth_refresh defined?
+asgrep "imports:serde"              # import statements mentioning serde
+asgrep "pattern:fn $NAME($$$)"      # structural — delegates to ast-grep
 
-# Semantic search (local embeddings, no API keys)
+# Semantic search (index with --embed first)
+asgrep --embed index .
 asgrep --embed "auth refresh"
 
-# Cloud embeddings (OpenAI-compatible API)
-export ASGREP_EMBED_API_KEY=sk-...
-asgrep --cloud-embed "auth refresh"
-
-# Large monorepos: lexical FTS sidecar
+# Large monorepos: lexical FTS sidecar (auto at 1000+ files)
 asgrep --tantivy index .
 
-# Benchmarks
-asgrep bench .
-
-# JSON output for agents / CI
+# JSON for agents / automation
 asgrep --json --limit 32 "process_request"
 
 # Index management
 asgrep status .
-asgrep reindex .
+asgrep reindex .          # force full re-parse (bypasses hash skip)
+asgrep bench .
 ```
 
-## CLI flags
+---
+
+## CLI reference
+
+### Commands
+
+| Command | Description |
+|---------|-------------|
+| `asgrep index [ROOT]` | Build or incrementally update the index |
+| `asgrep reindex [ROOT]` | Force full reindex (re-parse every file) |
+| `asgrep status [ROOT]` | Show index statistics |
+| `asgrep bench [ROOT]` | Run search latency benchmarks |
+| `asgrep "QUERY" [ROOT]` | Hybrid search (default) |
+
+### Flags
 
 | Flag | Description |
 |------|-------------|
 | `--root` | Project root (default: `.`) |
 | `--limit` | Max results (default: 16, env: `ASGREP_LIMIT`) |
 | `--json` | JSON output |
-| `--index-path` | Custom index DB path |
+| `--index-path` | Custom index DB path (`ASGREP_INDEX_PATH`) |
 | `--lang` | Filter by language (`rust`, `typescript`, `javascript`, `python`, `go`) |
-| `--embed` | Enable local embedding semantic search (`ASGREP_EMBED=1`) |
-| `ASGREP_INDEX_PATH` | Custom index DB path |
+| `--embed` | Enable embeddings at index + search time (`ASGREP_EMBED=1`) |
+| `--tantivy` | Build/use lexical FTS sidecar (`ASGREP_TANTIVY=1`) |
+| `--cloud-embed` | Cloud query embeddings (`ASGREP_CLOUD_EMBED=1`, needs API key) |
 | `ASGREP_USE_CACHE=1` | Store index in `~/.cache/asgrep/` |
 
-## Output kinds
+### Output kinds
 
 | Kind | Meaning |
 |------|---------|
-| `ASGREP` | Lexical line hit |
+| `ASGREP` | Lexical line hit (FTS5) |
 | `DEF` | Symbol definition |
 | `CALLER` | Caller → callee edge |
-| `GRAPH` | Graph neighborhood |
-| `ANCHOR` | Anchor excerpt around known symbol |
+| `GRAPH` | Graph neighborhood summary |
+| `ANCHOR` | Excerpt around a matched symbol |
 | `IMPORT` | Import statement |
 | `PATTERN` | Structural match via ast-grep |
-| `EMBED` | Semantic similarity (local plugin) |
+| `EMBED` | Semantic similarity hit |
 
-### Line output example
+### Example output
 
 ```
-ASGREP: src/main.rs:5-5: let _ = process_request("x");
-DEF: src/main.rs: process_request span=6..12 | fn process_request(...)
-CALLER: src/main.rs: main -> process_request
-GRAPH: src/main.rs: main calls process_request
-ANCHOR: src/main.rs:6-12: fn process_request(...) { ... }
+DEF: src/main.rs: auth_refresh span=19..22 | fn auth_refresh() { ... }
+CALLER: src/main.rs: main -> auth_refresh
+GRAPH: src/main.rs: main calls auth_refresh
+ANCHOR: src/main.rs:19-22: fn auth_refresh() { ... }
 ```
 
-### JSON output example
+### JSON example
 
 ```json
 {
@@ -122,43 +254,58 @@ ANCHOR: src/main.rs:6-12: fn process_request(...) { ... }
 }
 ```
 
-## LSP server (Phase 6)
+---
+
+## LSP server
+
+Full Phase 6 implementation — `asgrep-lsp` over stdio with Content-Length framed JSON-RPC.
 
 ```bash
 cargo install ast-sgrep-lsp
-asgrep-lsp   # stdio, Content-Length framed JSON-RPC
 ```
 
-Capabilities: workspace symbols, go-to-definition, find references, call hierarchy, `asgrep.search` / `asgrep.reindex` commands. See [docs/lsp.md](docs/lsp.md).
+| LSP method | Feature |
+|------------|---------|
+| `workspace/symbol` | Hybrid search across workspace |
+| `textDocument/documentSymbol` | AST symbols per file |
+| `textDocument/definition` | Go-to-definition at cursor |
+| `textDocument/references` | Find references + callers |
+| `callHierarchy/*` | Incoming/outgoing call graph |
+| `workspace/executeCommand` | `asgrep.search`, `asgrep.reindex`, `asgrep.callers`, `asgrep.defs` |
+| `textDocument/didSave` | Incremental single-file reindex |
 
-## Architecture
+See [docs/lsp.md](docs/lsp.md) for editor configuration.
+
+---
+
+## Crate layout
 
 ```
 ast-sgrep/
-  crates/ast-sgrep-core/   # Index + hybrid search engine
-  crates/ast-sgrep-cli/    # asgrep / ast-sgrep binaries
-  crates/ast-sgrep-lang/   # tree-sitter parsers (Rust, TS, JS, Python, Go)
-  crates/ast-sgrep-embed/  # Local + cloud embedding plugins
-  crates/ast-sgrep-lsp/    # LSP server (asgrep-lsp)
-  tests/fixtures/          # Polyglot + false-positive test fixtures
-  .github/workflows/       # (removed — no CI to save Actions budget)
+├── crates/ast-sgrep-core/    # Index + hybrid search engine
+├── crates/ast-sgrep-cli/     # asgrep / ast-sgrep binaries
+├── crates/ast-sgrep-lang/    # tree-sitter parsers (Rust, TS, JS, Python, Go)
+├── crates/ast-sgrep-embed/   # Local + cloud embedding plugins
+├── crates/ast-sgrep-lsp/     # LSP server (asgrep-lsp)
+├── tests/fixtures/           # Polyglot sample + regression fixtures
+└── docs/                     # LSP, publishing, architecture notes
 ```
 
-### Search passes
+### Index schema (`.asgrep/index.db`)
 
-1. **Lexical** — FTS5 BM25-like line scoring
-2. **Symbol + graph** — defs, callers, graph edges
-3. **Anchor** — excerpt around matched symbol
+| Table | Contents |
+|-------|----------|
+| `files` | Path, language, content hash, mtime |
+| `lines` | Per-line text content |
+| `lines_fts` | FTS5 virtual table for lexical search |
+| `symbols` | Function/method/type definitions |
+| `callers` | Caller → callee edges (AST-derived, string/comment-safe) |
+| `imports` | Import/module paths |
+| `embeddings` | Optional per-line vectors (`--embed`) |
 
-Results are fused, deduplicated, and ranked.
+Incremental indexing uses blake3 content hashes + mtime. Respects `.gitignore` and `.asgrepignore`.
 
-### Index
-
-SQLite database at `.asgrep/index.db`:
-
-- `files`, `lines`, `symbols`, `callers`, `imports`
-- Incremental single-file reindex (content hash + mtime)
-- Respects `.gitignore` and `.asgrepignore`
+---
 
 ## Library usage
 
@@ -170,6 +317,9 @@ let mut indexer = Indexer::new(IndexOptions {
     index_path: None,
     lang_filter: None,
     respect_gitignore: true,
+    use_tantivy: false,
+    embed_lines: false,
+    force_reindex: false,
 })?;
 indexer.index_all()?;
 
@@ -178,9 +328,32 @@ let searcher = Searcher::new(SearchOptions {
     index_path: None,
     limit: 16,
     lang_filter: None,
+    use_embed: false,
+    use_tantivy: false,
+    use_cloud_embed: false,
 })?;
 let response = searcher.search("auth refresh")?;
 ```
+
+---
+
+## Roadmap
+
+All phases complete (v1.0). See [PRD.md](PRD.md) for the full specification.
+
+| Phase | Scope | Status |
+|-------|-------|--------|
+| 0 | Repo + Cargo workspace | Done |
+| 1 | Rust+TS, SQLite, CLI, JSON | Done |
+| 2 | Python+Go, incremental, benchmarks | Done |
+| 3 | False-positive tests, crates.io metadata | Done |
+| 4 | `pattern:` ast-grep delegation | Done |
+| 5 | Local + cloud embedding plugins | Done |
+| 6 | Full LSP server | Done |
+
+Publishing: `scripts/publish.sh` (manual, no CI). See [docs/publishing.md](docs/publishing.md).
+
+---
 
 ## License
 
