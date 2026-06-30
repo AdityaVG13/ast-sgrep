@@ -1,22 +1,13 @@
 pub(crate) mod sql;
-mod read;
-mod rows;
-mod schema;
 mod sqlite;
-mod upsert;
 
-pub use rows::{CallerRow, ImportRow, SymbolRow};
-pub use sqlite::IndexStore;
+pub use sqlite::{CallerRow, ImportRow, IndexStore, SymbolRow};
 
 use std::path::Path;
 
-/// Default index directory name inside a project root.
 pub const INDEX_DIR: &str = ".asgrep";
-
-/// Default SQLite database filename.
 pub const INDEX_DB: &str = "index.db";
 
-/// Resolve the index database path for a project root.
 pub fn index_db_path(root: &Path, index_path: Option<&Path>) -> std::path::PathBuf {
     if let Some(path) = index_path {
         if path.extension().is_some_and(|e| e == "db") {
@@ -53,7 +44,6 @@ fn cache_index_path(root: &Path) -> std::path::PathBuf {
         .join(INDEX_DB)
 }
 
-/// Index status summary.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct IndexStatus {
     pub root: String,
