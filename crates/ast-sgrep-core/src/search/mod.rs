@@ -5,6 +5,7 @@ mod types;
 pub use types::{HitKind, SearchHit, SearchOptions, SearchResponse};
 
 use std::sync::{Arc, Mutex};
+use std::thread;
 
 use ast_sgrep_embed::SemanticChunkRow;
 
@@ -19,9 +20,13 @@ use passes::lexical::lexical_pass;
 use passes::modes::{search_callers, search_defs, search_imports};
 use passes::symbol::{anchor_pass, symbol_pass};
 
+/// File count at which lexical/symbol/anchor passes run on separate DB connections.
+const PARALLEL_PASS_FILE_THRESHOLD: usize = 128;
+
 struct SemanticCache {
     lang_filter: Option<String>,
     max_id: i64,
+    embed_backend: String,
     chunks: Arc<Vec<SemanticChunkRow>>,
     flat_vectors: Arc<Vec<f32>>,
 }
@@ -29,7 +34,7 @@ struct SemanticCache {
 pub struct Searcher {
     store: IndexStore,
     options: SearchOptions,
-    semantic_cache: Mutex<Option<SemanticCache>>,
+    semantic_cache: Arc<Mutex<Option<SemanticCache>>>,
 }
 
 impl Searcher {
@@ -38,7 +43,7 @@ impl Searcher {
         Ok(Self {
             store,
             options,
-            semantic_cache: Mutex::new(None),
+            semantic_cache: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -46,7 +51,7 @@ impl Searcher {
         Self {
             store,
             options,
-            semantic_cache: Mutex::new(None),
+            semantic_cache: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -83,61 +88,175 @@ impl Searcher {
     }
 
     fn search_hybrid(&self, parsed: &ParsedQuery) -> Result<Vec<SearchHit>> {
-        let mut hits = Vec::new();
-        hits.extend(lexical_pass(&self.store, &self.options, parsed)?);
-        hits.extend(symbol_pass(&self.store, &self.options, parsed)?);
-        hits.extend(anchor_pass(&self.store, &self.options, parsed)?);
+        let parallel_sql = self
+            .store
+            .status()
+            .map(|s| s.file_count >= PARALLEL_PASS_FILE_THRESHOLD)
+            .unwrap_or(false);
+
+        if parallel_sql {
+            self.search_hybrid_large(parsed)
+        } else {
+            self.search_hybrid_small(parsed)
+        }
+    }
+
+    fn search_hybrid_small(&self, parsed: &ParsedQuery) -> Result<Vec<SearchHit>> {
+        let mut hits = run_serial_passes(&self.store, &self.options, parsed)?;
         if self.options.use_embed {
-            let ctx = self.semantic_context()?;
-            hits.extend(embed_pass_with_context(
-                &self.store,
-                &self.options,
-                parsed,
-                ctx,
-            )?);
+            if let Some(ctx) = self.semantic_context()? {
+                hits.extend(embed_pass_with_context(
+                    &self.store,
+                    &self.options,
+                    parsed,
+                    Some(ctx),
+                )?);
+            }
         }
         Ok(hits)
     }
 
-    fn semantic_context(&self) -> Result<Option<EmbedContext>> {
-        if !self.options.use_embed {
-            return Ok(None);
-        }
-        let max_id = self.store.semantic_chunk_max_id()?.unwrap_or(0);
-        let lang_filter = self.options.lang_filter.clone();
-        {
-            let guard = self.semantic_cache.lock().unwrap_or_else(|e| e.into_inner());
-            if let Some(cache) = guard.as_ref() {
-                if cache.lang_filter == lang_filter && cache.max_id == max_id {
-                    return Ok(Some(EmbedContext {
-                        chunks: Arc::clone(&cache.chunks),
-                        flat_vectors: Arc::clone(&cache.flat_vectors),
-                    }));
+    fn search_hybrid_large(&self, parsed: &ParsedQuery) -> Result<Vec<SearchHit>> {
+        let root = self.options.root.clone();
+        let index_path = self.options.index_path.clone();
+        let options = self.options.clone();
+        let parsed = parsed.clone();
+
+        let parsed_sql = parsed.clone();
+
+        thread::scope(|scope| -> Result<Vec<SearchHit>> {
+            let embed = if self.options.use_embed {
+                let cache = Arc::clone(&self.semantic_cache);
+                let root_e = root.clone();
+                let index_path_e = index_path.clone();
+                let options_e = options.clone();
+                Some(scope.spawn(move || {
+                    let store = IndexStore::open(&root_e, index_path_e.as_deref())?;
+                    load_semantic_context(&store, &options_e, &cache)
+                }))
+            } else {
+                None
+            };
+
+            let sql = scope.spawn(move || {
+                run_parallel_passes(&root, index_path.as_deref(), &options, &parsed_sql)
+            });
+
+            let mut hits = join_worker(sql.join())?;
+            if let Some(embed) = embed {
+                if let Some(ctx) = join_worker(embed.join())? {
+                    hits.extend(embed_pass_with_context(
+                        &self.store,
+                        &self.options,
+                        &parsed,
+                        Some(ctx),
+                    )?);
                 }
             }
-        }
-
-        let chunks = self
-            .store
-            .all_semantic_chunks(lang_filter.as_deref())?;
-        if chunks.is_empty() {
-            return Ok(None);
-        }
-        let dim = chunks[0].5.len();
-        let flat_vectors = flatten_vectors_for_search(&chunks, dim);
-        let cache = SemanticCache {
-            lang_filter,
-            max_id,
-            chunks: Arc::new(chunks),
-            flat_vectors: Arc::new(flat_vectors),
-        };
-        let ctx = EmbedContext {
-            chunks: Arc::clone(&cache.chunks),
-            flat_vectors: Arc::clone(&cache.flat_vectors),
-        };
-        *self.semantic_cache.lock().unwrap_or_else(|e| e.into_inner()) = Some(cache);
-        Ok(Some(ctx))
+            Ok(hits)
+        })
     }
+
+    fn semantic_context(&self) -> Result<Option<EmbedContext>> {
+        load_semantic_context(&self.store, &self.options, &self.semantic_cache)
+    }
+}
+
+fn load_semantic_context(
+    store: &IndexStore,
+    options: &SearchOptions,
+    cache: &Mutex<Option<SemanticCache>>,
+) -> Result<Option<EmbedContext>> {
+    if !options.use_embed {
+        return Ok(None);
+    }
+    let max_id = store.semantic_chunk_max_id()?.unwrap_or(0);
+    let lang_filter = options.lang_filter.clone();
+    let embed_backend = store
+        .get_meta("embed_backend")?
+        .unwrap_or_else(|| "semantic".to_string());
+    {
+        let guard = cache.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(cached) = guard.as_ref() {
+            if cached.lang_filter == lang_filter
+                && cached.max_id == max_id
+                && cached.embed_backend == embed_backend
+            {
+                return Ok(Some(EmbedContext {
+                    chunks: Arc::clone(&cached.chunks),
+                    flat_vectors: Arc::clone(&cached.flat_vectors),
+                }));
+            }
+        }
+    }
+
+    let chunks = store.all_semantic_chunks(lang_filter.as_deref())?;
+    if chunks.is_empty() {
+        return Ok(None);
+    }
+    let dim = chunks[0].5.len();
+    let flat_vectors = flatten_vectors_for_search(&chunks, dim);
+    let entry = SemanticCache {
+        lang_filter,
+        max_id,
+        embed_backend,
+        chunks: Arc::new(chunks),
+        flat_vectors: Arc::new(flat_vectors),
+    };
+    let ctx = EmbedContext {
+        chunks: Arc::clone(&entry.chunks),
+        flat_vectors: Arc::clone(&entry.flat_vectors),
+    };
+    *cache.lock().unwrap_or_else(|e| e.into_inner()) = Some(entry);
+    Ok(Some(ctx))
+}
+
+fn run_serial_passes(
+    store: &IndexStore,
+    options: &SearchOptions,
+    parsed: &ParsedQuery,
+) -> Result<Vec<SearchHit>> {
+    let mut hits = Vec::new();
+    hits.extend(lexical_pass(store, options, parsed)?);
+    hits.extend(symbol_pass(store, options, parsed)?);
+    hits.extend(anchor_pass(store, options, parsed)?);
+    Ok(hits)
+}
+
+fn run_parallel_passes(
+    root: &std::path::Path,
+    index_path: Option<&std::path::Path>,
+    options: &SearchOptions,
+    parsed: &ParsedQuery,
+) -> Result<Vec<SearchHit>> {
+    let parsed = parsed.clone();
+    let options = options.clone();
+    let root = root.to_path_buf();
+    let index_path = index_path.map(|p| p.to_path_buf());
+
+    thread::scope(|scope| -> Result<Vec<SearchHit>> {
+        let lex = scope.spawn(|| {
+            let store = IndexStore::open(&root, index_path.as_deref())?;
+            lexical_pass(&store, &options, &parsed)
+        });
+        let sym = scope.spawn(|| {
+            let store = IndexStore::open(&root, index_path.as_deref())?;
+            symbol_pass(&store, &options, &parsed)
+        });
+        let anchor = scope.spawn(|| {
+            let store = IndexStore::open(&root, index_path.as_deref())?;
+            anchor_pass(&store, &options, &parsed)
+        });
+
+        let mut hits = join_worker(lex.join())?;
+        hits.extend(join_worker(sym.join())?);
+        hits.extend(join_worker(anchor.join())?);
+        Ok(hits)
+    })
+}
+
+fn join_worker<T>(join: thread::Result<Result<T>>) -> Result<T> {
+    join.map_err(|e| crate::StoreError::Other(format!("search worker panicked: {e:?}")))?
 }
 
 fn finish_response(

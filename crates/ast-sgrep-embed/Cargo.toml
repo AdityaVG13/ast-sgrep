@@ -19,6 +19,8 @@ cloud = ["ureq", "idna"]
 [dependencies]
 blake3.workspace = true
 idna = { workspace = true, optional = true }
+rayon.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+simsimd.workspace = true
 ureq = { workspace = true, optional = true }

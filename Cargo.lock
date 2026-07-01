@@ -121,6 +121,7 @@ dependencies = [
  "ast-sgrep-testkit",
  "blake3",
  "criterion",
+ "rayon",
  "rusqlite",
  "serde",
  "serde_json",
@@ -135,8 +136,10 @@ version = "1.0.0-alpha.0"
 dependencies = [
  "blake3",
  "idna",
+ "rayon",
  "serde",
  "serde_json",
+ "simsimd",
  "ureq",
 ]
 
@@ -894,6 +897,15 @@ name = "shlex"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
+
+[[package]]
+name = "simsimd"
+version = "6.5.16"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f4fb3bc3cdce07a7d7d4caa4c54f8aa967f6be41690482b54b24100a2253fa70"
+dependencies = [
+ "cc",
+]
 
 [[package]]
 name = "slab"

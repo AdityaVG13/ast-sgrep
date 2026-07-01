@@ -53,7 +53,7 @@ fn lexical_from_sidecar(
             rank,
         );
     }
-    Ok(finalize_lexical_hits(line_ranks, line_meta))
+    Ok(hits_from_ranks(line_ranks, line_meta))
 }
 
 fn lexical_from_fts(
@@ -95,7 +95,7 @@ fn lexical_from_fts(
         );
     }
 
-    Ok(finalize_lexical_hits(line_ranks, line_meta))
+    Ok(hits_from_ranks(line_ranks, line_meta))
 }
 
 fn empty_lexical_maps() -> (LineRanks, LineMeta) {
@@ -115,22 +115,17 @@ fn accumulate_lexical_line(
     if !matches_lang(language.as_deref(), options.lang_filter.as_deref()) {
         return;
     }
-    let key = (path.clone(), line_no);
+    let key = (path, line_no);
     line_ranks.entry(key.clone()).or_default().push(rank);
     line_meta.insert(key, (language, content));
 }
 
-fn finalize_lexical_hits(line_ranks: LineRanks, line_meta: LineMeta) -> Vec<SearchHit> {
-    hits_from_ranks(line_ranks, line_meta)
-}
-
-fn hits_from_ranks(line_ranks: LineRanks, line_meta: LineMeta) -> Vec<SearchHit> {
+fn hits_from_ranks(line_ranks: LineRanks, mut line_meta: LineMeta) -> Vec<SearchHit> {
     line_ranks
         .into_iter()
         .map(|((path, line_no), ranks)| {
             let (language, content) = line_meta
-                .get(&(path.clone(), line_no))
-                .cloned()
+                .remove(&(path.clone(), line_no))
                 .unwrap_or((None, String::new()));
             SearchHit::span(
                 HitKind::Asgrep,

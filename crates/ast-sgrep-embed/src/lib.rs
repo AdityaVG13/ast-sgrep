@@ -6,7 +6,10 @@ mod ollama;
 mod provider;
 mod semantic;
 
-pub use math::{cosine_similarity, cosine_scores_for, top_by_similarity, MIN_SIMILARITY};
+pub use math::{
+    cosine_scores_flat, cosine_scores_for, cosine_similarity, top_by_similarity,
+    MIN_SIMILARITY, PARALLEL_CHUNK_THRESHOLD,
+};
 
 pub use cloud::{embed_via_api, rank_by_vector, CloudEmbeddingConfig};
 pub use ollama::{embed_via_ollama, OllamaEmbeddingConfig};

@@ -1,8 +1,11 @@
 use std::io::{Read, Write};
 use std::sync::{Arc, Mutex};
 
+use rayon::prelude::*;
+
 use ast_sgrep_embed::{
-    cosine_similarity, cosine_scores_for, top_by_similarity, SemanticChunkRow, MIN_SIMILARITY,
+    cosine_scores_flat, cosine_similarity, top_by_similarity, SemanticChunkRow,
+    MIN_SIMILARITY, PARALLEL_CHUNK_THRESHOLD,
 };
 
 use crate::semantic_ivf::{
@@ -173,11 +176,20 @@ fn flatten_vectors(chunks: &[SemanticChunkRow], dim: usize) -> Vec<f32> {
 }
 
 pub fn flatten_vectors_for_search(chunks: &[SemanticChunkRow], dim: usize) -> Vec<f32> {
-    let mut flat = Vec::with_capacity(chunks.len() * dim);
-    for c in chunks {
-        let mut v = c.5.clone();
-        normalize_vec_in_place(&mut v);
-        flat.extend_from_slice(&v);
+    let mut flat = vec![0.0f32; chunks.len() * dim];
+    if chunks.len() >= PARALLEL_CHUNK_THRESHOLD {
+        flat.par_chunks_mut(dim)
+            .zip(chunks.par_iter())
+            .for_each(|(row, chunk)| {
+                row.copy_from_slice(&chunk.5);
+                normalize_vec_in_place(row);
+            });
+    } else {
+        for (i, chunk) in chunks.iter().enumerate() {
+            let start = i * dim;
+            flat[start..start + dim].copy_from_slice(&chunk.5);
+            normalize_vec_in_place(&mut flat[start..start + dim]);
+        }
     }
     flat
 }
@@ -224,16 +236,9 @@ fn normalize_vec(vec: &[f32]) -> Vec<f32> {
 }
 
 fn brute_force_flat(flat: &[f32], dim: usize, query: &[f32], limit: usize) -> Vec<(usize, f32)> {
-    let n = flat.len() / dim;
     let q = normalize_vec(query);
     top_by_similarity(
-        cosine_scores_for(
-            &q,
-            (0..n).map(|i| {
-                let start = i * dim;
-                (i, &flat[start..start + dim])
-            }),
-        ),
+        cosine_scores_flat(&q, flat, dim),
         limit,
         Some(MIN_SIMILARITY),
     )
@@ -407,16 +412,6 @@ fn cache_session(db_key: &str, fingerprint: [u8; 32], ivf: &PersistedSemanticIvf
             ivf: Arc::new(ivf.clone()),
         },
     ));
-}
-
-pub fn rank_chunk_indices(
-    store: &IndexStore,
-    query_vec: &[f32],
-    chunks: &[SemanticChunkRow],
-    limit: usize,
-    override_threshold: Option<usize>,
-) -> Result<Vec<(usize, f32)>> {
-    rank_chunk_indices_flat(store, query_vec, chunks, None, limit, override_threshold)
 }
 
 pub fn rank_chunk_indices_flat(

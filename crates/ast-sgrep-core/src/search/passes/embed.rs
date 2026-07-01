@@ -16,15 +16,6 @@ pub struct EmbedContext {
     pub flat_vectors: Arc<Vec<f32>>,
 }
 
-#[allow(dead_code)]
-pub fn embed_pass(
-    store: &IndexStore,
-    options: &SearchOptions,
-    parsed: &ParsedQuery,
-) -> Result<Vec<SearchHit>> {
-    embed_pass_with_context(store, options, parsed, None)
-}
-
 pub fn embed_pass_with_context(
     store: &IndexStore,
     options: &SearchOptions,
@@ -36,39 +27,30 @@ pub fn embed_pass_with_context(
     }
 
     let query = parsed.terms.join(" ");
-    if let Some(ctx) = ctx {
-        let chunks = &ctx.chunks;
-        if chunks.is_empty() {
-            return embed_legacy_hits(store, options, &query);
+    let owned;
+    let chunks: &[SemanticChunkRow] = match &ctx {
+        Some(ctx) => &ctx.chunks,
+        None => {
+            owned = store.all_semantic_chunks(options.lang_filter.as_deref())?;
+            &owned
         }
-        let query_vec =
-            embed_query_vector(store, options, &query, chunks.first().map(|c| c.5.len()))?;
-        let indices = rank_chunk_indices_flat(
-            store,
-            &query_vec,
-            chunks,
-            Some(ctx.flat_vectors.as_slice()),
-            EMBED_HIT_LIMIT,
-            options.ann_threshold,
-        )?;
-        return Ok(chunk_indices_to_hits(chunks, indices));
-    }
+    };
 
-    let chunks = store.all_semantic_chunks(options.lang_filter.as_deref())?;
     if chunks.is_empty() {
         return embed_legacy_hits(store, options, &query);
     }
 
+    let flat = ctx.as_ref().map(|c| c.flat_vectors.as_slice());
     let query_vec = embed_query_vector(store, options, &query, chunks.first().map(|c| c.5.len()))?;
     let indices = rank_chunk_indices_flat(
         store,
         &query_vec,
-        &chunks,
-        None,
+        chunks,
+        flat,
         EMBED_HIT_LIMIT,
         options.ann_threshold,
     )?;
-    Ok(chunk_indices_to_hits(&chunks, indices))
+    Ok(chunk_indices_to_hits(chunks, indices))
 }
 
 fn embed_query_vector(

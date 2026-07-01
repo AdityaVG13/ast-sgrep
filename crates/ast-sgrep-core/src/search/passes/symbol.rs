@@ -100,6 +100,17 @@ fn caller_rows_to_hits(
 
 type SymbolSpanRow = (String, Option<String>, String, u32, u32, String);
 
+fn read_symbol_span_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SymbolSpanRow> {
+    Ok((
+        row.get(0)?,
+        row.get(1)?,
+        row.get(2)?,
+        row.get(4)?,
+        row.get(5)?,
+        row.get::<_, Option<String>>(8)?.unwrap_or_default(),
+    ))
+}
+
 fn symbol_span_rows_to_hits(
     rows: Vec<SymbolSpanRow>,
     options: &SearchOptions,
@@ -162,16 +173,7 @@ pub fn anchor_pass(
     let (where_clause, bind) =
         like_terms_filter("s.name", &terms, options.lang_filter.as_deref());
     let sql = format!("{SYMBOL_SELECT}{where_clause} LIMIT ?{}", bind.len() + 1);
-    let rows = query_limit_map(store.connection(), &sql, bind, SYMBOL_SQL_LIMIT, |row| {
-        Ok((
-            row.get::<_, String>(0)?,
-            row.get::<_, Option<String>>(1)?,
-            row.get::<_, String>(2)?,
-            row.get::<_, u32>(4)?,
-            row.get::<_, u32>(5)?,
-            row.get::<_, Option<String>>(8)?.unwrap_or_default(),
-        ))
-    })?;
+    let rows = query_limit_map(store.connection(), &sql, bind, SYMBOL_SQL_LIMIT, read_symbol_span_row)?;
 
     symbol_span_rows_to_hits(rows, options, HitKind::Anchor, |_| SCORE_ANCHOR)
 }
@@ -192,16 +194,7 @@ pub(crate) fn def_hits_for_terms(
         options.lang_filter.as_deref(),
     );
     let sql = format!("{SYMBOL_SELECT}{where_clause} LIMIT ?{}", bind.len() + 1);
-    let rows = query_limit_map(store.connection(), &sql, bind, limit, |row| {
-        Ok((
-            row.get::<_, String>(0)?,
-            row.get::<_, Option<String>>(1)?,
-            row.get::<_, String>(2)?,
-            row.get::<_, u32>(4)?,
-            row.get::<_, u32>(5)?,
-            row.get::<_, Option<String>>(8)?.unwrap_or_default(),
-        ))
-    })?;
+    let rows = query_limit_map(store.connection(), &sql, bind, limit, read_symbol_span_row)?;
 
     symbol_span_rows_to_hits(rows, options, HitKind::Def, |name| {
         score_def(&parsed.terms, name)
