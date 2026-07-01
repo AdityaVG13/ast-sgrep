@@ -8,7 +8,7 @@ mod semantic;
 
 pub use math::{
     cosine_scores_flat, cosine_scores_for, cosine_similarity, top_by_similarity,
-    MIN_SIMILARITY, PARALLEL_CHUNK_THRESHOLD,
+    top_k_flat_similarity, top_k_similarity, MIN_SIMILARITY, PARALLEL_CHUNK_THRESHOLD,
 };
 
 pub use cloud::{embed_via_api, rank_by_vector, CloudEmbeddingConfig};
