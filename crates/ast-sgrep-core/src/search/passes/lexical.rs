@@ -53,7 +53,7 @@ fn lexical_from_sidecar(
             rank,
         );
     }
-    Ok(finalize_lexical_hits(line_ranks, line_meta))
+    Ok(hits_from_ranks(line_ranks, line_meta))
 }
 
 fn lexical_from_fts(
@@ -63,42 +63,39 @@ fn lexical_from_fts(
 ) -> Result<Vec<SearchHit>> {
     let conn = store.connection();
     let (mut line_ranks, mut line_meta) = empty_lexical_maps();
-
-    for term in &parsed.terms {
-        let fts_term = crate::fts::escape_fts_term(term);
-        let mut stmt = conn.prepare(
-            "SELECT f.path, f.language, l.line_no, l.content
-             FROM lines_fts
-             JOIN files f ON f.id = lines_fts.file_id
-             JOIN lines l ON l.file_id = lines_fts.file_id AND l.line_no = lines_fts.line_no
-             WHERE lines_fts MATCH ?1
-             ORDER BY bm25(lines_fts)
-             LIMIT 100",
-        )?;
-        let rows = stmt.query_map(params![fts_term], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, Option<String>>(1)?,
-                row.get::<_, u32>(2)?,
-                row.get::<_, String>(3)?,
-            ))
-        })?;
-        for (rank, row) in rows.enumerate() {
-            let (path, language, line_no, content) = row?;
-            accumulate_lexical_line(
-                options,
-                &mut line_ranks,
-                &mut line_meta,
-                path,
-                line_no,
-                language,
-                content,
-                rank,
-            );
-        }
+    let fts_query = crate::fts::escape_fts_query(&parsed.terms);
+    let mut stmt = conn.prepare_cached(
+        "SELECT f.path, f.language, l.line_no, l.content
+         FROM lines_fts
+         JOIN files f ON f.id = lines_fts.file_id
+         JOIN lines l ON l.file_id = lines_fts.file_id AND l.line_no = lines_fts.line_no
+         WHERE lines_fts MATCH ?1
+         ORDER BY bm25(lines_fts)
+         LIMIT 100",
+    )?;
+    let rows = stmt.query_map(params![fts_query], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, Option<String>>(1)?,
+            row.get::<_, u32>(2)?,
+            row.get::<_, String>(3)?,
+        ))
+    })?;
+    for (rank, row) in rows.enumerate() {
+        let (path, language, line_no, content) = row?;
+        accumulate_lexical_line(
+            options,
+            &mut line_ranks,
+            &mut line_meta,
+            path,
+            line_no,
+            language,
+            content,
+            rank,
+        );
     }
 
-    Ok(finalize_lexical_hits(line_ranks, line_meta))
+    Ok(hits_from_ranks(line_ranks, line_meta))
 }
 
 fn empty_lexical_maps() -> (LineRanks, LineMeta) {
@@ -118,28 +115,17 @@ fn accumulate_lexical_line(
     if !matches_lang(language.as_deref(), options.lang_filter.as_deref()) {
         return;
     }
-    let key = (path.clone(), line_no);
+    let key = (path, line_no);
     line_ranks.entry(key.clone()).or_default().push(rank);
     line_meta.insert(key, (language, content));
 }
 
-fn finalize_lexical_hits(line_ranks: LineRanks, line_meta: LineMeta) -> Vec<SearchHit> {
-    let mut hits = hits_from_ranks(line_ranks, line_meta);
-    hits.sort_by(|a, b| {
-        b.score
-            .partial_cmp(&a.score)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-    hits
-}
-
-fn hits_from_ranks(line_ranks: LineRanks, line_meta: LineMeta) -> Vec<SearchHit> {
+fn hits_from_ranks(line_ranks: LineRanks, mut line_meta: LineMeta) -> Vec<SearchHit> {
     line_ranks
         .into_iter()
         .map(|((path, line_no), ranks)| {
             let (language, content) = line_meta
-                .get(&(path.clone(), line_no))
-                .cloned()
+                .remove(&(path.clone(), line_no))
                 .unwrap_or((None, String::new()));
             SearchHit::span(
                 HitKind::Asgrep,

@@ -9,15 +9,19 @@ use crate::search::types::{HitKind, SearchHit, SearchOptions};
 const SYMBOL_SQL_LIMIT: usize = 500;
 const CALLER_SQL_LIMIT: usize = 500;
 
-const SYMBOL_SELECT: &str = "SELECT f.path, f.language, s.name, s.kind, s.line_start, s.line_end, s.byte_start, s.byte_end
+const SYMBOL_SELECT: &str = "SELECT f.path, f.language, s.name, s.kind, s.line_start, s.line_end, s.byte_start, s.byte_end,
+         (SELECT GROUP_CONCAT(l.content, char(10)) FROM lines l
+          WHERE l.file_id = f.id AND l.line_no >= s.line_start AND l.line_no <= s.line_end
+          ORDER BY l.line_no) AS excerpt
          FROM symbols s
          JOIN files f ON f.id = s.file_id";
 
-const CALLER_SELECT: &str = "SELECT f.path, f.language, c.caller, c.callee, c.line_no, c.byte_start, c.byte_end
+const CALLER_SELECT: &str = "SELECT f.path, f.language, c.caller, c.callee, c.line_no, l.content
          FROM callers c
-         JOIN files f ON f.id = c.file_id";
+         JOIN files f ON f.id = c.file_id
+         JOIN lines l ON l.file_id = c.file_id AND l.line_no = c.line_no";
 
-type CallerQueryRow = (String, Option<String>, String, String, u32);
+type CallerQueryRow = (String, Option<String>, String, String, u32, String);
 
 enum CallerMatchMode {
     Hybrid,
@@ -40,6 +44,7 @@ fn query_caller_rows(
             row.get::<_, String>(2)?,
             row.get::<_, String>(3)?,
             row.get::<_, u32>(4)?,
+            row.get::<_, String>(5)?,
         ))
     })
 }
@@ -48,11 +53,13 @@ fn caller_rows_to_hits(
     rows: Vec<CallerQueryRow>,
     options: &SearchOptions,
     parsed: &ParsedQuery,
-    excerpt: &dyn Fn(&str, u32, u32) -> Result<String>,
     mode: CallerMatchMode,
 ) -> Result<Vec<SearchHit>> {
+    let primary_lower = parsed
+        .primary_symbol()
+        .map(|s| s.to_lowercase());
     let mut hits = Vec::new();
-    for (path, language, caller, callee, line_no) in rows {
+    for (path, language, caller, callee, line_no, text) in rows {
         if !matches_lang(language.as_deref(), options.lang_filter.as_deref()) {
             continue;
         }
@@ -65,15 +72,14 @@ fn caller_rows_to_hits(
         if !matched {
             continue;
         }
-        let text = excerpt(&path, line_no, line_no)?;
         let score = score_caller(&parsed.terms, &callee);
         let include_graph = match mode {
             CallerMatchMode::CalleeOnly => true,
             CallerMatchMode::Hybrid => {
                 callee_score > 0.0
-                    || parsed
-                        .primary_symbol()
-                        .is_some_and(|s| callee.to_lowercase().contains(&s.to_lowercase()))
+                    || primary_lower
+                        .as_ref()
+                        .is_some_and(|s| callee.to_lowercase().contains(s))
             }
         };
         hits.push(SearchHit::caller(
@@ -92,21 +98,30 @@ fn caller_rows_to_hits(
     Ok(hits)
 }
 
-type SymbolSpanRow = (String, Option<String>, String, u32, u32);
+type SymbolSpanRow = (String, Option<String>, String, u32, u32, String);
+
+fn read_symbol_span_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SymbolSpanRow> {
+    Ok((
+        row.get(0)?,
+        row.get(1)?,
+        row.get(2)?,
+        row.get(4)?,
+        row.get(5)?,
+        row.get::<_, Option<String>>(8)?.unwrap_or_default(),
+    ))
+}
 
 fn symbol_span_rows_to_hits(
     rows: Vec<SymbolSpanRow>,
     options: &SearchOptions,
-    excerpt: &dyn Fn(&str, u32, u32) -> Result<String>,
     kind: HitKind,
     score_for: impl Fn(&str) -> f64,
 ) -> Result<Vec<SearchHit>> {
     let mut hits = Vec::new();
-    for (path, language, name, line_start, line_end) in rows {
+    for (path, language, name, line_start, line_end, text) in rows {
         if !matches_lang(language.as_deref(), options.lang_filter.as_deref()) {
             continue;
         }
-        let text = excerpt(&path, line_start, line_end)?;
         let score = score_for(&name);
         hits.push(SearchHit::span(
             kind, path, line_start, line_end, score, text, Some(name), language,
@@ -119,21 +134,18 @@ pub fn symbol_pass(
     store: &IndexStore,
     options: &SearchOptions,
     parsed: &ParsedQuery,
-    excerpt: &dyn Fn(&str, u32, u32) -> Result<String>,
 ) -> Result<Vec<SearchHit>> {
     let mut hits = Vec::new();
     hits.extend(def_hits_for_terms(
         store,
         options,
         parsed,
-        excerpt,
         SYMBOL_SQL_LIMIT,
     )?);
     hits.extend(caller_hits_for_terms(
         store,
         options,
         parsed,
-        excerpt,
         CALLER_SQL_LIMIT,
     )?);
     Ok(hits)
@@ -143,7 +155,6 @@ pub fn anchor_pass(
     store: &IndexStore,
     options: &SearchOptions,
     parsed: &ParsedQuery,
-    excerpt: &dyn Fn(&str, u32, u32) -> Result<String>,
 ) -> Result<Vec<SearchHit>> {
     let anchor_symbol = match parsed.primary_symbol() {
         Some(s) => s.to_string(),
@@ -162,30 +173,15 @@ pub fn anchor_pass(
     let (where_clause, bind) =
         like_terms_filter("s.name", &terms, options.lang_filter.as_deref());
     let sql = format!("{SYMBOL_SELECT}{where_clause} LIMIT ?{}", bind.len() + 1);
-    let rows = query_limit_map(store.connection(), &sql, bind, SYMBOL_SQL_LIMIT, |row| {
-        Ok((
-            row.get::<_, String>(0)?,
-            row.get::<_, Option<String>>(1)?,
-            row.get::<_, String>(2)?,
-            row.get::<_, u32>(4)?,
-            row.get::<_, u32>(5)?,
-        ))
-    })?;
+    let rows = query_limit_map(store.connection(), &sql, bind, SYMBOL_SQL_LIMIT, read_symbol_span_row)?;
 
-    symbol_span_rows_to_hits(
-        rows,
-        options,
-        excerpt,
-        HitKind::Anchor,
-        |_| SCORE_ANCHOR,
-    )
+    symbol_span_rows_to_hits(rows, options, HitKind::Anchor, |_| SCORE_ANCHOR)
 }
 
 pub(crate) fn def_hits_for_terms(
     store: &IndexStore,
     options: &SearchOptions,
     parsed: &ParsedQuery,
-    excerpt: &dyn Fn(&str, u32, u32) -> Result<String>,
     limit: usize,
 ) -> Result<Vec<SearchHit>> {
     if parsed.terms.is_empty() {
@@ -198,17 +194,9 @@ pub(crate) fn def_hits_for_terms(
         options.lang_filter.as_deref(),
     );
     let sql = format!("{SYMBOL_SELECT}{where_clause} LIMIT ?{}", bind.len() + 1);
-    let rows = query_limit_map(store.connection(), &sql, bind, limit, |row| {
-        Ok((
-            row.get::<_, String>(0)?,
-            row.get::<_, Option<String>>(1)?,
-            row.get::<_, String>(2)?,
-            row.get::<_, u32>(4)?,
-            row.get::<_, u32>(5)?,
-        ))
-    })?;
+    let rows = query_limit_map(store.connection(), &sql, bind, limit, read_symbol_span_row)?;
 
-    symbol_span_rows_to_hits(rows, options, excerpt, HitKind::Def, |name| {
+    symbol_span_rows_to_hits(rows, options, HitKind::Def, |name| {
         score_def(&parsed.terms, name)
     })
 }
@@ -217,7 +205,6 @@ pub(crate) fn caller_hits_for_terms(
     store: &IndexStore,
     options: &SearchOptions,
     parsed: &ParsedQuery,
-    excerpt: &dyn Fn(&str, u32, u32) -> Result<String>,
     limit: usize,
 ) -> Result<Vec<SearchHit>> {
     if parsed.terms.is_empty() {
@@ -230,14 +217,13 @@ pub(crate) fn caller_hits_for_terms(
         options.lang_filter.as_deref(),
         limit,
     )?;
-    caller_rows_to_hits(rows, options, parsed, excerpt, CallerMatchMode::Hybrid)
+    caller_rows_to_hits(rows, options, parsed, CallerMatchMode::Hybrid)
 }
 
 pub(crate) fn callee_hits_for_terms(
     store: &IndexStore,
     options: &SearchOptions,
     parsed: &ParsedQuery,
-    excerpt: &dyn Fn(&str, u32, u32) -> Result<String>,
     limit: usize,
 ) -> Result<Vec<SearchHit>> {
     if parsed.terms.is_empty() {
@@ -250,5 +236,5 @@ pub(crate) fn callee_hits_for_terms(
         options.lang_filter.as_deref(),
         limit,
     )?;
-    caller_rows_to_hits(rows, options, parsed, excerpt, CallerMatchMode::CalleeOnly)
+    caller_rows_to_hits(rows, options, parsed, CallerMatchMode::CalleeOnly)
 }
