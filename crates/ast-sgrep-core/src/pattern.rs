@@ -76,14 +76,25 @@ pub fn search_pattern(pattern: &str, root: &Path, lang_filter: Option<&str>) -> 
 
 fn find_ast_grep_binary() -> Option<String> {
     for name in ["ast-grep", "sg"] {
-        if Command::new(name)
-            .arg("--version")
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
-        {
+        let Ok(output) = Command::new(name).arg("--version").output() else {
+            continue;
+        };
+        if !output.status.success() {
+            continue;
+        }
+        let version = String::from_utf8_lossy(&output.stdout);
+        if version.contains("ast-grep") {
             return Some(name.to_string());
         }
+    }
+    if let Ok(path) = std::env::var("ASGREP_AST_GREP") {
+        if Path::new(&path).is_file() {
+            return Some(path);
+        }
+    }
+    let bundled = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.tools/ast-grep");
+    if bundled.is_file() {
+        return Some(bundled.to_string_lossy().into_owned());
     }
     None
 }
@@ -156,4 +167,36 @@ fn parse_ast_grep_json(stdout: &[u8], pattern: &str, root: &Path) -> Result<Vec<
     }
 
     Ok(hits)
+}
+
+/// Benchmark ast-grep stateless pattern scan; returns average ms per iteration.
+pub fn bench_ast_grep(pattern: &str, root: &Path, iterations: u32) -> Option<f64> {
+    let ast_grep = find_ast_grep_binary()?;
+    let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    let root = root.to_string_lossy().into_owned();
+    let mut total = 0.0f64;
+    for _ in 0..iterations {
+        let start = Instant::now();
+        let _ = Command::new(&ast_grep)
+            .args(["run", "--pattern", pattern, &root])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+        total += start.elapsed().as_secs_f64() * 1000.0;
+    }
+    Some(total / f64::from(iterations))
+}
+
+/// Map a hybrid query to an ast-grep literal pattern when comparable.
+pub fn ast_grep_pattern_for_query(query: &str) -> Option<String> {
+    let q = query.trim();
+    let q = q
+        .strip_prefix("defs:")
+        .or_else(|| q.strip_prefix("callers:"))
+        .unwrap_or(q)
+        .trim();
+    if q.is_empty() || q.contains(' ') {
+        return None;
+    }
+    Some(q.to_string())
 }

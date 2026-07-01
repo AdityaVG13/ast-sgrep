@@ -261,6 +261,11 @@ fn run_bench(
         hits = response.hits.len();
     }
     let avg_search_ms = total_search_ms / f64::from(iterations);
+    let ast_grep_pattern = ast_sgrep_core::pattern::ast_grep_pattern_for_query(query);
+    let ast_grep_avg_ms = ast_grep_pattern.as_ref().and_then(|pattern| {
+        ast_sgrep_core::pattern::bench_ast_grep(pattern, root, iterations)
+    });
+    let speedup_vs_ast_grep = ast_grep_avg_ms.map(|ag| ag / avg_search_ms);
 
     if cli.json {
         println!(
@@ -272,6 +277,9 @@ fn run_bench(
                 "iterations": iterations,
                 "avg_search_ms": avg_search_ms,
                 "hits": hits,
+                "ast_grep_pattern": ast_grep_pattern,
+                "avg_ast_grep_ms": ast_grep_avg_ms,
+                "speedup_vs_ast_grep": speedup_vs_ast_grep,
             })
         );
     } else {
@@ -279,6 +287,12 @@ fn run_bench(
         println!("Indexed {} files in {index_ms:.2}ms", stats.files_indexed);
         println!("Query: {query}");
         println!("Avg search: {avg_search_ms:.2}ms over {iterations} iterations ({hits} hits)");
+        if let (Some(pattern), Some(ag_ms)) = (&ast_grep_pattern, ast_grep_avg_ms) {
+            println!("Avg ast-grep (pattern: {pattern}): {ag_ms:.2}ms over {iterations} iterations");
+            if let Some(speedup) = speedup_vs_ast_grep {
+                println!("Speedup vs ast-grep: {speedup:.1}x");
+            }
+        }
     }
     Ok(())
 }

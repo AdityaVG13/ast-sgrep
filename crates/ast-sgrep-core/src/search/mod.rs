@@ -216,7 +216,7 @@ fn run_serial_passes(
     options: &SearchOptions,
     parsed: &ParsedQuery,
 ) -> Result<Vec<SearchHit>> {
-    let mut hits = Vec::new();
+    let mut hits = Vec::with_capacity(64);
     hits.extend(lexical_pass(store, options, parsed)?);
     hits.extend(symbol_pass(store, options, parsed)?);
     hits.extend(anchor_pass(store, options, parsed)?);
@@ -265,15 +265,23 @@ fn finish_response(
     mut hits: Vec<SearchHit>,
     dedup: bool,
 ) -> SearchResponse {
+    if dedup {
+        hits = dedup_hits(hits);
+    }
+    if hits.len() > limit {
+        let nth = limit.saturating_sub(1);
+        hits.select_nth_unstable_by(nth, |a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        hits.truncate(limit);
+    }
     hits.sort_by(|a, b| {
         b.score
             .partial_cmp(&a.score)
             .unwrap_or(std::cmp::Ordering::Equal)
     });
-    if dedup {
-        hits = dedup_hits(hits);
-    }
-    hits.truncate(limit);
     SearchResponse {
         query: parsed.raw.clone(),
         limit,
