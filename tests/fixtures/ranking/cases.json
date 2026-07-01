@@ -1,0 +1,45 @@
+{
+  "fixture": "sample",
+  "cases": [
+    {
+      "name": "defs_auth_refresh",
+      "query": "defs:auth_refresh",
+      "top_k": 8,
+      "must_include": [
+        { "kind": "def", "symbol": "auth_refresh", "max_rank": 3 }
+      ]
+    },
+    {
+      "name": "callers_process_request",
+      "query": "callers:process_request",
+      "top_k": 8,
+      "must_include": [
+        { "kind": "caller", "callee": "process_request", "max_rank": 3 }
+      ]
+    },
+    {
+      "name": "literal_process_request",
+      "query": "process_request",
+      "top_k": 5,
+      "must_include": [
+        { "kind": "def", "symbol": "process_request", "max_rank": 3 }
+      ]
+    },
+    {
+      "name": "nl_auth_refresh",
+      "query": "how does auth refresh work",
+      "top_k": 8,
+      "must_include": [
+        { "kind": "def", "symbol": "auth_refresh", "max_rank": 8 }
+      ]
+    },
+    {
+      "name": "synonym_credential_renewal",
+      "query": "credential renewal",
+      "top_k": 16,
+      "must_include": [
+        { "kind": "embed", "symbol": "auth_refresh", "max_rank": 16 }
+      ]
+    }
+  ]
+}

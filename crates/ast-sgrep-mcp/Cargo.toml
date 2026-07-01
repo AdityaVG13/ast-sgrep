@@ -1,0 +1,23 @@
+[package]
+name = "ast-sgrep-mcp"
+description = "Model Context Protocol server for ast-sgrep hybrid code search"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "../../README.md"
+keywords = ["mcp", "code-search", "agent"]
+categories = ["development-tools"]
+publish = true
+
+[[bin]]
+name = "asgrep-mcp"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+ast-sgrep-core = { path = "../ast-sgrep-core" }
+ast-sgrep-plugins = { path = "../ast-sgrep-plugins" }
+serde.workspace = true
+serde_json.workspace = true

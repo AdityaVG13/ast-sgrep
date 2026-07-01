@@ -3,3 +3,6 @@
 .internal/
 *.db
 *.db-*
+
+# Local tool binaries (ast-grep bench baseline)
+.tools/

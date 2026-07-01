@@ -1,5 +1,6 @@
 use thiserror::Error;
 
+pub mod bench_suite;
 pub mod fts;
 pub mod gitignore;
 pub mod index;

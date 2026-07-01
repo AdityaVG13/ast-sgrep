@@ -8,6 +8,7 @@ members = [
     "crates/ast-sgrep-lsp",
     "crates/ast-sgrep-plugins",
     "crates/ast-sgrep-testkit",
+    "crates/ast-sgrep-mcp",
 ]
 default-members = ["crates/ast-sgrep-cli"]
 
@@ -44,4 +45,5 @@ regex = "1"
 zeroize = "=1.8.1"
 walkdir = "2"
 rayon = "=1.12.0"
+notify = "=6.1.1"
 simsimd = "=6.5.16"

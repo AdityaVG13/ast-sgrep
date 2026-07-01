@@ -12,5 +12,6 @@ ast-sgrep-core = { path = "../ast-sgrep-core" }
 ast-sgrep-embed = { path = "../ast-sgrep-embed" }
 ast-sgrep-lang = { path = "../ast-sgrep-lang" }
 ast-sgrep-lsp = { path = "../ast-sgrep-lsp" }
+serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 tempfile.workspace = true

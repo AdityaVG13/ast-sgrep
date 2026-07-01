@@ -96,6 +96,17 @@ enum Commands {
         query: String,
         #[arg(long, default_value = "100")]
         iterations: u32,
+        /// Run a named benchmark suite (e.g. `default`) instead of a single query
+        #[arg(long)]
+        suite: Option<String>,
+    },
+    /// Watch the repo and incrementally re-index on file changes
+    Watch {
+        #[arg(default_value = ".")]
+        root: PathBuf,
+        /// Debounce window in milliseconds before re-indexing
+        #[arg(long, default_value = "300")]
+        debounce_ms: u64,
     },
     /// Semantic-only search (embed pass, synonym / NL queries)
     Semantic {
@@ -133,8 +144,19 @@ pub fn run() -> anyhow::Result<()> {
             ref root,
             ref query,
             iterations,
+            ref suite,
         }) => {
-            run_bench(root, &cli, query, iterations)?;
+            if let Some(suite_name) = suite {
+                run_bench_suite(root, &cli, suite_name, iterations)?;
+            } else {
+                run_bench(root, &cli, query, iterations)?;
+            }
+        }
+        Some(Commands::Watch {
+            ref root,
+            debounce_ms,
+        }) => {
+            run_watch(root, &cli, debounce_ms)?;
         }
         Some(Commands::Semantic { ref query, ref root }) => {
             run_search(root, &cli, query, true)?;
@@ -236,6 +258,149 @@ fn search_options(root: &std::path::Path, cli: &Cli) -> SearchOptions {
         use_semantic_only: cli.semantic_only,
         ann_threshold: cli.ann_threshold,
     }
+}
+
+fn run_bench_suite(
+    root: &std::path::Path,
+    cli: &Cli,
+    suite_name: &str,
+    iterations: u32,
+) -> anyhow::Result<()> {
+    let cases = ast_sgrep_core::bench_suite::suite_by_name(suite_name).with_context(|| {
+        format!(
+            "unknown suite {suite_name:?}; available: {}",
+            ast_sgrep_core::bench_suite::list_suite_names().join(", ")
+        )
+    })?;
+
+    let opts = index_options(root, cli);
+    let mut indexer = Indexer::new(opts.clone()).context("failed to open index")?;
+    let index_start = Instant::now();
+    let stats = indexer.index_all()?;
+    let index_ms = index_start.elapsed().as_secs_f64() * 1000.0;
+
+    let search_opts = search_options(root, cli);
+    let searcher = Searcher::new(search_opts)?;
+
+    let mut results = Vec::new();
+    for case in cases {
+        let mut total_search_ms = 0.0;
+        let mut hits = 0usize;
+        for _ in 0..iterations {
+            let start = Instant::now();
+            let response = searcher.search(case.query)?;
+            total_search_ms += start.elapsed().as_secs_f64() * 1000.0;
+            hits = response.hits.len();
+        }
+        let avg_search_ms = total_search_ms / f64::from(iterations);
+        let ast_grep_pattern = ast_sgrep_core::pattern::ast_grep_pattern_for_query(case.query);
+        let ast_grep_avg_ms = ast_grep_pattern.as_ref().and_then(|pattern| {
+            ast_sgrep_core::pattern::bench_ast_grep(pattern, root, iterations)
+        });
+        let speedup_vs_ast_grep = ast_grep_avg_ms.map(|ag| ag / avg_search_ms);
+        let ok = hits >= case.min_hits;
+        results.push(serde_json::json!({
+            "name": case.name,
+            "query": case.query,
+            "avg_search_ms": avg_search_ms,
+            "hits": hits,
+            "min_hits": case.min_hits,
+            "ok": ok,
+            "ast_grep_pattern": ast_grep_pattern,
+            "avg_ast_grep_ms": ast_grep_avg_ms,
+            "speedup_vs_ast_grep": speedup_vs_ast_grep,
+        }));
+    }
+
+    if cli.json {
+        println!(
+            "{}",
+            serde_json::json!({
+                "suite": suite_name,
+                "files_indexed": stats.files_indexed,
+                "index_ms": index_ms,
+                "iterations": iterations,
+                "cases": results,
+            })
+        );
+    } else {
+        println!("Benchmark suite: {suite_name}");
+        println!("Indexed {} files in {index_ms:.2}ms", stats.files_indexed);
+        for row in &results {
+            let name = row["name"].as_str().unwrap_or("?");
+            let query = row["query"].as_str().unwrap_or("?");
+            let avg = row["avg_search_ms"].as_f64().unwrap_or(0.0);
+            let hits = row["hits"].as_u64().unwrap_or(0);
+            let ok = row["ok"].as_bool().unwrap_or(false);
+            let status = if ok { "ok" } else { "FAIL" };
+            println!("  {name}: {avg:.2}ms avg, {hits} hits {status}");
+            if let (Some(pattern), Some(ag_ms)) = (
+                row["ast_grep_pattern"].as_str(),
+                row["avg_ast_grep_ms"].as_f64(),
+            ) {
+                println!("    ast-grep ({pattern}): {ag_ms:.2}ms");
+                if let Some(speedup) = row["speedup_vs_ast_grep"].as_f64() {
+                    println!("    speedup vs ast-grep: {speedup:.1}x");
+                }
+            }
+            let _ = query;
+        }
+    }
+
+    if results.iter().any(|r| r["ok"] == false) {
+        anyhow::bail!("benchmark suite had cases below min_hits threshold");
+    }
+    Ok(())
+}
+
+fn run_watch(root: &std::path::Path, cli: &Cli, debounce_ms: u64) -> anyhow::Result<()> {
+    use notify::{Config, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
+    use std::sync::mpsc::{self, RecvTimeoutError};
+    use std::time::Duration;
+
+    let opts = index_options(root, cli);
+    let root = opts.root.clone();
+    let (tx, rx) = mpsc::channel();
+    let mut watcher = RecommendedWatcher::new(
+        move |res| {
+            let _ = tx.send(res);
+        },
+        Config::default(),
+    )
+    .context("failed to create file watcher")?;
+    watcher
+        .watch(&root, RecursiveMode::Recursive)
+        .context("failed to watch project root")?;
+
+    eprintln!("[asgrep] watching {} (debounce {debounce_ms}ms)", root.display());
+
+    let mut indexer = Indexer::new(opts)?;
+    let initial = indexer.index_all()?;
+    eprintln!(
+        "[asgrep] initial index: {} files indexed, {} skipped",
+        initial.files_indexed, initial.files_skipped
+    );
+
+    let debounce = Duration::from_millis(debounce_ms);
+    loop {
+        match rx.recv_timeout(debounce) {
+            Ok(Ok(event)) => match event.kind {
+                EventKind::Modify(_) | EventKind::Create(_) | EventKind::Remove(_) => {
+                    while rx.recv_timeout(Duration::from_millis(50)).is_ok() {}
+                    let stats = indexer.index_all()?;
+                    eprintln!(
+                        "[asgrep] re-indexed: {} updated, {} skipped, {} removed",
+                        stats.files_indexed, stats.files_skipped, stats.files_removed
+                    );
+                }
+                _ => {}
+            },
+            Ok(Err(e)) => eprintln!("[asgrep] watch error: {e}"),
+            Err(RecvTimeoutError::Timeout) => {}
+            Err(RecvTimeoutError::Disconnected) => break,
+        }
+    }
+    Ok(())
 }
 
 fn run_bench(
