@@ -8,7 +8,7 @@ fn bench_search(c: &mut Criterion) {
         root: indexed.indexer.store().root().to_path_buf(),
         index_path: Some(indexed.indexer.store().db_path().to_path_buf()),
         limit: 16,
-        use_embed: false,
+        use_embed: true,
         ..SearchOptions::default()
     })
     .unwrap();

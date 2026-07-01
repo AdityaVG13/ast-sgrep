@@ -617,7 +617,7 @@ impl IndexStore {
     }
 
     pub fn excerpt_span(&self, rel_path: &str, line_start: u32, line_end: u32) -> Result<String> {
-        let mut stmt = self.conn.prepare(
+        let mut stmt = self.conn.prepare_cached(
             "SELECT l.content FROM lines l
              JOIN files f ON f.id = l.file_id
              WHERE f.path = ?1 AND l.line_no >= ?2 AND l.line_no <= ?3

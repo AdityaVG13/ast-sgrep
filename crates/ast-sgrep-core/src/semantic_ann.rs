@@ -169,6 +169,10 @@ impl SemanticAnnIndex {
 }
 
 fn flatten_vectors(chunks: &[SemanticChunkRow], dim: usize) -> Vec<f32> {
+    flatten_vectors_for_search(chunks, dim)
+}
+
+pub fn flatten_vectors_for_search(chunks: &[SemanticChunkRow], dim: usize) -> Vec<f32> {
     let mut flat = Vec::with_capacity(chunks.len() * dim);
     for c in chunks {
         let mut v = c.5.clone();
@@ -412,6 +416,17 @@ pub fn rank_chunk_indices(
     limit: usize,
     override_threshold: Option<usize>,
 ) -> Result<Vec<(usize, f32)>> {
+    rank_chunk_indices_flat(store, query_vec, chunks, None, limit, override_threshold)
+}
+
+pub fn rank_chunk_indices_flat(
+    store: &IndexStore,
+    query_vec: &[f32],
+    chunks: &[SemanticChunkRow],
+    flat: Option<&[f32]>,
+    limit: usize,
+    override_threshold: Option<usize>,
+) -> Result<Vec<(usize, f32)>> {
     if chunks.is_empty() {
         return Ok(Vec::new());
     }
@@ -421,8 +436,11 @@ pub fn rank_chunk_indices(
         return Ok(ivf.search(query_vec, limit));
     }
 
-    let flat = flatten_vectors(chunks, dim);
-    Ok(brute_force_flat(&flat, dim, query_vec, limit))
+    if let Some(flat) = flat {
+        return Ok(brute_force_flat(flat, dim, query_vec, limit));
+    }
+    let owned = flatten_vectors(chunks, dim);
+    Ok(brute_force_flat(&owned, dim, query_vec, limit))
 }
 
 pub fn rebuild_semantic_ivf_sidecar(

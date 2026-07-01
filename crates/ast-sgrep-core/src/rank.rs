@@ -27,11 +27,10 @@ pub fn score_lexical_rrf(per_term_ranks: &[usize]) -> f64 {
 }
 
 pub fn score_symbol(term: &str, symbol: &str) -> f64 {
-    let term_lower = term.to_lowercase();
     let sym_lower = symbol.to_lowercase();
-    if sym_lower == term_lower {
+    if sym_lower == term {
         SCORE_EXACT_SYMBOL
-    } else if sym_lower.contains(&term_lower) || term_lower.contains(&sym_lower) {
+    } else if sym_lower.contains(term) || term.contains(&sym_lower) {
         SCORE_SUBSTRING_SYMBOL
     } else {
         0.0

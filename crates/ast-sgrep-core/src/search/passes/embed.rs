@@ -1,35 +1,70 @@
+use std::sync::Arc;
+
 use ast_sgrep_embed::{embed_query, SemanticChunkRow};
 
 use crate::query::ParsedQuery;
 use crate::rank::SCORE_EMBED;
-use crate::semantic_ann::rank_chunk_indices;
+use crate::semantic_ann::rank_chunk_indices_flat;
 use crate::store::IndexStore;
 use crate::Result;
 use crate::search::types::{HitKind, SearchHit, SearchOptions};
 
 const EMBED_HIT_LIMIT: usize = 50;
 
+pub struct EmbedContext {
+    pub chunks: Arc<Vec<SemanticChunkRow>>,
+    pub flat_vectors: Arc<Vec<f32>>,
+}
+
+#[allow(dead_code)]
 pub fn embed_pass(
     store: &IndexStore,
     options: &SearchOptions,
     parsed: &ParsedQuery,
+) -> Result<Vec<SearchHit>> {
+    embed_pass_with_context(store, options, parsed, None)
+}
+
+pub fn embed_pass_with_context(
+    store: &IndexStore,
+    options: &SearchOptions,
+    parsed: &ParsedQuery,
+    ctx: Option<EmbedContext>,
 ) -> Result<Vec<SearchHit>> {
     if parsed.terms.is_empty() || !options.use_embed {
         return Ok(Vec::new());
     }
 
     let query = parsed.terms.join(" ");
-    let chunks = store.all_semantic_chunks(options.lang_filter.as_deref())?;
+    if let Some(ctx) = ctx {
+        let chunks = &ctx.chunks;
+        if chunks.is_empty() {
+            return embed_legacy_hits(store, options, &query);
+        }
+        let query_vec =
+            embed_query_vector(store, options, &query, chunks.first().map(|c| c.5.len()))?;
+        let indices = rank_chunk_indices_flat(
+            store,
+            &query_vec,
+            chunks,
+            Some(ctx.flat_vectors.as_slice()),
+            EMBED_HIT_LIMIT,
+            options.ann_threshold,
+        )?;
+        return Ok(chunk_indices_to_hits(chunks, indices));
+    }
 
+    let chunks = store.all_semantic_chunks(options.lang_filter.as_deref())?;
     if chunks.is_empty() {
         return embed_legacy_hits(store, options, &query);
     }
 
     let query_vec = embed_query_vector(store, options, &query, chunks.first().map(|c| c.5.len()))?;
-    let indices = rank_chunk_indices(
+    let indices = rank_chunk_indices_flat(
         store,
         &query_vec,
         &chunks,
+        None,
         EMBED_HIT_LIMIT,
         options.ann_threshold,
     )?;

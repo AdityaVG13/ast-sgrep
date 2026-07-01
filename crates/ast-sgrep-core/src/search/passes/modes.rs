@@ -18,7 +18,6 @@ fn prefixed_mode_query(parsed: &ParsedQuery) -> Option<ParsedQuery> {
 pub fn search_callers(
     store: &IndexStore,
     parsed: &ParsedQuery,
-    excerpt: &dyn Fn(&str, u32, u32) -> Result<String>,
 ) -> Result<Vec<SearchHit>> {
     let Some(mode_query) = prefixed_mode_query(parsed) else {
         return Ok(Vec::new());
@@ -27,7 +26,6 @@ pub fn search_callers(
         store,
         &mode_search_options(),
         &mode_query,
-        excerpt,
         MODE_SQL_LIMIT,
     )
 }
@@ -35,7 +33,6 @@ pub fn search_callers(
 pub fn search_defs(
     store: &IndexStore,
     parsed: &ParsedQuery,
-    excerpt: &dyn Fn(&str, u32, u32) -> Result<String>,
 ) -> Result<Vec<SearchHit>> {
     let Some(mode_query) = prefixed_mode_query(parsed) else {
         return Ok(Vec::new());
@@ -44,7 +41,6 @@ pub fn search_defs(
         store,
         &mode_search_options(),
         &mode_query,
-        excerpt,
         MODE_SQL_LIMIT,
     )
 }
