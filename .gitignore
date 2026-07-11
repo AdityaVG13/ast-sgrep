@@ -80,7 +80,8 @@ SYNC_STRATEGY.md
 # Keep any accidental local harness/scratch out of git
 benchmarks/**/__pycache__/
 benchmarks/corpora/
-benchmarks/results/
+benchmarks/results/*
+!benchmarks/results/*.md
 benchmarks/tmp-idx/
 benchmarks/cold-start-work/
 benchmarks/query-path-work/
