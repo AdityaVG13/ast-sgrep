@@ -1,0 +1,426 @@
+mod hits;
+mod passes;
+mod types;
+pub use types::{HitKind, SearchHit, SearchOptions, SearchResponse, SpanHitInput};
+use std::collections::HashSet;
+use std::fs::OpenOptions;
+use std::io::Write;
+use std::path::Path;
+use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::{SystemTime, UNIX_EPOCH};
+use ast_sgrep_embed::SemanticChunkRow;
+use crate::query::{ParsedQuery, QueryMode};
+use crate::semantic_ann::flatten_vectors_for_search;
+use crate::store::IndexStore;
+use crate::Result;
+use hits::dedup_hits;
+use passes::embed::{embed_pass_lazy_ivf, embed_pass_with_context, EmbedContext};
+use passes::lexical::lexical_pass;
+use passes::literal::literal_pass;
+use passes::regex::regex_pass;
+use passes::symbol::{anchor_pass, search_callers, search_defs, search_imports, symbol_pass};
+const PARALLEL_PASS_FILE_THRESHOLD: usize = 128;
+const MAX_HITS_PER_FILE: usize = 3;
+struct SemanticCache {
+    lang_filter: Option<String>,
+    max_id: i64,
+    embed_backend: String,
+    chunks: Arc<Vec<SemanticChunkRow>>,
+    flat_vectors: Arc<Vec<f32>>,
+}
+pub struct Searcher {
+    store: IndexStore,
+    options: SearchOptions,
+    semantic_cache: Arc<Mutex<Option<SemanticCache>>>,
+}
+impl Searcher {
+    pub fn new(options: SearchOptions) -> Result<Self> {
+        Ok(Self::with_store(
+            IndexStore::open(&options.root, options.index_path.as_deref())?,
+            options,
+        ))
+    }
+
+    pub fn with_store(store: IndexStore, options: SearchOptions) -> Self {
+        Self { store, options, semantic_cache: Arc::new(Mutex::new(None)) }
+    }
+
+    pub fn store(&self) -> &IndexStore {
+        &self.store
+    }
+
+    pub fn search(&self, query_str: &str) -> Result<SearchResponse> {
+        let parsed = ParsedQuery::parse(query_str);
+        let hits = match parsed.mode {
+            QueryMode::Callers => search_callers(&self.store, &self.options, &parsed)?,
+            QueryMode::Defs => search_defs(&self.store, &self.options, &parsed)?,
+            QueryMode::Imports => search_imports(&self.store, &self.options, &parsed)?,
+            QueryMode::Pattern => crate::pattern::search_pattern(
+                parsed.terms.first().map(|s| s.as_str()).unwrap_or(""),
+                &self.store,
+                &self.options.root,
+                self.options.lang_filter.as_deref(),
+            )?,
+            QueryMode::Literal | QueryMode::Word => literal_pass(&self.store, &self.options, &parsed)?,
+            QueryMode::Regex => regex_pass(&self.store, &self.options, &parsed)?,
+            QueryMode::Hybrid => {
+                let mut hits = self.search_hybrid(&parsed)?;
+                crate::intent::route_hits(&parsed, &mut hits);
+                hits
+            }
+        };
+        Ok(finish_response(&parsed, &self.options, hits, true))
+    }
+
+    pub fn search_semantic(&self, query_str: &str) -> Result<SearchResponse> {
+        let parsed = ParsedQuery::parse(query_str);
+        Ok(finish_response(
+            &parsed,
+            &self.options,
+            run_embed_pass(&self.store, &self.options, &parsed, &self.semantic_cache)?,
+            false,
+        ))
+    }
+
+    pub fn search_literal(&self, query: &str) -> Result<SearchResponse> {
+        let parsed = ParsedQuery::literal(query);
+        Ok(finish_response(&parsed, &self.options, literal_pass(&self.store, &self.options, &parsed)?, true))
+    }
+
+    pub fn search_regex(&self, query: &str) -> Result<SearchResponse> {
+        let parsed = ParsedQuery::regex(query);
+        Ok(finish_response(&parsed, &self.options, regex_pass(&self.store, &self.options, &parsed)?, true))
+    }
+
+    pub fn search_word(&self, query: &str) -> Result<SearchResponse> {
+        let parsed = ParsedQuery::word(query);
+        Ok(finish_response(&parsed, &self.options, literal_pass(&self.store, &self.options, &parsed)?, true))
+    }
+
+    fn search_hybrid(&self, parsed: &ParsedQuery) -> Result<Vec<SearchHit>> {
+        let parallel = self
+            .store
+            .status()
+            .map(|s| s.file_count >= PARALLEL_PASS_FILE_THRESHOLD)
+            .unwrap_or(false);
+        if parallel {
+            self.search_hybrid_large(parsed)
+        } else {
+            let mut hits = run_serial_passes(&self.store, &self.options, parsed)?;
+            if self.options.use_embed {
+                if let Some(ctx) = load_semantic_context(&self.store, &self.options, &self.semantic_cache)? {
+                    hits.extend(embed_pass_with_context(&self.store, &self.options, parsed, Some(ctx))?);
+                }
+            }
+            Ok(hits)
+        }
+    }
+
+    fn search_hybrid_large(&self, parsed: &ParsedQuery) -> Result<Vec<SearchHit>> {
+        let root = self.options.root.clone();
+        let index_path = self.options.index_path.clone();
+        let options = self.options.clone();
+        let parsed_c = parsed.clone();
+        let parsed_sql = parsed.clone();
+        thread::scope(|scope| -> Result<Vec<SearchHit>> {
+            let embed = self.options.use_embed.then(|| {
+                let cache = Arc::clone(&self.semantic_cache);
+                let (root_e, index_path_e, options_e, parsed_e) =
+                    (root.clone(), index_path.clone(), options.clone(), parsed_c.clone());
+                scope.spawn(move || {
+                    run_embed_pass(&IndexStore::open(&root_e, index_path_e.as_deref())?, &options_e, &parsed_e, &cache)
+                })
+            });
+            let sql = scope.spawn(move || run_parallel_passes(&root, index_path.as_deref(), &options, &parsed_sql));
+            let mut hits = join_worker(sql.join())?;
+            if let Some(embed) = embed {
+                hits.extend(join_worker(embed.join())?);
+            }
+            Ok(hits)
+        })
+    }
+}
+fn run_embed_pass(
+    store: &IndexStore,
+    options: &SearchOptions,
+    parsed: &ParsedQuery,
+    cache: &Mutex<Option<SemanticCache>>,
+) -> Result<Vec<SearchHit>> {
+    if let Some(hits) = embed_pass_lazy_ivf(store, options, parsed)? { return Ok(hits); }
+    match load_semantic_context(store, options, cache)? {
+        Some(ctx) => embed_pass_with_context(store, options, parsed, Some(ctx)),
+        None => Ok(vec![]),
+    }
+}
+fn load_semantic_context(
+    store: &IndexStore,
+    options: &SearchOptions,
+    cache: &Mutex<Option<SemanticCache>>,
+) -> Result<Option<EmbedContext>> {
+    if !options.use_embed { return Ok(None); }
+    let lang_filter = options.lang_filter.clone();
+    let max_id = store.semantic_chunk_max_id()?.unwrap_or(0);
+    let embed_backend = store.get_meta("embed_backend")?.unwrap_or_else(|| "semantic".into());
+    {
+        let guard = cache.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(c) = guard.as_ref() {
+            if c.lang_filter == lang_filter && c.max_id == max_id && c.embed_backend == embed_backend { return Ok(Some(EmbedContext {
+                    chunks: Arc::clone(&c.chunks),
+                    flat_vectors: Arc::clone(&c.flat_vectors),
+                })); }
+        }
+    }
+    let chunks = store.all_semantic_chunks(lang_filter.as_deref())?;
+    if chunks.is_empty() { return Ok(None); }
+    let flat_vectors = flatten_vectors_for_search(&chunks, chunks[0].5.len())?;
+    let entry = SemanticCache {
+        lang_filter,
+        max_id,
+        embed_backend,
+        chunks: Arc::new(chunks),
+        flat_vectors: Arc::new(flat_vectors),
+    };
+    let ctx = EmbedContext { chunks: Arc::clone(&entry.chunks), flat_vectors: Arc::clone(&entry.flat_vectors) };
+    *cache.lock().unwrap_or_else(|e| e.into_inner()) = Some(entry);
+    Ok(Some(ctx))
+}
+fn run_serial_passes(store: &IndexStore, options: &SearchOptions, parsed: &ParsedQuery) -> Result<Vec<SearchHit>> {
+    let mut hits = Vec::with_capacity(64);
+    hits.extend(lexical_pass(store, options, parsed)?);
+    hits.extend(symbol_pass(store, options, parsed)?);
+    hits.extend(anchor_pass(store, options, parsed)?);
+    Ok(hits)
+}
+fn run_parallel_passes(
+    root: &Path,
+    index_path: Option<&Path>,
+    options: &SearchOptions,
+    parsed: &ParsedQuery,
+) -> Result<Vec<SearchHit>> {
+    let (parsed, options, root, index_path) = (
+        parsed.clone(),
+        options.clone(),
+        root.to_path_buf(),
+        index_path.map(|p| p.to_path_buf()),
+    );
+    thread::scope(|scope| {
+        let lex = scope.spawn(|| {
+            let store = IndexStore::open(&root, index_path.as_deref())?;
+            lexical_pass(&store, &options, &parsed)
+        });
+        let sym = scope.spawn(|| {
+            let store = IndexStore::open(&root, index_path.as_deref())?;
+            symbol_pass(&store, &options, &parsed)
+        });
+        let anchor = scope.spawn(|| {
+            let store = IndexStore::open(&root, index_path.as_deref())?;
+            anchor_pass(&store, &options, &parsed)
+        });
+        let mut hits = join_worker(lex.join())?;
+        hits.extend(join_worker(sym.join())?);
+        hits.extend(join_worker(anchor.join())?);
+        Ok(hits)
+    })
+}
+fn join_worker<T>(join: thread::Result<Result<T>>) -> Result<T> {
+    join.map_err(|e| crate::StoreError::Other(format!("search worker panicked: {e:?}")))?
+}
+fn finish_response(parsed: &ParsedQuery, options: &SearchOptions, mut hits: Vec<SearchHit>, dedup: bool) -> SearchResponse {
+    if dedup {
+        hits = dedup_hits(hits);
+    }
+    if let Some(ref filter) = options.file_filter {
+        if let Ok(re) = compile_glob(filter) {
+            hits.retain(|h| re.is_match(&h.file));
+        }
+    }
+    if options.count_only {
+        let mut counts: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
+        for hit in &hits {
+            *counts.entry(hit.file.clone()).or_default() += 1;
+        }
+        let mut counts: Vec<_> = counts.into_iter().collect();
+        counts.sort_by(|a, b| a.0.cmp(&b.0));
+        let response = SearchResponse {
+            query: parsed.raw.clone(),
+            limit: options.limit,
+            hits: vec![],
+            counts,
+            read_bytes_estimate: 0,
+            returned_excerpt_bytes: 0,
+            prevented_read_bytes: 0,
+        };
+        record_ledger_from_env(&response);
+        return response;
+    }
+    let mut keyed: Vec<(u32, SearchHit)> = hits
+        .into_iter()
+        .map(|h| (excerpt_term_coverage(&parsed.terms, &h), h))
+        .collect();
+    let mut compare = |(ca, a): &(u32, SearchHit), (cb, b): &(u32, SearchHit)| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| cb.cmp(ca))
+            .then_with(|| a.file.cmp(&b.file))
+            .then_with(|| a.line_start.cmp(&b.line_start))
+    };
+    if parsed.mode == QueryMode::Hybrid {
+        keyed.sort_by(compare);
+    } else {
+        if keyed.len() > options.limit {
+            keyed.select_nth_unstable_by(options.limit, &mut compare);
+            keyed.truncate(options.limit);
+        }
+        keyed.sort_unstable_by(compare);
+    }
+    let mut hits: Vec<_> = keyed.into_iter().map(|(_, h)| h).collect();
+    if parsed.mode == QueryMode::Hybrid {
+        hits = cap_per_file(hits);
+    }
+    hits.truncate(options.limit);
+    if options.use_rerank {
+        hits = maybe_rerank(&parsed.raw, hits, options.rerank_top_k);
+    }
+    let (read_bytes_estimate, returned_excerpt_bytes, prevented_read_bytes) =
+        estimate_prevented_reads(&options.root, &hits);
+    let response = SearchResponse {
+        query: parsed.raw.clone(),
+        limit: options.limit,
+        hits,
+        counts: vec![],
+        read_bytes_estimate,
+        returned_excerpt_bytes,
+        prevented_read_bytes,
+    };
+    record_ledger_from_env(&response);
+    response
+}
+fn maybe_rerank(query: &str, mut hits: Vec<SearchHit>, top_k: usize) -> Vec<SearchHit> {
+    if hits.is_empty() {
+        return hits;
+    }
+    let k = top_k.max(1).min(hits.len());
+    let docs: Vec<String> = hits
+        .iter()
+        .take(k)
+        .map(|h| {
+            format!(
+                "{}:{} {}",
+                h.file,
+                h.line_start,
+                h.excerpt.lines().next().unwrap_or("")
+            )
+        })
+        .collect();
+    #[cfg(feature = "rerank")]
+    {
+        match ast_sgrep_embed::rerank(query, &docs) {
+            Ok(scores) => {
+                let mut scored: Vec<(f32, SearchHit)> = scores
+                    .into_iter()
+                    .filter_map(|s| hits.get(s.index).cloned().map(|h| (s.score, h)))
+                    .collect();
+                scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+                let mut out: Vec<SearchHit> = scored
+                    .into_iter()
+                    .map(|(score, mut h)| {
+                        h.score = f64::from(score);
+                        h
+                    })
+                    .collect();
+                if hits.len() > k {
+                    out.extend(hits.drain(k..));
+                }
+                return out;
+            }
+            Err(e) => eprintln!("[asgrep] rerank skipped: {e}"),
+        }
+    }
+    #[cfg(not(feature = "rerank"))]
+    {
+        let _ = (query, &docs);
+    }
+    hits
+}
+fn estimate_prevented_reads(root: &Path, hits: &[SearchHit]) -> (u64, u64, u64) {
+    let mut files = HashSet::new();
+    let read_bytes_estimate: u64 = hits
+        .iter()
+        .filter(|h| files.insert(h.file.as_str()))
+        .filter_map(|h| {
+            let p = Path::new(&h.file);
+            let p = if p.is_absolute() { p.to_path_buf() } else { root.join(p) };
+            std::fs::metadata(p).ok().map(|m| m.len())
+        })
+        .sum();
+    let returned_excerpt_bytes = hits.iter().map(|h| h.excerpt.len() as u64).sum();
+    (read_bytes_estimate, returned_excerpt_bytes, read_bytes_estimate.saturating_sub(returned_excerpt_bytes))
+}
+fn record_ledger_from_env(response: &SearchResponse) {
+    let Some(path) = std::env::var_os("ASGREP_LEDGER_PATH") else {
+        return;
+    };
+    let _ = append_ledger_entry(Path::new(&path), response);
+}
+fn append_ledger_entry(path: &Path, response: &SearchResponse) -> std::io::Result<()> {
+    let ts = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis();
+    let mut line = serde_json::to_vec(&serde_json::json!({
+        "ts": ts, "query": response.query, "hits": response.hits.len(),
+        "bytes": {
+            "read_bytes_estimate": response.read_bytes_estimate,
+            "returned_excerpt_bytes": response.returned_excerpt_bytes,
+            "prevented_read_bytes": response.prevented_read_bytes,
+        },
+    }))
+    .map_err(std::io::Error::other)?;
+    line.push(b'\n');
+    OpenOptions::new().create(true).append(true).open(path)?.write_all(&line)
+}
+fn cap_per_file(hits: Vec<SearchHit>) -> Vec<SearchHit> {
+    let mut counts = std::collections::HashMap::new();
+    let mut kept = Vec::with_capacity(hits.len());
+    let mut overflow = Vec::new();
+    for hit in hits {
+        let c = counts.entry(hit.file.clone()).or_insert(0);
+        if *c < MAX_HITS_PER_FILE {
+            *c += 1;
+            kept.push(hit);
+        } else {
+            overflow.push(hit);
+        }
+    }
+    kept.extend(overflow);
+    kept
+}
+fn compile_glob(pattern: &str) -> std::result::Result<regex::Regex, regex::Error> {
+    let mut result = String::from("^");
+    let mut chars = pattern.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '*' if chars.peek() == Some(&'*') => {
+                chars.next();
+                if chars.peek() == Some(&'/') {
+                    chars.next();
+                    result.push_str("(?:.*/)?");
+                } else {
+                    result.push_str(".*");
+                }
+            }
+            '*' => result.push_str(".*"),
+            '?' => result.push('.'),
+            c if "\\.+()|[]{}^$".contains(c) => {
+                result.push('\\');
+                result.push(c);
+            }
+            _ => result.push(c),
+        }
+    }
+    result.push('$');
+    regex::Regex::new(&result)
+}
+fn excerpt_term_coverage(terms: &[String], hit: &SearchHit) -> u32 {
+    let text = hit.excerpt.to_lowercase();
+    terms.iter().filter(|t| text.contains(t.as_str())).count() as u32
+}

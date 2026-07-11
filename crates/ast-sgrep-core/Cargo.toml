@@ -1,0 +1,46 @@
+[package]
+name = "ast-sgrep-core"
+description = "Core indexing and hybrid search engine for ast-sgrep"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "../../README.md"
+keywords = ["code-search", "call-graph", "sqlite", "hybrid-search"]
+categories = ["development-tools"]
+documentation = "https://docs.rs/ast-sgrep-core"
+
+[lints]
+workspace = true
+
+[features]
+default = ["cloud-embed"]
+cloud-embed = ["ast-sgrep-embed/cloud"]
+# Real neural embeddings (fastembed/ONNX). Heavy dependency, opt-in: off by
+# default in the workspace, enabled with --features neural-embed.
+neural-embed = ["ast-sgrep-embed/neural-embed"]
+rerank = ["ast-sgrep-embed/rerank"]
+
+[dependencies]
+ast-sgrep-embed = { path = "../ast-sgrep-embed", version = "1.0.0-alpha.0" }
+anyhow.workspace = true
+ast-sgrep-lang = { path = "../ast-sgrep-lang", version = "1.0.0-alpha.0" }
+blake3.workspace = true
+rusqlite.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+walkdir.workspace = true
+rayon.workspace = true
+regex.workspace = true
+
+[dev-dependencies]
+ast-sgrep-testkit = { path = "../ast-sgrep-testkit" }
+criterion = "=0.5.1"
+proptest = "1.6"
+tempfile.workspace = true
+
+[[bench]]
+name = "search"
+harness = false
