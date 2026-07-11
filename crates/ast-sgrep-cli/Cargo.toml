@@ -1,0 +1,48 @@
+[package]
+name = "ast-sgrep-cli"
+description = "CLI for ast-sgrep hybrid code search"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "../../README.md"
+keywords = ["cli", "code-search", "asgrep"]
+categories = ["command-line-utilities", "development-tools"]
+documentation = "https://docs.rs/ast-sgrep-cli"
+
+[lints]
+workspace = true
+
+[features]
+default = ["cloud-embed"]
+cloud-embed = ["ast-sgrep-core/cloud-embed"]
+# Real neural embeddings (fastembed/ONNX). Heavy dependency, opt-in: off by
+# default in the workspace, enabled with `--features neural-embed`.
+neural-embed = ["ast-sgrep-core/neural-embed"]
+rerank = ["ast-sgrep-core/rerank"]
+
+[lib]
+name = "ast_sgrep_cli"
+path = "src/lib.rs"
+
+[dependencies]
+anyhow.workspace = true
+ast-sgrep-core = { path = "../ast-sgrep-core", version = "1.0.0-alpha.0" }
+ast-sgrep-plugins = { path = "../ast-sgrep-plugins", version = "1.0.0-alpha.0" }
+clap.workspace = true
+nix = { version = "0.29", features = ["signal", "process"] }
+notify.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+signal-hook = "0.3"
+tempfile.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.29", features = ["signal", "process"] }
+signal-hook = "0.3"
+
+[dev-dependencies]
+ast-sgrep-testkit = { path = "../ast-sgrep-testkit" }
+serde_json.workspace = true
+tempfile.workspace = true
