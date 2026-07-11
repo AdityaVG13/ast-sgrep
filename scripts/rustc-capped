@@ -1,0 +1,9 @@
+#!/bin/sh
+# rustc-capped -- resolve repo root independent of cwd, then exec the CPU limiter.
+set -e
+WRAPPER_DIR="$(cd "$(dirname "$0")" && pwd)"
+if [ -n "${CPU_LIMIT_TRACE_FILE:-}" ]; then
+    exec python3 "$WRAPPER_DIR/cpu-limit-exec.py" --trace-file "$CPU_LIMIT_TRACE_FILE" "$@"
+else
+    exec python3 "$WRAPPER_DIR/cpu-limit-exec.py" "$@"
+fi

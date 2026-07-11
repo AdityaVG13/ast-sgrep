@@ -1,0 +1,77 @@
+{
+  "name": "ast-sgrep",
+  "displayName": "ast-sgrep",
+  "description": "Structural code search and navigation powered by ast-sgrep",
+  "version": "1.0.0-alpha.0",
+  "publisher": "ast-sgrep",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/AdityaVG13/ast-sgrep.git",
+    "directory": "editors/vscode"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Other"
+  ],
+  "keywords": [
+    "ast",
+    "code search",
+    "language server",
+    "structural search"
+  ],
+  "extensionKind": [
+    "workspace"
+  ],
+  "main": "./out/extension.js",
+  "activationEvents": [
+    "onLanguage:rust",
+    "onLanguage:python",
+    "onLanguage:typescript",
+    "onLanguage:typescriptreact",
+    "onLanguage:go",
+    "onCommand:asgrep.search"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "asgrep.search",
+        "title": "ast-sgrep: Search Workspace"
+      }
+    ],
+    "configuration": {
+      "title": "ast-sgrep",
+      "properties": {
+        "asgrep.serverPath": {
+          "type": "string",
+          "default": "asgrep-lsp",
+          "description": "Path to the asgrep-lsp executable. Relative paths are resolved by the extension host's PATH. Reload the window after changing this setting."
+        },
+        "asgrep.indexPath": {
+          "type": "string",
+          "default": "",
+          "description": "Optional path to the ast-sgrep SQLite index. Leave empty to let the server choose a workspace-local path. Reload the window after changing this setting."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc --noEmit -p ./ && esbuild src/extension.ts --bundle --platform=node --external:vscode --outfile=out/extension.js --sourcemap",
+    "watch": "tsc -watch -p ./",
+    "package": "vsce package --no-dependencies"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.17.0",
+    "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^3.2.2",
+    "typescript": "^5.7.2",
+    "esbuild": "^0.25.0"
+  }
+}

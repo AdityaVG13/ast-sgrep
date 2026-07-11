@@ -1,0 +1,101 @@
+{
+  "fixture": "sample",
+  "cases": [
+    {
+      "name": "defs_auth_refresh",
+      "query": "defs:auth_refresh",
+      "top_k": 8,
+      "must_include": [
+        { "kind": "def", "symbol": "auth_refresh", "max_rank": 3 }
+      ]
+    },
+    {
+      "name": "callers_process_request",
+      "query": "callers:process_request",
+      "top_k": 8,
+      "must_include": [
+        { "kind": "caller", "callee": "process_request", "max_rank": 3 }
+      ]
+    },
+    {
+      "name": "literal_process_request",
+      "query": "process_request",
+      "top_k": 5,
+      "must_include": [
+        { "kind": "def", "symbol": "process_request", "max_rank": 3 }
+      ]
+    },
+    {
+      "name": "nl_auth_refresh",
+      "query": "how does auth refresh work",
+      "top_k": 8,
+      "must_include": [
+        { "kind": "def", "symbol": "auth_refresh", "max_rank": 8 }
+      ]
+    },
+    {
+      "name": "synonym_credential_renewal",
+      "query": "credential renewal",
+      "top_k": 16,
+      "must_include": [
+        { "kind": "embed", "symbol": "auth_refresh", "max_rank": 16 }
+      ]
+    },
+    {
+      "name": "rust_defs_auth_refresh",
+      "query": "defs:auth_refresh",
+      "top_k": 5,
+      "must_include": [
+        { "kind": "def", "symbol": "auth_refresh", "file": "main.rs", "max_rank": 3 }
+      ]
+    },
+    {
+      "name": "python_callers_process_request",
+      "query": "callers:process_request",
+      "top_k": 5,
+      "must_include": [
+        { "kind": "caller", "callee": "process_request", "file": "main.py", "max_rank": 3 }
+      ]
+    },
+    {
+      "name": "go_defs_processRequest",
+      "query": "defs:processRequest",
+      "top_k": 5,
+      "must_include": [
+        { "kind": "def", "symbol": "processRequest", "file": "main.go", "max_rank": 5 }
+      ]
+    },
+    {
+      "name": "go_defs_authRefresh",
+      "query": "defs:authRefresh",
+      "top_k": 5,
+      "must_include": [
+        { "kind": "def", "symbol": "authRefresh", "file": "main.go", "max_rank": 5 }
+      ]
+    },
+    {
+      "name": "java_defs_authRefresh",
+      "query": "defs:authRefresh",
+      "top_k": 5,
+      "must_include": [
+        { "kind": "def", "symbol": "authRefresh", "file": "Main.java", "max_rank": 4 }
+      ]
+    },
+    {
+      "name": "ruby_defs_auth_refresh",
+      "query": "defs:auth_refresh",
+      "top_k": 5,
+      "must_include": [
+        { "kind": "def", "symbol": "auth_refresh", "file": "app.rb", "max_rank": 4 }
+      ]
+    },
+    {
+      "name": "csharp_defs_AuthRefresh",
+      "query": "defs:AuthRefresh",
+      "top_k": 5,
+      "must_include": [
+        { "kind": "def", "symbol": "AuthRefresh", "file": "Program.cs", "max_rank": 4 }
+      ]
+    }
+  ]
+}

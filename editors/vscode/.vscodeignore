@@ -1,0 +1,8 @@
+.gitignore
+node_modules/.cache/**
+src/**
+tsconfig.json
+**/*.map
+*.vsix
+.tokenzero/**
+.zerostack/**
