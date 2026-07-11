@@ -1,0 +1,80 @@
+
+mod cloud;
+mod embedder;
+mod math;
+mod neural;
+mod ollama;
+mod provider;
+#[cfg(feature = "rerank")]
+mod rerank;
+mod semantic;
+pub use math::{
+    cosine_scores_for, cosine_similarity, top_by_similarity, top_k_flat_similarity,
+    top_k_similarity, MIN_SIMILARITY, PARALLEL_CHUNK_THRESHOLD,
+};
+pub use cloud::{embed_via_api, CloudEmbeddingConfig};
+pub use embedder::{
+    embedder_for, CloudEmbedder, CostHint, Embedder, HashedEmbedder, OllamaEmbedder,
+};
+#[cfg(feature = "neural-embed")]
+pub use neural::NeuralEmbedder;
+pub use neural::{
+    configured_model_id as neural_configured_model_id,
+    default_cache_dir as neural_default_cache_dir, NeuralEmbeddingConfig, NeuralModel,
+};
+pub use ollama::{embed_via_ollama, OllamaEmbeddingConfig};
+pub use provider::{
+    default_semantic_dim, embed_batch_with_chain, embed_query, embed_with_chain, EmbedBackendKind,
+    EmbedPreference, EmbedResult,
+};
+#[cfg(feature = "rerank")]
+pub use rerank::{rerank, RerankScore};
+pub use semantic::{expand_concepts, tokenize, SemanticLocalEmbedding, SEMANTIC_DIM};
+pub trait EmbeddingProvider: Send + Sync {
+    fn embed_text(&self, text: &str) -> Vec<f32>;
+    fn similarity(&self, a: &[f32], b: &[f32]) -> f32;
+}
+impl EmbeddingProvider for SemanticLocalEmbedding {
+    fn embed_text(&self, text: &str) -> Vec<f32> {
+        SemanticLocalEmbedding::embed_text(self, text)
+    }
+
+    fn similarity(&self, a: &[f32], b: &[f32]) -> f32 {
+        SemanticLocalEmbedding::similarity(self, a, b)
+    }
+}
+pub fn embed_to_bytes(vec: &[f32]) -> Vec<u8> {
+    vec.iter().flat_map(|f| f.to_le_bytes()).collect()
+}
+pub fn embed_from_bytes(bytes: &[u8]) -> Result<Vec<f32>, &'static str> {
+    if !bytes.len().is_multiple_of(4) { return Err("embedding byte length is not a multiple of 4"); }
+    Ok(bytes
+        .chunks_exact(4)
+        .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+        .collect())
+}
+pub type SemanticChunkRow = (
+    String,   // file
+    u32,      // line_start
+    u32,      // line_end
+    String,   // symbol
+    String,   // excerpt
+    Vec<f32>, // vector
+);
+pub fn rank_chunk_indices_by_vector(
+    query_vec: &[f32],
+    chunks: &[SemanticChunkRow],
+    limit: usize,
+) -> Vec<(usize, f32)> {
+    top_by_similarity(
+        cosine_scores_for(
+            query_vec,
+            chunks
+                .iter()
+                .enumerate()
+                .map(|(idx, (_, _, _, _, _, emb))| (idx, emb.as_slice())),
+        ),
+        limit,
+        Some(MIN_SIMILARITY),
+    )
+}
