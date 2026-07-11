@@ -1,0 +1,18 @@
+# Benchmark harnesses are not shipped in-tree (docs/numbers only under benchmarks/).
+# This workflow is retained as a manual stub so Actions history stays clear.
+name: Offline retrieval bake-off
+
+on:
+  workflow_dispatch:
+
+jobs:
+  docs-only:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Confirm published benchmark docs exist
+        run: |
+          test -f benchmarks/results/bakeoff.md
+          test -f benchmarks/results/head-to-head.md
+          test -f benchmarks/results/losses.md
+          echo "Bake-off write-ups are documentation-only; no automated corpus run."

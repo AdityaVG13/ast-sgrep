@@ -1,0 +1,102 @@
+/target/
+**/.asgrep/
+.internal/
+*.db
+*.db-*
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor state
+*.swp
+*.swo
+*~
+.idea/
+*.iml
+.vscode/
+
+# Environment files (never commit secrets)
+.env
+.env.*
+!.env.example
+
+# Merge/backup artifacts
+*.orig
+*.bak
+*.tmp
+*.log
+
+# Local tool binaries
+.tools/
+rust_out
+
+# Local skill / agent / tool harness state (never product surface)
+.adversarial-review/
+.code-upgrade/
+.cyclomatic-reduction/
+.math-review/
+.ub-exorcism/
+.verification-purpose/
+.zero-tech-debt/
+.upgrade-backup/
+.cursor/
+.tokenzero/
+.fszero/
+.zerostack/
+.zerostack.*/
+.unsafe-audit/
+agent_ergonomics_audit/
+.agents/
+.claude/
+.codex/
+# Local agent instruction dumps (optional private harness; not product surface)
+/AGENTS.md
+/CLAUDE.md
+/GEMINI.md
+.skill-loop-progress.md
+.doctor/
+.bv/
+.dolt/
+**/.tokenzero/
+**/.fszero/
+**/.zerostack/
+
+# Accidental shell-expanded directory names
+${*}
+
+# library-updater / verification debris at repo root
+UPGRADE_LOG.md
+UPGRADE_LOG*.log
+claude-upgrade-progress.json
+verification-*.log
+RECOVERY_RUNBOOK.md
+SYNC_STRATEGY.md
+
+# Cargo package metadata
+**/.cargo_vcs_info.json
+
+# Benchmark: only markdown docs are tracked under benchmarks/
+# Keep any accidental local harness/scratch out of git
+benchmarks/**/__pycache__/
+benchmarks/corpora/
+benchmarks/results/
+benchmarks/tmp-idx/
+benchmarks/cold-start-work/
+benchmarks/query-path-work/
+benchmarks/perf/
+__pycache__/
+
+# beads local issue store
+.beads/
+.beads-bd-backup-*/
+.beads-credential-key
+
+# Fuzz / editor build artifacts
+fuzz/target/
+editors/**/node_modules/
+editors/**/out/
+editors/**/*.vsix
+
+# Tests
+tests/artifacts/perf/

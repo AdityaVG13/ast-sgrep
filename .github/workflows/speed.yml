@@ -1,0 +1,16 @@
+# Speed harness scripts are not shipped in-tree. See benchmarks/SPEED.md.
+name: Speed benchmark (manual)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  docs-only:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Confirm published speed docs exist
+        run: |
+          test -f benchmarks/results/speed.md
+          test -f benchmarks/results/baselines.md
+          echo "Speed numbers live in markdown only; no automated hyperfine job."

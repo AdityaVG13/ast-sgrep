@@ -1,0 +1,27 @@
+# Post-publish verification only. Run after the release is visible on crates.io.
+name: Post-publish install smoke
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  install-smoke:
+    name: Install from crates.io (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Install published CLI
+        run: cargo install ast-sgrep-cli --locked
+      - name: Verify installed binaries
+        run: |
+          asgrep --version
+          ast-sgrep --version

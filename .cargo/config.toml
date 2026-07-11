@@ -1,0 +1,6 @@
+# CPU isolation: single job + duty-cycle wrapper.
+# The wrapper lives in scripts/ relative to the workspace root.
+
+[build]
+jobs = 1
+rustc-wrapper = "scripts/rustc-capped"

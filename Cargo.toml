@@ -1,0 +1,65 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/ast-sgrep-core",
+    "crates/ast-sgrep-cli",
+    "crates/ast-sgrep-lang",
+    "crates/ast-sgrep-embed",
+    "crates/ast-sgrep-lsp",
+    "crates/ast-sgrep-plugins",
+    "crates/ast-sgrep-testkit",
+    "crates/ast-sgrep-mcp",
+]
+default-members = ["crates/ast-sgrep-cli"]
+exclude = ["fuzz"]
+
+[workspace.package]
+version = "1.0.0-alpha.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/AdityaVG13/ast-sgrep"
+homepage = "https://github.com/AdityaVG13/ast-sgrep"
+authors = ["ast-sgrep contributors"]
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[profile.release-perf]
+inherits = "release"
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+debug = "line-tables-only"
+strip = false
+
+[workspace.dependencies]
+anyhow = "1"
+# Caret range (not an exact pin): API surface used is Hasher/hash(), stable
+# across 1.x, and BLAKE3 output is algorithm-fixed, so index hashes are
+# version-independent. The range lets downstream consumers unify on one
+# blake3 in their dependency graph.
+blake3 = "1.5"
+clap = { version = "=4.5.23", features = ["derive", "env"] }
+criterion = "=0.5.1"
+idna = "=1.0.3"
+idna_adapter = "=1.0.0"
+rusqlite = { version = "0.40", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tempfile = "=3.14.0"
+thiserror = "2"
+ureq = { version = "=2.12.1", default-features = false, features = ["tls", "json"] }
+tree-sitter = "0.26"
+tree-sitter-go = "0.25"
+tree-sitter-java = "0.23"
+tree-sitter-javascript = "0.25"
+tree-sitter-python = "0.25"
+tree-sitter-ruby = "0.23"
+tree-sitter-rust = "0.24"
+tree-sitter-typescript = "0.23"
+regex = "1"
+zeroize = "=1.8.1"
+walkdir = "2"
+rayon = "=1.12.0"
+notify = "=6.1.1"
+simsimd = "=6.5.16"

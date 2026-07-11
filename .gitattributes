@@ -1,0 +1,14 @@
+# Local-only paths if ever present (source archives)
+.agents/ export-ignore
+.claude/ export-ignore
+.codex/ export-ignore
+.beads/ export-ignore
+.tokenzero/ export-ignore
+.zerostack/ export-ignore
+.fszero/ export-ignore
+AGENTS.md export-ignore
+CLAUDE.md export-ignore
+target/ export-ignore
+fuzz/target/ export-ignore
+editors/vscode/node_modules/ export-ignore
+editors/vscode/out/ export-ignore
