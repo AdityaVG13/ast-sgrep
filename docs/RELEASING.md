@@ -84,10 +84,10 @@ Do not publish `ast-sgrep-testkit`. If any publish fails, stop; crates.io releas
 
 ## Homebrew formula
 
-The standalone source formula lives at `packaging/homebrew/ast-sgrep.rb`. It is pinned to `1.0.0-alpha.0` and intentionally contains a SHA-256 placeholder until the matching GitHub tag is published. After publishing the tag, calculate the archive digest and replace the all-zero `sha256` placeholder in the formula:
+The standalone source formula lives at `packaging/homebrew/ast-sgrep.rb`. It is pinned to `1.0.0-alpha` and intentionally contains a SHA-256 placeholder until the matching GitHub tag is published. After publishing the tag, calculate the archive digest and replace the all-zero `sha256` placeholder in the formula:
 
 ```sh
-version="1.0.0-alpha.0"
+version="1.0.0-alpha"
 url="https://github.com/AdityaVG13/ast-sgrep/archive/refs/tags/v${version}.tar.gz"
 curl --fail --location --silent --show-error "$url" --output "ast-sgrep-v${version}.tar.gz"
 shasum -a 256 "ast-sgrep-v${version}.tar.gz"

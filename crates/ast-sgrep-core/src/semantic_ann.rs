@@ -105,7 +105,23 @@ impl SemanticAnnIndex {
         members
     }
 
+    /// Adaptive probe count (`√k` clusters). Prefer
+    /// [`Self::search_flat_with_probes`] when callers need exact coverage.
     pub fn search_flat(&self, flat: &[f32], dim: usize, query: &[f32], limit: usize) -> Vec<(usize, f32)> {
+        self.search_flat_with_probes(flat, dim, query, limit, None)
+    }
+
+    /// `probes`: `None`/`Some(0)` = adaptive √k; `Some(p)` with `p >= k` probes every
+    /// cluster (exact over the partitioned set, same top-k as brute force when the
+    /// partition is complete).
+    pub fn search_flat_with_probes(
+        &self,
+        flat: &[f32],
+        dim: usize,
+        query: &[f32],
+        limit: usize,
+        probes: Option<usize>,
+    ) -> Vec<(usize, f32)> {
         let n = flat.len().checked_div(dim).unwrap_or(0);
         if n == 0 {
             return vec![];
@@ -114,7 +130,7 @@ impl SemanticAnnIndex {
             return brute_force_flat(flat, dim, query, limit);
         }
         let q = normalize_vec(query);
-        score_members(&q, flat, dim, n, &self.candidate_indices(&q, None), limit)
+        score_members(&q, flat, dim, n, &self.candidate_indices(&q, probes), limit)
     }
 
     pub fn reassign_all(&mut self, flat: &[f32], dim: usize) {

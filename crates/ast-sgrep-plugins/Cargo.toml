@@ -14,7 +14,7 @@ categories = ["development-tools"]
 workspace = true
 
 [dependencies]
-ast-sgrep-core = { path = "../ast-sgrep-core", version = "1.0.0-alpha.0" }
+ast-sgrep-core = { path = "../ast-sgrep-core", version = "1.0.0-alpha" }
 serde.workspace = true
 serde_json.workspace = true
 

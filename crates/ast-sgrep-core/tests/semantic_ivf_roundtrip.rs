@@ -96,8 +96,9 @@ fn ivf_search_matches_brute_force_top_k_indices_ce003() {
     for &qi in &query_indices {
         let query = &flat[qi * dim..(qi + 1) * dim];
         let brute = brute_force_top_k_indices(&flat, dim, query, limit);
+        // Probe every cluster (exact partition scan), not adaptive √k.
         let ivf: HashSet<usize> = index
-            .search_flat(&flat, dim, query, limit)
+            .search_flat_with_probes(&flat, dim, query, limit, Some(usize::MAX))
             .into_iter()
             .map(|(idx, _)| idx)
             .collect();

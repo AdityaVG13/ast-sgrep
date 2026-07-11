@@ -297,7 +297,7 @@ fn finish_response(parsed: &ParsedQuery, options: &SearchOptions, mut hits: Vec<
     record_ledger_from_env(&response);
     response
 }
-fn maybe_rerank(query: &str, mut hits: Vec<SearchHit>, top_k: usize) -> Vec<SearchHit> {
+fn maybe_rerank(query: &str, hits: Vec<SearchHit>, top_k: usize) -> Vec<SearchHit> {
     if hits.is_empty() {
         return hits;
     }
@@ -331,7 +331,7 @@ fn maybe_rerank(query: &str, mut hits: Vec<SearchHit>, top_k: usize) -> Vec<Sear
                     })
                     .collect();
                 if hits.len() > k {
-                    out.extend(hits.drain(k..));
+                    out.extend(hits.iter().skip(k).cloned());
                 }
                 return out;
             }

@@ -113,7 +113,7 @@ checksum = "f02882884d3e1bc524fb12c79f107f6ad0e1cfd498c536ffb494301740995dfe"
 
 [[package]]
 name = "ast-sgrep-cli"
-version = "1.0.0-alpha.0"
+version = "1.0.0-alpha"
 dependencies = [
  "anyhow",
  "ast-sgrep-core",
@@ -130,7 +130,7 @@ dependencies = [
 
 [[package]]
 name = "ast-sgrep-core"
-version = "1.0.0-alpha.0"
+version = "1.0.0-alpha"
 dependencies = [
  "anyhow",
  "ast-sgrep-embed",
@@ -151,7 +151,7 @@ dependencies = [
 
 [[package]]
 name = "ast-sgrep-embed"
-version = "1.0.0-alpha.0"
+version = "1.0.0-alpha"
 dependencies = [
  "anyhow",
  "blake3",
@@ -167,7 +167,7 @@ dependencies = [
 
 [[package]]
 name = "ast-sgrep-lang"
-version = "1.0.0-alpha.0"
+version = "1.0.0-alpha"
 dependencies = [
  "anyhow",
  "ast-sgrep-testkit",
@@ -185,7 +185,7 @@ dependencies = [
 
 [[package]]
 name = "ast-sgrep-lsp"
-version = "1.0.0-alpha.0"
+version = "1.0.0-alpha"
 dependencies = [
  "anyhow",
  "ast-sgrep-core",
@@ -197,7 +197,7 @@ dependencies = [
 
 [[package]]
 name = "ast-sgrep-mcp"
-version = "1.0.0-alpha.0"
+version = "1.0.0-alpha"
 dependencies = [
  "anyhow",
  "ast-sgrep-core",
@@ -208,7 +208,7 @@ dependencies = [
 
 [[package]]
 name = "ast-sgrep-plugins"
-version = "1.0.0-alpha.0"
+version = "1.0.0-alpha"
 dependencies = [
  "ast-sgrep-core",
  "serde",
@@ -217,7 +217,7 @@ dependencies = [
 
 [[package]]
 name = "ast-sgrep-testkit"
-version = "1.0.0-alpha.0"
+version = "1.0.0-alpha"
 dependencies = [
  "ast-sgrep-core",
  "ast-sgrep-embed",

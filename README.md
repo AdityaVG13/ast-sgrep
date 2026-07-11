@@ -6,7 +6,7 @@
 
 **Hybrid code search that understands intent** -- not only text or syntax.
 
-**v1.0.0-alpha.0** · 8 languages · lexical + AST graph + **semantic symbol search** (on by default, no API key)
+**v1.0.0-alpha** · 8 languages · lexical + AST graph + **semantic symbol search** (on by default, no API key)
 
 > **ast-grep finds shapes. ripgrep finds strings. ast-sgrep finds intent.**
 
@@ -169,7 +169,7 @@ Canonical table: [head-to-head.md](benchmarks/results/head-to-head.md). Index: [
 
 ## Project status and verification
 
-**v1.0.0-alpha.0.** Hybrid search, semantic layer, LSP, MCP, agent JSON, and IVF path are in place.
+**v1.0.0-alpha.** Hybrid search, semantic layer, LSP, MCP, agent JSON, and IVF path are in place.
 
 GitHub Actions workflows are **manual-only** (`workflow_dispatch`) to control Actions minutes. Local quality bar for contributors:
 
