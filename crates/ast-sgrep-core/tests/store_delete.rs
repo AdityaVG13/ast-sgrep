@@ -160,6 +160,26 @@ fn remove_file_clears_all_per_file_tables() {
 }
 
 #[test]
+fn re_upsert_preserves_other_files_fts_rows() {
+    let temp = TempDir::new().expect("tempdir");
+    let store = IndexStore::open(temp.path(), None).expect("open index");
+    let first_lines = [(1, "first unique needle".into())];
+    let second_lines = [(1, "second unique haystack".into())];
+
+    store.upsert_file(base_input("first.py", &first_lines, "hash1")).expect("first upsert");
+    store.upsert_file(base_input("second.py", &second_lines, "hash2")).expect("second upsert");
+
+    let replacement = [(1, "replacement content".into())];
+    store.upsert_file(base_input("first.py", &replacement, "hash3")).expect("replace first");
+
+    for (table, query) in [("lines_fts", "second"), ("lines_trigram", "sec")] {
+        let sql = format!("SELECT COUNT(*) FROM {table} WHERE {table} MATCH ?1");
+        let count: i64 = store.connection().query_row(&sql, [query], |row| row.get(0)).unwrap();
+        assert_eq!(count, 1, "updating one file must preserve {table} rows for other files");
+    }
+}
+
+#[test]
 fn re_upsert_many_files_is_linear() {
     let temp = TempDir::new().expect("tempdir");
     let store = IndexStore::open(temp.path(), None).expect("open index");

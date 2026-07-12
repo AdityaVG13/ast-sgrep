@@ -20,7 +20,7 @@ const SYM_LOC: &str =
     "SELECT f.path, s.name, f.language, s.line_start, s.line_end FROM symbols s JOIN files f ON f.id = s.file_id";
 const SYM_FILE: &str =
     "SELECT f.path, f.language, s.name, s.kind, s.line_start, s.line_end FROM symbols s JOIN files f ON f.id = s.file_id";
-// Full DDL for schema v4; init_schema applies when user_version is lower.
+// Full DDL for the current schema; init_schema applies when user_version is lower.
 const SCHEMA_DDL: &str = "\
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);\
 CREATE TABLE IF NOT EXISTS files (id INTEGER PRIMARY KEY, path TEXT NOT NULL UNIQUE, language TEXT,\
@@ -921,23 +921,12 @@ fn delete_file_children(conn: &Connection, file_id: i64) -> Result<()> {
         .query_map(params![file_id], |r| r.get::<_, i64>(0))?
         .collect::<std::result::Result<Vec<_>, _>>()?;
 
-    // Delete external-content trigram rows before deleting the underlying lines rows.
-    if !rowids.is_empty() {
-        for chunk in rowids.chunks(500) {
-            let placeholders = std::iter::repeat("?").take(chunk.len()).collect::<Vec<_>>().join(",");
+    // Delete both FTS indexes by rowid before removing their source lines.
+    for chunk in rowids.chunks(500) {
+        let placeholders = std::iter::repeat_n("?", chunk.len()).collect::<Vec<_>>().join(",");
+        for table in ["lines_trigram", "lines_fts"] {
             conn.execute(
-                &format!("DELETE FROM lines_trigram WHERE rowid IN ({placeholders})"),
-                rusqlite::params_from_iter(chunk.iter()),
-            )?;
-        }
-    }
-
-    // Delete ordinary FTS5 rows by rowid to avoid the O(N^2) file_id scan.
-    if !rowids.is_empty() {
-        for chunk in rowids.chunks(500) {
-            let placeholders = std::iter::repeat("?").take(chunk.len()).collect::<Vec<_>>().join(",");
-            conn.execute(
-                &format!("DELETE FROM lines_fts WHERE rowid IN ({placeholders})"),
+                &format!("DELETE FROM {table} WHERE rowid IN ({placeholders})"),
                 rusqlite::params_from_iter(chunk.iter()),
             )?;
         }
