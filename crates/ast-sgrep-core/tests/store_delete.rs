@@ -1,9 +1,13 @@
-use ast_sgrep_core::IndexStore;
 use ast_sgrep_core::store::{CallerRow, ImportRow, SymbolRow, UpsertFileInput};
+use ast_sgrep_core::IndexStore;
 use ast_sgrep_lang::PatternNode;
 use tempfile::TempDir;
 
-fn base_input<'a>(rel_path: &'a str, lines: &'a [(u32, String)], content_hash: &'a str) -> UpsertFileInput<'a> {
+fn base_input<'a>(
+    rel_path: &'a str,
+    lines: &'a [(u32, String)],
+    content_hash: &'a str,
+) -> UpsertFileInput<'a> {
     UpsertFileInput {
         rel_path,
         language: Some("python"),
@@ -29,51 +33,67 @@ fn re_upsert_does_not_leave_stale_fts_rows() {
 
     let path = "stale_test.py";
     let first_lines = [(1, "alpha beta gamma".into()), (2, "delta epsilon".into())];
-    let first = base_input(
-        path,
-        &first_lines,
-        "hash1",
-    );
+    let first = base_input(path, &first_lines, "hash1");
     store.upsert_file(first).expect("first upsert");
 
     let fts_count: i64 = store
         .connection()
-        .query_row("SELECT COUNT(*) FROM lines_fts WHERE lines_fts MATCH 'alpha'", [], |r| r.get(0))
+        .query_row(
+            "SELECT COUNT(*) FROM lines_fts WHERE lines_fts MATCH 'alpha'",
+            [],
+            |r| r.get(0),
+        )
         .unwrap();
     assert_eq!(fts_count, 1, "lines_fts should find new content");
     let tri_count: i64 = store
         .connection()
-        .query_row("SELECT COUNT(*) FROM lines_trigram WHERE content MATCH 'alp'", [], |r| r.get(0))
+        .query_row(
+            "SELECT COUNT(*) FROM lines_trigram WHERE content MATCH 'alp'",
+            [],
+            |r| r.get(0),
+        )
         .unwrap();
     assert_eq!(tri_count, 1, "lines_trigram should find new content");
 
     let second_lines = [(1, "zeta eta theta".into()), (2, "iota kappa".into())];
-    let second = base_input(
-        path,
-        &second_lines,
-        "hash2",
-    );
+    let second = base_input(path, &second_lines, "hash2");
     store.upsert_file(second).expect("second upsert");
 
     let fts_stale: i64 = store
         .connection()
-        .query_row("SELECT COUNT(*) FROM lines_fts WHERE lines_fts MATCH 'alpha'", [], |r| r.get(0))
+        .query_row(
+            "SELECT COUNT(*) FROM lines_fts WHERE lines_fts MATCH 'alpha'",
+            [],
+            |r| r.get(0),
+        )
         .unwrap();
     assert_eq!(fts_stale, 0, "stale lines_fts rows must be deleted");
     let tri_stale: i64 = store
         .connection()
-        .query_row("SELECT COUNT(*) FROM lines_trigram WHERE content MATCH 'alp'", [], |r| r.get(0))
+        .query_row(
+            "SELECT COUNT(*) FROM lines_trigram WHERE content MATCH 'alp'",
+            [],
+            |r| r.get(0),
+        )
         .unwrap();
     assert_eq!(tri_stale, 0, "stale lines_trigram rows must be deleted");
 
     let fts_new: i64 = store
         .connection()
-        .query_row("SELECT COUNT(*) FROM lines_fts WHERE lines_fts MATCH 'zeta'", [], |r| r.get(0))
+        .query_row(
+            "SELECT COUNT(*) FROM lines_fts WHERE lines_fts MATCH 'zeta'",
+            [],
+            |r| r.get(0),
+        )
         .unwrap();
     assert_eq!(fts_new, 1, "lines_fts should find updated content");
     let tri_new: i64 = store
         .connection()
-        .query_row("SELECT COUNT(*) FROM lines_trigram WHERE content MATCH 'zet'", [], |r| r.get(0))
+        .query_row(
+            "SELECT COUNT(*) FROM lines_trigram WHERE content MATCH 'zet'",
+            [],
+            |r| r.get(0),
+        )
         .unwrap();
     assert_eq!(tri_new, 1, "lines_trigram should find updated content");
 }
@@ -130,7 +150,8 @@ fn remove_file_clears_all_per_file_tables() {
 
     // embeddings and semantic_chunks are not populated by the API without a real embed backend,
     // so insert them directly to verify the delete path covers them.
-    store.connection()
+    store
+        .connection()
         .execute(
             "INSERT INTO embeddings (file_id, line_no, vector) VALUES (?1, ?2, ?3)",
             rusqlite::params![file_id, 1u32, vec![0u8; 8]],
@@ -147,8 +168,15 @@ fn remove_file_clears_all_per_file_tables() {
     store.remove_file(path).expect("remove_file");
 
     let tables = [
-        "lines", "lines_fts", "lines_trigram", "symbols", "callers", "imports",
-        "pattern_nodes", "embeddings", "semantic_chunks",
+        "lines",
+        "lines_fts",
+        "lines_trigram",
+        "symbols",
+        "callers",
+        "imports",
+        "pattern_nodes",
+        "embeddings",
+        "semantic_chunks",
     ];
     for table in tables {
         let count: i64 = store
@@ -156,6 +184,38 @@ fn remove_file_clears_all_per_file_tables() {
             .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))
             .unwrap();
         assert_eq!(count, 0, "{table} should be empty after remove_file");
+    }
+}
+
+#[test]
+fn re_upsert_preserves_other_files_fts_rows() {
+    let temp = TempDir::new().expect("tempdir");
+    let store = IndexStore::open(temp.path(), None).expect("open index");
+    let first_lines = [(1, "first unique needle".into())];
+    let second_lines = [(1, "second unique haystack".into())];
+
+    store
+        .upsert_file(base_input("first.py", &first_lines, "hash1"))
+        .expect("first upsert");
+    store
+        .upsert_file(base_input("second.py", &second_lines, "hash2"))
+        .expect("second upsert");
+
+    let replacement = [(1, "replacement content".into())];
+    store
+        .upsert_file(base_input("first.py", &replacement, "hash3"))
+        .expect("replace first");
+
+    for (table, query) in [("lines_fts", "second"), ("lines_trigram", "sec")] {
+        let sql = format!("SELECT COUNT(*) FROM {table} WHERE {table} MATCH ?1");
+        let count: i64 = store
+            .connection()
+            .query_row(&sql, [query], |row| row.get(0))
+            .unwrap();
+        assert_eq!(
+            count, 1,
+            "updating one file must preserve {table} rows for other files"
+        );
     }
 }
 
@@ -220,10 +280,12 @@ fn re_upsert_many_files_is_linear() {
     let total = insert_elapsed + re_elapsed;
     assert!(
         re_elapsed < std::time::Duration::from_secs(15),
-        "re-upsert of {n} files took {:?}; expected < 15s", re_elapsed
+        "re-upsert of {n} files took {:?}; expected < 15s",
+        re_elapsed
     );
     assert!(
         total < std::time::Duration::from_secs(30),
-        "insert + re-upsert of {n} files took {:?}; expected < 30s", total
+        "insert + re-upsert of {n} files took {:?}; expected < 30s",
+        total
     );
 }
