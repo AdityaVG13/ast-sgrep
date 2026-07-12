@@ -12,7 +12,7 @@ use super::sql::{
     query_map_rows,
 };
 use crate::{IndexStatus, Result};
-const SCHEMA_VERSION: i64 = 4;
+const SCHEMA_VERSION: i64 = 5;
 const DEFAULT_EMBED_CACHE_CAP: usize = 100_000;
 const IMPORT_SELECT: &str =
     "SELECT f.path, f.language, i.module_path, i.line_no FROM imports i JOIN files f ON f.id = i.file_id";
@@ -20,7 +20,7 @@ const SYM_LOC: &str =
     "SELECT f.path, s.name, f.language, s.line_start, s.line_end FROM symbols s JOIN files f ON f.id = s.file_id";
 const SYM_FILE: &str =
     "SELECT f.path, f.language, s.name, s.kind, s.line_start, s.line_end FROM symbols s JOIN files f ON f.id = s.file_id";
-// Full DDL for schema v4; init_schema applies when user_version is lower.
+// Full DDL for the current schema; init_schema applies when user_version is lower.
 const SCHEMA_DDL: &str = "\
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);\
 CREATE TABLE IF NOT EXISTS files (id INTEGER PRIMARY KEY, path TEXT NOT NULL UNIQUE, language TEXT,\
@@ -32,15 +32,18 @@ CREATE TABLE IF NOT EXISTS symbols (id INTEGER PRIMARY KEY, file_id INTEGER NOT 
   byte_start INTEGER NOT NULL, byte_end INTEGER NOT NULL,\
   FOREIGN KEY (file_id) REFERENCES files(id) ON DELETE CASCADE);\
 CREATE INDEX IF NOT EXISTS idx_symbols_name ON symbols(name);\
+CREATE INDEX IF NOT EXISTS idx_symbols_file_id ON symbols(file_id);\
 CREATE TABLE IF NOT EXISTS callers (id INTEGER PRIMARY KEY, file_id INTEGER NOT NULL, caller TEXT NOT NULL,\
   callee TEXT NOT NULL, line_no INTEGER NOT NULL, byte_start INTEGER NOT NULL, byte_end INTEGER NOT NULL,\
   FOREIGN KEY (file_id) REFERENCES files(id) ON DELETE CASCADE);\
 CREATE INDEX IF NOT EXISTS idx_callers_callee ON callers(callee);\
 CREATE INDEX IF NOT EXISTS idx_callers_caller ON callers(caller);\
+CREATE INDEX IF NOT EXISTS idx_callers_file_id ON callers(file_id);\
 CREATE TABLE IF NOT EXISTS imports (id INTEGER PRIMARY KEY, file_id INTEGER NOT NULL,\
   module_path TEXT NOT NULL, line_no INTEGER NOT NULL,\
   FOREIGN KEY (file_id) REFERENCES files(id) ON DELETE CASCADE);\
 CREATE INDEX IF NOT EXISTS idx_imports_module ON imports(module_path);\
+CREATE INDEX IF NOT EXISTS idx_imports_file_id ON imports(file_id);\
 CREATE TABLE IF NOT EXISTS pattern_nodes (id INTEGER PRIMARY KEY, file_id INTEGER NOT NULL, signature TEXT NOT NULL,\
   line_start INTEGER NOT NULL, line_end INTEGER NOT NULL, excerpt TEXT NOT NULL,\
   FOREIGN KEY (file_id) REFERENCES files(id) ON DELETE CASCADE);\
@@ -56,6 +59,7 @@ CREATE TABLE IF NOT EXISTS semantic_chunks (id INTEGER PRIMARY KEY, file_id INTE
   FOREIGN KEY (file_id) REFERENCES files(id) ON DELETE CASCADE,\
   FOREIGN KEY (symbol_id) REFERENCES symbols(id) ON DELETE CASCADE);\
 CREATE INDEX IF NOT EXISTS idx_semantic_chunks_symbol ON semantic_chunks(symbol_name);\
+CREATE INDEX IF NOT EXISTS idx_semantic_chunks_file_id ON semantic_chunks(file_id);\
 CREATE TABLE IF NOT EXISTS embed_cache (chunk_hash TEXT NOT NULL, model_id TEXT NOT NULL, backend TEXT NOT NULL,\
   dim INTEGER NOT NULL, vector BLOB NOT NULL, accessed_at INTEGER NOT NULL, PRIMARY KEY (chunk_hash, model_id));\
 CREATE INDEX IF NOT EXISTS idx_embed_cache_accessed ON embed_cache(accessed_at);";
@@ -911,11 +915,25 @@ fn normalize_rel(path: &Path) -> String {
     parts.join("/")
 }
 fn delete_file_children(conn: &Connection, file_id: i64) -> Result<()> {
-    conn.execute(
-        "DELETE FROM lines_trigram WHERE rowid IN (SELECT rowid FROM lines WHERE file_id=?1)",
-        params![file_id],
-    )?;
-    for t in ["lines", "lines_fts", "symbols", "callers", "imports", "pattern_nodes", "embeddings", "semantic_chunks"] {
+    // Collect line rowids first; both FTS tables are keyed by lines.rowid.
+    let rowids: Vec<i64> = conn
+        .prepare_cached("SELECT rowid FROM lines WHERE file_id = ?1")?
+        .query_map(params![file_id], |r| r.get::<_, i64>(0))?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+
+    // Delete both FTS indexes by rowid before removing their source lines.
+    for chunk in rowids.chunks(500) {
+        let placeholders = std::iter::repeat_n("?", chunk.len()).collect::<Vec<_>>().join(",");
+        for table in ["lines_trigram", "lines_fts"] {
+            conn.execute(
+                &format!("DELETE FROM {table} WHERE rowid IN ({placeholders})"),
+                rusqlite::params_from_iter(chunk.iter()),
+            )?;
+        }
+    }
+
+    // Delete the remaining ordinary per-file tables by file_id.
+    for t in ["lines", "symbols", "callers", "imports", "pattern_nodes", "embeddings", "semantic_chunks"] {
         conn.prepare_cached(&format!("DELETE FROM {t} WHERE file_id=?1"))?.execute(params![file_id])?;
     }
     Ok(())
