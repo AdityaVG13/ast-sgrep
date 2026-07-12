@@ -14,7 +14,7 @@ default-members = ["crates/ast-sgrep-cli"]
 exclude = ["fuzz"]
 
 [workspace.package]
-version = "1.0.0-alpha"
+version = "1.1.0-alpha"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/AdityaVG13/ast-sgrep"

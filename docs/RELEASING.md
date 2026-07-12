@@ -5,7 +5,7 @@ This repository publishes its public crates in dependency order. Publishing is i
 ## Version policy
 
 - All public `ast-sgrep-*` crates use one lockstep version from `[workspace.package]`. A release must not mix versions.
-- Versions follow Semantic Versioning. While the current release is a `1.0.0-alpha.N` prerelease, incompatible changes require a new prerelease version and release notes; once `1.0.0` is stable, incompatible public API changes require a major version bump.
+- Versions follow Semantic Versioning. While the project is in alpha (currently `1.1.0-alpha`), incompatible changes require a new alpha version and release notes; once `1.0.0` stable ships, incompatible public API changes require a major version bump.
 - Additive, backward-compatible functionality increments the minor version after 1.0; backward-compatible fixes increment the patch version. Prerelease iterations increment the prerelease identifier (for example, `alpha.0` to `alpha.1`).
 - Every path dependency between publishable workspace crates must also specify the same explicit version, so packaged manifests resolve from crates.io.
 - `ast-sgrep-testkit` is internal (`publish = false`) and is never published. Dev-dependencies on it are excluded from published dependency resolution.
@@ -84,10 +84,10 @@ Do not publish `ast-sgrep-testkit`. If any publish fails, stop; crates.io releas
 
 ## Homebrew formula
 
-The standalone source formula lives at `packaging/homebrew/ast-sgrep.rb`. It is pinned to `1.0.0-alpha` and intentionally contains a SHA-256 placeholder until the matching GitHub tag is published. After publishing the tag, calculate the archive digest and replace the all-zero `sha256` placeholder in the formula:
+The standalone source formula lives at `packaging/homebrew/ast-sgrep.rb`. It is pinned to `1.1.0-alpha` and intentionally contains a SHA-256 placeholder until the matching GitHub tag is published. After publishing the tag, calculate the archive digest and replace the all-zero `sha256` placeholder in the formula:
 
 ```sh
-version="1.0.0-alpha"
+version="1.1.0-alpha"
 url="https://github.com/AdityaVG13/ast-sgrep/archive/refs/tags/v${version}.tar.gz"
 curl --fail --location --silent --show-error "$url" --output "ast-sgrep-v${version}.tar.gz"
 shasum -a 256 "ast-sgrep-v${version}.tar.gz"

@@ -66,7 +66,7 @@ works standalone; nothing here supersedes it.
 | date (UTC) | 2026-07-10T06:37:07Z |
 | commit at run time | `330b22c` (this repo is under active concurrent development by other agent sessions on this shared machine; HEAD moved forward during the run -- see caveat below) |
 | build | `cargo build --profile release-perf -p ast-sgrep-cli` |
-| asgrep | 1.0.0-alpha |
+| asgrep | 1.1.0-alpha |
 | rg | 15.1.0 (rev 48a6ad93f1) |
 | ast-grep | 0.44.1 |
 | semgrep | 1.168.0 |
@@ -309,7 +309,7 @@ Index construction is outside query timing. Parity is a set diff of normalized
 corpus-relative `(file, declaration-line)` pairs. Semgrep Rust matches that
 begin on a `#[...]` attribute are canonicalized to the declaration line.
 
-Machine: `macOS-26.5-arm64-arm-64bit-Mach-O (arm64)`; commit `b5bdf8a`; asgrep `asgrep 1.0.0-alpha`; Semgrep `1.168.0`.
+Machine: `macOS-26.5-arm64-arm-64bit-Mach-O (arm64)`; commit `b5bdf8a`; asgrep `asgrep 1.1.0-alpha`; Semgrep `1.168.0`.
 
 ### Aggregate
 
