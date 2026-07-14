@@ -24,6 +24,60 @@ jobs:
       - name: Test (release)
         run: cargo test --workspace --release
 
+  windows-smoke:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build release CLI and MCP
+        run: cargo build --release -p ast-sgrep-cli -p ast-sgrep-mcp
+
+      - name: Exercise Windows CLI and cancellation paths
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          cargo test -p ast-sgrep-cli --lib --release
+          $asgrep = (Resolve-Path "target/release/asgrep.exe").Path
+          $fixture = Join-Path $env:RUNNER_TEMP "asgrep windows smoke"
+          New-Item -ItemType Directory -Force $fixture | Out-Null
+          Set-Content -Encoding utf8 (Join-Path $fixture "app.rs") 'fn greet() -> &''static str { "hello" } fn main() { println!("{}", greet()); }'
+
+          & $asgrep --version
+          & $asgrep --root $fixture --no-embed --json index
+          & $asgrep --root $fixture --no-embed --json status
+          & $asgrep --root $fixture --no-embed --json --format native "find greeting implementation"
+          & $asgrep --root $fixture --no-embed --json --format native "defs: greet"
+          & $asgrep --root $fixture --no-embed --json --format native "callers: greet"
+          & $asgrep --root $fixture --no-embed --json doctor
+
+          1..2000 | ForEach-Object {
+            Set-Content -Encoding utf8 (Join-Path $fixture "cancel-$_.rs") "fn item_$($_)() -> usize { $($_) }"
+          }
+          $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+          $startInfo.FileName = $asgrep
+          $startInfo.UseShellExecute = $false
+          foreach ($argument in @("--root", $fixture, "--no-embed", "--json", "reindex")) {
+            [void]$startInfo.ArgumentList.Add($argument)
+          }
+          $process = [System.Diagnostics.Process]::new()
+          $process.StartInfo = $startInfo
+          if (-not $process.Start()) {
+            throw "failed to start asgrep cancellation smoke"
+          }
+          Start-Sleep -Milliseconds 100
+          if ($process.HasExited) {
+            throw "asgrep exited before cancellation with code $($process.ExitCode)"
+          }
+          $process.Kill($true)
+          $process.WaitForExit()
+          if (-not $process.HasExited) {
+            throw "asgrep process survived cancellation"
+          }
+
   clippy:
     runs-on: ubuntu-latest
     steps:

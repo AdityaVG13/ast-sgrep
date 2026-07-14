@@ -1,16 +1,16 @@
-use std::io::{self, IsTerminal};
-use std::path::Path;
-use anyhow::{bail, Context};
+use crate::{index_options, Cli};
+use anyhow::Context;
 use ast_sgrep_core::Indexer;
 use clap::{Parser, Subcommand};
 use serde_json::{json, Value};
-use crate::{index_options, Cli};
+use std::io::{self, IsTerminal};
+use std::path::Path;
 const TOOL: &str = "asgrep";
 const SCHEMA: &str = "1.0.0";
 #[derive(Parser)]
 pub(crate) struct CapabilitiesArgs {
     #[arg(long)]
-    json: bool,
+    pub(crate) json: bool,
 }
 #[derive(Subcommand)]
 pub(crate) enum RobotDocsCommand {
@@ -24,17 +24,18 @@ pub(crate) struct RobotDocsArgs {
 #[derive(Parser)]
 pub(crate) struct DoctorArgs {
     #[arg(long)]
-    json: bool,
+    pub(crate) json: bool,
     #[arg(long = "robot-triage")]
-    robot_triage: bool,
+    pub(crate) robot_triage: bool,
 }
 pub(crate) fn run_capabilities(cli: &Cli, args: &CapabilitiesArgs) -> anyhow::Result<()> {
-    if !args.json {
+    if !cli.json && !args.json {
         eprintln!("hint: agents should run `{TOOL} capabilities --json` (stdout is JSON only)");
-        bail!("capabilities requires --json for deterministic agent output");
+        return Err(crate::usage_error(
+            "capabilities requires --json for deterministic agent output",
+        ));
     }
-    println!("{}", serde_json::to_string_pretty(&capabilities_json(cli)?)?);
-    Ok(())
+    crate::print_machine_json("capabilities", capabilities_json(cli)?)
 }
 pub(crate) fn run_robot_docs(_cli: &Cli, args: &RobotDocsArgs) -> anyhow::Result<()> {
     match args.command {
@@ -45,17 +46,15 @@ pub(crate) fn run_robot_docs(_cli: &Cli, args: &RobotDocsArgs) -> anyhow::Result
     }
 }
 pub(crate) fn run_doctor(cli: &Cli, root: &Path, args: &DoctorArgs) -> anyhow::Result<()> {
-    if args.robot_triage || args.json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&doctor_triage_json(cli, root)?)?
-        );
-        return Ok(());
+    if cli.json || args.robot_triage || args.json {
+        return crate::print_machine_json("doctor", doctor_triage_json(cli, root)?);
     }
     eprintln!(
         "hint: use `{TOOL} doctor --json` or `{TOOL} doctor --robot-triage` for agent-readable triage"
     );
-    bail!("doctor requires --json or --robot-triage");
+    Err(crate::usage_error(
+        "doctor requires --json or --robot-triage",
+    ))
 }
 pub(crate) fn capabilities_json(_cli: &Cli) -> anyhow::Result<Value> {
     Ok(json!({
@@ -69,12 +68,13 @@ pub(crate) fn capabilities_json(_cli: &Cli) -> anyhow::Result<Value> {
             "deterministic": "stable JSON key ordering via serde_json; disable color with NO_COLOR=1",
         },
         "commands": [
-            {"name": "search", "usage": "asgrep [--json] [--format agent] \"QUERY\" [ROOT]", "robot_output": "--json [--format native|agent|github|gitlab]"},
+            {"name": "search", "usage": "asgrep [--json] [--format agent] \"QUERY\" [ROOT]", "robot_output": "--json [--format native|agent|agent-capsule|github|gitlab]"},
             {"name": "semantic", "usage": "asgrep semantic \"QUERY\" [ROOT] [--json]", "robot_output": "--json (defaults to agent format)"},
             {"name": "index", "usage": "asgrep index [ROOT] [--json]"},
             {"name": "status", "usage": "asgrep status [ROOT] [--json]"},
             {"name": "reindex", "usage": "asgrep reindex [ROOT] [--json]"},
             {"name": "capabilities", "usage": "asgrep capabilities --json"},
+            {"name": "version", "usage": "asgrep version --json"},
             {"name": "robot-docs", "usage": "asgrep robot-docs guide"},
             {"name": "doctor", "usage": "asgrep doctor [ROOT] --json | --robot-triage"},
         ],
@@ -87,6 +87,12 @@ pub(crate) fn capabilities_json(_cli: &Cli) -> anyhow::Result<Value> {
             "ASGREP_OLLAMA_EMBED", "ASGREP_SEMANTIC_ONLY", "ASGREP_TANTIVY", "ASGREP_ANN_THRESHOLD",
             "NO_COLOR", "CI"
         ],
+        "output_limits": {
+            "max_results": 1000,
+            "max_excerpt_lines": 100,
+            "max_error_message_chars": 4096,
+        },
+        "search_formats": ["native", "agent", "agent-capsule", "github", "gitlab"],
         "exit_codes": [
             {"code": 0, "meaning": "success"},
             {"code": 1, "meaning": "user input / usage error"},
@@ -104,19 +110,28 @@ fn doctor_triage_json(cli: &Cli, root: &Path) -> anyhow::Result<Value> {
     let mut issues = Vec::<Value>::new();
     let mut next = Vec::<&'static str>::new();
 
-    let status = match Indexer::new(index_options(&root, cli)).context("failed to open index for doctor") {
-        Ok(idx) => idx.store().status().ok(),
-        Err(e) => {
-            issues.push(json!({"kind": "index_open", "message": e.to_string()}));
-            None
-        }
-    };
+    let status =
+        match Indexer::new(index_options(&root, cli)).context("failed to open index for doctor") {
+            Ok(idx) => match idx.store().status() {
+                Ok(status) => Some(status),
+                Err(e) => {
+                    issues.push(json!({"kind": "status_read", "message": e.to_string()}));
+                    None
+                }
+            },
+            Err(e) => {
+                issues.push(json!({"kind": "index_open", "message": e.to_string()}));
+                None
+            }
+        };
 
     if status.is_none() {
         next.push("asgrep index . --json");
     } else if let Some(ref st) = status {
         if st.file_count == 0 {
-            issues.push(json!({"kind": "empty_index", "message": "index exists but indexes zero files"}));
+            issues.push(
+                json!({"kind": "empty_index", "message": "index exists but indexes zero files"}),
+            );
             next.push("asgrep index . --json");
         }
         if !st.semantic_ivf_present && st.semantic_chunk_count > 0 {
@@ -130,6 +145,7 @@ fn doctor_triage_json(cli: &Cli, root: &Path) -> anyhow::Result<Value> {
         next.push("asgrep --json --format agent \"<your query>\" .");
     }
     next.extend(["asgrep capabilities --json", "asgrep robot-docs guide"]);
+    let healthy = issues.is_empty();
 
     Ok(json!({
         "schema_version": SCHEMA,
@@ -140,6 +156,7 @@ fn doctor_triage_json(cli: &Cli, root: &Path) -> anyhow::Result<Value> {
         "status": status,
         "issues": issues,
         "suggested_commands": next,
+        "healthy": healthy,
         "tty": io::stdout().is_terminal(),
     }))
 }
@@ -180,13 +197,27 @@ fn print_robot_guide() {
 }
 pub(crate) fn query_looks_like_subcommand_typo(query: &str) -> Option<&'static str> {
     let q = query.trim();
-    if q.is_empty() || q.contains(' ') { return None; }
+    if q.is_empty() || q.contains(' ') {
+        return None;
+    }
     let lower = q.to_ascii_lowercase();
     const EXACT: &[&str] = &[
-        "index", "status", "reindex", "bench", "watch", "semantic", "capabilities", "capability",
-        "robot-docs", "robot_docs", "doctor", "help",
+        "index",
+        "status",
+        "reindex",
+        "bench",
+        "watch",
+        "semantic",
+        "capabilities",
+        "capability",
+        "robot-docs",
+        "robot_docs",
+        "doctor",
+        "help",
     ];
-    if let Some(c) = EXACT.iter().find(|c| lower == **c) { return Some(*c); }
+    if let Some(c) = EXACT.iter().find(|c| lower == **c) {
+        return Some(*c);
+    }
     const TYPOS: &[(&str, &str)] = &[
         ("capabilites", "capabilities"),
         ("capabilty", "capabilities"),

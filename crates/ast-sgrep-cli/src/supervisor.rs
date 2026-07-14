@@ -1,5 +1,8 @@
+#[cfg(unix)]
 const WORKER_MARKER: &str = "ASGREP_WORKER_MARKER";
+#[cfg(unix)]
 const SUPERVISOR_PID_ENV: &str = "ASGREP_SUPERVISOR_PID";
+#[cfg(unix)]
 const WORKER_NONCE_ENV: &str = "ASGREP_WORKER_NONCE";
 const CPU_LIMIT_ENV: &str = "ASGREP_CPU_LIMIT_PERCENT";
 pub const DEFAULT_CPU_LIMIT: u8 = 80;
@@ -8,6 +11,7 @@ pub const MAX_CPU_LIMIT: u8 = 80;
 pub const CYCLE_MS: u64 = 10;
 // Cap heavy native libraries; leave Rayon free so index/search can use cores.
 // Process-level duty cycling (SIGSTOP/CONT) still enforces the CPU ceiling.
+#[cfg(unix)]
 const THREAD_ENV_VARS: &[&str] = &[
     "OMP_NUM_THREADS",
     "OPENBLAS_NUM_THREADS",
@@ -18,6 +22,7 @@ const THREAD_ENV_VARS: &[&str] = &[
     "ASGREP_NEURAL_INTRA_THREADS",
     "ASGREP_RERANK_INTRA_THREADS",
 ];
+#[cfg(unix)]
 pub fn is_worker() -> bool {
     std::env::var(WORKER_MARKER).is_ok()
 }
@@ -32,7 +37,11 @@ pub fn parse_cpu_limit(raw: &str) -> u8 {
         .unwrap_or(DEFAULT_CPU_LIMIT)
 }
 pub fn duty_cycle_ms(limit_pct: u8) -> (u64, u64) {
-    let work_ms = if limit_pct == 0 { 0 } else { ((CYCLE_MS * u64::from(limit_pct)) / 100).max(1) };
+    let work_ms = if limit_pct == 0 {
+        0
+    } else {
+        ((CYCLE_MS * u64::from(limit_pct)) / 100).max(1)
+    };
     (work_ms, CYCLE_MS.saturating_sub(work_ms))
 }
 #[cfg(unix)]
@@ -41,23 +50,28 @@ pub fn clear_internal_envs() {
     std::env::remove_var(SUPERVISOR_PID_ENV);
     std::env::remove_var(WORKER_NONCE_ENV);
 }
-#[cfg(not(unix))]
-pub fn clear_internal_envs() {
-    std::env::remove_var(WORKER_MARKER);
-}
 #[cfg(unix)]
 pub fn supervise() -> anyhow::Result<()> {
     unix_impl::supervise()
 }
 #[cfg(unix)]
 pub fn worker_authenticate() -> bool {
-    if std::env::var(WORKER_MARKER).is_err() { return false; }
+    if std::env::var(WORKER_MARKER).is_err() {
+        return false;
+    }
     let fail = || {
         clear_internal_envs();
         false
     };
-    let Some(supervisor_pid) = std::env::var(SUPERVISOR_PID_ENV).ok().and_then(|v| v.parse::<i32>().ok()) else { return fail(); };
-    if nix::unistd::getppid().as_raw() != supervisor_pid { return fail(); }
+    let Some(supervisor_pid) = std::env::var(SUPERVISOR_PID_ENV)
+        .ok()
+        .and_then(|v| v.parse::<i32>().ok())
+    else {
+        return fail();
+    };
+    if nix::unistd::getppid().as_raw() != supervisor_pid {
+        return fail();
+    }
     match std::env::var(WORKER_NONCE_ENV) {
         Ok(ref v) if !v.is_empty() => {}
         _ => return fail(),
@@ -66,7 +80,9 @@ pub fn worker_authenticate() -> bool {
     {
         let parent_exe = std::fs::read_link(format!("/proc/{supervisor_pid}/exe")).ok();
         let self_exe = std::env::current_exe().ok();
-        if !matches!((parent_exe, self_exe), (Some(p), Some(s)) if p == s) { return fail(); }
+        if !matches!((parent_exe, self_exe), (Some(p), Some(s)) if p == s) {
+            return fail();
+        }
     }
     true
 }
@@ -104,7 +120,8 @@ mod unix_impl {
         fn install() -> anyhow::Result<Self> {
             fn reg(sig: i32) -> anyhow::Result<(signal_hook::SigId, Arc<AtomicBool>)> {
                 let flag = Arc::new(AtomicBool::new(false));
-                let id = signal_hook::flag::register(sig, Arc::clone(&flag)).context("register signal handler")?;
+                let id = signal_hook::flag::register(sig, Arc::clone(&flag))
+                    .context("register signal handler")?;
                 Ok((id, flag))
             }
             let (i0, sigint) = reg(signal_hook::consts::SIGINT)?;
@@ -112,7 +129,14 @@ mod unix_impl {
             let (i2, sighup) = reg(signal_hook::consts::SIGHUP)?;
             let (i3, sigquit) = reg(signal_hook::consts::SIGQUIT)?;
             let (i4, tstp) = reg(signal_hook::consts::SIGTSTP)?;
-            Ok(Self { _ids: [i0, i1, i2, i3, i4], sigint, sigterm, sighup, sigquit, tstp })
+            Ok(Self {
+                _ids: [i0, i1, i2, i3, i4],
+                sigint,
+                sigterm,
+                sighup,
+                sigquit,
+                tstp,
+            })
         }
 
         fn shutdown_any(&self) -> bool {
@@ -144,7 +168,10 @@ mod unix_impl {
 
     impl ChildGuard {
         fn new(child_pid: Pid) -> Self {
-            Self { child_pid, armed: true }
+            Self {
+                child_pid,
+                armed: true,
+            }
         }
         fn disarm(&mut self) {
             self.armed = false;
@@ -201,7 +228,10 @@ mod unix_impl {
     fn wait_for_child_stop(child_pid: Pid) -> anyhow::Result<()> {
         let deadline = Instant::now() + Duration::from_secs(10);
         loop {
-            match wait::waitpid(child_pid, Some(WaitPidFlag::WNOHANG | WaitPidFlag::WUNTRACED)) {
+            match wait::waitpid(
+                child_pid,
+                Some(WaitPidFlag::WNOHANG | WaitPidFlag::WUNTRACED),
+            ) {
                 Ok(WaitStatus::Stopped(_, _)) => return Ok(()),
                 Ok(WaitStatus::Exited(_, c)) => std::process::exit(c),
                 Ok(WaitStatus::Signaled(_, sig, _)) => {
@@ -214,7 +244,9 @@ mod unix_impl {
                     }
                     std::thread::sleep(Duration::from_millis(2));
                 }
-                Ok(other) => anyhow::bail!("unexpected worker status while waiting for stop: {other:?}"),
+                Ok(other) => {
+                    anyhow::bail!("unexpected worker status while waiting for stop: {other:?}")
+                }
             }
         }
     }
@@ -275,37 +307,26 @@ mod unix_impl {
             if sigs.shutdown_any() {
                 exit_shutdown(child_pid, sigs);
             }
-            match child.try_wait() {
-                Ok(Some(status)) => {
-                    if status.success() { return Ok(false); }
-                    #[cfg(unix)]
-                    {
-                        use std::os::unix::process::ExitStatusExt;
-                        if let Some(sig) = status.signal() {
-                            std::process::exit(128 + sig);
-                        }
-                    }
-                    std::process::exit(status.code().unwrap_or(1));
+            if let Ok(Some(status)) = child.try_wait() {
+                if status.success() {
+                    return Ok(false);
                 }
-                Ok(None) | Err(_) => {}
+                #[cfg(unix)]
+                {
+                    use std::os::unix::process::ExitStatusExt;
+                    if let Some(sig) = status.signal() {
+                        std::process::exit(128 + sig);
+                    }
+                }
+                std::process::exit(status.code().unwrap_or(1));
             }
-            if Instant::now() >= end { return Ok(true); }
+            if Instant::now() >= end {
+                return Ok(true);
+            }
             std::thread::sleep(
-                end.saturating_duration_since(Instant::now()).min(Duration::from_millis(10)),
+                end.saturating_duration_since(Instant::now())
+                    .min(Duration::from_millis(10)),
             );
         }
     }
-}
-#[cfg(not(unix))]
-pub fn supervise() -> anyhow::Result<()> {
-    anyhow::bail!(
-        "[asgrep] CPU supervision is not supported on this platform.          Set ASGREP_CPU_LIMIT_PERCENT to unset on non-Unix systems."
-    );
-}
-#[cfg(not(unix))]
-pub fn worker_start() {}
-#[cfg(not(unix))]
-pub fn worker_authenticate() -> bool {
-    std::env::remove_var(WORKER_MARKER);
-    true
 }

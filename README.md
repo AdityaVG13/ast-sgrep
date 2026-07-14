@@ -25,6 +25,10 @@ cargo build --release -p ast-sgrep-cli
 
 Binaries: `asgrep` and `ast-sgrep` (aliases).
 
+On Unix, the CLI runs commands through the process supervisor and enforces the configured
+CPU duty-cycle ceiling. On Windows, commands run directly: search, indexing, cancellation,
+and path handling are supported, but `ASGREP_CPU_LIMIT_PERCENT` is not enforced.
+
 ---
 
 ## Easy start (agents)

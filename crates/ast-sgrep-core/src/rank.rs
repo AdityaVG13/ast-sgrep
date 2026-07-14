@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 pub const RRF_K: f64 = 60.0;
 pub const SCORE_GRAPH: f64 = 5.0;
 pub const SCORE_ANCHOR: f64 = 6.0;
@@ -17,31 +19,47 @@ pub fn fuse_rrf(ranks: &[usize], k: f64) -> f64 {
 pub fn score_lexical_rrf(per_term_ranks: &[usize]) -> f64 {
     fuse_rrf(per_term_ranks, RRF_K) * LEXICAL_RRF_SCALE
 }
-pub fn score_symbol(term: &str, symbol: &str) -> f64 {
-    let sym = symbol.to_lowercase();
-    if sym == term {
+fn normalized_symbol(symbol: &str) -> Cow<'_, str> {
+    if symbol
+        .bytes()
+        .all(|b| b.is_ascii() && !b.is_ascii_uppercase())
+    {
+        Cow::Borrowed(symbol)
+    } else {
+        Cow::Owned(symbol.to_lowercase())
+    }
+}
+fn score_normalized_symbol(term: &str, symbol: &str) -> f64 {
+    if symbol == term {
         SCORE_EXACT_SYMBOL
-    } else if sym.contains(term) || term.contains(&sym) {
+    } else if symbol.contains(term) || term.contains(symbol) {
         SCORE_SUBSTRING_SYMBOL
     } else {
         0.0
     }
 }
+pub fn score_symbol(term: &str, symbol: &str) -> f64 {
+    score_normalized_symbol(term, normalized_symbol(symbol).as_ref())
+}
 pub fn best_symbol_score(terms: &[String], symbol: &str) -> f64 {
+    let symbol = normalized_symbol(symbol);
     terms
         .iter()
-        .map(|t| score_symbol(t, symbol))
+        .map(|term| score_normalized_symbol(term, symbol.as_ref()))
         .fold(0.0_f64, f64::max)
 }
 pub fn coverage_symbol_score(terms: &[String], symbol: &str) -> f64 {
-    if terms.is_empty() { return 0.0; }
+    if terms.is_empty() {
+        return 0.0;
+    }
+    let symbol = normalized_symbol(symbol);
     let mut sum = 0.0;
     let mut matched = 0usize;
     for term in terms {
-        let s = score_symbol(term, symbol);
-        if s > 0.0 {
+        let score = score_normalized_symbol(term, symbol.as_ref());
+        if score > 0.0 {
             matched += 1;
-            sum += s;
+            sum += score;
         }
     }
     sum * (matched as f64 / terms.len() as f64)

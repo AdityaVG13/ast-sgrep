@@ -1,8 +1,6 @@
 mod agent;
 mod eval;
 pub mod supervisor;
-use std::path::{Path, PathBuf};
-use std::time::Instant;
 use anyhow::Context;
 use ast_sgrep_core::{
     chain::{expand_chain, ChainConfig},
@@ -10,9 +8,14 @@ use ast_sgrep_core::{
     SearchOptions, SearchResponse, Searcher,
 };
 use clap::{Parser, Subcommand};
+use std::fmt;
+use std::path::{Path, PathBuf};
+use std::time::Instant;
 #[derive(Parser)]
 #[command(
-    name = "asgrep", version, about = "Polyglot hybrid code search",
+    name = "asgrep",
+    version,
+    about = "Polyglot hybrid code search",
     after_help = "Agent: asgrep capabilities --json | robot-docs guide | doctor --robot-triage\nExit: 0=ok 1=usage 2=fail"
 )]
 pub(crate) struct Cli {
@@ -22,7 +25,7 @@ pub(crate) struct Cli {
     query: Option<String>,
     #[arg(long, global = true)]
     root: Option<PathBuf>,
-    #[arg(long, global = true, env = "ASGREP_LIMIT")]
+    #[arg(long, global = true, env = "ASGREP_LIMIT", value_parser = parse_output_limit)]
     limit: Option<usize>,
     #[arg(long, global = true)]
     json: bool,
@@ -59,16 +62,28 @@ pub(crate) struct Cli {
     rerank_top_k: usize,
     #[arg(long, global = true, value_name = "FORMAT")]
     format: Option<String>,
-    #[arg(long, global = true, default_value = "0", value_name = "N")]
+    #[arg(
+        long, global = true, default_value = "0", value_name = "N",
+        value_parser = parse_excerpt_lines,
+    )]
     excerpt_lines: usize,
     #[arg(value_name = "ROOT", default_value = ".")]
     search_root: PathBuf,
 }
 #[derive(Subcommand)]
 enum Commands {
-    Index { #[arg(default_value = ".")] root: PathBuf },
-    Status { #[arg(default_value = ".")] root: PathBuf },
-    Reindex { #[arg(default_value = ".")] root: PathBuf },
+    Index {
+        #[arg(default_value = ".")]
+        root: PathBuf,
+    },
+    Status {
+        #[arg(default_value = ".")]
+        root: PathBuf,
+    },
+    Reindex {
+        #[arg(default_value = ".")]
+        root: PathBuf,
+    },
     Bench {
         #[arg(default_value = ".")]
         root: PathBuf,
@@ -91,9 +106,18 @@ enum Commands {
         #[arg(long, default_value = "300")]
         debounce_ms: u64,
     },
-    Semantic { query: String, #[arg(default_value = ".")] root: PathBuf },
-    Chain { query: String, #[arg(default_value = ".")] root: PathBuf },
+    Semantic {
+        query: String,
+        #[arg(default_value = ".")]
+        root: PathBuf,
+    },
+    Chain {
+        query: String,
+        #[arg(default_value = ".")]
+        root: PathBuf,
+    },
     Capabilities(agent::CapabilitiesArgs),
+    Version(VersionArgs),
     RobotDocs(agent::RobotDocsArgs),
     Doctor {
         #[arg(default_value = ".")]
@@ -103,22 +127,238 @@ enum Commands {
     },
     Eval(eval::EvalArgs),
 }
+
+#[derive(Parser)]
+struct VersionArgs {
+    #[arg(long)]
+    json: bool,
+}
+
+const MACHINE_SCHEMA_VERSION: &str = "1.0.0";
+const MAX_OUTPUT_RESULTS: usize = 1_000;
+const MAX_EXCERPT_LINES: usize = 100;
+const MAX_ERROR_MESSAGE_CHARS: usize = 4_096;
+
+#[derive(Debug)]
+pub(crate) struct UsageError(String);
+
+impl fmt::Display for UsageError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for UsageError {}
+
+pub(crate) fn usage_error(message: impl Into<String>) -> anyhow::Error {
+    UsageError(message.into()).into()
+}
+
+fn parse_bounded_usize(raw: &str, maximum: usize, name: &str) -> Result<usize, String> {
+    let value = raw
+        .parse::<usize>()
+        .map_err(|_| format!("{name} must be a non-negative integer"))?;
+    if value > maximum {
+        return Err(format!("{name} must not exceed {maximum}"));
+    }
+    Ok(value)
+}
+
+fn parse_output_limit(raw: &str) -> Result<usize, String> {
+    parse_bounded_usize(raw, MAX_OUTPUT_RESULTS, "--limit")
+}
+
+fn parse_excerpt_lines(raw: &str) -> Result<usize, String> {
+    parse_bounded_usize(raw, MAX_EXCERPT_LINES, "--excerpt-lines")
+}
+
 pub fn main() -> anyhow::Result<()> {
-    if supervisor::is_worker() {
-        if supervisor::worker_authenticate() {
-            supervisor::worker_start();
-            run()
+    #[cfg(not(unix))]
+    {
+        run_process()
+    }
+
+    #[cfg(unix)]
+    {
+        if supervisor::is_worker() {
+            if supervisor::worker_authenticate() {
+                supervisor::worker_start();
+                run_process()
+            } else {
+                supervisor::supervise()
+            }
         } else {
             supervisor::supervise()
         }
-    } else {
-        supervisor::supervise()
     }
 }
+
+fn run_process() -> ! {
+    let raw_args: Vec<_> = std::env::args_os().collect();
+    let cli = match Cli::try_parse_from(&raw_args) {
+        Ok(cli) => cli,
+        Err(error) => {
+            let exit_code = if error.use_stderr() { 1 } else { 0 };
+            if exit_code == 1 && raw_machine_output_requested(&raw_args) {
+                print_machine_failure(
+                    raw_command_name(&raw_args),
+                    "usage",
+                    exit_code,
+                    &error.to_string(),
+                );
+            }
+            let _ = error.print();
+            std::process::exit(exit_code);
+        }
+    };
+    match run_cli(&cli) {
+        Ok(()) => std::process::exit(0),
+        Err(error) => {
+            let usage = error.downcast_ref::<UsageError>().is_some();
+            let exit_code = if usage { 1 } else { 2 };
+            if cli.machine_output_requested() {
+                print_machine_failure(
+                    cli.command_name(),
+                    if usage { "usage" } else { "operational" },
+                    exit_code,
+                    &format!("{error:#}"),
+                );
+            }
+            eprintln!("{error:#}");
+            if !cli.machine_output_requested() {
+                agent::print_agent_help_footer();
+            }
+            std::process::exit(exit_code);
+        }
+    }
+}
+
 pub fn run() -> anyhow::Result<()> {
     let cli = Cli::parse();
-    run_cli(&cli).map_err(|e| { agent::print_agent_help_footer(); e })
+    run_cli(&cli)
 }
+impl Cli {
+    fn machine_output_requested(&self) -> bool {
+        self.json
+            || matches!(
+                self.command.as_ref(),
+                Some(Commands::Capabilities(args)) if args.json
+            )
+            || matches!(
+                self.command.as_ref(),
+                Some(Commands::Version(args)) if args.json
+            )
+            || matches!(
+                self.command.as_ref(),
+                Some(Commands::Doctor { args, .. }) if args.json || args.robot_triage
+            )
+    }
+
+    fn command_name(&self) -> &'static str {
+        match self.command.as_ref() {
+            None => "search",
+            Some(Commands::Index { .. }) => "index",
+            Some(Commands::Status { .. }) => "status",
+            Some(Commands::Reindex { .. }) => "reindex",
+            Some(Commands::Bench { .. }) => "bench",
+            Some(Commands::Watch { .. }) => "watch",
+            Some(Commands::Semantic { .. }) => "semantic",
+            Some(Commands::Chain { .. }) => "chain",
+            Some(Commands::Capabilities(_)) => "capabilities",
+            Some(Commands::Version(_)) => "version",
+            Some(Commands::RobotDocs(_)) => "robot-docs",
+            Some(Commands::Doctor { .. }) => "doctor",
+            Some(Commands::Eval(_)) => "eval",
+        }
+    }
+}
+
+fn raw_machine_output_requested(args: &[std::ffi::OsString]) -> bool {
+    args.iter()
+        .any(|arg| arg == "--json" || arg == "--robot-triage")
+}
+
+fn raw_command_name(args: &[std::ffi::OsString]) -> &'static str {
+    const COMMANDS: &[&str] = &[
+        "index",
+        "status",
+        "reindex",
+        "bench",
+        "watch",
+        "semantic",
+        "chain",
+        "capabilities",
+        "version",
+        "robot-docs",
+        "doctor",
+        "eval",
+    ];
+    args.iter()
+        .filter_map(|arg| arg.to_str())
+        .find_map(|arg| COMMANDS.iter().copied().find(|command| arg == *command))
+        .unwrap_or("search")
+}
+
+fn bounded_error_message(message: &str) -> String {
+    let mut chars = message.chars();
+    let bounded: String = chars.by_ref().take(MAX_ERROR_MESSAGE_CHARS).collect();
+    if chars.next().is_some() {
+        format!("{bounded}…")
+    } else {
+        bounded
+    }
+}
+
+fn machine_value(command: &str, value: impl serde::Serialize) -> anyhow::Result<serde_json::Value> {
+    let mut value = serde_json::to_value(value)?;
+    let object = match &mut value {
+        serde_json::Value::Object(object) => object,
+        _ => {
+            return Ok(serde_json::json!({
+                "schema_version": MACHINE_SCHEMA_VERSION, "tool": "asgrep",
+                "command": command, "ok": true, "data": value,
+            }))
+        }
+    };
+    if command == "status" {
+        object
+            .entry("embed_backend")
+            .or_insert(serde_json::Value::Null);
+        object.entry("embed_dim").or_insert(serde_json::Value::Null);
+    }
+    object.insert("schema_version".into(), MACHINE_SCHEMA_VERSION.into());
+    object.insert("tool".into(), "asgrep".into());
+    object.insert("command".into(), command.into());
+    object.insert("ok".into(), true.into());
+    Ok(value)
+}
+
+pub(crate) fn print_machine_json(
+    command: &str,
+    value: impl serde::Serialize,
+) -> anyhow::Result<()> {
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&machine_value(command, value)?)?
+    );
+    Ok(())
+}
+
+fn print_machine_failure(command: &str, kind: &str, exit_code: i32, message: &str) {
+    let value = serde_json::json!({
+        "schema_version": MACHINE_SCHEMA_VERSION,
+        "tool": "asgrep",
+        "command": command,
+        "ok": false,
+        "exit_code": exit_code,
+        "error": {"kind": kind, "message": bounded_error_message(message)},
+    });
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&value).expect("failure envelope serializes")
+    );
+}
+
 fn run_cli(cli: &Cli) -> anyhow::Result<()> {
     match cli.command.as_ref() {
         Some(c) => run_command(cli, c),
@@ -127,48 +367,91 @@ fn run_cli(cli: &Cli) -> anyhow::Result<()> {
 }
 fn run_command(cli: &Cli, command: &Commands) -> anyhow::Result<()> {
     match command {
-        Commands::Index { root } => {
-            with_index(root, cli, |i| i.index_all().context("indexing failed"), print_index_stats)
-        }
+        Commands::Index { root } => with_index(
+            "index",
+            root,
+            cli,
+            |i| i.index_all().context("indexing failed"),
+            print_index_stats,
+        ),
         Commands::Status { root } => {
-            let st = Indexer::new(index_options(root, cli)).context("failed to open index")?
-                .store().status().context("failed to read status")?;
-            print_json_or(cli.json, &st, || print_status(&st))
+            let st = Indexer::new(index_options(root, cli))
+                .context("failed to open index")?
+                .store()
+                .status()
+                .context("failed to read status")?;
+            print_json_or(cli.json, "status", &st, || print_status(&st))
         }
-        Commands::Reindex { root } => {
-            with_index(root, cli, |i| i.reindex_all().context("reindex failed"), print_index_stats)
-        }
-        Commands::Bench { root, query, iterations, suite, fixture, queries_file, skip_index } => {
-            run_bench_command(
-                root, cli, query, *iterations, suite.as_deref(), fixture,
-                queries_file.as_deref(), *skip_index,
-            )
-        }
+        Commands::Reindex { root } => with_index(
+            "reindex",
+            root,
+            cli,
+            |i| i.reindex_all().context("reindex failed"),
+            print_index_stats,
+        ),
+        Commands::Bench {
+            root,
+            query,
+            iterations,
+            suite,
+            fixture,
+            queries_file,
+            skip_index,
+        } => run_bench_command(
+            root,
+            cli,
+            query,
+            *iterations,
+            suite.as_deref(),
+            fixture,
+            queries_file.as_deref(),
+            *skip_index,
+        ),
         Commands::Watch { root, debounce_ms } => run_watch(root, cli, *debounce_ms),
         Commands::Semantic { query, root } => run_search(root, cli, query, true),
         Commands::Chain { query, root } => run_chain(root, cli, query),
         Commands::Capabilities(args) => agent::run_capabilities(cli, args),
+        Commands::Version(args) => run_version(cli, args),
         Commands::RobotDocs(args) => agent::run_robot_docs(cli, args),
         Commands::Doctor { root, args } => agent::run_doctor(cli, root, args),
         Commands::Eval(args) => eval::run_eval(cli, args),
     }
 }
+fn run_version(cli: &Cli, args: &VersionArgs) -> anyhow::Result<()> {
+    if cli.json || args.json {
+        print_machine_json(
+            "version",
+            serde_json::json!({
+                "version": env!("CARGO_PKG_VERSION"),
+                "machine_schema_version": MACHINE_SCHEMA_VERSION,
+            }),
+        )
+    } else {
+        println!("asgrep {}", env!("CARGO_PKG_VERSION"));
+        Ok(())
+    }
+}
+
 fn with_index<T: serde::Serialize>(
-    root: &Path, cli: &Cli, op: impl FnOnce(&mut Indexer) -> anyhow::Result<T>, human: impl FnOnce(&T),
+    command: &str,
+    root: &Path,
+    cli: &Cli,
+    op: impl FnOnce(&mut Indexer) -> anyhow::Result<T>,
+    human: impl FnOnce(&T),
 ) -> anyhow::Result<()> {
     let mut indexer = Indexer::new(index_options(root, cli)).context("failed to open index")?;
     let v = op(&mut indexer)?;
-    print_json_or(cli.json, &v, || human(&v))
+    print_json_or(cli.json, command, &v, || human(&v))
 }
 fn run_default_search(cli: &Cli) -> anyhow::Result<()> {
     let root = effective_root(cli, &cli.search_root);
-    let query = cli.query.as_deref().context(
+    let query = cli.query.as_deref().ok_or_else(|| usage_error(
         "search query required (e.g. asgrep \"auth refresh\") or use a subcommand: asgrep capabilities --json",
-    )?;
+    ))?;
     if let Some(sub) = agent::query_looks_like_subcommand_typo(query) {
-        anyhow::bail!(
+        return Err(usage_error(format!(
             "unknown subcommand '{query}'; did you mean: asgrep {sub} ... ? Try: asgrep capabilities --json"
-        );
+        )));
     }
     run_search(&root, cli, query, false)
 }
@@ -197,7 +480,11 @@ fn run_chain(root: &Path, cli: &Cli, query: &str) -> anyhow::Result<()> {
     for n in &r.nodes {
         println!(
             "  depth {} score {:.4} {}:{}-{} {}",
-            n.depth, n.score, n.file, n.line_start, n.line_end,
+            n.depth,
+            n.score,
+            n.file,
+            n.line_start,
+            n.line_end,
             n.symbol.as_deref().unwrap_or("<file>")
         );
     }
@@ -205,9 +492,12 @@ fn run_chain(root: &Path, cli: &Cli, query: &str) -> anyhow::Result<()> {
     for e in &r.edges {
         println!(
             "  depth {} {:?}: {}::{} -> {}::{}",
-            e.depth, e.label, e.from_file,
+            e.depth,
+            e.label,
+            e.from_file,
             e.from_symbol.as_deref().unwrap_or("<file>"),
-            e.to_file, e.to_symbol.as_deref().unwrap_or("<file>")
+            e.to_file,
+            e.to_symbol.as_deref().unwrap_or("<file>")
         );
     }
     Ok(())
@@ -219,7 +509,9 @@ fn run_search(root: &Path, cli: &Cli, query: &str, semantic: bool) -> anyhow::Re
     })
     .context("failed to open index")?;
     let response = if semantic {
-        searcher.search_semantic(query).context("semantic search failed")?
+        searcher
+            .search_semantic(query)
+            .context("semantic search failed")?
     } else {
         searcher.search(query).context("search failed")?
     };
@@ -229,13 +521,15 @@ fn run_search(root: &Path, cli: &Cli, query: &str, semantic: bool) -> anyhow::Re
         } else {
             ast_sgrep_plugins::OutputFormat::Native
         };
-        let format = cli
-            .format
-            .as_deref()
-            .and_then(ast_sgrep_plugins::OutputFormat::parse)
-            .unwrap_or(default);
+        let format = match cli.format.as_deref() {
+            Some(raw) => ast_sgrep_plugins::OutputFormat::parse(raw)
+                .ok_or_else(|| usage_error(format!(
+                    "unknown output format {raw:?}; expected native, agent, agent-capsule, github, or gitlab"
+                )))?,
+            None => default,
+        };
         let value = ast_sgrep_plugins::format_response_with(&response, format, cli.excerpt_lines);
-        println!("{}", serde_json::to_string_pretty(&value)?);
+        print_machine_json(if semantic { "semantic" } else { "search" }, value)?;
     } else {
         for hit in &response.hits {
             println!("{}", format_hit_line(hit));
@@ -243,8 +537,17 @@ fn run_search(root: &Path, cli: &Cli, query: &str, semantic: bool) -> anyhow::Re
     }
     Ok(())
 }
-fn print_json_or<T: serde::Serialize>(json: bool, value: &T, human: impl FnOnce()) -> anyhow::Result<()> {
-    if json { println!("{}", serde_json::to_string_pretty(value)?); } else { human(); }
+fn print_json_or<T: serde::Serialize>(
+    json: bool,
+    command: &str,
+    value: &T,
+    human: impl FnOnce(),
+) -> anyhow::Result<()> {
+    if json {
+        print_machine_json(command, value)?;
+    } else {
+        human();
+    }
     Ok(())
 }
 pub(crate) fn index_options(root: &Path, cli: &Cli) -> IndexOptions {
@@ -284,31 +587,52 @@ fn search_options(root: &Path, cli: &Cli) -> SearchOptions {
         ..SearchOptions::default()
     }
 }
+#[allow(clippy::too_many_arguments)]
 fn run_bench_command(
-    root: &Path, cli: &Cli, query: &str, iterations: u32, suite: Option<&str>, fixture: &str,
-    queries_file: Option<&Path>, skip_index: bool,
+    root: &Path,
+    cli: &Cli,
+    query: &str,
+    iterations: u32,
+    suite: Option<&str>,
+    fixture: &str,
+    queries_file: Option<&Path>,
+    skip_index: bool,
 ) -> anyhow::Result<()> {
-    if let Some(path) = queries_file { return run_bench_batch(root, cli, path, iterations, skip_index); }
+    if let Some(path) = queries_file {
+        return run_bench_batch(root, cli, path, iterations, skip_index);
+    }
     match suite {
         Some(name) => run_bench_suite(root, cli, name, fixture, iterations, skip_index),
         None => run_bench(root, cli, query, iterations, skip_index),
     }
 }
 fn maybe_index(root: &Path, cli: &Cli, skip: bool) -> anyhow::Result<(Option<IndexStats>, f64)> {
-    if skip { return Ok((None, 0.0)); }
+    if skip {
+        return Ok((None, 0.0));
+    }
     let mut indexer = Indexer::new(index_options(root, cli)).context("failed to open index")?;
     let t0 = Instant::now();
-    Ok((Some(indexer.index_all()?), t0.elapsed().as_secs_f64() * 1000.0))
+    Ok((
+        Some(indexer.index_all()?),
+        t0.elapsed().as_secs_f64() * 1000.0,
+    ))
 }
 fn bench_searcher(root: &Path, cli: &Cli, skip_index: bool) -> anyhow::Result<Searcher> {
     let db = index_db_path(root, cli.index_path.as_deref());
     if skip_index && !db.exists() {
-        anyhow::bail!("failed to open existing index at {} (run `asgrep index` first)", db.display());
+        anyhow::bail!(
+            "failed to open existing index at {} (run `asgrep index` first)",
+            db.display()
+        );
     }
     Searcher::new(search_options(root, cli)).context("failed to open index")
 }
 fn do_search(s: &Searcher, q: &str, semantic: bool) -> anyhow::Result<SearchResponse> {
-    if semantic { Ok(s.search_semantic(q)?) } else { Ok(s.search(q)?) }
+    if semantic {
+        Ok(s.search_semantic(q)?)
+    } else {
+        Ok(s.search(q)?)
+    }
 }
 fn add_index_json(obj: &mut serde_json::Value, stats: Option<&IndexStats>, index_ms: f64) {
     if let Some(s) = stats {
@@ -328,17 +652,36 @@ fn print_index_skipped(stats: Option<&IndexStats>, index_ms: Option<f64>) {
     }
 }
 fn run_bench_suite(
-    root: &Path, cli: &Cli, suite_name: &str, fixture_name: &str, iterations: u32, skip_index: bool,
+    root: &Path,
+    cli: &Cli,
+    suite_name: &str,
+    fixture_name: &str,
+    iterations: u32,
+    skip_index: bool,
 ) -> anyhow::Result<()> {
     use ast_sgrep_core::bench_suite;
     let fix = bench_suite::fixture_by_name(fixture_name).with_context(|| {
-        format!("unknown fixture {fixture_name:?}; available: {}", bench_suite::list_fixture_names().join(", "))
+        format!(
+            "unknown fixture {fixture_name:?}; available: {}",
+            bench_suite::list_fixture_names().join(", ")
+        )
     })?;
-    let selected = if suite_name.is_empty() { fix.suite } else { suite_name };
+    let selected = if suite_name.is_empty() {
+        fix.suite
+    } else {
+        suite_name
+    };
     let cases = bench_suite::suite_by_name(selected).with_context(|| {
-        format!("unknown suite {suite_name:?}; available: {}", bench_suite::list_suite_names().join(", "))
+        format!(
+            "unknown suite {suite_name:?}; available: {}",
+            bench_suite::list_suite_names().join(", ")
+        )
     })?;
-    let bench_root = if root.as_os_str() == "." { fix.root.to_path_buf() } else { root.to_path_buf() };
+    let bench_root = if root.as_os_str() == "." {
+        fix.root.to_path_buf()
+    } else {
+        root.to_path_buf()
+    };
     let (stats, _) = maybe_index(&bench_root, cli, skip_index)?;
     let searcher = bench_searcher(&bench_root, cli, skip_index)?;
     let results: Vec<serde_json::Value> = cases
@@ -382,16 +725,21 @@ fn run_bench_suite(
         println!("Benchmark fixture: {fixture_name}, suite: {suite_name}");
         print_index_skipped(stats.as_ref(), None);
         for row in &results {
-            let st = if row["ok"].as_bool().unwrap_or(false) { "ok" } else { "FAIL" };
+            let st = if row["ok"].as_bool().unwrap_or(false) {
+                "ok"
+            } else {
+                "FAIL"
+            };
             println!(
                 "  {}: {:.2}ms avg, {} hits {st}",
                 row["name"].as_str().unwrap_or("?"),
                 row["avg_search_ms"].as_f64().unwrap_or(0.0),
                 row["hits"].as_u64().unwrap_or(0)
             );
-            if let (Some(p), Some(ms)) =
-                (row["ast_grep_pattern"].as_str(), row["avg_ast_grep_ms"].as_f64())
-            {
+            if let (Some(p), Some(ms)) = (
+                row["ast_grep_pattern"].as_str(),
+                row["avg_ast_grep_ms"].as_f64(),
+            ) {
                 println!("    ast-grep ({p}): {ms:.2}ms");
                 if let Some(sp) = row["speedup_vs_ast_grep"].as_f64() {
                     println!("    speedup vs ast-grep: {sp:.1}x");
@@ -413,10 +761,20 @@ fn run_watch(root: &Path, cli: &Cli, debounce_ms: u64) -> anyhow::Result<()> {
     let opts = index_options(root, cli);
     let root = opts.root.clone();
     let (tx, rx) = mpsc::channel();
-    let mut watcher = RecommendedWatcher::new(move |res| { let _ = tx.send(res); }, Config::default())
-        .context("failed to create file watcher")?;
-    watcher.watch(&root, RecursiveMode::Recursive).context("failed to watch project root")?;
-    eprintln!("[asgrep] watching {} (debounce {debounce_ms}ms)", root.display());
+    let mut watcher = RecommendedWatcher::new(
+        move |res| {
+            let _ = tx.send(res);
+        },
+        Config::default(),
+    )
+    .context("failed to create file watcher")?;
+    watcher
+        .watch(&root, RecursiveMode::Recursive)
+        .context("failed to watch project root")?;
+    eprintln!(
+        "[asgrep] watching {} (debounce {debounce_ms}ms)",
+        root.display()
+    );
     let mut indexer = Indexer::new(opts)?;
     let initial = indexer.index_all()?;
     eprintln!(
@@ -472,7 +830,11 @@ fn run_watch(root: &Path, cli: &Cli, debounce_ms: u64) -> anyhow::Result<()> {
     Ok(())
 }
 fn run_bench(
-    root: &Path, cli: &Cli, query: &str, iterations: u32, skip_index: bool,
+    root: &Path,
+    cli: &Cli,
+    query: &str,
+    iterations: u32,
+    skip_index: bool,
 ) -> anyhow::Result<()> {
     let (stats_opt, index_ms) = maybe_index(root, cli, skip_index)?;
     let searcher = bench_searcher(root, cli, skip_index)?;
@@ -493,9 +855,9 @@ fn run_bench(
     };
     let ag_iters = iterations.min(3);
     let ag_pat = ast_sgrep_core::pattern::ast_grep_pattern_for_query(query);
-    let ag_ms = ag_pat.as_ref().and_then(|p| {
-        ast_sgrep_core::pattern::bench_ast_grep(p, root, ag_iters)
-    });
+    let ag_ms = ag_pat
+        .as_ref()
+        .and_then(|p| ast_sgrep_core::pattern::bench_ast_grep(p, root, ag_iters));
     let speedup = ag_ms.map(|ag| ag / avg);
 
     if cli.json {
@@ -524,16 +886,28 @@ fn run_bench(
 }
 const MAX_QUERIES_FILE_LINES: usize = 1000;
 fn run_bench_batch(
-    root: &Path, cli: &Cli, queries_path: &Path, iterations: u32, skip_index: bool,
+    root: &Path,
+    cli: &Cli,
+    queries_path: &Path,
+    iterations: u32,
+    skip_index: bool,
 ) -> anyhow::Result<()> {
     let content = std::fs::read_to_string(queries_path)
         .with_context(|| format!("failed to read queries file {}", queries_path.display()))?;
-    let queries: Vec<String> = content.lines().map(str::trim).filter(|l| !l.is_empty()).map(str::to_string).collect();
+    let queries: Vec<String> = content
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map(str::to_string)
+        .collect();
     if queries.is_empty() {
         anyhow::bail!("queries file is empty or contains only blank lines");
     }
     if queries.len() > MAX_QUERIES_FILE_LINES {
-        anyhow::bail!("queries file has {} lines; maximum is {MAX_QUERIES_FILE_LINES}", queries.len());
+        anyhow::bail!(
+            "queries file has {} lines; maximum is {MAX_QUERIES_FILE_LINES}",
+            queries.len()
+        );
     }
     let (stats_opt, index_ms) = maybe_index(root, cli, skip_index)?;
     let searcher = bench_searcher(root, cli, skip_index)?;
@@ -549,12 +923,17 @@ fn run_bench_batch(
         }
         samples.sort_by(f64::total_cmp);
         let avg = samples.iter().sum::<f64>() / f64::from(iterations);
-        let p50 = if samples.is_empty() { 0.0 } else { samples[(samples.len() - 1) / 2] };
+        let p50 = if samples.is_empty() {
+            0.0
+        } else {
+            samples[(samples.len() - 1) / 2]
+        };
         let (hits, top_10) = match &last {
             Some(r) => {
                 let mut hs: Vec<_> = r.hits.iter().collect();
                 hs.sort_by(|a, b| {
-                    b.score.total_cmp(&a.score)
+                    b.score
+                        .total_cmp(&a.score)
                         .then_with(|| a.file.cmp(&b.file))
                         .then_with(|| a.line_start.cmp(&b.line_start))
                 });
@@ -575,7 +954,11 @@ fn run_bench_batch(
         add_index_json(&mut obj, stats_opt.as_ref(), index_ms);
         println!("{obj}");
     } else {
-        println!("Batch benchmark: {} queries over {} iterations each", queries.len(), iterations);
+        println!(
+            "Batch benchmark: {} queries over {} iterations each",
+            queries.len(),
+            iterations
+        );
         print_index_skipped(stats_opt.as_ref(), Some(index_ms));
         for r in &results {
             println!(
@@ -592,8 +975,12 @@ fn run_bench_batch(
 fn print_index_stats(stats: &IndexStats) {
     println!(
         "Indexed {} files ({} skipped, {} removed)\nExtracted {} symbols, {} callers, {} imports",
-        stats.files_indexed, stats.files_skipped, stats.files_removed,
-        stats.symbols_extracted, stats.callers_extracted, stats.imports_extracted
+        stats.files_indexed,
+        stats.files_skipped,
+        stats.files_removed,
+        stats.symbols_extracted,
+        stats.callers_extracted,
+        stats.imports_extracted
     );
 }
 fn print_status(s: &ast_sgrep_core::IndexStatus) {
@@ -610,6 +997,10 @@ fn print_status(s: &ast_sgrep_core::IndexStatus) {
     }
     println!(
         "Semantic IVF sidecar: {}",
-        if s.semantic_ivf_present { "present" } else { "not built (below ANN threshold or not indexed)" }
+        if s.semantic_ivf_present {
+            "present"
+        } else {
+            "not built (below ANN threshold or not indexed)"
+        }
     );
 }

@@ -1,15 +1,15 @@
-use std::collections::HashSet;
-use std::fs;
-use std::path::{Path, PathBuf};
-use std::time::SystemTime;
-use ast_sgrep_lang::{detect_language, ExtractionResult, Language, ParserRegistry};
-use blake3::Hasher;
-use rayon::prelude::*;
-use walkdir::WalkDir;
 use crate::skip::{should_skip_dir, should_skip_file};
 use crate::store::{CallerRow, ImportRow, IndexStore, SymbolRow, UpsertFileInput};
 use crate::text::split_content_lines;
 use crate::Result;
+use ast_sgrep_lang::{detect_language, ExtractionResult, Language, ParserRegistry};
+use blake3::Hasher;
+use rayon::prelude::*;
+use std::collections::HashSet;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::time::SystemTime;
+use walkdir::WalkDir;
 type ExtractedRows = (
     Vec<SymbolRow>,
     Vec<CallerRow>,
@@ -215,7 +215,7 @@ impl Indexer {
 
         self.store.begin_bulk_tx()?;
         let write_result = (|| -> Result<()> {
-            for (rel_str, outcome) in candidates.iter().map(|(_, r)| r).zip(prepared.into_iter()) {
+            for (rel_str, outcome) in candidates.iter().map(|(_, r)| r).zip(prepared) {
                 match outcome {
                     PrepareOutcome::Filtered => {
                         if self.store.file_hash(rel_str)?.is_some() {
@@ -294,7 +294,9 @@ impl Indexer {
     }
 
     fn rebuild_dirty_sidecars(&self, stats: &IndexStats, semantic_ivf_dirty: bool) -> Result<()> {
-        if self.options.use_tantivy || crate::tantivy_index::should_use_tantivy(stats.files_indexed, false) {
+        if self.options.use_tantivy
+            || crate::tantivy_index::should_use_tantivy(stats.files_indexed, false)
+        {
             self.rebuild_tantivy_sidecar()?;
         }
         if self.options.embed_semantic && semantic_ivf_dirty {
@@ -343,7 +345,9 @@ impl Indexer {
                 continue;
             }
             let rel_str = rel.to_string_lossy().replace('\\', "/");
-            if rel.components().any(|c| should_skip_dir(Path::new(c.as_os_str())))
+            if rel
+                .components()
+                .any(|c| should_skip_dir(Path::new(c.as_os_str())))
                 || should_skip_file(abs)
                 || (self.options.respect_gitignore && self.ignore.is_ignored(rel))
             {
@@ -402,7 +406,9 @@ impl Indexer {
         let (mtime_secs, mtime_nanos) = system_time_to_parts(mtime);
         let content = match fs::read_to_string(abs_path) {
             Ok(c) => c,
-            Err(e) if e.kind() == std::io::ErrorKind::InvalidData => { return Err(crate::StoreError::Other(format!("binary file: {rel_path}"))); }
+            Err(e) if e.kind() == std::io::ErrorKind::InvalidData => {
+                return Err(crate::StoreError::Other(format!("binary file: {rel_path}")));
+            }
             Err(e) => return Err(e.into()),
         };
         self.index_content_at(rel_path, &content, abs_path, mtime_secs, mtime_nanos)
@@ -410,7 +416,13 @@ impl Indexer {
 
     pub fn index_content(&mut self, rel_path: &str, content: &str) -> Result<FileIndexStats> {
         let (mtime_secs, mtime_nanos) = system_time_to_parts(SystemTime::now());
-        self.index_content_at(rel_path, content, Path::new(rel_path), mtime_secs, mtime_nanos)
+        self.index_content_at(
+            rel_path,
+            content,
+            Path::new(rel_path),
+            mtime_secs,
+            mtime_nanos,
+        )
     }
 
     fn index_content_at(
@@ -426,11 +438,19 @@ impl Indexer {
             h.update(content.as_bytes());
             h.finalize().to_hex().to_string()
         };
-        if self.is_unchanged(rel_path, &hash)? { return Ok(FileIndexStats { skipped: true, ..Default::default() }); }
+        if self.is_unchanged(rel_path, &hash)? {
+            return Ok(FileIndexStats {
+                skipped: true,
+                ..Default::default()
+            });
+        }
         let language = detect_language(lang_path, Some(content));
-        if !self.language_filter_allows(rel_path, language)? { return Ok(FileIndexStats::default()); }
+        if !self.language_filter_allows(rel_path, language)? {
+            return Ok(FileIndexStats::default());
+        }
         let split = split_content_lines(content);
-        let (symbols, callers, imports, pattern_nodes) = self.extract_rows(rel_path, content, language)?;
+        let (symbols, callers, imports, pattern_nodes) =
+            self.extract_rows(rel_path, content, language)?;
         let semantic_chunks = if self.options.embed_semantic {
             crate::semantic_chunk::build_semantic_chunks(&symbols, &callers, &split.lines)
         } else {
@@ -461,19 +481,32 @@ impl Indexer {
     }
 
     fn is_unchanged(&self, rel_path: &str, hash: &str) -> Result<bool> {
-        if self.options.force_reindex { return Ok(false); }
-        if self.store.file_hash(rel_path)?.is_none_or(|h| h != hash) { return Ok(false); }
+        if self.options.force_reindex {
+            return Ok(false);
+        }
+        if self.store.file_hash(rel_path)?.is_none_or(|h| h != hash) {
+            return Ok(false);
+        }
         if self.options.embed_semantic {
             let stored = self.store.get_meta("embed_backend")?;
             let active = self.options.embed_backend.to_preference_str();
-            if stored.as_deref() != Some(active) && stored.as_deref() != Some("auto") && active != "auto" { return Ok(false); }
+            if stored.as_deref() != Some(active)
+                && stored.as_deref() != Some("auto")
+                && active != "auto"
+            {
+                return Ok(false);
+            }
         }
         Ok(true)
     }
 
     fn language_filter_allows(&self, rel_path: &str, language: Option<Language>) -> Result<bool> {
-        let Some(lang_filter) = self.options.lang_filter.as_ref() else { return Ok(true); };
-        if language.is_some_and(|lang| lang.as_str() == lang_filter.as_str()) { return Ok(true); }
+        let Some(lang_filter) = self.options.lang_filter.as_ref() else {
+            return Ok(true);
+        };
+        if language.is_some_and(|lang| lang.as_str() == lang_filter.as_str()) {
+            return Ok(true);
+        }
         if self.store.file_hash(rel_path)?.is_some() {
             self.store.remove_file(rel_path)?;
         }
@@ -486,9 +519,14 @@ impl Indexer {
         content: &str,
         language: Option<Language>,
     ) -> Result<ExtractedRows> {
-        let Some(lang) = language else { return Ok((vec![], vec![], vec![], vec![])); };
+        let Some(lang) = language else {
+            return Ok((vec![], vec![], vec![], vec![]));
+        };
         let extraction = self.parsers.parse(lang, content).map_err(|e| {
-            crate::StoreError::Other(format!("failed to parse {rel_path} as {}: {e}", lang.as_str()))
+            crate::StoreError::Other(format!(
+                "failed to parse {rel_path} as {}: {e}",
+                lang.as_str()
+            ))
         })?;
         Ok(rows_from_extraction(&extraction))
     }
@@ -506,6 +544,8 @@ struct PreparedFile {
     pattern_nodes: Vec<ast_sgrep_lang::PatternNode>,
     semantic_chunks: Vec<crate::semantic_chunk::SemanticChunkInput>,
 }
+// Ready is the common case; boxing it would add one heap allocation per indexed file.
+#[allow(clippy::large_enum_variant)]
 enum PrepareOutcome {
     Filtered,
     Failed(String),
@@ -536,7 +576,7 @@ fn prepare_file(
     let hash = hasher.finalize().to_hex().to_string();
     let language = detect_language(abs, Some(&content));
     if let Some(filter) = lang_filter {
-        if !language.is_some_and(|l| l.as_str() == filter) {
+        if language.is_none_or(|l| l.as_str() != filter) {
             return PrepareOutcome::Filtered;
         }
     }
