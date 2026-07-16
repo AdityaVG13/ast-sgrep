@@ -129,7 +129,9 @@ impl LspBackend {
         self.with_locked_indexer(|i| {
             i.index_all()?;
             Ok(())
-        })
+        })?;
+        self.index_ready.store(true, Ordering::SeqCst);
+        Ok(())
     }
 
     pub fn reindex_file(&self, rel_path: &str) -> anyhow::Result<()> {
