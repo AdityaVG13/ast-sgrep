@@ -62,3 +62,9 @@ An end-to-end p99 must therefore come from a wall-clock load run that timestamps
 `scripts/rustc-capped` applies an outer 80% STOP/CONT duty cycle. On Unix, an `asgrep` command also applies its own supervisor duty cycle (80% by default). If `asgrep` is intentionally run through that wrapper, effective wall-time capacity is the product, not the minimum or sum: `0.80 * 0.80 = 0.64` by default. A 50% outer limit with the default inner limit yields 40% capacity. Queue and latency estimates must use that product.
 
 The production policy is to invoke `asgrep` directly. Reserve `rustc-capped` for compiler/build payloads. A workflow that deliberately nests the two limiters must record both configured fractions, the product capacity, and full-wall latency including both STOP intervals; never report the inner `ASGREP_CPU_LIMIT_PERCENT` as effective capacity.
+
+## Sample duty-cycled latency over full wall time
+
+PASTA applies to arrivals over the complete STOP/CONT cycle. Latency, concurrency, or queue samples collected only during CONT windows are conditional measurements; they understate arrival-experienced waiting and must be labeled `CONT-conditional`. Do not use those samples to claim wall-clock p50, p99, or queue occupancy.
+
+Benchmarks must timestamp offered arrivals independently of worker state and retain requests that arrive during STOP. Measure occupancy and latency continuously across the full wall interval. If a legacy probe can observe only CONT windows, scale occupancy by the measured duty fraction before comparing with full-time quantities, disclose that correction, and do not substitute it for a full-wall latency histogram. Validate each run with Little law on the same observation window: `L = lambda * W`.
