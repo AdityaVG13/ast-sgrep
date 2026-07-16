@@ -45,7 +45,8 @@ fn score_normalized_symbol(term: &str, symbol: &str) -> f64 {
     }
 }
 pub fn score_symbol(term: &str, symbol: &str) -> f64 {
-    score_normalized_symbol(term, normalized_symbol(symbol).as_ref())
+    let term = normalized_symbol(term);
+    score_normalized_symbol(term.as_ref(), normalized_symbol(symbol).as_ref())
 }
 pub fn best_symbol_score(terms: &[String], symbol: &str) -> f64 {
     let symbol = normalized_symbol(symbol);
@@ -109,5 +110,11 @@ mod tests {
             coverage_symbol_score(&expanded, "init_handler")
                 >= coverage_symbol_score(&focused, "init_handler")
         );
+    }
+
+    #[test]
+    fn score_symbol_is_case_insensitive_for_both_inputs() {
+        assert_eq!(score_symbol("Init", "init"), SCORE_EXACT_SYMBOL);
+        assert_eq!(score_symbol("init", "Init"), SCORE_EXACT_SYMBOL);
     }
 }
