@@ -341,7 +341,7 @@ mod tests {
 
     #[test]
     fn duty_cycle_quantizes_supported_limits() {
-        for limit in [1, 10, 50, 80] {
+        for limit in [1, 5, 9, 10, 80] {
             let (work_ms, sleep_ms) = duty_cycle_ms(limit);
             assert_eq!(work_ms + sleep_ms, CYCLE_MS);
             assert_eq!(work_ms, ((CYCLE_MS * u64::from(limit)) / 100).max(1));

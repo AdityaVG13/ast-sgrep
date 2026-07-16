@@ -9,8 +9,10 @@ Architecture:
   waitpid(WUNTRACED), sends CONT, then enters a duty-cycle loop.
 
   Duty cycle (default 10 ms):
-    on_time  = cycle_ms * limit% / 100      (child runs)
-    off_time = cycle_ms * (100 - limit%) / 100  (child stopped)
+    work_ms  = max(1, floor(cycle_ms * limit% / 100))
+    on_time  = work_ms / 1000                (child runs)
+    off_time = (cycle_ms - work_ms) / 1000   (child stopped)
+  This matches the production Rust supervisor millisecond quantization.
 
   Signals (INT/TERM/HUP/QUIT) are handled via a pending-signum flag.
   On signal: CONT child if stopped, forward signal, grace-wait 5 s,
@@ -181,6 +183,18 @@ def _waitpid_retry(pid, options):
             continue
 
 
+# -- duty-cycle contract ---------------------------------------------------
+
+def duty_cycle_seconds(limit, cycle_ms):
+    """Return Rust-supervisor-compatible work/sleep quanta in seconds.
+
+    A zero limit retains a 0.1 ms bootstrap quantum so the child can exec and
+    exit; configured production limits are in the inclusive range 1..=80.
+    """
+    work_ms = 0.1 if limit == 0 else max(1, cycle_ms * limit // 100)
+    return work_ms / 1000.0, (cycle_ms - work_ms) / 1000.0
+
+
 # -- main ------------------------------------------------------------------
 
 def main():
@@ -224,12 +238,7 @@ def main():
 
     _install_signal_handlers()
 
-    on_time = cycle_ms * limit / 100.0 / 1000.0       # seconds
-    # Floor: ensure child gets at least a tiny quantum so trivial
-    # commands (e.g. true) can exit.  0.1 ms per cycle is ~1 % CPU.
-    if on_time < 0.0001:
-        on_time = 0.0001
-    off_time = cycle_ms * (100.0 - limit) / 100.0 / 1000.0
+    on_time, off_time = duty_cycle_seconds(limit, cycle_ms)
 
     # -- fork ----------------------------------------------------------
     pid = os.fork()
