@@ -61,9 +61,6 @@ pub fn best_symbol_score(terms: &[String], symbol: &str) -> f64 {
         .fold(0.0_f64, f64::max)
 }
 pub fn coverage_symbol_score(terms: &[String], symbol: &str) -> f64 {
-    if terms.is_empty() {
-        return 0.0;
-    }
     let symbol = normalized_symbol(symbol);
     let mut sum = 0.0;
     for term in terms {
@@ -75,6 +72,9 @@ pub fn coverage_symbol_score(terms: &[String], symbol: &str) -> f64 {
     // Each additional matching term contributes independently; unmatched query context must not
     // dilute evidence from terms that already match the symbol.
     sum
+    terms.iter()
+        .map(|term| score_normalized_symbol(term, symbol.as_ref()))
+        .sum()
 }
 pub fn score_def(terms: &[String], symbol: &str) -> f64 {
     let coverage = coverage_symbol_score(terms, symbol);
