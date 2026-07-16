@@ -76,4 +76,12 @@ fn measures_index_all_lock_hold_p99_under_repeated_load() {
     let p99 = backend.index_hold_p99().expect("index hold samples");
     assert!(p99 > std::time::Duration::ZERO, "p99={p99:?}");
     eprintln!("index_all lock-hold p99 over 33 samples: {p99:?}");
+fn index_readiness_tracks_success_and_store_failure() {
+    let (_indexed, mut backend) = sample_backend();
+    assert!(backend.is_index_ready());
+
+    let invalid_index_path = backend.root().join("src/main.rs");
+    backend.set_index_path(invalid_index_path);
+    assert!(backend.search("process_request", false, 1).is_err());
+    assert!(!backend.is_index_ready());
 }

@@ -136,6 +136,9 @@ impl LspBackend {
                 anyhow::bail!("index lock poisoned: {error}")
             }
         }
+    fn record_index_result<T>(&self, result: anyhow::Result<T>) -> anyhow::Result<T> {
+        self.index_ready.store(result.is_ok(), Ordering::SeqCst);
+        result
     }
 
     fn with_locked_indexer<F, T>(&self, f: F) -> anyhow::Result<T>
@@ -147,6 +150,11 @@ impl LspBackend {
         let result = f(&mut Indexer::new(self.index_options())?);
         record_index_hold(&self.index_hold_samples, started.elapsed());
         result
+        let result = (|| {
+            let _guard = self.index_guard()?;
+            f(&mut Indexer::new(self.index_options())?)
+        })();
+        self.record_index_result(result)
     }
 
     fn with_store<F, T>(&self, f: F) -> anyhow::Result<T>
@@ -155,6 +163,11 @@ impl LspBackend {
     {
         let _guard = self.request_index_guard()?;
         f(Indexer::new(self.index_options())?.store())
+        let result = (|| {
+            let _guard = self.index_guard()?;
+            f(Indexer::new(self.index_options())?.store())
+        })();
+        self.record_index_result(result)
     }
 
     fn with_locked_searcher<F, T>(&self, limit: usize, f: F) -> anyhow::Result<T>
@@ -163,6 +176,11 @@ impl LspBackend {
     {
         let _guard = self.request_index_guard()?;
         f(&Searcher::new(self.search_options(limit))?)
+        let result = (|| {
+            let _guard = self.index_guard()?;
+            f(&Searcher::new(self.search_options(limit))?)
+        })();
+        self.record_index_result(result)
     }
 
     pub fn start_background_index(&mut self) {
@@ -170,6 +188,7 @@ impl LspBackend {
             return;
         }
         self.background_index_started = true;
+        self.index_ready.store(false, Ordering::SeqCst);
         let opts = self.index_options();
         let ready = Arc::clone(&self.index_ready);
         let lock = Arc::clone(&self.index_lock);
@@ -181,10 +200,9 @@ impl LspBackend {
             let started = Instant::now();
             let ok = Indexer::new(opts).and_then(|mut i| i.index_all().map(|_| ())).is_ok();
             record_index_hold(&samples, started.elapsed());
+            ready.store(ok, Ordering::SeqCst);
             if !ok {
                 crate::server::log("background index failed");
-            } else {
-                ready.store(true, Ordering::SeqCst);
             }
         });
     }
@@ -264,6 +282,7 @@ impl LspBackend {
         if query.is_empty() {
             return Ok(json!([]));
         }
+        if query.is_empty() { return Ok(json!([])); }
         self.with_locked_searcher(50, |searcher| {
             Ok(Value::Array(
                 searcher
