@@ -1,6 +1,7 @@
 use ast_sgrep_lsp::backend::path_to_uri;
 use ast_sgrep_lsp::types::{ExecuteCommandParams, TextDocumentContentChangeEvent};
-use ast_sgrep_testkit::sample_backend;
+use ast_sgrep_lsp::LspBackend;
+use ast_sgrep_testkit::{sample_backend, sample_root};
 
 #[test]
 fn lsp_smoke() {
@@ -22,8 +23,13 @@ fn lsp_smoke() {
             &[TextDocumentContentChangeEvent {
                 range: None,
                 range_length: None,
-                text: "fn main() {\n    process_request(\"edited\");\n}\n\nfn process_request(input: &str) {}\n"
-                    .into(),
+                text: r#"fn main() {
+    process_request("edited");
+}
+
+fn process_request(input: &str) {}
+"#
+                .into(),
             }],
         )
         .unwrap();
@@ -36,4 +42,20 @@ fn lsp_smoke() {
         .unwrap()
         .iter()
         .any(|h| h["excerpt"].as_str().unwrap_or("").contains("edited")));
+}
+
+#[test]
+fn workspace_symbols_surfaces_background_index_failure() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let non_directory = temp.path().join("file");
+    std::fs::write(&non_directory, "not a directory").expect("write blocker");
+    let mut backend = LspBackend::new(sample_root());
+    backend.set_index_path(non_directory.join("index.db"));
+
+    backend.start_background_index();
+
+    let error = backend
+        .workspace_symbols("process_request")
+        .expect_err("invalid index path must not become a permanent empty result");
+    assert!(!error.to_string().is_empty());
 }

@@ -195,7 +195,9 @@ impl LspBackend {
     }
 
     pub fn workspace_symbols(&self, query: &str) -> anyhow::Result<Value> {
-        if query.is_empty() || (self.background_index_started && !self.is_index_ready()) { return Ok(json!([])); }
+        if query.is_empty() {
+            return Ok(json!([]));
+        }
         self.with_locked_searcher(50, |searcher| {
             Ok(Value::Array(
                 searcher
