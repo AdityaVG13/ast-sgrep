@@ -145,9 +145,8 @@ impl SemanticAnnIndex {
         probes: Option<usize>,
     ) -> Vec<(usize, f32)> {
         let n = flat.len().checked_div(dim).unwrap_or(0);
-        if n == 0 {
-            return vec![];
-        }
+        if n == 0 { return vec![]; }
+        if n < DEFAULT_ANN_THRESHOLD { return brute_force_flat(flat, dim, query, limit); }
         if self.centroids.is_empty() {
             return brute_force_flat(flat, dim, query, limit);
         }
