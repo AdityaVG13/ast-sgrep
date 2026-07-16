@@ -56,3 +56,9 @@ Watch mode is a tandem pipeline, not a single search queue:
 For an arrival rate lambda, record each station service capacity mu_i and wall-clock wait W_i. The practical end-to-end estimate is E[W_sys] approximately sum(E[W_i]); queue occupancy must also satisfy Little law L_i = lambda W_i. Report utilization as rho_i = lambda / mu_i and treat any station approaching rho_i = 1 as the bottleneck. The supervisor duty fraction reduces station 4 capacity and must be included in mu_4.
 
 An end-to-end p99 must therefore come from a wall-clock load run that timestamps all four boundaries. A search microbenchmark, or update_paths timing alone, cannot be reported as watch-to-search p99. The metric plan is to record debounce queue depth and release time, update_paths duration, deferred-rebuild duration, search queue depth, duty fraction, and final response time under the same offered load; publish per-hop and end-to-end percentiles together.
+
+## Do not assume nested duty limits are additive
+
+`scripts/rustc-capped` applies an outer 80% STOP/CONT duty cycle. On Unix, an `asgrep` command also applies its own supervisor duty cycle (80% by default). If `asgrep` is intentionally run through that wrapper, effective wall-time capacity is the product, not the minimum or sum: `0.80 * 0.80 = 0.64` by default. A 50% outer limit with the default inner limit yields 40% capacity. Queue and latency estimates must use that product.
+
+The production policy is to invoke `asgrep` directly. Reserve `rustc-capped` for compiler/build payloads. A workflow that deliberately nests the two limiters must record both configured fractions, the product capacity, and full-wall latency including both STOP intervals; never report the inner `ASGREP_CPU_LIMIT_PERCENT` as effective capacity.

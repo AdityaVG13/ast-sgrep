@@ -30,7 +30,7 @@ Contracts:
   - stdin/stdout/stderr are inherited; exit code is propagated.
   - On termination signal: always exit 128+signal.
   - After direct child exits: TERM process group, grace wait, KILL
-    survivors in a loop until ESRCH.
+    survivors in a loop until ESRCH.\n  - A payload with its own duty limiter receives multiplicative capacity;\n    rustc-capped is for compiler/build payloads, not production asgrep.
 """
 
 import argparse
