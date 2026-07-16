@@ -1,10 +1,10 @@
-use std::io::{self, BufRead, Write};
-use std::path::PathBuf;
 use anyhow::Context;
 use ast_sgrep_core::{EmbedBackend, IndexOptions, Indexer, SearchOptions, Searcher};
 use ast_sgrep_plugins::{format_response, OutputFormat};
 use serde::Deserialize;
 use serde_json::{json, Value};
+use std::io::{self, BufRead, Write};
+use std::path::PathBuf;
 const PROTOCOL_VERSION: &str = "2024-11-05";
 const SERVER_NAME: &str = "ast-sgrep";
 const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -56,24 +56,27 @@ impl McpServer {
                     continue;
                 }
             };
-            if let Some(result) = self.handle_request(&request) {
-                write_response(&mut stdout, request.id, Some(result), None)?;
+            if let Some(response) = self.handle_request(&request) {
+                match response {
+                    Ok(result) => write_response(&mut stdout, request.id, Some(result), None)?,
+                    Err(error) => write_response(&mut stdout, request.id, None, Some(error))?,
+                }
             }
         }
         Ok(())
     }
 
-    fn handle_request(&self, request: &JsonRpcRequest) -> Option<Value> {
+    fn handle_request(&self, request: &JsonRpcRequest) -> Option<Result<Value, Value>> {
         request.id.as_ref()?;
         Some(match request.method.as_str() {
-            "initialize" => self.handle_initialize(),
-            "tools/list" => self.handle_tools_list(),
-            "tools/call" => return self.handle_tools_call(&request.params),
-            "ping" => json!({}),
-            _ => json!({
-                "content": [{"type": "text", "text": format!("unsupported method: {}", request.method)}],
-                "isError": true,
-            }),
+            "initialize" => Ok(self.handle_initialize()),
+            "tools/list" => Ok(self.handle_tools_list()),
+            "tools/call" => return self.handle_tools_call(&request.params).map(Ok),
+            "ping" => Ok(json!({})),
+            _ => Err(json!({
+                "code": -32601,
+                "message": format!("method not found: {}", request.method),
+            })),
         })
     }
 
@@ -136,7 +139,9 @@ impl McpServer {
         };
         Some(match result {
             Ok(text) => json!({ "content": [{ "type": "text", "text": text }], "isError": false }),
-            Err(e) => json!({ "content": [{ "type": "text", "text": e.to_string() }], "isError": true }),
+            Err(e) => {
+                json!({ "content": [{ "type": "text", "text": e.to_string() }], "isError": true })
+            }
         })
     }
 
