@@ -10,8 +10,14 @@ fn bench_search(c: &mut Criterion) {
         limit: 16,
         use_embed: true,
         ..SearchOptions::default()
-    })
-    .unwrap();
+    }).unwrap();
+    let lexical_searcher = Searcher::new(SearchOptions {
+        root: indexed.indexer.store().root().to_path_buf(),
+        index_path: Some(indexed.indexer.store().db_path().to_path_buf()),
+        limit: 16,
+        use_embed: false,
+        ..SearchOptions::default()
+    }).unwrap();
 
     c.bench_function("search_process_request", |b| {
         b.iter(|| {
@@ -19,10 +25,11 @@ fn bench_search(c: &mut Criterion) {
         });
     });
 
-    c.bench_function("search_auth_refresh_nl", |b| {
-        b.iter(|| {
-            black_box(searcher.search("how does auth refresh work").unwrap());
-        });
+    c.bench_function("search_auth_refresh_nl", |b| { b.iter(|| {
+        black_box(searcher.search("how does auth refresh work").unwrap());
+    }); });
+    c.bench_function("search_auth_refresh_nl_lexical_only", |b| {
+        b.iter(|| black_box(lexical_searcher.search("how does auth refresh work").unwrap()));
     });
 
     let symbol_terms = vec![
