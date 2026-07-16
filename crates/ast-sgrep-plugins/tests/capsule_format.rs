@@ -62,6 +62,9 @@ fn capsule_hits_carry_refs_and_previews_without_bodies() {
     assert!(hits[0].get("excerpt").is_none(), "no body by default");
 
     // Preview skips blank lines and truncates long ones.
+    assert_eq!(hits[1]["symbol"], serde_json::Value::Null);
+    assert_eq!(hits[1]["caller"], "open_session");
+    assert_eq!(hits[1]["callee"], "auth_refresh");
     let preview = hits[1]["preview"].as_str().expect("preview");
     assert!(preview.chars().count() <= 121, "len {}", preview.len());
     assert!(preview.starts_with('x'));

@@ -60,6 +60,7 @@ pub fn to_github_json(response: &SearchResponse) -> serde_json::Value {
                     "kind": hit.kind.as_str(),
                     "line_start": hit.line_start,
                     "line_end": hit.line_end,
+                    "symbol": hit.symbol,
                     "caller": hit.caller,
                     "callee": hit.callee,
                 }
@@ -173,7 +174,9 @@ pub fn to_agent_capsule_json(response: &SearchResponse, excerpt_lines: usize) ->
             let mut capsule = serde_json::json!({
                 "file": hit.file,
                 "lines": { "start": hit.line_start, "end": hit.line_end },
-                "symbol": hit_symbol(hit),
+                "symbol": hit.symbol,
+                "caller": hit.caller,
+                "callee": hit.callee,
                 "kind": hit.kind.as_str(),
                 "score": hit.score,
                 "preview": preview_line(&hit.excerpt),
