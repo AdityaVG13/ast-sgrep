@@ -1,7 +1,10 @@
 # Benchmarks
 
 Published **numbers and write-ups** only. No harness scripts, gold corpora, or
-large worktrees live here.
+large worktrees live here. Consequently, every numeric row under the results
+directory is explicitly historical and unreproducible from this tree. External
+artifacts, when retained, are stored by the [Speed benchmark workflow](https://github.com/AdityaVG13/ast-sgrep/actions/workflows/speed.yml);
+no retained artifact has been identified for the currently published rows.
 
 ```text
 benchmarks/
