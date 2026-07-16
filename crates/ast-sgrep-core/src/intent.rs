@@ -93,15 +93,7 @@ impl Default for ChannelWeights {
 }
 pub fn default_weights(intent: QueryIntent) -> ChannelWeights {
     match intent {
-        QueryIntent::Conceptual => ChannelWeights {
-            lexical: 1.1,
-            def: 0.9,
-            caller: 0.8,
-            graph: 0.7,
-            anchor: 0.8,
-            embed: 1.1,
-            ..ChannelWeights::default()
-        },
+        QueryIntent::Conceptual => ChannelWeights { lexical: 1.1, def: 0.9, caller: 0.8, graph: 0.7, anchor: 0.8, embed: 1.1, pattern: 0.1 },
         _ => ChannelWeights::default(),
     }
 }
