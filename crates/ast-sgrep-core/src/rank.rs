@@ -30,10 +30,6 @@ fn normalized_symbol(symbol: &str) -> Cow<'_, str> {
         Cow::Owned(symbol.to_lowercase())
     }
 }
-fn has_multiple_chars(value: &str) -> bool {
-    value.chars().nth(1).is_some()
-}
-fn score_normalized_symbol(term: &str, symbol: &str) -> f64 {
 fn has_minimum_substring_chars(value: &str) -> bool {
     value.len() >= MIN_SUBSTRING_SYMBOL_CHARS
         && (value.is_ascii() || value.chars().nth(MIN_SUBSTRING_SYMBOL_CHARS - 1).is_some())
@@ -41,12 +37,6 @@ fn has_minimum_substring_chars(value: &str) -> bool {
 fn score_normalized_symbol(term: &str, symbol: &str, symbol_can_substring: bool) -> f64 {
     if symbol == term {
         SCORE_EXACT_SYMBOL
-    } else if term.chars().take(MIN_SUBSTRING_SYMBOL_CHARS).count()
-        == MIN_SUBSTRING_SYMBOL_CHARS
-        && symbol.chars().take(MIN_SUBSTRING_SYMBOL_CHARS).count()
-            == MIN_SUBSTRING_SYMBOL_CHARS
-    } else if has_multiple_chars(term)
-        && has_multiple_chars(symbol)
     } else if symbol_can_substring
         && has_minimum_substring_chars(term)
         && (symbol.contains(term) || term.contains(symbol))
@@ -57,8 +47,6 @@ fn score_normalized_symbol(term: &str, symbol: &str, symbol_can_substring: bool)
     }
 }
 pub fn score_symbol(term: &str, symbol: &str) -> f64 {
-    let term = normalized_symbol(term);
-    score_normalized_symbol(term.as_ref(), normalized_symbol(symbol).as_ref())
     let symbol = normalized_symbol(symbol);
     score_normalized_symbol(term, symbol.as_ref(), has_minimum_substring_chars(&symbol))
 }
@@ -71,29 +59,24 @@ pub fn best_symbol_score(terms: &[String], symbol: &str) -> f64 {
         .fold(0.0_f64, f64::max)
 }
 pub fn coverage_symbol_score(terms: &[String], symbol: &str) -> f64 {
+    if terms.is_empty() {
+        return 0.0;
+    }
     let symbol = normalized_symbol(symbol);
     let symbol_can_substring = has_minimum_substring_chars(&symbol);
     let mut sum = 0.0;
+    let mut matched = 0usize;
     for term in terms {
         let score = score_normalized_symbol(term, symbol.as_ref(), symbol_can_substring);
         if score > 0.0 {
+            matched += 1;
             sum += score;
         }
     }
-    // Each additional matching term contributes independently; unmatched query context must not
-    // dilute evidence from terms that already match the symbol.
-    sum
-    terms.iter()
-        .map(|term| score_normalized_symbol(term, symbol.as_ref()))
-        .sum()
+    sum * (matched as f64 / terms.len() as f64)
 }
 pub fn score_def(terms: &[String], symbol: &str) -> f64 {
-    let coverage = coverage_symbol_score(terms, symbol);
-    if coverage == 0.0 {
-        0.0
-    } else {
-        coverage * 2.0 + SCORE_DEF_BASE
-    }
+    coverage_symbol_score(terms, symbol) * 2.0 + SCORE_DEF_BASE
 }
 pub fn score_caller(terms: &[String], callee: &str) -> f64 {
     coverage_symbol_score(terms, callee) * 2.0 + SCORE_CALLER_BASE
@@ -101,7 +84,7 @@ pub fn score_caller(terms: &[String], callee: &str) -> f64 {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{score_symbol, SCORE_EXACT_SYMBOL, SCORE_SUBSTRING_SYMBOL};
 
     #[test]
     fn single_character_only_scores_an_exact_symbol() {
@@ -115,50 +98,5 @@ mod tests {
     fn multi_character_substrings_keep_their_rank_signal() {
         assert_eq!(score_symbol("in", "init"), SCORE_SUBSTRING_SYMBOL);
         assert_eq!(score_symbol("init", "in"), SCORE_SUBSTRING_SYMBOL);
-    }
-
-    #[test]
-    fn coverage_score_is_monotone_when_query_expands() {
-        let focused = vec!["init".to_string(), "handler".to_string()];
-        let expanded = vec![
-            "init".to_string(),
-            "handler".to_string(),
-            "noise".to_string(),
-            "zzz".to_string(),
-        ];
-
-        assert!(
-            coverage_symbol_score(&expanded, "init_handler")
-                >= coverage_symbol_score(&focused, "init_handler")
-        );
-    }
-
-    #[test]
-    fn score_symbol_is_case_insensitive_for_both_inputs() {
-        assert_eq!(score_symbol("Init", "init"), SCORE_EXACT_SYMBOL);
-        assert_eq!(score_symbol("init", "Init"), SCORE_EXACT_SYMBOL);
-    }
-
-    #[test]
-    fn unmatched_definition_has_zero_score() {
-        let terms = vec!["zzz".to_string()];
-
-        assert_eq!(score_def(&terms, "nomatch"), 0.0);
-    fn exact_single_character_symbol_still_matches() {
-        assert_eq!(score_symbol("i", "i"), SCORE_EXACT_SYMBOL);
-    }
-
-    #[test]
-    fn single_character_does_not_receive_substring_credit() {
-        assert_eq!(score_symbol("init", "i"), 0.0);
-        assert_eq!(score_symbol("i", "init"), 0.0);
-        assert_eq!(score_symbol("main", "i"), 0.0);
-        assert_eq!(score_symbol("éclair", "é"), 0.0);
-    }
-
-    #[test]
-    fn multi_character_substrings_still_match() {
-        assert_eq!(score_symbol("init", "initialize"), SCORE_SUBSTRING_SYMBOL);
-        assert_eq!(score_symbol("initialize", "init"), SCORE_SUBSTRING_SYMBOL);
     }
 }

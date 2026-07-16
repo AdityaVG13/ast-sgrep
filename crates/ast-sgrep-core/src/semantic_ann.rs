@@ -2,12 +2,12 @@ use std::io::{Read, Write};
 use std::sync::{Arc, Mutex};
 use rayon::prelude::*;
 use ast_sgrep_embed::{
-    dot_similarity, top_k_flat_similarity, top_k_similarity, SemanticChunkRow, MIN_SIMILARITY,
+    cosine_similarity, top_k_flat_similarity, top_k_similarity, SemanticChunkRow, MIN_SIMILARITY,
     PARALLEL_CHUNK_THRESHOLD,
 };
 use crate::semantic_ivf::{
     compute_ann_fingerprint, invalidate_semantic_ivf, load_semantic_ivf,
-    save_semantic_ivf, semantic_ivf_path, PersistedSemanticIvf,
+    load_semantic_ivf_unchecked, save_semantic_ivf, semantic_ivf_path, PersistedSemanticIvf,
 };
 use crate::store::IndexStore;
 use crate::Result;
@@ -77,29 +77,8 @@ impl SemanticAnnIndex {
         self.clusters.iter().all(|c| c.iter().all(|&i| i < chunk_count))
     }
 
-    /// `probes`: None/0 = adaptive 95% cluster coverage; ≥ n_clusters = all (exact).
+    /// `probes`: None/0 = adaptive √k clusters; ≥ n_clusters = all (exact).
     pub fn candidate_indices(&self, query: &[f32], probes: Option<usize>) -> Vec<usize> {
-        if self.centroids.is_empty() { return vec![]; }
-        let q = normalize_vec(query);
-        let mut scores: Vec<(usize, f32)> = self
-            .centroids
-            .iter()
-            .enumerate()
-            .map(|(i, c)| (i, dot_similarity(&q, c)))
-            .collect();
-        let mut scores: Vec<(usize, f32)> = self.centroids.iter().enumerate()
-            .map(|(i, c)| (i, cosine_similarity(&q, c))).collect();
-        scores.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-        let k = self.centroids.len();
-        let take = match probes {
-            None | Some(0) => k.saturating_mul(19).div_ceil(20).clamp(1, k),
-            Some(p) if p >= k => k,
-            Some(p) => p.max(1).min(k),
-        };
-        let mut members = Vec::new();
-        for (id, _) in scores.into_iter().take(take) {
-            if let Some(c) = self.clusters.get(id) {
-                members.extend_from_slice(c);
             if self.centroids.is_empty() {
                 return vec![];
             }
@@ -125,19 +104,15 @@ impl SemanticAnnIndex {
             }
             members.sort_unstable();
             members
-            if let Some(cluster) = self.clusters.get(id) { members.extend_from_slice(cluster); }
         }
-        members.sort_unstable();
-        members
-    }
 
-    /// Adaptive probe count (95% of clusters). Prefer
+    /// Adaptive probe count (`√k` clusters). Prefer
     /// [`Self::search_flat_with_probes`] when callers need exact coverage.
     pub fn search_flat(&self, flat: &[f32], dim: usize, query: &[f32], limit: usize) -> Vec<(usize, f32)> {
         self.search_flat_with_probes(flat, dim, query, limit, None)
     }
 
-    /// `probes`: `None`/`Some(0)` = adaptive 95% coverage; `Some(p)` with `p >= k` probes every
+    /// `probes`: `None`/`Some(0)` = adaptive √k; `Some(p)` with `p >= k` probes every
     /// cluster (exact over the partitioned set, same top-k as brute force when the
     /// partition is complete).
     pub fn search_flat_with_probes(
@@ -158,6 +133,24 @@ impl SemanticAnnIndex {
         score_members(&q, flat, dim, n, &self.candidate_indices(&q, probes), limit)
     }
 
+    pub fn reassign_all(&mut self, flat: &[f32], dim: usize) {
+        let n = flat.len().checked_div(dim).unwrap_or(0);
+        if n == 0 || self.centroids.is_empty() {
+            return;
+        }
+        self.clusters = vec![Vec::new(); self.centroids.len()];
+        for idx in 0..n {
+            let start = idx * dim;
+            if start + dim > flat.len() {
+                break;
+            }
+            let vec = &flat[start..start + dim];
+            let best = nearest_centroid(vec, &self.centroids);
+            if best < self.clusters.len() {
+                self.clusters[best].push(idx);
+            }
+        }
+    }
 }
 pub fn flatten_vectors_for_search(chunks: &[SemanticChunkRow], dim: usize) -> Result<Vec<f32>> {
     for (i, chunk) in chunks.iter().enumerate() {
@@ -211,19 +204,14 @@ fn score_members(
         if *idx >= n { return None; }
         let start = idx * dim;
         (start + dim <= flat.len())
-            .then(|| dot_similarity(query, &flat[start..start + dim]))
-            .filter(|&sim| sim >= MIN_SIMILARITY)
+            .then(|| cosine_similarity(query, &flat[start..start + dim]))
+            .filter(|&sim| sim > MIN_SIMILARITY)
             .map(|sim| (*idx, sim))
-            .then(|| (*idx, cosine_similarity(query, &flat[start..start + dim])))
     };
     if members.len() < PARALLEL_CHUNK_THRESHOLD {
-        top_k_similarity(members.iter().filter_map(score), limit, Some(MIN_SIMILARITY))
+        top_k_similarity(members.iter().filter_map(score), limit, None)
     } else {
-        top_k_similarity(
-            members.par_iter().filter_map(score).collect::<Vec<_>>(),
-            limit,
-            Some(MIN_SIMILARITY),
-        )
+        top_k_similarity(members.par_iter().filter_map(score).collect::<Vec<_>>(), limit, None)
     }
 }
 fn normalize_flat(vectors: &[f32], dim: usize) -> Vec<f32> {
@@ -253,7 +241,7 @@ fn nearest_centroid(vector: &[f32], centroids: &[Vec<f32>]) -> usize {
     centroids
         .iter()
         .enumerate()
-        .map(|(ci, c)| (ci, dot_similarity(vector, c)))
+        .map(|(ci, c)| (ci, cosine_similarity(vector, c)))
         .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
         .map(|(ci, _)| ci)
         .unwrap_or(0)
@@ -268,7 +256,7 @@ fn kmeans(vectors: &[Vec<f32>], k: usize, max_iters: usize) -> (Vec<Vec<f32>>, V
                 .iter()
                 .enumerate()
                 .map(|(i, v)| {
-                    let min_sim = c.iter().map(|cent| dot_similarity(v, cent)).fold(f32::INFINITY, f32::min);
+                    let min_sim = c.iter().map(|cent| cosine_similarity(v, cent)).fold(f32::INFINITY, f32::min);
                     (i, 1.0 - min_sim)
                 })
                 .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
@@ -333,12 +321,8 @@ static SESSION_CACHE: Mutex<Vec<(String, SessionCache)>> = Mutex::new(Vec::new()
 pub fn clear_semantic_ivf_session_cache() {
     SESSION_CACHE.lock().unwrap_or_else(|e| e.into_inner()).clear();
 }
-/// Invalidate both cache layers as soon as semantic rows mutate. Reassigning vectors
-/// to stale centroids is cheaper, but it preserves outdated partitions and can lower
-/// recall; the next rebuild therefore recomputes centroids from the committed rows.
 pub fn mark_semantic_ivf_stale(store: &IndexStore) {
     let _ = store.set_meta("semantic_ivf_stale", "1");
-    let _ = invalidate_semantic_ivf(store.db_path());
     clear_semantic_ivf_session_cache();
 }
 fn ann_session_key(store: &IndexStore, chunks: &[SemanticChunkRow]) -> Result<([u8; 32], String)> {
@@ -429,7 +413,21 @@ pub fn rebuild_semantic_ivf_sidecar(
         return Ok(());
     }
     if chunks.first().is_none_or(|c| c.5.is_empty()) { return Ok(()); }
-
+    let dim = chunks[0].5.len();
+    if store.get_meta("semantic_ivf_stale")?.as_deref() == Some("1") {
+        if let Some(mut ivf) = load_semantic_ivf_unchecked(&semantic_ivf_path(store.db_path()))? {
+            if ivf.chunk_count() == chunks.len() && ivf.dim == dim {
+                ivf.vectors = flatten_vectors_for_search(chunks, dim)?;
+                ivf.index.reassign_all(&ivf.vectors, dim);
+                let (fingerprint, db_key) = ann_session_key(store, chunks)?;
+                ivf.fingerprint = fingerprint;
+                save_semantic_ivf(&semantic_ivf_path(store.db_path()), fingerprint, dim, &ivf.vectors, &ivf.index)?;
+                cache_session(&db_key, fingerprint, &ivf);
+                let _ = store.set_meta("semantic_ivf_stale", "0");
+                return Ok(());
+            }
+        }
+    }
     let _ = load_or_build_semantic_ivf(store, chunks, override_threshold)?;
     let _ = store.set_meta("semantic_ivf_stale", "0");
     Ok(())

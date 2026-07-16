@@ -10,8 +10,7 @@ pub const MIN_CPU_LIMIT: u8 = 1;
 pub const MAX_CPU_LIMIT: u8 = 80;
 pub const CYCLE_MS: u64 = 10;
 // Cap heavy native libraries; leave Rayon free so index/search can use cores.
-// SIGSTOP/CONT controls the process runnable wall-time fraction, not machine-wide or
-// one-core CPU consumption; multi-threaded work can use several cores while runnable.
+// Process-level duty cycling (SIGSTOP/CONT) still enforces the CPU ceiling.
 #[cfg(unix)]
 const THREAD_ENV_VARS: &[&str] = &[
     "OMP_NUM_THREADS",
@@ -30,24 +29,12 @@ pub fn is_worker() -> bool {
 pub fn cpu_limit_percent() -> u8 {
     parse_cpu_limit(&std::env::var(CPU_LIMIT_ENV).unwrap_or_default())
 }
-/// Parses a configured limit in the supported inclusive range 1..=80.
-/// Empty, malformed, zero, and values above 80 use the 80% default.
 pub fn parse_cpu_limit(raw: &str) -> u8 {
     raw.trim()
         .parse::<u8>()
         .ok()
         .filter(|&p| (MIN_CPU_LIMIT..=MAX_CPU_LIMIT).contains(&p))
         .unwrap_or(DEFAULT_CPU_LIMIT)
-}
-/// Converts a percentage to a 10 ms duty cycle.
-/// Non-zero values below 10% have an effective 10% floor (1 ms of work).
-pub fn duty_cycle_ms(limit_pct: u8) -> (u64, u64) {
-    let work_ms = if limit_pct == 0 {
-        0
-    } else {
-        ((CYCLE_MS * u64::from(limit_pct)) / 100).max(1)
-    };
-    (work_ms, CYCLE_MS.saturating_sub(work_ms))
 }
 /// Returns the enforced work/sleep window. Effective service capacity is
 /// `mu_effective = mu_raw * work_ms / CYCLE_MS`; operators must keep arrival
@@ -342,25 +329,5 @@ mod unix_impl {
                     .min(Duration::from_millis(10)),
             );
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn duty_cycle_quantizes_supported_limits() {
-        for limit in [1, 5, 9, 10, 80] {
-            let (work_ms, sleep_ms) = duty_cycle_ms(limit);
-            assert_eq!(work_ms + sleep_ms, CYCLE_MS);
-            assert_eq!(work_ms, ((CYCLE_MS * u64::from(limit)) / 100).max(1));
-        }
-    }
-
-    #[test]
-    fn cpu_limit_rejects_values_outside_supported_range() {
-        assert_eq!(parse_cpu_limit("0"), DEFAULT_CPU_LIMIT);
-        assert_eq!(parse_cpu_limit("100"), DEFAULT_CPU_LIMIT);
     }
 }

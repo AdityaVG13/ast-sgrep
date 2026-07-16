@@ -12,7 +12,7 @@ pub use embedder::{
     embedder_for, CloudEmbedder, CostHint, Embedder, HashedEmbedder, OllamaEmbedder,
 };
 pub use math::{
-    cosine_scores_for, dot_similarity, top_by_similarity, top_k_flat_similarity,
+    cosine_scores_for, cosine_similarity, dot_similarity, top_by_similarity, top_k_flat_similarity,
     top_k_similarity, MIN_SIMILARITY, PARALLEL_CHUNK_THRESHOLD,
 };
 #[cfg(feature = "neural-embed")]

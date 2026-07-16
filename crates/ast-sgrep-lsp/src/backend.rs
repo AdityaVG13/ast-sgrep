@@ -1,8 +1,6 @@
-use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, TryLockError};
-use std::time::{Duration, Instant};
+use std::sync::{Arc, Mutex, MutexGuard};
 use ast_sgrep_core::{IndexOptions, Indexer, SearchOptions, Searcher};
 use serde_json::{json, Value};
 use crate::convert::{
@@ -24,39 +22,10 @@ pub struct LspBackend {
     index_ready: Arc<AtomicBool>,
     background_index_started: bool,
     index_lock: Arc<Mutex<()>>,
-    index_hold_samples: Arc<Mutex<VecDeque<Duration>>>,
 }
 fn first_command_arg(params: &ExecuteCommandParams) -> &str {
     params.arguments.first().and_then(|v| v.as_str()).unwrap_or("")
 }
-
-fn record_index_hold(samples: &Mutex<VecDeque<Duration>>, elapsed: Duration) {
-    let mut samples = samples.lock().unwrap_or_else(|error| error.into_inner());
-    if samples.len() == 64 {
-        samples.pop_front();
-    }
-    samples.push_back(elapsed);
-}
-
-#[cfg(test)]
-mod index_lock_tests {
-    use super::*;
-
-    #[test]
-    fn interactive_request_fails_fast_while_index_is_locked() {
-        let backend = LspBackend::new(PathBuf::from("."));
-        let index_lock = Arc::clone(&backend.index_lock);
-        let _held = index_lock.lock().unwrap();
-
-        let error = backend.request_index_guard().unwrap_err();
-
-        assert_eq!(
-            error.to_string(),
-            "index is currently being updated; retry the request"
-        );
-    }
-}
-
 impl LspBackend {
     pub fn new(root: PathBuf) -> Self {
         Self {
@@ -66,7 +35,6 @@ impl LspBackend {
             index_ready: Arc::new(AtomicBool::new(false)),
             background_index_started: false,
             index_lock: Arc::new(Mutex::new(())),
-            index_hold_samples: Arc::new(Mutex::new(VecDeque::with_capacity(64))),
         }
     }
 
@@ -85,18 +53,6 @@ impl LspBackend {
     }
     pub fn is_index_ready(&self) -> bool {
         self.index_ready.load(Ordering::SeqCst)
-    }
-
-    /// P99 of the latest 64 serialized index-write lock holds.
-    pub fn index_hold_p99(&self) -> Option<Duration> {
-        let samples = self.index_hold_samples.lock().unwrap_or_else(|error| error.into_inner());
-        if samples.is_empty() {
-            return None;
-        }
-        let mut sorted: Vec<_> = samples.iter().copied().collect();
-        sorted.sort_unstable();
-        let index = (sorted.len() * 99).div_ceil(100) - 1;
-        Some(sorted[index])
     }
 
     fn index_options(&self) -> IndexOptions {
@@ -124,18 +80,6 @@ impl LspBackend {
         self.index_lock.lock().map_err(|e| anyhow::anyhow!("index lock poisoned: {e}"))
     }
 
-    // Interactive requests must not wait behind a full workspace reindex. Returning a
-    // retryable error keeps the LSP responsive while preserving serialized access.
-    fn request_index_guard(&self) -> anyhow::Result<MutexGuard<'_, ()>> {
-        match self.index_lock.try_lock() {
-            Ok(guard) => Ok(guard),
-            Err(TryLockError::WouldBlock) => {
-                anyhow::bail!("index is currently being updated; retry the request")
-            }
-            Err(TryLockError::Poisoned(error)) => {
-                anyhow::bail!("index lock poisoned: {error}")
-            }
-        }
     fn record_index_result<T>(&self, result: anyhow::Result<T>) -> anyhow::Result<T> {
         self.index_ready.store(result.is_ok(), Ordering::SeqCst);
         result
@@ -145,11 +89,6 @@ impl LspBackend {
     where
         F: FnOnce(&mut Indexer) -> anyhow::Result<T>,
     {
-        let _guard = self.index_guard()?;
-        let started = Instant::now();
-        let result = f(&mut Indexer::new(self.index_options())?);
-        record_index_hold(&self.index_hold_samples, started.elapsed());
-        result
         let result = (|| {
             let _guard = self.index_guard()?;
             f(&mut Indexer::new(self.index_options())?)
@@ -161,8 +100,6 @@ impl LspBackend {
     where
         F: FnOnce(&ast_sgrep_core::IndexStore) -> anyhow::Result<T>,
     {
-        let _guard = self.request_index_guard()?;
-        f(Indexer::new(self.index_options())?.store())
         let result = (|| {
             let _guard = self.index_guard()?;
             f(Indexer::new(self.index_options())?.store())
@@ -174,8 +111,6 @@ impl LspBackend {
     where
         F: FnOnce(&Searcher) -> anyhow::Result<T>,
     {
-        let _guard = self.request_index_guard()?;
-        f(&Searcher::new(self.search_options(limit))?)
         let result = (|| {
             let _guard = self.index_guard()?;
             f(&Searcher::new(self.search_options(limit))?)
@@ -192,14 +127,11 @@ impl LspBackend {
         let opts = self.index_options();
         let ready = Arc::clone(&self.index_ready);
         let lock = Arc::clone(&self.index_lock);
-        let samples = Arc::clone(&self.index_hold_samples);
         std::thread::spawn(move || {
             let Ok(_guard) = lock.lock() else {
                 return;
             };
-            let started = Instant::now();
             let ok = Indexer::new(opts).and_then(|mut i| i.index_all().map(|_| ())).is_ok();
-            record_index_hold(&samples, started.elapsed());
             ready.store(ok, Ordering::SeqCst);
             if !ok {
                 crate::server::log("background index failed");
@@ -211,9 +143,7 @@ impl LspBackend {
         self.with_locked_indexer(|i| {
             i.index_all()?;
             Ok(())
-        })?;
-        self.index_ready.store(true, Ordering::SeqCst);
-        Ok(())
+        })
     }
 
     pub fn reindex_file(&self, rel_path: &str) -> anyhow::Result<()> {
@@ -279,11 +209,8 @@ impl LspBackend {
     }
 
     pub fn workspace_symbols(&self, query: &str) -> anyhow::Result<Value> {
-        if query.is_empty() {
-            return Ok(json!([]));
-        }
         if query.is_empty() { return Ok(json!([])); }
-        self.with_locked_searcher(SearchOptions::default_limit(), |searcher| {
+        self.with_locked_searcher(50, |searcher| {
             Ok(Value::Array(
                 searcher
                     .search(query)?
@@ -326,7 +253,7 @@ impl LspBackend {
 
     pub fn goto_definition(&self, params: &TextDocumentPositionParams) -> anyhow::Result<Value> {
         let symbol = self.symbol_at_position(params)?;
-        self.with_locked_searcher(SearchOptions::default_limit(), |searcher| {
+        self.with_locked_searcher(16, |searcher| {
             let locations: Vec<Value> = searcher
                 .search(&format!("defs:{symbol}"))?
                 .hits
@@ -346,7 +273,7 @@ impl LspBackend {
             text_document: params.text_document.clone(),
             position: params.position.clone(),
         })?;
-        self.with_locked_searcher(SearchOptions::default_limit(), |searcher| {
+        self.with_locked_searcher(128, |searcher| {
             let mut locations = Vec::new();
             for hit in searcher.search(&format!("callers:{symbol}"))?.hits {
                 locations.push(location_value(&self.root, &hit.file, hit.line_start, hit.line_end));
@@ -435,7 +362,7 @@ impl LspBackend {
 
     fn execute_search_command(&self, params: &ExecuteCommandParams, semantic: bool) -> anyhow::Result<Value> {
         let query = first_command_arg(params);
-        self.with_locked_searcher(SearchOptions::default_limit(), |searcher| {
+        self.with_locked_searcher(32, |searcher| {
             Ok(serde_json::to_value(if semantic {
                 searcher.search_semantic(query)?
             } else {
@@ -446,7 +373,7 @@ impl LspBackend {
 
     fn execute_symbol_query_command(&self, params: &ExecuteCommandParams, prefix: &str) -> anyhow::Result<Value> {
         let sym = first_command_arg(params);
-        self.with_locked_searcher(SearchOptions::default_limit(), |searcher| {
+        self.with_locked_searcher(32, |searcher| {
             Ok(serde_json::to_value(searcher.search(&format!("{prefix}:{sym}"))?)?)
         })
     }

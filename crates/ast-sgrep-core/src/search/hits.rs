@@ -4,8 +4,8 @@ pub fn matches_lang(language: Option<&str>, filter: Option<&str>) -> bool {
     filter.is_none_or(|lang| language == Some(lang))
 }
 pub fn dedup_hits(hits: Vec<SearchHit>) -> Vec<SearchHit> {
-    let mut best = Vec::with_capacity(hits.len());
-    let mut positions = std::collections::HashMap::new();
+    let mut best: Vec<SearchHit> = Vec::with_capacity(hits.len());
+    let mut positions: std::collections::HashMap<_, usize> = std::collections::HashMap::new();
     for hit in hits {
         let key = (
             hit.kind.as_str(),
