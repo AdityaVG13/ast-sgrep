@@ -72,7 +72,12 @@ pub fn coverage_symbol_score(terms: &[String], symbol: &str) -> f64 {
     sum
 }
 pub fn score_def(terms: &[String], symbol: &str) -> f64 {
-    coverage_symbol_score(terms, symbol) * 2.0 + SCORE_DEF_BASE
+    let coverage = coverage_symbol_score(terms, symbol);
+    if coverage == 0.0 {
+        0.0
+    } else {
+        coverage * 2.0 + SCORE_DEF_BASE
+    }
 }
 pub fn score_caller(terms: &[String], callee: &str) -> f64 {
     coverage_symbol_score(terms, callee) * 2.0 + SCORE_CALLER_BASE
@@ -116,5 +121,12 @@ mod tests {
     fn score_symbol_is_case_insensitive_for_both_inputs() {
         assert_eq!(score_symbol("Init", "init"), SCORE_EXACT_SYMBOL);
         assert_eq!(score_symbol("init", "Init"), SCORE_EXACT_SYMBOL);
+    }
+
+    #[test]
+    fn unmatched_definition_has_zero_score() {
+        let terms = vec!["zzz".to_string()];
+
+        assert_eq!(score_def(&terms, "nomatch"), 0.0);
     }
 }
