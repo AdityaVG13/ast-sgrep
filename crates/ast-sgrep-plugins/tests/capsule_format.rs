@@ -3,7 +3,7 @@
 
 use ast_sgrep_core::search::{HitKind, SearchHit};
 use ast_sgrep_core::SearchResponse;
-use ast_sgrep_plugins::{format_response_with, OutputFormat};
+use ast_sgrep_plugins::{format_response_with, to_github_json, OutputFormat};
 
 fn sample_response() -> SearchResponse {
     let long_line = "x".repeat(300);
@@ -72,4 +72,16 @@ fn capsule_hits_carry_refs_and_previews_without_bodies() {
     assert_ne!(capsule["returned_excerpt_bytes"], 350);
     assert_eq!(agent["prevented_read_bytes"], 650);
     assert_eq!(capsule["prevented_read_bytes"], 650);
+}
+
+
+#[test]
+fn github_page_at_limit_is_marked_incomplete() {
+    let mut response = sample_response();
+    response.limit = response.hits.len();
+
+    let github = to_github_json(&response);
+
+    assert_eq!(github["total_count"], response.hits.len());
+    assert_eq!(github["incomplete_results"], true);
 }

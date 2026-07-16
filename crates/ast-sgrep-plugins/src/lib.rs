@@ -37,6 +37,8 @@ pub fn format_response_with(
         OutputFormat::AgentCapsule => to_agent_capsule_json(response, excerpt_lines),
     }
 }
+/// Project a response into a GitHub-like page. total_count is the returned page size,
+/// because the core response does not carry a corpus-wide match count.
 pub fn to_github_json(response: &SearchResponse) -> serde_json::Value {
     let items: Vec<_> = response
         .hits
@@ -64,9 +66,10 @@ pub fn to_github_json(response: &SearchResponse) -> serde_json::Value {
             })
         })
         .collect();
+    let incomplete_results = response.limit > 0 && items.len() >= response.limit;
     serde_json::json!({
         "total_count": items.len(),
-        "incomplete_results": false,
+        "incomplete_results": incomplete_results,
         "items": items,
         "query": response.query,
         "provider": "ast-sgrep"
