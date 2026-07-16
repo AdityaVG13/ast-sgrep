@@ -148,7 +148,7 @@ pub fn to_agent_json(response: &SearchResponse) -> serde_json::Value {
     suggested.push("rg (use ripgrep for raw text scan)".into());
     serde_json::json!({
         "provider": "ast-sgrep",
-        "version": "1.1.0-alpha",
+        "version": env!("CARGO_PKG_VERSION"),
         "query": response.query,
         "limit": response.limit,
         "hit_count": hits.len(),

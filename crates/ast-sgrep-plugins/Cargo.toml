@@ -9,12 +9,13 @@ homepage.workspace = true
 readme = "../../README.md"
 keywords = ["code-search", "github", "gitlab", "json"]
 categories = ["development-tools"]
+documentation = "https://docs.rs/ast-sgrep-plugins"
 
 [lints]
 workspace = true
 
 [dependencies]
-ast-sgrep-core = { path = "../ast-sgrep-core", version = "1.1.0-alpha" }
+ast-sgrep-core = { path = "../ast-sgrep-core", version = "1.1.0-alpha.1" }
 serde.workspace = true
 serde_json.workspace = true
 
