@@ -7,6 +7,7 @@ pub const SCORE_DEF_BASE: f64 = 3.0;
 pub const SCORE_CALLER_BASE: f64 = 1.5;
 pub const SCORE_EXACT_SYMBOL: f64 = 5.0;
 pub const SCORE_SUBSTRING_SYMBOL: f64 = 2.0;
+const MIN_SUBSTRING_SYMBOL_CHARS: usize = 2;
 pub const SCORE_PATTERN: f64 = 7.0;
 pub const SCORE_EMBED: f64 = 4.0;
 pub const LEXICAL_RRF_SCALE: f64 = 200.0;
@@ -32,7 +33,12 @@ fn normalized_symbol(symbol: &str) -> Cow<'_, str> {
 fn score_normalized_symbol(term: &str, symbol: &str) -> f64 {
     if symbol == term {
         SCORE_EXACT_SYMBOL
-    } else if symbol.contains(term) || term.contains(symbol) {
+    } else if term.chars().take(MIN_SUBSTRING_SYMBOL_CHARS).count()
+        == MIN_SUBSTRING_SYMBOL_CHARS
+        && symbol.chars().take(MIN_SUBSTRING_SYMBOL_CHARS).count()
+            == MIN_SUBSTRING_SYMBOL_CHARS
+        && (symbol.contains(term) || term.contains(symbol))
+    {
         SCORE_SUBSTRING_SYMBOL
     } else {
         0.0
@@ -69,4 +75,23 @@ pub fn score_def(terms: &[String], symbol: &str) -> f64 {
 }
 pub fn score_caller(terms: &[String], callee: &str) -> f64 {
     coverage_symbol_score(terms, callee) * 2.0 + SCORE_CALLER_BASE
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{score_symbol, SCORE_EXACT_SYMBOL, SCORE_SUBSTRING_SYMBOL};
+
+    #[test]
+    fn single_character_only_scores_an_exact_symbol() {
+        assert_eq!(score_symbol("i", "i"), SCORE_EXACT_SYMBOL);
+        assert_eq!(score_symbol("i", "init"), 0.0);
+        assert_eq!(score_symbol("init", "i"), 0.0);
+        assert_eq!(score_symbol("λ", "λambda"), 0.0);
+    }
+
+    #[test]
+    fn multi_character_substrings_keep_their_rank_signal() {
+        assert_eq!(score_symbol("in", "init"), SCORE_SUBSTRING_SYMBOL);
+        assert_eq!(score_symbol("init", "in"), SCORE_SUBSTRING_SYMBOL);
+    }
 }
