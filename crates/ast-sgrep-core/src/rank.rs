@@ -34,6 +34,11 @@ fn has_multiple_chars(value: &str) -> bool {
     value.chars().nth(1).is_some()
 }
 fn score_normalized_symbol(term: &str, symbol: &str) -> f64 {
+fn has_minimum_substring_chars(value: &str) -> bool {
+    value.len() >= MIN_SUBSTRING_SYMBOL_CHARS
+        && (value.is_ascii() || value.chars().nth(MIN_SUBSTRING_SYMBOL_CHARS - 1).is_some())
+}
+fn score_normalized_symbol(term: &str, symbol: &str, symbol_can_substring: bool) -> f64 {
     if symbol == term {
         SCORE_EXACT_SYMBOL
     } else if term.chars().take(MIN_SUBSTRING_SYMBOL_CHARS).count()
@@ -42,6 +47,8 @@ fn score_normalized_symbol(term: &str, symbol: &str) -> f64 {
             == MIN_SUBSTRING_SYMBOL_CHARS
     } else if has_multiple_chars(term)
         && has_multiple_chars(symbol)
+    } else if symbol_can_substring
+        && has_minimum_substring_chars(term)
         && (symbol.contains(term) || term.contains(symbol))
     {
         SCORE_SUBSTRING_SYMBOL
@@ -52,19 +59,23 @@ fn score_normalized_symbol(term: &str, symbol: &str) -> f64 {
 pub fn score_symbol(term: &str, symbol: &str) -> f64 {
     let term = normalized_symbol(term);
     score_normalized_symbol(term.as_ref(), normalized_symbol(symbol).as_ref())
+    let symbol = normalized_symbol(symbol);
+    score_normalized_symbol(term, symbol.as_ref(), has_minimum_substring_chars(&symbol))
 }
 pub fn best_symbol_score(terms: &[String], symbol: &str) -> f64 {
     let symbol = normalized_symbol(symbol);
+    let symbol_can_substring = has_minimum_substring_chars(&symbol);
     terms
         .iter()
-        .map(|term| score_normalized_symbol(term, symbol.as_ref()))
+        .map(|term| score_normalized_symbol(term, symbol.as_ref(), symbol_can_substring))
         .fold(0.0_f64, f64::max)
 }
 pub fn coverage_symbol_score(terms: &[String], symbol: &str) -> f64 {
     let symbol = normalized_symbol(symbol);
+    let symbol_can_substring = has_minimum_substring_chars(&symbol);
     let mut sum = 0.0;
     for term in terms {
-        let score = score_normalized_symbol(term, symbol.as_ref());
+        let score = score_normalized_symbol(term, symbol.as_ref(), symbol_can_substring);
         if score > 0.0 {
             sum += score;
         }
