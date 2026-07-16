@@ -1,4 +1,3 @@
-
 mod cloud;
 mod embedder;
 mod math;
@@ -8,13 +7,13 @@ mod provider;
 #[cfg(feature = "rerank")]
 mod rerank;
 mod semantic;
-pub use math::{
-    cosine_scores_for, cosine_similarity, top_by_similarity, top_k_flat_similarity,
-    top_k_similarity, MIN_SIMILARITY, PARALLEL_CHUNK_THRESHOLD,
-};
 pub use cloud::{embed_via_api, CloudEmbeddingConfig};
 pub use embedder::{
     embedder_for, CloudEmbedder, CostHint, Embedder, HashedEmbedder, OllamaEmbedder,
+};
+pub use math::{
+    cosine_scores_for, cosine_similarity, top_by_similarity, top_k_flat_similarity,
+    top_k_similarity, MIN_SIMILARITY, PARALLEL_CHUNK_THRESHOLD,
 };
 #[cfg(feature = "neural-embed")]
 pub use neural::NeuralEmbedder;
@@ -47,7 +46,9 @@ pub fn embed_to_bytes(vec: &[f32]) -> Vec<u8> {
     vec.iter().flat_map(|f| f.to_le_bytes()).collect()
 }
 pub fn embed_from_bytes(bytes: &[u8]) -> Result<Vec<f32>, &'static str> {
-    if !bytes.len().is_multiple_of(4) { return Err("embedding byte length is not a multiple of 4"); }
+    if !bytes.len().is_multiple_of(4) {
+        return Err("embedding byte length is not a multiple of 4");
+    }
     Ok(bytes
         .chunks_exact(4)
         .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
@@ -66,15 +67,48 @@ pub fn rank_chunk_indices_by_vector(
     chunks: &[SemanticChunkRow],
     limit: usize,
 ) -> Vec<(usize, f32)> {
+    let query_norm = l2_norm(query_vec);
     top_by_similarity(
-        cosine_scores_for(
-            query_vec,
-            chunks
-                .iter()
-                .enumerate()
-                .map(|(idx, (_, _, _, _, _, emb))| (idx, emb.as_slice())),
-        ),
+        chunks
+            .iter()
+            .enumerate()
+            .filter(|(_, (_, _, _, _, _, emb))| emb.len() == query_vec.len())
+            .map(|(idx, (_, _, _, _, _, emb))| {
+                let denominator = query_norm * l2_norm(emb);
+                let similarity = if denominator > 0.0 {
+                    cosine_similarity(query_vec, emb) / denominator
+                } else {
+                    0.0
+                };
+                (idx, similarity)
+            })
+            .collect(),
         limit,
         Some(MIN_SIMILARITY),
     )
+}
+
+fn l2_norm(vector: &[f32]) -> f32 {
+    vector.iter().map(|value| value * value).sum::<f32>().sqrt()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn chunk(vector: Vec<f32>) -> SemanticChunkRow {
+        (String::new(), 0, 0, String::new(), String::new(), vector)
+    }
+
+    #[test]
+    fn chunk_ranking_is_invariant_to_vector_magnitude() {
+        let chunks = vec![chunk(vec![10.0, 1.0]), chunk(vec![1.0, 0.0])];
+
+        let ranked = rank_chunk_indices_by_vector(&[1.0, 0.0], &chunks, 2);
+
+        assert_eq!(
+            ranked.iter().map(|(index, _)| *index).collect::<Vec<_>>(),
+            vec![1, 0]
+        );
+    }
 }
