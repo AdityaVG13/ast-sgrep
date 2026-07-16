@@ -76,6 +76,8 @@ pub fn to_github_json(response: &SearchResponse) -> serde_json::Value {
         "provider": "ast-sgrep"
     })
 }
+/// Project local results into a GitLab-like shape. This adapter has no repository context,
+/// so ref is always HEAD and project_id is always null; consumers must supply that context.
 pub fn to_gitlab_json(response: &SearchResponse) -> serde_json::Value {
     let data: Vec<_> = response
         .hits

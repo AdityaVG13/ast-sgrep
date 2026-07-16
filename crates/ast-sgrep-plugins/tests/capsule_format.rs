@@ -3,7 +3,7 @@
 
 use ast_sgrep_core::search::{HitKind, SearchHit};
 use ast_sgrep_core::SearchResponse;
-use ast_sgrep_plugins::{format_response_with, to_github_json, OutputFormat};
+use ast_sgrep_plugins::{format_response_with, to_github_json, to_gitlab_json, OutputFormat};
 
 fn sample_response() -> SearchResponse {
     let long_line = "x".repeat(300);
@@ -87,4 +87,13 @@ fn github_page_at_limit_is_marked_incomplete() {
 
     assert_eq!(github["total_count"], response.hits.len());
     assert_eq!(github["incomplete_results"], true);
+}
+
+#[test]
+fn gitlab_projection_documents_absent_repository_context() {
+    let gitlab = to_gitlab_json(&sample_response());
+    let hits = gitlab["data"].as_array().expect("data array");
+
+    assert!(hits.iter().all(|hit| hit["ref"] == "HEAD"));
+    assert!(hits.iter().all(|hit| hit["project_id"].is_null()));
 }
