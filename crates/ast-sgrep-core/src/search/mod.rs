@@ -29,11 +29,14 @@ struct SemanticCache {
     chunks: Arc<Vec<SemanticChunkRow>>,
     flat_vectors: Arc<Vec<f32>>,
 }
-pub struct Searcher {
-    store: IndexStore,
-    options: SearchOptions,
-    semantic_cache: Arc<Mutex<Option<SemanticCache>>>,
-}
+/// Searches use SQLite statement snapshots, so each channel is internally consistent,
+/// but a hybrid search concurrent with reindex may combine adjacent committed snapshots.
+/// Semantic cache entries are discarded when the chunk maximum id changes; persisted IVF
+/// is fingerprint-validated and falls back to flat search when stale. Public methods return
+/// structured errors rather than panicking if a concurrent reindex changes vector shape.
+pub struct Searcher { store: IndexStore,
+options: SearchOptions,
+semantic_cache: Arc<Mutex<Option<SemanticCache>>>, }
 impl Searcher {
     pub fn new(options: SearchOptions) -> Result<Self> {
         Ok(Self::with_store(
