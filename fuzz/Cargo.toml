@@ -24,3 +24,10 @@ path = "fuzz_targets/query_grammar.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "rank"
+path = "fuzz_targets/rank.rs"
+test = false
+doc = false
+bench = false
