@@ -43,3 +43,16 @@ A same-machine Criterion comparison on 2026-07-14 used the command above for bot
 the checked-out HEAD and this change. The median estimate moved from 1.0042 us to
 638.88 ns, a 1.57x speedup (36.4% lower latency). This isolated microbenchmark is
 evidence for the normalization hot path, not a claim about end-to-end indexed search.
+
+## Watch-to-search latency is a multi-station path
+
+Watch mode is a tandem pipeline, not a single search queue:
+
+1. notification debounce and coalescing;
+2. Indexer::update_paths;
+3. Indexer::flush_deferred_rebuilds for Tantivy and IVF sidecars;
+4. searches served at the supervisor duty-scaled capacity.
+
+For an arrival rate lambda, record each station service capacity mu_i and wall-clock wait W_i. The practical end-to-end estimate is E[W_sys] approximately sum(E[W_i]); queue occupancy must also satisfy Little law L_i = lambda W_i. Report utilization as rho_i = lambda / mu_i and treat any station approaching rho_i = 1 as the bottleneck. The supervisor duty fraction reduces station 4 capacity and must be included in mu_4.
+
+An end-to-end p99 must therefore come from a wall-clock load run that timestamps all four boundaries. A search microbenchmark, or update_paths timing alone, cannot be reported as watch-to-search p99. The metric plan is to record debounce queue depth and release time, update_paths duration, deferred-rebuild duration, search queue depth, duty fraction, and final response time under the same offered load; publish per-hop and end-to-end percentiles together.
