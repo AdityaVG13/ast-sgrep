@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, TryLockError};
 use ast_sgrep_core::{IndexOptions, Indexer, SearchOptions, Searcher};
 use serde_json::{json, Value};
 use crate::convert::{
@@ -26,6 +26,26 @@ pub struct LspBackend {
 fn first_command_arg(params: &ExecuteCommandParams) -> &str {
     params.arguments.first().and_then(|v| v.as_str()).unwrap_or("")
 }
+
+#[cfg(test)]
+mod index_lock_tests {
+    use super::*;
+
+    #[test]
+    fn interactive_request_fails_fast_while_index_is_locked() {
+        let backend = LspBackend::new(PathBuf::from("."));
+        let index_lock = Arc::clone(&backend.index_lock);
+        let _held = index_lock.lock().unwrap();
+
+        let error = backend.request_index_guard().unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            "index is currently being updated; retry the request"
+        );
+    }
+}
+
 impl LspBackend {
     pub fn new(root: PathBuf) -> Self {
         Self {
@@ -80,6 +100,20 @@ impl LspBackend {
         self.index_lock.lock().map_err(|e| anyhow::anyhow!("index lock poisoned: {e}"))
     }
 
+    // Interactive requests must not wait behind a full workspace reindex. Returning a
+    // retryable error keeps the LSP responsive while preserving serialized access.
+    fn request_index_guard(&self) -> anyhow::Result<MutexGuard<'_, ()>> {
+        match self.index_lock.try_lock() {
+            Ok(guard) => Ok(guard),
+            Err(TryLockError::WouldBlock) => {
+                anyhow::bail!("index is currently being updated; retry the request")
+            }
+            Err(TryLockError::Poisoned(error)) => {
+                anyhow::bail!("index lock poisoned: {error}")
+            }
+        }
+    }
+
     fn with_locked_indexer<F, T>(&self, f: F) -> anyhow::Result<T>
     where
         F: FnOnce(&mut Indexer) -> anyhow::Result<T>,
@@ -92,7 +126,7 @@ impl LspBackend {
     where
         F: FnOnce(&ast_sgrep_core::IndexStore) -> anyhow::Result<T>,
     {
-        let _guard = self.index_guard()?;
+        let _guard = self.request_index_guard()?;
         f(Indexer::new(self.index_options())?.store())
     }
 
@@ -100,7 +134,7 @@ impl LspBackend {
     where
         F: FnOnce(&Searcher) -> anyhow::Result<T>,
     {
-        let _guard = self.index_guard()?;
+        let _guard = self.request_index_guard()?;
         f(&Searcher::new(self.search_options(limit))?)
     }
 
