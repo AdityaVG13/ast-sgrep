@@ -982,6 +982,11 @@ fn print_index_stats(stats: &IndexStats) {
         stats.callers_extracted,
         stats.imports_extracted
     );
+    if stats.walk_errors {
+        eprintln!(
+            "Warning: directory walk errors left the index unpruned; stale paths may remain until a clean reindex"
+        );
+    }
 }
 fn print_status(s: &ast_sgrep_core::IndexStatus) {
     println!(
