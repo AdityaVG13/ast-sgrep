@@ -12,7 +12,7 @@ pub use embedder::{
     embedder_for, CloudEmbedder, CostHint, Embedder, HashedEmbedder, OllamaEmbedder,
 };
 pub use math::{
-    cosine_scores_for, cosine_similarity, top_by_similarity, top_k_flat_similarity,
+    cosine_scores_for, dot_similarity, top_by_similarity, top_k_flat_similarity,
     top_k_similarity, MIN_SIMILARITY, PARALLEL_CHUNK_THRESHOLD,
 };
 #[cfg(feature = "neural-embed")]
@@ -76,7 +76,7 @@ pub fn rank_chunk_indices_by_vector(
             .map(|(idx, (_, _, _, _, _, emb))| {
                 let denominator = query_norm * l2_norm(emb);
                 let similarity = if denominator > 0.0 {
-                    cosine_similarity(query_vec, emb) / denominator
+                    dot_similarity(query_vec, emb) / denominator
                 } else {
                     0.0
                 };

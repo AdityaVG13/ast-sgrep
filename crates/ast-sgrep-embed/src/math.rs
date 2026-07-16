@@ -33,7 +33,7 @@ fn score_order(left: f32, right: f32) -> Ordering {
 fn compare_hits_desc(left: &(usize, f32), right: &(usize, f32)) -> Ordering {
     score_order(right.1, left.1).then_with(|| left.0.cmp(&right.0))
 }
-pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
+pub fn dot_similarity(a: &[f32], b: &[f32]) -> f32 {
     if a.len() != b.len() || a.is_empty() { return 0.0; }
     if a.len() >= SIMD_DOT_THRESHOLD {
         if let Some(d) = f32::dot(a, b) { return d as f32; }
@@ -45,7 +45,7 @@ pub fn cosine_scores_for<'a>(
     rows: impl Iterator<Item = (usize, &'a [f32])>,
 ) -> Vec<(usize, f32)> {
     rows.filter(|(_, emb)| emb.len() == query_vec.len())
-        .map(|(idx, emb)| (idx, cosine_similarity(query_vec, emb)))
+        .map(|(idx, emb)| (idx, dot_similarity(query_vec, emb)))
         .collect()
 }
 pub fn top_k_similarity(
@@ -74,7 +74,7 @@ pub fn top_k_flat_similarity(
     if n < PARALLEL_CHUNK_THRESHOLD {
         let mut heap = BinaryHeap::new();
         for i in 0..n {
-            let sim = cosine_similarity(query_vec, &flat[i * dim..(i + 1) * dim]);
+            let sim = dot_similarity(query_vec, &flat[i * dim..(i + 1) * dim]);
             if min_similarity.is_none_or(|min| sim >= min) {
                 push_top_k(&mut heap, limit, i, sim);
             }
@@ -84,7 +84,7 @@ pub fn top_k_flat_similarity(
     let heap = (0..n)
         .into_par_iter()
         .fold(BinaryHeap::new, |mut heap, i| {
-            let sim = cosine_similarity(query_vec, &flat[i * dim..(i + 1) * dim]);
+            let sim = dot_similarity(query_vec, &flat[i * dim..(i + 1) * dim]);
             if min_similarity.is_none_or(|min| sim >= min) {
                 push_top_k(&mut heap, limit, i, sim);
             }
@@ -126,6 +126,15 @@ pub fn top_by_similarity(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dot_similarity_is_scale_equivariant() {
+        let a = [1.0, -2.0, 3.0];
+        let b = [4.0, 5.0, -6.0];
+
+        assert_eq!(dot_similarity(&a, &b), -24.0);
+        assert_eq!(dot_similarity(&[2.0, -4.0, 6.0], &b), -48.0);
+    }
 
     #[test]
     fn minimum_similarity_is_inclusive_across_rankers() {

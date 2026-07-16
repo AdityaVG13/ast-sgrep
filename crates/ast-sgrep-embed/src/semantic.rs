@@ -1,5 +1,5 @@
 use std::collections::HashSet;
-use crate::cosine_similarity;
+use crate::dot_similarity;
 pub const SEMANTIC_DIM: usize = 256;
 pub fn expand_concepts(text: &str) -> String {
     let tokens = tokenize(text);
@@ -128,6 +128,6 @@ impl SemanticLocalEmbedding {
     }
 
     pub fn similarity(&self, a: &[f32], b: &[f32]) -> f32 {
-        cosine_similarity(a, b)
+        dot_similarity(a, b)
     }
 }

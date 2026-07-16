@@ -2,7 +2,7 @@ use std::io::{Read, Write};
 use std::sync::{Arc, Mutex};
 use rayon::prelude::*;
 use ast_sgrep_embed::{
-    cosine_similarity, top_k_flat_similarity, top_k_similarity, SemanticChunkRow, MIN_SIMILARITY,
+    dot_similarity, top_k_flat_similarity, top_k_similarity, SemanticChunkRow, MIN_SIMILARITY,
     PARALLEL_CHUNK_THRESHOLD,
 };
 use crate::semantic_ivf::{
@@ -87,7 +87,7 @@ impl SemanticAnnIndex {
             .centroids
             .iter()
             .enumerate()
-            .map(|(i, c)| (i, cosine_similarity(&q, c)))
+            .map(|(i, c)| (i, dot_similarity(&q, c)))
             .collect();
         scores.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
         let k = self.centroids.len();
@@ -204,7 +204,7 @@ fn score_members(
         if *idx >= n { return None; }
         let start = idx * dim;
         (start + dim <= flat.len())
-            .then(|| cosine_similarity(query, &flat[start..start + dim]))
+            .then(|| dot_similarity(query, &flat[start..start + dim]))
             .filter(|&sim| sim >= MIN_SIMILARITY)
             .map(|sim| (*idx, sim))
     };
@@ -241,7 +241,7 @@ fn nearest_centroid(vector: &[f32], centroids: &[Vec<f32>]) -> usize {
     centroids
         .iter()
         .enumerate()
-        .map(|(ci, c)| (ci, cosine_similarity(vector, c)))
+        .map(|(ci, c)| (ci, dot_similarity(vector, c)))
         .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
         .map(|(ci, _)| ci)
         .unwrap_or(0)
@@ -256,7 +256,7 @@ fn kmeans(vectors: &[Vec<f32>], k: usize, max_iters: usize) -> (Vec<Vec<f32>>, V
                 .iter()
                 .enumerate()
                 .map(|(i, v)| {
-                    let min_sim = c.iter().map(|cent| cosine_similarity(v, cent)).fold(f32::INFINITY, f32::min);
+                    let min_sim = c.iter().map(|cent| dot_similarity(v, cent)).fold(f32::INFINITY, f32::min);
                     (i, 1.0 - min_sim)
                 })
                 .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
