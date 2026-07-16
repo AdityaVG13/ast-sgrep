@@ -46,3 +46,19 @@ Methodology for readers: [docs/benchmarks.md](../docs/benchmarks.md).
 ```bash
 cargo test -p ast-sgrep-core --test parity -j1 -- --test-threads=1
 ```
+
+## Latency error budgets
+
+Published latency budgets are hard sample thresholds, separate from the measured
+tables in `results/`. The cold self-index budget is **285 ms p95**: the prior
+258.4 ms p95 plus a 10% same-host variance allowance, rounded up. A baseline
+above its threshold must not be published as a passing budget.
+
+`scripts/check-error-budget.py` computes the hard-threshold exceedance rate
+directly from hyperfine `times`; for a 95% SLO, `burn_rate = error_rate / 0.05`.
+The p95 threshold and burn-rate checks are both gates. A p95 comparison alone is
+not an empirical error rate. Example:
+
+```bash
+python3 scripts/check-error-budget.py hyperfine_index_self.json --label cold-index-self --threshold-ms 285 --slo 0.95 --baseline-p95-ms 258.4
+```
