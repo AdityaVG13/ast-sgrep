@@ -10,7 +10,7 @@ The npm release is one atomic versioned family, published only from the human-ap
 2. the `ast-sgrep` launcher, whose optional native dependencies use that exact version;
 3. the `pi-ast-sgrep` extension, whose launcher dependency uses that exact version.
 
-All layers, the Rust workspace, machine protocol, config schema, and index format share the tag, commit, canonical workspace version, and artifact checksums recorded by [the release contract](../packages/pi/release-contract.json). Main-branch automation may pack and test artifacts but does not publish a stable npm version. npm and crates.io are independently approved registry operations over the same source release; neither waits for or proves completion of the other.
+All layers, the Rust workspace, machine protocol, config schema, and index format share the tag, commit, canonical workspace version, and artifact checksums recorded by [the release contract](../packages/pi/release-contract.json). Pi validation does not run automatically on pull requests, pushes to `main`, or tag pushes; both Pi workflows are manual `workflow_dispatch` actions. npm and crates.io are independently approved registry operations over the same source release; neither waits for or proves completion of the other.
 
 Local preparation is side-effect free:
 

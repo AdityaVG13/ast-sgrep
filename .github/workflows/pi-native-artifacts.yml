@@ -1,41 +1,6 @@
 name: Pi native artifacts
 on:
   workflow_dispatch:
-  pull_request:
-    paths:
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - "package.json"
-      - "package-lock.json"
-      - "packages/pi/release-contract.json"
-      - "packages/pi/release/targets.json"
-      - "packages/pi/scripts/**"
-      - "packages/pi/extension/package.json"
-      - "packages/pi/launcher/package.json"
-      - "packages/pi/platforms/**/package.json"
-      - "crates/**/*.rs"
-      - "crates/**/Cargo.toml"
-      - "packages/pi/**"
-      - ".github/workflows/pi-native-artifacts.yml"
-      - ".github/workflows/pi-npm-release.yml"
-  push:
-    branches: [main]
-    paths:
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - "package.json"
-      - "package-lock.json"
-      - "packages/pi/release-contract.json"
-      - "packages/pi/release/targets.json"
-      - "packages/pi/scripts/**"
-      - "packages/pi/extension/package.json"
-      - "packages/pi/launcher/package.json"
-      - "packages/pi/platforms/**/package.json"
-      - "crates/**/*.rs"
-      - "crates/**/Cargo.toml"
-      - "packages/pi/**"
-      - ".github/workflows/pi-native-artifacts.yml"
-      - ".github/workflows/pi-npm-release.yml"
 permissions:
   contents: read
 jobs:

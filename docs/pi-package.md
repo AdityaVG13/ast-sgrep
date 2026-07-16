@@ -140,7 +140,7 @@ Deleting `.asgrep` is irreversible but does not delete source files; a later sea
 
 ## Release cadence and provenance
 
-Main-branch automation packs and tests artifacts but does not publish a stable npm version. An official release is one human-approved tag, commit, and canonical version for the Rust workspace, five native npm packages, launcher, extension, machine protocol, config schema, and index format. npm publishes platform packages first, then `ast-sgrep`, then `pi-ast-sgrep`, all from the same repository commit and checksums with trusted-publishing provenance. npm and crates.io are independently gated views of that same source release; neither registry's publication implies the other completed.
+Pi release validation does not run automatically on pull requests, pushes to `main`, or tag pushes. Both Pi workflows are manual `workflow_dispatch` actions. Manually dispatch **Pi native artifacts** (`.github/workflows/pi-native-artifacts.yml`) for a safe dry-run that packs and tests without publishing. An official release is one human-approved tag, commit, and canonical version for the Rust workspace, five native npm packages, launcher, extension, machine protocol, config schema, and index format. npm publishes platform packages first, then `ast-sgrep`, then `pi-ast-sgrep`, all from the same repository commit and checksums with trusted-publishing provenance. npm and crates.io are independently gated views of that same source release; neither registry's publication implies the other completed.
 
 Before the first external publication, a human must verify package-name ownership and approve the protected publishing environment. A partial npm publication is recovered by releasing a new immutable version, never by overwriting a published version.
 

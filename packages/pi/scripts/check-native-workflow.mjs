@@ -23,10 +23,8 @@ const validate = (text) => {
   let workflow;
   try { workflow = parse(text); } catch (error) { return ['YAML parse failed: ' + error.message]; }
   const report = (condition, message) => { if (!condition) errors.push(message); };
-  const paths = ['Cargo.toml', 'Cargo.lock', 'package.json', 'package-lock.json', 'packages/pi/release-contract.json', 'packages/pi/release/targets.json', 'packages/pi/scripts/**', 'packages/pi/extension/package.json', 'packages/pi/launcher/package.json', 'packages/pi/platforms/**/package.json', 'crates/**/*.rs', 'crates/**/Cargo.toml', 'packages/pi/**', '.github/workflows/pi-native-artifacts.yml', '.github/workflows/pi-npm-release.yml'];
-  report(workflow.on?.pull_request && workflow.on?.push, 'pull_request and push triggers are required');
-  report(JSON.stringify(workflow.on?.push?.branches) === '["main"]', 'push must target main only');
-  for (const event of ['pull_request', 'push']) for (const required of paths) report(workflow.on?.[event]?.paths?.includes(required), event + ' paths missing ' + required);
+  const triggers = Object.keys(workflow.on ?? {});
+  report(triggers.length === 1 && triggers[0] === 'workflow_dispatch', 'native artifact workflow must be manual-only');
   const load = workflow.jobs?.['target-matrix'];
   const native = workflow.jobs?.['native-artifact'];
   report(load?.outputs?.matrix === '${{ steps.targets.outputs.matrix }}', 'target matrix output expression is invalid');
@@ -58,8 +56,13 @@ const validateOfficial = (text) => {
   let workflow;
   try { workflow = parse(text); } catch (error) { return ['official YAML parse failed: ' + error.message]; }
   const report = (condition, message) => { if (!condition) errors.push(message); };
-  report(!workflow.on?.pull_request && !workflow.on?.workflow_dispatch && JSON.stringify(workflow.on?.push?.tags) === '["v*"]', 'official publication must be tag-only, never PR/main/manual');
+  const triggers = Object.keys(workflow.on ?? {});
+  const inputs = workflow.on?.workflow_dispatch?.inputs;
+  report(triggers.length === 1 && triggers[0] === 'workflow_dispatch', 'official publication workflow must be manual-only');
+  report(inputs?.release_tag?.required === true && inputs.release_tag.type === 'string', 'official publication requires an explicit release_tag string input');
+  report(inputs?.publish?.required === true && inputs.publish.type === 'boolean' && inputs.publish.default === false, 'official publication requires an explicit publish intent defaulting to false');
   const gate = workflow.jobs?.['release-gate'];
+  report(gate?.if === "${{ inputs.publish == true && github.ref_type == 'tag' && github.ref_name == inputs.release_tag }}", 'official release gate must require publish intent and an exact tag ref match');
   const build = workflow.jobs?.['build-native'];
   const verify = workflow.jobs?.['verify-release'];
   const publish = workflow.jobs?.publish;
@@ -85,7 +88,7 @@ for (const target of targets) {
 for (const label of ['version', 'fixture-index', 'status', 'semantic-natural-search', 'defs', 'callers', 'timeout-cancellation', 'doctor', 'extension-load']) if (!helper.includes(label)) errors.push('smoke helper is missing ' + label);
 const mutations = [
   workflowText.replace('matrix: ${{ fromJSON(needs.target-matrix.outputs.matrix) }}', 'matrix: {}'),
-  workflowText.replace('      - "package-lock.json"', '      # - "package-lock.json"'),
+  workflowText.replace('  workflow_dispatch:', '  push:'),
   workflowText.replace('          node packages/pi/scripts/ci-install-smoke.mjs', '          # node packages/pi/scripts/ci-install-smoke.mjs'),
   workflowText.replace('          node packages/pi/scripts/release-acceptance.mjs self-test', '          # node packages/pi/scripts/release-acceptance.mjs self-test')
 ];
@@ -93,7 +96,10 @@ for (const [index, mutation] of mutations.entries()) if (validate(mutation).leng
 const officialMutations = [
   officialText.replace('    environment: npm-production', '    # environment removed'),
   officialText.replace('--layer native', '--layer launcher'),
-  officialText.replace('      id-token: write', '      id-token: read')
+  officialText.replace('      id-token: write', '      id-token: read'),
+  officialText.replace('      release_tag:', '      release_tag_removed:'),
+  officialText.replace('        default: false', '        default: true'),
+  officialText.replace("github.ref_name == inputs.release_tag", "github.ref_name != inputs.release_tag")
 ];
 for (const [index, mutation] of officialMutations.entries()) if (validateOfficial(mutation).length === 0) errors.push('negative official mutation ' + (index + 1) + ' was not rejected');
 for (const token of ['ASGREP_RELEASE_DIRTY', 'ASGREP_RELEASE_TAG_VERSION', 'ASGREP_RELEASE_TAG_COMMIT', 'ASGREP_RELEASE_CHECKSUM_MISSING', 'ASGREP_RELEASE_CHECKSUM_MISMATCH', 'ASGREP_RELEASE_VERSION_SKEW', 'ASGREP_RELEASE_DUPLICATE_VERSION', 'ASGREP_RELEASE_OIDC_REQUIRED', 'ASGREP_RELEASE_PROTECTED_ENVIRONMENT', "['publish'", "'--provenance'"]) if (!releaseHelper.includes(token)) errors.push('release acceptance helper is missing ' + token);

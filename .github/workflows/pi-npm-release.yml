@@ -1,9 +1,17 @@
 name: Pi npm official release
 
 on:
-  push:
-    tags:
-      - "v*"
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Exact existing release tag to publish (for example, v1.2.3)
+        required: true
+        type: string
+      publish:
+        description: Confirm publication to npm
+        required: true
+        type: boolean
+        default: false
 
 concurrency:
   group: pi-npm-${{ github.ref }}
@@ -15,6 +23,7 @@ permissions:
 jobs:
   release-gate:
     name: Validate immutable signed release
+    if: ${{ inputs.publish == true && github.ref_type == 'tag' && github.ref_name == inputs.release_tag }}
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.targets.outputs.matrix }}
