@@ -20,5 +20,16 @@ class ErrorBudgetTests(unittest.TestCase):
         self.assertFalse(result["claim_within_slo"])
 
 
+    def test_surface_burn_rates_are_independent(self):
+        semantic = MODULE.evaluate([0.011, 0.012] + [0.009] * 18, 10.0, 0.95)
+        literal = MODULE.evaluate([0.011, 0.012] + [0.009] * 18, 10.0, 0.95)
+        natural_language = MODULE.evaluate([0.011] + [0.009] * 19, 10.0, 0.95)
+
+        self.assertAlmostEqual(semantic["burn_rate"], 2.0)
+        self.assertAlmostEqual(literal["burn_rate"], 2.0)
+        self.assertAlmostEqual(natural_language["burn_rate"], 1.0)
+        self.assertFalse(semantic["gates"]["p95_within_threshold"])
+        self.assertTrue(natural_language["gates"]["burn_rate_within_budget"])
+
 if __name__ == "__main__":
     unittest.main()

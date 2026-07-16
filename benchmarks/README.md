@@ -54,6 +54,17 @@ tables in `results/`. The cold self-index budget is **285 ms p95**: the prior
 258.4 ms p95 plus a 10% same-host variance allowance, rounded up. A baseline
 above its threshold must not be published as a passing budget.
 
+| Surface | Hard p95 threshold | SLO |
+|---------|--------------------|-----|
+| cold self-index CLI | 285 ms | 95% |
+| literal CLI fixture | 15 ms | 95% |
+| semantic CLI fixture | 15 ms | 95% |
+| natural-language CLI fixture | 15 ms | 95% |
+
+The historical 10 ms self-repo Searcher-query target does not apply to CLI
+startup fixtures. Each CLI surface is gated independently; handoff JSON must
+retain both `p95_ms` and `burn_rate` rather than collapsing them.
+
 `scripts/check-error-budget.py` computes the hard-threshold exceedance rate
 directly from hyperfine `times`; for a 95% SLO, `burn_rate = error_rate / 0.05`.
 The p95 threshold and burn-rate checks are both gates. A p95 comparison alone is
