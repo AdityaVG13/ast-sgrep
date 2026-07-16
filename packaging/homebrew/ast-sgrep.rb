@@ -5,9 +5,9 @@
 class AstSgrep < Formula
   desc "Hybrid structural and semantic code search"
   homepage "https://github.com/AdityaVG13/ast-sgrep"
-  url "https://github.com/AdityaVG13/ast-sgrep/archive/refs/tags/v1.1.0-alpha.1.tar.gz"
-  version "1.1.0-alpha.1"
-  sha256 "0000000000000000000000000000000000000000000000000000000000000000"
+  url "https://github.com/AdityaVG13/ast-sgrep/archive/refs/tags/v1.1.0-alpha.tar.gz"
+  version "1.1.0-alpha"
+  sha256 "aaf34b409a3f21026548b236f568f77ea23dc26daf432847c46a678968f40c1b"
   license "MIT"
 
   depends_on "rust" => :build
