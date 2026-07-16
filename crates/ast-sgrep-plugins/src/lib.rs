@@ -200,7 +200,7 @@ pub fn to_agent_capsule_json(response: &SearchResponse, excerpt_lines: usize) ->
         "hit_count": hits.len(),
         "read_bytes_estimate": response.read_bytes_estimate,
         "returned_excerpt_bytes": returned_excerpt_bytes,
-        "prevented_read_bytes": response.read_bytes_estimate.saturating_sub(returned_excerpt_bytes),
+        "prevented_read_bytes": response.prevented_read_bytes,
         "expand_hint": "re-run with --excerpt-lines N for bodies, or read each ref span with your file reader (path + line window)",
         "hits": hits,
     })

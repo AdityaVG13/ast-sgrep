@@ -21,7 +21,10 @@ fn sample_response() -> SearchResponse {
                 callee: None,
                 language: Some("rust".into()),
                 score: 5.5,
-                excerpt: "fn auth_refresh() {\n    renew_token();\n    log();\n}".into(),
+                excerpt: "fn auth_refresh() {
+    renew_token();
+    log();
+}".into(),
             },
             SearchHit {
                 kind: HitKind::Caller,
@@ -33,7 +36,8 @@ fn sample_response() -> SearchResponse {
                 callee: Some("auth_refresh".into()),
                 language: Some("rust".into()),
                 score: 3.2,
-                excerpt: format!("   \n{long_line}"),
+                excerpt: format!("   
+{long_line}"),
             },
         ],
         counts: Vec::new(),
@@ -61,4 +65,11 @@ fn capsule_hits_carry_refs_and_previews_without_bodies() {
     let preview = hits[1]["preview"].as_str().expect("preview");
     assert!(preview.chars().count() <= 121, "len {}", preview.len());
     assert!(preview.starts_with('x'));
+
+    // Capsule excerpts have format-specific byte counts, but prevented bytes remain
+    // the query-level metric shared with the full agent response.
+    let agent = format_response_with(&response, OutputFormat::Agent, 0);
+    assert_ne!(capsule["returned_excerpt_bytes"], 350);
+    assert_eq!(agent["prevented_read_bytes"], 650);
+    assert_eq!(capsule["prevented_read_bytes"], 650);
 }
