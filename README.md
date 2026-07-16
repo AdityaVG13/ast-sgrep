@@ -130,7 +130,7 @@ These are **checked-in run summaries**, not portable guarantees. Hardware, corpu
 
 Canonical table: [head-to-head.md](benchmarks/results/head-to-head.md). Index: [benchmarks/README.md](benchmarks/README.md). Methodology: [docs/benchmarks.md](docs/benchmarks.md).
 
-**Quality snapshot (self corpus, labeled gold):** hybrid MRR ≈ 0.75, Recall@k ≈ 0.94 (see docs/benchmarks for commands). On some foreign corpora the offline embedder currently adds little over lexical + AST; a stronger local model is on the roadmap.
+**Quality snapshot (self corpus, 18 labeled gold queries):** hybrid MRR **0.712**, Recall@k **0.889**, nDCG@k **0.751**. The canonical row and its reproduction status are in [baselines.md](benchmarks/results/baselines.md#retrieval-quality--self-corpus-18-gold-queries). On some foreign corpora the offline embedder currently adds little over lexical + AST; a stronger local model is on the roadmap.
 
 ---
 
