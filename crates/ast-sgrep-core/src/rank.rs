@@ -60,15 +60,15 @@ pub fn coverage_symbol_score(terms: &[String], symbol: &str) -> f64 {
     }
     let symbol = normalized_symbol(symbol);
     let mut sum = 0.0;
-    let mut matched = 0usize;
     for term in terms {
         let score = score_normalized_symbol(term, symbol.as_ref());
         if score > 0.0 {
-            matched += 1;
             sum += score;
         }
     }
-    sum * (matched as f64 / terms.len() as f64)
+    // Each additional matching term contributes independently; unmatched query context must not
+    // dilute evidence from terms that already match the symbol.
+    sum
 }
 pub fn score_def(terms: &[String], symbol: &str) -> f64 {
     coverage_symbol_score(terms, symbol) * 2.0 + SCORE_DEF_BASE
@@ -79,7 +79,7 @@ pub fn score_caller(terms: &[String], callee: &str) -> f64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{score_symbol, SCORE_EXACT_SYMBOL, SCORE_SUBSTRING_SYMBOL};
+    use super::*;
 
     #[test]
     fn single_character_only_scores_an_exact_symbol() {
@@ -93,5 +93,21 @@ mod tests {
     fn multi_character_substrings_keep_their_rank_signal() {
         assert_eq!(score_symbol("in", "init"), SCORE_SUBSTRING_SYMBOL);
         assert_eq!(score_symbol("init", "in"), SCORE_SUBSTRING_SYMBOL);
+    }
+
+    #[test]
+    fn coverage_score_is_monotone_when_query_expands() {
+        let focused = vec!["init".to_string(), "handler".to_string()];
+        let expanded = vec![
+            "init".to_string(),
+            "handler".to_string(),
+            "noise".to_string(),
+            "zzz".to_string(),
+        ];
+
+        assert!(
+            coverage_symbol_score(&expanded, "init_handler")
+                >= coverage_symbol_score(&focused, "init_handler")
+        );
     }
 }
