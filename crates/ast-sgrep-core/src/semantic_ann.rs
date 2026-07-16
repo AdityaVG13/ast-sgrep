@@ -321,9 +321,9 @@ struct SessionCache {
     ivf: Arc<PersistedSemanticIvf>,
 }
 
-static SESSION_CACHE: Mutex<Option<(String, SessionCache)>> = Mutex::new(None);
+static SESSION_CACHE: Mutex<Vec<(String, SessionCache)>> = Mutex::new(Vec::new());
 pub fn clear_semantic_ivf_session_cache() {
-    *SESSION_CACHE.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    SESSION_CACHE.lock().unwrap_or_else(|e| e.into_inner()).clear();
 }
 /// Invalidate both cache layers as soon as semantic rows mutate. Reassigning vectors
 /// to stale centroids is cheaper, but it preserves outdated partitions and can lower
@@ -343,7 +343,14 @@ fn ann_session_key(store: &IndexStore, chunks: &[SemanticChunkRow]) -> Result<([
     ))
 }
 fn cache_session(db_key: &str, fingerprint: [u8; 32], ivf: &PersistedSemanticIvf) {
-    *SESSION_CACHE.lock().unwrap_or_else(|e| e.into_inner()) = Some((
+    let mut cache = SESSION_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(position) = cache.iter().position(|(key, _)| key == db_key) {
+        cache.remove(position);
+    }
+    if cache.len() == 4 {
+        cache.remove(0);
+    }
+    cache.push((
         db_key.to_string(),
         SessionCache { fingerprint, ivf: Arc::new(ivf.clone()) },
     ));
@@ -376,9 +383,14 @@ pub fn cached_semantic_ivf(
     if !should_use_ann(chunks.len(), override_threshold) { return Ok(None); }
     let (fingerprint, db_key) = ann_session_key(store, chunks)?;
     {
-        let guard = SESSION_CACHE.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some((key, cached)) = guard.as_ref() {
-            if key == &db_key && cached.fingerprint == fingerprint { return Ok(Some(Arc::clone(&cached.ivf))); }
+        let mut cache = SESSION_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(position) = cache.iter().position(|(key, _)| key == &db_key) {
+            let (key, cached) = cache.remove(position);
+            if cached.fingerprint == fingerprint {
+                let ivf = Arc::clone(&cached.ivf);
+                cache.push((key, cached));
+                return Ok(Some(ivf));
+            }
         }
     }
     load_or_build_semantic_ivf(store, chunks, override_threshold)
