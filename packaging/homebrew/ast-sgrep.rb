@@ -16,6 +16,15 @@ class AstSgrep < Formula
     system "cargo", "install", *std_cargo_args(path: "crates/ast-sgrep-cli")
   end
 
+  def caveats
+    <<~EOS
+      This formula installs the asgrep CLI only. Editor integrations also require
+      the asgrep-lsp binary, which can be installed from crates.io with:
+
+        cargo install ast-sgrep-lsp
+    EOS
+  end
+
   test do
     assert_match version.to_s, shell_output("#{bin}/asgrep --version")
   end
