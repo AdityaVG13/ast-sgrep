@@ -217,7 +217,9 @@ export class FreshnessCoordinator {
             await state.inFlight;
             return this.ensureFresh(runtime, { cwd: root }, options);
         }
-        const expired = state.initialized && this.#now() - state.lastRefreshAt >= this.#interval;
+        const now = this.#now();
+        const elapsed = now - state.lastRefreshAt;
+        const expired = state.initialized && (elapsed < 0 || elapsed >= this.#interval);
         if (state.initialized && state.cleanGeneration === state.dirtyGeneration && !expired)
             return root;
         const refreshGeneration = state.dirtyGeneration;
