@@ -283,7 +283,7 @@ impl LspBackend {
             return Ok(json!([]));
         }
         if query.is_empty() { return Ok(json!([])); }
-        self.with_locked_searcher(50, |searcher| {
+        self.with_locked_searcher(SearchOptions::default_limit(), |searcher| {
             Ok(Value::Array(
                 searcher
                     .search(query)?
@@ -326,7 +326,7 @@ impl LspBackend {
 
     pub fn goto_definition(&self, params: &TextDocumentPositionParams) -> anyhow::Result<Value> {
         let symbol = self.symbol_at_position(params)?;
-        self.with_locked_searcher(16, |searcher| {
+        self.with_locked_searcher(SearchOptions::default_limit(), |searcher| {
             let locations: Vec<Value> = searcher
                 .search(&format!("defs:{symbol}"))?
                 .hits
@@ -346,7 +346,7 @@ impl LspBackend {
             text_document: params.text_document.clone(),
             position: params.position.clone(),
         })?;
-        self.with_locked_searcher(128, |searcher| {
+        self.with_locked_searcher(SearchOptions::default_limit(), |searcher| {
             let mut locations = Vec::new();
             for hit in searcher.search(&format!("callers:{symbol}"))?.hits {
                 locations.push(location_value(&self.root, &hit.file, hit.line_start, hit.line_end));
@@ -435,7 +435,7 @@ impl LspBackend {
 
     fn execute_search_command(&self, params: &ExecuteCommandParams, semantic: bool) -> anyhow::Result<Value> {
         let query = first_command_arg(params);
-        self.with_locked_searcher(32, |searcher| {
+        self.with_locked_searcher(SearchOptions::default_limit(), |searcher| {
             Ok(serde_json::to_value(if semantic {
                 searcher.search_semantic(query)?
             } else {
@@ -446,7 +446,7 @@ impl LspBackend {
 
     fn execute_symbol_query_command(&self, params: &ExecuteCommandParams, prefix: &str) -> anyhow::Result<Value> {
         let sym = first_command_arg(params);
-        self.with_locked_searcher(32, |searcher| {
+        self.with_locked_searcher(SearchOptions::default_limit(), |searcher| {
             Ok(serde_json::to_value(searcher.search(&format!("{prefix}:{sym}"))?)?)
         })
     }

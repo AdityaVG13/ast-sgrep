@@ -57,9 +57,7 @@ pub struct SearchParams {
     #[serde(default = "default_search_limit")]
     pub limit: usize,
 }
-fn default_search_limit() -> usize {
-    32
-}
+fn default_search_limit() -> usize { ast_sgrep_core::SearchOptions::default_limit() }
 #[derive(Debug, Deserialize)]
 pub struct DocumentSymbolParams {
     #[serde(rename = "textDocument")]

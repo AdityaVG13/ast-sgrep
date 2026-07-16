@@ -157,11 +157,7 @@ impl McpServer {
             .get("query")
             .and_then(|v| v.as_str())
             .context("query is required")?;
-        let limit = args
-            .get("limit")
-            .and_then(|v| v.as_u64())
-            .map(|n| n as usize)
-            .unwrap_or(self.limit);
+        let limit = args.get("limit").and_then(|v| v.as_u64()).map(|n| n as usize).unwrap_or(self.limit).clamp(1, 500);
         let semantic_only = args
             .get("semantic_only")
             .and_then(|v| v.as_bool())
