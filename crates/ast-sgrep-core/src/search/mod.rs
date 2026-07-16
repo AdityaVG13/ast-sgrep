@@ -442,9 +442,22 @@ fn compile_glob(pattern: &str) -> std::result::Result<regex::Regex, regex::Error
     result.push('$');
     regex::Regex::new(&result)
 }
+fn contains_term_token(text: &str, term: &str) -> bool {
+    !term.is_empty()
+        && text.match_indices(term).any(|(start, matched)| {
+            let before = text[..start].chars().next_back();
+            let after = text[start + matched.len()..].chars().next();
+            before.is_none_or(|ch| !ch.is_alphanumeric() && ch != '_')
+                && after.is_none_or(|ch| !ch.is_alphanumeric() && ch != '_')
+        })
+}
+
 fn excerpt_term_coverage(terms: &[String], hit: &SearchHit) -> u32 {
     let text = hit.excerpt.to_lowercase();
-    terms.iter().filter(|t| text.contains(t.as_str())).count() as u32
+    terms
+        .iter()
+        .filter(|term| contains_term_token(&text, term))
+        .count() as u32
 }
 
 #[cfg(test)]
