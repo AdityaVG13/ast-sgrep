@@ -19,7 +19,7 @@ use passes::embed::{embed_pass_lazy_ivf, embed_pass_with_context, EmbedContext};
 use passes::lexical::lexical_pass;
 use passes::literal::literal_pass;
 use passes::regex::regex_pass;
-use passes::symbol::{anchor_pass, search_callers, search_defs, search_imports, symbol_anchor_pass, symbol_pass};
+use passes::symbol::{anchor_pass, search_callers, search_defs, search_imports, symbol_pass};
 const PARALLEL_PASS_FILE_THRESHOLD: usize = 128;
 const MAX_HITS_PER_FILE: usize = 3;
 struct SemanticCache {
@@ -188,7 +188,8 @@ fn load_semantic_context(
 fn run_serial_passes(store: &IndexStore, options: &SearchOptions, parsed: &ParsedQuery) -> Result<Vec<SearchHit>> {
     let mut hits = Vec::with_capacity(64);
     hits.extend(lexical_pass(store, options, parsed)?);
-    hits.extend(symbol_anchor_pass(store, options, parsed)?);
+    hits.extend(symbol_pass(store, options, parsed)?);
+    hits.extend(anchor_pass(store, options, parsed)?);
     Ok(hits)
 }
 fn run_parallel_passes(
