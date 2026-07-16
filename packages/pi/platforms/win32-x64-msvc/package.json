@@ -1,0 +1,25 @@
+{
+  "name": "ast-sgrep-win32-x64-msvc",
+  "version": "1.1.0-alpha",
+  "description": "ast-sgrep native binary for Windows x64 MSVC",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/AdityaVG13/ast-sgrep.git",
+    "directory": "packages/pi/platforms/win32-x64-msvc"
+  },
+  "os": [
+    "win32"
+  ],
+  "cpu": [
+    "x64"
+  ],
+  "scripts": {
+    "prepack": "node ../prepack-verify.mjs"
+  },
+  "files": [
+    "asgrep.exe",
+    "checksum.sha256",
+    "LICENSE"
+  ]
+}

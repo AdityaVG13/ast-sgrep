@@ -1,0 +1,171 @@
+name: Pi native artifacts
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "package.json"
+      - "package-lock.json"
+      - "packages/pi/release-contract.json"
+      - "packages/pi/release/targets.json"
+      - "packages/pi/scripts/**"
+      - "packages/pi/extension/package.json"
+      - "packages/pi/launcher/package.json"
+      - "packages/pi/platforms/**/package.json"
+      - "crates/**/*.rs"
+      - "crates/**/Cargo.toml"
+      - "packages/pi/**"
+      - ".github/workflows/pi-native-artifacts.yml"
+      - ".github/workflows/pi-npm-release.yml"
+  push:
+    branches: [main]
+    paths:
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "package.json"
+      - "package-lock.json"
+      - "packages/pi/release-contract.json"
+      - "packages/pi/release/targets.json"
+      - "packages/pi/scripts/**"
+      - "packages/pi/extension/package.json"
+      - "packages/pi/launcher/package.json"
+      - "packages/pi/platforms/**/package.json"
+      - "crates/**/*.rs"
+      - "crates/**/Cargo.toml"
+      - "packages/pi/**"
+      - ".github/workflows/pi-native-artifacts.yml"
+      - ".github/workflows/pi-npm-release.yml"
+permissions:
+  contents: read
+jobs:
+  target-matrix:
+    name: Load authoritative target matrix
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.targets.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.19.0
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - id: targets
+        shell: bash
+        run: echo "matrix=$(node packages/pi/scripts/release-artifact.mjs matrix)" >> "$GITHUB_OUTPUT"
+      - name: Verify release and workflow contracts
+        run: |
+          node packages/pi/scripts/check-contract.mjs
+          node packages/pi/scripts/check-native-workflow.mjs
+  native-artifact:
+    name: ${{ matrix.package }} on ${{ matrix.runner }}
+    needs: target-matrix
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.target-matrix.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.19.0
+          cache: npm
+      - run: npm ci
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rustTarget }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: pi-native-${{ matrix.rustTarget }}
+      - name: Log target mapping
+        shell: bash
+        run: |
+          printf '%s\n' \
+            "target.id=${{ matrix.id }}" \
+            "target.runner=${{ matrix.runner }}" \
+            "target.rust=${{ matrix.rustTarget }}" \
+            "target.package=${{ matrix.package }}" \
+            "target.executable=${{ matrix.executable }}"
+      - name: Build target-local release executable
+        shell: bash
+        run: cargo build --locked --release -p ast-sgrep-cli --bin asgrep --no-default-features --target "${{ matrix.rustTarget }}"
+      - name: Prepare and verify deterministic artifact metadata
+        shell: bash
+        run: |
+          binary="target/${{ matrix.rustTarget }}/release/${{ matrix.executable }}"
+          output="dist/${{ matrix.package }}"
+          node packages/pi/scripts/release-artifact.mjs prepare \
+            --target "${{ matrix.id }}" --binary "$binary" --output "$output" --commit "$GITHUB_SHA"
+          node packages/pi/scripts/release-artifact.mjs verify --target "${{ matrix.id }}" --input "$output"
+      - name: Pack native, launcher, and extension tarballs
+        shell: bash
+        run: |
+          set -euo pipefail
+          platform_dir="packages/pi/platforms/${{ matrix.id }}"
+          cp "dist/${{ matrix.package }}/${{ matrix.executable }}" "$platform_dir/${{ matrix.executable }}"
+          cp "dist/${{ matrix.package }}/SHA256SUMS" "$platform_dir/checksum.sha256"
+          if [ "${{ matrix.os }}" != "win32" ]; then chmod 755 "$platform_dir/${{ matrix.executable }}"; fi
+          mkdir -p npm-packs
+          npm pack "$platform_dir" --pack-destination npm-packs
+          npm pack packages/pi/launcher --pack-destination npm-packs
+          npm pack packages/pi/extension --pack-destination npm-packs
+          node -e "const fs=require('fs'); console.log('[pi-ci] package inventory: '+fs.readdirSync('npm-packs').sort().join(','))"
+      - name: Clean-install local tarballs
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(node -p "require('./packages/pi/release-contract.json').canonicalVersion.version")"
+          clean="$RUNNER_TEMP/clean-pi-npm-install"
+          mkdir -p "$clean"
+          npm install --no-audit --no-fund --prefix "$clean" \
+            "$PWD/npm-packs/ast-sgrep-${{ matrix.id }}-$version.tgz" \
+            "$PWD/npm-packs/ast-sgrep-$version.tgz" \
+            "$PWD/npm-packs/pi-ast-sgrep-$version.tgz"
+          node -e "const fs=require('fs'); console.log('[pi-ci] install inventory: '+fs.readdirSync(process.argv[1]).sort().join(','))" "$clean/node_modules"
+      - name: Exercise installed launcher and extension
+        shell: bash
+        run: |
+          set -euo pipefail
+          clean="$RUNNER_TEMP/clean-pi-npm-install"
+          node packages/pi/scripts/ci-install-smoke.mjs \
+            --launcher "$clean/node_modules/ast-sgrep/bin/asgrep.js" \
+            --install-root "$clean" \
+            --fixture "$RUNNER_TEMP/pi-native-fixture"
+      - name: Upload native artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.package }}
+          path: dist/${{ matrix.package }}/
+          if-no-files-found: error
+          retention-days: 14
+
+  release-acceptance:
+    name: Complete seven-package dry run
+    needs: [target-matrix, native-artifact]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.19.0
+          cache: npm
+      - run: npm ci
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: ast-sgrep-*
+          path: dist/native
+      - name: Pack and inspect without publication
+        run: |
+          node packages/pi/scripts/release-acceptance.mjs pack --native-root dist/native --output npm-packs --commit "$GITHUB_SHA"
+          node packages/pi/scripts/release-acceptance.mjs verify --artifacts npm-packs
+          node packages/pi/scripts/release-acceptance.mjs self-test
+          npm run test:pi-e2e
+      - name: Preserve dry-run tarballs and checksums
+        uses: actions/upload-artifact@v4
+        with:
+          name: pi-npm-dry-run-${{ github.sha }}
+          path: npm-packs/
+          if-no-files-found: error
+          retention-days: 14

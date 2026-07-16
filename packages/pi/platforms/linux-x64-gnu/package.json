@@ -1,0 +1,28 @@
+{
+  "name": "ast-sgrep-linux-x64-gnu",
+  "version": "1.1.0-alpha",
+  "description": "ast-sgrep native binary for Linux x64 glibc",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/AdityaVG13/ast-sgrep.git",
+    "directory": "packages/pi/platforms/linux-x64-gnu"
+  },
+  "os": [
+    "linux"
+  ],
+  "cpu": [
+    "x64"
+  ],
+  "libc": [
+    "glibc"
+  ],
+  "scripts": {
+    "prepack": "node ../prepack-verify.mjs"
+  },
+  "files": [
+    "asgrep",
+    "checksum.sha256",
+    "LICENSE"
+  ]
+}

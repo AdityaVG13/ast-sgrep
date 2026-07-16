@@ -1,6 +1,29 @@
-# Releasing to crates.io
+# Releasing
 
-This repository publishes its public crates in dependency order. Publishing is irreversible: prepare and verify locally, then wait for explicit human approval before running any `cargo publish` command.
+This repository publishes npm packages and public crates from one canonical version and source commit. Publishing is irreversible: prepare and verify locally, then wait for explicit human approval before any external registry command or protected release-environment approval.
+
+## Pi npm package family
+
+The npm release is one atomic versioned family, published only from the human-approved official `v1.1.0-alpha` tag and commit:
+
+1. the five host-constrained native packages: `ast-sgrep-darwin-arm64`, `ast-sgrep-darwin-x64`, `ast-sgrep-linux-arm64-gnu`, `ast-sgrep-linux-x64-gnu`, and `ast-sgrep-win32-x64-msvc`;
+2. the `ast-sgrep` launcher, whose optional native dependencies use that exact version;
+3. the `pi-ast-sgrep` extension, whose launcher dependency uses that exact version.
+
+All layers, the Rust workspace, machine protocol, config schema, and index format share the tag, commit, canonical workspace version, and artifact checksums recorded by [the release contract](../packages/pi/release-contract.json). Main-branch automation may pack and test artifacts but does not publish a stable npm version. npm and crates.io are independently approved registry operations over the same source release; neither waits for or proves completion of the other.
+
+Local preparation is side-effect free:
+
+```bash
+npm run check:pi-contract
+npm run check:pi-release
+npm run test:pi-release-gate
+npm run test:pi-e2e
+```
+
+The release-gate and E2E commands exercise packed artifacts and the official Pi loader without publishing. Package-level `npm pack --dry-run`/`npm pack` preparation is allowed; do not run `npm publish` locally. The manual **Pi native artifacts** workflow (`.github/workflows/pi-native-artifacts.yml`) is dry-run only. The tag-only **Pi npm official release** workflow (`.github/workflows/pi-npm-release.yml`) is the canonical publisher. External npm publication requires explicit human approval of its protected `npm-production` environment and trusted-publishing OIDC/provenance. Before the first publication, re-verify every npm name and publisher ownership; a prior 404 is not a reservation. Publish native packages before the launcher and the launcher before the extension.
+
+If publication stops after an immutable npm version becomes visible, do not overwrite it or finish a mixed family. Correct the cause, advance every coupled component to a new version, repeat all checks, obtain new approval, and publish the complete family in order.
 
 ## Version policy
 

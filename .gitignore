@@ -8,7 +8,7 @@
 .DS_Store
 Thumbs.db
 
-# Editor state
+# Node package installs\nnode_modules/\n\n# Editor state
 *.swp
 *.swo
 *~

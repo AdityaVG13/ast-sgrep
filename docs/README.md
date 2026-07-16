@@ -7,7 +7,8 @@ Canonical entry points for humans and agents. Prefer this list over scavenging t
 | Doc | Audience | Contents |
 |-----|----------|----------|
 | [../README.md](../README.md) | Everyone | Product overview, install, quick start |
-| [getting-started.md](getting-started.md) | Users | Install, index, everyday queries, flags, troubleshooting |
+| [getting-started.md](getting-started.md) | Users | Pi-first and standalone install, index, queries, flags, troubleshooting |
+| [pi-package.md](pi-package.md) | Pi users/operators | Canonical install/use/update/debug/remove guide; data, security, privacy, compatibility, and provenance |
 | [comparison.md](comparison.md) | Users | When to use ast-sgrep vs ripgrep vs ast-grep |
 
 ## Product depth
