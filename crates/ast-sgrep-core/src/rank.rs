@@ -30,6 +30,9 @@ fn normalized_symbol(symbol: &str) -> Cow<'_, str> {
         Cow::Owned(symbol.to_lowercase())
     }
 }
+fn has_multiple_chars(value: &str) -> bool {
+    value.chars().nth(1).is_some()
+}
 fn score_normalized_symbol(term: &str, symbol: &str) -> f64 {
     if symbol == term {
         SCORE_EXACT_SYMBOL
@@ -37,6 +40,8 @@ fn score_normalized_symbol(term: &str, symbol: &str) -> f64 {
         == MIN_SUBSTRING_SYMBOL_CHARS
         && symbol.chars().take(MIN_SUBSTRING_SYMBOL_CHARS).count()
             == MIN_SUBSTRING_SYMBOL_CHARS
+    } else if has_multiple_chars(term)
+        && has_multiple_chars(symbol)
         && (symbol.contains(term) || term.contains(symbol))
     {
         SCORE_SUBSTRING_SYMBOL
@@ -128,5 +133,21 @@ mod tests {
         let terms = vec!["zzz".to_string()];
 
         assert_eq!(score_def(&terms, "nomatch"), 0.0);
+    fn exact_single_character_symbol_still_matches() {
+        assert_eq!(score_symbol("i", "i"), SCORE_EXACT_SYMBOL);
+    }
+
+    #[test]
+    fn single_character_does_not_receive_substring_credit() {
+        assert_eq!(score_symbol("init", "i"), 0.0);
+        assert_eq!(score_symbol("i", "init"), 0.0);
+        assert_eq!(score_symbol("main", "i"), 0.0);
+        assert_eq!(score_symbol("éclair", "é"), 0.0);
+    }
+
+    #[test]
+    fn multi_character_substrings_still_match() {
+        assert_eq!(score_symbol("init", "initialize"), SCORE_SUBSTRING_SYMBOL);
+        assert_eq!(score_symbol("initialize", "init"), SCORE_SUBSTRING_SYMBOL);
     }
 }
