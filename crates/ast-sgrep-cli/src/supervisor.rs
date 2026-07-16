@@ -29,6 +29,8 @@ pub fn is_worker() -> bool {
 pub fn cpu_limit_percent() -> u8 {
     parse_cpu_limit(&std::env::var(CPU_LIMIT_ENV).unwrap_or_default())
 }
+/// Parses a configured limit in the supported inclusive range 1..=80.
+/// Empty, malformed, zero, and values above 80 use the 80% default.
 pub fn parse_cpu_limit(raw: &str) -> u8 {
     raw.trim()
         .parse::<u8>()
@@ -36,6 +38,8 @@ pub fn parse_cpu_limit(raw: &str) -> u8 {
         .filter(|&p| (MIN_CPU_LIMIT..=MAX_CPU_LIMIT).contains(&p))
         .unwrap_or(DEFAULT_CPU_LIMIT)
 }
+/// Converts a percentage to a 10 ms duty cycle.
+/// Non-zero values below 10% have an effective 10% floor (1 ms of work).
 pub fn duty_cycle_ms(limit_pct: u8) -> (u64, u64) {
     let work_ms = if limit_pct == 0 {
         0
@@ -328,5 +332,25 @@ mod unix_impl {
                     .min(Duration::from_millis(10)),
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn duty_cycle_quantizes_supported_limits() {
+        for limit in [1, 10, 50, 80] {
+            let (work_ms, sleep_ms) = duty_cycle_ms(limit);
+            assert_eq!(work_ms + sleep_ms, CYCLE_MS);
+            assert_eq!(work_ms, ((CYCLE_MS * u64::from(limit)) / 100).max(1));
+        }
+    }
+
+    #[test]
+    fn cpu_limit_rejects_values_outside_supported_range() {
+        assert_eq!(parse_cpu_limit("0"), DEFAULT_CPU_LIMIT);
+        assert_eq!(parse_cpu_limit("100"), DEFAULT_CPU_LIMIT);
     }
 }
