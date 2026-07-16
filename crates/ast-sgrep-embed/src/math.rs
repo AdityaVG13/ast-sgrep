@@ -2,7 +2,7 @@ use std::cmp::Ordering;
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 use rayon::prelude::*;
-use simsimd::SpatialSimilarity;
+
 pub const MIN_SIMILARITY: f32 = 0.08;
 pub const PARALLEL_CHUNK_THRESHOLD: usize = 64;
 const SIMD_DOT_THRESHOLD: usize = 64;
@@ -35,10 +35,20 @@ fn compare_hits_desc(left: &(usize, f32), right: &(usize, f32)) -> Ordering {
 }
 pub fn dot_similarity(a: &[f32], b: &[f32]) -> f32 {
     if a.len() != b.len() || a.is_empty() { return 0.0; }
-    if a.len() >= SIMD_DOT_THRESHOLD {
-        if let Some(d) = f32::dot(a, b) { return d as f32; }
-    }
-    a.iter().zip(b.iter()).map(|(x, y)| x * y).sum()
+    let (dot, norm_a, norm_b) = a.iter().zip(b).fold(
+        (0.0_f64, 0.0_f64, 0.0_f64),
+        |(dot, norm_a, norm_b), (&left, &right)| {
+            let left = f64::from(left);
+            let right = f64::from(right);
+            (
+                left.mul_add(right, dot),
+                left.mul_add(left, norm_a),
+                right.mul_add(right, norm_b),
+            )
+        },
+    );
+    if norm_a == 0.0 || norm_b == 0.0 { return 0.0; }
+    (dot / (norm_a.sqrt() * norm_b.sqrt())) as f32
 }
 pub fn cosine_scores_for<'a>(
     query_vec: &[f32],
