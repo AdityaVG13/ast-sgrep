@@ -64,15 +64,15 @@ pub fn coverage_symbol_score(terms: &[String], symbol: &str) -> f64 {
     let symbol = normalized_symbol(symbol);
     let symbol_can_substring = has_minimum_substring_chars(&symbol);
     let mut sum = 0.0;
-    let mut matched = 0usize;
     for term in terms {
         let score = score_normalized_symbol(term, symbol.as_ref(), symbol_can_substring);
         if score > 0.0 {
-            matched += 1;
             sum += score;
         }
     }
-    sum * (matched as f64 / terms.len() as f64)
+    // Each additional matching term contributes independently; unmatched query context must not
+    // dilute evidence from terms that already match the symbol.
+    sum
 }
 pub fn score_def(terms: &[String], symbol: &str) -> f64 {
     let coverage = coverage_symbol_score(terms, symbol);
@@ -115,5 +115,26 @@ mod tests {
         assert_eq!(score_caller(&terms, "process_request"), 0.0);
         let hit = vec!["process".into()];
         assert!(score_def(&hit, "process_request") > 0.0);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn coverage_score_is_monotone_when_query_expands() {
+        let focused = vec!["init".to_string(), "handler".to_string()];
+        let expanded = vec![
+            "init".to_string(),
+            "handler".to_string(),
+            "noise".to_string(),
+            "zzz".to_string(),
+        ];
+
+        assert!(
+            coverage_symbol_score(&expanded, "init_handler")
+                >= coverage_symbol_score(&focused, "init_handler")
+        );
     }
 }
