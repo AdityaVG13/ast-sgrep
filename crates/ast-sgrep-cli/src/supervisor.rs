@@ -49,6 +49,15 @@ pub fn duty_cycle_ms(limit_pct: u8) -> (u64, u64) {
     };
     (work_ms, CYCLE_MS.saturating_sub(work_ms))
 }
+/// Returns the enforced work/sleep window. Effective service capacity is
+/// `mu_effective = mu_raw * work_ms / CYCLE_MS`; operators must keep arrival
+/// rate below that capacity or queue latency grows without bound.
+pub fn duty_cycle_ms(limit_pct: u8) -> (u64, u64) { let work_ms = if limit_pct == 0 {
+    0
+} else {
+    ((CYCLE_MS * u64::from(limit_pct)) / 100).max(1)
+};
+(work_ms, CYCLE_MS.saturating_sub(work_ms)) }
 #[cfg(unix)]
 pub fn clear_internal_envs() {
     std::env::remove_var(WORKER_MARKER);
