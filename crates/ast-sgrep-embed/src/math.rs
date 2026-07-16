@@ -5,6 +5,23 @@ use rayon::prelude::*;
 
 pub const MIN_SIMILARITY: f32 = 0.08;
 pub const PARALLEL_CHUNK_THRESHOLD: usize = 64;
+
+/// A threshold is crossed only when the score is more than one representable
+/// f32 step above it. This keeps products that merely round upward at the
+/// boundary from changing an exclusive gate decision.
+fn exceeds_similarity_threshold(sim: f32, min: f32) -> bool {
+    if !sim.is_finite() || !min.is_finite() {
+        return false;
+    }
+    let next = if min == 0.0 {
+        f32::from_bits(1)
+    } else if min > 0.0 {
+        f32::from_bits(min.to_bits() + 1)
+    } else {
+        f32::from_bits(min.to_bits() - 1)
+    };
+    sim > next
+}
 const SIMD_DOT_THRESHOLD: usize = 64;
 #[derive(Clone, Copy, PartialEq)]
 struct Scored {
@@ -67,6 +84,9 @@ pub fn top_k_similarity(
     let mut heap = BinaryHeap::new();
     for (idx, sim) in scored {
         if sim.is_finite() && min_similarity.is_none_or(|min| sim >= min) {
+        if sim.is_finite()
+            && min_similarity.is_none_or(|min| exceeds_similarity_threshold(sim, min))
+        {
             push_top_k(&mut heap, limit, idx, sim);
         }
     }
@@ -88,6 +108,7 @@ pub fn top_k_flat_similarity(
             if min_similarity.is_none_or(|min| sim >= min) {
             let sim = cosine_similarity(query_vec, &flat[i * dim..(i + 1) * dim]);
             if sim.is_finite() && min_similarity.is_none_or(|min| sim > min) {
+            if min_similarity.is_none_or(|min| exceeds_similarity_threshold(sim, min)) {
                 push_top_k(&mut heap, limit, i, sim);
             }
         }
@@ -100,6 +121,7 @@ pub fn top_k_flat_similarity(
             if min_similarity.is_none_or(|min| sim >= min) {
             let sim = cosine_similarity(query_vec, &flat[i * dim..(i + 1) * dim]);
             if sim.is_finite() && min_similarity.is_none_or(|min| sim > min) {
+            if min_similarity.is_none_or(|min| exceeds_similarity_threshold(sim, min)) {
                 push_top_k(&mut heap, limit, i, sim);
             }
             heap
@@ -131,6 +153,7 @@ pub fn top_by_similarity(
     if limit == 0 { return vec![]; }
     if let Some(min) = min_similarity {
         scored.retain(|(_, sim)| *sim >= min);
+        scored.retain(|(_, sim)| exceeds_similarity_threshold(*sim, min));
     }
     scored.retain(|(_, sim)| {
         sim.is_finite() && min_similarity.is_none_or(|min| *sim > min)
@@ -174,6 +197,20 @@ mod tests {
                 Some(MIN_SIMILARITY),
             ),
             scored
+    fn rounded_boundary_product_does_not_cross_minimum() {
+        let rounded = 0.1_f32 * 0.8_f32;
+        assert!(rounded > MIN_SIMILARITY);
+        assert!(top_k_similarity([(0, rounded)], 1, Some(MIN_SIMILARITY)).is_empty());
+    }
+
+    #[test]
+    fn score_beyond_boundary_band_crosses_minimum() {
+        let one_ulp = f32::from_bits(MIN_SIMILARITY.to_bits() + 1);
+        let two_ulps = f32::from_bits(MIN_SIMILARITY.to_bits() + 2);
+        assert!(top_by_similarity(vec![(0, one_ulp)], 1, Some(MIN_SIMILARITY)).is_empty());
+        assert_eq!(
+            top_by_similarity(vec![(0, two_ulps)], 1, Some(MIN_SIMILARITY)),
+            vec![(0, two_ulps)]
         );
     }
 }

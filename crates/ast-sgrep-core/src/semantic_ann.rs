@@ -211,11 +211,16 @@ fn score_members(
             .then(|| dot_similarity(query, &flat[start..start + dim]))
             .filter(|&sim| sim >= MIN_SIMILARITY)
             .map(|sim| (*idx, sim))
+            .then(|| (*idx, cosine_similarity(query, &flat[start..start + dim])))
     };
     if members.len() < PARALLEL_CHUNK_THRESHOLD {
-        top_k_similarity(members.iter().filter_map(score), limit, None)
+        top_k_similarity(members.iter().filter_map(score), limit, Some(MIN_SIMILARITY))
     } else {
-        top_k_similarity(members.par_iter().filter_map(score).collect::<Vec<_>>(), limit, None)
+        top_k_similarity(
+            members.par_iter().filter_map(score).collect::<Vec<_>>(),
+            limit,
+            Some(MIN_SIMILARITY),
+        )
     }
 }
 fn normalize_flat(vectors: &[f32], dim: usize) -> Vec<f32> {
