@@ -127,6 +127,11 @@ fn apply_spec(weights: &mut ChannelWeights, intent: QueryIntent, spec: &str) {
             let Ok(v) = value.trim().parse::<f64>() else {
                 continue;
             };
+            // Overrides stay within an 8x ratio so no channel can erase the others.
+            if !v.is_finite() {
+                continue;
+            }
+            let v = v.clamp(0.25, 2.0);
             match ch.trim() {
                 "lexical" => weights.lexical = v,
                 "def" => weights.def = v,
