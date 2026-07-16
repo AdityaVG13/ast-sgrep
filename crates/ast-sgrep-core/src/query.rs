@@ -150,15 +150,17 @@ fn tokenize_words(input: &str, drop_stopwords: bool) -> Vec<String> {
             }
         }
         let mut parts = Vec::new();
-        let mut current = String::new();
-        for ch in w.chars() {
-            if ch.is_uppercase() && !current.is_empty() {
-                parts.push(std::mem::take(&mut current).to_lowercase());
+        for segment in w.split('_').filter(|segment| !segment.is_empty()) {
+            let mut current = String::new();
+            for ch in segment.chars() {
+                if ch.is_uppercase() && !current.is_empty() {
+                    parts.push(std::mem::take(&mut current).to_lowercase());
+                }
+                current.push(ch);
             }
-            current.push(ch);
-        }
-        if !current.is_empty() {
-            parts.push(current.to_lowercase());
+            if !current.is_empty() {
+                parts.push(current.to_lowercase());
+            }
         }
         for part in parts {
             if part.len() > 1 && !terms.contains(&part) {
@@ -183,5 +185,14 @@ mod tests {
         let parsed = ParsedQuery::parse("Map");
 
         assert_eq!(parsed.primary_symbol(), Some("map"));
+    }
+
+    #[test]
+    fn camel_split_does_not_emit_underscore_ghost_terms() {
+        let parsed = ParsedQuery::parse("User_Id");
+
+        assert!(!parsed.terms.iter().any(|term| term.ends_with('_')));
+        assert!(parsed.terms.iter().any(|term| term == "user"));
+        assert!(parsed.terms.iter().any(|term| term == "id"));
     }
 }
