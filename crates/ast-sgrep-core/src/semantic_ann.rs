@@ -205,7 +205,7 @@ fn score_members(
         let start = idx * dim;
         (start + dim <= flat.len())
             .then(|| cosine_similarity(query, &flat[start..start + dim]))
-            .filter(|&sim| sim > MIN_SIMILARITY)
+            .filter(|&sim| sim >= MIN_SIMILARITY)
             .map(|sim| (*idx, sim))
     };
     if members.len() < PARALLEL_CHUNK_THRESHOLD {

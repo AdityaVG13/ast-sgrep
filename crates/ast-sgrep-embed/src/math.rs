@@ -56,7 +56,7 @@ pub fn top_k_similarity(
     if limit == 0 { return vec![]; }
     let mut heap = BinaryHeap::new();
     for (idx, sim) in scored {
-        if sim.is_finite() && min_similarity.is_none_or(|min| sim > min) {
+        if sim.is_finite() && min_similarity.is_none_or(|min| sim >= min) {
             push_top_k(&mut heap, limit, idx, sim);
         }
     }
@@ -75,7 +75,7 @@ pub fn top_k_flat_similarity(
         let mut heap = BinaryHeap::new();
         for i in 0..n {
             let sim = cosine_similarity(query_vec, &flat[i * dim..(i + 1) * dim]);
-            if min_similarity.is_none_or(|min| sim > min) {
+            if min_similarity.is_none_or(|min| sim >= min) {
                 push_top_k(&mut heap, limit, i, sim);
             }
         }
@@ -85,7 +85,7 @@ pub fn top_k_flat_similarity(
         .into_par_iter()
         .fold(BinaryHeap::new, |mut heap, i| {
             let sim = cosine_similarity(query_vec, &flat[i * dim..(i + 1) * dim]);
-            if min_similarity.is_none_or(|min| sim > min) {
+            if min_similarity.is_none_or(|min| sim >= min) {
                 push_top_k(&mut heap, limit, i, sim);
             }
             heap
@@ -116,9 +116,38 @@ pub fn top_by_similarity(
 ) -> Vec<(usize, f32)> {
     if limit == 0 { return vec![]; }
     if let Some(min) = min_similarity {
-        scored.retain(|(_, sim)| *sim > min);
+        scored.retain(|(_, sim)| *sim >= min);
     }
     scored.sort_by(compare_hits_desc);
     scored.truncate(limit);
     scored
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn minimum_similarity_is_inclusive_across_rankers() {
+        let scored = vec![(0, MIN_SIMILARITY)];
+
+        assert_eq!(
+            top_k_similarity(scored.clone(), 1, Some(MIN_SIMILARITY)),
+            scored
+        );
+        assert_eq!(
+            top_by_similarity(scored.clone(), 1, Some(MIN_SIMILARITY)),
+            scored
+        );
+        assert_eq!(
+            top_k_flat_similarity(
+                &[MIN_SIMILARITY],
+                &[1.0],
+                1,
+                1,
+                Some(MIN_SIMILARITY),
+            ),
+            scored
+        );
+    }
 }
