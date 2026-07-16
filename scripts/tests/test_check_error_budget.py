@@ -31,5 +31,20 @@ class ErrorBudgetTests(unittest.TestCase):
         self.assertFalse(semantic["gates"]["p95_within_threshold"])
         self.assertTrue(natural_language["gates"]["burn_rate_within_budget"])
 
+    def test_variance_envelope_does_not_override_hard_threshold(self):
+        result = MODULE.evaluate(
+            [0.2584] * 10,
+            threshold_ms=250.0,
+            slo=0.95,
+            prior_p95_ms=250.0,
+            fingerprint="same-host",
+            prior_fingerprint="same-host",
+        )
+
+        self.assertFalse(result["claim_within_slo"])
+        self.assertTrue(result["variance_gate"]["within_envelope"])
+        self.assertAlmostEqual(result["variance_gate"]["drift_fraction"], 0.0336)
+        self.assertFalse(result["claim_within_all_gates"])
+
 if __name__ == "__main__":
     unittest.main()

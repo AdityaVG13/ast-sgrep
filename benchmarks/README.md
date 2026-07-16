@@ -68,7 +68,13 @@ retain both `p95_ms` and `burn_rate` rather than collapsing them.
 `scripts/check-error-budget.py` computes the hard-threshold exceedance rate
 directly from hyperfine `times`; for a 95% SLO, `burn_rate = error_rate / 0.05`.
 The p95 threshold and burn-rate checks are both gates. A p95 comparison alone is
-not an empirical error rate. Example:
+not an empirical error rate. Same-host variance is a separate regression gate:
+provide `--prior-p95-ms`, `--fingerprint`, and `--prior-fingerprint` to compare
+the current p95 with a prior run. A missing or different fingerprint makes drift
+non-comparable. Passing the default 10% drift envelope never changes the hard
+threshold, exceedance rate, burn rate, or `claim_within_slo`.
+
+Example:
 
 ```bash
 python3 scripts/check-error-budget.py hyperfine_index_self.json --label cold-index-self --threshold-ms 285 --slo 0.95 --baseline-p95-ms 258.4
