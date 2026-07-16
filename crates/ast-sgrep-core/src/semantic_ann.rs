@@ -7,7 +7,7 @@ use ast_sgrep_embed::{
 };
 use crate::semantic_ivf::{
     compute_ann_fingerprint, invalidate_semantic_ivf, load_semantic_ivf,
-    load_semantic_ivf_unchecked, save_semantic_ivf, semantic_ivf_path, PersistedSemanticIvf,
+    save_semantic_ivf, semantic_ivf_path, PersistedSemanticIvf,
 };
 use crate::store::IndexStore;
 use crate::Result;
@@ -133,24 +133,6 @@ impl SemanticAnnIndex {
         score_members(&q, flat, dim, n, &self.candidate_indices(&q, probes), limit)
     }
 
-    pub fn reassign_all(&mut self, flat: &[f32], dim: usize) {
-        let n = flat.len().checked_div(dim).unwrap_or(0);
-        if n == 0 || self.centroids.is_empty() {
-            return;
-        }
-        self.clusters = vec![Vec::new(); self.centroids.len()];
-        for idx in 0..n {
-            let start = idx * dim;
-            if start + dim > flat.len() {
-                break;
-            }
-            let vec = &flat[start..start + dim];
-            let best = nearest_centroid(vec, &self.centroids);
-            if best < self.clusters.len() {
-                self.clusters[best].push(idx);
-            }
-        }
-    }
 }
 pub fn flatten_vectors_for_search(chunks: &[SemanticChunkRow], dim: usize) -> Result<Vec<f32>> {
     for (i, chunk) in chunks.iter().enumerate() {
@@ -321,8 +303,12 @@ static SESSION_CACHE: Mutex<Option<(String, SessionCache)>> = Mutex::new(None);
 pub fn clear_semantic_ivf_session_cache() {
     *SESSION_CACHE.lock().unwrap_or_else(|e| e.into_inner()) = None;
 }
+/// Invalidate both cache layers as soon as semantic rows mutate. Reassigning vectors
+/// to stale centroids is cheaper, but it preserves outdated partitions and can lower
+/// recall; the next rebuild therefore recomputes centroids from the committed rows.
 pub fn mark_semantic_ivf_stale(store: &IndexStore) {
     let _ = store.set_meta("semantic_ivf_stale", "1");
+    let _ = invalidate_semantic_ivf(store.db_path());
     clear_semantic_ivf_session_cache();
 }
 fn ann_session_key(store: &IndexStore, chunks: &[SemanticChunkRow]) -> Result<([u8; 32], String)> {
@@ -401,21 +387,7 @@ pub fn rebuild_semantic_ivf_sidecar(
         return Ok(());
     }
     if chunks.first().is_none_or(|c| c.5.is_empty()) { return Ok(()); }
-    let dim = chunks[0].5.len();
-    if store.get_meta("semantic_ivf_stale")?.as_deref() == Some("1") {
-        if let Some(mut ivf) = load_semantic_ivf_unchecked(&semantic_ivf_path(store.db_path()))? {
-            if ivf.chunk_count() == chunks.len() && ivf.dim == dim {
-                ivf.vectors = flatten_vectors_for_search(chunks, dim)?;
-                ivf.index.reassign_all(&ivf.vectors, dim);
-                let (fingerprint, db_key) = ann_session_key(store, chunks)?;
-                ivf.fingerprint = fingerprint;
-                save_semantic_ivf(&semantic_ivf_path(store.db_path()), fingerprint, dim, &ivf.vectors, &ivf.index)?;
-                cache_session(&db_key, fingerprint, &ivf);
-                let _ = store.set_meta("semantic_ivf_stale", "0");
-                return Ok(());
-            }
-        }
-    }
+
     let _ = load_or_build_semantic_ivf(store, chunks, override_threshold)?;
     let _ = store.set_meta("semantic_ivf_stale", "0");
     Ok(())
