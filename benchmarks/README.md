@@ -79,3 +79,14 @@ Example:
 ```bash
 python3 scripts/check-error-budget.py hyperfine_index_self.json --label cold-index-self --threshold-ms 285 --slo 0.95 --baseline-p95-ms 258.4
 ```
+
+## ANN quality error budget
+
+Adaptive IVF has a **0.99 recall@10 SLO** against the same index queried
+with all clusters (`probes=all`). Miss rate is `1 - recall`; quality burn rate
+is `miss_rate / 0.01`. The narrowly filtered CI regression measures 64
+deterministic queries and fails when burn rate exceeds 1:
+
+```bash
+cargo test -p ast-sgrep-core --test semantic_ivf_roundtrip adaptive_ivf_recall_at_10_stays_within_quality_error_budget -- --nocapture
+```

@@ -77,7 +77,7 @@ impl SemanticAnnIndex {
         self.clusters.iter().all(|c| c.iter().all(|&i| i < chunk_count))
     }
 
-    /// `probes`: None/0 = adaptive √k clusters; ≥ n_clusters = all (exact).
+    /// `probes`: None/0 = adaptive 95% cluster coverage; ≥ n_clusters = all (exact).
     pub fn candidate_indices(&self, query: &[f32], probes: Option<usize>) -> Vec<usize> {
         if self.centroids.is_empty() {
             return vec![];
@@ -92,7 +92,7 @@ impl SemanticAnnIndex {
         scores.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
         let k = self.centroids.len();
         let take = match probes {
-            None | Some(0) => ((k as f64).sqrt() as usize).clamp(1, k),
+            None | Some(0) => k.saturating_mul(19).div_ceil(20).clamp(1, k),
             Some(p) if p >= k => k,
             Some(p) => p.max(1).min(k),
         };
@@ -105,13 +105,13 @@ impl SemanticAnnIndex {
         members
     }
 
-    /// Adaptive probe count (`√k` clusters). Prefer
+    /// Adaptive probe count (95% of clusters). Prefer
     /// [`Self::search_flat_with_probes`] when callers need exact coverage.
     pub fn search_flat(&self, flat: &[f32], dim: usize, query: &[f32], limit: usize) -> Vec<(usize, f32)> {
         self.search_flat_with_probes(flat, dim, query, limit, None)
     }
 
-    /// `probes`: `None`/`Some(0)` = adaptive √k; `Some(p)` with `p >= k` probes every
+    /// `probes`: `None`/`Some(0)` = adaptive 95% coverage; `Some(p)` with `p >= k` probes every
     /// cluster (exact over the partitioned set, same top-k as brute force when the
     /// partition is complete).
     pub fn search_flat_with_probes(

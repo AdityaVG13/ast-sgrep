@@ -108,3 +108,43 @@ fn ivf_search_matches_brute_force_top_k_indices_ce003() {
         );
     }
 }
+
+/// Adaptive IVF must retain at least 99% of exact recall@10.
+#[test]
+fn adaptive_ivf_recall_at_10_stays_within_quality_error_budget() {
+    const RECALL_SLO: f64 = 0.99;
+    let dim = 32usize;
+    let vector_count = 512usize;
+    let limit = 10usize;
+    let flat = normalized_flat_vectors(vector_count, dim, 0x5D0_036_u64);
+    let index = SemanticAnnIndex::build_from_flat(&flat, dim);
+    let mut matches = 0usize;
+    let mut expected = 0usize;
+
+    for qi in (0..vector_count).step_by(8) {
+        let query = &flat[qi * dim..(qi + 1) * dim];
+        let exact: HashSet<_> = index
+            .search_flat_with_probes(&flat, dim, query, limit, Some(usize::MAX))
+            .into_iter()
+            .map(|(idx, _)| idx)
+            .collect();
+        let adaptive: HashSet<_> = index
+            .search_flat(&flat, dim, query, limit)
+            .into_iter()
+            .map(|(idx, _)| idx)
+            .collect();
+        matches += exact.intersection(&adaptive).count();
+        expected += exact.len();
+    }
+
+    let recall = matches as f64 / expected as f64;
+    let miss_rate = 1.0 - recall;
+    let burn_rate = miss_rate / (1.0 - RECALL_SLO);
+    eprintln!(
+        "adaptive IVF recall@10={recall:.6}, miss_rate={miss_rate:.6}, burn_rate={burn_rate:.3}"
+    );
+    assert!(
+        burn_rate <= 1.0 + f64::EPSILON,
+        "adaptive IVF quality error budget exceeded: recall@10={recall:.6}, burn_rate={burn_rate:.3}"
+    );
+}
