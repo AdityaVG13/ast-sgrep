@@ -51,6 +51,10 @@ fn compare_hits_desc(left: &(usize, f32), right: &(usize, f32)) -> Ordering {
     score_order(right.1, left.1).then_with(|| left.0.cmp(&right.0))
 }
 pub fn dot_similarity(a: &[f32], b: &[f32]) -> f32 {
+/// Returns the dot product of two equal-length vectors.
+///
+/// This is cosine similarity only when both inputs are already L2-normalized.
+pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
     if a.len() != b.len() || a.is_empty() { return 0.0; }
     let (dot, norm_a, norm_b) = a.iter().zip(b).fold(
         (0.0_f64, 0.0_f64, 0.0_f64),
