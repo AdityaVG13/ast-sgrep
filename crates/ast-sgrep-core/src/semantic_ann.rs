@@ -100,10 +100,32 @@ impl SemanticAnnIndex {
         for (id, _) in scores.into_iter().take(take) {
             if let Some(c) = self.clusters.get(id) {
                 members.extend_from_slice(c);
+            if self.centroids.is_empty() {
+                return vec![];
             }
+            let q = normalize_vec(query);
+            let mut scores: Vec<(usize, f32)> = self
+                .centroids
+                .iter()
+                .enumerate()
+                .map(|(i, c)| (i, cosine_similarity(&q, c)))
+                .collect();
+            scores.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+            let k = self.centroids.len();
+            let take = match probes {
+                None | Some(0) => ((k as f64).sqrt() as usize).clamp(1, k),
+                Some(p) if p >= k => k,
+                Some(p) => p.max(1).min(k),
+            };
+            let mut members = Vec::new();
+            for (id, _) in scores.into_iter().take(take) {
+                if let Some(c) = self.clusters.get(id) {
+                    members.extend_from_slice(c);
+                }
+            }
+            members.sort_unstable();
+            members
         }
-        members
-    }
 
     /// Adaptive probe count (95% of clusters). Prefer
     /// [`Self::search_flat_with_probes`] when callers need exact coverage.
