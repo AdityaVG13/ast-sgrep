@@ -86,6 +86,8 @@ pub fn top_k_flat_similarity(
         for i in 0..n {
             let sim = dot_similarity(query_vec, &flat[i * dim..(i + 1) * dim]);
             if min_similarity.is_none_or(|min| sim >= min) {
+            let sim = cosine_similarity(query_vec, &flat[i * dim..(i + 1) * dim]);
+            if sim.is_finite() && min_similarity.is_none_or(|min| sim > min) {
                 push_top_k(&mut heap, limit, i, sim);
             }
         }
@@ -96,6 +98,8 @@ pub fn top_k_flat_similarity(
         .fold(BinaryHeap::new, |mut heap, i| {
             let sim = dot_similarity(query_vec, &flat[i * dim..(i + 1) * dim]);
             if min_similarity.is_none_or(|min| sim >= min) {
+            let sim = cosine_similarity(query_vec, &flat[i * dim..(i + 1) * dim]);
+            if sim.is_finite() && min_similarity.is_none_or(|min| sim > min) {
                 push_top_k(&mut heap, limit, i, sim);
             }
             heap
@@ -128,6 +132,9 @@ pub fn top_by_similarity(
     if let Some(min) = min_similarity {
         scored.retain(|(_, sim)| *sim >= min);
     }
+    scored.retain(|(_, sim)| {
+        sim.is_finite() && min_similarity.is_none_or(|min| *sim > min)
+    });
     scored.sort_by(compare_hits_desc);
     scored.truncate(limit);
     scored
