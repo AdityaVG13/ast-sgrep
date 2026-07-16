@@ -10,7 +10,8 @@ pub const MIN_CPU_LIMIT: u8 = 1;
 pub const MAX_CPU_LIMIT: u8 = 80;
 pub const CYCLE_MS: u64 = 10;
 // Cap heavy native libraries; leave Rayon free so index/search can use cores.
-// Process-level duty cycling (SIGSTOP/CONT) still enforces the CPU ceiling.
+// SIGSTOP/CONT controls the process runnable wall-time fraction, not machine-wide or
+// one-core CPU consumption; multi-threaded work can use several cores while runnable.
 #[cfg(unix)]
 const THREAD_ENV_VARS: &[&str] = &[
     "OMP_NUM_THREADS",
