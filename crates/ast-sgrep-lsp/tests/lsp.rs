@@ -65,3 +65,15 @@ fn workspace_symbols_surfaces_background_index_failure() {
         .expect_err("invalid index path must not become a permanent empty result");
     assert!(!error.to_string().is_empty());
 }
+
+#[test]
+fn measures_index_all_lock_hold_p99_under_repeated_load() {
+    let (_indexed, backend) = sample_backend();
+    for _ in 0..32 {
+        backend.ensure_index().expect("repeat index_all");
+    }
+
+    let p99 = backend.index_hold_p99().expect("index hold samples");
+    assert!(p99 > std::time::Duration::ZERO, "p99={p99:?}");
+    eprintln!("index_all lock-hold p99 over 33 samples: {p99:?}");
+}

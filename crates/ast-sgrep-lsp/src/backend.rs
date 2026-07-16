@@ -1,6 +1,8 @@
+use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, TryLockError};
+use std::time::{Duration, Instant};
 use ast_sgrep_core::{IndexOptions, Indexer, SearchOptions, Searcher};
 use serde_json::{json, Value};
 use crate::convert::{
@@ -22,9 +24,18 @@ pub struct LspBackend {
     index_ready: Arc<AtomicBool>,
     background_index_started: bool,
     index_lock: Arc<Mutex<()>>,
+    index_hold_samples: Arc<Mutex<VecDeque<Duration>>>,
 }
 fn first_command_arg(params: &ExecuteCommandParams) -> &str {
     params.arguments.first().and_then(|v| v.as_str()).unwrap_or("")
+}
+
+fn record_index_hold(samples: &Mutex<VecDeque<Duration>>, elapsed: Duration) {
+    let mut samples = samples.lock().unwrap_or_else(|error| error.into_inner());
+    if samples.len() == 64 {
+        samples.pop_front();
+    }
+    samples.push_back(elapsed);
 }
 
 #[cfg(test)]
@@ -55,6 +66,7 @@ impl LspBackend {
             index_ready: Arc::new(AtomicBool::new(false)),
             background_index_started: false,
             index_lock: Arc::new(Mutex::new(())),
+            index_hold_samples: Arc::new(Mutex::new(VecDeque::with_capacity(64))),
         }
     }
 
@@ -73,6 +85,18 @@ impl LspBackend {
     }
     pub fn is_index_ready(&self) -> bool {
         self.index_ready.load(Ordering::SeqCst)
+    }
+
+    /// P99 of the latest 64 serialized index-write lock holds.
+    pub fn index_hold_p99(&self) -> Option<Duration> {
+        let samples = self.index_hold_samples.lock().unwrap_or_else(|error| error.into_inner());
+        if samples.is_empty() {
+            return None;
+        }
+        let mut sorted: Vec<_> = samples.iter().copied().collect();
+        sorted.sort_unstable();
+        let index = (sorted.len() * 99).div_ceil(100) - 1;
+        Some(sorted[index])
     }
 
     fn index_options(&self) -> IndexOptions {
@@ -119,7 +143,10 @@ impl LspBackend {
         F: FnOnce(&mut Indexer) -> anyhow::Result<T>,
     {
         let _guard = self.index_guard()?;
-        f(&mut Indexer::new(self.index_options())?)
+        let started = Instant::now();
+        let result = f(&mut Indexer::new(self.index_options())?);
+        record_index_hold(&self.index_hold_samples, started.elapsed());
+        result
     }
 
     fn with_store<F, T>(&self, f: F) -> anyhow::Result<T>
@@ -146,11 +173,14 @@ impl LspBackend {
         let opts = self.index_options();
         let ready = Arc::clone(&self.index_ready);
         let lock = Arc::clone(&self.index_lock);
+        let samples = Arc::clone(&self.index_hold_samples);
         std::thread::spawn(move || {
             let Ok(_guard) = lock.lock() else {
                 return;
             };
+            let started = Instant::now();
             let ok = Indexer::new(opts).and_then(|mut i| i.index_all().map(|_| ())).is_ok();
+            record_index_hold(&samples, started.elapsed());
             if !ok {
                 crate::server::log("background index failed");
             } else {
