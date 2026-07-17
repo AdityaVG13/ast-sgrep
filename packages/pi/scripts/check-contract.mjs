@@ -28,7 +28,7 @@ const workspaceSection = cargo.match(/^\[workspace\.package\]\s*$([\s\S]*?)(?=^\
 const cargoVersion = workspaceSection.match(/^version\s*=\s*"([^"]+)"\s*$/m)?.[1];
 
 required(contract, ['schemaVersion', 'canonicalVersion', 'packages', 'compatibility', 'surface', 'config', 'offlineSemantics', 'dataLifecycle', 'updates', 'registries', 'firstPublication', 'releaseAutomation', 'nonGoals'], 'contract');
-required(contract.canonicalVersion, ['version', 'source', 'npmWorkspaceSource', 'tag', 'coupledComponents', 'driftPolicy'], 'canonicalVersion');
+required(contract.canonicalVersion, ['version', 'source', 'npmWorkspaceSource', 'tag', 'nativeCliVersion', 'nativeCliSource', 'coupledComponents', 'driftPolicy'], 'canonicalVersion');
 required(contract.packages, ['extension', 'launcher', 'platformDependencyPolicy', 'platforms', 'unsupportedTargets', 'installPolicy'], 'packages');
 required(contract.packages?.extension, ['name', 'directory'], 'packages.extension');
 required(contract.packages?.launcher, ['name', 'directory', 'commands'], 'packages.launcher');
@@ -50,12 +50,13 @@ required(contract.registries?.npm, ['requiresCratesIoPublication', 'availability
 required(contract.registries?.cratesIo, ['requiresNpmPublication', 'policy'], 'registries.cratesIo');
 required(contract.firstPublication, ['humanAuthorizationRequired', 'automatedFirstPublishForbidden', 'protectedEnvironmentApprovalRequired', 'packageNameAndOwnershipVerificationRequired', 'trustedPublishingRequired', 'provenanceRequired', 'authorizationRecordRequired', 'gate'], 'firstPublication');
 required(contract.releaseAutomation, ['dryRunWorkflow', 'officialWorkflow', 'officialTrigger', 'protectedEnvironment', 'trustedPublishing', 'provenance', 'packageOrder', 'idempotence'], 'releaseAutomation');
-report(contract.schemaVersion === 1, 'unsupported contract schemaVersion');
+report(contract.schemaVersion === 2, 'unsupported contract schemaVersion');
 const version = contract.canonicalVersion?.version;
+const nativeVersion = contract.canonicalVersion?.nativeCliVersion;
 report(typeof version === 'string' && /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(version), 'canonical version must be explicit semver');
-report(contract.canonicalVersion?.source === 'Cargo.toml#workspace.package.version', 'canonical Rust version source changed');
+report(contract.canonicalVersion?.source === 'package.json#version' && contract.canonicalVersion?.npmWorkspaceSource === 'package.json#version', 'canonical npm version source changed');
 report(contract.canonicalVersion?.tag === 'v' + version, 'official tag must be v<canonical version>');
-report(cargoVersion === version, 'Cargo workspace version drifts from the Pi contract');
+report(contract.canonicalVersion?.nativeCliSource === 'Cargo.toml#workspace.package.version' && cargoVersion === nativeVersion, 'native CLI version drifts from the Rust workspace');
 report(workspace.version === version, 'npm workspace version drifts from the Pi contract');
 report(workspace.name === 'ast-sgrep-workspace' && workspace.private === true, 'root npm workspace name/private policy changed');
 report(equal(workspace.workspaces, ['packages/pi/extension', 'packages/pi/launcher']), 'root npm workspace paths changed or native platform templates became direct workspaces');
@@ -97,10 +98,10 @@ report(equal(contract.surface?.cliCommands, ['asgrep', 'ast-sgrep']) && contract
 report(contract.compatibility?.node?.range === '>=22.19.0' && contract.compatibility.node.minimum === '22.19.0', 'Node compatibility floor changed');
 report(contract.compatibility?.pi?.package === '@earendil-works/pi-coding-agent' && contract.compatibility.pi.range === '>=0.80.6 <1' && contract.compatibility.pi.minimum === '0.80.6' && contract.compatibility.pi.api === 'ExtensionAPI', 'Pi compatibility policy changed');
 const layers = contract.compatibility?.layers ?? {};
-report(layers.extension?.version === version && layers.launcher?.version === version && layers.binary?.version === version, 'extension, launcher, and binary compatibility versions must equal the canonical version');
-report(layers.extension?.compatibility === 'exact' && layers.launcher?.compatibility === 'exact' && layers.binary?.compatibility === 'exact', 'release layer compatibility must reject version skew');
+report(layers.extension?.version === version && layers.launcher?.version === version && layers.binary?.version === nativeVersion, 'npm layers or embedded native CLI drift from their canonical versions');
+report(layers.extension?.compatibility === 'exact' && layers.launcher?.compatibility === 'exact' && layers.binary?.compatibility === 'exact-native-cli', 'release layer compatibility must reject package or native CLI version skew');
 report(extensionManifest.version === version && launcherManifest.version === version && extensionManifest.dependencies?.['ast-sgrep'] === version, 'extension and launcher manifests drift from the compatibility matrix');
-report(runtimeSource.includes(`export const RUNTIME_VERSION = "${version}";`) && launcherSource.includes(`const VERSION = "${version}";`), 'runtime or launcher source version drifts from the compatibility matrix');
+report(runtimeSource.includes(`export const RUNTIME_VERSION = "${nativeVersion}";`) && launcherSource.includes(`const VERSION = "${version}";`), 'runtime native CLI expectation or launcher package version drifts from the compatibility matrix');
 report(layers.machineSchema?.version === '1.0.0' && equal(layers.machineSchema.readable, ['1.0.0']) && runtimeSource.includes('export const MACHINE_SCHEMA_VERSION = "1.0.0";'), 'machine schema compatibility matrix is inconsistent');
 report(layers.configSchema?.current === 1 && equal(layers.configSchema.readable, [0, 1]) && equal(layers.configSchema.rollback, [0]) && runtimeSource.includes('export const CONFIG_SCHEMA_VERSION = 1 as const;'), 'config schema migration/rollback matrix is inconsistent');
 report(layers.indexFormat?.current === 5 && equal(layers.indexFormat.reusable, [5]) && equal(layers.indexFormat.rebuild, [0, 1, 2, 3, 4]) && layers.indexFormat.newer === 'reject-and-preserve' && runtimeSource.includes('export const INDEX_FORMAT_VERSION = 5 as const;'), 'index format reuse/rebuild matrix is inconsistent');
@@ -110,8 +111,8 @@ report(contract.dataLifecycle?.path === '<project-root>/.asgrep' && contract.dat
 report(contract.updates?.runtimeDownloads === false && /never publish/.test(contract.updates.mainBranch ?? '') && /human-approved official version tag/.test(contract.updates.officialTag ?? ''), 'update/publication policy changed');
 report(contract.registries?.npm?.requiresCratesIoPublication === false && contract.registries?.cratesIo?.requiresNpmPublication === false, 'npm and crates.io must remain independently publishable');
 const availability = contract.registries?.npm?.availabilityObserved ?? {};
-required(availability, ['date', 'registryResult', 'names', 'reservationGuaranteed', 'policy'], 'registries.npm.availabilityObserved');
-report(availability.date === '2026-07-14' && availability.registryResult === '404/not-found', 'npm availability observation changed');
+required(availability, ['date', 'version', 'registryResult', 'names', 'reservationGuaranteed', 'policy'], 'registries.npm.availabilityObserved');
+report(availability.date === '2026-07-16' && availability.version === version && availability.registryResult === '404/not-found', 'npm availability observation changed');
 report(equal(availability.names, ['pi-ast-sgrep', 'ast-sgrep', ...expectedPlatforms.map(([name]) => name)]), 'npm availability observation must cover every public package name');
 report(availability.reservationGuaranteed === false && /re-verify/.test(availability.policy ?? ''), 'npm availability must not be represented as a reservation guarantee');
 const gate = contract.firstPublication ?? {};

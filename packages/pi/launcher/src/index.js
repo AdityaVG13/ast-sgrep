@@ -3,7 +3,7 @@ import { accessSync, constants, readFileSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
 
-const VERSION = "1.1.0-alpha";
+const VERSION = "1.1.0-alpha.1";
 const HOSTS = new Map([
   ["darwin:arm64:", ["ast-sgrep-darwin-arm64", "asgrep", "darwin", "arm64", null]],
   ["darwin:x64:", ["ast-sgrep-darwin-x64", "asgrep", "darwin", "x64", null]],

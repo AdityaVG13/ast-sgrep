@@ -1,16 +1,16 @@
 # Releasing
 
-This repository publishes npm packages and public crates from one canonical version and source commit. Publishing is irreversible: prepare and verify locally, then wait for explicit human approval before any external registry command or protected release-environment approval.
+This repository publishes npm packages and public crates from one source commit with separate, explicit release identities. Publishing is irreversible: prepare and verify locally, then wait for explicit human approval before any external registry command or protected release-environment approval.
 
 ## Pi npm package family
 
-The npm release is one atomic versioned family, published only from the human-approved official `v1.1.0-alpha` tag and commit:
+The npm release is one atomic versioned family at `1.1.0-alpha.1`, published only from the human-approved official `v1.1.0-alpha.1` tag and commit:
 
 1. the five host-constrained native packages: `ast-sgrep-darwin-arm64`, `ast-sgrep-darwin-x64`, `ast-sgrep-linux-arm64-gnu`, `ast-sgrep-linux-x64-gnu`, and `ast-sgrep-win32-x64-msvc`;
 2. the `ast-sgrep` launcher, whose optional native dependencies use that exact version;
 3. the `pi-ast-sgrep` extension, whose launcher dependency uses that exact version.
 
-All layers, the Rust workspace, machine protocol, config schema, and index format share the tag, commit, canonical workspace version, and artifact checksums recorded by [the release contract](../packages/pi/release-contract.json). Pi validation does not run automatically on pull requests, pushes to `main`, or tag pushes; both Pi workflows are manual `workflow_dispatch` actions. npm and crates.io are independently approved registry operations over the same source release; neither waits for or proves completion of the other.
+The extension, launcher, and five native npm packages share npm version `1.1.0-alpha.1`. The packaged executable is built from this PR base and reports native CLI version `1.1.0-alpha`; that expected CLI identity is recorded separately in [the release contract](../packages/pi/release-contract.json). All artifacts still share one source commit and recorded checksums. Pi validation does not run automatically on pull requests, pushes to `main`, or tag pushes; both Pi workflows are manual `workflow_dispatch` actions. npm and crates.io are independently approved registry operations over the same source release; neither waits for or proves completion of the other.
 
 Local preparation is side-effect free:
 

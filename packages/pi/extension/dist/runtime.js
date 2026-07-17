@@ -11,6 +11,7 @@ export const INDEX_FORMAT_VERSION = 5;
 export const DEFAULT_TIMEOUT_MS = 30_000;
 export const DEFAULT_MAX_OUTPUT_BYTES = 4 * 1024 * 1024;
 export const DEFAULT_REFRESH_INTERVAL_MS = 30_000;
+const RESOLVED_ROOT = Symbol("resolvedRoot");
 export class RuntimeError extends Error {
     code;
     details;
@@ -202,6 +203,7 @@ export class FreshnessCoordinator {
     }
     async ensureFresh(runtime, context, options = {}) {
         const root = await runtime.resolveRoot(context);
+        const rootContext = { cwd: root, [RESOLVED_ROOT]: true };
         let state = this.#states.get(root);
         if (!state) {
             state = { dirtyGeneration: 0, cleanGeneration: 0, initialized: false, lastRefreshAt: 0, inFlight: undefined };
@@ -215,7 +217,7 @@ export class FreshnessCoordinator {
         }
         if (state.inFlight) {
             await state.inFlight;
-            return this.ensureFresh(runtime, { cwd: root }, options);
+            return this.ensureFresh(runtime, rootContext, options);
         }
         const now = this.#now();
         const elapsed = now - state.lastRefreshAt;
@@ -225,10 +227,10 @@ export class FreshnessCoordinator {
         const refreshGeneration = state.dirtyGeneration;
         const wasInitialized = state.initialized;
         const refresh = (async () => {
-            let health = await runtime.inspectIndexCompatibility?.({ cwd: root });
+            let health = await runtime.inspectIndexCompatibility?.(rootContext);
             if (health !== "incompatible") {
                 try {
-                    const status = await runtime.run(["status", ".", "--json"], { cwd: root }, options);
+                    const status = await runtime.run(["status", ".", "--json"], rootContext, options);
                     health = indexHealth(status);
                 }
                 catch (cause) {
@@ -240,17 +242,17 @@ export class FreshnessCoordinator {
             const dirty = refreshGeneration > state.cleanGeneration;
             if (health === "incompatible") {
                 if (runtime.rebuildIncompatibleIndex)
-                    await runtime.rebuildIncompatibleIndex({ cwd: root }, options);
+                    await runtime.rebuildIncompatibleIndex(rootContext, options);
                 else
-                    await runtime.run(["reindex", ".", "--json"], { cwd: root }, options);
+                    await runtime.run(["reindex", ".", "--json"], rootContext, options);
             }
             else if (health === "missing" || !wasInitialized || dirty) {
-                await runtime.run(["index", ".", "--json"], { cwd: root }, options);
+                await runtime.run(["index", ".", "--json"], rootContext, options);
             }
             else if (expired) {
                 // Lease expired without dirty marks: incremental index (not force reindex)
                 // so external create/modify/delete are reconciled without rebuild thrash (5du.9).
-                await runtime.run(["index", ".", "--json"], { cwd: root }, options);
+                await runtime.run(["index", ".", "--json"], rootContext, options);
             }
             state.initialized = true;
             state.cleanGeneration = refreshGeneration;
@@ -343,7 +345,7 @@ function indexPathFor(root, env) {
     if (!configured)
         return join(root, ".asgrep", "index.db");
     const resolved = resolve(root, configured);
-    return extname(resolved) ? resolved : join(resolved, "index.db");
+    return extname(resolved) === ".db" ? resolved : join(resolved, "index.db");
 }
 function inspectIndexFile(path) {
     if (!existsSync(path))
@@ -352,9 +354,19 @@ function inspectIndexFile(path) {
     try {
         database = new DatabaseSync(path, { readOnly: true });
         const row = database.prepare("PRAGMA user_version").get();
-        return Number(Object.values(row ?? {})[0]) === INDEX_FORMAT_VERSION ? "ready" : "incompatible";
+        const version = Number(Object.values(row ?? {})[0]);
+        if (version > INDEX_FORMAT_VERSION) {
+            throw new RuntimeError("INDEX_VERSION_TOO_NEW", "Index schema is newer than this ast-sgrep runtime", {
+                actual: version,
+                supported: INDEX_FORMAT_VERSION,
+                rollbackSafe: true,
+            });
+        }
+        return version === INDEX_FORMAT_VERSION ? "ready" : "incompatible";
     }
-    catch {
+    catch (cause) {
+        if (cause instanceof RuntimeError)
+            throw cause;
         return "incompatible";
     }
     finally {
@@ -373,7 +385,9 @@ export class AstSgrepRuntime {
         this.#resolver = dependencies.resolveBinary ?? resolveBinary;
     }
     async resolveRoot(context) {
-        return resolveRuntimeRoot(context.cwd, this.config.root, this.config.allowOutsideProject);
+        return context[RESOLVED_ROOT]
+            ? resolveRuntimeRoot(context.cwd)
+            : resolveRuntimeRoot(context.cwd, this.config.root, this.config.allowOutsideProject);
     }
     async inspectIndexCompatibility(context) {
         const root = await this.resolveRoot(context);

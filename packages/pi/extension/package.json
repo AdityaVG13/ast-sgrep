@@ -1,6 +1,6 @@
 {
   "name": "pi-ast-sgrep",
-  "version": "1.1.0-alpha",
+  "version": "1.1.0-alpha.1",
   "description": "Pi extension for the ast-sgrep native search runtime",
   "type": "module",
   "license": "MIT",
@@ -30,7 +30,7 @@
     "prepack": "npm run build"
   },
   "engines": {"node": ">=22.19.0"},
-  "dependencies": {"ast-sgrep": "1.1.0-alpha", "typebox": "^1.0.0"},
+  "dependencies": {"ast-sgrep": "1.1.0-alpha.1", "typebox": "^1.0.0"},
   "peerDependencies": {"@earendil-works/pi-coding-agent": ">=0.80.6 <1"},
   "peerDependenciesMeta": {"@earendil-works/pi-coding-agent": {"optional": true}},
   "devDependencies": {"@earendil-works/pi-coding-agent": "^0.80.6", "@types/node": "^22.15.0", "tsx": "^4.20.0", "typescript": "^5.8.0"}

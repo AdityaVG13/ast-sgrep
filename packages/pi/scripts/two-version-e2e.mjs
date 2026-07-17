@@ -9,7 +9,8 @@ import { spawnSync } from 'node:child_process';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const oldVersion = '1.0.0-alpha';
-const newVersion = '1.1.0-alpha';
+const newVersion = '1.1.0-alpha.1';
+const newNativeVersion = '1.1.0-alpha';
 const oldCommit = '1f7ba20';
 const machineSchema = '1.0.0';
 const hosts = new Map([
@@ -131,7 +132,7 @@ async function stageArtifacts(version, binary) {
     manifest.version = version;
     manifest.optionalDependencies = { [host.packageName]: `file:${nativeArtifact}` };
   });
-  await replace(path.join(launcher, 'src', 'index.js'), 'const VERSION = "1.1.0-alpha";', `const VERSION = "${version}";`);
+  await replace(path.join(launcher, 'src', 'index.js'), 'const VERSION = "1.1.0-alpha.1";', `const VERSION = "${version}";`);
   pack(launcher, launcherArtifact);
 
   await setJson(path.join(extension, 'package.json'), (manifest) => {
@@ -141,7 +142,7 @@ async function stageArtifacts(version, binary) {
   });
   if (version !== newVersion) {
     for (const relative of ['dist/runtime.js', 'dist/runtime.d.ts']) {
-      await replace(path.join(extension, relative), newVersion, version);
+      await replace(path.join(extension, relative), newNativeVersion, oldVersion);
     }
   }
   pack(extension, extensionArtifact);
@@ -160,7 +161,7 @@ async function assertInstalled(version) {
   const binary = resolveBinary();
   if (version === newVersion) {
     const reported = runJson(binary, ['version', '--json'], { cwd: project });
-    assert.equal(reported.version, version);
+    assert.equal(reported.version, newNativeVersion);
     assert.equal(reported.machine_schema_version, machineSchema);
   } else {
     const reported = run(binary, ['--version'], { cwd: project });

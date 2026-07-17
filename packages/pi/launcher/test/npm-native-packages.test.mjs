@@ -23,7 +23,7 @@ function fixture(target = targets[0], changes = {}) {
   mkdirSync(packageDir);
   const manifest = {
     name: target.name,
-    version: changes.version ?? "1.1.0-alpha",
+    version: changes.version ?? "1.1.0-alpha.1",
     os: [target.platform],
     cpu: [target.arch],
     ...(target.libc ? { libc: [target.libc] } : {})
@@ -148,7 +148,7 @@ test("npm omits a wrong-OS local optional package without registry access", () =
     const appDir = join(root, "app");
     mkdirSync(nativeDir);
     mkdirSync(appDir);
-    writeFileSync(join(nativeDir, "package.json"), JSON.stringify({ name: "ast-sgrep-win32-x64-msvc", version: "1.1.0-alpha", os: ["win32"], cpu: ["x64"] }));
+    writeFileSync(join(nativeDir, "package.json"), JSON.stringify({ name: "ast-sgrep-win32-x64-msvc", version: "1.1.0-alpha.1", os: ["win32"], cpu: ["x64"] }));
     writeFileSync(join(appDir, "package.json"), JSON.stringify({ private: true, optionalDependencies: { "ast-sgrep-win32-x64-msvc": "file:../native" } }));
     const result = spawnSync("npm", ["install", "--offline", "--ignore-scripts", "--no-audit", "--no-fund", "--os=linux", "--cpu=x64"], { cwd: appDir, encoding: "utf8" });
     assert.equal(result.status, 0, result.stderr);

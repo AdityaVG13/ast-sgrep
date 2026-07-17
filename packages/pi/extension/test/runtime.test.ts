@@ -169,6 +169,13 @@ describe("machine compatibility", () => {
   });
 });
 describe("index format upgrades", () => {
+  it("treats dotted non-.db index paths as directories", async () => {
+    const { project } = await fixture();
+    const configuredDirectory = join(project, "index.cache.v1");
+    await createIndex(join(configuredDirectory, "index.db"), INDEX_FORMAT_VERSION, "current");
+    const subject = runtime(new FakePi(), project, { environment: { ASGREP_INDEX_PATH: "index.cache.v1" } });
+    assert.equal(await subject.inspectIndexCompatibility({ cwd: project }), "ready");
+  });
   it("atomically replaces an incompatible index only after a valid rebuild", async () => {
     const { project } = await fixture();
     const indexPath = join(project, ".asgrep", "index.db");
@@ -187,6 +194,30 @@ describe("index format upgrades", () => {
     assert.equal(pi.calls[0]?.args[0], "--index-path");
     assert.match(pi.calls[0]?.args[1] ?? "", /\.asgrep\/\.rebuild-[^/]+\/index\.db$/);
     assert.deepEqual(pi.calls[0]?.args.slice(2), ["index", ".", "--json"]);
+  });
+
+  it("rejects a future index schema without modifying or rebuilding it", async () => {
+    const { project } = await fixture();
+    const indexPath = join(project, ".asgrep", "index.db");
+    await createIndex(indexPath, INDEX_FORMAT_VERSION + 1, "future");
+    const pi = new FakePi();
+    const subject = runtime(pi, project, { environment: {} });
+    const error = await errorCode(
+      () => new FreshnessCoordinator().ensureFresh(subject, { cwd: project }),
+      "INDEX_VERSION_TOO_NEW",
+    );
+    assert.equal(error.details.actual, INDEX_FORMAT_VERSION + 1);
+    assert.equal(error.details.supported, INDEX_FORMAT_VERSION);
+    assert.equal(error.details.rollbackSafe, true);
+    assert.equal(readMarker(indexPath), "future");
+    const database = new DatabaseSync(indexPath, { readOnly: true });
+    try {
+      const row = database.prepare("PRAGMA user_version").get() as Record<string, unknown>;
+      assert.equal(Number(Object.values(row)[0]), INDEX_FORMAT_VERSION + 1);
+    } finally {
+      database.close();
+    }
+    assert.equal(pi.calls.length, 0);
   });
 
   it("preserves the recoverable prior index and returns a structured failure", async () => {
@@ -282,6 +313,32 @@ describe("per-root index freshness", () => {
     releases.get("/root")!(); releases.get("/other")!();
     await Promise.all([sameA, sameB, other]);
     assert.equal(runtime.calls.filter(({ root, command }) => root === "/root" && command === "index").length, 1);
+  });
+
+  it("reuses the original context when concurrent searches share a relative configured root", async () => {
+    const { project } = await fixture();
+    const sourceRoot = join(project, "src");
+    await mkdir(sourceRoot);
+    const canonicalSourceRoot = await realpath(sourceRoot);
+    let release!: () => void;
+    const pi = new FakePi(async (_options, args) => {
+      const command = args[0];
+      if (command === "index") await new Promise<void>((resolve) => { release = resolve; });
+      return valid({ command, index: { exists: command !== "status", compatible: true, status: command === "status" ? "missing" : "ready" } });
+    });
+    const configured = new AstSgrepRuntime(
+      pi,
+      { environment: {}, explicitProjectConfig: { root: "src" } },
+      { resolveBinary: (() => process.execPath) as never },
+    );
+    const subject = new FreshnessCoordinator();
+    const first = subject.ensureFresh(configured, { cwd: project });
+    while (!release) await new Promise((resolve) => setImmediate(resolve));
+    const concurrent = subject.ensureFresh(configured, { cwd: project });
+    release();
+    await Promise.all([first, concurrent]);
+    assert.deepEqual(pi.calls.map(({ args }) => args[0]), ["status", "index"]);
+    assert.ok(pi.calls.every(({ options }) => options.cwd === canonicalSourceRoot));
   });
 
   it("clears failed and cancelled in-flight work, keeps dirty, and retries", async () => {

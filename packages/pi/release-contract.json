@@ -1,20 +1,18 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "canonicalVersion": {
-    "version": "1.1.0-alpha",
-    "source": "Cargo.toml#workspace.package.version",
+    "version": "1.1.0-alpha.1",
+    "source": "package.json#version",
     "npmWorkspaceSource": "package.json#version",
-    "tag": "v1.1.0-alpha",
+    "tag": "v1.1.0-alpha.1",
     "coupledComponents": [
-      "rust-workspace",
       "pi-extension",
       "npm-launcher",
-      "native-platform-packages",
-      "cli-json-protocol",
-      "config-schema",
-      "index-format"
+      "native-platform-packages"
     ],
-    "driftPolicy": "All coupled components and release metadata MUST equal the canonical version; mixed versions are rejected."
+    "driftPolicy": "All Pi/npm packages and release metadata MUST equal the canonical npm version; the embedded native CLI MUST equal nativeCliVersion. Mixed package versions or unexpected CLI versions are rejected.",
+    "nativeCliVersion": "1.1.0-alpha",
+    "nativeCliSource": "Cargo.toml#workspace.package.version"
   },
   "packages": {
     "extension": {
@@ -43,7 +41,7 @@
         ],
         "libc": [],
         "executable": "asgrep",
-        "optionalDependencyVersion": "1.1.0-alpha"
+        "optionalDependencyVersion": "1.1.0-alpha.1"
       },
       {
         "name": "ast-sgrep-darwin-x64",
@@ -57,7 +55,7 @@
         ],
         "libc": [],
         "executable": "asgrep",
-        "optionalDependencyVersion": "1.1.0-alpha"
+        "optionalDependencyVersion": "1.1.0-alpha.1"
       },
       {
         "name": "ast-sgrep-linux-arm64-gnu",
@@ -73,7 +71,7 @@
           "glibc"
         ],
         "executable": "asgrep",
-        "optionalDependencyVersion": "1.1.0-alpha"
+        "optionalDependencyVersion": "1.1.0-alpha.1"
       },
       {
         "name": "ast-sgrep-linux-x64-gnu",
@@ -89,7 +87,7 @@
           "glibc"
         ],
         "executable": "asgrep",
-        "optionalDependencyVersion": "1.1.0-alpha"
+        "optionalDependencyVersion": "1.1.0-alpha.1"
       },
       {
         "name": "ast-sgrep-win32-x64-msvc",
@@ -103,7 +101,7 @@
         ],
         "libc": [],
         "executable": "asgrep.exe",
-        "optionalDependencyVersion": "1.1.0-alpha"
+        "optionalDependencyVersion": "1.1.0-alpha.1"
       }
     ],
     "unsupportedTargets": [
@@ -127,16 +125,16 @@
     },
     "layers": {
       "extension": {
-        "version": "1.1.0-alpha",
+        "version": "1.1.0-alpha.1",
         "compatibility": "exact"
       },
       "launcher": {
-        "version": "1.1.0-alpha",
+        "version": "1.1.0-alpha.1",
         "compatibility": "exact"
       },
       "binary": {
         "version": "1.1.0-alpha",
-        "compatibility": "exact"
+        "compatibility": "exact-native-cli"
       },
       "machineSchema": {
         "version": "1.0.0",
@@ -253,7 +251,7 @@
     "npm": {
       "requiresCratesIoPublication": false,
       "availabilityObserved": {
-        "date": "2026-07-14",
+        "date": "2026-07-16",
         "registryResult": "404/not-found",
         "names": [
           "pi-ast-sgrep",
@@ -265,7 +263,8 @@
           "ast-sgrep-win32-x64-msvc"
         ],
         "reservationGuaranteed": false,
-        "policy": "Availability is an observation only; re-verify every name and publisher ownership immediately before first publication."
+        "policy": "Availability is an observation only; re-verify every name and publisher ownership immediately before first publication.",
+        "version": "1.1.0-alpha.1"
       },
       "policy": "npm publication is independently gated and does not wait for crates.io availability or ordering."
     },
