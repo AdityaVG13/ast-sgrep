@@ -6,6 +6,8 @@ import { fileURLToPath } from 'node:url';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const workflowText = await readFile(path.join(root, '.github/workflows/pi-native-artifacts.yml'), 'utf8');
 const officialText = await readFile(path.join(root, '.github/workflows/pi-npm-release.yml'), 'utf8');
+const allowedSignersText = await readFile(path.join(root, 'packages/pi/release/allowed-signers'), 'utf8');
+const expectedAllowedSigner = 'adityavgcode@gmail.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICeIowlFrWVQpSI2f/8qjz1KZY7Uif+cFR0u5Jwin8oH mac-m5-max\n';
 const releaseHelper = await readFile(path.join(root, 'packages/pi/scripts/release-acceptance.mjs'), 'utf8');
 const targets = JSON.parse(await readFile(path.join(root, 'packages/pi/release/targets.json'), 'utf8')).targets;
 const helper = await readFile(path.join(root, 'packages/pi/scripts/ci-install-smoke.mjs'), 'utf8');
@@ -51,7 +53,7 @@ const validate = (text) => {
   return errors;
 };
 
-const validateOfficial = (text) => {
+const validateOfficial = (text, signersText = allowedSignersText) => {
   const errors = [];
   let workflow;
   try { workflow = parse(text); } catch (error) { return ['official YAML parse failed: ' + error.message]; }
@@ -69,8 +71,14 @@ const validateOfficial = (text) => {
   const publish = workflow.jobs?.publish;
   const bootstrapToken = "${{ inputs.bootstrap_token && secrets.NPM_TOKEN || '' }}";
   report(build?.strategy?.matrix === '${{ fromJSON(needs.release-gate.outputs.matrix) }}' && build?.['runs-on'] === '${{ matrix.runner }}', 'official native build must use the authoritative native matrix once');
-  const gateRuns = (gate?.steps ?? []).map(activeRun).join('\n');
-  report(gateRuns.includes('release-acceptance.mjs gate') && gateRuns.includes('npm run check:pi-contract') && gateRuns.includes('npm run check:pi-release'), 'official tag/version/duplicate gate is missing');
+  const gateRuns = (gate?.steps ?? []).map(activeRun);
+  const sshSetup = 'git config --local gpg.format ssh\ngit config --local gpg.ssh.allowedSignersFile \"$GITHUB_WORKSPACE/packages/pi/release/allowed-signers\"';
+  const sshSetupIndex = gateRuns.indexOf(sshSetup);
+  const officialGateIndex = gateRuns.findIndex((run) => run.includes('release-acceptance.mjs gate'));
+  report(sshSetupIndex !== -1 && sshSetupIndex < officialGateIndex, 'official release gate must configure repository-local SSH verification with the tracked allowed-signers file before verifying the tag');
+  report(signersText === expectedAllowedSigner, 'tracked SSH allowed signer must contain the exact release principal and public key');
+  const gateRunText = gateRuns.join('\n');
+  report(gateRunText.includes('release-acceptance.mjs gate') && gateRunText.includes('npm run check:pi-contract') && gateRunText.includes('npm run check:pi-release'), 'official tag/version/duplicate gate is missing');
   const verifyRuns = (verify?.steps ?? []).map(activeRun).join('\n');
   report(verifyRuns.includes('release-acceptance.mjs pack --native-root dist/native') && verifyRuns.includes('release-acceptance.mjs verify --artifacts npm-packs') && verifyRuns.includes('npm run test:pi-e2e'), 'official release must pack and verify the complete family exactly once');
   report(verify?.permissions?.['id-token'] === 'write' && verify?.permissions?.attestations === 'write' && (verify?.steps ?? []).some((step) => step.uses === 'actions/attest-build-provenance@v2'), 'artifact provenance attestation is missing');
@@ -108,11 +116,18 @@ const officialMutations = [
   officialText.replace("      bootstrap_token:", "      bootstrap_token_removed:"),
   officialText.replace("      NODE_AUTH_TOKEN: ${{ inputs.bootstrap_token && secrets.NPM_TOKEN || '' }}", "      NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}"),
   officialText.replace("      NODE_AUTH_TOKEN: ${{ inputs.bootstrap_token && secrets.NPM_TOKEN || '' }}", "      # NODE_AUTH_TOKEN omitted"),
-  officialText.replace("      NODE_AUTH_TOKEN: ${{ inputs.bootstrap_token && secrets.NPM_TOKEN || '' }}", "      NODE_AUTH_TOKEN: ${{ inputs.bootstrap_token && secrets.NPM_TOKEN }}")
+  officialText.replace("      NODE_AUTH_TOKEN: ${{ inputs.bootstrap_token && secrets.NPM_TOKEN || '' }}", "      NODE_AUTH_TOKEN: ${{ inputs.bootstrap_token && secrets.NPM_TOKEN }}"),
+  officialText.replace("      - name: Configure SSH tag verification\n        run: |\n          git config --local gpg.format ssh\n          git config --local gpg.ssh.allowedSignersFile \"$GITHUB_WORKSPACE/packages/pi/release/allowed-signers\"\n", ''),
+  officialText.replace('packages/pi/release/allowed-signers', 'packages/pi/release/wrong-signers')
 ];
 for (const [index, mutation] of officialMutations.entries()) if (validateOfficial(mutation).length === 0) errors.push('negative official mutation ' + (index + 1) + ' was not rejected');
+const signerMutations = [
+  allowedSignersText.replace('adityavgcode@gmail.com', 'attacker@example.com'),
+  allowedSignersText.replace('AAAAC3NzaC1lZDI1NTE5AAAAICeIowlFrWVQpSI2f/8qjz1KZY7Uif+cFR0u5Jwin8oH', 'AAAAC3NzaC1lZDI1NTE5AAAAICorrupted')
+];
+for (const [index, mutation] of signerMutations.entries()) if (validateOfficial(officialText, mutation).length === 0) errors.push('negative allowed-signers mutation ' + (index + 1) + ' was not rejected');
 for (const token of ['ASGREP_RELEASE_DIRTY', 'ASGREP_RELEASE_TAG_VERSION', 'ASGREP_RELEASE_TAG_COMMIT', 'ASGREP_RELEASE_CHECKSUM_MISSING', 'ASGREP_RELEASE_CHECKSUM_MISMATCH', 'ASGREP_RELEASE_VERSION_SKEW', 'ASGREP_RELEASE_DUPLICATE_VERSION', 'ASGREP_RELEASE_OIDC_REQUIRED', 'ASGREP_RELEASE_PROTECTED_ENVIRONMENT', "['publish'", "'--provenance'"]) if (!releaseHelper.includes(token)) errors.push('release acceptance helper is missing ' + token);
 if (errors.length) {
   for (const error of errors) console.error('Pi native workflow: ' + error);
   process.exitCode = 1;
-} else console.log('Pi npm workflows are structurally consistent across ' + targets.length + ' targets and 7 packages; rejected ' + (mutations.length + officialMutations.length) + ' negative mutations');
+} else console.log('Pi npm workflows are structurally consistent across ' + targets.length + ' targets and 7 packages; rejected ' + (mutations.length + officialMutations.length + signerMutations.length) + ' negative mutations');
