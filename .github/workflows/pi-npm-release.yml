@@ -41,6 +41,10 @@ jobs:
           node-version: 22.19.0
           cache: npm
       - run: npm ci --ignore-scripts
+      - name: Configure SSH tag verification
+        run: |
+          git config --local gpg.format ssh
+          git config --local gpg.ssh.allowedSignersFile "$GITHUB_WORKSPACE/packages/pi/release/allowed-signers"
       - name: Verify contracts and official tag gate
         run: |
           npm run check:pi-contract
