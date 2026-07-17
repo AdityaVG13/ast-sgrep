@@ -37,6 +37,8 @@ pub fn format_response_with(
         OutputFormat::AgentCapsule => to_agent_capsule_json(response, excerpt_lines),
     }
 }
+/// Project a response into a GitHub-like page. total_count is the returned page size,
+/// because the core response does not carry a corpus-wide match count.
 pub fn to_github_json(response: &SearchResponse) -> serde_json::Value {
     let items: Vec<_> = response
         .hits
@@ -58,20 +60,24 @@ pub fn to_github_json(response: &SearchResponse) -> serde_json::Value {
                     "kind": hit.kind.as_str(),
                     "line_start": hit.line_start,
                     "line_end": hit.line_end,
+                    "symbol": hit.symbol,
                     "caller": hit.caller,
                     "callee": hit.callee,
                 }
             })
         })
         .collect();
+    let incomplete_results = response.limit > 0 && items.len() >= response.limit;
     serde_json::json!({
         "total_count": items.len(),
-        "incomplete_results": false,
+        "incomplete_results": incomplete_results,
         "items": items,
         "query": response.query,
         "provider": "ast-sgrep"
     })
 }
+/// Project local results into a GitLab-like shape. This adapter has no repository context,
+/// so ref is always HEAD and project_id is always null; consumers must supply that context.
 pub fn to_gitlab_json(response: &SearchResponse) -> serde_json::Value {
     let data: Vec<_> = response
         .hits
@@ -148,7 +154,7 @@ pub fn to_agent_json(response: &SearchResponse) -> serde_json::Value {
     suggested.push("rg (use ripgrep for raw text scan)".into());
     serde_json::json!({
         "provider": "ast-sgrep",
-        "version": "1.1.0-alpha",
+        "version": env!("CARGO_PKG_VERSION"),
         "query": response.query,
         "limit": response.limit,
         "hit_count": hits.len(),
@@ -170,7 +176,9 @@ pub fn to_agent_capsule_json(response: &SearchResponse, excerpt_lines: usize) ->
             let mut capsule = serde_json::json!({
                 "file": hit.file,
                 "lines": { "start": hit.line_start, "end": hit.line_end },
-                "symbol": hit_symbol(hit),
+                "symbol": hit.symbol,
+                "caller": hit.caller,
+                "callee": hit.callee,
                 "kind": hit.kind.as_str(),
                 "score": hit.score,
                 "preview": preview_line(&hit.excerpt),
@@ -200,7 +208,7 @@ pub fn to_agent_capsule_json(response: &SearchResponse, excerpt_lines: usize) ->
         "hit_count": hits.len(),
         "read_bytes_estimate": response.read_bytes_estimate,
         "returned_excerpt_bytes": returned_excerpt_bytes,
-        "prevented_read_bytes": response.read_bytes_estimate.saturating_sub(returned_excerpt_bytes),
+        "prevented_read_bytes": response.prevented_read_bytes,
         "expand_hint": "re-run with --excerpt-lines N for bodies, or read each ref span with your file reader (path + line window)",
         "hits": hits,
     })

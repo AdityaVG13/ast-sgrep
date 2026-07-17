@@ -1,0 +1,11 @@
+{
+  "metrics": [
+    {
+      "name": "cold_index_110_files",
+      "measured_p95_ms": 258.4,
+      "variance_percent": 30,
+      "budget_ms": 336,
+      "source": "historical run 20260702T180757Z"
+    }
+  ]
+}

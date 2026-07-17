@@ -9,6 +9,34 @@ fn literal_pattern_matches_rust_symbol() {
 }
 
 #[test]
+fn literal_pattern_matching_is_case_sensitive() {
+    let source = "fn Foo() {}
+fn foo() {}
+fn FOO() {}
+";
+
+    let upper_camel = match_literal_pattern(Language::Rust, source, "Foo").unwrap();
+    let lower = match_literal_pattern(Language::Rust, source, "foo").unwrap();
+    let upper = match_literal_pattern(Language::Rust, source, "FOO").unwrap();
+
+    assert!(!upper_camel.is_empty());
+    assert!(upper_camel.iter().all(|hit| hit.line_start == 1));
+    assert!(!lower.is_empty());
+    assert!(lower.iter().all(|hit| hit.line_start == 2));
+    assert!(!upper.is_empty());
+    assert!(upper.iter().all(|hit| hit.line_start == 3));
+}
+
+#[test]
+fn literal_pattern_case_mismatch_has_no_match() {
+    let source = "fn foo() {}
+";
+    assert!(match_literal_pattern(Language::Rust, source, "Foo")
+        .unwrap()
+        .is_empty());
+}
+
+#[test]
 fn metavariable_pattern_needs_ast_grep() {
     assert!(needs_ast_grep_fallback("fn $NAME($$$)"));
     assert!(!needs_ast_grep_fallback("process_request"));

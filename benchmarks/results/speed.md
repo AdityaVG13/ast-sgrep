@@ -1,5 +1,12 @@
 # Speed benchmarks
 
+> **Reproducibility status:** Every numeric row in this report is a historical
+> published value and is **unreproducible from this source tree**: the generating
+> harnesses, raw corpora, and raw result artifacts are absent. The external
+> artifact location is the [Speed benchmark workflow](https://github.com/AdityaVG13/ast-sgrep/actions/workflows/speed.yml).
+> No retained artifact is identified there for these historical runs, so this
+> link is a storage location, not evidence that a row can currently be regenerated.
+
 > **Published record** of measured results. No runnable harnesses ship in this tree.
 
 Companion to `BASELINES.md` (which owns retrieval-quality numbers). This file

@@ -23,6 +23,37 @@ fn base_input<'a>(rel_path: &'a str, lines: &'a [(u32, String)], content_hash: &
 }
 
 #[test]
+fn semantic_mutation_removes_ivf_before_it_can_be_reloaded() {
+    let temp = TempDir::new().expect("tempdir");
+    let store = IndexStore::open(temp.path(), None).expect("open index");
+    let sidecar = ast_sgrep_core::semantic_ivf::semantic_ivf_path(store.db_path());
+    std::fs::write(&sidecar, b"stale sidecar").expect("seed stale sidecar");
+
+    let lines = [(1, "semantic content".into())];
+    let chunks = [ast_sgrep_core::semantic_chunk::SemanticChunkInput {
+        symbol_name: "example".into(),
+        kind: "function".into(),
+        line_start: 1,
+        line_end: 1,
+        excerpt: "semantic content".into(),
+        callers: vec![],
+        callees: vec![],
+        doc: String::new(),
+        scope: String::new(),
+    }];
+    let mut input = base_input("semantic.py", &lines, "hash");
+    input.semantic_chunks = &chunks;
+    input.embed_semantic = true;
+
+    store.upsert_file(input).expect("semantic upsert");
+
+    assert!(
+        !sidecar.exists(),
+        "semantic mutation must invalidate the on-disk IVF before commit"
+    );
+}
+
+#[test]
 fn re_upsert_does_not_leave_stale_fts_rows() {
     let temp = TempDir::new().expect("tempdir");
     let store = IndexStore::open(temp.path(), None).expect("open index");

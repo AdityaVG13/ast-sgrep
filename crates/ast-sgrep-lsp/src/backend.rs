@@ -80,12 +80,20 @@ impl LspBackend {
         self.index_lock.lock().map_err(|e| anyhow::anyhow!("index lock poisoned: {e}"))
     }
 
+    fn record_index_result<T>(&self, result: anyhow::Result<T>) -> anyhow::Result<T> {
+        self.index_ready.store(result.is_ok(), Ordering::SeqCst);
+        result
+    }
+
     fn with_locked_indexer<F, T>(&self, f: F) -> anyhow::Result<T>
     where
         F: FnOnce(&mut Indexer) -> anyhow::Result<T>,
     {
-        let _guard = self.index_guard()?;
-        f(&mut Indexer::new(self.index_options())?)
+        let result = (|| {
+            let _guard = self.index_guard()?;
+            f(&mut Indexer::new(self.index_options())?)
+        })();
+        self.record_index_result(result)
     }
 
     fn with_store<F, T>(&self, f: F) -> anyhow::Result<T>
@@ -109,6 +117,7 @@ impl LspBackend {
             return;
         }
         self.background_index_started = true;
+        self.index_ready.store(false, Ordering::SeqCst);
         let opts = self.index_options();
         let ready = Arc::clone(&self.index_ready);
         let lock = Arc::clone(&self.index_lock);
@@ -117,10 +126,9 @@ impl LspBackend {
                 return;
             };
             let ok = Indexer::new(opts).and_then(|mut i| i.index_all().map(|_| ())).is_ok();
+            ready.store(ok, Ordering::SeqCst);
             if !ok {
                 crate::server::log("background index failed");
-            } else {
-                ready.store(true, Ordering::SeqCst);
             }
         });
     }
@@ -195,7 +203,7 @@ impl LspBackend {
     }
 
     pub fn workspace_symbols(&self, query: &str) -> anyhow::Result<Value> {
-        if query.is_empty() || (self.background_index_started && !self.is_index_ready()) { return Ok(json!([])); }
+        if query.is_empty() { return Ok(json!([])); }
         self.with_locked_searcher(50, |searcher| {
             Ok(Value::Array(
                 searcher

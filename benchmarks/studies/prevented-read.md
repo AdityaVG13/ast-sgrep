@@ -43,7 +43,7 @@ Every `SearchResponse` now carries:
 - `returned_excerpt_bytes`: UTF-8 bytes in returned hit excerpts;
 - `prevented_read_bytes`: the saturating difference between the two.
 
-Agent and agent-capsule JSON expose the byte fields. Capsule output recomputes returned bytes from the actual body excerpts, or from previews when bodies are omitted. When `ASGREP_LEDGER_PATH` is set, each query appends one JSONL object containing `ts`, `query`, `hits`, and a `bytes` object with the three estimates. Ledger I/O is best-effort so telemetry cannot turn a successful search into a failure.
+Agent and agent-capsule JSON expose the byte fields. Capsule output recomputes `returned_excerpt_bytes` from the actual body excerpts, or from previews when bodies are omitted, while `prevented_read_bytes` preserves the query-level `SearchResponse` metric so it has the same meaning in both agent formats. When `ASGREP_LEDGER_PATH` is set, each query appends one JSONL object containing `ts`, `query`, `hits`, and a `bytes` object with the three estimates. Ledger I/O is best-effort so telemetry cannot turn a successful search into a failure.
 
 ## Limitations
 

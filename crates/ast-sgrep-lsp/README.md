@@ -8,7 +8,7 @@
 asgrep-lsp --stdio
 ```
 
-The client should set the workspace root with `workspaceFolders` or `rootUri`. Indexing starts after `initialize`; requests that need the index wait for the initial indexing pass, while `workspace/symbol` returns an empty list until that pass is ready.
+The client should set the workspace root with `workspaceFolders` or `rootUri`. Indexing starts after `initialize`. `workspace/symbol` returns an empty list until the initial pass is ready. Other index-backed read requests never wait behind indexing: while the serialized index lock is busy, they return a retryable `index is currently being updated; retry the request` error. Clients should retry after progress or the next edit; partial index results are not returned. The backend retains the latest 64 index-write lock-hold samples and exposes their p99 through `index_hold_p99` for load diagnostics.
 
 ## Standard LSP capabilities
 

@@ -23,9 +23,9 @@ neural-embed = ["ast-sgrep-embed/neural-embed"]
 rerank = ["ast-sgrep-embed/rerank"]
 
 [dependencies]
-ast-sgrep-embed = { path = "../ast-sgrep-embed", version = "1.1.0-alpha" }
+ast-sgrep-embed = { path = "../ast-sgrep-embed", version = "1.1.0-alpha.1" }
 anyhow.workspace = true
-ast-sgrep-lang = { path = "../ast-sgrep-lang", version = "1.1.0-alpha" }
+ast-sgrep-lang = { path = "../ast-sgrep-lang", version = "1.1.0-alpha.1" }
 blake3.workspace = true
 rusqlite.workspace = true
 serde.workspace = true

@@ -16,6 +16,8 @@ Studies (optional depth): [intent-confusion](../benchmarks/studies/intent-confus
 
 Folder index: [benchmarks/README.md](../benchmarks/README.md).
 
+The canonical self-corpus quality snapshot and its reproduction command or status live in the [18-query retrieval-quality section of baselines.md](../benchmarks/results/baselines.md#retrieval-quality--self-corpus-18-gold-queries). Do not copy quality figures without that source link.
+
 ## Honest caveats
 
 - Hardware, corpus, warm/cold cache, and flags all move the numbers.

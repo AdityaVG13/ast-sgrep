@@ -2,7 +2,7 @@
   "name": "ast-sgrep",
   "displayName": "ast-sgrep",
   "description": "Structural code search and navigation powered by ast-sgrep",
-  "version": "1.1.0-alpha",
+  "version": "1.1.0-alpha.1",
   "publisher": "ast-sgrep",
   "license": "MIT",
   "repository": {
@@ -32,7 +32,12 @@
     "onLanguage:python",
     "onLanguage:typescript",
     "onLanguage:typescriptreact",
+    "onLanguage:javascript",
+    "onLanguage:javascriptreact",
     "onLanguage:go",
+    "onLanguage:java",
+    "onLanguage:ruby",
+    "onLanguage:csharp",
     "onCommand:asgrep.search"
   ],
   "contributes": {
@@ -54,6 +59,11 @@
           "type": "string",
           "default": "",
           "description": "Optional path to the ast-sgrep SQLite index. Leave empty to let the server choose a workspace-local path. Reload the window after changing this setting."
+        },
+        "asgrep.semantic": {
+          "type": "boolean",
+          "default": true,
+          "description": "Include semantic results in workspace searches."
         }
       }
     }

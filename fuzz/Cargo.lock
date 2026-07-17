@@ -37,7 +37,7 @@ checksum = "d3fb67a6e08acf24fdeccbac2cb6ac4305825bd1f117462e0e6f2f193345ad56"
 
 [[package]]
 name = "ast-sgrep-core"
-version = "1.0.0-alpha"
+version = "1.1.0-alpha.1"
 dependencies = [
  "anyhow",
  "ast-sgrep-embed",
@@ -54,7 +54,7 @@ dependencies = [
 
 [[package]]
 name = "ast-sgrep-embed"
-version = "1.0.0-alpha"
+version = "1.1.0-alpha.1"
 dependencies = [
  "anyhow",
  "blake3",
@@ -76,7 +76,7 @@ dependencies = [
 
 [[package]]
 name = "ast-sgrep-lang"
-version = "1.0.0-alpha"
+version = "1.1.0-alpha.1"
 dependencies = [
  "anyhow",
  "serde",

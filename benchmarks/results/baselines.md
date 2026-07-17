@@ -1,5 +1,12 @@
 # Baselines
 
+> **Reproducibility status:** Every numeric row in this report is a historical
+> published value and is **unreproducible from this source tree**: the generating
+> harnesses, raw corpora, and raw result artifacts are absent. The external
+> artifact location is the [Speed benchmark workflow](https://github.com/AdityaVG13/ast-sgrep/actions/workflows/speed.yml).
+> No retained artifact is identified there for these historical runs, so this
+> link is a storage location, not evidence that a row can currently be regenerated.
+
 > **Published record** of measured results. No runnable harnesses ship in this tree.
 
 Single source of truth for every MRR / recall / latency claim in this
@@ -20,7 +27,7 @@ produced by the harness, twice, on the machine below — no hand-edited figures.
 | competitors | ripgrep 15.1.0, ast-grep 0.44.1, semgrep 1.168.0 |
 | timing | hyperfine 1.20.0 |
 
-Corpora are pinned by tag + SHA in `corpora.lock`:
+The original run used a `corpora.lock` file that is not shipped in this tree. Its pinned tag and SHA values are preserved here:
 
 | corpus | ref | SHA |
 |--------|-----|-----|
@@ -32,11 +39,7 @@ Corpora are pinned by tag + SHA in `corpora.lock`:
 
 ## Retrieval quality — self corpus (18 gold queries)
 
-Reproduce:
-
-```bash
-cargo build --profile release-perf -p ast-sgrep-cli
-cd benchmarks && ```
+**Reproduction status:** unavailable from this tree. The recorded run used an 18-query eval gold file and retrieval harness that are not checked in; the current `tests/fixtures/ranking/cases.json` is a different schema and corpus. `asgrep eval --gold <gold.json> <root> --ab <mode>` is the supported evaluator shape, but without the original gold file it cannot reproduce these rows.
 
 | tool | MRR | Recall@k | nDCG@k |
 |------|----:|---------:|-------:|
@@ -47,16 +50,11 @@ cd benchmarks && ```
 
 Note: 0.712 is lower than the previously published 0.746; the drop landed
 with the reviewed correctness fixes in `29129bd` (ranking changed for one
-query). The `retrieval_gold.rs` CI gate (MRR >= 0.70) still passes. This
-table supersedes the old figure.
+query). The historical run recorded a `retrieval_gold.rs` gate (MRR >= 0.70), but that harness is not present in this tree. This table supersedes the old figure and remains a published record, not a currently reproducible result.
 
 ## Retrieval quality — foreign-corpus bake-off (k=10)
 
-Reproduce:
-
-```bash
-cd benchmarks
-```
+**Reproduction status:** unavailable from this tree. The foreign corpora can be recovered from the pinned SHAs above, but their gold labels and the cross-tool bake-off harness are not checked in. Running `cd benchmarks` alone performs no evaluation.
 
 ### ripgrep 14.1.1 (Rust, 14 queries)
 

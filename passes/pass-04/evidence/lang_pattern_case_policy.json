@@ -1,0 +1,11 @@
+{
+  "bead": "ast-sgrep-5du.31",
+  "literal_pattern_policy": "case-sensitive exact identifier match",
+  "ranking_policy": "case-folded symbol relevance",
+  "expected": {
+    "Foo": ["Foo"],
+    "foo": ["foo"],
+    "FOO": ["FOO"]
+  },
+  "targeted_test": "cargo test -p ast-sgrep-lang --test pattern case_ -- --nocapture"
+}

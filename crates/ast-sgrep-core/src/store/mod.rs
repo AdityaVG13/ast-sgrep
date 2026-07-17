@@ -40,5 +40,9 @@ pub struct IndexStatus {
     pub embed_backend: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub embed_dim: Option<usize>,
+    pub embed_cache_entries: usize,
+    pub embed_cache_capacity: usize,
+    pub embed_cache_hits: u64,
+    pub embed_cache_misses: u64,
     pub semantic_ivf_present: bool,
 }

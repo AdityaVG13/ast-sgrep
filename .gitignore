@@ -8,6 +8,10 @@
 .DS_Store
 Thumbs.db
 
+# Repository-root path/index noise
+/~/
+/LanguageClient/
+
 # Editor state
 *.swp
 *.swo

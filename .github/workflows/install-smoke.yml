@@ -1,15 +1,24 @@
 # Post-publish verification only. Run after the release is visible on crates.io.
-name: Post-publish install smoke
+name: Post-publish install and docs smoke
 
 on:
   workflow_dispatch:
+    inputs:
+      version:
+        description: Exact published version to verify
+        required: true
+        default: 1.1.0-alpha.1
+        type: string
 
 permissions:
   contents: read
 
+env:
+  RELEASE_VERSION: ${{ inputs.version }}
+
 jobs:
   install-smoke:
-    name: Install from crates.io (${{ matrix.os }})
+    name: Clean install from crates.io (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:
@@ -19,9 +28,41 @@ jobs:
     steps:
       - name: Install stable Rust
         uses: dtolnay/rust-toolchain@stable
-      - name: Install published CLI
-        run: cargo install ast-sgrep-cli --locked
-      - name: Verify installed binaries
+      - name: Install exact published CLI into an empty root
+        shell: bash
         run: |
-          asgrep --version
-          ast-sgrep --version
+          install_root="$(mktemp -d)"
+          printf 'CARGO_INSTALL_ROOT=%s\n' "$install_root" >> "$GITHUB_ENV"
+          cargo install ast-sgrep-cli --version "=${RELEASE_VERSION}" --locked --root "$install_root"
+      - name: Verify installed binaries report the requested version
+        shell: bash
+        run: |
+          asgrep_version="$("$CARGO_INSTALL_ROOT/bin/asgrep" --version)"
+          ast_sgrep_version="$("$CARGO_INSTALL_ROOT/bin/ast-sgrep" --version)"
+          printf '%s\n%s\n' "$asgrep_version" "$ast_sgrep_version"
+          [[ "$asgrep_version" == *" ${RELEASE_VERSION}" ]]
+          [[ "$ast_sgrep_version" == *" ${RELEASE_VERSION}" ]]
+
+  docs-smoke:
+    name: docs.rs (${{ matrix.crate }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        crate:
+          - ast-sgrep-lang
+          - ast-sgrep-embed
+          - ast-sgrep-core
+          - ast-sgrep-plugins
+          - ast-sgrep-lsp
+          - ast-sgrep-cli
+          - ast-sgrep-mcp
+    steps:
+      - name: Verify exact-version documentation is available
+        env:
+          CRATE: ${{ matrix.crate }}
+        run: |
+          curl --fail --location --retry 60 --retry-delay 15 --retry-all-errors \
+            --silent --show-error --output /dev/null \
+            "https://docs.rs/${CRATE}/${RELEASE_VERSION}/"

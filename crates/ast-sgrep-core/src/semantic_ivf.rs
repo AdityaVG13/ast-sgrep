@@ -1,9 +1,9 @@
+use crate::semantic_ann::SemanticAnnIndex;
+use crate::Result;
+use blake3::Hasher;
 use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::Path;
-use blake3::Hasher;
-use crate::semantic_ann::SemanticAnnIndex;
-use crate::Result;
 const MAGIC: &[u8; 6] = b"ASIVF\0";
 const VERSION: u32 = 1;
 pub const SEMANTIC_IVF_FILE: &str = "semantic.ivf";
@@ -43,11 +43,7 @@ pub struct PersistedSemanticIvf {
 }
 impl PersistedSemanticIvf {
     pub fn chunk_count(&self) -> usize {
-        if self.dim == 0 {
-            0
-        } else {
-            self.vectors.len() / self.dim
-        }
+        self.vectors.len().checked_div(self.dim).unwrap_or(0)
     }
 
     pub fn search(&self, query: &[f32], limit: usize) -> Vec<(usize, f32)> {
@@ -101,9 +97,13 @@ pub fn load_semantic_ivf_index(
         Ok(f) => f,
         Err(_) => return Ok(None),
     };
-    let Some(header) = read_ivf_header(&mut file, Some(expected_fingerprint))? else { return Ok(None); };
+    let Some(header) = read_ivf_header(&mut file, Some(expected_fingerprint))? else {
+        return Ok(None);
+    };
     let index = SemanticAnnIndex::read_clusters_from(&mut file, header.k, header.dim)?;
-    if !index.validate_member_indices(header.chunk_count) { return Ok(None); }
+    if !index.validate_member_indices(header.chunk_count) {
+        return Ok(None);
+    }
     Ok(Some(LazySemanticIvf {
         fingerprint: header.fingerprint,
         dim: header.dim,
@@ -142,12 +142,16 @@ fn read_ivf_header<R: Read>(
 ) -> std::io::Result<Option<IvfHeader>> {
     let mut magic = [0u8; 6];
     reader.read_exact(&mut magic)?;
-    if &magic != MAGIC || read_u32(reader)? != VERSION { return Ok(None); }
+    if &magic != MAGIC || read_u32(reader)? != VERSION {
+        return Ok(None);
+    }
     let chunk_count = read_u64(reader)? as usize;
     let dim = read_u32(reader)? as usize;
     let mut fingerprint = [0u8; 32];
     reader.read_exact(&mut fingerprint)?;
-    if expected_fingerprint.is_some_and(|want| fingerprint != want) { return Ok(None); }
+    if expected_fingerprint.is_some_and(|want| fingerprint != want) {
+        return Ok(None);
+    }
     Ok(Some(IvfHeader {
         chunk_count,
         dim,
@@ -159,7 +163,9 @@ fn try_parse_semantic_ivf_from_reader<R: Read>(
     reader: &mut R,
     expected_fingerprint: Option<[u8; 32]>,
 ) -> std::io::Result<Option<PersistedSemanticIvf>> {
-    let Some(header) = read_ivf_header(reader, expected_fingerprint)? else { return Ok(None); };
+    let Some(header) = read_ivf_header(reader, expected_fingerprint)? else {
+        return Ok(None);
+    };
     let index = SemanticAnnIndex::read_clusters_from(reader, header.k, header.dim)?;
     let vector_bytes = match header
         .chunk_count
@@ -177,7 +183,9 @@ fn try_parse_semantic_ivf_from_reader<R: Read>(
         .collect();
     if vectors.len() != header.chunk_count * header.dim
         || !index.validate_member_indices(header.chunk_count)
-    { return Ok(None); }
+    {
+        return Ok(None);
+    }
     Ok(Some(PersistedSemanticIvf {
         fingerprint: header.fingerprint,
         dim: header.dim,
@@ -189,7 +197,9 @@ fn load_semantic_ivf_inner(
     path: &Path,
     expected_fingerprint: Option<[u8; 32]>,
 ) -> Result<Option<PersistedSemanticIvf>> {
-    if !path.exists() { return Ok(None); }
+    if !path.exists() {
+        return Ok(None);
+    }
     let mut file = match File::open(path) {
         Ok(f) => f,
         Err(_) => return Ok(None),

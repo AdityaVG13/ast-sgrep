@@ -25,3 +25,11 @@ fn cli_smoke() {
     let github = session.search_json("process_request", &["--format", "github"]);
     assert!(github["items"].is_array());
 }
+
+#[test]
+fn cli_failure_oracle_preserves_diagnostics() {
+    let session = CliSession::sample(asgrep_bin());
+    let failure = session.run_failure(&["--definitely-invalid-option"]);
+
+    assert!(!failure.stderr.is_empty());
+}
