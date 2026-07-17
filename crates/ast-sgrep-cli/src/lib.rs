@@ -469,8 +469,7 @@ fn run_chain(root: &Path, cli: &Cli, query: &str) -> anyhow::Result<()> {
     };
     let r = expand_chain(&store, query, &config).context("chain search failed")?;
     if cli.json {
-        println!("{}", serde_json::to_string_pretty(&r)?);
-        return Ok(());
+        return print_machine_json("chain", &r);
     }
     println!(
         "chain {:?}: {} nodes, {} edges (max depth {})",
@@ -720,7 +719,7 @@ fn run_bench_suite(
             obj["index_ms"] = serde_json::json!(0.0);
             obj["files_indexed"] = serde_json::Value::Null;
         }
-        println!("{obj}");
+        print_machine_json("bench", &obj)?;
     } else {
         println!("Benchmark fixture: {fixture_name}, suite: {suite_name}");
         print_index_skipped(stats.as_ref(), None);
@@ -869,7 +868,7 @@ fn run_bench(
             "avg_ast_grep_ms": ag_ms, "speedup_vs_ast_grep": speedup,
         });
         add_index_json(&mut obj, stats_opt.as_ref(), index_ms);
-        println!("{obj}");
+        print_machine_json("bench", &obj)?;
     } else {
         println!("Benchmark (v1.0 targets: search <20ms, 0% false callers)");
         print_index_skipped(stats_opt.as_ref(), Some(index_ms));
@@ -952,7 +951,7 @@ fn run_bench_batch(
     if cli.json {
         let mut obj = serde_json::json!({"iterations": iterations, "queries": results});
         add_index_json(&mut obj, stats_opt.as_ref(), index_ms);
-        println!("{obj}");
+        print_machine_json("bench", &obj)?;
     } else {
         println!(
             "Batch benchmark: {} queries over {} iterations each",
@@ -982,6 +981,11 @@ fn print_index_stats(stats: &IndexStats) {
         stats.callers_extracted,
         stats.imports_extracted
     );
+    if stats.walk_errors {
+        eprintln!(
+            "Warning: directory walk errors left the index unpruned; stale paths may remain until a clean reindex"
+        );
+    }
 }
 fn print_status(s: &ast_sgrep_core::IndexStatus) {
     println!(

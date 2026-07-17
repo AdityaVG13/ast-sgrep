@@ -1,4 +1,8 @@
 use crate::query::{ParsedQuery, QueryMode};
+use crate::rank::{
+    rrf_score, LEXICAL_RRF_SCALE, RRF_K, SCORE_ANCHOR, SCORE_CALLER_BASE, SCORE_DEF_BASE,
+    SCORE_EMBED, SCORE_EXACT_SYMBOL, SCORE_GRAPH, SCORE_PATTERN,
+};
 use crate::search::{HitKind, SearchHit};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum QueryIntent {
@@ -89,15 +93,7 @@ impl Default for ChannelWeights {
 }
 pub fn default_weights(intent: QueryIntent) -> ChannelWeights {
     match intent {
-        QueryIntent::Conceptual => ChannelWeights {
-            lexical: 1.1,
-            def: 0.9,
-            caller: 0.8,
-            graph: 0.7,
-            anchor: 0.8,
-            embed: 1.1,
-            ..ChannelWeights::default()
-        },
+        QueryIntent::Conceptual => ChannelWeights { lexical: 1.1, def: 0.9, caller: 0.8, graph: 0.7, anchor: 0.8, embed: 1.1, pattern: 0.1 },
         _ => ChannelWeights::default(),
     }
 }
@@ -123,6 +119,11 @@ fn apply_spec(weights: &mut ChannelWeights, intent: QueryIntent, spec: &str) {
             let Ok(v) = value.trim().parse::<f64>() else {
                 continue;
             };
+            // Overrides stay within an 8x ratio so no channel can erase the others.
+            if !v.is_finite() {
+                continue;
+            }
+            let v = v.clamp(0.25, 2.0);
             match ch.trim() {
                 "lexical" => weights.lexical = v,
                 "def" => weights.def = v,
@@ -136,10 +137,37 @@ fn apply_spec(weights: &mut ChannelWeights, intent: QueryIntent, spec: &str) {
         }
     }
 }
+fn channel_ceiling(kind: HitKind, term_count: usize) -> f64 {
+    let terms = term_count.max(1) as f64;
+    match kind {
+        HitKind::Asgrep => terms * rrf_score(0, RRF_K) * LEXICAL_RRF_SCALE,
+        HitKind::Def => 2.0 * SCORE_EXACT_SYMBOL * terms + SCORE_DEF_BASE,
+        HitKind::Caller => 2.0 * SCORE_EXACT_SYMBOL * terms + SCORE_CALLER_BASE,
+        HitKind::Graph => SCORE_GRAPH,
+        HitKind::Anchor => SCORE_ANCHOR,
+        HitKind::Embed => SCORE_EMBED,
+        HitKind::Pattern => SCORE_PATTERN,
+        HitKind::Import => 2.0,
+    }
+}
+
 pub fn route_hits(parsed: &ParsedQuery, hits: &mut [SearchHit]) {
     let w = weights_for(classify(parsed));
+    let substantive_terms = parsed
+        .terms
+        .iter()
+        .filter(|term| term.chars().count() > 1)
+        .count();
     for hit in hits {
-        hit.score *= match hit.kind {
+        let text_channel = matches!(
+            hit.kind,
+            HitKind::Asgrep | HitKind::Def | HitKind::Caller | HitKind::Graph | HitKind::Anchor
+        );
+        if substantive_terms == 0 && text_channel {
+            hit.score = 0.0;
+            continue;
+        }
+        let weight = match hit.kind {
             HitKind::Asgrep => w.lexical,
             HitKind::Def => w.def,
             HitKind::Caller => w.caller,
@@ -149,5 +177,7 @@ pub fn route_hits(parsed: &ParsedQuery, hits: &mut [SearchHit]) {
             HitKind::Pattern => w.pattern,
             HitKind::Import => 1.0,
         };
+        hit.score = (hit.score / channel_ceiling(hit.kind, substantive_terms)).clamp(0.0, 1.0)
+            * weight;
     }
 }

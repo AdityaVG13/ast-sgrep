@@ -258,7 +258,7 @@ impl Indexer {
                     }
                 }
             }
-            if !stats.walk_errors {
+            if should_prune_missing_files(stats.walk_errors) {
                 self.prune_missing_files(&seen_paths, &mut stats, &mut semantic_ivf_dirty)?;
             }
             Ok(())
@@ -651,9 +651,26 @@ fn rows_from_extraction(extraction: &ExtractionResult) -> ExtractedRows {
         extraction.pattern_nodes.clone(),
     )
 }
+// A failed directory walk produces an incomplete seen-path set. Pruning from that set
+// would delete valid index entries, so callers surface walk_errors and retry later.
+fn should_prune_missing_files(walk_errors: bool) -> bool {
+    !walk_errors
+}
+
 fn system_time_to_parts(time: SystemTime) -> (i64, u32) {
     let d = time
         .duration_since(SystemTime::UNIX_EPOCH)
         .unwrap_or_default();
     (d.as_secs() as i64, d.subsec_nanos())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_prune_missing_files;
+
+    #[test]
+    fn walk_error_prevents_pruning_from_incomplete_seen_paths() {
+        assert!(!should_prune_missing_files(true));
+        assert!(should_prune_missing_files(false));
+    }
 }

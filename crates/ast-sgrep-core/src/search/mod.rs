@@ -29,11 +29,14 @@ struct SemanticCache {
     chunks: Arc<Vec<SemanticChunkRow>>,
     flat_vectors: Arc<Vec<f32>>,
 }
-pub struct Searcher {
-    store: IndexStore,
-    options: SearchOptions,
-    semantic_cache: Arc<Mutex<Option<SemanticCache>>>,
-}
+/// Searches use SQLite statement snapshots, so each channel is internally consistent,
+/// but a hybrid search concurrent with reindex may combine adjacent committed snapshots.
+/// Semantic cache entries are discarded when the chunk maximum id changes; persisted IVF
+/// is fingerprint-validated and falls back to flat search when stale. Public methods return
+/// structured errors rather than panicking if a concurrent reindex changes vector shape.
+pub struct Searcher { store: IndexStore,
+options: SearchOptions,
+semantic_cache: Arc<Mutex<Option<SemanticCache>>>, }
 impl Searcher {
     pub fn new(options: SearchOptions) -> Result<Self> {
         Ok(Self::with_store(
@@ -276,12 +279,14 @@ fn finish_response(parsed: &ParsedQuery, options: &SearchOptions, mut hits: Vec<
         keyed.sort_unstable_by(compare);
     }
     let mut hits: Vec<_> = keyed.into_iter().map(|(_, h)| h).collect();
-    if parsed.mode == QueryMode::Hybrid {
-        hits = cap_per_file(hits);
-    }
-    hits.truncate(options.limit);
+    hits = enforce_result_gates(
+        hits,
+        parsed.mode == QueryMode::Hybrid,
+        rerank_candidate_limit(options),
+    );
     if options.use_rerank {
         hits = maybe_rerank(&parsed.raw, hits, options.rerank_top_k);
+        hits = enforce_result_gates(hits, parsed.mode == QueryMode::Hybrid, options.limit);
     }
     let (read_bytes_estimate, returned_excerpt_bytes, prevented_read_bytes) =
         estimate_prevented_reads(&options.root, &hits);
@@ -297,6 +302,14 @@ fn finish_response(parsed: &ParsedQuery, options: &SearchOptions, mut hits: Vec<
     record_ledger_from_env(&response);
     response
 }
+fn rerank_candidate_limit(options: &SearchOptions) -> usize {
+    if options.use_rerank {
+        options.limit.max(options.rerank_top_k)
+    } else {
+        options.limit
+    }
+}
+
 fn maybe_rerank(query: &str, hits: Vec<SearchHit>, top_k: usize) -> Vec<SearchHit> {
     if hits.is_empty() {
         return hits;
@@ -318,22 +331,11 @@ fn maybe_rerank(query: &str, hits: Vec<SearchHit>, top_k: usize) -> Vec<SearchHi
     {
         match ast_sgrep_embed::rerank(query, &docs) {
             Ok(scores) => {
-                let mut scored: Vec<(f32, SearchHit)> = scores
-                    .into_iter()
-                    .filter_map(|s| hits.get(s.index).cloned().map(|h| (s.score, h)))
-                    .collect();
-                scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
-                let mut out: Vec<SearchHit> = scored
-                    .into_iter()
-                    .map(|(score, mut h)| {
-                        h.score = f64::from(score);
-                        h
-                    })
-                    .collect();
-                if hits.len() > k {
-                    out.extend(hits.iter().skip(k).cloned());
-                }
-                return out;
+                return apply_rerank_order(
+                    hits,
+                    k,
+                    scores.into_iter().map(|score| (score.index, score.score)),
+                );
             }
             Err(e) => eprintln!("[asgrep] rerank skipped: {e}"),
         }
@@ -342,6 +344,41 @@ fn maybe_rerank(query: &str, hits: Vec<SearchHit>, top_k: usize) -> Vec<SearchHi
     {
         let _ = (query, &docs);
     }
+    hits
+}
+#[cfg(any(feature = "rerank", test))]
+fn apply_rerank_order(
+    mut hits: Vec<SearchHit>,
+    top_k: usize,
+    scores: impl IntoIterator<Item = (usize, f32)>,
+) -> Vec<SearchHit> {
+    let k = top_k.min(hits.len());
+    let mut prefix: Vec<Option<SearchHit>> = hits.drain(..k).map(Some).collect();
+    let mut seen = vec![false; k];
+    let mut ranked: Vec<(f32, usize)> = scores
+        .into_iter()
+        .filter(|(index, score)| {
+            let valid = *index < k && score.is_finite() && !seen.get(*index).copied().unwrap_or(true);
+            if valid {
+                seen[*index] = true;
+            }
+            valid
+        })
+        .map(|(index, score)| (score, index))
+        .collect();
+    ranked.sort_by(|a, b| b.0.total_cmp(&a.0));
+
+    let mut out = Vec::with_capacity(prefix.len() + hits.len());
+    out.extend(ranked.into_iter().filter_map(|(_, index)| prefix[index].take()));
+    out.extend(prefix.into_iter().flatten());
+    out.append(&mut hits);
+    out
+}
+fn enforce_result_gates(mut hits: Vec<SearchHit>, hybrid: bool, limit: usize) -> Vec<SearchHit> {
+    if hybrid {
+        hits = cap_per_file(hits);
+    }
+    hits.truncate(limit);
     hits
 }
 fn estimate_prevented_reads(root: &Path, hits: &[SearchHit]) -> (u64, u64, u64) {
@@ -420,7 +457,117 @@ fn compile_glob(pattern: &str) -> std::result::Result<regex::Regex, regex::Error
     result.push('$');
     regex::Regex::new(&result)
 }
+fn contains_term_token(text: &str, term: &str) -> bool {
+    !term.is_empty()
+        && text.match_indices(term).any(|(start, matched)| {
+            let before = text[..start].chars().next_back();
+            let after = text[start + matched.len()..].chars().next();
+            before.is_none_or(|ch| !ch.is_alphanumeric() && ch != '_')
+                && after.is_none_or(|ch| !ch.is_alphanumeric() && ch != '_')
+        })
+}
+
 fn excerpt_term_coverage(terms: &[String], hit: &SearchHit) -> u32 {
     let text = hit.excerpt.to_lowercase();
-    terms.iter().filter(|t| text.contains(t.as_str())).count() as u32
+    terms
+        .iter()
+        .filter(|term| contains_term_token(&text, term))
+        .count() as u32
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn hit(file: &str, line: u32, score: f64) -> SearchHit {
+        SearchHit {
+            kind: HitKind::Asgrep,
+            file: file.to_owned(),
+            line_start: line,
+            line_end: line,
+            symbol: None,
+            caller: None,
+            callee: None,
+            language: None,
+            score,
+            excerpt: String::new(),
+        }
+    }
+
+    #[test]
+    fn rerank_can_promote_candidate_beyond_final_limit() {
+        let options = SearchOptions {
+            limit: 16,
+            use_rerank: true,
+            rerank_top_k: 20,
+            ..SearchOptions::default()
+        };
+        let hits: Vec<_> = (0..20)
+            .map(|index| hit(&format!("candidate-{index}.rs"), index + 1, 1.0 - f64::from(index) / 100.0))
+            .collect();
+
+        let candidates = enforce_result_gates(hits, false, rerank_candidate_limit(&options));
+        assert_eq!(candidates.len(), 20);
+        let reranked = apply_rerank_order(candidates, options.rerank_top_k, [(16, 1.0)]);
+        let final_hits = enforce_result_gates(reranked, false, options.limit);
+
+        assert_eq!(final_hits.len(), options.limit);
+        assert_eq!(final_hits[0].file, "candidate-16.rs");
+    }
+
+    #[test]
+    fn rerank_reorders_prefix_without_overwriting_fused_scores() {
+        let hits = vec![
+            hit("a.rs", 1, 0.9),
+            hit("b.rs", 2, 0.8),
+            hit("c.rs", 3, 0.7),
+            hit("tail.rs", 4, 0.6),
+        ];
+
+        let reranked = apply_rerank_order(
+            hits,
+            3,
+            [(2, 0.99), (0, 0.5), (7, 1.0), (2, 0.2), (1, f32::NAN)],
+        );
+
+        let identity: Vec<_> = reranked
+            .iter()
+            .map(|hit| (hit.file.as_str(), hit.score))
+            .collect();
+        assert_eq!(
+            identity,
+            vec![("c.rs", 0.7), ("a.rs", 0.9), ("b.rs", 0.8), ("tail.rs", 0.6)]
+        );
+    }
+
+    #[test]
+    fn hybrid_cap_and_limit_are_reapplied_after_rerank() {
+        let hits = vec![
+            hit("a.rs", 1, 0.9),
+            hit("a.rs", 2, 0.8),
+            hit("a.rs", 3, 0.7),
+            hit("a.rs", 4, 0.6),
+            hit("b.rs", 1, 0.5),
+        ];
+        let reranked = apply_rerank_order(
+            hits,
+            5,
+            [(3, 1.0), (2, 0.9), (1, 0.8), (0, 0.7), (4, 0.1)],
+        );
+
+        let gated = enforce_result_gates(reranked, true, 4);
+        let identity: Vec<_> = gated
+            .iter()
+            .map(|hit| (hit.file.as_str(), hit.line_start, hit.score))
+            .collect();
+        assert_eq!(
+            identity,
+            vec![
+                ("a.rs", 4, 0.6),
+                ("a.rs", 3, 0.7),
+                ("a.rs", 2, 0.8),
+                ("b.rs", 1, 0.5),
+            ]
+        );
+    }
 }

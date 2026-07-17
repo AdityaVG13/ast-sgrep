@@ -216,6 +216,9 @@ impl SearchOptions {
 pub struct SearchResponse {
     pub query: String,
     pub limit: usize,
+    /// Ranked results after result gates. Hybrid search promotes at most three hits per
+    /// file ahead of overflow before applying `limit`, so this is a diversity-aware
+    /// ranking rather than a pure global score top-k.
     pub hits: Vec<SearchHit>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub counts: Vec<(String, u32)>,

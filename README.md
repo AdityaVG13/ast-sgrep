@@ -6,7 +6,7 @@
 
 **Hybrid code search that understands intent** -- not only text or syntax.
 
-**v1.1.0-alpha** · 8 languages · lexical + AST graph + **semantic symbol search** (on by default, no API key)
+**v1.1.0-alpha.1** · 8 languages · lexical + AST graph + **semantic symbol search** (on by default, no API key)
 
 > **ast-grep finds shapes. ripgrep finds strings. ast-sgrep finds intent.**
 
@@ -22,7 +22,13 @@ pi install npm:pi-ast-sgrep
 
 It immediately adds `asgrep_search`, `asgrep_index`, `asgrep_status`, four `/asgrep-*` commands, and the `ast-sgrep` skill. The first search lazily creates `.asgrep/`; no Rust toolchain, PATH setup, MCP adapter, credential, or runtime download is required. See the [complete Pi package guide](docs/pi-package.md) for supported hosts, data/privacy behavior, updates, rollback, troubleshooting, and uninstall.
 
-For the standalone CLI, build from source (crates.io publish is planned):
+For the standalone CLI, after `1.1.0-alpha.1` is published to crates.io, install with:
+
+```bash
+cargo install ast-sgrep-cli --version 1.1.0-alpha.1 --locked
+```
+
+Until publication, build from source:
 
 ```bash
 git clone https://github.com/AdityaVG13/ast-sgrep
@@ -33,9 +39,11 @@ cargo build --release -p ast-sgrep-cli
 
 Standalone binaries: `asgrep` and `ast-sgrep` (aliases).
 
-On Unix, the CLI runs commands through the process supervisor and enforces the configured
-CPU duty-cycle ceiling. On Windows, commands run directly: search, indexing, cancellation,
-and path handling are supported, but `ASGREP_CPU_LIMIT_PERCENT` is not enforced.
+On Unix, the CLI runs commands through the process supervisor. `ASGREP_CPU_LIMIT_PERCENT`
+sets the worker process runnable wall-time fraction in each 10 ms SIGSTOP/CONT cycle; it is not
+a machine-wide or one-core CPU percentage, and multi-threaded work may consume several cores
+while runnable. On Windows, commands run directly: search, indexing, cancellation, and path
+handling are supported, but the duty cycle is not enforced.
 
 ---
 
@@ -130,7 +138,8 @@ These are **checked-in run summaries**, not portable guarantees. Hardware, corpu
 
 Canonical table: [head-to-head.md](benchmarks/results/head-to-head.md). Index: [benchmarks/README.md](benchmarks/README.md). Methodology: [docs/benchmarks.md](docs/benchmarks.md).
 
-**Quality snapshot (self corpus, labeled gold):** hybrid MRR ≈ 0.75, Recall@k ≈ 0.94 (see docs/benchmarks for commands). On some foreign corpora the offline embedder currently adds little over lexical + AST; a stronger local model is on the roadmap.
+**Quality snapshot (self corpus, 18 labeled gold queries):** hybrid MRR **0.712**, Recall@k **0.889**, nDCG@k **0.751**. The canonical row and its reproduction status are in [baselines.md](benchmarks/results/baselines.md#retrieval-quality--self-corpus-18-gold-queries). On some foreign corpora the offline embedder currently adds little over lexical + AST; a stronger local model is on the roadmap.
+**Historical quality snapshot (self corpus, labeled gold):** hybrid MRR ≈ 0.75, Recall@k ≈ 0.94 (see docs/benchmarks for commands). These are point estimates from an historical evaluation whose sample size and confidence intervals were not recorded; they are not product guarantees and must not be used to claim statistically significant improvements. On some foreign corpora the offline embedder currently adds little over lexical + AST; a stronger local model is on the roadmap.
 
 ---
 
@@ -182,7 +191,7 @@ Canonical table: [head-to-head.md](benchmarks/results/head-to-head.md). Index: [
 
 ## Project status and verification
 
-**v1.1.0-alpha.** Hybrid search, semantic layer, LSP, MCP, agent JSON, and IVF path are in place.
+**v1.1.0-alpha.1.** Hybrid search, semantic layer, LSP, MCP, agent JSON, and IVF path are in place.
 
 GitHub Actions workflows are **manual-only** (`workflow_dispatch`) to control Actions minutes. Local quality bar for contributors:
 

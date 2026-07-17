@@ -6,6 +6,10 @@ const LEGACY_PREFIXES: &[&str] = &[
 const CLAUSE_PREFIXES: &[&str] = &[
     "sem", "pattern", "path", "lang", "callers", "defs", "imports", "literal", "regex", "word",
 ];
+/// Parsed multi-clause query syntax for clients that need an explicit plan.
+///
+/// The search hot path intentionally continues to use ParsedQuery; this type is a
+/// parser API for future clause-aware execution rather than a second active query path.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QueryPlan {
     pub raw: String,

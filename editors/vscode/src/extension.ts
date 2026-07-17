@@ -34,7 +34,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       { scheme: 'file', language: 'python' },
       { scheme: 'file', language: 'typescript' },
       { scheme: 'file', language: 'typescriptreact' },
+      { scheme: 'file', language: 'javascript' },
+      { scheme: 'file', language: 'javascriptreact' },
       { scheme: 'file', language: 'go' },
+      { scheme: 'file', language: 'java' },
+      { scheme: 'file', language: 'ruby' },
+      { scheme: 'file', language: 'csharp' },
     ],
     initializationOptions: { asgrep: indexPath ? { indexPath } : {} },
   };
@@ -61,8 +66,9 @@ async function searchWorkspace(): Promise<void> {
   });
   if (!query?.trim()) return;
   try {
+    const semantic = vscode.workspace.getConfiguration('asgrep').get<boolean>('semantic', true);
     const response = await client.sendRequest<SearchResponse>('asgrep/search', {
-      query: query.trim(), semantic: false, limit: 100,
+      query: query.trim(), semantic, limit: 100,
     });
     const hits = Array.isArray(response.hits) ? response.hits : [];
     if (hits.length === 0) {

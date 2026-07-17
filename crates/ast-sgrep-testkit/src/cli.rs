@@ -31,13 +31,28 @@ impl CliSession {
             args.push(query);
         }
         args.push(self.root.to_str().unwrap());
-        let out = self.run(&args).expect("search");
+        let out = self.run_success(&args);
+        serde_json::from_slice(&out.stdout).expect("search json")
+    }
+
+    pub fn run_success(&self, args: &[&str]) -> Output {
+        let out = self.run(args).expect("run command");
         assert!(
             out.status.success(),
-            "{}",
+            "expected success, stderr: {}",
             String::from_utf8_lossy(&out.stderr)
         );
-        serde_json::from_slice(&out.stdout).expect("search json")
+        out
+    }
+
+    pub fn run_failure(&self, args: &[&str]) -> Output {
+        let out = self.run(args).expect("run command");
+        assert!(
+            !out.status.success(),
+            "expected failure, stdout: {}",
+            String::from_utf8_lossy(&out.stdout)
+        );
+        out
     }
 
     pub fn run(&self, args: &[&str]) -> Result<Output, String> {

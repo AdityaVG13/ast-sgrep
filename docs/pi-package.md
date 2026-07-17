@@ -16,7 +16,7 @@ This is the canonical package-user guide for the `1.1.0-alpha.1` contract. The p
 
 Alpine/musl Linux, Windows arm64, and other hosts are unsupported. On an unsupported host, or when npm omitted the matching optional native package, `/asgrep-doctor` reports a binary-resolution error; the package does not compile Rust, search `PATH`, contact MCP, or download a fallback executable. Install on a supported host rather than bypassing this check.
 
-The npm layers are exact-version matched: the `pi-ast-sgrep` extension depends on `ast-sgrep`, which selects one of five host-constrained native packages. Extension, launcher, and native package manifests must all be `1.1.0-alpha.1`. The embedded executable reports native CLI version `1.1.0-alpha`; the runtime verifies that identity separately from the npm package version.
+The npm layers are exact-version matched: the `pi-ast-sgrep` extension depends on `ast-sgrep`, which selects one of five host-constrained native packages. Extension, launcher, and native package manifests must all be `1.1.0-alpha.1`. The embedded executable reports native CLI version `1.1.0-alpha.1`; the runtime verifies that identity separately from the npm package version.
 
 ## What is available immediately
 

@@ -1,10 +1,25 @@
 use std::cmp::Ordering;
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
-use rayon::prelude::*;
 use simsimd::SpatialSimilarity;
+use rayon::prelude::*;
+
 pub const MIN_SIMILARITY: f32 = 0.08;
 pub const PARALLEL_CHUNK_THRESHOLD: usize = 64;
+fn exceeds_similarity_threshold(sim: f32, min: f32) -> bool {
+    if !sim.is_finite() || !min.is_finite() {
+        return false;
+    }
+    let next = if min == 0.0 {
+        f32::from_bits(1)
+    } else if min > 0.0 {
+        f32::from_bits(min.to_bits() + 1)
+    } else {
+        f32::from_bits(min.to_bits() - 1)
+    };
+    sim > next
+}
+
 const SIMD_DOT_THRESHOLD: usize = 64;
 #[derive(Clone, Copy, PartialEq)]
 struct Scored {
@@ -33,13 +48,29 @@ fn score_order(left: f32, right: f32) -> Ordering {
 fn compare_hits_desc(left: &(usize, f32), right: &(usize, f32)) -> Ordering {
     score_order(right.1, left.1).then_with(|| left.0.cmp(&right.0))
 }
-pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
+pub fn dot_similarity(a: &[f32], b: &[f32]) -> f32 {
     if a.len() != b.len() || a.is_empty() { return 0.0; }
     if a.len() >= SIMD_DOT_THRESHOLD {
         if let Some(d) = f32::dot(a, b) { return d as f32; }
     }
     a.iter().zip(b.iter()).map(|(x, y)| x * y).sum()
 }
+
+pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 { if a.len() != b.len() || a.is_empty() { return 0.0; }
+let (dot, norm_a, norm_b) = a.iter().zip(b).fold(
+    (0.0_f64, 0.0_f64, 0.0_f64),
+    |(dot, norm_a, norm_b), (&left, &right)| {
+        let left = f64::from(left);
+        let right = f64::from(right);
+        (
+            left.mul_add(right, dot),
+            left.mul_add(left, norm_a),
+            right.mul_add(right, norm_b),
+        )
+    },
+);
+if norm_a == 0.0 || norm_b == 0.0 { return 0.0; }
+(dot / (norm_a.sqrt() * norm_b.sqrt())) as f32 }
 pub fn cosine_scores_for<'a>(
     query_vec: &[f32],
     rows: impl Iterator<Item = (usize, &'a [f32])>,
@@ -56,7 +87,7 @@ pub fn top_k_similarity(
     if limit == 0 { return vec![]; }
     let mut heap = BinaryHeap::new();
     for (idx, sim) in scored {
-        if sim.is_finite() && min_similarity.is_none_or(|min| sim > min) {
+        if sim.is_finite() && min_similarity.is_none_or(|min| exceeds_similarity_threshold(sim, min)) {
             push_top_k(&mut heap, limit, idx, sim);
         }
     }
@@ -75,9 +106,7 @@ pub fn top_k_flat_similarity(
         let mut heap = BinaryHeap::new();
         for i in 0..n {
             let sim = cosine_similarity(query_vec, &flat[i * dim..(i + 1) * dim]);
-            if min_similarity.is_none_or(|min| sim > min) {
-                push_top_k(&mut heap, limit, i, sim);
-            }
+            if sim.is_finite() && min_similarity.is_none_or(|min| exceeds_similarity_threshold(sim, min)) { push_top_k(&mut heap, limit, i, sim); }
         }
         return heap_to_sorted_vec(heap);
     }
@@ -85,9 +114,7 @@ pub fn top_k_flat_similarity(
         .into_par_iter()
         .fold(BinaryHeap::new, |mut heap, i| {
             let sim = cosine_similarity(query_vec, &flat[i * dim..(i + 1) * dim]);
-            if min_similarity.is_none_or(|min| sim > min) {
-                push_top_k(&mut heap, limit, i, sim);
-            }
+            if sim.is_finite() && min_similarity.is_none_or(|min| exceeds_similarity_threshold(sim, min)) { push_top_k(&mut heap, limit, i, sim); }
             heap
         })
         .reduce(BinaryHeap::new, |mut left, right| {
@@ -109,16 +136,42 @@ fn heap_to_sorted_vec(heap: BinaryHeap<Reverse<Scored>>) -> Vec<(usize, f32)> {
     out.sort_by(compare_hits_desc);
     out
 }
-pub fn top_by_similarity(
-    mut scored: Vec<(usize, f32)>,
-    limit: usize,
-    min_similarity: Option<f32>,
-) -> Vec<(usize, f32)> {
-    if limit == 0 { return vec![]; }
-    if let Some(min) = min_similarity {
-        scored.retain(|(_, sim)| *sim > min);
+pub fn top_by_similarity(mut scored: Vec<(usize, f32)>,
+limit: usize,
+min_similarity: Option<f32>,) -> Vec<(usize, f32)> { if limit == 0 { return vec![]; }
+if let Some(min) = min_similarity {
+    scored.retain(|(_, sim)| *sim > min);
+}
+scored.sort_by(compare_hits_desc);
+scored.truncate(limit);
+scored }
+
+#[cfg(test)]
+mod contract_tests {
+    use super::*;
+
+    #[test]
+    fn cosine_similarity_is_scale_invariant() {
+        let base = cosine_similarity(&[1.0, 2.0], &[3.0, 4.0]);
+        let scaled = cosine_similarity(&[10.0, 20.0], &[1.5, 2.0]);
+        assert!((base - scaled).abs() <= f32::EPSILON);
     }
-    scored.sort_by(compare_hits_desc);
-    scored.truncate(limit);
-    scored
+
+    #[test]
+    fn similarity_rankers_filter_non_finite_scores() {
+        let ranked = top_k_similarity([(0, f32::NAN), (1, 0.5)], 2, None);
+        assert_eq!(ranked, vec![(1, 0.5)]);
+
+        let flat = top_k_flat_similarity(&[1.0, 0.0], &[f32::NAN, 0.0, 0.5, 0.0], 2, 2, None);
+        assert_eq!(flat, vec![(1, 1.0)]);
+    }
+
+    #[test]
+    fn minimum_similarity_uses_stable_ulp_boundary() {
+        let min = 0.5_f32;
+        let one_ulp_above = f32::from_bits(min.to_bits() + 1);
+        let two_ulps_above = f32::from_bits(min.to_bits() + 2);
+        assert!(top_k_similarity([(0, one_ulp_above)], 1, Some(min)).is_empty());
+        assert_eq!(top_k_similarity([(0, two_ulps_above)], 1, Some(min)), vec![(0, two_ulps_above)]);
+    }
 }

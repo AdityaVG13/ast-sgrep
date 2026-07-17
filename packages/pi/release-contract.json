@@ -11,7 +11,7 @@
       "native-platform-packages"
     ],
     "driftPolicy": "All Pi/npm packages and release metadata MUST equal the canonical npm version; the embedded native CLI MUST equal nativeCliVersion. Mixed package versions or unexpected CLI versions are rejected.",
-    "nativeCliVersion": "1.1.0-alpha",
+    "nativeCliVersion": "1.1.0-alpha.1",
     "nativeCliSource": "Cargo.toml#workspace.package.version"
   },
   "packages": {
@@ -133,7 +133,7 @@
         "compatibility": "exact"
       },
       "binary": {
-        "version": "1.1.0-alpha",
+        "version": "1.1.0-alpha.1",
         "compatibility": "exact-native-cli"
       },
       "machineSchema": {

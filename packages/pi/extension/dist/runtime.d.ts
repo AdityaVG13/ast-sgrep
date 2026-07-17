@@ -1,5 +1,5 @@
 import { resolveBinary } from "ast-sgrep";
-export declare const RUNTIME_VERSION = "1.1.0-alpha";
+export declare const RUNTIME_VERSION = "1.1.0-alpha.1";
 export declare const MACHINE_SCHEMA_VERSION = "1.0.0";
 export declare const CONFIG_SCHEMA_VERSION: 1;
 export declare const INDEX_FORMAT_VERSION: 5;

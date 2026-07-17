@@ -102,10 +102,21 @@ impl ParsedQuery {
     }
 
     pub fn primary_symbol(&self) -> Option<&str> {
-        self.terms
-            .iter()
-            .find(|t| looks_like_symbol(t))
-            .map(|s| s.as_str())
+        let cased_identifier = self
+            .raw
+            .split(|c: char| !c.is_alphanumeric() && c != '_')
+            .find(|word| word.chars().any(char::is_uppercase))
+            .map(str::to_lowercase);
+
+        cased_identifier
+            .as_deref()
+            .and_then(|identifier| {
+                self.terms
+                    .iter()
+                    .find(|term| term.as_str() == identifier)
+            })
+            .or_else(|| self.terms.iter().find(|term| looks_like_symbol(term)))
+            .map(String::as_str)
     }
 }
 const STOPWORDS: &[&str] = &[
@@ -139,15 +150,17 @@ fn tokenize_words(input: &str, drop_stopwords: bool) -> Vec<String> {
             }
         }
         let mut parts = Vec::new();
-        let mut current = String::new();
-        for ch in w.chars() {
-            if ch.is_uppercase() && !current.is_empty() {
-                parts.push(std::mem::take(&mut current).to_lowercase());
+        for segment in w.split('_').filter(|segment| !segment.is_empty()) {
+            let mut current = String::new();
+            for ch in segment.chars() {
+                if ch.is_uppercase() && !current.is_empty() {
+                    parts.push(std::mem::take(&mut current).to_lowercase());
+                }
+                current.push(ch);
             }
-            current.push(ch);
-        }
-        if !current.is_empty() {
-            parts.push(current.to_lowercase());
+            if !current.is_empty() {
+                parts.push(current.to_lowercase());
+            }
         }
         for part in parts {
             if part.len() > 1 && !terms.contains(&part) {
@@ -160,5 +173,26 @@ fn tokenize_words(input: &str, drop_stopwords: bool) -> Vec<String> {
     terms
 }
 fn looks_like_symbol(term: &str) -> bool {
-    term.contains('_') || term.chars().any(|c| c.is_uppercase()) || term.len() > 3
+    term.contains('_') || term.len() > 3
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn short_cased_identifier_is_the_primary_symbol() {
+        let parsed = ParsedQuery::parse("Map");
+
+        assert_eq!(parsed.primary_symbol(), Some("map"));
+    }
+
+    #[test]
+    fn camel_split_does_not_emit_underscore_ghost_terms() {
+        let parsed = ParsedQuery::parse("User_Id");
+
+        assert!(!parsed.terms.iter().any(|term| term.ends_with('_')));
+        assert!(parsed.terms.iter().any(|term| term == "user"));
+        assert!(parsed.terms.iter().any(|term| term == "id"));
+    }
 }

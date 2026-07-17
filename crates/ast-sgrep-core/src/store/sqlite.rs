@@ -282,26 +282,33 @@ impl IndexStore {
     }
 
     pub fn upsert_file(&self, input: UpsertFileInput<'_>) -> Result<i64> {
-        let emb = self.embed_chunks(input.semantic_chunks, input.embed_semantic, input.embed_backend)?;
-        self.begin_file_tx()?;
-        match self.upsert_file_inner(input, &emb.chunks) {
-            Ok(id) => {
-                if let Err(e) = self.insert_embed_cache_entries(&emb.cache_entries) {
-                    eprintln!("[asgrep] warning: failed to write embedding cache: {e}");
+            let emb = self.embed_chunks(input.semantic_chunks, input.embed_semantic, input.embed_backend)?;
+            let cache_hits = emb.cache_hits.len();
+            let cache_misses = emb.chunks.len().saturating_sub(cache_hits);
+            self.begin_file_tx()?;
+            match self.upsert_file_inner(input, &emb.chunks) {
+                Ok(id) => {
+                    if let Err(e) = self.insert_embed_cache_entries(&emb.cache_entries) {
+                        eprintln!("[asgrep] warning: failed to write embedding cache: {e}");
+                    }
+                    let hits: Vec<_> = emb.cache_hits.iter().map(|h| (h.chunk_hash.clone(), h.model_id.clone())).collect();
+                    if let Err(e) = self.touch_embed_cache_entries(&hits) {
+                        eprintln!("[asgrep] warning: failed to touch embedding cache: {e}");
+                    }
+                    for (key, delta) in [("embed_cache_hits", cache_hits), ("embed_cache_misses", cache_misses)] {
+                        let total = self.get_meta(key)?.and_then(|value| value.parse::<u64>().ok())
+                            .unwrap_or(0).saturating_add(delta as u64);
+                        self.set_meta(key, &total.to_string())?;
+                    }
+                    if let Err(e) = self.evict_embed_cache(embed_cache_cap()) {
+                        eprintln!("[asgrep] warning: failed to evict embedding cache: {e}");
+                    }
+                    self.commit_file_tx()?;
+                    Ok(id)
                 }
-                let hits: Vec<_> = emb.cache_hits.iter().map(|h| (h.chunk_hash.clone(), h.model_id.clone())).collect();
-                if let Err(e) = self.touch_embed_cache_entries(&hits) {
-                    eprintln!("[asgrep] warning: failed to touch embedding cache: {e}");
-                }
-                if let Err(e) = self.evict_embed_cache(embed_cache_cap()) {
-                    eprintln!("[asgrep] warning: failed to evict embedding cache: {e}");
-                }
-                self.commit_file_tx()?;
-                Ok(id)
+                Err(e) => { self.rollback_file_tx()?; Err(e) }
             }
-            Err(e) => { self.rollback_file_tx()?; Err(e) }
         }
-    }
 
     fn upsert_file_inner(&self, input: UpsertFileInput<'_>, emb: &[EmbeddedChunk]) -> Result<i64> {
         let file_id = self.upsert_file_row(
@@ -456,22 +463,27 @@ impl IndexStore {
     }
 
     pub fn status(&self) -> Result<IndexStatus> {
-        let (fc, lc, sc, cc, ic, sec): (i64, i64, i64, i64, i64, i64) = self.conn.query_row(
-            "SELECT (SELECT COUNT(*) FROM files),(SELECT COUNT(*) FROM lines),
-                    (SELECT COUNT(*) FROM symbols),(SELECT COUNT(*) FROM callers),
-                    (SELECT COUNT(*) FROM imports),(SELECT COUNT(*) FROM semantic_chunks)",
-            [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)),
-        )?;
-        Ok(IndexStatus {
-            root: self.root.display().to_string(),
-            index_path: self.db_path.display().to_string(),
-            file_count: fc as usize, line_count: lc as usize, symbol_count: sc as usize,
-            caller_count: cc as usize, import_count: ic as usize, semantic_chunk_count: sec as usize,
-            embed_backend: self.get_meta("embed_backend")?,
-            embed_dim: self.get_meta("embed_dim")?.and_then(|d| d.parse().ok()),
-            semantic_ivf_present: crate::semantic_ivf::semantic_ivf_path(&self.db_path).exists(),
-        })
-    }
+            let (fc, lc, sc, cc, ic, sec): (i64, i64, i64, i64, i64, i64) = self.conn.query_row(
+                "SELECT (SELECT COUNT(*) FROM files),(SELECT COUNT(*) FROM lines),
+                        (SELECT COUNT(*) FROM symbols),(SELECT COUNT(*) FROM callers),
+                        (SELECT COUNT(*) FROM imports),(SELECT COUNT(*) FROM semantic_chunks)",
+                [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)),
+            )?;
+            let embed_cache_entries = count_star(&self.conn, "embed_cache")?;
+            Ok(IndexStatus {
+                root: self.root.display().to_string(),
+                index_path: self.db_path.display().to_string(),
+                file_count: fc as usize, line_count: lc as usize, symbol_count: sc as usize,
+                caller_count: cc as usize, import_count: ic as usize, semantic_chunk_count: sec as usize,
+                embed_backend: self.get_meta("embed_backend")?,
+                embed_dim: self.get_meta("embed_dim")?.and_then(|d| d.parse().ok()),
+                embed_cache_entries,
+                embed_cache_capacity: embed_cache_cap(),
+                embed_cache_hits: self.get_meta("embed_cache_hits")?.and_then(|v| v.parse().ok()).unwrap_or(0),
+                embed_cache_misses: self.get_meta("embed_cache_misses")?.and_then(|v| v.parse().ok()).unwrap_or(0),
+                semantic_ivf_present: crate::semantic_ivf::semantic_ivf_path(&self.db_path).exists(),
+            })
+        }
 
     pub fn indexed_line_count(&self) -> Result<usize> { count_star(&self.conn, "lines") }
 

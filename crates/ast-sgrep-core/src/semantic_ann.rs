@@ -79,31 +79,32 @@ impl SemanticAnnIndex {
 
     /// `probes`: None/0 = adaptive √k clusters; ≥ n_clusters = all (exact).
     pub fn candidate_indices(&self, query: &[f32], probes: Option<usize>) -> Vec<usize> {
-        if self.centroids.is_empty() {
-            return vec![];
-        }
-        let q = normalize_vec(query);
-        let mut scores: Vec<(usize, f32)> = self
-            .centroids
-            .iter()
-            .enumerate()
-            .map(|(i, c)| (i, cosine_similarity(&q, c)))
-            .collect();
-        scores.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-        let k = self.centroids.len();
-        let take = match probes {
-            None | Some(0) => ((k as f64).sqrt() as usize).clamp(1, k),
-            Some(p) if p >= k => k,
-            Some(p) => p.max(1).min(k),
-        };
-        let mut members = Vec::new();
-        for (id, _) in scores.into_iter().take(take) {
-            if let Some(c) = self.clusters.get(id) {
-                members.extend_from_slice(c);
+            if self.centroids.is_empty() {
+                return vec![];
             }
+            let q = normalize_vec(query);
+            let mut scores: Vec<(usize, f32)> = self
+                .centroids
+                .iter()
+                .enumerate()
+                .map(|(i, c)| (i, cosine_similarity(&q, c)))
+                .collect();
+            scores.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+            let k = self.centroids.len();
+            let take = match probes {
+                None | Some(0) => ((k as f64).sqrt() as usize).clamp(1, k),
+                Some(p) if p >= k => k,
+                Some(p) => p.max(1).min(k),
+            };
+            let mut members = Vec::new();
+            for (id, _) in scores.into_iter().take(take) {
+                if let Some(c) = self.clusters.get(id) {
+                    members.extend_from_slice(c);
+                }
+            }
+            members.sort_unstable();
+            members
         }
-        members
-    }
 
     /// Adaptive probe count (`√k` clusters). Prefer
     /// [`Self::search_flat_with_probes`] when callers need exact coverage.
@@ -123,9 +124,8 @@ impl SemanticAnnIndex {
         probes: Option<usize>,
     ) -> Vec<(usize, f32)> {
         let n = flat.len().checked_div(dim).unwrap_or(0);
-        if n == 0 {
-            return vec![];
-        }
+        if n == 0 { return vec![]; }
+        if n < DEFAULT_ANN_THRESHOLD { return brute_force_flat(flat, dim, query, limit); }
         if self.centroids.is_empty() {
             return brute_force_flat(flat, dim, query, limit);
         }
@@ -317,9 +317,9 @@ struct SessionCache {
     ivf: Arc<PersistedSemanticIvf>,
 }
 
-static SESSION_CACHE: Mutex<Option<(String, SessionCache)>> = Mutex::new(None);
+static SESSION_CACHE: Mutex<Vec<(String, SessionCache)>> = Mutex::new(Vec::new());
 pub fn clear_semantic_ivf_session_cache() {
-    *SESSION_CACHE.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    SESSION_CACHE.lock().unwrap_or_else(|e| e.into_inner()).clear();
 }
 pub fn mark_semantic_ivf_stale(store: &IndexStore) {
     let _ = store.set_meta("semantic_ivf_stale", "1");
@@ -335,7 +335,14 @@ fn ann_session_key(store: &IndexStore, chunks: &[SemanticChunkRow]) -> Result<([
     ))
 }
 fn cache_session(db_key: &str, fingerprint: [u8; 32], ivf: &PersistedSemanticIvf) {
-    *SESSION_CACHE.lock().unwrap_or_else(|e| e.into_inner()) = Some((
+    let mut cache = SESSION_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(position) = cache.iter().position(|(key, _)| key == db_key) {
+        cache.remove(position);
+    }
+    if cache.len() == 4 {
+        cache.remove(0);
+    }
+    cache.push((
         db_key.to_string(),
         SessionCache { fingerprint, ivf: Arc::new(ivf.clone()) },
     ));
@@ -368,9 +375,14 @@ pub fn cached_semantic_ivf(
     if !should_use_ann(chunks.len(), override_threshold) { return Ok(None); }
     let (fingerprint, db_key) = ann_session_key(store, chunks)?;
     {
-        let guard = SESSION_CACHE.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some((key, cached)) = guard.as_ref() {
-            if key == &db_key && cached.fingerprint == fingerprint { return Ok(Some(Arc::clone(&cached.ivf))); }
+        let mut cache = SESSION_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(position) = cache.iter().position(|(key, _)| key == &db_key) {
+            let (key, cached) = cache.remove(position);
+            if cached.fingerprint == fingerprint {
+                let ivf = Arc::clone(&cached.ivf);
+                cache.push((key, cached));
+                return Ok(Some(ivf));
+            }
         }
     }
     load_or_build_semantic_ivf(store, chunks, override_threshold)

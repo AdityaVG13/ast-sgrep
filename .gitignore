@@ -8,7 +8,14 @@
 .DS_Store
 Thumbs.db
 
-# Node package installs\nnode_modules/\n\n# Editor state
+# Repository-root path/index noise
+/~/
+/LanguageClient/
+
+# Node package installs
+node_modules/
+
+# Editor state
 *.swp
 *.swo
 *~

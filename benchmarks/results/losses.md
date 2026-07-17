@@ -1,5 +1,12 @@
 # Known losses
 
+> **Reproducibility status:** Every numeric row in this report is a historical
+> published value and is **unreproducible from this source tree**: the generating
+> harnesses, raw corpora, and raw result artifacts are absent. The external
+> artifact location is the [Speed benchmark workflow](https://github.com/AdityaVG13/ast-sgrep/actions/workflows/speed.yml).
+> No retained artifact is identified there for these historical runs, so this
+> link is a storage location, not evidence that a row can currently be regenerated.
+
 > **Published record** of measured results. No runnable harnesses ship in this tree.
 
 Measured 2026-07-10 on Apple M5 Max, 48 GiB RAM. The corpus is ripgrep 14.1.1 at `4649aa9700619f94cf9c66876e9549d83420e16c`; the 14-query gold fixture is unchanged. Full machine, corpus, and tool provenance is in [`BASELINES.md`](baselines.md). Machine-readable aggregate and per-query results are under `bakeoff.corpora.ripgrep` in *(historical dump; not in-tree)*.

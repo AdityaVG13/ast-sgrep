@@ -21,6 +21,10 @@ pub fn tree_sitter_language(lang: Language) -> tree_sitter::Language {
         Language::Ruby => tree_sitter_ruby::LANGUAGE.into(),
     }
 }
+/// Matches identifier text exactly, including case.
+///
+/// This syntax-level policy intentionally differs from relevance ranking, where symbol
+/// comparisons are case-folded. A pattern for `Foo` does not match an identifier `foo`.
 pub fn match_literal_pattern(
     lang: Language,
     source: &str,
