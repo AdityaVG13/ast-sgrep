@@ -1,0 +1,56 @@
+{
+  "schemaVersion": 1,
+  "artifactSchemaVersion": 1,
+  "targets": [
+    {
+      "id": "darwin-arm64",
+      "package": "ast-sgrep-darwin-arm64",
+      "rustTarget": "aarch64-apple-darwin",
+      "runner": "macos-14-xlarge",
+      "os": "darwin",
+      "cpu": "arm64",
+      "libc": null,
+      "executable": "asgrep"
+    },
+    {
+      "id": "darwin-x64",
+      "package": "ast-sgrep-darwin-x64",
+      "rustTarget": "x86_64-apple-darwin",
+      "runner": "macos-13",
+      "os": "darwin",
+      "cpu": "x64",
+      "libc": null,
+      "executable": "asgrep"
+    },
+    {
+      "id": "linux-arm64-gnu",
+      "package": "ast-sgrep-linux-arm64-gnu",
+      "rustTarget": "aarch64-unknown-linux-gnu",
+      "runner": "ubuntu-24.04-arm",
+      "os": "linux",
+      "cpu": "arm64",
+      "libc": "glibc",
+      "executable": "asgrep"
+    },
+    {
+      "id": "linux-x64-gnu",
+      "package": "ast-sgrep-linux-x64-gnu",
+      "rustTarget": "x86_64-unknown-linux-gnu",
+      "runner": "ubuntu-latest",
+      "os": "linux",
+      "cpu": "x64",
+      "libc": "glibc",
+      "executable": "asgrep"
+    },
+    {
+      "id": "win32-x64-msvc",
+      "package": "ast-sgrep-win32-x64-msvc",
+      "rustTarget": "x86_64-pc-windows-msvc",
+      "runner": "windows-latest",
+      "os": "win32",
+      "cpu": "x64",
+      "libc": null,
+      "executable": "asgrep.exe"
+    }
+  ]
+}

@@ -4,11 +4,21 @@ This guide walks through install, first index, everyday queries, and common conf
 
 ## Install
 
+### Pi (recommended for Pi users)
+
 ```bash
-# planned once the crates are published:
-cargo install ast-sgrep-cli   # CLI (asgrep / ast-sgrep)
-cargo install ast-sgrep-lsp   # LSP server (editor integration)
+pi install npm:pi-ast-sgrep
 ```
+
+Open Pi in the project you want to search. The extension immediately provides the `asgrep_search`, `asgrep_index`, and `asgrep_status` tools; `/asgrep-doctor`, `/asgrep-status`, `/asgrep-index`, and `/asgrep-reindex`; and the `ast-sgrep` skill. The first search lazily creates the index, so no separate setup command is required. Start with:
+
+1. `/asgrep-doctor` if native availability or configuration is uncertain.
+2. `/asgrep-status` to inspect the current project.
+3. Ask Pi to use `asgrep_search` with `mode: "defs"`, `"callers"`, or `"semantic"` as appropriate.
+
+No Cargo build, source checkout, PATH configuration, MCP adapter, API key, or runtime executable download is part of the Pi package path. Read the [canonical Pi package guide](pi-package.md) before configuring external embeddings, updating, rolling back, or removing the package; it also documents supported hosts, `.asgrep` retention, security, and complete troubleshooting.
+
+### Standalone CLI/LSP from source
 
 Requires a Rust toolchain. Until the crates are published, build from source:
 
@@ -19,7 +29,7 @@ cargo build --release -p ast-sgrep-cli
 ./target/release/asgrep --help
 ```
 
-## Quickstart
+## Standalone quickstart
 
 From a source checkout, build once and exercise the six core workflows:
 

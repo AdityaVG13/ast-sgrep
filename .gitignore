@@ -12,6 +12,9 @@ Thumbs.db
 /~/
 /LanguageClient/
 
+# Node package installs
+node_modules/
+
 # Editor state
 *.swp
 *.swo

@@ -1,0 +1,25 @@
+{
+  "name": "ast-sgrep-darwin-arm64",
+  "version": "1.1.0-alpha.1",
+  "description": "ast-sgrep native binary for macOS arm64",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/AdityaVG13/ast-sgrep.git",
+    "directory": "packages/pi/platforms/darwin-arm64"
+  },
+  "os": [
+    "darwin"
+  ],
+  "cpu": [
+    "arm64"
+  ],
+  "scripts": {
+    "prepack": "node ../prepack-verify.mjs"
+  },
+  "files": [
+    "asgrep",
+    "checksum.sha256",
+    "LICENSE"
+  ]
+}

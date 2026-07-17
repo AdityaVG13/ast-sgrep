@@ -1,0 +1,312 @@
+{
+  "schemaVersion": 2,
+  "canonicalVersion": {
+    "version": "1.1.0-alpha.1",
+    "source": "package.json#version",
+    "npmWorkspaceSource": "package.json#version",
+    "tag": "v1.1.0-alpha.1",
+    "coupledComponents": [
+      "pi-extension",
+      "npm-launcher",
+      "native-platform-packages"
+    ],
+    "driftPolicy": "All Pi/npm packages and release metadata MUST equal the canonical npm version; the embedded native CLI MUST equal nativeCliVersion. Mixed package versions or unexpected CLI versions are rejected.",
+    "nativeCliVersion": "1.1.0-alpha.1",
+    "nativeCliSource": "Cargo.toml#workspace.package.version"
+  },
+  "packages": {
+    "extension": {
+      "name": "pi-ast-sgrep",
+      "directory": "packages/pi/extension"
+    },
+    "launcher": {
+      "name": "ast-sgrep",
+      "directory": "packages/pi/launcher",
+      "commands": [
+        "asgrep",
+        "ast-sgrep"
+      ]
+    },
+    "platformDependencyPolicy": "exact",
+    "platforms": [
+      {
+        "name": "ast-sgrep-darwin-arm64",
+        "directory": "packages/pi/platforms/darwin-arm64",
+        "target": "aarch64-apple-darwin",
+        "os": [
+          "darwin"
+        ],
+        "cpu": [
+          "arm64"
+        ],
+        "libc": [],
+        "executable": "asgrep",
+        "optionalDependencyVersion": "1.1.0-alpha.1"
+      },
+      {
+        "name": "ast-sgrep-darwin-x64",
+        "directory": "packages/pi/platforms/darwin-x64",
+        "target": "x86_64-apple-darwin",
+        "os": [
+          "darwin"
+        ],
+        "cpu": [
+          "x64"
+        ],
+        "libc": [],
+        "executable": "asgrep",
+        "optionalDependencyVersion": "1.1.0-alpha.1"
+      },
+      {
+        "name": "ast-sgrep-linux-arm64-gnu",
+        "directory": "packages/pi/platforms/linux-arm64-gnu",
+        "target": "aarch64-unknown-linux-gnu",
+        "os": [
+          "linux"
+        ],
+        "cpu": [
+          "arm64"
+        ],
+        "libc": [
+          "glibc"
+        ],
+        "executable": "asgrep",
+        "optionalDependencyVersion": "1.1.0-alpha.1"
+      },
+      {
+        "name": "ast-sgrep-linux-x64-gnu",
+        "directory": "packages/pi/platforms/linux-x64-gnu",
+        "target": "x86_64-unknown-linux-gnu",
+        "os": [
+          "linux"
+        ],
+        "cpu": [
+          "x64"
+        ],
+        "libc": [
+          "glibc"
+        ],
+        "executable": "asgrep",
+        "optionalDependencyVersion": "1.1.0-alpha.1"
+      },
+      {
+        "name": "ast-sgrep-win32-x64-msvc",
+        "directory": "packages/pi/platforms/win32-x64-msvc",
+        "target": "x86_64-pc-windows-msvc",
+        "os": [
+          "win32"
+        ],
+        "cpu": [
+          "x64"
+        ],
+        "libc": [],
+        "executable": "asgrep.exe",
+        "optionalDependencyVersion": "1.1.0-alpha.1"
+      }
+    ],
+    "unsupportedTargets": [
+      "linux-musl",
+      "win32-arm64"
+    ],
+    "installPolicy": "The launcher uses exact-version optionalDependencies with npm os, cpu, and libc constraints; it never downloads an executable at install time or runtime."
+  },
+  "compatibility": {
+    "node": {
+      "range": ">=22.19.0",
+      "minimum": "22.19.0",
+      "policy": "Each release MUST pass acceptance on the minimum version and the current Node.js LTS."
+    },
+    "pi": {
+      "package": "@earendil-works/pi-coding-agent",
+      "range": ">=0.80.6 <1",
+      "minimum": "0.80.6",
+      "api": "ExtensionAPI",
+      "policy": "Each release MUST pass the real Pi loader acceptance suite on the minimum and current stable Pi versions; Pi 1.x requires an explicit contract revision."
+    },
+    "layers": {
+      "extension": {
+        "version": "1.1.0-alpha.1",
+        "compatibility": "exact"
+      },
+      "launcher": {
+        "version": "1.1.0-alpha.1",
+        "compatibility": "exact"
+      },
+      "binary": {
+        "version": "1.1.0-alpha.1",
+        "compatibility": "exact-native-cli"
+      },
+      "machineSchema": {
+        "version": "1.0.0",
+        "readable": [
+          "1.0.0"
+        ],
+        "policy": "Reject every unlisted machine schema before consuming command data."
+      },
+      "configSchema": {
+        "current": 1,
+        "readable": [
+          0,
+          1
+        ],
+        "rollback": [
+          0
+        ],
+        "policy": "Migrate schema 0 copies without mutating their rollback source; reject ambiguous or newer schemas."
+      },
+      "indexFormat": {
+        "current": 5,
+        "reusable": [
+          5
+        ],
+        "rebuild": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ],
+        "newer": "reject-and-preserve",
+        "policy": "Reuse only an exact compatible format. Build an incompatible replacement separately and swap only after validation; failed replacement preserves recoverable prior data."
+      }
+    }
+  },
+  "surface": {
+    "tools": [
+      "asgrep_search",
+      "asgrep_index",
+      "asgrep_status"
+    ],
+    "commands": [
+      "/asgrep-doctor",
+      "/asgrep-status",
+      "/asgrep-index",
+      "/asgrep-reindex"
+    ],
+    "cliCommands": [
+      "asgrep",
+      "ast-sgrep"
+    ],
+    "defaultSearchFormat": "agent-capsule",
+    "separation": "Pi tools use ExtensionAPI directly. LSP and MCP remain separate integrations; pi-mcp-adapter is not used."
+  },
+  "config": {
+    "precedenceHighToLow": [
+      "explicit-project-config",
+      "project-settings",
+      "global-settings",
+      "environment",
+      "defaults"
+    ],
+    "developerBinaryOverrides": [
+      "binaryPath",
+      "ASGREP_BIN"
+    ],
+    "defaultRoot": "Pi ctx.cwd",
+    "rootPolicy": "Requested roots are canonicalized and confined to ctx.cwd unless explicit project configuration permits otherwise."
+  },
+  "offlineSemantics": {
+    "defaultBackend": "local",
+    "localSemanticSearchAlwaysAvailable": true,
+    "firstUseModelDownload": false,
+    "credentialsRequired": false,
+    "lazyIndexOnFirstSearch": true,
+    "optionalBackends": [
+      "cloud",
+      "ollama",
+      "neural"
+    ],
+    "policy": "A clean supported install performs local semantic indexing and search offline. Optional backends are opt-in and never replace or delay the local default."
+  },
+  "dataLifecycle": {
+    "path": "<project-root>/.asgrep",
+    "created": "Lazily by the first index or search that requires an index.",
+    "contents": [
+      "index database",
+      "embedding data",
+      "format and compatibility metadata",
+      "locks and atomic-rebuild state"
+    ],
+    "gitignoreMutation": false,
+    "compatibleUpdate": "Reuse the index after compatibility validation.",
+    "incompatibleUpdate": "Build a replacement atomically; retain the previous usable index until replacement succeeds.",
+    "failedUpdate": "Leave the previous data recoverable and report an actionable error.",
+    "uninstall": "Pi removal unloads the package but preserves project .asgrep data.",
+    "deletion": "Only an explicit user request may remove .asgrep data."
+  },
+  "updates": {
+    "mainBranch": "Pack and test relevant artifacts; never publish a stable npm version.",
+    "officialTag": "Every human-approved official version tag prepares and publishes all npm layers at the canonical version in platform, launcher, extension order.",
+    "selection": "Pi/npm update selects the exact matching extension, launcher, platform binary, and protocol version.",
+    "runtimeDownloads": false,
+    "partialPublishRecovery": "Move forward with a new immutable version; never overwrite a published npm version."
+  },
+  "registries": {
+    "sharedAnchor": [
+      "signed official tag",
+      "commit SHA",
+      "canonical workspace version",
+      "artifact checksums"
+    ],
+    "npm": {
+      "requiresCratesIoPublication": false,
+      "availabilityObserved": {
+        "date": "2026-07-16",
+        "registryResult": "404/not-found",
+        "names": [
+          "pi-ast-sgrep",
+          "ast-sgrep",
+          "ast-sgrep-darwin-arm64",
+          "ast-sgrep-darwin-x64",
+          "ast-sgrep-linux-arm64-gnu",
+          "ast-sgrep-linux-x64-gnu",
+          "ast-sgrep-win32-x64-msvc"
+        ],
+        "reservationGuaranteed": false,
+        "policy": "Availability is an observation only; re-verify every name and publisher ownership immediately before first publication.",
+        "version": "1.1.0-alpha.1"
+      },
+      "policy": "npm publication is independently gated and does not wait for crates.io availability or ordering."
+    },
+    "cratesIo": {
+      "requiresNpmPublication": false,
+      "policy": "crates.io publication is independently gated and does not wait for npm availability or ordering."
+    }
+  },
+  "firstPublication": {
+    "humanAuthorizationRequired": true,
+    "automatedFirstPublishForbidden": true,
+    "protectedEnvironmentApprovalRequired": true,
+    "packageNameAndOwnershipVerificationRequired": true,
+    "trustedPublishingRequired": true,
+    "provenanceRequired": true,
+    "authorizationRecordRequired": true,
+    "gate": "Before any external registry side effect, a human MUST verify every package name and publisher ownership and approve the protected release environment."
+  },
+  "releaseAutomation": {
+    "dryRunWorkflow": ".github/workflows/pi-native-artifacts.yml",
+    "officialWorkflow": ".github/workflows/pi-npm-release.yml",
+    "officialTrigger": "signed canonical version tag only",
+    "protectedEnvironment": "npm-production",
+    "trustedPublishing": "npm OIDC",
+    "provenance": true,
+    "packageOrder": [
+      "ast-sgrep-darwin-arm64",
+      "ast-sgrep-darwin-x64",
+      "ast-sgrep-linux-arm64-gnu",
+      "ast-sgrep-linux-x64-gnu",
+      "ast-sgrep-win32-x64-msvc",
+      "ast-sgrep",
+      "pi-ast-sgrep"
+    ],
+    "idempotence": "Refuse dirty, unsigned, wrong-tag, wrong-commit, version-skewed, checksum-incomplete, or already-published releases; immutable versions are never overwritten."
+  },
+  "nonGoals": [
+    "JavaScript search reimplementation",
+    "hidden daemon",
+    "runtime executable download",
+    "MCP adapter dependency",
+    "automatic .gitignore edits",
+    "automatic .asgrep deletion"
+  ]
+}

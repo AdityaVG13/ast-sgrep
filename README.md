@@ -14,7 +14,15 @@
 
 ## Install
 
-After `1.1.0-alpha.1` is published to crates.io, install the standalone CLI with:
+For Pi, install the native package directly:
+
+```bash
+pi install npm:pi-ast-sgrep
+```
+
+It immediately adds `asgrep_search`, `asgrep_index`, `asgrep_status`, four `/asgrep-*` commands, and the `ast-sgrep` skill. The first search lazily creates `.asgrep/`; no Rust toolchain, PATH setup, MCP adapter, credential, or runtime download is required. See the [complete Pi package guide](docs/pi-package.md) for supported hosts, data/privacy behavior, updates, rollback, troubleshooting, and uninstall.
+
+For the standalone CLI, after `1.1.0-alpha.1` is published to crates.io, install with:
 
 ```bash
 cargo install ast-sgrep-cli --version 1.1.0-alpha.1 --locked
@@ -29,7 +37,7 @@ cargo build --release -p ast-sgrep-cli
 ./target/release/asgrep --help
 ```
 
-Binaries: `asgrep` and `ast-sgrep` (aliases).
+Standalone binaries: `asgrep` and `ast-sgrep` (aliases).
 
 On Unix, the CLI runs commands through the process supervisor. `ASGREP_CPU_LIMIT_PERCENT`
 sets the worker process runnable wall-time fraction in each 10 ms SIGSTOP/CONT cycle; it is not
@@ -153,6 +161,7 @@ Canonical table: [head-to-head.md](benchmarks/results/head-to-head.md). Index: [
 |-----|----------|
 | [docs/README.md](docs/README.md) | Full documentation index |
 | [Getting started](docs/getting-started.md) | Install, index, queries, flags |
+| [Pi package guide](docs/pi-package.md) | Pi install, tools, data, security, updates, rollback, uninstall |
 | [Architecture](docs/ARCHITECTURE.md) | Index schema, search pipeline, crates |
 | [Query grammar](docs/QUERY_GRAMMAR.md) | Prefixes and composition |
 | [Semantic search](docs/semantic-search.md) | Chunks, providers, IVF-ANN |

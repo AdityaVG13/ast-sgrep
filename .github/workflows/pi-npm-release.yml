@@ -1,0 +1,152 @@
+name: Pi npm official release
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Exact existing release tag to publish (for example, v1.2.3)
+        required: true
+        type: string
+      publish:
+        description: Confirm publication to npm
+        required: true
+        type: boolean
+        default: false
+
+concurrency:
+  group: pi-npm-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  release-gate:
+    name: Validate immutable signed release
+    if: ${{ inputs.publish == true && github.ref_type == 'tag' && github.ref_name == inputs.release_tag }}
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.targets.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.19.0
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - name: Verify contracts and official tag gate
+        run: |
+          npm run check:pi-contract
+          npm run check:pi-release
+          node packages/pi/scripts/release-acceptance.mjs gate
+      - id: targets
+        run: echo "matrix=$(node packages/pi/scripts/release-artifact.mjs matrix)" >> "$GITHUB_OUTPUT"
+
+  build-native:
+    name: Build ${{ matrix.package }} once
+    needs: release-gate
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.release-gate.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.19.0
+          cache: npm
+      - run: npm ci
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rustTarget }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: pi-official-${{ matrix.rustTarget }}
+      - name: Build target-local release executable once
+        shell: bash
+        run: cargo build --locked --release -p ast-sgrep-cli --bin asgrep --no-default-features --target "${{ matrix.rustTarget }}"
+      - name: Preserve native checksum and provenance metadata
+        shell: bash
+        run: |
+          node packages/pi/scripts/release-artifact.mjs prepare \
+            --target "${{ matrix.id }}" \
+            --binary "target/${{ matrix.rustTarget }}/release/${{ matrix.executable }}" \
+            --output "dist/${{ matrix.package }}" \
+            --commit "$GITHUB_SHA"
+          node packages/pi/scripts/release-artifact.mjs verify --target "${{ matrix.id }}" --input "dist/${{ matrix.package }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.package }}
+          path: dist/${{ matrix.package }}/
+          if-no-files-found: error
+          retention-days: 90
+
+  verify-release:
+    name: Pack and verify complete npm family once
+    needs: [release-gate, build-native]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.19.0
+          cache: npm
+      - run: npm ci
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: ast-sgrep-*
+          path: dist/native
+      - name: Pack and verify all seven immutable artifacts
+        run: |
+          node packages/pi/scripts/release-acceptance.mjs pack --native-root dist/native --output npm-packs --commit "$GITHUB_SHA"
+          node packages/pi/scripts/release-acceptance.mjs verify --artifacts npm-packs
+          npm run test:pi-e2e
+      - name: Attest exact npm tarballs
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: npm-packs/*.tgz
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pi-npm-${{ github.ref_name }}-${{ github.sha }}
+          path: npm-packs/
+          if-no-files-found: error
+          retention-days: 90
+
+  publish:
+    name: Protected npm OIDC publication
+    needs: verify-release
+    runs-on: ubuntu-latest
+    environment: npm-production
+    env:
+      ASGREP_NPM_PROTECTED_ENVIRONMENT: npm-production
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.19.0
+          registry-url: https://registry.npmjs.org
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npm install --global npm@latest
+      - uses: actions/download-artifact@v4
+        with:
+          name: pi-npm-${{ github.ref_name }}-${{ github.sha }}
+          path: npm-packs
+      - name: Re-verify preserved checksums
+        run: node packages/pi/scripts/release-acceptance.mjs verify --artifacts npm-packs
+      - name: Publish five native packages
+        run: node packages/pi/scripts/release-acceptance.mjs publish --artifacts npm-packs --layer native
+      - name: Publish launcher after every native package
+        run: node packages/pi/scripts/release-acceptance.mjs publish --artifacts npm-packs --layer launcher
+      - name: Publish extension after launcher
+        run: node packages/pi/scripts/release-acceptance.mjs publish --artifacts npm-packs --layer extension

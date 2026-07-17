@@ -1,0 +1,39 @@
+{
+  "name": "ast-sgrep",
+  "version": "1.1.0-alpha.1",
+  "description": "Native ast-sgrep command launcher",
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/AdityaVG13/ast-sgrep.git",
+    "directory": "packages/pi/launcher"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "types": "./src/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.d.ts",
+      "import": "./src/index.js",
+      "default": "./src/index.js"
+    }
+  },
+  "bin": {
+    "asgrep": "./bin/asgrep.js",
+    "ast-sgrep": "./bin/asgrep.js"
+  },
+  "files": [
+    "bin",
+    "src",
+    "LICENSE"
+  ],
+  "optionalDependencies": {
+    "ast-sgrep-darwin-arm64": "1.1.0-alpha.1",
+    "ast-sgrep-darwin-x64": "1.1.0-alpha.1",
+    "ast-sgrep-linux-arm64-gnu": "1.1.0-alpha.1",
+    "ast-sgrep-linux-x64-gnu": "1.1.0-alpha.1",
+    "ast-sgrep-win32-x64-msvc": "1.1.0-alpha.1"
+  }
+}

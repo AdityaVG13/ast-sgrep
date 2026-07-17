@@ -1,0 +1,16 @@
+{
+  "name": "ast-sgrep-workspace",
+  "version": "1.1.0-alpha.1",
+  "private": true,
+  "workspaces": [
+    "packages/pi/extension",
+    "packages/pi/launcher"
+  ],
+  "scripts": {
+    "check:pi-contract": "node packages/pi/scripts/check-contract.mjs",
+    "check:pi-release": "node packages/pi/scripts/check-native-workflow.mjs",
+    "pack:pi-release": "node packages/pi/scripts/release-acceptance.mjs pack",
+    "test:pi-release-gate": "node packages/pi/scripts/release-acceptance.mjs self-test",
+    "test:pi-e2e": "node packages/pi/scripts/release-gate-e2e.mjs"
+  }
+}
