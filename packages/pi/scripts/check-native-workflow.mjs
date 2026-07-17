@@ -61,11 +61,13 @@ const validateOfficial = (text) => {
   report(triggers.length === 1 && triggers[0] === 'workflow_dispatch', 'official publication workflow must be manual-only');
   report(inputs?.release_tag?.required === true && inputs.release_tag.type === 'string', 'official publication requires an explicit release_tag string input');
   report(inputs?.publish?.required === true && inputs.publish.type === 'boolean' && inputs.publish.default === false, 'official publication requires an explicit publish intent defaulting to false');
+  report(inputs?.bootstrap_token?.required === true && inputs.bootstrap_token.type === 'boolean' && inputs.bootstrap_token.default === false, 'official publication requires an explicit bootstrap_token intent defaulting to false');
   const gate = workflow.jobs?.['release-gate'];
   report(gate?.if === "${{ inputs.publish == true && github.ref_type == 'tag' && github.ref_name == inputs.release_tag }}", 'official release gate must require publish intent and an exact tag ref match');
   const build = workflow.jobs?.['build-native'];
   const verify = workflow.jobs?.['verify-release'];
   const publish = workflow.jobs?.publish;
+  const bootstrapToken = "${{ inputs.bootstrap_token && secrets.NPM_TOKEN || '' }}";
   report(build?.strategy?.matrix === '${{ fromJSON(needs.release-gate.outputs.matrix) }}' && build?.['runs-on'] === '${{ matrix.runner }}', 'official native build must use the authoritative native matrix once');
   const gateRuns = (gate?.steps ?? []).map(activeRun).join('\n');
   report(gateRuns.includes('release-acceptance.mjs gate') && gateRuns.includes('npm run check:pi-contract') && gateRuns.includes('npm run check:pi-release'), 'official tag/version/duplicate gate is missing');
@@ -73,10 +75,12 @@ const validateOfficial = (text) => {
   report(verifyRuns.includes('release-acceptance.mjs pack --native-root dist/native') && verifyRuns.includes('release-acceptance.mjs verify --artifacts npm-packs') && verifyRuns.includes('npm run test:pi-e2e'), 'official release must pack and verify the complete family exactly once');
   report(verify?.permissions?.['id-token'] === 'write' && verify?.permissions?.attestations === 'write' && (verify?.steps ?? []).some((step) => step.uses === 'actions/attest-build-provenance@v2'), 'artifact provenance attestation is missing');
   report(publish?.environment === 'npm-production' && publish?.env?.ASGREP_NPM_PROTECTED_ENVIRONMENT === 'npm-production' && publish?.permissions?.['id-token'] === 'write' && publish?.needs === 'verify-release', 'npm publication must use protected npm-production OIDC after verification');
+  report(publish?.env?.NODE_AUTH_TOKEN === bootstrapToken, 'npm bootstrap token must use the exact default-off opt-in expression');
+  report(text.split('\n').filter((line) => line.trim() === 'NODE_AUTH_TOKEN: ' + bootstrapToken).length === 1 && (text.match(/secrets\.NPM_TOKEN/gu) ?? []).length === 1, 'npm bootstrap token wiring must appear exactly once in the publish job');
   const publishSteps = (publish?.steps ?? []).filter((step) => step.name).map((step) => [step.name, activeRun(step)]);
   const layers = publishSteps.filter(([, run]) => run.includes('release-acceptance.mjs publish')).map(([, run]) => run.match(/--layer (native|launcher|extension)/u)?.[1]);
   report(JSON.stringify(layers) === '["native","launcher","extension"]', 'publication order must be native -> launcher -> extension');
-  report(!text.includes('NODE_AUTH_TOKEN') && !text.includes('NPM_TOKEN'), 'trusted publishing must not use a long-lived npm token');
+
   return errors;
 };
 
@@ -99,7 +103,12 @@ const officialMutations = [
   officialText.replace('      id-token: write', '      id-token: read'),
   officialText.replace('      release_tag:', '      release_tag_removed:'),
   officialText.replace('        default: false', '        default: true'),
-  officialText.replace("github.ref_name == inputs.release_tag", "github.ref_name != inputs.release_tag")
+  officialText.replace("github.ref_name == inputs.release_tag", "github.ref_name != inputs.release_tag"),
+  officialText.replace("      bootstrap_token:\n        description: One-time first-publication npm token bootstrap; leave off for all subsequent publications\n        required: true\n        type: boolean\n        default: false", "      bootstrap_token:\n        description: One-time first-publication npm token bootstrap; leave off for all subsequent publications\n        required: true\n        type: boolean\n        default: true"),
+  officialText.replace("      bootstrap_token:", "      bootstrap_token_removed:"),
+  officialText.replace("      NODE_AUTH_TOKEN: ${{ inputs.bootstrap_token && secrets.NPM_TOKEN || '' }}", "      NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}"),
+  officialText.replace("      NODE_AUTH_TOKEN: ${{ inputs.bootstrap_token && secrets.NPM_TOKEN || '' }}", "      # NODE_AUTH_TOKEN omitted"),
+  officialText.replace("      NODE_AUTH_TOKEN: ${{ inputs.bootstrap_token && secrets.NPM_TOKEN || '' }}", "      NODE_AUTH_TOKEN: ${{ inputs.bootstrap_token && secrets.NPM_TOKEN }}")
 ];
 for (const [index, mutation] of officialMutations.entries()) if (validateOfficial(mutation).length === 0) errors.push('negative official mutation ' + (index + 1) + ' was not rejected');
 for (const token of ['ASGREP_RELEASE_DIRTY', 'ASGREP_RELEASE_TAG_VERSION', 'ASGREP_RELEASE_TAG_COMMIT', 'ASGREP_RELEASE_CHECKSUM_MISSING', 'ASGREP_RELEASE_CHECKSUM_MISMATCH', 'ASGREP_RELEASE_VERSION_SKEW', 'ASGREP_RELEASE_DUPLICATE_VERSION', 'ASGREP_RELEASE_OIDC_REQUIRED', 'ASGREP_RELEASE_PROTECTED_ENVIRONMENT', "['publish'", "'--provenance'"]) if (!releaseHelper.includes(token)) errors.push('release acceptance helper is missing ' + token);
