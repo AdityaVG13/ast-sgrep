@@ -279,7 +279,11 @@ fn finish_response(parsed: &ParsedQuery, options: &SearchOptions, mut hits: Vec<
         keyed.sort_unstable_by(compare);
     }
     let mut hits: Vec<_> = keyed.into_iter().map(|(_, h)| h).collect();
-    hits = enforce_result_gates(hits, parsed.mode == QueryMode::Hybrid, options.limit);
+    hits = enforce_result_gates(
+        hits,
+        parsed.mode == QueryMode::Hybrid,
+        rerank_candidate_limit(options),
+    );
     if options.use_rerank {
         hits = maybe_rerank(&parsed.raw, hits, options.rerank_top_k);
         hits = enforce_result_gates(hits, parsed.mode == QueryMode::Hybrid, options.limit);
@@ -298,6 +302,14 @@ fn finish_response(parsed: &ParsedQuery, options: &SearchOptions, mut hits: Vec<
     record_ledger_from_env(&response);
     response
 }
+fn rerank_candidate_limit(options: &SearchOptions) -> usize {
+    if options.use_rerank {
+        options.limit.max(options.rerank_top_k)
+    } else {
+        options.limit
+    }
+}
+
 fn maybe_rerank(query: &str, hits: Vec<SearchHit>, top_k: usize) -> Vec<SearchHit> {
     if hits.is_empty() {
         return hits;
@@ -480,6 +492,27 @@ mod tests {
             score,
             excerpt: String::new(),
         }
+    }
+
+    #[test]
+    fn rerank_can_promote_candidate_beyond_final_limit() {
+        let options = SearchOptions {
+            limit: 16,
+            use_rerank: true,
+            rerank_top_k: 20,
+            ..SearchOptions::default()
+        };
+        let hits: Vec<_> = (0..20)
+            .map(|index| hit(&format!("candidate-{index}.rs"), index + 1, 1.0 - f64::from(index) / 100.0))
+            .collect();
+
+        let candidates = enforce_result_gates(hits, false, rerank_candidate_limit(&options));
+        assert_eq!(candidates.len(), 20);
+        let reranked = apply_rerank_order(candidates, options.rerank_top_k, [(16, 1.0)]);
+        let final_hits = enforce_result_gates(reranked, false, options.limit);
+
+        assert_eq!(final_hits.len(), options.limit);
+        assert_eq!(final_hits[0].file, "candidate-16.rs");
     }
 
     #[test]

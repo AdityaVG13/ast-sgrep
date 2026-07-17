@@ -173,6 +173,84 @@ fn agent_search_modes_are_stable_and_bounded() {
 }
 
 #[test]
+fn chain_eval_and_bench_successes_use_machine_envelope() {
+    let session = CliSession::sample(asgrep_bin());
+    let index = session.index_path.to_str().expect("index utf8");
+    let root = session.root.to_str().expect("root utf8");
+
+    let chain = assert_success(
+        &run(
+            &session.bin,
+            &[
+                "--json",
+                "--no-embed",
+                "--index-path",
+                index,
+                "chain",
+                "process_request",
+                root,
+            ],
+        ),
+        "chain",
+    );
+    assert!(chain["nodes"].is_array());
+
+    let bench = assert_success(
+        &run(
+            &session.bin,
+            &[
+                "--json",
+                "--no-embed",
+                "--index-path",
+                index,
+                "bench",
+                root,
+                "--query",
+                "process_request",
+                "--iterations",
+                "1",
+                "--skip-index",
+            ],
+        ),
+        "bench",
+    );
+    assert_eq!(bench["iterations"], 1);
+
+    let gold = session._temp.path().join("gold.json");
+    std::fs::write(
+        &gold,
+        serde_json::json!({
+            "corpus": "sample",
+            "queries": [{
+                "name": "process",
+                "query": "process_request",
+                "k": 5,
+                "relevant": [{"file": "src/main.rs", "symbol": "process_request"}]
+            }]
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let eval = assert_success(
+        &run(
+            &session.bin,
+            &[
+                "--json",
+                "--no-embed",
+                "--index-path",
+                index,
+                "eval",
+                "--gold",
+                gold.to_str().unwrap(),
+                root,
+            ],
+        ),
+        "eval",
+    );
+    assert_eq!(eval["corpus"], "sample");
+}
+
+#[test]
 fn operational_failures_are_json_and_exit_two() {
     let bin = asgrep_bin();
     let temp = TempDir::new().expect("tempdir");

@@ -257,11 +257,13 @@ pub(crate) fn run_eval(cli: &Cli, args: &EvalArgs) -> anyhow::Result<()> {
         }
     };
 
+    if !cli.json {
     eprintln!(
         "[asgrep eval] indexing {} into {} ...",
         root.display(),
         index_path.display()
     );
+    }
     let mut indexer = Indexer::new(IndexOptions {
         root: root.clone(),
         index_path: Some(index_path.clone()),
@@ -299,7 +301,7 @@ pub(crate) fn run_eval(cli: &Cli, args: &EvalArgs) -> anyhow::Result<()> {
                 &evals_b,
                 &agg_a,
                 &agg_b,
-            );
+            )?;
         }
         None => {
             let cfg = EvalConfig {
@@ -316,7 +318,7 @@ pub(crate) fn run_eval(cli: &Cli, args: &EvalArgs) -> anyhow::Result<()> {
                 cfg,
                 &evals,
                 &agg,
-            );
+            )?;
         }
     }
     Ok(())
@@ -376,16 +378,12 @@ fn print_single(
     cfg: EvalConfig,
     evals: &[QueryEval],
     agg: &Aggregate,
-) {
+) -> anyhow::Result<()> {
     if cli.json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&single_json(
-                gold_path, gold, root, index_path, cfg, evals, agg
-            ))
-            .unwrap()
+        return crate::print_machine_json(
+            "eval",
+            single_json(gold_path, gold, root, index_path, cfg, evals, agg),
         );
-        return;
     }
     println!(
         "corpus: {}  queries: {}  config: {}",
@@ -412,6 +410,7 @@ fn print_single(
         "MRR={:.3}  Recall@k={:.3}  nDCG@k={:.3}  Recall@1={:.3}  Recall@5={:.3}  Recall@20={:.3}  n={}",
         agg.mrr, agg.recall_at_k, agg.ndcg, agg.recall_at[0].1, agg.recall_at[1].1, agg.recall_at[2].1, agg.n_queries
     );
+    Ok(())
 }
 #[allow(clippy::too_many_arguments)]
 fn print_ab(
@@ -426,7 +425,7 @@ fn print_ab(
     evals_b: &[QueryEval],
     agg_a: &Aggregate,
     agg_b: &Aggregate,
-) {
+) -> anyhow::Result<()> {
     if cli.json {
         let a = single_json(gold_path, gold, root, index_path, cfg_a, evals_a, agg_a);
         let b = single_json(gold_path, gold, root, index_path, cfg_b, evals_b, agg_b);
@@ -448,14 +447,10 @@ fn print_ab(
             "delta_recall_at_5": round3(agg_b.recall_at[1].1 - agg_a.recall_at[1].1),
             "delta_recall_at_20": round3(agg_b.recall_at[2].1 - agg_a.recall_at[2].1),
         });
-        println!(
-            "{}",
-            serde_json::to_string_pretty(
-                &json!({ "a": a, "b": b, "diff": { "queries": queries, "aggregate": aggregate } })
-            )
-            .unwrap()
+        return crate::print_machine_json(
+            "eval",
+            json!({ "a": a, "b": b, "diff": { "queries": queries, "aggregate": aggregate } }),
         );
-        return;
     }
     println!(
         "corpus: {}  queries: {}  A={}  B={}",
@@ -484,4 +479,5 @@ fn print_ab(
         agg_b.recall_at[0].1 - agg_a.recall_at[0].1, agg_b.recall_at[1].1 - agg_a.recall_at[1].1,
         agg_b.recall_at[2].1 - agg_a.recall_at[2].1,
     );
+    Ok(())
 }

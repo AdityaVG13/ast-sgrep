@@ -100,22 +100,16 @@ impl LspBackend {
     where
         F: FnOnce(&ast_sgrep_core::IndexStore) -> anyhow::Result<T>,
     {
-        let result = (|| {
-            let _guard = self.index_guard()?;
-            f(Indexer::new(self.index_options())?.store())
-        })();
-        self.record_index_result(result)
+        let _guard = self.index_guard()?;
+        f(Indexer::new(self.index_options())?.store())
     }
 
     fn with_locked_searcher<F, T>(&self, limit: usize, f: F) -> anyhow::Result<T>
     where
         F: FnOnce(&Searcher) -> anyhow::Result<T>,
     {
-        let result = (|| {
-            let _guard = self.index_guard()?;
-            f(&Searcher::new(self.search_options(limit))?)
-        })();
-        self.record_index_result(result)
+        let _guard = self.index_guard()?;
+        f(&Searcher::new(self.search_options(limit))?)
     }
 
     pub fn start_background_index(&mut self) {

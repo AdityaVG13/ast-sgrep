@@ -154,7 +154,6 @@ impl Indexer {
     }
 
     pub fn index_all(&mut self) -> Result<IndexStats> {
-        let _ = crate::semantic_ivf::invalidate_semantic_ivf(self.store.db_path());
         self.ignore.clear();
         let mut stats = IndexStats::default();
         let mut seen_paths = HashSet::new();
