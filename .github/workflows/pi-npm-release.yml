@@ -12,6 +12,11 @@ on:
         required: true
         type: boolean
         default: false
+      bootstrap_token:
+        description: One-time first-publication npm token bootstrap; leave off for all subsequent publications
+        required: true
+        type: boolean
+        default: false
 
 concurrency:
   group: pi-npm-${{ github.ref }}
@@ -126,6 +131,7 @@ jobs:
     environment: npm-production
     env:
       ASGREP_NPM_PROTECTED_ENVIRONMENT: npm-production
+      NODE_AUTH_TOKEN: ${{ inputs.bootstrap_token && secrets.NPM_TOKEN || '' }}
     permissions:
       contents: read
       id-token: write
