@@ -10,15 +10,11 @@ fn literal_pattern_matches_rust_symbol() {
 
 #[test]
 fn literal_pattern_matching_is_case_sensitive() {
-    let source = "fn Foo() {}
-fn foo() {}
-fn FOO() {}
-";
-
+    // Keep each fn on its own line — line_start assertions depend on it.
+    let source = "fn Foo() {}\nfn foo() {}\nfn FOO() {}\n";
     let upper_camel = match_literal_pattern(Language::Rust, source, "Foo").unwrap();
     let lower = match_literal_pattern(Language::Rust, source, "foo").unwrap();
     let upper = match_literal_pattern(Language::Rust, source, "FOO").unwrap();
-
     assert!(!upper_camel.is_empty());
     assert!(upper_camel.iter().all(|hit| hit.line_start == 1));
     assert!(!lower.is_empty());
@@ -29,11 +25,8 @@ fn FOO() {}
 
 #[test]
 fn literal_pattern_case_mismatch_has_no_match() {
-    let source = "fn foo() {}
-";
-    assert!(match_literal_pattern(Language::Rust, source, "Foo")
-        .unwrap()
-        .is_empty());
+    let source = "fn foo() {}\n";
+    assert!(match_literal_pattern(Language::Rust, source, "Foo").unwrap().is_empty());
 }
 
 #[test]
