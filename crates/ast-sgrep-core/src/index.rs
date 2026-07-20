@@ -335,7 +335,10 @@ impl Indexer {
     }
 
     pub fn update_paths(&mut self, paths: &[PathBuf]) -> Result<WatchUpdateStats> {
-        self.ignore.clear();
+        // Single-file updates reuse the existing gitignore matcher.
+        if paths.len() != 1 {
+            self.ignore.clear();
+        }
         let mut stats = WatchUpdateStats::default();
         for abs in paths {
             let Ok(rel) = abs.strip_prefix(&self.options.root) else {

@@ -155,18 +155,29 @@ impl IndexStore {
 
     pub fn begin_file_tx(&self) -> Result<()> {
         if !self.conn.is_autocommit() { return Ok(()); }
-        self.conn.execute_batch("BEGIN IMMEDIATE")?;
+        // Defer fsync for the single-file transaction (WAL remains crash-safe).
+        self.conn.execute_batch(
+            "PRAGMA temp_store = MEMORY;
+             PRAGMA synchronous = OFF;
+             BEGIN IMMEDIATE",
+        )?;
         self.file_tx_active.set(true);
         Ok(())
     }
     pub fn commit_file_tx(&self) -> Result<()> {
         if !self.file_tx_active.replace(false) { return Ok(()); }
-        self.conn.execute_batch("COMMIT")?;
+        self.conn.execute_batch(
+            "COMMIT;
+             PRAGMA synchronous = NORMAL",
+        )?;
         Ok(())
     }
     pub fn rollback_file_tx(&self) -> Result<()> {
         if !self.file_tx_active.replace(false) { return Ok(()); }
-        let _ = self.conn.execute_batch("ROLLBACK");
+        let _ = self.conn.execute_batch(
+            "ROLLBACK;
+             PRAGMA synchronous = NORMAL",
+        );
         Ok(())
     }
     pub fn begin_bulk_tx(&self) -> Result<()> {
@@ -282,45 +293,155 @@ impl IndexStore {
     }
 
     pub fn upsert_file(&self, input: UpsertFileInput<'_>) -> Result<i64> {
-            let emb = self.embed_chunks(input.semantic_chunks, input.embed_semantic, input.embed_backend)?;
-            let cache_hits = emb.cache_hits.len();
-            let cache_misses = emb.chunks.len().saturating_sub(cache_hits);
-            self.begin_file_tx()?;
-            match self.upsert_file_inner(input, &emb.chunks) {
-                Ok(id) => {
+        // Fast path only when graph structure *and* body-dependent semantic/pattern text match.
+        let struct_fp = structure_fingerprint(
+            input.symbols,
+            input.callers,
+            input.imports,
+            input.pattern_nodes,
+            input.semantic_chunks,
+        );
+        let struct_key = format!("struct:{}", input.rel_path);
+        if let Some(file_id) = optional_row(
+            &self.conn,
+            "SELECT id FROM files WHERE path = ?1",
+            &[&input.rel_path],
+            |r| r.get(0),
+        )? {
+            if self.get_meta(&struct_key)?.as_deref() == Some(struct_fp.as_str()) {
+                self.begin_file_tx()?;
+                match self.upsert_lines_only(
+                    file_id,
+                    input.language,
+                    input.mtime_secs,
+                    input.mtime_nanos,
+                    input.content_hash,
+                    input.lines,
+                    input.eol,
+                    input.rel_path,
+                ) {
+                    Ok(id) => {
+                        self.commit_file_tx()?;
+                        return Ok(id);
+                    }
+                    Err(e) => {
+                        self.rollback_file_tx()?;
+                        return Err(e);
+                    }
+                }
+            }
+        }
+
+        let emb =
+            self.embed_chunks(input.semantic_chunks, input.embed_semantic, input.embed_backend)?;
+        let cache_hits = emb.cache_hits.len();
+        let cache_misses = emb.chunks.len().saturating_sub(cache_hits);
+        self.begin_file_tx()?;
+        match self.upsert_file_inner(input, &emb.chunks, &struct_key, &struct_fp) {
+            Ok(id) => {
+                if !emb.cache_entries.is_empty() {
                     if let Err(e) = self.insert_embed_cache_entries(&emb.cache_entries) {
                         eprintln!("[asgrep] warning: failed to write embedding cache: {e}");
-                    }
-                    let hits: Vec<_> = emb.cache_hits.iter().map(|h| (h.chunk_hash.clone(), h.model_id.clone())).collect();
-                    if let Err(e) = self.touch_embed_cache_entries(&hits) {
-                        eprintln!("[asgrep] warning: failed to touch embedding cache: {e}");
-                    }
-                    for (key, delta) in [("embed_cache_hits", cache_hits), ("embed_cache_misses", cache_misses)] {
-                        let total = self.get_meta(key)?.and_then(|value| value.parse::<u64>().ok())
-                            .unwrap_or(0).saturating_add(delta as u64);
-                        self.set_meta(key, &total.to_string())?;
                     }
                     if let Err(e) = self.evict_embed_cache(embed_cache_cap()) {
                         eprintln!("[asgrep] warning: failed to evict embedding cache: {e}");
                     }
-                    self.commit_file_tx()?;
-                    Ok(id)
+                } else if !emb.cache_hits.is_empty() {
+                    // Pure hit path: skip eviction COUNT(*); still bump accessed_at sparingly.
+                    let hits: Vec<_> = emb
+                        .cache_hits
+                        .iter()
+                        .map(|h| (h.chunk_hash.clone(), h.model_id.clone()))
+                        .collect();
+                    if let Err(e) = self.touch_embed_cache_entries(&hits) {
+                        eprintln!("[asgrep] warning: failed to touch embedding cache: {e}");
+                    }
                 }
-                Err(e) => { self.rollback_file_tx()?; Err(e) }
+                for (key, delta) in [
+                    ("embed_cache_hits", cache_hits),
+                    ("embed_cache_misses", cache_misses),
+                ] {
+                    if delta == 0 {
+                        continue;
+                    }
+                    let total = self
+                        .get_meta(key)?
+                        .and_then(|value| value.parse::<u64>().ok())
+                        .unwrap_or(0)
+                        .saturating_add(delta as u64);
+                    self.set_meta(key, &total.to_string())?;
+                }
+                self.commit_file_tx()?;
+                Ok(id)
+            }
+            Err(e) => {
+                self.rollback_file_tx()?;
+                Err(e)
             }
         }
+    }
 
-    fn upsert_file_inner(&self, input: UpsertFileInput<'_>, emb: &[EmbeddedChunk]) -> Result<i64> {
+    /// Refresh lines/FTS only when structure fingerprint is unchanged.
+    fn upsert_lines_only(
+        &self,
+        file_id: i64,
+        lang: Option<&str>,
+        mtime_secs: i64,
+        mtime_nanos: u32,
+        hash: &str,
+        lines: &[(u32, String)],
+        eol: &str,
+        rel_path: &str,
+    ) -> Result<i64> {
+        self.conn
+            .prepare_cached("DELETE FROM lines_fts WHERE file_id = ?1")?
+            .execute(params![file_id])?;
+        self.conn
+            .prepare_cached(
+                "DELETE FROM lines_trigram WHERE rowid IN (SELECT rowid FROM lines WHERE file_id = ?1)",
+            )?
+            .execute(params![file_id])?;
+        self.conn
+            .prepare_cached("DELETE FROM lines WHERE file_id = ?1")?
+            .execute(params![file_id])?;
+        self.insert_lines(file_id, lines)?;
+        self.conn
+            .prepare_cached(
+                "UPDATE files SET language=?1, mtime_secs=?2, mtime_nanos=?3, content_hash=?4 WHERE id=?5",
+            )?
+            .execute(params![lang, mtime_secs, mtime_nanos, hash, file_id])?;
+        self.set_meta(&format!("eol:{rel_path}"), eol)?;
+        Ok(file_id)
+    }
+
+    fn upsert_file_inner(
+        &self,
+        input: UpsertFileInput<'_>,
+        emb: &[EmbeddedChunk],
+        struct_key: &str,
+        struct_fp: &str,
+    ) -> Result<i64> {
         let file_id = self.upsert_file_row(
-            input.rel_path, input.language, input.mtime_secs, input.mtime_nanos, input.content_hash,
+            input.rel_path,
+            input.language,
+            input.mtime_secs,
+            input.mtime_nanos,
+            input.content_hash,
         )?;
         self.insert_lines(file_id, input.lines)?;
         self.set_meta(&format!("eol:{}", input.rel_path), input.eol)?;
         let symbol_ids = self.insert_symbols(file_id, input.symbols)?;
-        self.insert_semantic_chunks(file_id, input.symbols, &symbol_ids, input.semantic_chunks, emb)?;
+        self.insert_semantic_chunks(
+            file_id,
+            input.symbols,
+            &symbol_ids,
+            input.semantic_chunks,
+            emb,
+        )?;
         self.insert_callers(file_id, input.callers)?;
         self.insert_imports(file_id, input.imports)?;
         self.insert_pattern_nodes(file_id, input.pattern_nodes)?;
+        self.set_meta(struct_key, struct_fp)?;
         crate::semantic_ann::mark_semantic_ivf_stale(self);
         Ok(file_id)
     }
@@ -926,27 +1047,81 @@ fn normalize_rel(path: &Path) -> String {
     }
     parts.join("/")
 }
-fn delete_file_children(conn: &Connection, file_id: i64) -> Result<()> {
-    // Collect line rowids first; both FTS tables are keyed by lines.rowid.
-    let rowids: Vec<i64> = conn
-        .prepare_cached("SELECT rowid FROM lines WHERE file_id = ?1")?
-        .query_map(params![file_id], |r| r.get::<_, i64>(0))?
-        .collect::<std::result::Result<Vec<_>, _>>()?;
-
-    // Delete both FTS indexes by rowid before removing their source lines.
-    for chunk in rowids.chunks(500) {
-        let placeholders = std::iter::repeat_n("?", chunk.len()).collect::<Vec<_>>().join(",");
-        for table in ["lines_trigram", "lines_fts"] {
-            conn.execute(
-                &format!("DELETE FROM {table} WHERE rowid IN ({placeholders})"),
-                rusqlite::params_from_iter(chunk.iter()),
-            )?;
-        }
+/// Graph rows + body-dependent semantic/pattern content.
+/// Equal fingerprints mean a lines-only upsert is safe.
+fn structure_fingerprint(
+    symbols: &[SymbolRow],
+    callers: &[CallerRow],
+    imports: &[ImportRow],
+    pattern_nodes: &[PatternNode],
+    semantic_chunks: &[crate::semantic_chunk::SemanticChunkInput],
+) -> String {
+    let mut h = Hasher::new();
+    for s in symbols {
+        h.update(s.name.as_bytes());
+        h.update(b"\0");
+        h.update(s.kind.as_bytes());
+        h.update(&s.line_start.to_le_bytes());
+        h.update(&s.line_end.to_le_bytes());
+        h.update(&s.byte_start.to_le_bytes());
+        h.update(&s.byte_end.to_le_bytes());
     }
+    h.update(b"|c|");
+    for c in callers {
+        h.update(c.caller.as_bytes());
+        h.update(b"\0");
+        h.update(c.callee.as_bytes());
+        h.update(&c.line_no.to_le_bytes());
+        h.update(&c.byte_start.to_le_bytes());
+        h.update(&c.byte_end.to_le_bytes());
+    }
+    h.update(b"|i|");
+    for i in imports {
+        h.update(i.module_path.as_bytes());
+        h.update(&i.line_no.to_le_bytes());
+    }
+    h.update(b"|p|");
+    for n in pattern_nodes {
+        h.update(n.signature.as_bytes());
+        h.update(&n.line_start.to_le_bytes());
+        h.update(&n.line_end.to_le_bytes());
+        h.update(n.excerpt.as_bytes());
+        h.update(b"\0");
+    }
+    h.update(b"|s|");
+    for chunk in semantic_chunks {
+        let rendered = crate::semantic_chunk::render_chunk_text(chunk);
+        h.update(rendered.as_bytes());
+        h.update(b"\0");
+        h.update(chunk.symbol_name.as_bytes());
+        h.update(&chunk.line_start.to_le_bytes());
+        h.update(&chunk.line_end.to_le_bytes());
+        h.update(chunk.excerpt.as_bytes());
+        h.update(chunk.doc.as_bytes());
+    }
+    h.finalize().to_hex().to_string()
+}
 
-    // Delete the remaining ordinary per-file tables by file_id.
-    for t in ["lines", "symbols", "callers", "imports", "pattern_nodes", "embeddings", "semantic_chunks"] {
-        conn.prepare_cached(&format!("DELETE FROM {t} WHERE file_id=?1"))?.execute(params![file_id])?;
+fn delete_file_children(conn: &Connection, file_id: i64) -> Result<()> {
+    // lines_fts stores file_id as an UNINDEXED column.
+    conn.prepare_cached("DELETE FROM lines_fts WHERE file_id = ?1")?
+        .execute(params![file_id])?;
+    // lines_trigram is content='lines'; delete via subquery before lines go away.
+    conn.prepare_cached(
+        "DELETE FROM lines_trigram WHERE rowid IN (SELECT rowid FROM lines WHERE file_id = ?1)",
+    )?
+    .execute(params![file_id])?;
+    for t in [
+        "lines",
+        "symbols",
+        "callers",
+        "imports",
+        "pattern_nodes",
+        "embeddings",
+        "semantic_chunks",
+    ] {
+        conn.prepare_cached(&format!("DELETE FROM {t} WHERE file_id=?1"))?
+            .execute(params![file_id])?;
     }
     Ok(())
 }

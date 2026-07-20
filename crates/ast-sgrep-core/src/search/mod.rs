@@ -1,5 +1,5 @@
 mod hits;
-mod passes;
+pub mod passes;
 mod types;
 pub use types::{HitKind, SearchHit, SearchOptions, SearchResponse, SpanHitInput};
 use std::collections::HashSet;
@@ -51,6 +51,29 @@ impl Searcher {
 
     pub fn store(&self) -> &IndexStore {
         &self.store
+    }
+
+    pub fn options(&self) -> &SearchOptions {
+        &self.options
+    }
+
+    /// Lexical / FTS pass only.
+    pub fn search_lexical(&self, query_str: &str) -> Result<SearchResponse> {
+        let parsed = ParsedQuery::parse(query_str);
+        Ok(finish_response(
+            &parsed,
+            &self.options,
+            lexical_pass(&self.store, &self.options, &parsed)?,
+            true,
+        ))
+    }
+
+    /// Symbol + anchor graph passes only.
+    pub fn search_symbol_pass(&self, query_str: &str) -> Result<SearchResponse> {
+        let parsed = ParsedQuery::parse(query_str);
+        let mut hits = symbol_pass(&self.store, &self.options, &parsed)?;
+        hits.extend(anchor_pass(&self.store, &self.options, &parsed)?);
+        Ok(finish_response(&parsed, &self.options, hits, true))
     }
 
     pub fn search(&self, query_str: &str) -> Result<SearchResponse> {
@@ -229,7 +252,13 @@ fn run_parallel_passes(
 fn join_worker<T>(join: thread::Result<Result<T>>) -> Result<T> {
     join.map_err(|e| crate::StoreError::Other(format!("search worker panicked: {e:?}")))?
 }
-fn finish_response(parsed: &ParsedQuery, options: &SearchOptions, mut hits: Vec<SearchHit>, dedup: bool) -> SearchResponse {
+/// Rank, dedup, and cap multi-pass candidates into a [`SearchResponse`].
+pub fn finish_response(
+    parsed: &ParsedQuery,
+    options: &SearchOptions,
+    mut hits: Vec<SearchHit>,
+    dedup: bool,
+) -> SearchResponse {
     if dedup {
         hits = dedup_hits(hits);
     }

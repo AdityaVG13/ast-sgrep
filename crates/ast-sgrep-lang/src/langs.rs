@@ -1,5 +1,5 @@
 use crate::extract::{
-    add_named_symbol, collect_identifiers, field_child, is_inside_kind, node_text, parse_ts_language,
+    add_named_symbol, collect_identifiers, field_child, is_inside_kind, node_text,
 };
 use crate::{ExtractionResult, Language, LanguageParser, SymbolKind};
 
@@ -11,7 +11,12 @@ macro_rules! parser {
                 Language::$lang
             }
             fn parse(&self, source: &str) -> anyhow::Result<ExtractionResult> {
-                parse_ts_language($ts.into(), source, $body)
+                crate::extract::parse_ts_language_for(
+                    Some(Language::$lang),
+                    $ts.into(),
+                    source,
+                    $body,
+                )
             }
         }
     };
@@ -236,7 +241,12 @@ impl LanguageParser for TypeScriptParser {
         Language::TypeScript
     }
     fn parse(&self, source: &str) -> anyhow::Result<ExtractionResult> {
-        parse_ts_language(tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(), source, handle_ts_js_node)
+        crate::extract::parse_ts_language_for(
+            Some(Language::TypeScript),
+            tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
+            source,
+            handle_ts_js_node,
+        )
     }
 }
 impl LanguageParser for JavaScriptParser {
@@ -244,7 +254,12 @@ impl LanguageParser for JavaScriptParser {
         Language::JavaScript
     }
     fn parse(&self, source: &str) -> anyhow::Result<ExtractionResult> {
-        parse_ts_language(tree_sitter_javascript::LANGUAGE.into(), source, handle_ts_js_node)
+        crate::extract::parse_ts_language_for(
+            Some(Language::JavaScript),
+            tree_sitter_javascript::LANGUAGE.into(),
+            source,
+            handle_ts_js_node,
+        )
     }
 }
 fn handle_ts_js_node(ext: &mut crate::extract::Extractor, node: &tree_sitter::Node, source: &str) {

@@ -322,7 +322,11 @@ pub fn clear_semantic_ivf_session_cache() {
     SESSION_CACHE.lock().unwrap_or_else(|e| e.into_inner()).clear();
 }
 pub fn mark_semantic_ivf_stale(store: &IndexStore) {
-    let _ = store.set_meta("semantic_ivf_stale", "1");
+    if store.get_meta("semantic_ivf_stale").ok().flatten().as_deref() != Some("1") {
+        let _ = store.set_meta("semantic_ivf_stale", "1");
+    }
+    // Drop on-disk IVF immediately so concurrent search cannot load a stale sidecar.
+    let _ = invalidate_semantic_ivf(store.db_path());
     clear_semantic_ivf_session_cache();
 }
 fn ann_session_key(store: &IndexStore, chunks: &[SemanticChunkRow]) -> Result<([u8; 32], String)> {
