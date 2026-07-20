@@ -25,8 +25,7 @@ impl GoldenWidget {
 
 /// Enum docs mention doc_only_rust.
 pub enum GoldenState {
-    Ready,
-    Spent,
+    Ready, Spent,
 }
 
 /// Trait docs mention doc_only_rust.
