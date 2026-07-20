@@ -278,3 +278,104 @@ fn re_upsert_many_files_is_linear() {
         "insert + re-upsert of {n} files took {:?}; expected < 30s", total
     );
 }
+
+/// Same symbol/call/import spans but different function body text must refresh
+/// semantic_chunks text and vectors (must not take the lines-only fast path).
+#[test]
+fn same_span_body_edit_refreshes_semantic_chunks() {
+    use ast_sgrep_core::semantic_chunk::{build_semantic_chunks, SemanticChunkInput};
+
+    let temp = TempDir::new().expect("tempdir");
+    let store = IndexStore::open(temp.path(), None).expect("open index");
+    let path = "body_edit.py";
+
+    let symbols = [SymbolRow {
+        name: "compute".into(),
+        kind: "function".into(),
+        line_start: 1,
+        line_end: 3,
+        byte_start: 0,
+        byte_end: 40,
+    }];
+    let callers: [CallerRow; 0] = [];
+    let imports: [ImportRow; 0] = [];
+
+    let lines_v1 = [
+        (1, "def compute():".into()),
+        (2, "    return ALPHA_TOKEN_111".into()),
+        (3, "".into()),
+    ];
+    let lines_v2 = [
+        (1, "def compute():".into()),
+        (2, "    return BETA_TOKEN_222".into()),
+        (3, "".into()),
+    ];
+
+    let chunks_v1 = build_semantic_chunks(&symbols, &callers, &lines_v1);
+    let chunks_v2 = build_semantic_chunks(&symbols, &callers, &lines_v2);
+    assert!(!chunks_v1.is_empty() && !chunks_v2.is_empty());
+    assert_ne!(chunks_v1[0].excerpt, chunks_v2[0].excerpt);
+
+    let patterns_v1 = [PatternNode {
+        signature: "fn compute".into(),
+        line_start: 1,
+        line_end: 3,
+        excerpt: "return ALPHA_TOKEN_111".into(),
+    }];
+    let patterns_v2 = [PatternNode {
+        signature: "fn compute".into(),
+        line_start: 1,
+        line_end: 3,
+        excerpt: "return BETA_TOKEN_222".into(),
+    }];
+
+    let upsert = |lines: &[(u32, String)],
+                  chunks: &[SemanticChunkInput],
+                  patterns: &[PatternNode],
+                  hash: &str| {
+        store
+            .upsert_file(UpsertFileInput {
+                rel_path: path,
+                language: Some("python"),
+                mtime_secs: 1,
+                mtime_nanos: 0,
+                content_hash: hash,
+                lines,
+                eol: "\n",
+                symbols: &symbols,
+                callers: &callers,
+                imports: &imports,
+                pattern_nodes: patterns,
+                semantic_chunks: chunks,
+                embed_semantic: true,
+                embed_backend: ast_sgrep_embed::EmbedPreference::Semantic,
+            })
+            .expect("upsert");
+    };
+
+    upsert(&lines_v1, &chunks_v1, &patterns_v1, "hash_alpha");
+    let rows_v1 = store.all_semantic_chunks(None).expect("chunks v1");
+    assert_eq!(rows_v1.len(), 1);
+    let text_v1 = rows_v1[0].4.clone();
+    let vec_v1 = rows_v1[0].5.clone();
+    assert!(text_v1.contains("ALPHA_TOKEN_111"), "v1 body missing: {text_v1}");
+
+    upsert(&lines_v2, &chunks_v2, &patterns_v2, "hash_beta");
+    let rows_v2 = store.all_semantic_chunks(None).expect("chunks v2");
+    assert_eq!(rows_v2.len(), 1);
+    let text_v2 = &rows_v2[0].4;
+    let vec_v2 = &rows_v2[0].5;
+    assert!(text_v2.contains("BETA_TOKEN_222"), "v2 body missing: {text_v2}");
+    assert!(!text_v2.contains("ALPHA_TOKEN_111"), "stale v1 body: {text_v2}");
+    assert_ne!(text_v1, *text_v2);
+    assert_ne!(vec_v1, *vec_v2, "vectors must re-embed on same-span body edit");
+
+    let pattern_excerpt: String = store
+        .connection()
+        .query_row("SELECT excerpt FROM pattern_nodes LIMIT 1", [], |r| r.get(0))
+        .expect("pattern row");
+    assert!(
+        pattern_excerpt.contains("BETA_TOKEN_222"),
+        "pattern excerpt must refresh: {pattern_excerpt}"
+    );
+}

@@ -7,6 +7,7 @@ pub mod index;
 pub mod intent;
 pub mod output;
 pub mod pattern;
+pub mod pipeline_parts;
 pub mod query;
 pub mod rank;
 pub mod search;

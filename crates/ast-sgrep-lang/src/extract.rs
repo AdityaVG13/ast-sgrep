@@ -1,16 +1,60 @@
+use std::cell::RefCell;
+use std::collections::HashMap;
 use tree_sitter::{Node, Parser, Tree};
-use crate::{CallSite, ExtractionResult, ImportSite, SymbolDef, SymbolKind};
-pub fn parse_and_extract(
+use crate::{CallSite, ExtractionResult, ImportSite, Language, SymbolDef, SymbolKind};
+
+thread_local! {
+    /// One tree-sitter Parser per language (creating parsers is relatively expensive).
+    static TS_PARSERS: RefCell<HashMap<Language, Parser>> = RefCell::new(HashMap::new());
+}
+
+/// Parse `source` and run `extract` on the tree.
+///
+/// When `lang_key` is set, reuses a thread-local parser for that language.
+pub fn parse_and_extract_for(
+    lang_key: Option<Language>,
     language: tree_sitter::Language,
     source: &str,
     extract: impl FnOnce(&Tree, &str) -> ExtractionResult,
 ) -> anyhow::Result<ExtractionResult> {
-    let mut parser = Parser::new();
-    parser.set_language(&language).map_err(|e| anyhow::anyhow!("failed to set language: {e}"))?;
-    let tree = parser.parse(source, None).ok_or_else(|| anyhow::anyhow!("failed to parse source"))?;
+    let tree = parse_tree(lang_key, language, source)?;
     let mut result = extract(&tree, source);
-    result.pattern_nodes = crate::pattern::collect_pattern_nodes(tree.root_node(), source);
+    if result.pattern_nodes.is_empty() {
+        result.pattern_nodes = crate::pattern::collect_pattern_nodes(tree.root_node(), source);
+    }
     Ok(result)
+}
+
+fn parse_tree(
+    lang_key: Option<Language>,
+    language: tree_sitter::Language,
+    source: &str,
+) -> anyhow::Result<Tree> {
+    if let Some(key) = lang_key {
+        return TS_PARSERS.with(|cell| {
+            let mut map = cell.borrow_mut();
+            use std::collections::hash_map::Entry;
+            let parser = match map.entry(key) {
+                Entry::Occupied(o) => o.into_mut(),
+                Entry::Vacant(v) => {
+                    let mut p = Parser::new();
+                    p.set_language(&language)
+                        .map_err(|e| anyhow::anyhow!("failed to set language: {e}"))?;
+                    v.insert(p)
+                }
+            };
+            parser
+                .parse(source, None)
+                .ok_or_else(|| anyhow::anyhow!("failed to parse source"))
+        });
+    }
+    let mut parser = Parser::new();
+    parser
+        .set_language(&language)
+        .map_err(|e| anyhow::anyhow!("failed to set language: {e}"))?;
+    parser
+        .parse(source, None)
+        .ok_or_else(|| anyhow::anyhow!("failed to parse source"))
 }
 pub fn byte_to_line(source: &str, byte: usize) -> u32 {
     source[..byte.min(source.len())].bytes().filter(|&b| b == b'\n').count() as u32 + 1
@@ -179,12 +223,13 @@ fn collect_identifiers_rec(node: &Node, source: &str, ids: &mut Vec<String>) {
 pub fn field_child<'a>(node: &'a Node, name: &str) -> Option<Node<'a>> {
     node.child_by_field_name(name)
 }
-pub fn parse_ts_language(
+pub fn parse_ts_language_for(
+    lang_key: Option<Language>,
     language: tree_sitter::Language,
     source: &str,
     mut on_node: impl FnMut(&mut Extractor, &Node, &str),
 ) -> anyhow::Result<ExtractionResult> {
-    parse_and_extract(language, source, |tree, src| {
+    parse_and_extract_for(lang_key, language, source, |tree, src| {
         let mut extractor = Extractor::new();
         walk_mut(&mut extractor, &tree.root_node(), src, &mut on_node);
         extractor.into_result()
