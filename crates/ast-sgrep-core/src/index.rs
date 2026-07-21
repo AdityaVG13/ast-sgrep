@@ -667,8 +667,12 @@ fn prepare_file(
     let split = split_content_lines(&content);
     let (symbols, callers, imports, pattern_nodes) = match language {
         Some(lang) => {
-            let registry = ParserRegistry::new();
-            match registry.parse(lang, &content) {
+            // One ParserRegistry per rayon worker — building all language parsers
+            // on every file was pure fixed cost on the hot index path.
+            thread_local! {
+                static REGISTRY: ParserRegistry = ParserRegistry::new();
+            }
+            match REGISTRY.with(|registry| registry.parse(lang, &content)) {
                 Ok(extraction) => rows_from_extraction(&extraction),
                 Err(e) => {
                     return PrepareOutcome::Failed(format!(
