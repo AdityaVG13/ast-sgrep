@@ -12,7 +12,7 @@ use ast_sgrep_core::{IndexOptions, Indexer, SearchOptions, Searcher};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex};
 pub struct LspBackend {
     root: PathBuf,
     index_path: Option<PathBuf>,
@@ -69,38 +69,44 @@ impl LspBackend {
         self.settings.apply_to_search_options(&mut opts);
         opts
     }
-    fn index_guard(&self) -> anyhow::Result<MutexGuard<'_, ()>> {
-        self.index_lock
-            .lock()
-            .map_err(|e| anyhow::anyhow!("index lock poisoned: {e}"))
-    }
     fn record_index_result<T>(&self, result: anyhow::Result<T>) -> anyhow::Result<T> {
         self.index_ready.store(result.is_ok(), Ordering::SeqCst);
         result
+    }
+    fn with_index_lock<T>(&self, f: impl FnOnce() -> anyhow::Result<T>) -> anyhow::Result<T> {
+        let _g = self
+            .index_lock
+            .lock()
+            .map_err(|e| anyhow::anyhow!("index lock poisoned: {e}"))?;
+        f()
     }
     fn with_locked_indexer<F, T>(&self, f: F) -> anyhow::Result<T>
     where
         F: FnOnce(&mut Indexer) -> anyhow::Result<T>,
     {
-        let result = (|| {
-            let _g = self.index_guard()?;
-            f(&mut Indexer::new(self.index_options())?)
-        })();
-        self.record_index_result(result)
+        self.record_index_result(self.with_index_lock(|| {
+            let mut indexer = Indexer::new(self.index_options())?;
+            f(&mut indexer)
+        }))
     }
     fn with_store<F, T>(&self, f: F) -> anyhow::Result<T>
     where
         F: FnOnce(&ast_sgrep_core::IndexStore) -> anyhow::Result<T>,
     {
-        let _g = self.index_guard()?;
-        f(Indexer::new(self.index_options())?.store())
+        self.with_index_lock(|| f(Indexer::new(self.index_options())?.store()))
     }
     fn with_locked_searcher<F, T>(&self, limit: usize, f: F) -> anyhow::Result<T>
     where
         F: FnOnce(&Searcher) -> anyhow::Result<T>,
     {
-        let _g = self.index_guard()?;
-        f(&Searcher::new(self.search_options(limit))?)
+        self.with_index_lock(|| f(&Searcher::new(self.search_options(limit))?))
+    }
+    fn hit_locations(&self, s: &Searcher, query: &str) -> anyhow::Result<Vec<Value>> {
+        Ok(s.search(query)?
+            .hits
+            .iter()
+            .map(|h| location_value(&self.root, &h.file, h.line_start, h.line_end))
+            .collect())
     }
     pub fn start_background_index(&mut self) {
         if self.background_index_started {
@@ -210,12 +216,7 @@ impl LspBackend {
     pub fn goto_definition(&self, params: &TextDocumentPositionParams) -> anyhow::Result<Value> {
         let symbol = self.symbol_at_position(params)?;
         self.with_locked_searcher(16, |s| {
-            let locs: Vec<Value> = s
-                .search(&format!("defs:{symbol}"))?
-                .hits
-                .iter()
-                .map(|h| location_value(&self.root, &h.file, h.line_start, h.line_end))
-                .collect();
+            let locs = self.hit_locations(s, &format!("defs:{symbol}"))?;
             Ok(match locs.len() {
                 0 => Value::Null,
                 1 => locs.into_iter().next().unwrap_or(Value::Null),
@@ -224,34 +225,16 @@ impl LspBackend {
         })
     }
     pub fn find_references(&self, params: &crate::types::ReferenceParams) -> anyhow::Result<Value> {
-        let symbol = self.symbol_at_position(&TextDocumentPositionParams {
-            text_document: params.text_document.clone(),
-            position: params.position.clone(),
-        })?;
+        let symbol = self.symbol_at_position(&params.at)?;
         self.with_locked_searcher(128, |s| {
-            let mut locs = Vec::new();
-            for h in s.search(&format!("callers:{symbol}"))?.hits {
-                locs.push(location_value(
-                    &self.root,
-                    &h.file,
-                    h.line_start,
-                    h.line_end,
-                ));
-            }
+            let mut locs = self.hit_locations(s, &format!("callers:{symbol}"))?;
             if params
                 .context
                 .as_ref()
                 .map(|c| c.include_declaration)
                 .unwrap_or(true)
             {
-                for h in s.search(&format!("defs:{symbol}"))?.hits {
-                    locs.push(location_value(
-                        &self.root,
-                        &h.file,
-                        h.line_start,
-                        h.line_end,
-                    ));
-                }
+                locs.extend(self.hit_locations(s, &format!("defs:{symbol}"))?);
             }
             Ok(Value::Array(locs))
         })
@@ -263,12 +246,13 @@ impl LspBackend {
         let symbol = self.symbol_at_position(params)?;
         let rel = uri_to_rel_path(&params.text_document.uri, &self.root)?;
         let line = params.position.line + 1;
+        let range = line_range(line, line);
         Ok(json!([CallHierarchyItem {
             name: symbol,
             kind: SYMBOL_KIND_FUNCTION,
             uri: path_to_uri(&self.root.join(&rel)),
-            range: line_range(line, line),
-            selection_range: line_range(line, line),
+            range: range.clone(),
+            selection_range: range,
             detail: Some("ast-sgrep".into()),
         }]))
     }
@@ -296,28 +280,14 @@ impl LspBackend {
                 self.ensure_index()?;
                 Ok(json!({ "status": "reindexed" }))
             }
-            "asgrep.search" => self.exec_search(params, false),
-            "asgrep.search.semantic" => self.exec_search(params, true),
-            "asgrep.callers" => self.exec_sym_query(params, "callers"),
-            "asgrep.defs" => self.exec_sym_query(params, "defs"),
+            "asgrep.search" => self.search(first_cmd_arg(params), false, 32),
+            "asgrep.search.semantic" => self.search(first_cmd_arg(params), true, 32),
+            "asgrep.callers" => {
+                self.search(&format!("callers:{}", first_cmd_arg(params)), false, 32)
+            }
+            "asgrep.defs" => self.search(&format!("defs:{}", first_cmd_arg(params)), false, 32),
             other => Err(anyhow::anyhow!("unknown command: {other}")),
         }
-    }
-    fn exec_search(&self, params: &ExecuteCommandParams, semantic: bool) -> anyhow::Result<Value> {
-        let q = first_cmd_arg(params);
-        self.with_locked_searcher(32, |s| {
-            Ok(serde_json::to_value(if semantic {
-                s.search_semantic(q)?
-            } else {
-                s.search(q)?
-            })?)
-        })
-    }
-    fn exec_sym_query(&self, params: &ExecuteCommandParams, prefix: &str) -> anyhow::Result<Value> {
-        let sym = first_cmd_arg(params);
-        self.with_locked_searcher(32, |s| {
-            Ok(serde_json::to_value(s.search(&format!("{prefix}:{sym}"))?)?)
-        })
     }
     pub fn symbol_at_position(
         &self,

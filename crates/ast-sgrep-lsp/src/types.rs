@@ -60,15 +60,17 @@ fn default_search_limit() -> usize {
     ast_sgrep_core::SearchOptions::default_limit()
 }
 #[derive(Debug, Deserialize)]
-pub struct DocumentSymbolParams {
+pub struct TextDocumentParams {
     #[serde(rename = "textDocument")]
     pub text_document: TextDocumentIdentifier,
 }
+pub type DocumentSymbolParams = TextDocumentParams;
+pub type DidSaveTextDocumentParams = TextDocumentParams;
+pub type CallHierarchyPrepareParams = TextDocumentPositionParams;
 #[derive(Debug, Deserialize)]
 pub struct ReferenceParams {
-    #[serde(rename = "textDocument")]
-    pub text_document: TextDocumentIdentifier,
-    pub position: Position,
+    #[serde(flatten)]
+    pub at: TextDocumentPositionParams,
     #[serde(default)]
     pub context: Option<ReferenceContext>,
 }
@@ -76,12 +78,6 @@ pub struct ReferenceParams {
 pub struct ReferenceContext {
     #[serde(rename = "includeDeclaration")]
     pub include_declaration: bool,
-}
-#[derive(Debug, Deserialize)]
-pub struct CallHierarchyPrepareParams {
-    #[serde(rename = "textDocument")]
-    pub text_document: TextDocumentIdentifier,
-    pub position: Position,
 }
 #[derive(Debug, Deserialize)]
 pub struct CallHierarchyItemParams {
@@ -108,11 +104,6 @@ pub struct ExecuteCommandParams {
     pub command: String,
     #[serde(default)]
     pub arguments: Vec<Value>,
-}
-#[derive(Debug, Deserialize)]
-pub struct DidSaveTextDocumentParams {
-    #[serde(rename = "textDocument")]
-    pub text_document: TextDocumentIdentifier,
 }
 #[derive(Debug, Deserialize)]
 pub struct DidChangeTextDocumentParams {

@@ -350,7 +350,8 @@ pub fn line_range_ext(line_start: u32, line_end: u32, end_line_text: Option<&str
     }
 }
 pub fn call_hierarchy_endpoint(root: &Path, file: &str, line: u32, name: &str) -> Value {
-    json!({ "name": name, "kind": SYMBOL_KIND_FUNCTION, "uri": path_to_file_uri(&root.join(file)), "range": line_range(line, line), "selectionRange": line_range(line, line) })
+    let range = line_range(line, line);
+    json!({ "name": name, "kind": SYMBOL_KIND_FUNCTION, "uri": path_to_file_uri(&root.join(file)), "range": range, "selectionRange": range })
 }
 fn line_utf16_len(line: &str) -> u32 {
     line.chars().map(|c| c.len_utf16() as u32).sum()
