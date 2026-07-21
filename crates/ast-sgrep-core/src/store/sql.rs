@@ -100,50 +100,49 @@ fn escape_like_term(term: &str) -> String {
     }
     out
 }
-pub fn like_terms_filter(
-    column: &str,
+/// OR of `lower(col) LIKE %term%` over `columns` × `terms`, plus optional lang filter.
+fn or_like_filter(
+    columns: &[&str],
     terms: &[String],
     lang_filter: Option<&str>,
 ) -> (String, Vec<String>) {
-    let mut bind: Vec<String> = terms.iter().map(|t| escape_like_term(t)).collect();
-    let mut parts = Vec::new();
-    if !terms.is_empty() {
-        let conds: Vec<String> = terms
-            .iter()
-            .map(|_| format!("lower({column}) LIKE '%' || lower(?) || '%' ESCAPE '\\'"))
-            .collect();
-        parts.push(format!("({})", conds.join(" OR ")));
-    }
-    append_lang_filter(&mut parts, &mut bind, lang_filter);
-    (where_clause(&parts), bind)
-}
-pub fn caller_terms_filter(terms: &[String], lang_filter: Option<&str>) -> (String, Vec<String>) {
-    let escaped: Vec<String> = terms.iter().map(|t| escape_like_term(t)).collect();
     let mut bind = Vec::new();
     let mut parts = Vec::new();
-    if !terms.is_empty() {
-        let conds: Vec<String> = terms.iter().map(|_| {
-            "(lower(c.callee) LIKE '%' || lower(?) || '%' ESCAPE '\\' OR lower(c.caller) LIKE '%' || lower(?) || '%' ESCAPE '\\')"
-                .to_string()
-        }).collect();
-        for t in &escaped {
-            bind.push(t.clone());
-            bind.push(t.clone());
+    if !terms.is_empty() && !columns.is_empty() {
+        let conds: Vec<String> = terms
+            .iter()
+            .map(|_| {
+                let per_col: Vec<String> = columns
+                    .iter()
+                    .map(|c| format!("lower({c}) LIKE '%' || lower(?) || '%' ESCAPE '\\'"))
+                    .collect();
+                if per_col.len() == 1 {
+                    per_col.into_iter().next().unwrap()
+                } else {
+                    format!("({})", per_col.join(" OR "))
+                }
+            })
+            .collect();
+        for t in terms {
+            let esc = escape_like_term(t);
+            for _ in columns {
+                bind.push(esc.clone());
+            }
         }
         parts.push(format!("({})", conds.join(" OR ")));
     }
     append_lang_filter(&mut parts, &mut bind, lang_filter);
     (where_clause(&parts), bind)
 }
-fn collect_mapped_rows<T, F>(mut rows: rusqlite::Rows<'_>, mut map: F) -> Result<Vec<T>>
-where
-    F: FnMut(&rusqlite::Row<'_>) -> rusqlite::Result<T>,
-{
-    let mut out = Vec::new();
-    while let Some(row) = rows.next()? {
-        out.push(map(row)?);
-    }
-    Ok(out)
+pub fn like_terms_filter(
+    column: &str,
+    terms: &[String],
+    lang_filter: Option<&str>,
+) -> (String, Vec<String>) {
+    or_like_filter(&[column], terms, lang_filter)
+}
+pub fn caller_terms_filter(terms: &[String], lang_filter: Option<&str>) -> (String, Vec<String>) {
+    or_like_filter(&["c.callee", "c.caller"], terms, lang_filter)
 }
 pub fn query_map_rows<T, F>(
     conn: &Connection,
@@ -154,11 +153,9 @@ pub fn query_map_rows<T, F>(
 where
     F: FnMut(&rusqlite::Row<'_>) -> rusqlite::Result<T>,
 {
-    let mut stmt = conn.prepare_cached(sql)?;
-    if let Some(lang) = lang {
-        collect_mapped_rows(stmt.query(params![lang])?, map)
-    } else {
-        collect_mapped_rows(stmt.query([])?, map)
+    match lang {
+        Some(lang) => query_cached_map(conn, sql, params![lang], map),
+        None => query_cached_map(conn, sql, [], map),
     }
 }
 pub fn query_limit_map<T, F>(
@@ -208,16 +205,42 @@ pub fn at_least_rows(conn: &Connection, table: &str, threshold: usize) -> Result
     )?;
     Ok(n as usize >= threshold)
 }
-/// Delete per-file child rows (FTS/trigram first, then relational tables).
+/// Delete lines_fts + content-sync trigram + lines for one file.
+/// When `from_line` is `Some(n)`, only rows with `line_no >= n` are removed (truncate path).
+pub fn delete_file_lines(
+    conn: &Connection,
+    file_id: i64,
+    from_line: Option<u32>,
+) -> Result<()> {
+    match from_line {
+        Some(first) => {
+            conn.prepare_cached(
+                "DELETE FROM lines_trigram WHERE rowid IN \
+                 (SELECT rowid FROM lines WHERE file_id = ?1 AND line_no >= ?2)",
+            )?
+            .execute(params![file_id, first])?;
+            conn.prepare_cached("DELETE FROM lines_fts WHERE file_id = ?1 AND line_no >= ?2")?
+                .execute(params![file_id, first])?;
+            conn.prepare_cached("DELETE FROM lines WHERE file_id = ?1 AND line_no >= ?2")?
+                .execute(params![file_id, first])?;
+        }
+        None => {
+            conn.prepare_cached("DELETE FROM lines_fts WHERE file_id = ?1")?
+                .execute(params![file_id])?;
+            conn.prepare_cached(
+                "DELETE FROM lines_trigram WHERE rowid IN (SELECT rowid FROM lines WHERE file_id = ?1)",
+            )?
+            .execute(params![file_id])?;
+            conn.prepare_cached("DELETE FROM lines WHERE file_id = ?1")?
+                .execute(params![file_id])?;
+        }
+    }
+    Ok(())
+}
+/// Delete per-file child rows (lines/FTS/trigram first, then relational tables).
 pub fn delete_file_children(conn: &Connection, file_id: i64) -> Result<()> {
-    conn.prepare_cached("DELETE FROM lines_fts WHERE file_id = ?1")?
-        .execute(params![file_id])?;
-    conn.prepare_cached(
-        "DELETE FROM lines_trigram WHERE rowid IN (SELECT rowid FROM lines WHERE file_id = ?1)",
-    )?
-    .execute(params![file_id])?;
+    delete_file_lines(conn, file_id, None)?;
     for t in [
-        "lines",
         "symbols",
         "callers",
         "imports",
@@ -230,29 +253,44 @@ pub fn delete_file_children(conn: &Connection, file_id: i64) -> Result<()> {
     }
     Ok(())
 }
+/// Full wipe of index content tables (schema left intact). Order keeps FTS/content-sync safe.
+pub const CLEAR_ALL_SQL: &str = "\
+DELETE FROM lines_trigram; DELETE FROM lines_fts; DELETE FROM semantic_chunks; \
+DELETE FROM pattern_nodes; DELETE FROM embeddings; DELETE FROM imports; \
+DELETE FROM callers; DELETE FROM symbols; DELETE FROM lines; DELETE FROM files;";
+fn emb_vec(r: &rusqlite::Row<'_>, idx: usize) -> rusqlite::Result<Vec<f32>> {
+    let v: Vec<u8> = r.get(idx)?;
+    Ok(ast_sgrep_embed::embed_from_bytes(&v).unwrap_or_default())
+}
 pub fn read_legacy_emb(
     r: &rusqlite::Row<'_>,
 ) -> rusqlite::Result<ast_sgrep_embed::SemanticChunkRow> {
-    let v: Vec<u8> = r.get(4)?;
     Ok((
         r.get(0)?,
         r.get(1)?,
         r.get(1)?,
         r.get::<_, Option<String>>(3)?.unwrap_or_default(),
         r.get(2)?,
-        ast_sgrep_embed::embed_from_bytes(&v).unwrap_or_default(),
+        emb_vec(r, 4)?,
     ))
 }
 pub fn read_sem_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<ast_sgrep_embed::SemanticChunkRow> {
-    let v: Vec<u8> = r.get(5)?;
     Ok((
         r.get(0)?,
         r.get(1)?,
         r.get(2)?,
         r.get::<_, Option<String>>(3)?.unwrap_or_default(),
         r.get(4)?,
-        ast_sgrep_embed::embed_from_bytes(&v).unwrap_or_default(),
+        emb_vec(r, 5)?,
     ))
+}
+/// ` AND f.language = ?1` when a language bind is present.
+pub fn lang_and_clause(lang: Option<&str>) -> &'static str {
+    if lang.is_some() {
+        " AND f.language = ?1"
+    } else {
+        ""
+    }
 }
 pub fn configure_connection(conn: &Connection) -> Result<()> {
     conn.busy_timeout(Duration::from_secs(5))?;
