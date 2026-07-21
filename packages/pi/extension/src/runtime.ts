@@ -5,7 +5,7 @@ import { DatabaseSync } from "node:sqlite";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
 import { resolveBinary } from "ast-sgrep";
 
-export const RUNTIME_VERSION = "1.1.0-alpha.1";
+export const RUNTIME_VERSION = "1.2.0-alpha";
 export const MACHINE_SCHEMA_VERSION = "1.0.0";
 export const CONFIG_SCHEMA_VERSION = 1 as const;
 export const INDEX_FORMAT_VERSION = 5 as const;

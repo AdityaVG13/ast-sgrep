@@ -242,13 +242,13 @@ fn measure_index_update(root: &Path, index_dir: &Path, cfg: &Config) -> Result<P
     let content_b = format!("{content_a}\n// sub1ms-bench-marker\n");
     for content in [&content_a, &content_b, &content_a, &content_b] {
         std::fs::write(&work_file, content).map_err(crate::StoreError::Io)?;
-        indexer.update_paths(&[work_file.clone()])?;
+        indexer.update_paths(std::slice::from_ref(&work_file))?;
     }
     for _ in 0..cfg.warmup {
         std::fs::write(&work_file, &content_b).map_err(crate::StoreError::Io)?;
-        indexer.update_paths(&[work_file.clone()])?;
+        indexer.update_paths(std::slice::from_ref(&work_file))?;
         std::fs::write(&work_file, &content_a).map_err(crate::StoreError::Io)?;
-        indexer.update_paths(&[work_file.clone()])?;
+        indexer.update_paths(std::slice::from_ref(&work_file))?;
     }
     let mut flip = false;
     let mut samples = Vec::with_capacity(cfg.iterations as usize);
@@ -258,7 +258,7 @@ fn measure_index_update(root: &Path, index_dir: &Path, cfg: &Config) -> Result<P
         let content = if flip { &content_b } else { &content_a };
         std::fs::write(&work_file, content).map_err(crate::StoreError::Io)?;
         let t0 = Instant::now();
-        let stats = indexer.update_paths(&[work_file.clone()])?;
+        let stats = indexer.update_paths(std::slice::from_ref(&work_file))?;
         samples.push(ms(t0.elapsed()));
         last_work =
             (stats.files_indexed + stats.files_skipped + stats.files_removed + stats.files_failed)

@@ -83,6 +83,16 @@ pub struct UpsertFileInput<'a> {
     pub embed_semantic: bool,
     pub embed_backend: ast_sgrep_embed::EmbedPreference,
 }
+pub struct RefreshLinesInput<'a> {
+    pub file_id: i64,
+    pub language: Option<&'a str>,
+    pub mtime_secs: i64,
+    pub mtime_nanos: u32,
+    pub content_hash: &'a str,
+    pub lines: &'a [(u32, String)],
+    pub eol: &'a str,
+    pub rel_path: &'a str,
+}
 pub struct IndexStore {
     conn: Connection,
     root: std::path::PathBuf,
@@ -262,16 +272,16 @@ impl IndexStore {
         if let Some(file_id) = self.file_id(input.rel_path)? {
             if self.get_meta(&struct_key)?.as_deref() == Some(struct_fp.as_str()) {
                 return self.with_file_tx(|| {
-                    self.refresh_lines_only(
+                    self.refresh_lines_only(RefreshLinesInput {
                         file_id,
-                        input.language,
-                        input.mtime_secs,
-                        input.mtime_nanos,
-                        input.content_hash,
-                        input.lines,
-                        input.eol,
-                        input.rel_path,
-                    )
+                        language: input.language,
+                        mtime_secs: input.mtime_secs,
+                        mtime_nanos: input.mtime_nanos,
+                        content_hash: input.content_hash,
+                        lines: input.lines,
+                        eol: input.eol,
+                        rel_path: input.rel_path,
+                    })
                 });
             }
         }
@@ -321,17 +331,17 @@ impl IndexStore {
         Ok(())
     }
     /// Lines/FTS only when structure fingerprint matches (append / truncate / full rewrite).
-    pub fn refresh_lines_only(
-        &self,
-        file_id: i64,
-        lang: Option<&str>,
-        mtime_secs: i64,
-        mtime_nanos: u32,
-        hash: &str,
-        lines: &[(u32, String)],
-        eol: &str,
-        rel_path: &str,
-    ) -> Result<i64> {
+    pub fn refresh_lines_only(&self, input: RefreshLinesInput<'_>) -> Result<i64> {
+        let RefreshLinesInput {
+            file_id,
+            language: lang,
+            mtime_secs,
+            mtime_nanos,
+            content_hash: hash,
+            lines,
+            eol,
+            rel_path,
+        } = input;
         let existing: Vec<(u32, String)> = {
             let mut stmt = self.conn.prepare_cached(
                 "SELECT line_no, content FROM lines WHERE file_id = ?1 ORDER BY line_no",

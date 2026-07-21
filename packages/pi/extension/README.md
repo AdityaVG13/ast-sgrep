@@ -8,7 +8,7 @@ Native intent, structural, definition, caller, chain, and semantic code search f
 pi install npm:pi-ast-sgrep
 ```
 
-Requires Node.js `>=22.19.0`, Pi `>=0.80.6 <1`, and a packaged host: macOS arm64/x64, glibc Linux arm64/x64, or Windows x64. The extension, `ast-sgrep` launcher, and selected native package manifests are exact-version matched at `1.1.0-alpha.1`; the embedded CLI compatibility identity is `1.1.0-alpha.1`. Alpine/musl, Windows arm64, and other hosts fail with an actionable unsupported-platform error; there is no source build or runtime download fallback.
+Requires Node.js `>=22.19.0`, Pi `>=0.80.6 <1`, and a packaged host: macOS arm64/x64, glibc Linux arm64/x64, or Windows x64. The extension, `ast-sgrep` launcher, and selected native package manifests are exact-version matched at `1.2.0-alpha`; the embedded CLI compatibility identity is `1.2.0-alpha`. Alpine/musl, Windows arm64, and other hosts fail with an actionable unsupported-platform error; there is no source build or runtime download fallback.
 
 ## First use
 

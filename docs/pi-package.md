@@ -6,7 +6,7 @@
 pi install npm:pi-ast-sgrep
 ```
 
-This is the canonical package-user guide for the `1.1.0-alpha.1` contract. The package is an alpha release; npm availability is established only by an authorized release, not by this repository documentation. For a project-local Pi installation, add `-l` to Pi package-management commands.
+This is the canonical package-user guide for the `1.2.0-alpha` contract. The package is an alpha release; npm availability is established only by an authorized release, not by this repository documentation. For a project-local Pi installation, add `-l` to Pi package-management commands.
 
 ## Requirements and packaged platforms
 
@@ -16,7 +16,7 @@ This is the canonical package-user guide for the `1.1.0-alpha.1` contract. The p
 
 Alpine/musl Linux, Windows arm64, and other hosts are unsupported. On an unsupported host, or when npm omitted the matching optional native package, `/asgrep-doctor` reports a binary-resolution error; the package does not compile Rust, search `PATH`, contact MCP, or download a fallback executable. Install on a supported host rather than bypassing this check.
 
-The npm layers are exact-version matched: the `pi-ast-sgrep` extension depends on `ast-sgrep`, which selects one of five host-constrained native packages. Extension, launcher, and native package manifests must all be `1.1.0-alpha.1`. The embedded executable reports native CLI version `1.1.0-alpha.1`; the runtime verifies that identity separately from the npm package version.
+The npm layers are exact-version matched: the `pi-ast-sgrep` extension depends on `ast-sgrep`, which selects one of five host-constrained native packages. Extension, launcher, and native package manifests must all be `1.2.0-alpha`. The embedded executable reports native CLI version `1.2.0-alpha`; the runtime verifies that identity separately from the npm package version.
 
 ## What is available immediately
 
@@ -140,7 +140,7 @@ Deleting `.asgrep` is irreversible but does not delete source files; a later sea
 
 ## Release cadence and provenance
 
-Pi release validation does not run automatically on pull requests, pushes to `main`, or tag pushes. Both Pi workflows are manual `workflow_dispatch` actions. Manually dispatch **Pi native artifacts** (`.github/workflows/pi-native-artifacts.yml`) for a safe dry-run that packs and tests without publishing. An official Pi/npm release is one human-approved `v1.1.0-alpha.1` tag and commit for the five native npm packages, launcher, and extension. Its contract separately pins the embedded native CLI at `1.1.0-alpha`, so the already-existing `v1.1.0-alpha` tag is never reused for post-tag Pi code. npm publishes platform packages first, then `ast-sgrep`, then `pi-ast-sgrep`, all from the same repository commit and checksums with trusted-publishing provenance. npm and crates.io are independently gated views of that same source release; neither registry's publication implies the other completed.
+Pi release validation does not run automatically on pull requests, pushes to `main`, or tag pushes. Both Pi workflows are manual `workflow_dispatch` actions. Manually dispatch **Pi native artifacts** (`.github/workflows/pi-native-artifacts.yml`) for a safe dry-run that packs and tests without publishing. An official Pi/npm release is one human-approved `v1.2.0-alpha` tag and commit for the five native npm packages, launcher, and extension. Its contract separately pins the embedded native CLI at `1.2.0-alpha`. The `Pi npm official release` workflow must be dispatched against that exact tag with `publish=true`.
 
 Before the first external publication, a human must verify package-name ownership and approve the protected publishing environment. A partial npm publication is recovered by releasing a new immutable version, never by overwriting a published version.
 

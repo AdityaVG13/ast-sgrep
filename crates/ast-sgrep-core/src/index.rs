@@ -1,5 +1,7 @@
 use crate::gitignore::{should_skip_dir, should_skip_file};
-use crate::store::{CallerRow, ImportRow, IndexStore, SymbolRow, UpsertFileInput};
+use crate::store::{
+    CallerRow, ImportRow, IndexStore, RefreshLinesInput, SymbolRow, UpsertFileInput,
+};
 use crate::Result;
 use ast_sgrep_lang::{detect_language, ExtractionResult, Language, ParserRegistry};
 use blake3::Hasher;
@@ -480,16 +482,16 @@ impl Indexer {
         if let Some(file_id) = self.store.file_id(rel_path)? {
             if self.store.get_meta(&body_key)?.as_deref() == Some(body_hash.as_str()) {
                 self.store.begin_file_tx()?;
-                match self.store.refresh_lines_only(
+                match self.store.refresh_lines_only(RefreshLinesInput {
                     file_id,
-                    language.map(|l| l.as_str()),
+                    language: language.map(|l| l.as_str()),
                     mtime_secs,
                     mtime_nanos,
-                    &hash,
-                    &split.lines,
-                    split.eol,
+                    content_hash: &hash,
+                    lines: &split.lines,
+                    eol: split.eol,
                     rel_path,
-                ) {
+                }) {
                     Ok(_) => {
                         self.store.commit_file_tx()?;
                         return Ok(FileIndexStats::default());

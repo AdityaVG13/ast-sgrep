@@ -1,17 +1,27 @@
 {
   "name": "pi-ast-sgrep",
-  "version": "1.1.0-alpha.1",
+  "version": "1.2.0-alpha",
   "description": "Pi extension for the ast-sgrep native search runtime",
   "type": "module",
   "license": "MIT",
-  "keywords": ["pi-package", "ast", "code-search", "semantic-search"],
+  "keywords": [
+    "pi-package",
+    "ast",
+    "code-search",
+    "semantic-search"
+  ],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/AdityaVG13/ast-sgrep.git",
     "directory": "packages/pi/extension"
   },
   "homepage": "https://github.com/AdityaVG13/ast-sgrep#readme",
-  "files": ["dist", "skills", "assets", "LICENSE"],
+  "files": [
+    "dist",
+    "skills",
+    "assets",
+    "LICENSE"
+  ],
   "exports": {
     ".": "./dist/index.js",
     "./runtime": {
@@ -20,8 +30,12 @@
     }
   },
   "pi": {
-    "extensions": ["./dist/index.js"],
-    "skills": ["./skills"],
+    "extensions": [
+      "./dist/index.js"
+    ],
+    "skills": [
+      "./skills"
+    ],
     "image": "./assets/preview.png"
   },
   "scripts": {
@@ -29,9 +43,25 @@
     "test": "node --import tsx --test test/*.test.ts",
     "prepack": "npm run build"
   },
-  "engines": {"node": ">=22.19.0"},
-  "dependencies": {"ast-sgrep": "1.1.0-alpha.1", "typebox": "^1.0.0"},
-  "peerDependencies": {"@earendil-works/pi-coding-agent": ">=0.80.6 <1"},
-  "peerDependenciesMeta": {"@earendil-works/pi-coding-agent": {"optional": true}},
-  "devDependencies": {"@earendil-works/pi-coding-agent": "^0.80.6", "@types/node": "^22.15.0", "tsx": "^4.20.0", "typescript": "^5.8.0"}
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "dependencies": {
+    "ast-sgrep": "1.2.0-alpha",
+    "typebox": "^1.0.0"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": ">=0.80.6 <1"
+  },
+  "peerDependenciesMeta": {
+    "@earendil-works/pi-coding-agent": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "^0.80.6",
+    "@types/node": "^22.15.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.8.0"
+  }
 }

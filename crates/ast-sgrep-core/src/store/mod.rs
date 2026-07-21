@@ -3,7 +3,8 @@ pub(crate) mod sql;
 mod sqlite;
 pub use sql::integrity_check;
 pub use sqlite::{
-    CallerRow, ImportRow, IndexStore, IndexedLineRow, SymbolLocationRow, SymbolRow, UpsertFileInput,
+    CallerRow, ImportRow, IndexStore, IndexedLineRow, RefreshLinesInput, SymbolLocationRow,
+    SymbolRow, UpsertFileInput,
 };
 use std::path::{Path, PathBuf};
 pub const INDEX_DIR: &str = ".asgrep";

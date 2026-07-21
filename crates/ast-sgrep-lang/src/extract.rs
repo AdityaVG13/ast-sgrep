@@ -251,7 +251,7 @@ fn apply_kind_rule(ext: &mut Extractor, node: &Node, source: &str, rule: KindRul
             let Some(name) = node_text(&method, source) else {
                 return;
             };
-            if import_names.iter().any(|&n| n == name) {
+            if import_names.contains(&name) {
                 if let Some(args) = field_child(node, args_field) {
                     if let Some(path) = first_string_literal(&args, source) {
                         ext.add_import(node, source, &path);
@@ -298,7 +298,7 @@ fn apply_kind_rule(ext: &mut Extractor, node: &Node, source: &str, rule: KindRul
             if let Some(sep) = id_join {
                 let ids: Vec<String> = collect_identifiers(node, source)
                     .into_iter()
-                    .filter(|s| !skip.iter().any(|&k| k == s.as_str()))
+                    .filter(|s| !skip.contains(&s.as_str()))
                     .collect();
                 if !ids.is_empty() {
                     ext.add_import(node, source, &ids.join(sep));
@@ -320,7 +320,7 @@ pub fn path_from_name_children(
     for child in node.children(&mut cursor) {
         if name_kinds.iter().any(|&k| child.kind() == k) {
             if let Some(text) = node_text(&child, source) {
-                if !skip.iter().any(|&s| s == text) {
+                if !skip.contains(&text) {
                     return Some(text.to_string());
                 }
             }

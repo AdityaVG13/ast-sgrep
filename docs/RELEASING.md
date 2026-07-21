@@ -4,13 +4,13 @@ This repository publishes npm packages and public crates from one source commit 
 
 ## Pi npm package family
 
-The npm release is one atomic versioned family at `1.1.0-alpha.1`, published only from the human-approved official `v1.1.0-alpha.1` tag and commit:
+The npm release is one atomic versioned family at `1.2.0-alpha`, published only from the human-approved official `v1.2.0-alpha` tag and commit:
 
 1. the five host-constrained native packages: `ast-sgrep-darwin-arm64`, `ast-sgrep-darwin-x64`, `ast-sgrep-linux-arm64-gnu`, `ast-sgrep-linux-x64-gnu`, and `ast-sgrep-win32-x64-msvc`;
 2. the `ast-sgrep` launcher, whose optional native dependencies use that exact version;
 3. the `pi-ast-sgrep` extension, whose launcher dependency uses that exact version.
 
-The extension, launcher, and five native npm packages share npm version `1.1.0-alpha.1`. The packaged executable is built from this PR base and reports native CLI version `1.1.0-alpha`; that expected CLI identity is recorded separately in [the release contract](../packages/pi/release-contract.json). All artifacts still share one source commit and recorded checksums. Pi validation does not run automatically on pull requests, pushes to `main`, or tag pushes; both Pi workflows are manual `workflow_dispatch` actions. npm and crates.io are independently approved registry operations over the same source release; neither waits for or proves completion of the other.
+The extension, launcher, and five native npm packages share npm version `1.2.0-alpha`. The packaged executable is built from this release commit and reports native CLI version `1.2.0-alpha`; that expected CLI identity is recorded separately in [the release contract](../packages/pi/release-contract.json). All artifacts share one source commit and recorded checksums. Pi validation does not run automatically on pull requests, pushes to `main`, or tag pushes; both Pi workflows are manual `workflow_dispatch` actions. npm and crates.io are independently approved registry operations over the same source release; neither waits for or proves completion of the other.
 
 Local preparation is side-effect free:
 
@@ -28,7 +28,7 @@ If publication stops after an immutable npm version becomes visible, do not over
 ## Version policy
 
 - All public `ast-sgrep-*` crates use one lockstep version from `[workspace.package]`. A release must not mix versions.
-- Versions follow Semantic Versioning. While the project is in alpha (currently `1.1.0-alpha.1`), incompatible changes require a new alpha version and release notes; once `1.0.0` stable ships, incompatible public API changes require a major version bump.
+- Versions follow Semantic Versioning. While the project is in alpha (currently `1.2.0-alpha`), incompatible changes require a new alpha version and release notes; once `1.0.0` stable ships, incompatible public API changes require a major version bump.
 - Additive, backward-compatible functionality increments the minor version after 1.0; backward-compatible fixes increment the patch version. Prerelease iterations increment the prerelease identifier (for example, `alpha.0` to `alpha.1`).
 - Every path dependency between publishable workspace crates must also specify the same explicit version, so packaged manifests resolve from crates.io.
 - `ast-sgrep-testkit` is internal (`publish = false`) and is never published. Dev-dependencies on it are excluded from published dependency resolution.
@@ -79,7 +79,7 @@ Only a human release operator may run this block. It is noninteractive and publi
 
 ```bash
 set -euo pipefail
-release_version='1.1.0-alpha.1'
+release_version='1.2.0-alpha'
 release_crates=(
   ast-sgrep-lang
   ast-sgrep-embed
@@ -120,7 +120,7 @@ Do not publish `ast-sgrep-testkit`. A transient failure before a crate is accept
 
    ```bash
    set -euo pipefail
-   release_version='1.1.0-alpha.1'
+   release_version='1.2.0-alpha'
    release_crates=(ast-sgrep-lang ast-sgrep-embed ast-sgrep-core ast-sgrep-plugins ast-sgrep-lsp ast-sgrep-cli ast-sgrep-mcp)
    for crate in "${release_crates[@]}"; do
      cargo info --registry crates-io "${crate}@${release_version}" >/dev/null
@@ -133,7 +133,7 @@ Do not publish `ast-sgrep-testkit`. A transient failure before a crate is accept
 
    ```bash
    set -euo pipefail
-   release_version='1.1.0-alpha.1'
+   release_version='1.2.0-alpha'
    install_root="$(mktemp -d)"
    cargo install ast-sgrep-cli --version "=${release_version}" --locked --root "$install_root"
    asgrep_version="$("$install_root/bin/asgrep" --version)"
@@ -143,14 +143,14 @@ Do not publish `ast-sgrep-testkit`. A transient failure before a crate is accept
    [[ "$ast_sgrep_version" == *" ${release_version}" ]]
    ```
 
-3. Run the GitHub Actions `Post-publish install and docs smoke` workflow manually with `version` set to `1.1.0-alpha.1`. It installs the exact crates.io CLI version into an empty temporary root on Linux and macOS, checks both binaries, and verifies the exact-version docs.rs page for every published crate. Save the successful workflow URL with the release record. This workflow is post-publish evidence only; do not run it before the release is visible on crates.io.
+3. Run the GitHub Actions `Post-publish install and docs smoke` workflow manually with `version` set to `1.2.0-alpha`. It installs the exact crates.io CLI version into an empty temporary root on Linux and macOS, checks both binaries, and verifies the exact-version docs.rs page for every published crate. Save the successful workflow URL with the release record. This workflow is post-publish evidence only; do not run it before the release is visible on crates.io.
 
 ## Homebrew formula
 
-The standalone source formula lives at `packaging/homebrew/ast-sgrep.rb`. It is pinned to `1.1.0-alpha.1` and intentionally contains a SHA-256 placeholder until the matching GitHub tag is published. After publishing the tag, calculate the archive digest and replace the all-zero `sha256` placeholder in the formula:
+The standalone source formula lives at `packaging/homebrew/ast-sgrep.rb`. It remains pinned to the latest verified archive until the new GitHub tag is published and its digest is known. After publishing the tag, calculate the archive digest and update both the formula URL/version and checksum:
 
 ```sh
-version="1.1.0-alpha.1"
+version="1.2.0-alpha"
 url="https://github.com/AdityaVG13/ast-sgrep/archive/refs/tags/v${version}.tar.gz"
 curl --fail --location --silent --show-error "$url" --output "ast-sgrep-v${version}.tar.gz"
 shasum -a 256 "ast-sgrep-v${version}.tar.gz"

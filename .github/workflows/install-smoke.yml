@@ -7,7 +7,7 @@ on:
       version:
         description: Exact published version to verify
         required: true
-        default: 1.1.0-alpha.1
+        default: 1.2.0-alpha
         type: string
 
 permissions:
