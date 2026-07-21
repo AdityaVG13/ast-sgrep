@@ -340,7 +340,23 @@ impl Indexer {
             self.ignore.clear();
         }
         let mut stats = WatchUpdateStats::default();
-        for abs in paths {
+        for input_path in paths {
+            // `root` is canonicalized at construction, while watcher paths may
+            // still contain platform symlink prefixes such as macOS `/var`.
+            // Preserve the fast path, then canonicalize only on mismatch.
+            let normalized;
+            let abs = if input_path.starts_with(&self.options.root) {
+                input_path.as_path()
+            } else {
+                normalized = input_path.canonicalize().ok().or_else(|| {
+                    let parent = input_path.parent()?.canonicalize().ok()?;
+                    Some(parent.join(input_path.file_name()?))
+                });
+                let Some(path) = normalized.as_deref() else {
+                    continue;
+                };
+                path
+            };
             let Ok(rel) = abs.strip_prefix(&self.options.root) else {
                 continue;
             };
