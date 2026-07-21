@@ -1,6 +1,6 @@
-use crate::Cli;
+use crate::{index_options, search_options, Cli};
 use anyhow::{bail, Context};
-use ast_sgrep_core::{EmbedBackend, IndexOptions, Indexer, SearchHit, SearchOptions, Searcher};
+use ast_sgrep_core::{Indexer, SearchHit, SearchOptions, Searcher};
 use clap::Parser;
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
@@ -199,20 +199,13 @@ fn run_single(
     gold: &GoldFixture,
     cfg: EvalConfig,
 ) -> anyhow::Result<(Vec<QueryEval>, Aggregate)> {
-    let searcher = Searcher::new(SearchOptions {
-        root: root.to_path_buf(),
-        index_path: Some(index_path.to_path_buf()),
-        limit,
-        lang_filter: cli.lang.clone(),
-        use_embed: !cfg.no_embed,
-        use_tantivy: cli.tantivy,
-        use_cloud_embed: cli.cloud_embed,
-        use_ollama_embed: cli.ollama_embed,
-        use_semantic_only: false,
-        ann_threshold: cli.ann_threshold,
-        ..SearchOptions::default()
-    })
-    .with_context(|| format!("failed to open searcher for eval ({})", cfg.label()))?;
+    let mut opts = search_options(root, cli);
+    opts.index_path = Some(index_path.to_path_buf());
+    opts.limit = limit;
+    opts.use_embed = !cfg.no_embed;
+    opts.use_semantic_only = false;
+    let searcher = Searcher::new(opts)
+        .with_context(|| format!("failed to open searcher for eval ({})", cfg.label()))?;
     let evals: Vec<QueryEval> = gold
         .queries
         .iter()
@@ -255,24 +248,19 @@ pub(crate) fn run_eval(cli: &Cli, args: &EvalArgs) -> anyhow::Result<()> {
             index_path.display()
         );
     }
-    let mut indexer = Indexer::new(IndexOptions {
-        root: root.clone(),
-        index_path: Some(index_path.clone()),
-        lang_filter: cli.lang.clone(),
-        respect_gitignore: true,
-        use_tantivy: cli.tantivy,
-        embed_semantic: true,
-        embed_backend: EmbedBackend::from_flags(
-            cli.cloud_embed,
-            cli.ollama_embed,
-            cli.neural_embed,
-            false,
-        ),
-        force_reindex: false,
-        ann_threshold: cli.ann_threshold,
-    })
-    .context("failed to open index for eval")?;
-    indexer.index_all().context("indexing failed for eval")?;
+    let mut idx_opts = index_options(&root, cli);
+    idx_opts.index_path = Some(index_path.clone());
+    idx_opts.embed_semantic = true;
+    idx_opts.embed_backend = ast_sgrep_core::EmbedBackend::from_flags(
+        cli.cloud_embed,
+        cli.ollama_embed,
+        cli.neural_embed,
+        false,
+    );
+    Indexer::new(idx_opts)
+        .context("failed to open index for eval")?
+        .index_all()
+        .context("indexing failed for eval")?;
     match &args.ab {
         Some(mode) => {
             let cfg_b = ab_config(mode)?;
@@ -291,7 +279,7 @@ pub(crate) fn run_eval(cli: &Cli, args: &EvalArgs) -> anyhow::Result<()> {
                 &evals_b,
                 &agg_a,
                 &agg_b,
-            )?;
+            )
         }
         None => {
             let cfg = EvalConfig {
@@ -308,10 +296,9 @@ pub(crate) fn run_eval(cli: &Cli, args: &EvalArgs) -> anyhow::Result<()> {
                 cfg,
                 &evals,
                 &agg,
-            )?;
+            )
         }
     }
-    Ok(())
 }
 fn rank_s(r: Option<usize>) -> String {
     r.map_or_else(|| "miss".into(), |n| n.to_string())

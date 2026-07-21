@@ -75,10 +75,21 @@ pub fn coverage_symbol_score(terms: &[String], symbol: &str) -> f64 {
     sum * (matched as f64 / terms.len() as f64)
 }
 pub fn score_def(terms: &[String], symbol: &str) -> f64 {
-    coverage_symbol_score(terms, symbol) * 2.0 + SCORE_DEF_BASE
+    let coverage = coverage_symbol_score(terms, symbol);
+    // Do not award base score to non-matches (prevents rank pollution from weak LIKE hits).
+    if coverage == 0.0 {
+        0.0
+    } else {
+        coverage * 2.0 + SCORE_DEF_BASE
+    }
 }
 pub fn score_caller(terms: &[String], callee: &str) -> f64 {
-    coverage_symbol_score(terms, callee) * 2.0 + SCORE_CALLER_BASE
+    let coverage = coverage_symbol_score(terms, callee);
+    if coverage == 0.0 {
+        0.0
+    } else {
+        coverage * 2.0 + SCORE_CALLER_BASE
+    }
 }
 #[cfg(test)]
 mod tests {
@@ -94,5 +105,15 @@ mod tests {
     fn multi_character_substrings_keep_their_rank_signal() {
         assert_eq!(score_symbol("in", "init"), SCORE_SUBSTRING_SYMBOL);
         assert_eq!(score_symbol("init", "in"), SCORE_SUBSTRING_SYMBOL);
+    }
+
+    #[test]
+    fn score_def_and_caller_zero_when_no_coverage() {
+        use super::{score_caller, score_def};
+        let terms = vec!["nomatch_xyz".into()];
+        assert_eq!(score_def(&terms, "process_request"), 0.0);
+        assert_eq!(score_caller(&terms, "process_request"), 0.0);
+        let hit = vec!["process".into()];
+        assert!(score_def(&hit, "process_request") > 0.0);
     }
 }

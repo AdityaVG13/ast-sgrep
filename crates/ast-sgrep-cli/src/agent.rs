@@ -6,7 +6,6 @@ use serde_json::{json, Value};
 use std::io::{self, IsTerminal};
 use std::path::Path;
 const TOOL: &str = "asgrep";
-const SCHEMA: &str = "1.0.0";
 #[derive(Parser)]
 pub(crate) struct CapabilitiesArgs {
     #[arg(long)]
@@ -56,7 +55,7 @@ pub(crate) fn run_doctor(cli: &Cli, root: &Path, args: &DoctorArgs) -> anyhow::R
 }
 pub(crate) fn capabilities_json(_cli: &Cli) -> anyhow::Result<Value> {
     Ok(json!({
-        "schema_version": SCHEMA, "tool": TOOL, "version": env!("CARGO_PKG_VERSION"),
+        "version": env!("CARGO_PKG_VERSION"),
         "description": "Polyglot hybrid code search (lexical + structural + semantic)",
         "agent_contract": {"stdout": "data payloads only when --json / robot modes are set", "stderr": "human hints and diagnostics", "deterministic": "stable JSON key ordering via serde_json; disable color with NO_COLOR=1"},
         "commands": [
@@ -111,7 +110,7 @@ fn doctor_triage_json(cli: &Cli, root: &Path) -> anyhow::Result<Value> {
     }
     next.extend(["asgrep capabilities --json", "asgrep robot-docs guide"]);
     Ok(
-        json!({"schema_version": SCHEMA, "tool": TOOL, "robot_triage": true, "root": root, "index_path": cli.index_path, "status": status, "issues": issues, "suggested_commands": next, "healthy": issues.is_empty(), "tty": io::stdout().is_terminal()}),
+        json!({"robot_triage": true, "root": root, "index_path": cli.index_path, "status": status, "issues": issues, "suggested_commands": next, "healthy": issues.is_empty(), "tty": io::stdout().is_terminal()}),
     )
 }
 fn print_robot_guide() {
