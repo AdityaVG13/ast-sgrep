@@ -4,15 +4,12 @@ pub(crate) fn build_file_lines_map(lines: &[IndexedLineRow]) -> FileLinesMap {
         map.entry(path.to_string())
             .or_default() .insert(*line_no, content.clone());
     } map
-} pub(crate) fn build_excerpt_with_context(
-    file_map: &FileLinesMap, path: &str, line_no: u32, content: &str, before: usize, after: usize,
+} pub(crate) fn build_excerpt_with_context( file_map: &FileLinesMap, path: &str, line_no: u32, content: &str, before: usize, after: usize,
 ) -> String {
     if before == 0 && after == 0 { return content.to_string(); } let Some(file_lines) = file_map.get(path) else { return content.to_string(); };
     let start = line_no.saturating_sub(before as u32); let end = line_no + after as u32; (start..=end)
         .filter_map(|ln| {
-            if ln == line_no {
-                Some(content.to_string())
-            } else {
+            if ln == line_no { Some(content.to_string()) } else {
                 file_lines.get(&ln).cloned()
             }
         }) .collect::<Vec<_>>() .join("\n")

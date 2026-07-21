@@ -1,15 +1,11 @@
 use ast_sgrep_lang::{ExtractionResult, ImportSite, Language, SymbolKind}; use ast_sgrep_testkit::parse;
-
 type Sym = (&'static str, SymbolKind); type Call = (&'static str, &'static str); struct Case {
     language: Language, source: &'static str, symbols: &'static [Sym], imports: &'static [&'static str], calls: &'static [Call], forbid: &'static [&'static str],
 }
-
 const RUST: &str = include_str!("fixtures/extract/rust.rs"); const TS: &str = include_str!("fixtures/extract/typescript.ts");
 const JS: &str = include_str!("fixtures/extract/javascript.js"); const PY: &str = include_str!("fixtures/extract/python.py");
 const GO: &str = include_str!("fixtures/extract/go.go"); const JAVA: &str = include_str!("fixtures/extract/java.java"); const CS: &str = include_str!("fixtures/extract/csharp.cs"); const RB: &str = include_str!("fixtures/extract/ruby.rb");
-
 use SymbolKind::*;
-
 #[test] fn extractors_emit_language_goldens_with_sane_spans_and_relationships() {
     for c in CASES {
         let r = parse(c.language, c.source); for &(name, kind) in c.symbols {
@@ -27,7 +23,6 @@ use SymbolKind::*;
         }
     }
 }
-
 const CASES: &[Case] = &[
     Case {
         language: Language::Rust, source: RUST, symbols: &[("top_level_helper", Function), ("new", Method), ("process", Method),
@@ -55,7 +50,6 @@ const CASES: &[Case] = &[
         imports: &["json"], calls: &[("render", "format_widget")], forbid: &["doc_only_ruby"],
     },
 ];
-
 fn assert_spans(c: &Case, r: &ExtractionResult) {
     let lines = c.source.lines().count() as u32; let bytes = c.source.len(); for s in &r.symbols {
         assert!(s.line_start >= 1 && s.line_start <= s.line_end && s.line_end <= lines,
