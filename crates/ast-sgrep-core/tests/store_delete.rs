@@ -1,5 +1,4 @@
 use ast_sgrep_core::store::{CallerRow, ImportRow, SymbolRow, UpsertFileInput}; use ast_sgrep_core::IndexStore; use ast_sgrep_lang::PatternNode; use tempfile::TempDir;
-
 fn base<'a>(path: &'a str, lines: &'a [(u32, String)], hash: &'a str) -> UpsertFileInput<'a> {
     UpsertFileInput {
         rel_path: path, language: Some("python"), mtime_secs: 1, mtime_nanos: 0, content_hash: hash, lines, eol: "\n", symbols: &[], callers: &[], imports: &[], pattern_nodes: &[],
@@ -8,7 +7,6 @@ fn base<'a>(path: &'a str, lines: &'a [(u32, String)], hash: &'a str) -> UpsertF
 } fn count(store: &IndexStore, sql: &str) -> i64 { store.connection().query_row(sql, [], |r| r.get(0)).unwrap() } fn count_match(store: &IndexStore, table: &str, q: &str) -> i64 {
     store.connection().query_row(&format!("SELECT COUNT(*) FROM {table} WHERE {table} MATCH ?1"), [q], |r| r.get(0)).unwrap()
 }
-
 #[test] fn semantic_mutation_removes_ivf_before_it_can_be_reloaded() {
     let temp = TempDir::new().unwrap(); let store = IndexStore::open(temp.path(), None).unwrap(); let sidecar = ast_sgrep_core::semantic_ivf::semantic_ivf_path(store.db_path());
     std::fs::write(&sidecar, b"stale sidecar").unwrap(); let lines = [(1, "semantic content".into())]; let chunks = [ast_sgrep_core::semantic_chunk::SemanticChunkInput {
@@ -16,7 +14,6 @@ fn base<'a>(path: &'a str, lines: &'a [(u32, String)], hash: &'a str) -> UpsertF
     }]; let mut input = base("semantic.py", &lines, "hash"); input.semantic_chunks = &chunks; input.embed_semantic = true;
     store.upsert_file(input).unwrap(); assert!(!sidecar.exists(), "semantic mutation must invalidate the on-disk IVF before commit");
 }
-
 #[test] fn re_upsert_does_not_leave_stale_fts_rows() {
     let temp = TempDir::new().unwrap(); let store = IndexStore::open(temp.path(), None).unwrap(); let path = "stale_test.py";
     let first = [(1, "alpha beta gamma".into()), (2, "delta epsilon".into())]; store.upsert_file(base(path, &first, "hash1")).unwrap();
@@ -24,7 +21,6 @@ fn base<'a>(path: &'a str, lines: &'a [(u32, String)], hash: &'a str) -> UpsertF
     let second = [(1, "zeta eta theta".into()), (2, "iota kappa".into())]; store.upsert_file(base(path, &second, "hash2")).unwrap();
     assert_eq!(count_match(&store, "lines_fts", "alpha"), 0); assert_eq!(count_match(&store, "lines_trigram", "alp"), 0); assert_eq!(count_match(&store, "lines_fts", "zeta"), 1); assert_eq!(count_match(&store, "lines_trigram", "zet"), 1);
 }
-
 #[test] fn remove_file_clears_all_per_file_tables() {
     let temp = TempDir::new().unwrap(); let store = IndexStore::open(temp.path(), None).unwrap(); let path = "delete_all.py";
     let symbols = [SymbolRow { name: "foo".into(), kind: "function".into(), line_start: 1, line_end: 2, byte_start: 0, byte_end: 10 }];
@@ -37,13 +33,11 @@ fn base<'a>(path: &'a str, lines: &'a [(u32, String)], hash: &'a str) -> UpsertF
         assert_eq!(count(&store, &format!("SELECT COUNT(*) FROM {table}")), 0, "{table} should be empty");
     }
 }
-
 #[test] fn re_upsert_preserves_other_files_fts_rows() {
     let temp = TempDir::new().unwrap(); let store = IndexStore::open(temp.path(), None).unwrap(); let a = [(1, "first unique needle".into())]; let b = [(1, "second unique haystack".into())];
     store.upsert_file(base("first.py", &a, "hash1")).unwrap(); store.upsert_file(base("second.py", &b, "hash2")).unwrap(); let rep = [(1, "replacement content".into())]; store.upsert_file(base("first.py", &rep, "hash3")).unwrap();
     assert_eq!(count_match(&store, "lines_fts", "second"), 1); assert_eq!(count_match(&store, "lines_trigram", "sec"), 1);
 }
-
 #[test] fn re_upsert_many_files_is_linear() {
     let temp = TempDir::new().unwrap(); let store = IndexStore::open(temp.path(), None).unwrap(); let n = 2000usize; let paths: Vec<String> = (0..n).map(|i| format!("file{i:04}.py")).collect();
     let lines = [(1, "hello world".into()), (2, "foo bar baz".into())]; let lines2 = [(1, "goodbye world".into()), (2, "qux corge grault".into())]; let run = |lines: &[(u32, String)], prefix: &str, offset: usize| {
@@ -53,7 +47,6 @@ fn base<'a>(path: &'a str, lines: &'a [(u32, String)], hash: &'a str) -> UpsertF
     }; let insert = run(&lines, "hash", 0); let re = run(&lines2, "hash2_", n); assert!(re < std::time::Duration::from_secs(15), "re-upsert of {n} took {re:?}");
     assert!(insert + re < std::time::Duration::from_secs(30), "total took {:?}", insert + re);
 }
-
 #[test] fn same_span_body_edit_refreshes_semantic_chunks() {
     use ast_sgrep_core::semantic_chunk::build_semantic_chunks; let temp = TempDir::new().unwrap(); let store = IndexStore::open(temp.path(), None).unwrap(); let path = "body_edit.py";
     let symbols = [SymbolRow { name: "compute".into(), kind: "function".into(), line_start: 1, line_end: 3, byte_start: 0, byte_end: 40 }];
