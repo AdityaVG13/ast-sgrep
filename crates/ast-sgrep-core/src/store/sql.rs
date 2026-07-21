@@ -207,11 +207,7 @@ pub fn at_least_rows(conn: &Connection, table: &str, threshold: usize) -> Result
 }
 /// Delete lines_fts + content-sync trigram + lines for one file.
 /// When `from_line` is `Some(n)`, only rows with `line_no >= n` are removed (truncate path).
-pub fn delete_file_lines(
-    conn: &Connection,
-    file_id: i64,
-    from_line: Option<u32>,
-) -> Result<()> {
+pub fn delete_file_lines(conn: &Connection, file_id: i64, from_line: Option<u32>) -> Result<()> {
     match from_line {
         Some(first) => {
             conn.prepare_cached(

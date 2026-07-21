@@ -158,7 +158,11 @@ impl McpServer {
         }
     }
 
-    fn searcher_for(&self, root: PathBuf, limit: usize) -> anyhow::Result<std::sync::MutexGuard<'_, Option<(SearcherKey, Searcher)>>> {
+    fn searcher_for(
+        &self,
+        root: PathBuf,
+        limit: usize,
+    ) -> anyhow::Result<std::sync::MutexGuard<'_, Option<(SearcherKey, Searcher)>>> {
         let key = SearcherKey {
             root: root.clone(),
             index_path: self.index_path.clone(),
@@ -203,10 +207,7 @@ impl McpServer {
             .unwrap_or(false);
         let root = self.root_arg(args);
         let guard = self.searcher_for(root, limit)?;
-        let searcher = &guard
-            .as_ref()
-            .expect("searcher_for populates cache")
-            .1;
+        let searcher = &guard.as_ref().expect("searcher_for populates cache").1;
         let response = if semantic_only {
             searcher.search_semantic(query)?
         } else {
