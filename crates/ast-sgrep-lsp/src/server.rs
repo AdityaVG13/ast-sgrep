@@ -1,13 +1,17 @@
 use crate::backend::LspBackend;
-use crate::support::{canonicalize_workspace_root, file_uri_to_path};
-use crate::support::{read_message, send_error, send_response};
+use crate::support::{
+    canonicalize_workspace_root, file_uri_to_path, read_message, send_error, send_response,
+    AsgrepSettings,
+};
 use crate::types::{
     CallHierarchyItemParams, CallHierarchyPrepareParams, DocumentSymbolParams,
     ExecuteCommandParams, InitializeParams, NotificationMessage, ReferenceParams, RequestMessage,
     SearchParams, TextDocumentPositionParams, WorkspaceSymbolParams,
 };
+use serde::de::DeserializeOwned;
 use serde_json::Value;
 use std::io::{self, BufReader, Write};
+use std::path::PathBuf;
 pub struct LspServer {
     backend: Option<LspBackend>,
     shutdown: bool,
@@ -114,13 +118,18 @@ impl LspServer {
             .find_map(|(n, h)| (*n == method).then_some(*h))
             .ok_or_else(|| anyhow::anyhow!("Method not found: {method}"))?(self, params)
     }
+    fn with_parsed<P, F>(&self, params: &Value, f: F) -> anyhow::Result<Value>
+    where
+        P: DeserializeOwned,
+        F: FnOnce(&LspBackend, P) -> anyhow::Result<Value>,
+    {
+        f(self.backend()?, serde_json::from_value(params.clone())?)
+    }
     fn h_init(&mut self, params: &Value) -> anyhow::Result<Value> {
         let params: InitializeParams = serde_json::from_value(params.clone())?;
         let mut backend = LspBackend::new(canonicalize_workspace_root(resolve_root(&params)));
         if let Some(ref opts) = params.initialization_options {
-            backend.apply_settings(crate::support::AsgrepSettings::from_initialization_options(
-                opts,
-            ));
+            backend.apply_settings(AsgrepSettings::from_initialization_options(opts));
         }
         backend.start_background_index();
         let result = backend.initialize_result();
@@ -132,49 +141,43 @@ impl LspServer {
         Ok(Value::Null)
     }
     fn h_wsym(&mut self, params: &Value) -> anyhow::Result<Value> {
-        let p: WorkspaceSymbolParams = serde_json::from_value(params.clone())?;
-        self.backend()?.workspace_symbols(&p.query)
+        self.with_parsed(params, |b, p: WorkspaceSymbolParams| {
+            b.workspace_symbols(&p.query)
+        })
     }
     fn h_search(&mut self, params: &Value) -> anyhow::Result<Value> {
-        let p: SearchParams = serde_json::from_value(params.clone())?;
-        self.backend()?
-            .search(&p.query, p.semantic, p.limit.clamp(1, 500))
+        self.with_parsed(params, |b, p: SearchParams| {
+            b.search(&p.query, p.semantic, p.limit.clamp(1, 500))
+        })
     }
     fn h_dsym(&mut self, params: &Value) -> anyhow::Result<Value> {
-        self.backend()?
-            .document_symbols(&serde_json::from_value::<DocumentSymbolParams>(
-                params.clone(),
-            )?)
+        self.with_parsed(params, |b, p: DocumentSymbolParams| b.document_symbols(&p))
     }
     fn h_def(&mut self, params: &Value) -> anyhow::Result<Value> {
-        self.backend()?
-            .goto_definition(&serde_json::from_value(params.clone())?)
+        self.with_parsed(params, |b, p: TextDocumentPositionParams| {
+            b.goto_definition(&p)
+        })
     }
     fn h_refs(&mut self, params: &Value) -> anyhow::Result<Value> {
-        self.backend()?
-            .find_references(&serde_json::from_value::<ReferenceParams>(params.clone())?)
+        self.with_parsed(params, |b, p: ReferenceParams| b.find_references(&p))
     }
     fn h_prep_ch(&mut self, params: &Value) -> anyhow::Result<Value> {
-        let p: CallHierarchyPrepareParams = serde_json::from_value(params.clone())?;
-        self.backend()?
-            .prepare_call_hierarchy(&TextDocumentPositionParams {
-                text_document: p.text_document,
-                position: p.position,
-            })
+        self.with_parsed(params, |b, p: CallHierarchyPrepareParams| {
+            b.prepare_call_hierarchy(&p)
+        })
     }
     fn h_in_calls(&mut self, params: &Value) -> anyhow::Result<Value> {
-        let p: CallHierarchyItemParams = serde_json::from_value(params.clone())?;
-        self.backend()?.incoming_calls(&p.item)
+        self.with_parsed(params, |b, p: CallHierarchyItemParams| {
+            b.incoming_calls(&p.item)
+        })
     }
     fn h_out_calls(&mut self, params: &Value) -> anyhow::Result<Value> {
-        let p: CallHierarchyItemParams = serde_json::from_value(params.clone())?;
-        self.backend()?.outgoing_calls(&p.item)
+        self.with_parsed(params, |b, p: CallHierarchyItemParams| {
+            b.outgoing_calls(&p.item)
+        })
     }
     fn h_exec(&mut self, params: &Value) -> anyhow::Result<Value> {
-        self.backend()?
-            .execute_command(&serde_json::from_value::<ExecuteCommandParams>(
-                params.clone(),
-            )?)
+        self.with_parsed(params, |b, p: ExecuteCommandParams| b.execute_command(&p))
     }
     fn backend(&self) -> anyhow::Result<&LspBackend> {
         self.backend
@@ -182,23 +185,20 @@ impl LspServer {
             .ok_or_else(|| anyhow::anyhow!("server not initialized"))
     }
 }
-fn resolve_root(params: &InitializeParams) -> std::path::PathBuf {
-    if let Some(folders) = &params.workspace_folders {
-        if let Some(first) = folders.first() {
-            if let Ok(p) = file_uri_to_path(&first.uri) {
-                return p;
-            }
-        }
-    }
-    if let Some(uri) = &params.root_uri {
-        if let Ok(p) = file_uri_to_path(uri) {
-            return p;
-        }
-    }
-    if let Some(path) = &params.root_path {
-        return std::path::PathBuf::from(path);
-    }
-    std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
+fn resolve_root(params: &InitializeParams) -> PathBuf {
+    params
+        .workspace_folders
+        .as_ref()
+        .and_then(|folders| folders.first())
+        .and_then(|folder| file_uri_to_path(&folder.uri).ok())
+        .or_else(|| {
+            params
+                .root_uri
+                .as_ref()
+                .and_then(|uri| file_uri_to_path(uri).ok())
+        })
+        .or_else(|| params.root_path.as_ref().map(PathBuf::from))
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
 }
 pub fn log(msg: &str) {
     let _ = writeln!(io::stderr(), "[asgrep-lsp] {msg}");
