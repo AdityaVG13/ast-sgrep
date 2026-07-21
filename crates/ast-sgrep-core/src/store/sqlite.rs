@@ -101,20 +101,54 @@ impl IndexStore {
         &self, file_id: i64, lang: Option<&str>, mtime_secs: i64, mtime_nanos: u32, hash: &str, lines: &[(u32, String)], eol: &str, rel_path: &str,
     ) -> Result<i64> {
         let existing: Vec<(u32, String)> = {
-            let mut stmt = self.conn.prepare_cached("SELECT line_no, content FROM lines WHERE file_id = ?1 ORDER BY line_no")?;
-            let rows = stmt.query_map(params![file_id], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<std::result::Result<Vec<_>, _>>()?; rows
-        }; let common = existing.iter().zip(lines.iter()).take_while(|(a, b)| a.1 == b.1).count();
-        if common == existing.len() && lines.len() >= existing.len() { let extra = &lines[common..]; if !extra.is_empty() { self.insert_lines_no_trigram(file_id, extra)?; } } else if common == lines.len() && existing.len() > lines.len() {
-            let first_drop = lines.len() as u32 + 1; self.conn.prepare_cached("DELETE FROM lines_fts WHERE file_id = ?1 AND line_no >= ?2")?
+            let mut stmt = self.conn.prepare_cached(
+                "SELECT line_no, content FROM lines WHERE file_id = ?1 ORDER BY line_no",
+            )?;
+            let rows = stmt.query_map(params![file_id], |r| Ok((r.get(0)?, r.get(1)?)))?;
+            rows.collect::<std::result::Result<Vec<_>, _>>()?
+        };
+        let common = existing
+            .iter()
+            .zip(lines.iter())
+            .take_while(|(a, b)| a.1 == b.1)
+            .count();
+        if common == existing.len() && lines.len() >= existing.len() {
+            // Append trailing lines — must keep lines_fts AND lines_trigram in sync
+            // (literal BMH path uses trigram when indexed lines ≥ 1000).
+            let extra = &lines[common..];
+            if !extra.is_empty() {
+                self.insert_lines(file_id, extra)?;
+            }
+        } else if common == lines.len() && existing.len() > lines.len() {
+            // Truncate trailing lines: drop FTS + content=trigram rowids before lines.
+            let first_drop = lines.len() as u32 + 1;
+            self.conn
+                .prepare_cached(
+                    "DELETE FROM lines_trigram WHERE rowid IN \
+                     (SELECT rowid FROM lines WHERE file_id = ?1 AND line_no >= ?2)",
+                )?
                 .execute(params![file_id, first_drop])?;
-            self.conn.prepare_cached("DELETE FROM lines WHERE file_id = ?1 AND line_no >= ?2")?
+            self.conn
+                .prepare_cached("DELETE FROM lines_fts WHERE file_id = ?1 AND line_no >= ?2")?
+                .execute(params![file_id, first_drop])?;
+            self.conn
+                .prepare_cached("DELETE FROM lines WHERE file_id = ?1 AND line_no >= ?2")?
                 .execute(params![file_id, first_drop])?;
         } else {
-            self.conn.execute_batch(&format!( "DELETE FROM lines_fts WHERE file_id = {file_id};
-                 DELETE FROM lines_trigram WHERE rowid IN (SELECT rowid FROM lines WHERE file_id = {file_id}); DELETE FROM lines WHERE file_id = {file_id};"
-            ))?; self.insert_lines(file_id, lines)?;
-        } self.conn.prepare_cached( "UPDATE files SET language=?1, mtime_secs=?2, mtime_nanos=?3, content_hash=?4 WHERE id=?5",
-        )?.execute(params![lang, mtime_secs, mtime_nanos, hash, file_id])?; self.set_meta(&format!("eol:{rel_path}"), eol)?; Ok(file_id)
+            self.conn.execute_batch(&format!(
+                "DELETE FROM lines_fts WHERE file_id = {file_id};
+                 DELETE FROM lines_trigram WHERE rowid IN (SELECT rowid FROM lines WHERE file_id = {file_id});
+                 DELETE FROM lines WHERE file_id = {file_id};"
+            ))?;
+            self.insert_lines(file_id, lines)?;
+        }
+        self.conn
+            .prepare_cached(
+                "UPDATE files SET language=?1, mtime_secs=?2, mtime_nanos=?3, content_hash=?4 WHERE id=?5",
+            )?
+            .execute(params![lang, mtime_secs, mtime_nanos, hash, file_id])?;
+        self.set_meta(&format!("eol:{rel_path}"), eol)?;
+        Ok(file_id)
     }
     fn upsert_file_inner( &self, input: UpsertFileInput<'_>, emb: &[EmbeddedChunk], struct_key: &str, struct_fp: &str,
     ) -> Result<i64> {
@@ -142,11 +176,7 @@ impl IndexStore {
             fts.execute(params![rid, content, file_id, no])?; tri.execute(params![rid, content])?;
         } Ok(())
     }
-    fn insert_lines_no_trigram(&self, file_id: i64, lines: &[(u32, String)]) -> Result<()> {
-        let mut ls = self.conn.prepare_cached("INSERT INTO lines(file_id, line_no, content) VALUES(?1,?2,?3)")?;
-        let mut fts = self.conn.prepare_cached("INSERT INTO lines_fts(rowid, content, file_id, line_no) VALUES(?1,?2,?3,?4)")?;
-        for (no, content) in lines { ls.execute(params![file_id, no, content])?; let rid = self.conn.last_insert_rowid(); fts.execute(params![rid, content, file_id, no])?; } Ok(())
-    }
+
     fn insert_symbols(&self, file_id: i64, symbols: &[SymbolRow]) -> Result<Vec<i64>> {
         let mut ids = Vec::with_capacity(symbols.len()); let mut st = self.conn.prepare_cached(
             "INSERT INTO symbols(file_id, name, kind, line_start, line_end, byte_start, byte_end) VALUES(?1,?2,?3,?4,?5,?6,?7)", )?;

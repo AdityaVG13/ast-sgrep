@@ -47,6 +47,86 @@ fn base<'a>(path: &'a str, lines: &'a [(u32, String)], hash: &'a str) -> UpsertF
     }; let insert = run(&lines, "hash", 0); let re = run(&lines2, "hash2_", n); assert!(re < std::time::Duration::from_secs(15), "re-upsert of {n} took {re:?}");
     assert!(insert + re < std::time::Duration::from_secs(30), "total took {:?}", insert + re);
 }
+/// Body-hash / structure-stable append must keep lines_trigram searchable so the
+/// literal BMH path (≥1000 lines) still finds newly appended trailing tokens.
+#[test]
+fn structure_stable_append_keeps_trigram_and_search_literal() {
+    use ast_sgrep_core::{SearchOptions, Searcher};
+    let temp = TempDir::new().unwrap();
+    let store = IndexStore::open(temp.path(), None).unwrap();
+    let path = "big_pad.py";
+    // ≥1000 lines forces literal_pass onto the trigram path (BMH_LINE_THRESHOLD).
+    let mut lines: Vec<(u32, String)> = (1u32..=1000)
+        .map(|i| (i, format!("pad content line number {i} filler")))
+        .collect();
+    store
+        .upsert_file(base(path, &lines, "hash_pad_v1"))
+        .unwrap();
+    assert!(
+        store.indexed_line_count().unwrap() >= 1000,
+        "fixture must reach BMH threshold"
+    );
+    lines.push((
+        1001,
+        "// UNIQUE_TRAILING_TOKEN_xyzzy_body_hash_append".into(),
+    ));
+    // Empty graph structure matches first upsert → refresh_lines_only append path.
+    store
+        .upsert_file(base(path, &lines, "hash_pad_v2"))
+        .unwrap();
+    assert_eq!(
+        count_match(&store, "lines_trigram", "xyzzy"),
+        1,
+        "append must insert lines_trigram rows for new trailing content"
+    );
+    assert_eq!(
+        count_match(&store, "lines_fts", "UNIQUE_TRAILING_TOKEN_xyzzy_body_hash_append"),
+        1,
+        "append must insert lines_fts rows"
+    );
+    let searcher = Searcher::with_store(
+        store,
+        SearchOptions {
+            root: temp.path().to_path_buf(),
+            limit: 16,
+            use_embed: false,
+            ..SearchOptions::default()
+        },
+    );
+    let resp = searcher
+        .search_literal("UNIQUE_TRAILING_TOKEN_xyzzy_body_hash_append")
+        .expect("search_literal");
+    assert!(
+        resp.hits.iter().any(|h| h.excerpt.contains("xyzzy")),
+        "search_literal must hit appended trailing token via trigram path; hits={:?}",
+        resp.hits
+            .iter()
+            .map(|h| (h.file.as_str(), h.line_start, h.excerpt.as_str()))
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn structure_stable_truncate_drops_trigram_rows() {
+    let temp = TempDir::new().unwrap();
+    let store = IndexStore::open(temp.path(), None).unwrap();
+    let path = "trim.py";
+    let long = [
+        (1, "keep alpha".into()),
+        (2, "drop UNIQUE_TRIM_TOKEN_qqq".into()),
+    ];
+    store.upsert_file(base(path, &long, "h1")).unwrap();
+    assert_eq!(count_match(&store, "lines_trigram", "qqq"), 1);
+    let short = [(1, "keep alpha".into())];
+    store.upsert_file(base(path, &short, "h2")).unwrap();
+    assert_eq!(
+        count_match(&store, "lines_trigram", "qqq"),
+        0,
+        "truncate must delete lines_trigram rowids for dropped lines"
+    );
+    assert_eq!(count_match(&store, "lines_fts", "UNIQUE_TRIM_TOKEN_qqq"), 0);
+}
+
 #[test] fn same_span_body_edit_refreshes_semantic_chunks() {
     use ast_sgrep_core::semantic_chunk::build_semantic_chunks; let temp = TempDir::new().unwrap(); let store = IndexStore::open(temp.path(), None).unwrap(); let path = "body_edit.py";
     let symbols = [SymbolRow { name: "compute".into(), kind: "function".into(), line_start: 1, line_end: 3, byte_start: 0, byte_end: 40 }];
