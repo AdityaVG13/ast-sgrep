@@ -1,7 +1,9 @@
 use crate::query::ParsedQuery;
-use crate::search::passes::bmh::{build_excerpt_with_context, build_file_lines_map};
+use crate::search::passes::bmh::{
+    asgrep_line_hit, build_file_lines_map, excerpt_opt, needs_context, FileLinesMap,
+};
 use crate::search::types::matches_lang;
-use crate::search::types::{HitKind, SearchHit, SearchOptions, SpanHitInput};
+use crate::search::types::{SearchHit, SearchOptions};
 use crate::store::IndexStore;
 use crate::{Result, StoreError};
 use regex::Regex;
@@ -35,13 +37,13 @@ pub fn regex_pass(
         .unwrap_or(1)
         .min(lines.len());
     let chunk_size = lines.len().div_ceil(num_threads).max(1);
-    let file_map = if options.context_before > 0 || options.context_after > 0 {
+    let file_map = if needs_context(options) {
         Some(Arc::new(build_file_lines_map(&store.all_indexed_lines()?)))
     } else {
         None
     };
-    let (context_before, context_after) = (options.context_before, options.context_after);
     let lang_filter = options.lang_filter.clone();
+    let options = options.clone();
     let re = Arc::new(re);
     thread::scope(|scope| {
         let mut handles = Vec::new();
@@ -49,15 +51,9 @@ pub fn regex_pass(
             let re = Arc::clone(&re);
             let file_map = file_map.clone();
             let lang_filter = lang_filter.clone();
+            let options = options.clone();
             handles.push(scope.spawn(move || {
-                scan_regex_chunk(
-                    chunk,
-                    &re,
-                    &lang_filter,
-                    context_before,
-                    context_after,
-                    file_map.as_deref(),
-                )
+                scan_regex_chunk(chunk, &re, &lang_filter, &options, file_map.as_deref())
             }));
         }
         Ok(handles
@@ -144,38 +140,21 @@ fn scan_regex_chunk(
     chunk: &[crate::store::IndexedLineRow],
     re: &Regex,
     lang_filter: &Option<String>,
-    context_before: usize,
-    context_after: usize,
-    file_map: Option<&crate::search::passes::bmh::FileLinesMap>,
+    options: &SearchOptions,
+    file_map: Option<&FileLinesMap>,
 ) -> Vec<SearchHit> {
     let mut hits = Vec::new();
     for (rank, (path, line_no, content, language)) in chunk.iter().enumerate() {
         if !matches_lang(language.as_deref(), lang_filter.as_deref()) || !re.is_match(content) {
             continue;
         }
-        let excerpt = file_map.map_or_else(
-            || content.to_string(),
-            |fm| {
-                build_excerpt_with_context(
-                    fm,
-                    path,
-                    *line_no,
-                    content,
-                    context_before,
-                    context_after,
-                )
-            },
-        );
-        hits.push(SearchHit::span(SpanHitInput {
-            kind: HitKind::Asgrep,
-            file: path.to_string(),
-            line_start: *line_no,
-            line_end: *line_no,
-            score: 1.0 / (1.0 + rank as f64 * 0.01),
-            excerpt,
-            symbol: None,
-            language: language.as_deref().map(str::to_owned),
-        }));
+        hits.push(asgrep_line_hit(
+            path.to_string(),
+            language.as_deref().map(str::to_owned),
+            *line_no,
+            excerpt_opt(file_map, path, *line_no, content, options),
+            1.0 / (1.0 + rank as f64 * 0.01),
+        ));
     }
     hits
 }

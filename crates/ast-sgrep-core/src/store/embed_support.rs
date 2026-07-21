@@ -1,13 +1,13 @@
 //! Private embed-cache + structure-fingerprint helpers used by `IndexStore`.
 use super::sql::optional_row;
-use super::sqlite::{CallerRow, ImportRow, SymbolFileRow, SymbolLocationRow, SymbolRow};
+use super::sqlite::{CallerRow, ImportRow, SymbolLocationRow, SymbolRow};
 use crate::Result;
 use ast_sgrep_lang::PatternNode;
 use blake3::Hasher;
 use rusqlite::{params, Connection};
 use std::cell::Cell;
 use std::path::{Component, Path};
-pub(super) const DEFAULT_EMBED_CACHE_CAP: usize = 100_000;
+const DEFAULT_EMBED_CACHE_CAP: usize = 100_000;
 pub(super) struct EmbeddedChunk {
     pub text: String,
     pub vector_bytes: Vec<u8>,
@@ -15,10 +15,10 @@ pub(super) struct EmbeddedChunk {
     pub backend: ast_sgrep_embed::EmbedBackendKind,
 }
 #[derive(Clone)]
-pub(super) struct CacheRow {
-    pub vector: Vec<u8>,
-    pub backend: ast_sgrep_embed::EmbedBackendKind,
-    pub dim: usize,
+struct CacheRow {
+    vector: Vec<u8>,
+    backend: ast_sgrep_embed::EmbedBackendKind,
+    dim: usize,
 }
 #[derive(Clone)]
 pub(super) struct CacheEntry {
@@ -39,7 +39,7 @@ pub(super) struct EmbeddedChunks {
     pub cache_hits: Vec<CacheHit>,
 }
 impl EmbeddedChunks {
-    pub fn empty() -> Self {
+    fn empty() -> Self {
         Self {
             chunks: Vec::new(),
             cache_entries: Vec::new(),
@@ -47,7 +47,7 @@ impl EmbeddedChunks {
         }
     }
 }
-pub(super) fn hash_text(t: &str) -> String {
+fn hash_text(t: &str) -> String {
     let mut h = Hasher::new();
     h.update(t.as_bytes());
     h.finalize().to_hex().to_string()
@@ -64,25 +64,24 @@ fn semantic_mid() -> String {
         ast_sgrep_embed::default_semantic_dim()
     )
 }
-pub(super) fn cache_model_id_for_pref(p: ast_sgrep_embed::EmbedPreference) -> Option<String> {
+fn neural_mid() -> String {
+    format!(
+        "neural:{}",
+        ast_sgrep_embed::neural_configured_model_id()
+    )
+}
+fn cache_model_id_for_pref(p: ast_sgrep_embed::EmbedPreference) -> Option<String> {
     use ast_sgrep_embed::EmbedPreference::*;
     match p {
         Semantic => Some(semantic_mid()),
-        Neural => Some(format!(
-            "neural:{}",
-            ast_sgrep_embed::neural_configured_model_id()
-        )),
+        Neural => Some(neural_mid()),
         Cloud | Ollama => None,
         Auto => {
             let skip = std::env::var_os("ASGREP_EMBED_API_KEY").is_some()
                 || std::env::var_os("ASGREP_OLLAMA_EMBED").is_some()
                 || std::env::var_os("ASGREP_OLLAMA_URL").is_some()
                 || std::env::var("ASGREP_NEURAL_EMBED").is_ok_and(|v| v == "1");
-            if skip {
-                None
-            } else {
-                Some(semantic_mid())
-            }
+            (!skip).then(semantic_mid)
         }
     }
 }
@@ -90,10 +89,7 @@ fn cache_model_id_for_backend(b: ast_sgrep_embed::EmbedBackendKind) -> Option<St
     use ast_sgrep_embed::EmbedBackendKind::*;
     match b {
         Semantic => Some(semantic_mid()),
-        Neural => Some(format!(
-            "neural:{}",
-            ast_sgrep_embed::neural_configured_model_id()
-        )),
+        Neural => Some(neural_mid()),
         Cloud => {
             ast_sgrep_embed::CloudEmbeddingConfig::from_env().map(|c| format!("cloud:{}", c.model))
         }
@@ -121,7 +117,7 @@ fn drop_cache(conn: &Connection, h: &str, m: &str) {
         params![h, m],
     );
 }
-pub(super) fn lookup_embed_cache(conn: &Connection, h: &str, m: &str) -> Result<Option<CacheRow>> {
+fn lookup_embed_cache(conn: &Connection, h: &str, m: &str) -> Result<Option<CacheRow>> {
     let raw: Option<(Vec<u8>, String, i64)> = optional_row(
         conn,
         "SELECT vector, backend, dim FROM embed_cache WHERE chunk_hash = ?1 AND model_id = ?2",
@@ -317,16 +313,6 @@ pub(super) fn read_sym_loc(r: &rusqlite::Row<'_>) -> rusqlite::Result<SymbolLoca
         language: r.get(2)?,
         line_start: r.get(3)?,
         line_end: r.get(4)?,
-    })
-}
-pub(super) fn read_sym_file(r: &rusqlite::Row<'_>) -> rusqlite::Result<SymbolFileRow> {
-    Ok(SymbolFileRow {
-        path: r.get(0)?,
-        language: r.get(1)?,
-        name: r.get(2)?,
-        kind: r.get(3)?,
-        line_start: r.get(4)?,
-        line_end: r.get(5)?,
     })
 }
 pub(super) fn normalize_rel(path: &Path) -> String {

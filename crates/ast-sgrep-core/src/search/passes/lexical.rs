@@ -1,7 +1,8 @@
 use crate::query::ParsedQuery;
 use crate::rank::score_lexical_rrf;
+use crate::search::passes::bmh::{asgrep_line_hit, map_line_row};
 use crate::search::types::matches_lang;
-use crate::search::types::{HitKind, SearchHit, SearchOptions, SpanHitInput};
+use crate::search::types::{SearchHit, SearchOptions};
 use crate::store::IndexStore;
 use crate::Result;
 use rusqlite::params;
@@ -60,14 +61,7 @@ fn lexical_from_fts(
         "SELECT f.path, f.language, l.line_no, l.content
          FROM lines_fts JOIN files f ON f.id = lines_fts.file_id JOIN lines l ON l.file_id = lines_fts.file_id AND l.line_no = lines_fts.line_no WHERE lines_fts MATCH ?1 ORDER BY bm25(lines_fts), f.path, l.line_no LIMIT 100",
     )?;
-    let rows = stmt.query_map(params![fts_query], |row| {
-        Ok((
-            row.get::<_, String>(0)?,
-            row.get::<_, Option<String>>(1)?,
-            row.get::<_, u32>(2)?,
-            row.get::<_, String>(3)?,
-        ))
-    })?;
+    let rows = stmt.query_map(params![fts_query], map_line_row)?;
     for (rank, row) in rows.enumerate() {
         let (path, language, line_no, content) = row?;
         accumulate(
@@ -108,16 +102,7 @@ fn hits_from_ranks(line_ranks: LineRanks, mut line_meta: LineMeta) -> Vec<Search
             let (language, content) = line_meta
                 .remove(&(path.clone(), line_no))
                 .unwrap_or((None, String::new()));
-            SearchHit::span(SpanHitInput {
-                kind: HitKind::Asgrep,
-                file: path,
-                line_start: line_no,
-                line_end: line_no,
-                score: score_lexical_rrf(&ranks),
-                excerpt: content,
-                symbol: None,
-                language,
-            })
+            asgrep_line_hit(path, language, line_no, content, score_lexical_rrf(&ranks))
         })
         .collect()
 }

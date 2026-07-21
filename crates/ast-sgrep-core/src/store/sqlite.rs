@@ -1,19 +1,19 @@
 use super::embed_support::{
     embed_cache_cap, embed_chunks, evict_embed_cache, init_cache_seq, insert_embed_cache_entries,
-    normalize_rel, read_sym_file, read_sym_loc, structure_fingerprint, touch_embed_cache_entries,
-    EmbeddedChunk,
+    normalize_rel, read_sym_loc, structure_fingerprint, touch_embed_cache_entries, EmbeddedChunk,
+    EmbeddedChunks,
 };
 use super::index_db_path;
 use super::sql::configure_connection;
 use super::sql::{
-    append_lang_filter, calls_matching, count_star, delete_file_children, like_terms_filter,
-    optional_row, query_cached_map, query_limit_map, query_map_rows, read_legacy_emb, read_sem_row,
-    where_clause, SCHEMA_DDL,
+    append_lang_filter, calls_matching, count_star, delete_file_children, delete_file_lines,
+    lang_and_clause, like_terms_filter, optional_row, query_cached_map, query_limit_map,
+    query_map_rows, read_legacy_emb, read_sem_row, where_clause, CLEAR_ALL_SQL, SCHEMA_DDL,
 };
 use crate::{IndexStatus, Result};
 use ast_sgrep_lang::PatternNode;
 use rusqlite::types::{Type, ValueRef};
-use rusqlite::{params, Connection, OptionalExtension, ToSql};
+use rusqlite::{params, Connection, ToSql};
 use std::collections::{BTreeSet, HashMap};
 use std::path::Path;
 use std::sync::Arc;
@@ -21,19 +21,9 @@ const SCHEMA_VERSION: i64 = 5;
 const IMPORT_SELECT: &str =
     "SELECT f.path, f.language, i.module_path, i.line_no FROM imports i JOIN files f ON f.id = i.file_id";
 const SYM_LOC: &str = "SELECT f.path, s.name, f.language, s.line_start, s.line_end FROM symbols s JOIN files f ON f.id = s.file_id";
-const SYM_FILE: &str = "SELECT f.path, f.language, s.name, s.kind, s.line_start, s.line_end FROM symbols s JOIN files f ON f.id = s.file_id";
 pub type IndexedLineRow = (Arc<str>, u32, String, Option<Arc<str>>);
 pub type ImportQueryRow = (String, Option<String>, String, u32);
 pub type CallRow = (String, u32, String, String);
-#[derive(Debug, Clone)]
-pub struct SymbolFileRow {
-    pub path: String,
-    pub language: Option<String>,
-    pub name: String,
-    pub kind: String,
-    pub line_start: u32,
-    pub line_end: u32,
-}
 pub struct PatternNodeRow {
     pub path: String,
     pub language: Option<String>,
@@ -182,18 +172,47 @@ impl IndexStore {
         Ok(())
     }
     pub fn commit_file_tx(&self) -> Result<()> {
-        if !self.file_tx_active.replace(false) {
-            return Ok(());
-        }
-        self.conn.execute_batch("COMMIT")?;
-        Ok(())
+        self.end_file_tx(true)
     }
     pub fn rollback_file_tx(&self) -> Result<()> {
+        self.end_file_tx(false)
+    }
+    fn end_file_tx(&self, commit: bool) -> Result<()> {
         if !self.file_tx_active.replace(false) {
             return Ok(());
         }
-        let _ = self.conn.execute_batch("ROLLBACK");
+        if commit {
+            self.conn.execute_batch("COMMIT")?;
+        } else {
+            let _ = self.conn.execute_batch("ROLLBACK");
+        }
         Ok(())
+    }
+    fn with_file_tx<T>(&self, f: impl FnOnce() -> Result<T>) -> Result<T> {
+        self.begin_file_tx()?;
+        match f() {
+            Ok(v) => {
+                self.commit_file_tx()?;
+                Ok(v)
+            }
+            Err(e) => {
+                self.rollback_file_tx()?;
+                Err(e)
+            }
+        }
+    }
+    fn meta_u64(&self, key: &str) -> Result<u64> {
+        Ok(self
+            .get_meta(key)?
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0))
+    }
+    fn bump_meta_u64(&self, key: &str, delta: usize) -> Result<()> {
+        if delta == 0 {
+            return Ok(());
+        }
+        let total = self.meta_u64(key)?.saturating_add(delta as u64);
+        self.set_meta(key, &total.to_string())
     }
     pub fn begin_bulk_tx(&self) -> Result<()> {
         if !self.conn.is_autocommit() {
@@ -201,32 +220,33 @@ impl IndexStore {
         }
         self.conn.execute_batch(
             "PRAGMA temp_store = MEMORY; PRAGMA cache_size = -131072; PRAGMA mmap_size = 536870912; \
-             PRAGMA synchronous = OFF; BEGIN IMMEDIATE", )?;
+             PRAGMA synchronous = OFF; BEGIN IMMEDIATE",
+        )?;
         Ok(())
     }
     pub fn commit_bulk_tx(&self) -> Result<()> {
-        if self.conn.is_autocommit() {
-            return Ok(());
-        }
-        self.file_tx_active.set(false);
-        self.conn.execute_batch("COMMIT")?;
-        let _ = self
-            .conn
-            .execute_batch("PRAGMA synchronous = NORMAL; PRAGMA cache_size = -16384");
-        Ok(())
+        self.end_bulk_tx(true)
     }
     pub fn rollback_bulk_tx(&self) -> Result<()> {
+        self.end_bulk_tx(false)
+    }
+    fn end_bulk_tx(&self, commit: bool) -> Result<()> {
         if self.conn.is_autocommit() {
             return Ok(());
         }
         self.file_tx_active.set(false);
-        let _ = self.conn.execute_batch("ROLLBACK");
+        if commit {
+            self.conn.execute_batch("COMMIT")?;
+            let _ = self
+                .conn
+                .execute_batch("PRAGMA synchronous = NORMAL; PRAGMA cache_size = -16384");
+        } else {
+            let _ = self.conn.execute_batch("ROLLBACK");
+        }
         Ok(())
     }
     pub fn clear_all_data(&self) -> Result<()> {
-        self.conn.execute_batch( "DELETE FROM lines_trigram; DELETE FROM lines_fts; DELETE FROM semantic_chunks; DELETE FROM pattern_nodes; \
-             DELETE FROM embeddings; DELETE FROM imports; DELETE FROM callers; DELETE FROM symbols; DELETE FROM lines; DELETE FROM files;",
-        )?;
+        self.conn.execute_batch(CLEAR_ALL_SQL)?;
         let _ = self.conn.execute_batch("VACUUM");
         Ok(())
     }
@@ -241,26 +261,18 @@ impl IndexStore {
         let struct_key = format!("struct:{}", input.rel_path);
         if let Some(file_id) = self.file_id(input.rel_path)? {
             if self.get_meta(&struct_key)?.as_deref() == Some(struct_fp.as_str()) {
-                self.begin_file_tx()?;
-                return match self.refresh_lines_only(
-                    file_id,
-                    input.language,
-                    input.mtime_secs,
-                    input.mtime_nanos,
-                    input.content_hash,
-                    input.lines,
-                    input.eol,
-                    input.rel_path,
-                ) {
-                    Ok(id) => {
-                        self.commit_file_tx()?;
-                        Ok(id)
-                    }
-                    Err(e) => {
-                        self.rollback_file_tx()?;
-                        Err(e)
-                    }
-                };
+                return self.with_file_tx(|| {
+                    self.refresh_lines_only(
+                        file_id,
+                        input.language,
+                        input.mtime_secs,
+                        input.mtime_nanos,
+                        input.content_hash,
+                        input.lines,
+                        input.eol,
+                        input.rel_path,
+                    )
+                });
             }
         }
         let emb = embed_chunks(
@@ -273,50 +285,40 @@ impl IndexStore {
             emb.cache_hits.len(),
             emb.chunks.len().saturating_sub(emb.cache_hits.len()),
         );
-        self.begin_file_tx()?;
-        match self.upsert_file_inner(input, &emb.chunks, &struct_key, &struct_fp) {
-            Ok(id) => {
-                if !emb.cache_entries.is_empty() {
-                    if let Err(e) =
-                        insert_embed_cache_entries(&self.conn, &self.cache_seq, &emb.cache_entries)
-                    {
-                        eprintln!("[asgrep] warning: failed to write embedding cache: {e}");
-                    }
-                    if let Err(e) = evict_embed_cache(&self.conn, embed_cache_cap()) {
-                        eprintln!("[asgrep] warning: failed to evict embedding cache: {e}");
-                    }
-                } else if !emb.cache_hits.is_empty() {
-                    let hits: Vec<_> = emb
-                        .cache_hits
-                        .iter()
-                        .map(|h| (h.chunk_hash.clone(), h.model_id.clone()))
-                        .collect();
-                    if let Err(e) = touch_embed_cache_entries(&self.conn, &self.cache_seq, &hits) {
-                        eprintln!("[asgrep] warning: failed to touch embedding cache: {e}");
-                    }
-                }
-                for (key, delta) in [
-                    ("embed_cache_hits", cache_hits),
-                    ("embed_cache_misses", cache_misses),
-                ] {
-                    if delta == 0 {
-                        continue;
-                    }
-                    let total = self
-                        .get_meta(key)?
-                        .and_then(|v| v.parse::<u64>().ok())
-                        .unwrap_or(0)
-                        .saturating_add(delta as u64);
-                    self.set_meta(key, &total.to_string())?;
-                }
-                self.commit_file_tx()?;
-                Ok(id)
+        self.with_file_tx(|| {
+            let id = self.upsert_file_inner(input, &emb.chunks, &struct_key, &struct_fp)?;
+            self.persist_embed_cache_side_effects(&emb, cache_hits, cache_misses)?;
+            Ok(id)
+        })
+    }
+    fn persist_embed_cache_side_effects(
+        &self,
+        emb: &EmbeddedChunks,
+        cache_hits: usize,
+        cache_misses: usize,
+    ) -> Result<()> {
+        if !emb.cache_entries.is_empty() {
+            if let Err(e) =
+                insert_embed_cache_entries(&self.conn, &self.cache_seq, &emb.cache_entries)
+            {
+                eprintln!("[asgrep] warning: failed to write embedding cache: {e}");
             }
-            Err(e) => {
-                self.rollback_file_tx()?;
-                Err(e)
+            if let Err(e) = evict_embed_cache(&self.conn, embed_cache_cap()) {
+                eprintln!("[asgrep] warning: failed to evict embedding cache: {e}");
+            }
+        } else if !emb.cache_hits.is_empty() {
+            let hits: Vec<_> = emb
+                .cache_hits
+                .iter()
+                .map(|h| (h.chunk_hash.clone(), h.model_id.clone()))
+                .collect();
+            if let Err(e) = touch_embed_cache_entries(&self.conn, &self.cache_seq, &hits) {
+                eprintln!("[asgrep] warning: failed to touch embedding cache: {e}");
             }
         }
+        self.bump_meta_u64("embed_cache_hits", cache_hits)?;
+        self.bump_meta_u64("embed_cache_misses", cache_misses)?;
+        Ok(())
     }
     /// Lines/FTS only when structure fingerprint matches (append / truncate / full rewrite).
     pub fn refresh_lines_only(
@@ -351,25 +353,9 @@ impl IndexStore {
             }
         } else if common == lines.len() && existing.len() > lines.len() {
             // Truncate trailing lines: drop FTS + content=trigram rowids before lines.
-            let first_drop = lines.len() as u32 + 1;
-            self.conn
-                .prepare_cached(
-                    "DELETE FROM lines_trigram WHERE rowid IN \
-                     (SELECT rowid FROM lines WHERE file_id = ?1 AND line_no >= ?2)",
-                )?
-                .execute(params![file_id, first_drop])?;
-            self.conn
-                .prepare_cached("DELETE FROM lines_fts WHERE file_id = ?1 AND line_no >= ?2")?
-                .execute(params![file_id, first_drop])?;
-            self.conn
-                .prepare_cached("DELETE FROM lines WHERE file_id = ?1 AND line_no >= ?2")?
-                .execute(params![file_id, first_drop])?;
+            delete_file_lines(&self.conn, file_id, Some(lines.len() as u32 + 1))?;
         } else {
-            self.conn.execute_batch(&format!(
-                "DELETE FROM lines_fts WHERE file_id = {file_id};
-                 DELETE FROM lines_trigram WHERE rowid IN (SELECT rowid FROM lines WHERE file_id = {file_id});
-                 DELETE FROM lines WHERE file_id = {file_id};"
-            ))?;
+            delete_file_lines(&self.conn, file_id, None)?;
             self.insert_lines(file_id, lines)?;
         }
         self.conn
@@ -613,14 +599,8 @@ impl IndexStore {
             embed_dim: self.get_meta("embed_dim")?.and_then(|d| d.parse().ok()),
             embed_cache_entries: count_star(&self.conn, "embed_cache")?,
             embed_cache_capacity: embed_cache_cap(),
-            embed_cache_hits: self
-                .get_meta("embed_cache_hits")?
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(0),
-            embed_cache_misses: self
-                .get_meta("embed_cache_misses")?
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(0),
+            embed_cache_hits: self.meta_u64("embed_cache_hits")?,
+            embed_cache_misses: self.meta_u64("embed_cache_misses")?,
             semantic_ivf_present: crate::semantic_ivf::semantic_ivf_path(&self.db_path).exists(),
         })
     }
@@ -711,19 +691,19 @@ impl IndexStore {
             );
             let mut stmt = self.conn.prepare(&sql)?;
             let rows = stmt.query_map(rusqlite::params_from_iter(batch.iter()), |r| {
-                let id = r.get(0)?;
-                let v: Vec<u8> = r.get(6)?;
-                Ok((
-                    id,
-                    (
-                        r.get(1)?,
-                        r.get(2)?,
-                        r.get(3)?,
-                        r.get::<_, Option<String>>(4)?.unwrap_or_default(),
-                        r.get(5)?,
-                        ast_sgrep_embed::embed_from_bytes(&v).unwrap_or_default(),
-                    ),
-                ))
+                let id: i64 = r.get(0)?;
+                let row = (
+                    r.get(1)?,
+                    r.get(2)?,
+                    r.get(3)?,
+                    r.get::<_, Option<String>>(4)?.unwrap_or_default(),
+                    r.get(5)?,
+                    {
+                        let v: Vec<u8> = r.get(6)?;
+                        ast_sgrep_embed::embed_from_bytes(&v).unwrap_or_default()
+                    },
+                );
+                Ok((id, row))
             })?;
             out.extend(rows.collect::<std::result::Result<Vec<_>, _>>()?);
         }
@@ -733,14 +713,10 @@ impl IndexStore {
         &self,
         lang: Option<&str>,
     ) -> Result<Vec<ast_sgrep_embed::SemanticChunkRow>> {
-        let c = if lang.is_some() {
-            " AND f.language = ?1"
-        } else {
-            ""
-        };
         let sql = format!(
             "SELECT f.path, sc.line_start, sc.line_end, sc.symbol_name, sc.text, sc.vector \
-             FROM semantic_chunks sc JOIN files f ON f.id=sc.file_id WHERE 1=1{c} ORDER BY sc.id"
+             FROM semantic_chunks sc JOIN files f ON f.id=sc.file_id WHERE 1=1{} ORDER BY sc.id",
+            lang_and_clause(lang)
         );
         query_map_rows(&self.conn, &sql, lang, read_sem_row)
     }
@@ -869,37 +845,6 @@ impl IndexStore {
         }
         Ok(out)
     }
-    pub fn all_symbols(&self) -> Result<Vec<SymbolFileRow>> {
-        query_cached_map(
-            &self.conn,
-            &format!("{SYM_FILE} ORDER BY f.path, s.line_start"),
-            [],
-            read_sym_file,
-        )
-    }
-    pub fn symbols_matching(&self, name: &str, limit: usize) -> Result<Vec<SymbolFileRow>> {
-        let sql = format!( "{SYM_FILE} WHERE lower(s.name) LIKE '%' || lower(?1) || '%' ESCAPE '\\' ORDER BY f.path, s.line_start LIMIT ?2"
-        );
-        query_cached_map(&self.conn, &sql, params![name, limit as i64], read_sym_file)
-    }
-    pub fn files_importing_module(
-        &self,
-        module: &str,
-        limit: usize,
-    ) -> Result<Vec<ImportQueryRow>> {
-        let sql = format!( "{IMPORT_SELECT} WHERE lower(i.module_path) LIKE '%' || lower(?1) || '%' ESCAPE '\\' ORDER BY f.path, i.line_no LIMIT ?2"
-        );
-        query_cached_map(&self.conn, &sql, params![module, limit as i64], |r| {
-            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
-        })
-    }
-    pub fn file_language(&self, path: &str) -> Result<Option<String>> {
-        self.conn
-            .prepare_cached("SELECT language FROM files WHERE path=?1")?
-            .query_row(params![path], |r| r.get(0))
-            .optional()
-            .map_err(Into::into)
-    }
     pub fn pattern_node_count(&self) -> Result<usize> {
         count_star(&self.conn, "pattern_nodes")
     }
@@ -990,15 +935,11 @@ impl IndexStore {
         &self,
         lang: Option<&str>,
     ) -> Result<Vec<ast_sgrep_embed::SemanticChunkRow>> {
-        let c = if lang.is_some() {
-            " AND f.language = ?1"
-        } else {
-            ""
-        };
         let sql = format!(
             "SELECT f.path, l.line_no, l.content, sc.symbol_name, e.vector FROM embeddings e \
              JOIN lines l ON l.file_id=e.file_id AND l.line_no=e.line_no JOIN files f ON f.id=e.file_id \
-             LEFT JOIN semantic_chunks sc ON sc.file_id=f.id AND sc.line_start=l.line_no WHERE 1=1{c} LIMIT 5000"
+             LEFT JOIN semantic_chunks sc ON sc.file_id=f.id AND sc.line_start=l.line_no WHERE 1=1{} LIMIT 5000",
+            lang_and_clause(lang)
         );
         query_map_rows(&self.conn, &sql, lang, read_legacy_emb)
     }

@@ -24,6 +24,16 @@ enum CallerMatchMode {
     Hybrid,
     CalleeOnly,
 }
+fn map_caller_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<CallerQueryRow> {
+    Ok((
+        row.get(0)?,
+        row.get(1)?,
+        row.get(2)?,
+        row.get(3)?,
+        row.get(4)?,
+        row.get(5)?,
+    ))
+}
 fn query_caller_rows(
     store: &IndexStore,
     filter: CallerFilter,
@@ -33,16 +43,7 @@ fn query_caller_rows(
 ) -> Result<Vec<CallerQueryRow>> {
     let (where_clause, bind) = filter(terms, lang_filter);
     let sql = format!("{CALLER_SELECT}{where_clause} LIMIT ?{}", bind.len() + 1);
-    query_limit_map(store.connection(), &sql, bind, limit, |row| {
-        Ok((
-            row.get(0)?,
-            row.get(1)?,
-            row.get(2)?,
-            row.get(3)?,
-            row.get(4)?,
-            row.get(5)?,
-        ))
-    })
+    query_limit_map(store.connection(), &sql, bind, limit, map_caller_row)
 }
 fn caller_rows_to_hits(
     rows: Vec<CallerQueryRow>,
@@ -218,10 +219,10 @@ pub(crate) fn def_hits_for_terms(
         score_def(&parsed.terms, name)
     })
 }
-fn exact_name_filter(name: &str, lang: Option<&str>) -> (String, Vec<String>) {
+fn exact_eq_filter(column: &str, value: &str, lang: Option<&str>) -> (String, Vec<String>) {
     use crate::store::sql::{append_lang_filter, where_clause};
-    let mut bind = vec![name.to_string()];
-    let mut parts = vec!["lower(s.name) = lower(?)".into()];
+    let mut bind = vec![value.to_string()];
+    let mut parts = vec![format!("lower({column}) = lower(?)")];
     append_lang_filter(&mut parts, &mut bind, lang);
     (where_clause(&parts), bind)
 }
@@ -267,22 +268,15 @@ pub fn search_callers(
     if name.is_empty() {
         return Ok(vec![]);
     }
-    use crate::store::sql::{append_lang_filter, where_clause};
-    let mut bind = vec![name.to_string()];
-    let mut parts = vec!["lower(c.callee) = lower(?)".into()];
-    append_lang_filter(&mut parts, &mut bind, options.lang_filter.as_deref());
-    let where_clause = where_clause(&parts);
+    let (where_clause, bind) = exact_eq_filter("c.callee", name, options.lang_filter.as_deref());
     let sql = format!("{CALLER_SELECT}{where_clause} LIMIT ?{}", bind.len() + 1);
-    let rows = query_limit_map(store.connection(), &sql, bind, MODE_SQL_LIMIT, |row| {
-        Ok((
-            row.get(0)?,
-            row.get(1)?,
-            row.get(2)?,
-            row.get(3)?,
-            row.get(4)?,
-            row.get(5)?,
-        ))
-    })?;
+    let rows = query_limit_map(
+        store.connection(),
+        &sql,
+        bind,
+        MODE_SQL_LIMIT,
+        map_caller_row,
+    )?;
     caller_rows_to_hits(rows, options, &q, CallerMatchMode::CalleeOnly)
 }
 pub fn search_defs(
@@ -298,7 +292,7 @@ pub fn search_defs(
     if name.is_empty() {
         return Ok(vec![]);
     }
-    let (where_clause, bind) = exact_name_filter(name, options.lang_filter.as_deref());
+    let (where_clause, bind) = exact_eq_filter("s.name", name, options.lang_filter.as_deref());
     let rows = query_symbol_spans(store, &where_clause, bind, MODE_SQL_LIMIT)?;
     symbol_span_rows_to_hits(rows, options, HitKind::Def, |n| score_def(&q.terms, n))
 }
