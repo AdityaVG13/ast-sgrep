@@ -65,10 +65,7 @@ fn semantic_mid() -> String {
     )
 }
 fn neural_mid() -> String {
-    format!(
-        "neural:{}",
-        ast_sgrep_embed::neural_configured_model_id()
-    )
+    format!("neural:{}", ast_sgrep_embed::neural_configured_model_id())
 }
 fn cache_model_id_for_pref(p: ast_sgrep_embed::EmbedPreference) -> Option<String> {
     use ast_sgrep_embed::EmbedPreference::*;
