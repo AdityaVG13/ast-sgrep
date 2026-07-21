@@ -1,22 +1,40 @@
 use ast_sgrep_core::search::HitKind;
 use ast_sgrep_core::SearchResponse;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum OutputFormat { Native, GitHub, GitLab, Agent, AgentCapsule }
+pub enum OutputFormat {
+    Native,
+    GitHub,
+    GitLab,
+    Agent,
+    AgentCapsule,
+}
 impl OutputFormat {
     pub fn parse(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
-            "native" | "asgrep" => Some(Self::Native), "github" | "gh" => Some(Self::GitHub),
-            "gitlab" | "gl" => Some(Self::GitLab), "agent" | "llm" | "ai" => Some(Self::Agent),
-            "agent-capsule" | "capsule" => Some(Self::AgentCapsule), _ => None,
+            "native" | "asgrep" => Some(Self::Native),
+            "github" | "gh" => Some(Self::GitHub),
+            "gitlab" | "gl" => Some(Self::GitLab),
+            "agent" | "llm" | "ai" => Some(Self::Agent),
+            "agent-capsule" | "capsule" => Some(Self::AgentCapsule),
+            _ => None,
         }
     }
 }
-pub fn format_response(response: &SearchResponse, format: OutputFormat) -> serde_json::Value { format_response_with(response, format, 0) }
-pub fn format_response_with(response: &SearchResponse, format: OutputFormat, excerpt_lines: usize) -> serde_json::Value {
+pub fn format_response(response: &SearchResponse, format: OutputFormat) -> serde_json::Value {
+    format_response_with(response, format, 0)
+}
+pub fn format_response_with(
+    response: &SearchResponse,
+    format: OutputFormat,
+    excerpt_lines: usize,
+) -> serde_json::Value {
     match format {
-        OutputFormat::Native => serde_json::to_value(response).unwrap_or_else(|e| serde_json::json!({"error": e.to_string()})),
-        OutputFormat::GitHub => to_github_json(response), OutputFormat::GitLab => to_gitlab_json(response),
-        OutputFormat::Agent => to_agent_json(response), OutputFormat::AgentCapsule => to_agent_capsule_json(response, excerpt_lines),
+        OutputFormat::Native => serde_json::to_value(response)
+            .unwrap_or_else(|e| serde_json::json!({"error": e.to_string()})),
+        OutputFormat::GitHub => to_github_json(response),
+        OutputFormat::GitLab => to_gitlab_json(response),
+        OutputFormat::Agent => to_agent_json(response),
+        OutputFormat::AgentCapsule => to_agent_capsule_json(response, excerpt_lines),
     }
 }
 /// Project a response into a GitHub-like page. total_count is the returned page size (no corpus-wide match count).
@@ -45,7 +63,12 @@ pub fn to_gitlab_json(response: &SearchResponse) -> serde_json::Value {
     })).collect();
     serde_json::json!({"data": data, "query": response.query, "provider": "ast-sgrep"})
 }
-fn hit_symbol(hit: &ast_sgrep_core::SearchHit) -> Option<&str> { hit.symbol.as_deref().or(hit.callee.as_deref()).or(hit.caller.as_deref()) }
+fn hit_symbol(hit: &ast_sgrep_core::SearchHit) -> Option<&str> {
+    hit.symbol
+        .as_deref()
+        .or(hit.callee.as_deref())
+        .or(hit.caller.as_deref())
+}
 pub fn to_agent_json(response: &SearchResponse) -> serde_json::Value {
     let hits: Vec<_> = response.hits.iter().map(|hit| {
         let symbol = hit_symbol(hit);
@@ -58,10 +81,18 @@ pub fn to_agent_json(response: &SearchResponse) -> serde_json::Value {
             "excerpt": hit.excerpt, "follow_up_queries": follow_ups, })
     }).collect();
     let has_semantic = hits.iter().any(|h| h["semantic"] == true);
-    let top_symbol = response.hits.first().and_then(|h| h.symbol.clone().or(h.callee.clone()));
+    let top_symbol = response
+        .hits
+        .first()
+        .and_then(|h| h.symbol.clone().or(h.callee.clone()));
     let mut suggested = Vec::new();
-    if has_semantic { suggested.push(format!("asgrep semantic \"{}\"", response.query)); }
-    if let Some(sym) = top_symbol { suggested.push(format!("defs:{sym}")); suggested.push(format!("callers:{sym}")); }
+    if has_semantic {
+        suggested.push(format!("asgrep semantic \"{}\"", response.query));
+    }
+    if let Some(sym) = top_symbol {
+        suggested.push(format!("defs:{sym}"));
+        suggested.push(format!("callers:{sym}"));
+    }
     suggested.push("pattern: (delegate to ast-grep for structural search)".into());
     suggested.push("rg (use ripgrep for raw text scan)".into());
     serde_json::json!({
@@ -84,9 +115,15 @@ pub fn to_agent_capsule_json(response: &SearchResponse, excerpt_lines: usize) ->
         }
         capsule
     }).collect();
-    let returned: u64 = hits.iter()
-        .filter_map(|h| h.get("excerpt").or_else(|| h.get("preview")).and_then(serde_json::Value::as_str))
-        .map(|e| e.len() as u64).sum();
+    let returned: u64 = hits
+        .iter()
+        .filter_map(|h| {
+            h.get("excerpt")
+                .or_else(|| h.get("preview"))
+                .and_then(serde_json::Value::as_str)
+        })
+        .map(|e| e.len() as u64)
+        .sum();
     serde_json::json!({
         "provider": "ast-sgrep", "mode": "capsule", "query": response.query, "limit": response.limit,
         "hit_count": hits.len(), "read_bytes_estimate": response.read_bytes_estimate,
@@ -95,10 +132,26 @@ pub fn to_agent_capsule_json(response: &SearchResponse, excerpt_lines: usize) ->
     })
 }
 fn preview_line(excerpt: &str) -> String {
-    let line = excerpt.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("");
-    if line.chars().count() <= PREVIEW_MAX_CHARS { line.to_string() }
-    else { format!("{}…", line.chars().take(PREVIEW_MAX_CHARS).collect::<String>()) }
+    let line = excerpt
+        .lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+        .unwrap_or("");
+    if line.chars().count() <= PREVIEW_MAX_CHARS {
+        line.to_string()
+    } else {
+        format!(
+            "{}…",
+            line.chars().take(PREVIEW_MAX_CHARS).collect::<String>()
+        )
+    }
 }
-pub mod agent { pub use super::{to_agent_capsule_json, to_agent_json}; }
-pub mod github { pub use super::to_github_json; }
-pub mod gitlab { pub use super::to_gitlab_json; }
+pub mod agent {
+    pub use super::{to_agent_capsule_json, to_agent_json};
+}
+pub mod github {
+    pub use super::to_github_json;
+}
+pub mod gitlab {
+    pub use super::to_gitlab_json;
+}
