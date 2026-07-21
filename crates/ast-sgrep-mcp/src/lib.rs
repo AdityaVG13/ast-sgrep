@@ -1,3 +1,8 @@
+//! MCP stdio server for ast-sgrep hybrid search.
+//!
+//! Warm path: a single process reuses one `Searcher` across `code_search` calls
+//! (invalidated on `index_repo`) so AI agents avoid per-request SQLite open cost.
+
 use anyhow::Context;
 use ast_sgrep_core::{EmbedBackend, IndexOptions, Indexer, SearchOptions, Searcher};
 use ast_sgrep_plugins::{format_response, OutputFormat};
@@ -5,9 +10,12 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use std::io::{self, BufRead, Write};
 use std::path::PathBuf;
+use std::sync::Mutex;
+
 const PROTOCOL_VERSION: &str = "2024-11-05";
 const SERVER_NAME: &str = "ast-sgrep";
 const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
+
 #[derive(Debug, Deserialize)]
 struct JsonRpcRequest {
     id: Option<Value>,
@@ -15,12 +23,24 @@ struct JsonRpcRequest {
     #[serde(default)]
     params: Value,
 }
-pub struct McpServer {
+
+#[derive(Clone, PartialEq, Eq)]
+struct SearcherKey {
     root: PathBuf,
     index_path: Option<PathBuf>,
     limit: usize,
     use_embed: bool,
 }
+
+pub struct McpServer {
+    root: PathBuf,
+    index_path: Option<PathBuf>,
+    limit: usize,
+    use_embed: bool,
+    /// Reused across tools/call code_search; cleared after index mutations.
+    searcher_cache: Mutex<Option<(SearcherKey, Searcher)>>,
+}
+
 impl McpServer {
     pub fn from_env() -> anyhow::Result<Self> {
         Ok(Self {
@@ -33,8 +53,10 @@ impl McpServer {
                 .and_then(|v| v.parse().ok())
                 .unwrap_or_else(SearchOptions::default_limit),
             use_embed: std::env::var("ASGREP_NO_EMBED").ok().as_deref() != Some("1"),
+            searcher_cache: Mutex::new(None),
         })
     }
+
     pub fn run_stdio(&self) -> anyhow::Result<()> {
         let stdin = io::stdin();
         let mut stdout = io::stdout();
@@ -64,6 +86,7 @@ impl McpServer {
         }
         Ok(())
     }
+
     fn handle_request(&self, request: &JsonRpcRequest) -> Option<Result<Value, Value>> {
         request.id.as_ref()?;
         Some(match request.method.as_str() {
@@ -76,11 +99,15 @@ impl McpServer {
             ),
         })
     }
+
     fn handle_initialize(&self) -> Value {
         json!({
-            "protocolVersion": PROTOCOL_VERSION, "capabilities": { "tools": {} }, "serverInfo": { "name": SERVER_NAME, "version": SERVER_VERSION },
+            "protocolVersion": PROTOCOL_VERSION,
+            "capabilities": { "tools": {} },
+            "serverInfo": { "name": SERVER_NAME, "version": SERVER_VERSION },
         })
     }
+
     fn handle_tools_list(&self) -> Value {
         json!({"tools": [
             {"name": "code_search", "description": "Hybrid code search: lexical + symbols + call graph + semantic. Supports defs:, callers:, NL queries.",
@@ -89,13 +116,18 @@ impl McpServer {
                 "root": {"type": "string", "description": "Project root (defaults to ASGREP_ROOT or cwd)"},
                 "semantic_only": {"type": "boolean", "description": "Semantic/embed pass only"},
                 "limit": {"type": "integer", "description": "Max hits (default ASGREP_LIMIT or 16)"}
-             }, "required": ["query"]}}, {"name": "index_status",
+             }, "required": ["query"]}},
+            {"name": "index_status",
              "description": "Show ast-sgrep index statistics for a project root.",
-             "inputSchema": {"type": "object", "properties": {"root": {"type": "string", "description": "Project root"}}}}, {"name": "index_repo",
-             "description": "Build or incrementally update the ast-sgrep index.", "inputSchema": {"type": "object", "properties": {
-                "root": {"type": "string", "description": "Project root"}, "force": {"type": "boolean", "description": "Force full reindex"}}}}
+             "inputSchema": {"type": "object", "properties": {"root": {"type": "string", "description": "Project root"}}}},
+            {"name": "index_repo",
+             "description": "Build or incrementally update the ast-sgrep index.",
+             "inputSchema": {"type": "object", "properties": {
+                "root": {"type": "string", "description": "Project root"},
+                "force": {"type": "boolean", "description": "Force full reindex"}}}}
         ]})
     }
+
     fn handle_tools_call(&self, params: &Value) -> Option<Value> {
         let name = params.get("name").and_then(|v| v.as_str()).unwrap_or("");
         let args = params.get("arguments").cloned().unwrap_or(json!({}));
@@ -112,12 +144,48 @@ impl McpServer {
             }
         })
     }
+
     fn root_arg(&self, args: &Value) -> PathBuf {
         args.get("root")
             .and_then(|v| v.as_str())
             .map(PathBuf::from)
             .unwrap_or_else(|| self.root.clone())
     }
+
+    fn invalidate_searcher_cache(&self) {
+        if let Ok(mut guard) = self.searcher_cache.lock() {
+            *guard = None;
+        }
+    }
+
+    fn searcher_for(&self, root: PathBuf, limit: usize) -> anyhow::Result<std::sync::MutexGuard<'_, Option<(SearcherKey, Searcher)>>> {
+        let key = SearcherKey {
+            root: root.clone(),
+            index_path: self.index_path.clone(),
+            limit,
+            use_embed: self.use_embed,
+        };
+        let mut guard = self
+            .searcher_cache
+            .lock()
+            .map_err(|_| anyhow::anyhow!("searcher cache lock poisoned"))?;
+        let need_new = match guard.as_ref() {
+            None => true,
+            Some((k, _)) => k != &key,
+        };
+        if need_new {
+            let searcher = Searcher::new(SearchOptions {
+                root,
+                index_path: self.index_path.clone(),
+                limit,
+                use_embed: self.use_embed,
+                ..SearchOptions::default()
+            })?;
+            *guard = Some((key, searcher));
+        }
+        Ok(guard)
+    }
+
     fn tool_code_search(&self, args: &Value) -> anyhow::Result<String> {
         let query = args
             .get("query")
@@ -133,13 +201,12 @@ impl McpServer {
             .get("semantic_only")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
-        let searcher = Searcher::new(SearchOptions {
-            root: self.root_arg(args),
-            index_path: self.index_path.clone(),
-            limit,
-            use_embed: self.use_embed,
-            ..SearchOptions::default()
-        })?;
+        let root = self.root_arg(args);
+        let guard = self.searcher_for(root, limit)?;
+        let searcher = &guard
+            .as_ref()
+            .expect("searcher_for populates cache")
+            .1;
         let response = if semantic_only {
             searcher.search_semantic(query)?
         } else {
@@ -150,6 +217,7 @@ impl McpServer {
             OutputFormat::Agent,
         ))?)
     }
+
     fn tool_index_status(&self, args: &Value) -> anyhow::Result<String> {
         let indexer = Indexer::new(IndexOptions {
             root: self.root_arg(args),
@@ -158,6 +226,7 @@ impl McpServer {
         })?;
         Ok(serde_json::to_string_pretty(&indexer.store().status()?)?)
     }
+
     fn tool_index_repo(&self, args: &Value) -> anyhow::Result<String> {
         let force = args.get("force").and_then(|v| v.as_bool()).unwrap_or(false);
         let mut indexer = Indexer::new(IndexOptions {
@@ -171,9 +240,12 @@ impl McpServer {
         } else {
             indexer.index_all()?
         };
+        // Index changed — drop cached Searcher so next search sees fresh data.
+        self.invalidate_searcher_cache();
         Ok(serde_json::to_string_pretty(&stats)?)
     }
 }
+
 fn write_resp(
     stdout: &mut impl Write,
     id: Option<Value>,

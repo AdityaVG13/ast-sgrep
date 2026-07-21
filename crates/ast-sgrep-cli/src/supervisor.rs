@@ -135,24 +135,20 @@ mod unix_impl {
                 tstp,
             })
         }
-        fn shutdown_any(&self) -> bool {
-            self.sigterm.load(Ordering::SeqCst)
-                || self.sigint.load(Ordering::SeqCst)
-                || self.sigquit.load(Ordering::SeqCst)
-                || self.sighup.load(Ordering::SeqCst)
-        }
         fn shutdown_signal(&self) -> i32 {
-            if self.sigterm.load(Ordering::SeqCst) {
-                signal_hook::consts::SIGTERM
-            } else if self.sigint.load(Ordering::SeqCst) {
-                signal_hook::consts::SIGINT
-            } else if self.sigquit.load(Ordering::SeqCst) {
-                signal_hook::consts::SIGQUIT
-            } else if self.sighup.load(Ordering::SeqCst) {
-                signal_hook::consts::SIGHUP
-            } else {
-                0
-            }
+            [
+                (&self.sigterm, signal_hook::consts::SIGTERM),
+                (&self.sigint, signal_hook::consts::SIGINT),
+                (&self.sigquit, signal_hook::consts::SIGQUIT),
+                (&self.sighup, signal_hook::consts::SIGHUP),
+            ]
+            .into_iter()
+            .find(|(f, _)| f.load(Ordering::SeqCst))
+            .map(|(_, s)| s)
+            .unwrap_or(0)
+        }
+        fn shutdown_any(&self) -> bool {
+            self.shutdown_signal() != 0
         }
     }
     struct ChildGuard {

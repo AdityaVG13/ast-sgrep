@@ -124,22 +124,235 @@ pub fn is_in_comment_or_string(node: &Node) -> bool {
     }
     false
 }
-pub fn is_inside_kind(node: &Node, kind: &str) -> bool {
+/// True if any ancestor node has a kind in `kinds`.
+pub fn is_inside_any(node: &Node, kinds: &[&str]) -> bool {
     let mut current = node.parent();
     while let Some(n) = current {
-        if n.kind() == kind {
+        if kinds.iter().any(|&k| n.kind() == k) {
             return true;
         }
         current = n.parent();
     }
     false
 }
+
 pub fn add_named_symbol(ext: &mut Extractor, node: &Node, source: &str, kind: SymbolKind) {
     if let Some(name_node) = node.child_by_field_name("name") {
         if let Some(name) = node_text(&name_node, source) {
             ext.add_symbol(node, source, name, kind);
         }
     }
+}
+
+pub fn trim_string_literal(raw: &str) -> &str {
+    raw.trim().trim_matches(|c| matches!(c, '"' | '\'' | '`'))
+}
+
+/// Table-driven extraction action for a tree-sitter node kind.
+///
+/// Prefer positional variants so language kind-maps stay compact and scannable.
+#[derive(Clone, Copy)]
+pub enum KindRule {
+    /// Named symbol with fixed kind.
+    Sym(SymbolKind),
+    /// Named symbol: Method if inside any of these parents, else Function.
+    MethodIn(&'static [&'static str]),
+    /// Symbol kind from `child_by_field_name(field).kind()` cases, else `default`.
+    SymByField(
+        &'static str,
+        &'static [(&'static str, SymbolKind)],
+        SymbolKind,
+    ),
+    /// For each direct child of `child_kind`, add a named symbol of `sym`.
+    SymChildren(&'static str, SymbolKind),
+    /// If parent kind matches, add named symbol on the parent (arrow → declarator).
+    SymParent(&'static str, SymbolKind),
+    /// Call site; callee from child field name.
+    Call(&'static str),
+    /// Call via field; if callee text ∈ import_names, import string under args field.
+    CallOrImport(&'static str, &'static [&'static str], &'static str),
+    /// Import = identifiers under node joined by separator.
+    ImportJoin(&'static str),
+    /// Import = quoted string from child field.
+    ImportQuoted(&'static str),
+    /// Import = quoted string from field, else first child of fallback kind.
+    ImportQuotedOrChild(&'static str, &'static str),
+    /// Import path: (name_kinds, skip_words, recursive, optional id-join fallback).
+    ImportPath(
+        &'static [&'static str],
+        &'static [&'static str],
+        bool,
+        Option<&'static str>,
+    ),
+}
+
+/// Apply the first matching kind rule. Returns true if a rule fired.
+pub fn apply_kind_table(
+    ext: &mut Extractor,
+    node: &Node,
+    source: &str,
+    table: &[(&str, KindRule)],
+) -> bool {
+    let kind = node.kind();
+    for &(k, rule) in table {
+        if k != kind {
+            continue;
+        }
+        apply_kind_rule(ext, node, source, rule);
+        return true;
+    }
+    false
+}
+
+fn apply_kind_rule(ext: &mut Extractor, node: &Node, source: &str, rule: KindRule) {
+    match rule {
+        KindRule::Sym(sk) => add_named_symbol(ext, node, source, sk),
+        KindRule::MethodIn(parents) => {
+            let sk = if is_inside_any(node, parents) {
+                SymbolKind::Method
+            } else {
+                SymbolKind::Function
+            };
+            add_named_symbol(ext, node, source, sk);
+        }
+        KindRule::SymByField(field, cases, default) => {
+            let sk = field_child(node, field)
+                .and_then(|t| {
+                    let tk = t.kind();
+                    cases.iter().find(|(k, _)| *k == tk).map(|(_, sk)| *sk)
+                })
+                .unwrap_or(default);
+            add_named_symbol(ext, node, source, sk);
+        }
+        KindRule::SymChildren(child_kind, sk) => {
+            let mut cursor = node.walk();
+            for child in node.children(&mut cursor) {
+                if child.kind() == child_kind {
+                    add_named_symbol(ext, &child, source, sk);
+                }
+            }
+        }
+        KindRule::SymParent(parent_kind, sk) => {
+            if let Some(parent) = node.parent() {
+                if parent.kind() == parent_kind {
+                    add_named_symbol(ext, &parent, source, sk);
+                }
+            }
+        }
+        KindRule::Call(field) => {
+            if let Some(func) = field_child(node, field) {
+                ext.add_call(node, source, &func);
+            }
+        }
+        KindRule::CallOrImport(callee_field, import_names, args_field) => {
+            let Some(method) = field_child(node, callee_field) else {
+                return;
+            };
+            let Some(name) = node_text(&method, source) else {
+                return;
+            };
+            if import_names.iter().any(|&n| n == name) {
+                if let Some(args) = field_child(node, args_field) {
+                    if let Some(path) = first_string_literal(&args, source) {
+                        ext.add_import(node, source, &path);
+                    }
+                }
+            } else {
+                ext.add_call(node, source, &method);
+            }
+        }
+        KindRule::ImportJoin(sep) => {
+            let ids = collect_identifiers(node, source);
+            if !ids.is_empty() {
+                ext.add_import(node, source, &ids.join(sep));
+            }
+        }
+        KindRule::ImportQuoted(field) => {
+            if let Some(path_node) = field_child(node, field) {
+                if let Some(path) = node_text(&path_node, source) {
+                    ext.add_import(node, source, trim_string_literal(path));
+                }
+            }
+        }
+        KindRule::ImportQuotedOrChild(field, fallback_kind) => {
+            if let Some(path_node) = field_child(node, field) {
+                if let Some(path) = node_text(&path_node, source) {
+                    ext.add_import(node, source, trim_string_literal(path));
+                    return;
+                }
+            }
+            let mut cursor = node.walk();
+            for child in node.children(&mut cursor) {
+                if child.kind() == fallback_kind {
+                    if let Some(path) = node_text(&child, source) {
+                        ext.add_import(node, source, trim_string_literal(path));
+                    }
+                }
+            }
+        }
+        KindRule::ImportPath(name_kinds, skip, recursive, id_join) => {
+            if let Some(path) = path_from_name_children(node, source, name_kinds, skip, recursive) {
+                ext.add_import(node, source, &path);
+                return;
+            }
+            if let Some(sep) = id_join {
+                let ids: Vec<String> = collect_identifiers(node, source)
+                    .into_iter()
+                    .filter(|s| !skip.iter().any(|&k| k == s.as_str()))
+                    .collect();
+                if !ids.is_empty() {
+                    ext.add_import(node, source, &ids.join(sep));
+                }
+            }
+        }
+    }
+}
+
+/// First direct (or recursive) child whose kind is in `name_kinds` and text is not in `skip`.
+pub fn path_from_name_children(
+    node: &Node,
+    source: &str,
+    name_kinds: &[&str],
+    skip: &[&str],
+    recursive: bool,
+) -> Option<String> {
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if name_kinds.iter().any(|&k| child.kind() == k) {
+            if let Some(text) = node_text(&child, source) {
+                if !skip.iter().any(|&s| s == text) {
+                    return Some(text.to_string());
+                }
+            }
+        }
+        if recursive {
+            if let Some(path) = path_from_name_children(&child, source, name_kinds, skip, true) {
+                return Some(path);
+            }
+        }
+    }
+    None
+}
+
+const STRING_KINDS: &[&str] = &[
+    "string",
+    "string_content",
+    "interpreted_string_literal",
+    "bare_string_literal",
+];
+
+/// First string-like descendant (quoted literals / string content nodes).
+pub fn first_string_literal(node: &Node, source: &str) -> Option<String> {
+    if STRING_KINDS.iter().any(|&k| node.kind() == k) {
+        return node_text(node, source).map(|raw| trim_string_literal(raw).to_string());
+    }
+    let mut cursor = node.walk();
+    for c in node.children(&mut cursor) {
+        if let Some(s) = first_string_literal(&c, source) {
+            return Some(s);
+        }
+    }
+    None
 }
 pub fn enclosing_symbol_name(node: &Node, source: &str) -> Option<String> {
     let mut current = node.parent();
