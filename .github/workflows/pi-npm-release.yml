@@ -118,6 +118,14 @@ jobs:
           path: dist/native
       - name: Restore native executable bit stripped by upload-artifact
         run: find dist/native -type f -name asgrep -exec chmod +x {} +
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: pi-e2e-debug
+      - name: Build debug CLI required by the packaged e2e
+        env:
+          RUSTC_WRAPPER: ""
+        run: cargo build --locked -p ast-sgrep-cli --bin asgrep
       - name: Pack and verify all seven immutable artifacts
         run: |
           node packages/pi/scripts/release-acceptance.mjs pack --native-root dist/native --output npm-packs --commit "$GITHUB_SHA"
