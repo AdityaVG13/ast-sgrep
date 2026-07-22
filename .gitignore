@@ -108,3 +108,6 @@ editors/**/*.vsix
 
 # Tests
 tests/artifacts/perf/
+
+# Agent skill specs (local-only)
+.agents/
