@@ -78,6 +78,8 @@ jobs:
           key: pi-official-${{ matrix.rustTarget }}
       - name: Build target-local release executable once
         shell: bash
+        env:
+          RUSTC_WRAPPER: ""
         run: cargo build --locked --release -p ast-sgrep-cli --bin asgrep --no-default-features --target "${{ matrix.rustTarget }}"
       - name: Preserve native checksum and provenance metadata
         shell: bash

@@ -55,6 +55,8 @@ jobs:
             "target.executable=${{ matrix.executable }}"
       - name: Build target-local release executable
         shell: bash
+        env:
+          RUSTC_WRAPPER: ""
         run: cargo build --locked --release -p ast-sgrep-cli --bin asgrep --no-default-features --target "${{ matrix.rustTarget }}"
       - name: Prepare and verify deterministic artifact metadata
         shell: bash
