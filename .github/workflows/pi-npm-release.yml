@@ -116,6 +116,8 @@ jobs:
         with:
           pattern: ast-sgrep-*
           path: dist/native
+      - name: Restore native executable bit stripped by upload-artifact
+        run: find dist/native -type f -name asgrep -exec chmod +x {} +
       - name: Pack and verify all seven immutable artifacts
         run: |
           node packages/pi/scripts/release-acceptance.mjs pack --native-root dist/native --output npm-packs --commit "$GITHUB_SHA"
