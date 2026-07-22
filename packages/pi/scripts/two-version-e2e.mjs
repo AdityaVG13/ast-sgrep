@@ -9,8 +9,8 @@ import { spawnSync } from 'node:child_process';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const oldVersion = '1.0.0-alpha';
-const newVersion = '1.2.0-alpha';
-const newNativeVersion = '1.2.0-alpha';
+const newVersion = '1.3.0';
+const newNativeVersion = '1.3.0';
 const oldCommit = '1f7ba20';
 const machineSchema = '1.0.0';
 const hosts = new Map([
@@ -132,7 +132,7 @@ async function stageArtifacts(version, binary) {
     manifest.version = version;
     manifest.optionalDependencies = { [host.packageName]: `file:${nativeArtifact}` };
   });
-  await replace(path.join(launcher, 'src', 'index.js'), 'const VERSION = "1.2.0-alpha";', `const VERSION = "${version}";`);
+  await replace(path.join(launcher, 'src', 'index.js'), 'const VERSION = "1.3.0";', `const VERSION = "${version}";`);
   pack(launcher, launcherArtifact);
 
   await setJson(path.join(extension, 'package.json'), (manifest) => {

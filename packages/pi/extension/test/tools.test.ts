@@ -94,7 +94,7 @@ test("index force maps only to index or reindex", async () => {
 
 test("status preserves version, protocol, root, index, counts, backend, IVF and capabilities", async () => {
   const response: MachineEnvelope = {
-    tool: "asgrep", schema_version: "1.0.0", ok: true, command: "status", version: "1.2.0-alpha",
+    tool: "asgrep", schema_version: "1.0.0", ok: true, command: "status", version: "1.3.0",
     machine_schema_version: "1.0.0", root: "/project", index_path: "/project/.asgrep/index.db",
     counts: { files: 12, symbols: 34 }, backend: "fastembed", ivf: { clusters: 4, probes: 2 }, capabilities: ["semantic", "chain"],
   };
