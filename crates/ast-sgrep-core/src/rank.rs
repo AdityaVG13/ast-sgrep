@@ -124,13 +124,19 @@ mod tests {
     fn symbol_scoring_is_case_insensitive_on_the_term_side() {
         // Regression for Issue #12 / F-01: prefixed callers:/defs: pass the raw
         // (possibly mixed-case) target as the term; scoring must normalize both sides.
-        assert_eq!(score_symbol("RefreshToken", "refreshToken"), SCORE_EXACT_SYMBOL);
+        assert_eq!(
+            score_symbol("RefreshToken", "refreshToken"),
+            SCORE_EXACT_SYMBOL
+        );
         assert_eq!(
             best_symbol_score(&["RefreshToken".to_string()], "refreshToken"),
             SCORE_EXACT_SYMBOL
         );
         assert!(coverage_symbol_score(&["RefreshToken".to_string()], "refreshToken") > 0.0);
-        assert_eq!(score_symbol("Refresh", "refreshToken"), SCORE_SUBSTRING_SYMBOL);
+        assert_eq!(
+            score_symbol("Refresh", "refreshToken"),
+            SCORE_SUBSTRING_SYMBOL
+        );
     }
 
     #[test]

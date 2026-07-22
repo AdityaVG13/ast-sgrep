@@ -41,7 +41,11 @@ fn prefixed_modes_are_case_insensitive_on_mixed_case_symbols() {
     .unwrap();
 
     // Query casing differs from stored casing; each must still return caller hits.
-    for q in ["callers:RefreshToken", "callers:refreshtoken", "callers:REFRESHTOKEN"] {
+    for q in [
+        "callers:RefreshToken",
+        "callers:refreshtoken",
+        "callers:REFRESHTOKEN",
+    ] {
         let resp = searcher.search(q).unwrap();
         let caller_hit = resp
             .hits

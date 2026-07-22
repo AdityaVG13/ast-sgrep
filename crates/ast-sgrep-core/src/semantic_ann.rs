@@ -95,10 +95,16 @@ impl SemanticAnnIndex {
     }
     /// `probes`: None/0 = adaptive √k; ≥ n_clusters = all (exact).
     pub fn candidate_indices(&self, query: &[f32], probes: Option<usize>) -> Vec<usize> {
-        if self.centroids.is_empty() { return vec![]; }
+        if self.centroids.is_empty() {
+            return vec![];
+        }
         let q = normalize_vec(query);
-        let mut scores: Vec<(usize, f32)> = self.centroids.iter().enumerate()
-            .map(|(i, c)| (i, cosine_similarity(&q, c))).collect();
+        let mut scores: Vec<(usize, f32)> = self
+            .centroids
+            .iter()
+            .enumerate()
+            .map(|(i, c)| (i, cosine_similarity(&q, c)))
+            .collect();
         scores.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
         let k = self.centroids.len();
         let take = match probes {
@@ -108,7 +114,9 @@ impl SemanticAnnIndex {
         };
         let mut members = Vec::new();
         for (id, _) in scores.into_iter().take(take) {
-            if let Some(cluster) = self.clusters.get(id) { members.extend_from_slice(cluster); }
+            if let Some(cluster) = self.clusters.get(id) {
+                members.extend_from_slice(cluster);
+            }
         }
         members.sort_unstable();
         members
