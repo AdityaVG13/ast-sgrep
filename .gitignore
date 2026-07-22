@@ -53,6 +53,7 @@ rust_out
 .zerostack/
 .zerostack.*/
 .unsafe-audit/
+.prosecution/
 agent_ergonomics_audit/
 .agents/
 .claude/
