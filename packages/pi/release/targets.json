@@ -6,7 +6,7 @@
       "id": "darwin-arm64",
       "package": "ast-sgrep-darwin-arm64",
       "rustTarget": "aarch64-apple-darwin",
-      "runner": "macos-14-xlarge",
+      "runner": "macos-14",
       "os": "darwin",
       "cpu": "arm64",
       "libc": null,
