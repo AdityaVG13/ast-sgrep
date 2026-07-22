@@ -34,6 +34,10 @@ fn has_minimum_substring_chars(value: &str) -> bool {
         && (value.is_ascii() || value.chars().nth(MIN_SUBSTRING_SYMBOL_CHARS - 1).is_some())
 }
 fn score_normalized_symbol(term: &str, symbol: &str, symbol_can_substring: bool) -> f64 {
+    // Normalize BOTH sides: prefixed modes (callers:/defs:/imports:) pass the raw,
+    // possibly mixed-case target as the term, while `symbol` is already normalized.
+    let term = normalized_symbol(term);
+    let term = term.as_ref();
     if symbol == term {
         SCORE_EXACT_SYMBOL
     } else if symbol_can_substring
@@ -93,7 +97,7 @@ pub fn score_caller(terms: &[String], callee: &str) -> f64 {
 }
 #[cfg(test)]
 mod tests {
-    use super::{score_symbol, SCORE_EXACT_SYMBOL, SCORE_SUBSTRING_SYMBOL};
+    use super::*;
     #[test]
     fn single_character_only_scores_an_exact_symbol() {
         assert_eq!(score_symbol("i", "i"), SCORE_EXACT_SYMBOL);
@@ -109,18 +113,25 @@ mod tests {
 
     #[test]
     fn score_def_and_caller_zero_when_no_coverage() {
-        use super::{score_caller, score_def};
         let terms = vec!["nomatch_xyz".into()];
         assert_eq!(score_def(&terms, "process_request"), 0.0);
         assert_eq!(score_caller(&terms, "process_request"), 0.0);
         let hit = vec!["process".into()];
         assert!(score_def(&hit, "process_request") > 0.0);
     }
-}
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+    #[test]
+    fn symbol_scoring_is_case_insensitive_on_the_term_side() {
+        // Regression for Issue #12 / F-01: prefixed callers:/defs: pass the raw
+        // (possibly mixed-case) target as the term; scoring must normalize both sides.
+        assert_eq!(score_symbol("RefreshToken", "refreshToken"), SCORE_EXACT_SYMBOL);
+        assert_eq!(
+            best_symbol_score(&["RefreshToken".to_string()], "refreshToken"),
+            SCORE_EXACT_SYMBOL
+        );
+        assert!(coverage_symbol_score(&["RefreshToken".to_string()], "refreshToken") > 0.0);
+        assert_eq!(score_symbol("Refresh", "refreshToken"), SCORE_SUBSTRING_SYMBOL);
+    }
 
     #[test]
     fn coverage_score_is_monotone_when_query_expands() {
