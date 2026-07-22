@@ -6,7 +6,7 @@
 
 **Hybrid code search that understands intent** -- not only text or syntax.
 
-**v1.2.0-alpha** · 8 languages · lexical + AST graph + **semantic symbol search** (on by default, no API key)
+**v1.3.0** · 8 languages · lexical + AST graph + **semantic symbol search** (on by default, no API key)
 
 > **ast-grep finds shapes. ripgrep finds strings. ast-sgrep finds intent.**
 
@@ -22,10 +22,10 @@ pi install npm:pi-ast-sgrep
 
 It immediately adds `asgrep_search`, `asgrep_index`, `asgrep_status`, four `/asgrep-*` commands, and the `ast-sgrep` skill. The first search lazily creates `.asgrep/`; no Rust toolchain, PATH setup, MCP adapter, credential, or runtime download is required. See the [complete Pi package guide](docs/pi-package.md) for supported hosts, data/privacy behavior, updates, rollback, troubleshooting, and uninstall.
 
-For the standalone CLI, after `1.2.0-alpha` is published to crates.io, install with:
+For the standalone CLI, after `1.3.0` is published to crates.io, install with:
 
 ```bash
-cargo install ast-sgrep-cli --version 1.2.0-alpha --locked
+cargo install ast-sgrep-cli --version 1.3.0 --locked
 ```
 
 Until publication, build from source:
@@ -191,7 +191,7 @@ Canonical table: [head-to-head.md](benchmarks/results/head-to-head.md). Index: [
 
 ## Project status and verification
 
-**v1.2.0-alpha.** Hybrid search, semantic layer, LSP, MCP, agent JSON, and IVF path are in place.
+**v1.3.0.** Hybrid search, semantic layer, LSP, MCP, agent JSON, and IVF path are in place.
 
 GitHub Actions workflows are **manual-only** (`workflow_dispatch`) to control Actions minutes. Local quality bar for contributors:
 

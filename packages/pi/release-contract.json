@@ -1,17 +1,17 @@
 {
   "schemaVersion": 2,
   "canonicalVersion": {
-    "version": "1.2.0-alpha",
+    "version": "1.3.0",
     "source": "package.json#version",
     "npmWorkspaceSource": "package.json#version",
-    "tag": "v1.2.0-alpha",
+    "tag": "v1.3.0",
     "coupledComponents": [
       "pi-extension",
       "npm-launcher",
       "native-platform-packages"
     ],
     "driftPolicy": "All Pi/npm packages and release metadata MUST equal the canonical npm version; the embedded native CLI MUST equal nativeCliVersion. Mixed package versions or unexpected CLI versions are rejected.",
-    "nativeCliVersion": "1.2.0-alpha",
+    "nativeCliVersion": "1.3.0",
     "nativeCliSource": "Cargo.toml#workspace.package.version"
   },
   "packages": {
@@ -41,7 +41,7 @@
         ],
         "libc": [],
         "executable": "asgrep",
-        "optionalDependencyVersion": "1.2.0-alpha"
+        "optionalDependencyVersion": "1.3.0"
       },
       {
         "name": "ast-sgrep-darwin-x64",
@@ -55,7 +55,7 @@
         ],
         "libc": [],
         "executable": "asgrep",
-        "optionalDependencyVersion": "1.2.0-alpha"
+        "optionalDependencyVersion": "1.3.0"
       },
       {
         "name": "ast-sgrep-linux-arm64-gnu",
@@ -71,7 +71,7 @@
           "glibc"
         ],
         "executable": "asgrep",
-        "optionalDependencyVersion": "1.2.0-alpha"
+        "optionalDependencyVersion": "1.3.0"
       },
       {
         "name": "ast-sgrep-linux-x64-gnu",
@@ -87,7 +87,7 @@
           "glibc"
         ],
         "executable": "asgrep",
-        "optionalDependencyVersion": "1.2.0-alpha"
+        "optionalDependencyVersion": "1.3.0"
       },
       {
         "name": "ast-sgrep-win32-x64-msvc",
@@ -101,7 +101,7 @@
         ],
         "libc": [],
         "executable": "asgrep.exe",
-        "optionalDependencyVersion": "1.2.0-alpha"
+        "optionalDependencyVersion": "1.3.0"
       }
     ],
     "unsupportedTargets": [
@@ -125,15 +125,15 @@
     },
     "layers": {
       "extension": {
-        "version": "1.2.0-alpha",
+        "version": "1.3.0",
         "compatibility": "exact"
       },
       "launcher": {
-        "version": "1.2.0-alpha",
+        "version": "1.3.0",
         "compatibility": "exact"
       },
       "binary": {
-        "version": "1.2.0-alpha",
+        "version": "1.3.0",
         "compatibility": "exact-native-cli"
       },
       "machineSchema": {
@@ -264,7 +264,7 @@
         ],
         "reservationGuaranteed": false,
         "policy": "Availability is an observation only; re-verify every name and publisher ownership immediately before first publication.",
-        "version": "1.2.0-alpha"
+        "version": "1.3.0"
       },
       "policy": "npm publication is independently gated and does not wait for crates.io availability or ordering."
     },

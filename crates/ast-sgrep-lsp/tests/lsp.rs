@@ -4,6 +4,12 @@ use ast_sgrep_testkit::sample_backend;
 #[test]
 fn lsp_smoke() {
     let (_indexed, backend) = sample_backend();
+    let reindex = ExecuteCommandParams {
+        command: "asgrep.reindex".into(),
+        arguments: vec![],
+    };
+    backend.execute_command(&reindex).unwrap();
+    assert!(backend.is_index_ready());
     let uri = path_to_uri(&backend.root().join("src/main.rs"));
     let search = ExecuteCommandParams {
         command: "asgrep.search".into(),

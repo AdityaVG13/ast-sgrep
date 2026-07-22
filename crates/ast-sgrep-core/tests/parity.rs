@@ -2,10 +2,75 @@
 use ast_sgrep_core::chain::{expand_chain, ChainConfig};
 use ast_sgrep_core::search::HitKind;
 use ast_sgrep_core::store::IndexStore;
-use ast_sgrep_core::{EmbedBackend, IndexOptions, Indexer, SearchOptions};
+use ast_sgrep_core::{EmbedBackend, IndexOptions, Indexer, SearchOptions, Searcher};
 use ast_sgrep_embed::EmbedPreference;
 use ast_sgrep_testkit::{index_sample, reopen_indexer, searcher_from};
 use std::fs;
+
+/// Regression for Issue #12 / F-01: prefixed callers:/defs: must return hits even
+/// when the query casing differs from the stored symbol casing. Pre-fix, the raw
+/// mixed-case target was scored against a lowercased symbol, yielding score 0 and
+/// dropping every caller row.
+#[test]
+fn prefixed_modes_are_case_insensitive_on_mixed_case_symbols() {
+    let corpus = tempfile::tempdir().unwrap();
+    let index_dir = tempfile::tempdir().unwrap();
+    fs::write(
+        corpus.path().join("auth.rs"),
+        "fn RefreshToken() {}\nfn caller() { RefreshToken(); }\n",
+    )
+    .unwrap();
+    let index_path = index_dir.path().join("index.db");
+    let mut indexer = Indexer::new(IndexOptions {
+        root: corpus.path().to_path_buf(),
+        index_path: Some(index_path.clone()),
+        force_reindex: true,
+        embed_semantic: false,
+        ..IndexOptions::default()
+    })
+    .unwrap();
+    indexer.index_all().unwrap();
+
+    let searcher = Searcher::new(SearchOptions {
+        root: corpus.path().to_path_buf(),
+        index_path: Some(index_path.clone()),
+        limit: 16,
+        use_embed: false,
+        ..SearchOptions::default()
+    })
+    .unwrap();
+
+    // Query casing differs from stored casing; each must still return caller hits.
+    for q in [
+        "callers:RefreshToken",
+        "callers:refreshtoken",
+        "callers:REFRESHTOKEN",
+    ] {
+        let resp = searcher.search(q).unwrap();
+        let caller_hit = resp
+            .hits
+            .iter()
+            .find(|h| h.kind == HitKind::Caller && h.callee.as_deref() == Some("RefreshToken"));
+        assert!(
+            caller_hit.is_some(),
+            "{q} must return a caller hit; got {:#?}",
+            resp.hits
+        );
+        assert!(
+            caller_hit.unwrap().score > 0.0,
+            "{q} caller hit must have a positive score"
+        );
+    }
+
+    let defs = searcher.search("defs:RefreshToken").unwrap();
+    assert!(
+        defs.hits
+            .iter()
+            .any(|h| h.kind == HitKind::Def && h.symbol.as_deref() == Some("RefreshToken")),
+        "defs:RefreshToken must return a Def hit; got {:#?}",
+        defs.hits
+    );
+}
 #[test]
 fn parity_embed_backend_and_search_option_wiring() {
     assert_eq!(

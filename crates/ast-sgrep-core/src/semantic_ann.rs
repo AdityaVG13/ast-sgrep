@@ -114,8 +114,8 @@ impl SemanticAnnIndex {
         };
         let mut members = Vec::new();
         for (id, _) in scores.into_iter().take(take) {
-            if let Some(c) = self.clusters.get(id) {
-                members.extend_from_slice(c);
+            if let Some(cluster) = self.clusters.get(id) {
+                members.extend_from_slice(cluster);
             }
         }
         members.sort_unstable();
