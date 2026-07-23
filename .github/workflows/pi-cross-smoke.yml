@@ -1,0 +1,110 @@
+name: Pi cross-compile smoke test
+
+# One-time validation that the cheaper build topology (option C) produces
+# working binaries before it is wired into the official release:
+#   - linux-arm64-gnu cross-compiled on x64 via cargo-zigbuild
+#   - win32-x64-msvc cross-compiled on Linux via cargo-xwin
+#   - both macOS arches built on a single macos-14 runner
+# Each cross-built binary is then executed on a real matching runner.
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pi-cross-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  cross-build:
+    name: Cross-build linux-arm64 + win32-msvc on one ubuntu runner
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-unknown-linux-gnu, x86_64-pc-windows-msvc
+      - uses: mlugg/setup-zig@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-zigbuild,cargo-xwin
+      - name: Cross-build linux-arm64-gnu via cargo-zigbuild
+        env:
+          RUSTC_WRAPPER: ""
+        run: cargo zigbuild --locked --release -p ast-sgrep-cli --bin asgrep --no-default-features --target aarch64-unknown-linux-gnu
+      - name: Cross-build win32-x64-msvc via cargo-xwin
+        env:
+          RUSTC_WRAPPER: ""
+        run: cargo xwin build --locked --release -p ast-sgrep-cli --bin asgrep --no-default-features --target x86_64-pc-windows-msvc
+      - name: Report output formats
+        run: |
+          file target/aarch64-unknown-linux-gnu/release/asgrep
+          file target/x86_64-pc-windows-msvc/release/asgrep.exe
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cross-linux-arm64
+          path: target/aarch64-unknown-linux-gnu/release/asgrep
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cross-win32-x64
+          path: target/x86_64-pc-windows-msvc/release/asgrep.exe
+          if-no-files-found: error
+
+  run-linux-arm64:
+    name: Execute the cross-built linux-arm64 binary on real ARM
+    needs: cross-build
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 10
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: cross-linux-arm64
+          path: bin
+      - name: Run version and doctor
+        run: |
+          chmod +x bin/asgrep
+          ./bin/asgrep version
+          ./bin/asgrep doctor || echo "doctor exit $?"
+
+  run-win32:
+    name: Execute the cross-built win32 binary on real Windows
+    needs: cross-build
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: cross-win32-x64
+          path: bin
+      - name: Run version and doctor
+        shell: pwsh
+        run: |
+          .\bin\asgrep.exe version
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          .\bin\asgrep.exe doctor
+          echo "doctor exit $LASTEXITCODE"
+
+  mac-build-run:
+    name: Grouped macOS build (arm64 native + x64 cross) on one runner
+    runs-on: macos-14
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin, x86_64-apple-darwin
+      - name: Build both darwin arches on one runner
+        env:
+          RUSTC_WRAPPER: ""
+        run: |
+          cargo build --locked --release -p ast-sgrep-cli --bin asgrep --no-default-features --target aarch64-apple-darwin
+          cargo build --locked --release -p ast-sgrep-cli --bin asgrep --no-default-features --target x86_64-apple-darwin
+      - name: Run arm64 and confirm x64 Mach-O
+        run: |
+          ./target/aarch64-apple-darwin/release/asgrep version
+          ./target/aarch64-apple-darwin/release/asgrep doctor || echo "doctor exit $?"
+          file target/x86_64-apple-darwin/release/asgrep

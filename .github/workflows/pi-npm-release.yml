@@ -102,7 +102,7 @@ jobs:
     needs: [release-gate, build-native]
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
       id-token: write
       attestations: write
     steps:
@@ -141,6 +141,15 @@ jobs:
           path: npm-packs/
           if-no-files-found: error
           retention-days: 90
+      - name: Preserve immutable tarballs as durable GitHub Release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "${{ github.ref_name }}" >/dev/null 2>&1 || \
+            gh release create "${{ github.ref_name }}" --verify-tag --draft \
+              --title "ast-sgrep ${{ github.ref_name }}" \
+              --notes "Attested, immutable npm tarballs and manifest for ${{ github.ref_name }}. To finish or repeat publication without rebuilding, re-run the publish job (it idempotently skips packages already live)."
+          gh release upload "${{ github.ref_name }}" npm-packs/*.tgz npm-packs/release-manifest.json --clobber
 
   publish:
     name: Protected npm OIDC publication
