@@ -1,6 +1,6 @@
 {
   "name": "ast-sgrep",
-  "version": "1.3.0",
+  "version": "1.3.1",
   "description": "Native ast-sgrep command launcher",
   "type": "module",
   "license": "MIT",
@@ -30,10 +30,10 @@
     "LICENSE"
   ],
   "optionalDependencies": {
-    "ast-sgrep-darwin-arm64": "1.3.0",
-    "ast-sgrep-darwin-x64": "1.3.0",
-    "ast-sgrep-linux-arm64-gnu": "1.3.0",
-    "ast-sgrep-linux-x64-gnu": "1.3.0",
-    "ast-sgrep-win32-x64-msvc": "1.3.0"
+    "ast-sgrep-darwin-arm64": "1.3.1",
+    "ast-sgrep-darwin-x64": "1.3.1",
+    "ast-sgrep-linux-arm64-gnu": "1.3.1",
+    "ast-sgrep-linux-x64-gnu": "1.3.1",
+    "ast-sgrep-win32-x64-msvc": "1.3.1"
   }
 }

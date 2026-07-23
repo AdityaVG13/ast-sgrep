@@ -10,6 +10,7 @@ const fail = (code, message) => { throw new Error(`${code}: ${message}`); };
 const readJson = async (file) => JSON.parse(await readFile(file, 'utf8'));
 const canonical = (value) => JSON.stringify(value, null, 2) + '\n';
 const sha256 = async (file) => createHash('sha256').update(await readFile(file)).digest('hex');
+const delay = (ms) => new Promise((resolve) => { setTimeout(resolve, ms); });
 const option = (name, fallback) => {
   const index = process.argv.indexOf(`--${name}`);
   return index < 0 ? fallback : process.argv[index + 1] ?? fail('ASGREP_RELEASE_OPTION', `missing value for --${name}`);
@@ -202,7 +203,9 @@ const publish = async () => {
   const expectedPrior = layer === 'native' ? [] : layer === 'launcher' ? manifest.artifacts.filter((item) => item.layer === 'native').map((item) => item.name) : manifest.artifacts.filter((item) => item.layer !== 'extension').map((item) => item.name);
   if (JSON.stringify(receipt.published) !== JSON.stringify(expectedPrior)) fail('ASGREP_RELEASE_PUBLISH_ORDER', `${layer} cannot publish after [${receipt.published.join(', ')}]`);
   const selected = manifest.artifacts.filter((artifact) => artifact.layer === layer);
+  const publishDelayMs = Math.max(0, Number(process.env.ASGREP_PUBLISH_DELAY_MS ?? '30000'));
   for (const artifact of selected) {
+    if (publishDelayMs > 0) await delay(publishDelayMs);
     run('npm', ['publish', path.join(directory, artifact.filename), '--access', 'public', '--provenance'], { stdio: 'inherit' });
     receipt.published.push(artifact.name);
     await writeFile(receiptPath, canonical(receipt));

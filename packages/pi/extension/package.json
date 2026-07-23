@@ -1,6 +1,6 @@
 {
   "name": "pi-ast-sgrep",
-  "version": "1.3.0",
+  "version": "1.3.1",
   "description": "Pi extension for the ast-sgrep native search runtime",
   "type": "module",
   "license": "MIT",
@@ -47,7 +47,7 @@
     "node": ">=22.19.0"
   },
   "dependencies": {
-    "ast-sgrep": "1.3.0",
+    "ast-sgrep": "1.3.1",
     "typebox": "^1.0.0"
   },
   "peerDependencies": {

@@ -21,7 +21,7 @@ asgrep semantic "credential renewal" --json
 ```json
 {
   "provider": "ast-sgrep",
-  "version": "1.3.0",
+  "version": "1.3.1",
   "query": "credential renewal",
   "hit_count": 3,
   "has_semantic_hits": true,

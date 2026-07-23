@@ -11,10 +11,10 @@ publish = false
 workspace = true
 
 [dependencies]
-ast-sgrep-core = { path = "../ast-sgrep-core", version = "1.3.0" }
-ast-sgrep-embed = { path = "../ast-sgrep-embed", version = "1.3.0" }
-ast-sgrep-lang = { path = "../ast-sgrep-lang", version = "1.3.0" }
-ast-sgrep-lsp = { path = "../ast-sgrep-lsp", version = "1.3.0" }
+ast-sgrep-core = { path = "../ast-sgrep-core", version = "1.3.1" }
+ast-sgrep-embed = { path = "../ast-sgrep-embed", version = "1.3.1" }
+ast-sgrep-lang = { path = "../ast-sgrep-lang", version = "1.3.1" }
+ast-sgrep-lsp = { path = "../ast-sgrep-lsp", version = "1.3.1" }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 tempfile.workspace = true
