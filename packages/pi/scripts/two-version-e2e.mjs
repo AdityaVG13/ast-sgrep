@@ -9,16 +9,16 @@ import { spawnSync } from 'node:child_process';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const oldVersion = '1.0.0-alpha';
-const newVersion = '1.3.1';
-const newNativeVersion = '1.3.1';
+const newVersion = '1.3.2';
+const newNativeVersion = '1.3.2';
 const oldCommit = '1f7ba20';
 const machineSchema = '1.0.0';
 const hosts = new Map([
-  ['darwin:arm64', { directory: 'darwin-arm64', packageName: 'ast-sgrep-darwin-arm64', executable: 'asgrep' }],
-  ['darwin:x64', { directory: 'darwin-x64', packageName: 'ast-sgrep-darwin-x64', executable: 'asgrep' }],
-  ['linux:arm64', { directory: 'linux-arm64-gnu', packageName: 'ast-sgrep-linux-arm64-gnu', executable: 'asgrep' }],
-  ['linux:x64', { directory: 'linux-x64-gnu', packageName: 'ast-sgrep-linux-x64-gnu', executable: 'asgrep' }],
-  ['win32:x64', { directory: 'win32-x64-msvc', packageName: 'ast-sgrep-win32-x64-msvc', executable: 'asgrep.exe' }],
+  ['darwin:arm64', { directory: 'darwin-arm64', packageName: '@ast-sgrep/darwin-arm64', executable: 'asgrep' }],
+  ['darwin:x64', { directory: 'darwin-x64', packageName: '@ast-sgrep/darwin-x64', executable: 'asgrep' }],
+  ['linux:arm64', { directory: 'linux-arm64-gnu', packageName: '@ast-sgrep/linux-arm64-gnu', executable: 'asgrep' }],
+  ['linux:x64', { directory: 'linux-x64-gnu', packageName: '@ast-sgrep/linux-x64-gnu', executable: 'asgrep' }],
+  ['win32:x64', { directory: 'win32-x64-msvc', packageName: '@ast-sgrep/win32-x64-msvc', executable: 'asgrep.exe' }],
 ]);
 const host = hosts.get(`${process.platform}:${process.arch}`);
 if (!host) throw new Error(`two-version E2E has no local artifact target for ${process.platform}:${process.arch}`);
@@ -132,7 +132,7 @@ async function stageArtifacts(version, binary) {
     manifest.version = version;
     manifest.optionalDependencies = { [host.packageName]: `file:${nativeArtifact}` };
   });
-  await replace(path.join(launcher, 'src', 'index.js'), 'const VERSION = "1.3.1";', `const VERSION = "${version}";`);
+  await replace(path.join(launcher, 'src', 'index.js'), 'const VERSION = "1.3.2";', `const VERSION = "${version}";`);
   pack(launcher, launcherArtifact);
 
   await setJson(path.join(extension, 'package.json'), (manifest) => {

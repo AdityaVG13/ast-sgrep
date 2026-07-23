@@ -50,7 +50,7 @@ test("maps commands to safe argv arrays without a shell", async () => {
 test("headless doctor emits the complete machine envelope as JSON", async () => {
   const response: MachineEnvelope = {
     tool: "asgrep", schema_version: "1.0.0", ok: true, command: "doctor", status: "healthy",
-    version: "1.3.1", root: "/fixture", binary: { available: true, path: "/fixture/asgrep" },
+    version: "1.3.2", root: "/fixture", binary: { available: true, path: "/fixture/asgrep" },
     index: { exists: true, compatible: true }, capabilities: ["exact", "graph", "semantic"],
   };
   const command = fixture(async () => response).get("asgrep-doctor")!;

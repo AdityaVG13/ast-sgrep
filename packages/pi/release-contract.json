@@ -1,17 +1,17 @@
 {
   "schemaVersion": 2,
   "canonicalVersion": {
-    "version": "1.3.1",
+    "version": "1.3.2",
     "source": "package.json#version",
     "npmWorkspaceSource": "package.json#version",
-    "tag": "v1.3.1",
+    "tag": "v1.3.2",
     "coupledComponents": [
       "pi-extension",
       "npm-launcher",
       "native-platform-packages"
     ],
     "driftPolicy": "All Pi/npm packages and release metadata MUST equal the canonical npm version; the embedded native CLI MUST equal nativeCliVersion. Mixed package versions or unexpected CLI versions are rejected.",
-    "nativeCliVersion": "1.3.1",
+    "nativeCliVersion": "1.3.2",
     "nativeCliSource": "Cargo.toml#workspace.package.version"
   },
   "packages": {
@@ -30,7 +30,7 @@
     "platformDependencyPolicy": "exact",
     "platforms": [
       {
-        "name": "ast-sgrep-darwin-arm64",
+        "name": "@ast-sgrep/darwin-arm64",
         "directory": "packages/pi/platforms/darwin-arm64",
         "target": "aarch64-apple-darwin",
         "os": [
@@ -41,10 +41,10 @@
         ],
         "libc": [],
         "executable": "asgrep",
-        "optionalDependencyVersion": "1.3.1"
+        "optionalDependencyVersion": "1.3.2"
       },
       {
-        "name": "ast-sgrep-darwin-x64",
+        "name": "@ast-sgrep/darwin-x64",
         "directory": "packages/pi/platforms/darwin-x64",
         "target": "x86_64-apple-darwin",
         "os": [
@@ -55,10 +55,10 @@
         ],
         "libc": [],
         "executable": "asgrep",
-        "optionalDependencyVersion": "1.3.1"
+        "optionalDependencyVersion": "1.3.2"
       },
       {
-        "name": "ast-sgrep-linux-arm64-gnu",
+        "name": "@ast-sgrep/linux-arm64-gnu",
         "directory": "packages/pi/platforms/linux-arm64-gnu",
         "target": "aarch64-unknown-linux-gnu",
         "os": [
@@ -71,10 +71,10 @@
           "glibc"
         ],
         "executable": "asgrep",
-        "optionalDependencyVersion": "1.3.1"
+        "optionalDependencyVersion": "1.3.2"
       },
       {
-        "name": "ast-sgrep-linux-x64-gnu",
+        "name": "@ast-sgrep/linux-x64-gnu",
         "directory": "packages/pi/platforms/linux-x64-gnu",
         "target": "x86_64-unknown-linux-gnu",
         "os": [
@@ -87,10 +87,10 @@
           "glibc"
         ],
         "executable": "asgrep",
-        "optionalDependencyVersion": "1.3.1"
+        "optionalDependencyVersion": "1.3.2"
       },
       {
-        "name": "ast-sgrep-win32-x64-msvc",
+        "name": "@ast-sgrep/win32-x64-msvc",
         "directory": "packages/pi/platforms/win32-x64-msvc",
         "target": "x86_64-pc-windows-msvc",
         "os": [
@@ -101,7 +101,7 @@
         ],
         "libc": [],
         "executable": "asgrep.exe",
-        "optionalDependencyVersion": "1.3.1"
+        "optionalDependencyVersion": "1.3.2"
       }
     ],
     "unsupportedTargets": [
@@ -125,15 +125,15 @@
     },
     "layers": {
       "extension": {
-        "version": "1.3.1",
+        "version": "1.3.2",
         "compatibility": "exact"
       },
       "launcher": {
-        "version": "1.3.1",
+        "version": "1.3.2",
         "compatibility": "exact"
       },
       "binary": {
-        "version": "1.3.1",
+        "version": "1.3.2",
         "compatibility": "exact-native-cli"
       },
       "machineSchema": {
@@ -256,15 +256,15 @@
         "names": [
           "pi-ast-sgrep",
           "ast-sgrep",
-          "ast-sgrep-darwin-arm64",
-          "ast-sgrep-darwin-x64",
-          "ast-sgrep-linux-arm64-gnu",
-          "ast-sgrep-linux-x64-gnu",
-          "ast-sgrep-win32-x64-msvc"
+          "@ast-sgrep/darwin-arm64",
+          "@ast-sgrep/darwin-x64",
+          "@ast-sgrep/linux-arm64-gnu",
+          "@ast-sgrep/linux-x64-gnu",
+          "@ast-sgrep/win32-x64-msvc"
         ],
         "reservationGuaranteed": false,
         "policy": "Availability is an observation only; re-verify every name and publisher ownership immediately before first publication.",
-        "version": "1.3.1"
+        "version": "1.3.2"
       },
       "policy": "npm publication is independently gated and does not wait for crates.io availability or ordering."
     },
@@ -291,11 +291,11 @@
     "trustedPublishing": "npm OIDC",
     "provenance": true,
     "packageOrder": [
-      "ast-sgrep-darwin-arm64",
-      "ast-sgrep-darwin-x64",
-      "ast-sgrep-linux-arm64-gnu",
-      "ast-sgrep-linux-x64-gnu",
-      "ast-sgrep-win32-x64-msvc",
+      "@ast-sgrep/darwin-arm64",
+      "@ast-sgrep/darwin-x64",
+      "@ast-sgrep/linux-arm64-gnu",
+      "@ast-sgrep/linux-x64-gnu",
+      "@ast-sgrep/win32-x64-msvc",
       "ast-sgrep",
       "pi-ast-sgrep"
     ],

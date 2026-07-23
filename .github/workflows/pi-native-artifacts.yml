@@ -62,7 +62,7 @@ jobs:
         shell: bash
         run: |
           binary="target/${{ matrix.rustTarget }}/release/${{ matrix.executable }}"
-          output="dist/${{ matrix.package }}"
+          output="dist/${{ matrix.id }}"
           node packages/pi/scripts/release-artifact.mjs prepare \
             --target "${{ matrix.id }}" --binary "$binary" --output "$output" --commit "$GITHUB_SHA"
           node packages/pi/scripts/release-artifact.mjs verify --target "${{ matrix.id }}" --input "$output"
@@ -71,8 +71,8 @@ jobs:
         run: |
           set -euo pipefail
           platform_dir="packages/pi/platforms/${{ matrix.id }}"
-          cp "dist/${{ matrix.package }}/${{ matrix.executable }}" "$platform_dir/${{ matrix.executable }}"
-          cp "dist/${{ matrix.package }}/SHA256SUMS" "$platform_dir/checksum.sha256"
+          cp "dist/${{ matrix.id }}/${{ matrix.executable }}" "$platform_dir/${{ matrix.executable }}"
+          cp "dist/${{ matrix.id }}/SHA256SUMS" "$platform_dir/checksum.sha256"
           if [ "${{ matrix.os }}" != "win32" ]; then chmod 755 "$platform_dir/${{ matrix.executable }}"; fi
           mkdir -p npm-packs
           npm pack "$platform_dir" --pack-destination npm-packs
@@ -103,8 +103,8 @@ jobs:
       - name: Upload native artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.package }}
-          path: dist/${{ matrix.package }}/
+          name: ${{ matrix.id }}
+          path: dist/${{ matrix.id }}/
           if-no-files-found: error
           retention-days: 14
 
@@ -121,7 +121,7 @@ jobs:
       - run: npm ci
       - uses: actions/download-artifact@v4
         with:
-          pattern: ast-sgrep-*
+          pattern: "*"
           path: dist/native
       - name: Pack and inspect without publication
         run: |

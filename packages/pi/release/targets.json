@@ -4,7 +4,7 @@
   "targets": [
     {
       "id": "darwin-arm64",
-      "package": "ast-sgrep-darwin-arm64",
+      "package": "@ast-sgrep/darwin-arm64",
       "rustTarget": "aarch64-apple-darwin",
       "runner": "macos-14",
       "os": "darwin",
@@ -14,7 +14,7 @@
     },
     {
       "id": "darwin-x64",
-      "package": "ast-sgrep-darwin-x64",
+      "package": "@ast-sgrep/darwin-x64",
       "rustTarget": "x86_64-apple-darwin",
       "runner": "macos-14",
       "os": "darwin",
@@ -24,7 +24,7 @@
     },
     {
       "id": "linux-arm64-gnu",
-      "package": "ast-sgrep-linux-arm64-gnu",
+      "package": "@ast-sgrep/linux-arm64-gnu",
       "rustTarget": "aarch64-unknown-linux-gnu",
       "runner": "ubuntu-24.04-arm",
       "os": "linux",
@@ -34,7 +34,7 @@
     },
     {
       "id": "linux-x64-gnu",
-      "package": "ast-sgrep-linux-x64-gnu",
+      "package": "@ast-sgrep/linux-x64-gnu",
       "rustTarget": "x86_64-unknown-linux-gnu",
       "runner": "ubuntu-latest",
       "os": "linux",
@@ -44,7 +44,7 @@
     },
     {
       "id": "win32-x64-msvc",
-      "package": "ast-sgrep-win32-x64-msvc",
+      "package": "@ast-sgrep/win32-x64-msvc",
       "rustTarget": "x86_64-pc-windows-msvc",
       "runner": "windows-latest",
       "os": "win32",

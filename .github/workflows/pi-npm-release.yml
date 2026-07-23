@@ -87,13 +87,13 @@ jobs:
           node packages/pi/scripts/release-artifact.mjs prepare \
             --target "${{ matrix.id }}" \
             --binary "target/${{ matrix.rustTarget }}/release/${{ matrix.executable }}" \
-            --output "dist/${{ matrix.package }}" \
+            --output "dist/${{ matrix.id }}" \
             --commit "$GITHUB_SHA"
-          node packages/pi/scripts/release-artifact.mjs verify --target "${{ matrix.id }}" --input "dist/${{ matrix.package }}"
+          node packages/pi/scripts/release-artifact.mjs verify --target "${{ matrix.id }}" --input "dist/${{ matrix.id }}"
       - uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.package }}
-          path: dist/${{ matrix.package }}/
+          name: ${{ matrix.id }}
+          path: dist/${{ matrix.id }}/
           if-no-files-found: error
           retention-days: 90
 
@@ -114,7 +114,7 @@ jobs:
       - run: npm ci
       - uses: actions/download-artifact@v4
         with:
-          pattern: ast-sgrep-*
+          pattern: "*"
           path: dist/native
       - name: Restore native executable bit stripped by upload-artifact
         run: find dist/native -type f -name asgrep -exec chmod +x {} +

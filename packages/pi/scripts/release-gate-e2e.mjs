@@ -8,16 +8,16 @@ import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
-const version = '1.3.1';
+const version = '1.3.2';
 const machineSchema = '1.0.0';
 const piVersion = '0.80.6';
 const maxCapturedBytes = 4 * 1024 * 1024;
 const hosts = new Map([
-  ['darwin:arm64', { directory: 'darwin-arm64', packageName: 'ast-sgrep-darwin-arm64', executable: 'asgrep' }],
-  ['darwin:x64', { directory: 'darwin-x64', packageName: 'ast-sgrep-darwin-x64', executable: 'asgrep' }],
-  ['linux:arm64', { directory: 'linux-arm64-gnu', packageName: 'ast-sgrep-linux-arm64-gnu', executable: 'asgrep' }],
-  ['linux:x64', { directory: 'linux-x64-gnu', packageName: 'ast-sgrep-linux-x64-gnu', executable: 'asgrep' }],
-  ['win32:x64', { directory: 'win32-x64-msvc', packageName: 'ast-sgrep-win32-x64-msvc', executable: 'asgrep.exe' }],
+  ['darwin:arm64', { directory: 'darwin-arm64', packageName: '@ast-sgrep/darwin-arm64', executable: 'asgrep' }],
+  ['darwin:x64', { directory: 'darwin-x64', packageName: '@ast-sgrep/darwin-x64', executable: 'asgrep' }],
+  ['linux:arm64', { directory: 'linux-arm64-gnu', packageName: '@ast-sgrep/linux-arm64-gnu', executable: 'asgrep' }],
+  ['linux:x64', { directory: 'linux-x64-gnu', packageName: '@ast-sgrep/linux-x64-gnu', executable: 'asgrep' }],
+  ['win32:x64', { directory: 'win32-x64-msvc', packageName: '@ast-sgrep/win32-x64-msvc', executable: 'asgrep.exe' }],
 ]);
 const host = hosts.get(process.platform + ':' + process.arch);
 if (!host) throw new Error(process.platform + ':' + process.arch + ' is not a packaged ast-sgrep target');

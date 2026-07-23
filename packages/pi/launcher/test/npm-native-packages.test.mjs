@@ -11,19 +11,19 @@ import { resolveBinary } from "../src/index.js";
 const launcherDir = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const repoRoot = resolve(launcherDir, "../../..");
 const targets = [
-  { id: "darwin-arm64", name: "ast-sgrep-darwin-arm64", platform: "darwin", arch: "arm64", libc: "", executable: "asgrep" },
-  { id: "darwin-x64", name: "ast-sgrep-darwin-x64", platform: "darwin", arch: "x64", libc: "", executable: "asgrep" },
-  { id: "linux-arm64-gnu", name: "ast-sgrep-linux-arm64-gnu", platform: "linux", arch: "arm64", libc: "glibc", executable: "asgrep" },
-  { id: "linux-x64-gnu", name: "ast-sgrep-linux-x64-gnu", platform: "linux", arch: "x64", libc: "glibc", executable: "asgrep" },
-  { id: "win32-x64-msvc", name: "ast-sgrep-win32-x64-msvc", platform: "win32", arch: "x64", libc: "", executable: "asgrep.exe" }
+  { id: "darwin-arm64", name: "@ast-sgrep/darwin-arm64", platform: "darwin", arch: "arm64", libc: "", executable: "asgrep" },
+  { id: "darwin-x64", name: "@ast-sgrep/darwin-x64", platform: "darwin", arch: "x64", libc: "", executable: "asgrep" },
+  { id: "linux-arm64-gnu", name: "@ast-sgrep/linux-arm64-gnu", platform: "linux", arch: "arm64", libc: "glibc", executable: "asgrep" },
+  { id: "linux-x64-gnu", name: "@ast-sgrep/linux-x64-gnu", platform: "linux", arch: "x64", libc: "glibc", executable: "asgrep" },
+  { id: "win32-x64-msvc", name: "@ast-sgrep/win32-x64-msvc", platform: "win32", arch: "x64", libc: "", executable: "asgrep.exe" }
 ];
 function fixture(target = targets[0], changes = {}) {
   const root = mkdtempSync(join(tmpdir(), "ast-sgrep-native-"));
-  const packageDir = join(root, target.name);
+  const packageDir = join(root, target.id);
   mkdirSync(packageDir);
   const manifest = {
     name: target.name,
-    version: changes.version ?? "1.3.1",
+    version: changes.version ?? "1.3.2",
     os: [target.platform],
     cpu: [target.arch],
     ...(target.libc ? { libc: [target.libc] } : {})
@@ -79,7 +79,7 @@ test("reports representative unsupported tuples and omitted packages", () => {
     { platform: "win32", arch: "arm64" },
     { platform: "darwin", arch: "riscv64" }
   ]) expectCode("ASGREP_UNSUPPORTED_PLATFORM", () => resolveBinary({ ...tuple, env: {} }));
-  expectCode("ASGREP_PLATFORM_PACKAGE_MISSING", () => resolveBinary({ platform: "linux", arch: "x64", libc: "glibc", env: {}, requireResolve() { throw new Error("omitted"); } }), /ast-sgrep-linux-x64-gnu/u);
+  expectCode("ASGREP_PLATFORM_PACKAGE_MISSING", () => resolveBinary({ platform: "linux", arch: "x64", libc: "glibc", env: {}, requireResolve() { throw new Error("omitted"); } }), /@ast-sgrep\/linux-x64-gnu/u);
 });
 
 test("committed target, contract, package, and checksum metadata do not drift", () => {
@@ -148,11 +148,11 @@ test("npm omits a wrong-OS local optional package without registry access", () =
     const appDir = join(root, "app");
     mkdirSync(nativeDir);
     mkdirSync(appDir);
-    writeFileSync(join(nativeDir, "package.json"), JSON.stringify({ name: "ast-sgrep-win32-x64-msvc", version: "1.3.1", os: ["win32"], cpu: ["x64"] }));
-    writeFileSync(join(appDir, "package.json"), JSON.stringify({ private: true, optionalDependencies: { "ast-sgrep-win32-x64-msvc": "file:../native" } }));
+    writeFileSync(join(nativeDir, "package.json"), JSON.stringify({ name: "@ast-sgrep/win32-x64-msvc", version: "1.3.2", os: ["win32"], cpu: ["x64"] }));
+    writeFileSync(join(appDir, "package.json"), JSON.stringify({ private: true, optionalDependencies: { "@ast-sgrep/win32-x64-msvc": "file:../native" } }));
     const result = spawnSync("npm", ["install", "--offline", "--ignore-scripts", "--no-audit", "--no-fund", "--os=linux", "--cpu=x64"], { cwd: appDir, encoding: "utf8" });
     assert.equal(result.status, 0, result.stderr);
-    assert.equal(existsSync(join(appDir, "node_modules/ast-sgrep-win32-x64-msvc")), false);
+    assert.equal(existsSync(join(appDir, "node_modules/@ast-sgrep/win32-x64-msvc")), false);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 

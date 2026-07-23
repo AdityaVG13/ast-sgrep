@@ -3,13 +3,13 @@ import { accessSync, constants, readFileSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
 
-const VERSION = "1.3.1";
+const VERSION = "1.3.2";
 const HOSTS = new Map([
-  ["darwin:arm64:", ["ast-sgrep-darwin-arm64", "asgrep", "darwin", "arm64", null]],
-  ["darwin:x64:", ["ast-sgrep-darwin-x64", "asgrep", "darwin", "x64", null]],
-  ["linux:arm64:glibc", ["ast-sgrep-linux-arm64-gnu", "asgrep", "linux", "arm64", "glibc"]],
-  ["linux:x64:glibc", ["ast-sgrep-linux-x64-gnu", "asgrep", "linux", "x64", "glibc"]],
-  ["win32:x64:", ["ast-sgrep-win32-x64-msvc", "asgrep.exe", "win32", "x64", null]]
+  ["darwin:arm64:", ["@ast-sgrep/darwin-arm64", "asgrep", "darwin", "arm64", null]],
+  ["darwin:x64:", ["@ast-sgrep/darwin-x64", "asgrep", "darwin", "x64", null]],
+  ["linux:arm64:glibc", ["@ast-sgrep/linux-arm64-gnu", "asgrep", "linux", "arm64", "glibc"]],
+  ["linux:x64:glibc", ["@ast-sgrep/linux-x64-gnu", "asgrep", "linux", "x64", "glibc"]],
+  ["win32:x64:", ["@ast-sgrep/win32-x64-msvc", "asgrep.exe", "win32", "x64", null]]
 ]);
 const nativeRequire = createRequire(import.meta.url);
 

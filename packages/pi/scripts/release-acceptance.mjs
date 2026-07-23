@@ -90,7 +90,7 @@ const stageNative = async (state, nativeRoot, commit) => {
   await copyFile(path.join(root, 'packages/pi/release-contract.json'), path.join(temporary, 'release-contract.json'));
   await copyFile(path.join(root, 'packages/pi/release/targets.json'), path.join(temporary, 'release/targets.json'));
   for (const target of state.matrix.targets) {
-    const source = path.resolve(nativeRoot, target.package);
+    const source = path.resolve(nativeRoot, target.id);
     run(process.execPath, ['packages/pi/scripts/release-artifact.mjs', 'verify', '--target', target.id, '--input', source]);
     const metadata = await readJson(path.join(source, 'artifact-metadata.json'));
     if (commit && metadata.commit !== commit.toLowerCase()) fail('ASGREP_RELEASE_COMMIT_SKEW', `${target.package} was built from ${metadata.commit}, expected ${commit}`);
@@ -223,8 +223,8 @@ const fixtureNative = async () => {
     const binary = path.join(output, `${target.id}.fixture`);
     await writeFile(binary, `contract-only target-shaped fixture for ${target.package}@${state.version}\n`);
     if (target.os !== 'win32') await chmod(binary, 0o755);
-    run(process.execPath, ['packages/pi/scripts/release-artifact.mjs', 'prepare', '--target', target.id, '--binary', binary, '--output', path.join(output, target.package), '--commit', commit]);
-    run(process.execPath, ['packages/pi/scripts/release-artifact.mjs', 'verify', '--target', target.id, '--input', path.join(output, target.package)]);
+    run(process.execPath, ['packages/pi/scripts/release-artifact.mjs', 'prepare', '--target', target.id, '--binary', binary, '--output', path.join(output, target.id), '--commit', commit]);
+    run(process.execPath, ['packages/pi/scripts/release-artifact.mjs', 'verify', '--target', target.id, '--input', path.join(output, target.id)]);
   }
   console.log(`[pi-release] created and verified ${state.matrix.targets.length} disposable target-shaped fixtures at commit ${commit}`);
   console.log('[pi-release] fixture mode is structural pack evidence only; fixtures are never publishable native binaries');

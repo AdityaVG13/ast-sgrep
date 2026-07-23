@@ -72,7 +72,7 @@ report(new Set(ids).size === ids.length, 'target matrix IDs must be unique');
 report(equal(ids, ['darwin-arm64', 'darwin-x64', 'linux-arm64-gnu', 'linux-x64-gnu', 'win32-x64-msvc']), 'target matrix set or deterministic order changed');
 for (const target of targetMatrix.targets ?? []) {
   required(target, ['id', 'package', 'rustTarget', 'runner', 'os', 'cpu', 'libc', 'executable'], 'target matrix ' + target.id);
-  report(target.package === 'ast-sgrep-' + target.id, target.id + ' package name must match its npm platform/CPU ID');
+  report(target.package === '@ast-sgrep/' + target.id, target.id + ' package name must match its scoped npm platform/CPU ID');
   report(target.executable === (target.os === 'win32' ? 'asgrep.exe' : 'asgrep'), target.id + ' executable name is invalid');
   report(!/musl/.test(target.id + target.rustTarget + (target.libc ?? '')), 'musl targets are unsupported');
   report(!(target.os === 'win32' && target.cpu === 'arm64'), 'Windows arm64 is unsupported');
