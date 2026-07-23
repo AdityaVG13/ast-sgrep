@@ -167,10 +167,11 @@ const gateState = (state, input, observed) => {
   if (!input.clean) fail('ASGREP_RELEASE_DIRTY', 'release checkout must be clean');
   if (input.refType !== 'tag' || input.tag !== state.contract.canonicalVersion.tag) fail('ASGREP_RELEASE_TAG_VERSION', `expected official tag ${state.contract.canonicalVersion.tag}`);
   if (!/^[a-f0-9]{40}$/u.test(input.commit) || input.tagCommit !== input.commit) fail('ASGREP_RELEASE_TAG_COMMIT', 'tag, checkout, and workflow commit must be identical');
-  for (const name of packageOrder(state)) {
-    const spec = `${name}@${state.version}`;
-    if (observed[spec] !== null) fail('ASGREP_RELEASE_DUPLICATE_VERSION', `${spec} already exists; immutable versions are never overwritten`);
-  }
+  const names = packageOrder(state);
+  const live = names.filter((name) => observed[`${name}@${state.version}`] !== null);
+  const pending = names.filter((name) => !live.includes(name));
+  if (live.length === names.length) fail('ASGREP_RELEASE_DUPLICATE_VERSION', `all ${names.length} packages already exist at ${state.version}; bump the canonical version for a new release`);
+  return { live, pending };
 };
 const gate = async () => {
   const state = await load();
@@ -184,8 +185,8 @@ const gate = async () => {
   run('git', ['verify-tag', tag]);
   const tagCommit = run('git', ['rev-list', '-n', '1', tag]).trim().toLowerCase();
   const observed = await registryVersions(state, option('registry-snapshot'));
-  gateState(state, { clean, refType, tag, commit, tagCommit }, observed);
-  console.log(`[pi-release] gate accepted signed ${tag} at ${commit}; all ${packageOrder(state).length} versions are unpublished`);
+  const { live, pending } = gateState(state, { clean, refType, tag, commit, tagCommit }, observed);
+  console.log(`[pi-release] gate accepted signed ${tag} at ${commit}; publish plan at ${state.version}: ${pending.length} to publish, ${live.length} already live${live.length ? ` (idempotent skip: ${live.join(', ')})` : ''}`);
 };
 const validatePublishContext = (state, manifest, environment = process.env) => {
   if (environment.GITHUB_ACTIONS !== 'true' || !environment.ACTIONS_ID_TOKEN_REQUEST_URL) fail('ASGREP_RELEASE_OIDC_REQUIRED', 'publication is only allowed from GitHub Actions OIDC');
@@ -203,14 +204,21 @@ const publish = async () => {
   const expectedPrior = layer === 'native' ? [] : layer === 'launcher' ? manifest.artifacts.filter((item) => item.layer === 'native').map((item) => item.name) : manifest.artifacts.filter((item) => item.layer !== 'extension').map((item) => item.name);
   if (JSON.stringify(receipt.published) !== JSON.stringify(expectedPrior)) fail('ASGREP_RELEASE_PUBLISH_ORDER', `${layer} cannot publish after [${receipt.published.join(', ')}]`);
   const selected = manifest.artifacts.filter((artifact) => artifact.layer === layer);
-  const publishDelayMs = Math.max(0, Number(process.env.ASGREP_PUBLISH_DELAY_MS ?? '30000'));
+  const observed = await registryVersions(state);
+  const publishDelayMs = Math.max(0, Number(process.env.ASGREP_PUBLISH_DELAY_MS ?? '0'));
+  const published = [];
   for (const artifact of selected) {
-    if (publishDelayMs > 0) await delay(publishDelayMs);
-    run('npm', ['publish', path.join(directory, artifact.filename), '--access', 'public', '--provenance'], { stdio: 'inherit' });
+    if (observed[`${artifact.name}@${manifest.version}`] !== null) {
+      console.log(`[pi-release] skip ${artifact.name}@${manifest.version}: already live (idempotent re-run)`);
+    } else {
+      if (publishDelayMs > 0) await delay(publishDelayMs);
+      run('npm', ['publish', path.join(directory, artifact.filename), '--access', 'public', '--provenance'], { stdio: 'inherit' });
+      published.push(artifact.name);
+    }
     receipt.published.push(artifact.name);
     await writeFile(receiptPath, canonical(receipt));
   }
-  console.log(`[pi-release] published ${layer}: ${selected.map((item) => item.name).join(' -> ')}`);
+  console.log(`[pi-release] ${layer}: newly published [${published.join(', ') || 'none'}]; complete layer is [${selected.map((item) => item.name).join(', ')}]`);
 };
 const fixtureNative = async () => {
   const state = await load();
@@ -234,13 +242,18 @@ const selfTest = async () => {
   validateAlignment(state);
   const commit = 'a'.repeat(40);
   const empty = Object.fromEntries(packageOrder(state).map((name) => [`${name}@${state.version}`, null]));
-  gateState(state, { clean: true, refType: 'tag', tag: state.contract.canonicalVersion.tag, commit, tagCommit: commit }, empty);
+  const canonicalInput = { clean: true, refType: 'tag', tag: state.contract.canonicalVersion.tag, commit, tagCommit: commit };
+  const fresh = gateState(state, canonicalInput, empty);
+  if (fresh.pending.length !== 7 || fresh.live.length !== 0) fail('ASGREP_RELEASE_SELF_TEST', 'a fresh version must plan to publish all seven packages');
+  const partialObserved = { ...empty, [`${state.launcher.name}@${state.version}`]: state.version, [`${state.matrix.targets[0].package}@${state.version}`]: state.version };
+  const partial = gateState(state, canonicalInput, partialObserved);
+  if (partial.live.length !== 2 || partial.pending.length !== 5 || partial.pending.includes(state.launcher.name)) fail('ASGREP_RELEASE_SELF_TEST', 'a partial version must skip live packages and re-publish only the remainder');
   const rejected = [];
   const expect = (label, callback) => { try { callback(); } catch (error) { rejected.push(`${label}=${error.message.split(':')[0]}`); return; } fail('ASGREP_RELEASE_SELF_TEST', `${label} was accepted`); };
-  expect('dirty', () => gateState(state, { clean: false, refType: 'tag', tag: state.contract.canonicalVersion.tag, commit, tagCommit: commit }, empty));
-  expect('wrong-tag', () => gateState(state, { clean: true, refType: 'tag', tag: 'v0.0.0', commit, tagCommit: commit }, empty));
-  expect('wrong-commit', () => gateState(state, { clean: true, refType: 'tag', tag: state.contract.canonicalVersion.tag, commit, tagCommit: 'b'.repeat(40) }, empty));
-  expect('duplicate', () => gateState(state, { clean: true, refType: 'tag', tag: state.contract.canonicalVersion.tag, commit, tagCommit: commit }, { ...empty, [`${state.launcher.name}@${state.version}`]: state.version }));
+  expect('dirty', () => gateState(state, { ...canonicalInput, clean: false }, empty));
+  expect('wrong-tag', () => gateState(state, { ...canonicalInput, tag: 'v0.0.0' }, empty));
+  expect('wrong-commit', () => gateState(state, { ...canonicalInput, tagCommit: 'b'.repeat(40) }, empty));
+  expect('fully-published', () => gateState(state, canonicalInput, Object.fromEntries(packageOrder(state).map((name) => [`${name}@${state.version}`, state.version]))));
   expect('version-skew', () => validateAlignment({ ...state, launcher: { ...state.launcher, version: '0.0.0' } }));
   expect('missing-checksum', () => validateChecksumRecord(state.matrix.targets[0], null, '0'.repeat(64)));
   expect('checksum-mismatch', () => validateChecksumRecord(state.matrix.targets[0], `${'1'.repeat(64)}  asgrep`, '0'.repeat(64)));

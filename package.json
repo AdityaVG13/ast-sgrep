@@ -11,6 +11,7 @@
     "check:pi-release": "node packages/pi/scripts/check-native-workflow.mjs",
     "pack:pi-release": "node packages/pi/scripts/release-acceptance.mjs pack",
     "test:pi-release-gate": "node packages/pi/scripts/release-acceptance.mjs self-test",
-    "test:pi-e2e": "node packages/pi/scripts/release-gate-e2e.mjs"
+    "test:pi-e2e": "node packages/pi/scripts/release-gate-e2e.mjs",
+    "release:preflight": "node packages/pi/scripts/release-preflight.mjs"
   }
 }
