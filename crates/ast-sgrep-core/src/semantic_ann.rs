@@ -372,8 +372,9 @@ fn ann_session_key(store: &IndexStore, chunks: &[SemanticChunkRow]) -> Result<([
     let backend = store
         .get_meta("embed_backend")?
         .unwrap_or_else(|| "semantic".into());
+    let data_version = store.semantic_data_version()?;
     Ok((
-        compute_ann_fingerprint(chunks.len(), max_id, dim, Some(&backend)),
+        compute_ann_fingerprint(chunks.len(), max_id, dim, Some(&backend), data_version),
         store.db_path().to_string_lossy().into_owned(),
     ))
 }

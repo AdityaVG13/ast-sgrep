@@ -25,6 +25,7 @@ struct SemanticCache {
     lang_filter: Option<String>,
     max_id: i64,
     embed_backend: String,
+    data_version: i64,
     chunks: Arc<Vec<SemanticChunkRow>>,
     flat_vectors: Arc<Vec<f32>>,
 }
@@ -279,12 +280,14 @@ fn load_semantic_context(
     let embed_backend = store
         .get_meta("embed_backend")?
         .unwrap_or_else(|| "semantic".into());
+    let data_version = store.semantic_data_version()?;
     {
         let guard = cache.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(c) = guard.as_ref() {
             if c.lang_filter == lang_filter
                 && c.max_id == max_id
                 && c.embed_backend == embed_backend
+                && c.data_version == data_version
             {
                 return Ok(Some(EmbedContext {
                     chunks: Arc::clone(&c.chunks),
@@ -302,6 +305,7 @@ fn load_semantic_context(
         lang_filter,
         max_id,
         embed_backend,
+        data_version,
         chunks: Arc::new(chunks),
         flat_vectors: Arc::new(flat_vectors),
     };
