@@ -125,6 +125,17 @@ fn embed_query_vector(
             )));
         }
     }
+    // Semantic backend version gate: indexes built before the e2hc.13 sign-bit
+    // fix stored embed_backend="semantic" (unversioned) and used only 32 of 256
+    // sign bits, collapsing the effective dimension to 32. The active backend
+    // now stores "semantic-v2". Refuse to serve semantic results against a stale
+    // v1 index so the user reindexes rather than getting garbage similarity.
+    if stored_backend.as_deref() == Some("semantic") {
+        return Err(crate::StoreError::Other(
+            "stored semantic backend is v1 (unversioned; 32-of-256 sign-bit bug); reindex with: asgrep reindex"
+                .into(),
+        ));
+    }
     let dim = stored_dim.unwrap_or(ast_sgrep_embed::default_semantic_dim());
     let cache_key = format!(
         "{}|{}|{}|{:?}",

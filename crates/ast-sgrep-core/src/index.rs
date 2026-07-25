@@ -72,7 +72,7 @@ impl EmbedBackend {
             Self::Cloud => "cloud",
             Self::Ollama => "ollama",
             Self::Neural => "neural",
-            Self::Semantic => "semantic",
+            Self::Semantic => "semantic-v2",
         }
     }
     pub fn parse(s: &str) -> Self {
@@ -80,7 +80,7 @@ impl EmbedBackend {
             "cloud" => Self::Cloud,
             "ollama" => Self::Ollama,
             "neural" | "fastembed" => Self::Neural,
-            "semantic" | "local" => Self::Semantic,
+            "semantic-v2" | "semantic" | "local" => Self::Semantic,
             _ => Self::Auto,
         }
     }

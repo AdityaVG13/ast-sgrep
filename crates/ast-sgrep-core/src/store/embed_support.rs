@@ -60,7 +60,7 @@ pub(super) fn embed_cache_cap() -> usize {
 }
 fn semantic_mid() -> String {
     format!(
-        "semantic:hashed-v1:{}",
+        "semantic:hashed-v2:{}",
         ast_sgrep_embed::default_semantic_dim()
     )
 }
