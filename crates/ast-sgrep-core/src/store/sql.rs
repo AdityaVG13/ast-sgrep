@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS symbols (id INTEGER PRIMARY KEY, file_id INTEGER NOT 
   byte_start INTEGER NOT NULL, byte_end INTEGER NOT NULL,\
   FOREIGN KEY (file_id) REFERENCES files(id) ON DELETE CASCADE);\
 CREATE INDEX IF NOT EXISTS idx_symbols_name ON symbols(name);\
+CREATE INDEX IF NOT EXISTS idx_symbols_name_lower ON symbols(lower(name));\
 CREATE INDEX IF NOT EXISTS idx_symbols_file_id ON symbols(file_id);\
 CREATE TABLE IF NOT EXISTS callers (id INTEGER PRIMARY KEY, file_id INTEGER NOT NULL, caller TEXT NOT NULL,\
   callee TEXT NOT NULL, line_no INTEGER NOT NULL, byte_start INTEGER NOT NULL, byte_end INTEGER NOT NULL,\

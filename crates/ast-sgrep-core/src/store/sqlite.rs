@@ -17,7 +17,7 @@ use rusqlite::{params, Connection, ToSql};
 use std::collections::{BTreeSet, HashMap};
 use std::path::Path;
 use std::sync::Arc;
-const SCHEMA_VERSION: i64 = 5;
+const SCHEMA_VERSION: i64 = 6;
 const IMPORT_SELECT: &str =
     "SELECT f.path, f.language, i.module_path, i.line_no FROM imports i JOIN files f ON f.id = i.file_id";
 const SYM_LOC: &str = "SELECT f.path, s.name, f.language, s.line_start, s.line_end FROM symbols s JOIN files f ON f.id = s.file_id";
@@ -772,7 +772,7 @@ impl IndexStore {
         query_cached_map(
             &self.conn,
             &format!(
-                "{SYM_LOC} WHERE s.name=?1 ORDER BY f.path, s.line_start, s.line_end LIMIT ?2"
+                "{SYM_LOC} WHERE lower(s.name)=lower(?1) ORDER BY f.path, s.line_start, s.line_end LIMIT ?2"
             ),
             params![name, limit as i64],
             read_sym_loc,
