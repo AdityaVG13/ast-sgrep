@@ -116,22 +116,25 @@ fn uppercase_symbol_resolves_through_lsp_search() {
             }],
         )
         .unwrap();
-    // defs:FooBar must find the definition (case-insensitive equality).
-    let defs = backend.search("defs:FooBar", false, 32).unwrap();
+    // defs: with a CASE-MISMATCHED query (lowercase) must still find the uppercase
+    // FooBar definition. A same-case query would pass even if exact_eq_filter
+    // regressed to case-sensitive s.name=?, so the mismatched query is what
+    // actually pins the F-01 case-insensitivity invariant.
+    let defs = backend.search("defs:foobar", false, 32).unwrap();
     let defs_hits = defs["hits"].as_array().unwrap();
     assert!(
         !defs_hits.is_empty(),
-        "defs:FooBar returned no hits; uppercase symbol lookup is broken"
+        "defs:foobar returned no hits; case-insensitive symbol lookup is broken"
     );
     assert!(defs_hits.iter().any(|h| h["excerpt"]
         .as_str()
         .unwrap_or("")
         .contains("fn FooBar")));
-    // callers:FooBar must find the call site in baz.
-    let callers = backend.search("callers:FooBar", false, 32).unwrap();
+    // callers: with a case-mismatched query must find the call site in baz.
+    let callers = backend.search("callers:foobar", false, 32).unwrap();
     let callers_hits = callers["hits"].as_array().unwrap();
     assert!(
         !callers_hits.is_empty(),
-        "callers:FooBar returned no hits; uppercase symbol lookup is broken"
+        "callers:foobar returned no hits; case-insensitive symbol lookup is broken"
     );
 }
