@@ -1,5 +1,6 @@
 use ast_sgrep_lsp::backend::path_to_uri;
-use ast_sgrep_lsp::types::{ExecuteCommandParams, TextDocumentContentChangeEvent};
+use ast_sgrep_lsp::support::apply_text_edit;
+use ast_sgrep_lsp::types::{ExecuteCommandParams, Position, Range, TextDocumentContentChangeEvent};
 use ast_sgrep_testkit::sample_backend;
 #[test]
 fn lsp_smoke() {
@@ -47,4 +48,50 @@ fn successful_read_does_not_heal_failed_index() {
     backend.set_index_path(healthy);
     assert!(backend.search("process_request", false, 1).is_ok());
     assert!(!backend.is_index_ready());
+}
+
+// Regression for bead ast-sgrep-c9os: utf16_span_end consumed the first char on
+// zero-length ranges (rangeLength=0), so every pure insertion VS Code sends
+// deleted the char after the cursor in the mirrored document.
+#[test]
+fn pure_insertion_preserves_following_char() {
+    let insert_at = |line: u32, character: u32, content: &str, text: &str| {
+        apply_text_edit(
+            content,
+            &TextDocumentContentChangeEvent {
+                range: Some(Range {
+                    start: Position { line, character },
+                    end: Position { line, character },
+                }),
+                range_length: Some(0),
+                text: text.to_string(),
+            },
+        )
+    };
+    // ASCII insertion at start: must not eat 'h'.
+    assert_eq!(insert_at(0, 0, "hello", "X"), "Xhello");
+    // ASCII insertion mid-string: must not eat 'l'.
+    assert_eq!(insert_at(0, 2, "hello", "X"), "heXllo");
+    // Multibyte (é = 2 UTF-8 bytes, 1 UTF-16 unit): must not eat 'h'.
+    assert_eq!(insert_at(0, 0, "héllo", "X"), "Xhéllo");
+    // Surrogate pair (😂 = 4 UTF-8 bytes, 2 UTF-16 units) at start: must not eat it.
+    assert_eq!(insert_at(0, 0, "😂ab", "X"), "X😂ab");
+}
+
+// Companion: non-zero range_length still replaces the correct span (no regression
+// from the zero-length early-return).
+#[test]
+fn nonzero_range_length_replaces_correct_span() {
+    let out = apply_text_edit(
+        "hello",
+        &TextDocumentContentChangeEvent {
+            range: Some(Range {
+                start: Position { line: 0, character: 1 },
+                end: Position { line: 0, character: 3 },
+            }),
+            range_length: Some(2),
+            text: "XY".to_string(),
+        },
+    );
+    assert_eq!(out, "hXYlo");
 }
