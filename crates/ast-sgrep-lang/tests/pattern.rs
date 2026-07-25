@@ -1,4 +1,4 @@
-use ast_sgrep_lang::{match_literal_pattern, needs_ast_grep_fallback, Language};
+use ast_sgrep_lang::{match_literal_pattern, match_pattern, needs_ast_grep_fallback, Language};
 use ast_sgrep_testkit::sample_file;
 #[test]
 fn literal_pattern_matches_rust_symbol() {
@@ -74,4 +74,33 @@ fn csharp_pattern_uses_real_grammar_not_java() {
         !call_hits.is_empty(),
         "C# invocation_expression must match call pattern; got {call_hits:?}"
     );
+}
+
+/// difu.1: Per-language pattern conformance — function patterns must match
+/// declarations in all 8 supported languages. This complements the extraction
+/// goldens (which test symbol/call/import extraction) by verifying the pattern
+/// channel works for every language, not just Rust and C#.
+#[test]
+fn function_pattern_matches_all_languages() {
+    let cases: &[(Language, &str, &str)] = &[
+        (Language::Rust, "fn my_func() {}", "my_func"),
+        (Language::Python, "def my_func():\n    pass\n", "my_func"),
+        (Language::Go, "func myFunc() {}\n", "myFunc"),
+        (Language::Java, "class Foo { void myFunc() {} }\n", "myFunc"),
+        (Language::CSharp, "class Foo { void MyFunc() {} }\n", "MyFunc"),
+        (Language::JavaScript, "function myFunc() {}\n", "myFunc"),
+        (Language::TypeScript, "function myFunc(): void {}\n", "myFunc"),
+        (Language::Ruby, "def my_func\nend\n", "my_func"),
+    ];
+    for &(lang, source, expected_name) in cases {
+        let hits = match_pattern(lang, source, "function $NAME($$$)").unwrap();
+        assert!(
+            !hits.is_empty(),
+            "function pattern must match {expected_name} in {lang}; got {hits:?}"
+        );
+        assert!(
+            hits.iter().any(|h| h.excerpt.contains(expected_name)),
+            "function pattern hit for {lang} must contain {expected_name}; got {hits:?}"
+        );
+    }
 }
