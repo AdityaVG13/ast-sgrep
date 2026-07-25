@@ -71,6 +71,55 @@ fn prefixed_modes_are_case_insensitive_on_mixed_case_symbols() {
         defs.hits
     );
 }
+
+/// Regression for Issue #12 / oxbj: `imports:` must return hits when the query
+/// casing differs from the stored module_path casing. `query_imports` uses
+/// `like_terms_filter` (SQLite LIKE, ASCII case-insensitive), so a mixed-case
+/// module path must match case-variant queries. Pre-evidence, `imports:` had no
+/// mixed-case coverage at all.
+#[test]
+fn imports_mode_is_case_insensitive_on_mixed_case_module_path() {
+    let corpus = tempfile::tempdir().unwrap();
+    let index_dir = tempfile::tempdir().unwrap();
+    fs::write(
+        corpus.path().join("app.ts"),
+        "import { Bar } from './Utils';\n",
+    )
+    .unwrap();
+    let index_path = index_dir.path().join("index.db");
+    let mut indexer = Indexer::new(IndexOptions {
+        root: corpus.path().to_path_buf(),
+        index_path: Some(index_path.clone()),
+        force_reindex: true,
+        embed_semantic: false,
+        ..IndexOptions::default()
+    })
+    .unwrap();
+    indexer.index_all().unwrap();
+
+    let searcher = Searcher::new(SearchOptions {
+        root: corpus.path().to_path_buf(),
+        index_path: Some(index_path.clone()),
+        limit: 16,
+        use_embed: false,
+        ..SearchOptions::default()
+    })
+    .unwrap();
+
+    // Query casing differs from stored casing; each must still return an import hit.
+    for q in ["imports:./Utils", "imports:./utils", "imports:./UTILS"] {
+        let resp = searcher.search(q).unwrap();
+        let import_hit = resp
+            .hits
+            .iter()
+            .find(|h| h.kind == HitKind::Import && h.symbol.as_deref() == Some("./Utils"));
+        assert!(
+            import_hit.is_some(),
+            "{q} must return an import hit for module_path './Utils'; got {:#?}",
+            resp.hits
+        );
+    }
+}
 #[test]
 fn parity_embed_backend_and_search_option_wiring() {
     assert_eq!(
