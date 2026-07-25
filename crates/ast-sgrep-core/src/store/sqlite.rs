@@ -487,6 +487,12 @@ impl IndexStore {
         emb: &[EmbeddedChunk],
     ) -> Result<()> {
         if emb.is_empty() {
+            // A re-upsert of an EXISTING file reaches here AFTER upsert_file_row's
+            // delete_file_children already removed its old semantic_chunks. Bump so
+            // SemanticCache + IVF fingerprint detect the mutation (bead ast-sgrep-44a4).
+            // Benign over-bump when the file never had chunks (new file, no chunks):
+            // an extra cache miss, never a stale hit.
+            self.bump_semantic_data_version()?;
             return Ok(());
         }
         if emb.len() < chunks.len() && emb[0].backend == ast_sgrep_embed::EmbedBackendKind::Neural {

@@ -140,3 +140,58 @@ fn clear_all_data_bumps_semantic_data_version() {
         "clear_all_data must bump semantic_data_version"
     );
 }
+
+// Regression for the emb-empty re-upsert path: a re-upsert of an existing file
+// with embed_semantic=false (or empty chunks) reaches insert_semantic_chunks
+// AFTER upsert_file_row's delete_file_children already removed the file's old
+// semantic_chunks. The emb-empty early return must still bump
+// semantic_data_version so SemanticCache + IVF fingerprint detect the deletion
+// (bead ast-sgrep-44a4). Without this bump, a stale cache hit returns deleted
+// chunks as phantom hits.
+#[test]
+fn reupsert_with_empty_chunks_bumps_data_version_after_deleting_old() {
+    let temp = TempDir::new().unwrap();
+    let store = IndexStore::open(temp.path(), None).unwrap();
+
+    // File A with chunks -> version 1.
+    let lines_a = [(1u32, "def foo(): return 1".into())];
+    let chunks_a = [chunk("foo", "def foo(): return 1")];
+    store
+        .upsert_file(base("a.py", &lines_a, "h1", &chunks_a))
+        .unwrap();
+    assert_eq!(store.semantic_data_version().unwrap(), 1);
+
+    // File B with chunks -> version 2; max_id advances past A's chunks.
+    let lines_b = [(1u32, "def bar(): return 2".into())];
+    let chunks_b = [chunk("bar", "def bar(): return 2")];
+    store
+        .upsert_file(base("b.py", &lines_b, "h2", &chunks_b))
+        .unwrap();
+    let v_after_b = store.semantic_data_version().unwrap();
+    assert_eq!(v_after_b, 2);
+    assert_eq!(
+        store.semantic_chunk_stats(None).unwrap().count,
+        2,
+        "two chunks indexed"
+    );
+
+    // Re-upsert file A with NO chunks (empty slice). The structure fingerprint
+    // differs (chunks went [foo] -> []), so upsert_file_inner runs:
+    // upsert_file_row deletes A's old chunks via delete_file_children, then
+    // insert_semantic_chunks hits the emb-empty early return. The bump on that
+    // path is what this test guards. embed_semantic stays true but emb is empty
+    // because the chunks slice is empty.
+    store
+        .upsert_file(base("a.py", &lines_a, "h3", &[]))
+        .unwrap();
+    let v_after_reupsert = store.semantic_data_version().unwrap();
+    assert_eq!(
+        v_after_reupsert, 3,
+        "emb-empty re-upsert that deleted old chunks must bump semantic_data_version"
+    );
+    assert_eq!(
+        store.semantic_chunk_stats(None).unwrap().count,
+        1,
+        "only file B's chunk remains after A's chunks were deleted"
+    );
+}
