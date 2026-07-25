@@ -95,3 +95,43 @@ fn nonzero_range_length_replaces_correct_span() {
     );
     assert_eq!(out, "hXYlo");
 }
+
+// Regression for bead ast-sgrep-nuli (F-04): find_references/goto_definition
+// returned empty on uppercase symbols. The bead notes this inherits from F-01;
+// search_callers/search_defs now use exact_eq_filter (lower()=lower()) so the
+// path is case-insensitive. This test pins that invariant: an uppercase symbol
+// FooBar must resolve through defs: and callers: via the LSP search surface.
+#[test]
+fn uppercase_symbol_resolves_through_lsp_search() {
+    let (_indexed, backend) = sample_backend();
+    let uri = path_to_uri(&backend.root().join("src/main.rs"));
+    // Index a file with an uppercase symbol that is both defined and called.
+    backend
+        .apply_document_changes(
+            &uri,
+            &[TextDocumentContentChangeEvent {
+                range: None,
+                range_length: None,
+                text: "fn FooBar() { baz(); }\nfn baz() { FooBar(); }\n".into(),
+            }],
+        )
+        .unwrap();
+    // defs:FooBar must find the definition (case-insensitive equality).
+    let defs = backend.search("defs:FooBar", false, 32).unwrap();
+    let defs_hits = defs["hits"].as_array().unwrap();
+    assert!(
+        !defs_hits.is_empty(),
+        "defs:FooBar returned no hits; uppercase symbol lookup is broken"
+    );
+    assert!(defs_hits.iter().any(|h| h["excerpt"]
+        .as_str()
+        .unwrap_or("")
+        .contains("fn FooBar")));
+    // callers:FooBar must find the call site in baz.
+    let callers = backend.search("callers:FooBar", false, 32).unwrap();
+    let callers_hits = callers["hits"].as_array().unwrap();
+    assert!(
+        !callers_hits.is_empty(),
+        "callers:FooBar returned no hits; uppercase symbol lookup is broken"
+    );
+}
