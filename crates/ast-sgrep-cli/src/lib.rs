@@ -720,17 +720,55 @@ fn run_watch(root: &Path, cli: &Cli, debounce_ms: u64) -> anyhow::Result<()> {
         initial.files_indexed, initial.files_skipped
     );
     let debounce = Duration::from_millis(debounce_ms);
+    // Max-latency bound: force a flush after this much wall time regardless of
+    // event arrival rate. Without it, rx.recv_timeout(debounce) resets on every
+    // event, so an event stream faster than debounce means Timeout never fires,
+    // pending grows unbounded, and no indexing ever happens (bead ast-sgrep-jsfn).
+    // k=3 gives the quiet-gap coalescer room to batch while bounding staleness.
+    let max_latency = debounce * 3;
     let mut pending = HashSet::new();
     let mut full = false;
+    let mut first_pending: Option<Instant> = None;
+    // Filter self-events from the index directory (.asgrep/) so index writes do
+    // not re-trigger indexing. The index lives under <root>/.asgrep/.
+    let index_dir = root.join(".asgrep");
+    let is_self_event = |paths: &[std::path::PathBuf]| -> bool {
+        paths.iter().all(|p| p.starts_with(&index_dir))
+    };
     loop {
         match rx.recv_timeout(debounce) {
-            Ok(Ok(ev)) => match ev.kind {
-                EventKind::Modify(_) | EventKind::Create(_) | EventKind::Remove(_) => {
-                    pending.extend(ev.paths)
+            Ok(Ok(ev)) => {
+                if is_self_event(&ev.paths) {
+                    continue;
                 }
-                EventKind::Other | EventKind::Any => full = true,
-                _ => {}
-            },
+                match ev.kind {
+                    EventKind::Modify(_) | EventKind::Create(_) | EventKind::Remove(_) => {
+                        pending.extend(ev.paths);
+                        if first_pending.is_none() {
+                            first_pending = Some(Instant::now());
+                        }
+                        // Force flush under sustained event flood once the
+                        // max-latency bound is exceeded.
+                        if let Some(fp) = first_pending {
+                            if fp.elapsed() >= max_latency && !pending.is_empty() {
+                                let paths: Vec<_> = pending.drain().collect();
+                                let t0 = Instant::now();
+                                let s = indexer.update_paths(&paths)?;
+                                let ms = t0.elapsed().as_secs_f64() * 1000.0;
+                                if s.files_indexed + s.files_removed + s.files_failed > 0 {
+                                    eprintln!(
+                                        "[asgrep] flushed {} file(s) after max-latency bound ({ms:.3}ms)",
+                                        s.files_indexed
+                                    );
+                                }
+                                first_pending = None;
+                            }
+                        }
+                    }
+                    EventKind::Other | EventKind::Any => full = true,
+                    _ => {}
+                }
+            }
             Ok(Err(e)) => eprintln!("[asgrep] watch error: {e}"),
             Err(RecvTimeoutError::Timeout) if full => {
                 let s = indexer.index_all()?;
@@ -740,6 +778,7 @@ fn run_watch(root: &Path, cli: &Cli, debounce_ms: u64) -> anyhow::Result<()> {
                 );
                 full = false;
                 pending.clear();
+                first_pending = None;
             }
             Err(RecvTimeoutError::Timeout) if !pending.is_empty() => {
                 let paths: Vec<_> = pending.drain().collect();
@@ -752,9 +791,10 @@ fn run_watch(root: &Path, cli: &Cli, debounce_ms: u64) -> anyhow::Result<()> {
                         s.files_indexed, s.files_removed, s.files_skipped
                     );
                 }
+                first_pending = None;
             }
             Err(RecvTimeoutError::Timeout) if indexer.deferred_rebuilds_pending() => {
-                let t0 = Instant::now();
+                let t0 = std::time::Instant::now();
                 indexer.flush_deferred_rebuilds()?;
                 eprintln!(
                     "[asgrep] deferred rebuilds done in {:.1}ms",
