@@ -91,6 +91,7 @@ fn function_pattern_matches_all_languages() {
         (Language::JavaScript, "function myFunc() {}\n", "myFunc"),
         (Language::TypeScript, "function myFunc(): void {}\n", "myFunc"),
         (Language::Ruby, "def my_func\nend\n", "my_func"),
+        (Language::Swift, "func myFunc() {}\n", "myFunc"),
     ];
     for &(lang, source, expected_name) in cases {
         let hits = match_pattern(lang, source, "function $NAME($$$)").unwrap();

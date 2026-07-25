@@ -48,6 +48,7 @@ pub fn tree_sitter_language(lang: Language) -> tree_sitter::Language {
         // tree_sitter_c_sharp).
         Language::CSharp => tree_sitter_c_sharp::LANGUAGE.into(),
         Language::Ruby => tree_sitter_ruby::LANGUAGE.into(),
+        Language::Swift => tree_sitter_swift::LANGUAGE.into(),
     }
 }
 
@@ -267,6 +268,9 @@ fn function_queries(lang: Language) -> Vec<&'static str> {
             "(method name: (identifier) @name) @match",
             "(singleton_method name: (identifier) @name) @match",
         ],
+        Language::Swift => vec![
+            "(function_declaration name: (identifier) @name) @match",
+        ],
     }
 }
 
@@ -295,6 +299,12 @@ fn class_queries(lang: Language) -> Vec<&'static str> {
             vec!["(class_declaration name: (identifier) @name) @match"]
         }
         Language::Ruby => vec!["(class name: (constant) @name) @match"],
+        Language::Swift => vec![
+            "(class_declaration name: (identifier) @name) @match",
+            "(struct_declaration name: (identifier) @name) @match",
+            "(protocol_declaration name: (identifier) @name) @match",
+            "(enum_declaration name: (identifier) @name) @match",
+        ],
     }
 }
 
@@ -501,8 +511,10 @@ fn declaration_prefix(kind: &str) -> Option<&'static str> {
         "class_definition" | "class_declaration" | "class" | "record_declaration" => {
             Some("class")
         }
-        "trait_item" | "interface_declaration" => Some("interface"),
-        "enum_item" | "enum_declaration" | "struct_declaration" => Some("struct"),
+        "trait_item" | "interface_declaration" | "protocol_declaration" => Some("interface"),
+        "enum_item" | "enum_declaration" | "struct_declaration" | "actor_declaration" => {
+            Some("struct")
+        }
         _ => None,
     }
 }

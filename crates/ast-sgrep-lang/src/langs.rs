@@ -41,6 +41,7 @@ const CS_TYPES: &[&str] = &[
     "record_declaration",
 ];
 const RB_CLASS: &[&str] = &["class"];
+const SWIFT_TYPES: &[&str] = &["class_declaration", "struct_declaration", "actor_declaration"];
 const GO_TYPE_CASES: &[(&str, SymbolKind)] = &[("interface_type", Interface)];
 const RUBY_REQUIRE: &[&str] = &["require", "require_relative", "load"];
 
@@ -128,6 +129,20 @@ const RUBY: &[(&str, KindRule)] = &[
     ("call",   CallOrImport("method", RUBY_REQUIRE, "arguments")),
 ];
 
+// ─── Swift ──────────────────────────────────────────────────────────────────
+
+#[rustfmt::skip]
+const SWIFT: &[(&str, KindRule)] = &[
+    ("function_declaration",     MethodIn(SWIFT_TYPES)),
+    ("class_declaration",        Sym(Class)),
+    ("struct_declaration",       Sym(Type)),
+    ("actor_declaration",        Sym(Type)),
+    ("protocol_declaration",     Sym(Interface)),
+    ("enum_declaration",         Sym(Enum)),
+    ("call_expression",          Call("function")),
+    ("import_declaration",       ImportJoin(".")),
+];
+
 /// Shared TypeScript + JavaScript rules (same grammar shape for decls/calls/imports).
 #[rustfmt::skip]
 const TS_JS: &[(&str, KindRule)] = &[
@@ -153,6 +168,7 @@ parser!(GoParser, Go, tree_sitter_go::LANGUAGE, GO);
 parser!(JavaParser, Java, tree_sitter_java::LANGUAGE, JAVA);
 parser!(CSharpParser, CSharp, tree_sitter_c_sharp::LANGUAGE, CSHARP);
 parser!(RubyParser, Ruby, tree_sitter_ruby::LANGUAGE, RUBY);
+parser!(SwiftParser, Swift, tree_sitter_swift::LANGUAGE, SWIFT);
 parser!(
     TypeScriptParser,
     TypeScript,

@@ -11,6 +11,7 @@ pub enum Language {
     Java,
     CSharp,
     Ruby,
+    Swift,
 }
 impl Language {
     pub fn as_str(self) -> &'static str {
@@ -23,6 +24,7 @@ impl Language {
             Language::Java => "java",
             Language::CSharp => "csharp",
             Language::Ruby => "ruby",
+            Language::Swift => "swift",
         }
     }
     pub fn all() -> &'static [Language] {
@@ -35,6 +37,7 @@ impl Language {
             Language::Java,
             Language::CSharp,
             Language::Ruby,
+            Language::Swift,
         ]
     }
 }
@@ -101,6 +104,7 @@ pub fn detect_language(path: &Path, content: Option<&str>) -> Option<Language> {
             "java" => Some(Language::Java),
             "cs" => Some(Language::CSharp),
             "rb" => Some(Language::Ruby),
+            "swift" => Some(Language::Swift),
             _ => None,
         };
         if lang.is_some() {
@@ -152,7 +156,7 @@ mod langs;
 mod pattern;
 use langs::{
     CSharpParser, GoParser, JavaParser, JavaScriptParser, PythonParser, RubyParser, RustParser,
-    TypeScriptParser,
+    SwiftParser, TypeScriptParser,
 };
 pub use pattern::{
     match_literal_pattern, match_pattern, needs_ast_grep_fallback, tree_sitter_language,
@@ -168,5 +172,6 @@ fn make_parser(lang: Language) -> Box<dyn LanguageParser> {
         Language::Java => Box::new(JavaParser),
         Language::CSharp => Box::new(CSharpParser),
         Language::Ruby => Box::new(RubyParser),
+        Language::Swift => Box::new(SwiftParser),
     }
 }

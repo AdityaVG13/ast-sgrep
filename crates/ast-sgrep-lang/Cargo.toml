@@ -26,6 +26,7 @@ tree-sitter-ruby = "0.23"
 tree-sitter-rust.workspace = true
 tree-sitter-typescript.workspace = true
 tree-sitter-c-sharp = "0.23"
+tree-sitter-swift = "0.7"
 
 [dev-dependencies]
 ast-sgrep-testkit = { path = "../ast-sgrep-testkit" }
