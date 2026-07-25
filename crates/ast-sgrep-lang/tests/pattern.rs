@@ -46,3 +46,32 @@ fn structural_fn_pattern_matches_rust_source() {
         "expected native structural matches for fn $NAME($$$)"
     );
 }
+
+/// difu.5: C# patterns must use the real tree-sitter-c-sharp grammar, not Java.
+/// Pre-fix, tree_sitter_language(CSharp) returned the Java grammar, causing
+/// misparses of C#-specific syntax. Also is_call_kind lacked invocation_expression
+/// so C# calls produced zero pattern signatures.
+#[test]
+fn csharp_pattern_uses_real_grammar_not_java() {
+    use ast_sgrep_lang::{match_pattern, tree_sitter_language};
+    // The C# and Java grammars must be different tree-sitter languages.
+    let cs_grammar = tree_sitter_language(Language::CSharp);
+    let java_grammar = tree_sitter_language(Language::Java);
+    assert_ne!(
+        cs_grammar, java_grammar,
+        "C# and Java must use different tree-sitter grammars"
+    );
+    let source = "struct Point { public int X; public int Y; }\nclass Program { static void Main() { Helper(); } }\n";
+    // Function pattern should match method Main via the C# grammar.
+    let hits = match_pattern(Language::CSharp, source, "function $NAME($$$)").unwrap();
+    assert!(
+        !hits.is_empty(),
+        "C# method declarations must match with the real C# grammar; got {hits:?}"
+    );
+    // Call pattern should match Helper() invocation_expression.
+    let call_hits = match_pattern(Language::CSharp, source, "Helper($$$)").unwrap();
+    assert!(
+        !call_hits.is_empty(),
+        "C# invocation_expression must match call pattern; got {call_hits:?}"
+    );
+}

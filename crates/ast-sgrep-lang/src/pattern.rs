@@ -40,7 +40,13 @@ pub fn tree_sitter_language(lang: Language) -> tree_sitter::Language {
         Language::JavaScript => tree_sitter_typescript::LANGUAGE_TSX.into(),
         Language::Python => tree_sitter_python::LANGUAGE.into(),
         Language::Go => tree_sitter_go::LANGUAGE.into(),
-        Language::Java | Language::CSharp => tree_sitter_java::LANGUAGE.into(),
+        Language::Java => tree_sitter_java::LANGUAGE.into(),
+        // e2hc/difu.5: C# patterns were parsed with the Java grammar, causing
+        // misparses of C#-specific syntax (properties, namespaces, attributes,
+        // var, expression-bodied members). Use the real C# grammar so the
+        // pattern channel agrees with the extraction channel (langs.rs uses
+        // tree_sitter_c_sharp).
+        Language::CSharp => tree_sitter_c_sharp::LANGUAGE.into(),
         Language::Ruby => tree_sitter_ruby::LANGUAGE.into(),
     }
 }
@@ -242,9 +248,15 @@ fn function_queries(lang: Language) -> Vec<&'static str> {
         ],
         Language::Python => vec!["(function_definition name: (identifier) @name) @match"],
         Language::Go => vec!["(function_declaration name: (identifier) @name) @match"],
-        Language::Java | Language::CSharp => vec![
+        Language::Java => vec![
             "(method_declaration name: (identifier) @name) @match",
             "(constructor_declaration name: (identifier) @name) @match",
+        ],
+        // e2hc/difu.5: C# has local_function_statement in addition to methods.
+        Language::CSharp => vec![
+            "(method_declaration name: (identifier) @name) @match",
+            "(constructor_declaration name: (identifier) @name) @match",
+            "(local_function_statement name: (identifier) @name) @match",
         ],
         Language::JavaScript | Language::TypeScript => vec![
             "(function_declaration name: (identifier) @name) @match",
@@ -267,9 +279,17 @@ fn class_queries(lang: Language) -> Vec<&'static str> {
         ],
         Language::Python => vec!["(class_definition name: (identifier) @name) @match"],
         Language::Go => vec!["(type_declaration (type_spec name: (type_identifier) @name) @match)"],
-        Language::Java | Language::CSharp => vec![
+        Language::Java => vec![
             "(class_declaration name: (identifier) @name) @match",
             "(interface_declaration name: (identifier) @name) @match",
+        ],
+        // e2hc/difu.5: C# has struct, record, and enum declarations.
+        Language::CSharp => vec![
+            "(class_declaration name: (identifier) @name) @match",
+            "(interface_declaration name: (identifier) @name) @match",
+            "(struct_declaration name: (identifier) @name) @match",
+            "(record_declaration name: (identifier) @name) @match",
+            "(enum_declaration name: (identifier) @name) @match",
         ],
         Language::JavaScript | Language::TypeScript => {
             vec!["(class_declaration name: (identifier) @name) @match"]
@@ -476,18 +496,25 @@ fn declaration_prefix(kind: &str) -> Option<&'static str> {
         "function_item" => Some("fn"),
         "struct_item" => Some("struct"),
         "function_definition" => Some("def"),
-        "function_declaration" | "method_definition" | "method_declaration" | "method" => {
-            Some("function")
+        "function_declaration" | "method_definition" | "method_declaration"
+        | "method" | "local_function_statement" => Some("function"),
+        "class_definition" | "class_declaration" | "class" | "record_declaration" => {
+            Some("class")
         }
-        "class_definition" | "class_declaration" | "class" => Some("class"),
         "trait_item" | "interface_declaration" => Some("interface"),
-        "enum_item" => Some("enum"),
+        "enum_item" | "enum_declaration" | "struct_declaration" => Some("struct"),
         _ => None,
     }
 }
 
 fn is_call_kind(kind: &str) -> bool {
-    matches!(kind, "call_expression" | "call" | "method_invocation")
+    // e2hc/difu.5: invocation_expression is the C# tree-sitter grammar's call
+    // node kind. Without it, collect_pattern_nodes emits ZERO call signatures
+    // for C# files.
+    matches!(
+        kind,
+        "call_expression" | "call" | "method_invocation" | "invocation_expression"
+    )
 }
 
 fn call_target<'a>(node: &Node<'a>, source: &'a str) -> Option<&'a str> {
