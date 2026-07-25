@@ -9,7 +9,7 @@ fn semantic_ivf_roundtrip_and_fingerprint_gate() {
     let dim = 4usize;
     let vectors: Vec<f32> = (0..24).map(|i| i as f32 * 0.1).collect();
     let index = SemanticAnnIndex::build_from_flat(&vectors, dim);
-    let fingerprint = compute_ann_fingerprint(6, 6, dim, Some("test"));
+    let fingerprint = compute_ann_fingerprint(6, 6, dim, Some("test"), 0);
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("semantic.ivf");
     save_semantic_ivf(&path, fingerprint, dim, &vectors, &index).unwrap();
@@ -19,7 +19,7 @@ fn semantic_ivf_roundtrip_and_fingerprint_gate() {
     assert_eq!(loaded.dim, dim);
     assert_eq!(loaded.vectors, vectors);
     assert_eq!(loaded.fingerprint, fingerprint);
-    let wrong_fp = compute_ann_fingerprint(6, 5, dim, Some("test"));
+    let wrong_fp = compute_ann_fingerprint(6, 5, dim, Some("test"), 0);
     assert!(load_semantic_ivf(&path, wrong_fp).unwrap().is_none());
     let unchecked = load_semantic_ivf_unchecked(&path)
         .unwrap()
