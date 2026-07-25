@@ -228,14 +228,18 @@ fn parity_index_defs_hybrid_chain() {
         callers.hits
     );
     let nl = searcher.search("credential renewal").unwrap();
+    // e2hc.19(b): The old oracle accepted ANY Embed hit via
+    // `|| h.kind == HitKind::Embed`, making the assertion vacuous — an
+    // irrelevant semantic chunk would satisfy it. Removed that clause so the
+    // oracle requires an actually-relevant hit: either the symbol is
+    // auth_refresh or the excerpt mentions it.
     assert!(
         !nl.hits.is_empty()
             && nl
                 .hits
                 .iter()
                 .any(|h| h.symbol.as_deref() == Some("auth_refresh")
-                    || h.excerpt.contains("auth_refresh")
-                    || h.kind == HitKind::Embed),
+                    || h.excerpt.contains("auth_refresh")),
         "NL/hybrid should surface auth_refresh; got {:#?}",
         nl.hits
     );
