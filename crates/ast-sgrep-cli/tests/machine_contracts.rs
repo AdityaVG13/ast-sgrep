@@ -158,6 +158,26 @@ fn agent_search_modes_are_stable_and_bounded() {
         assert!(hit["preview"].as_str().expect("preview").chars().count() <= 121);
         assert!(hit["excerpt"].as_str().expect("excerpt").lines().count() <= 2);
     }
+    let compact = session.search_json(
+        "process_request",
+        &[
+            "--no-embed",
+            "--limit",
+            "2",
+            "--format",
+            "compact",
+            "--snippet-tokens",
+            "12",
+            "--response-snippet-tokens",
+            "16",
+        ],
+    );
+    assert_shape(&compact, &shapes["compact"]);
+    assert!(compact["h"].as_array().expect("compact hits").len() <= 2);
+    assert!(compact["p"].is_object());
+    assert_eq!(compact["b"][0], 12);
+    assert_eq!(compact["b"][1], 16);
+    assert!(compact["b"][2].as_u64().expect("used budget") <= 16);
 }
 #[test]
 fn chain_eval_and_bench_successes_use_machine_envelope() {

@@ -71,6 +71,12 @@ pub(crate) struct Cli {
     format: Option<String>,
     #[arg(long, global = true, default_value = "0", value_name = "N", value_parser = parse_excerpt_lines)]
     excerpt_lines: usize,
+    /// Conservative UTF-8 token-unit ceiling per compact result
+    #[arg(long, global = true, default_value_t = DEFAULT_SNIPPET_TOKENS, value_parser = parse_snippet_tokens)]
+    snippet_tokens: usize,
+    /// Conservative UTF-8 token-unit ceiling across compact snippets
+    #[arg(long, global = true, default_value_t = DEFAULT_RESPONSE_SNIPPET_TOKENS, value_parser = parse_response_snippet_tokens)]
+    response_snippet_tokens: usize,
     #[arg(value_name = "ROOT", default_value = ".")]
     search_root: PathBuf,
 }
@@ -123,6 +129,10 @@ struct VersionArgs {
 const MACHINE_SCHEMA_VERSION: &str = "1.0.0";
 const MAX_OUTPUT_RESULTS: usize = 1_000;
 const MAX_EXCERPT_LINES: usize = 100;
+const DEFAULT_SNIPPET_TOKENS: usize = 96;
+const DEFAULT_RESPONSE_SNIPPET_TOKENS: usize = 768;
+const MAX_SNIPPET_TOKENS: usize = 4_096;
+const MAX_RESPONSE_SNIPPET_TOKENS: usize = 65_536;
 const MAX_ERROR_MESSAGE_CHARS: usize = 4_096;
 const MAX_QUERIES_FILE_LINES: usize = 1000;
 #[derive(Debug)]
@@ -150,6 +160,16 @@ fn parse_output_limit(raw: &str) -> Result<usize, String> {
 }
 fn parse_excerpt_lines(raw: &str) -> Result<usize, String> {
     parse_bounded_usize(raw, MAX_EXCERPT_LINES, "--excerpt-lines")
+}
+fn parse_snippet_tokens(raw: &str) -> Result<usize, String> {
+    parse_bounded_usize(raw, MAX_SNIPPET_TOKENS, "--snippet-tokens")
+}
+fn parse_response_snippet_tokens(raw: &str) -> Result<usize, String> {
+    parse_bounded_usize(
+        raw,
+        MAX_RESPONSE_SNIPPET_TOKENS,
+        "--response-snippet-tokens",
+    )
 }
 pub fn main() -> anyhow::Result<()> {
     #[cfg(not(unix))]
@@ -297,10 +317,19 @@ pub(crate) fn print_machine_json(
     command: &str,
     value: impl serde::Serialize,
 ) -> anyhow::Result<()> {
-    println!(
-        "{}",
-        serde_json::to_string_pretty(&machine_value(command, value)?)?
-    );
+    print_machine_json_with_style(command, value, false)
+}
+fn print_machine_json_with_style(
+    command: &str,
+    value: impl serde::Serialize,
+    compact: bool,
+) -> anyhow::Result<()> {
+    let value = machine_value(command, value)?;
+    if compact {
+        println!("{}", serde_json::to_string(&value)?);
+    } else {
+        println!("{}", serde_json::to_string_pretty(&value)?);
+    }
     Ok(())
 }
 fn print_machine_failure(command: &str, kind: &str, exit_code: i32, message: &str) {
@@ -461,15 +490,12 @@ fn run_keyword_search(root: &Path, cli: &Cli, query: &str) -> anyhow::Result<()>
     let format = match cli.format.as_deref() {
         Some(raw) => ast_sgrep_plugins::OutputFormat::parse(raw).ok_or_else(|| {
             usage_error(format!(
-                "unknown output format {raw:?}; expected native, agent, agent-capsule, github, or gitlab"
+                "unknown output format {raw:?}; expected native, agent, agent-capsule, compact, github, or gitlab"
             ))
         })?,
         None => ast_sgrep_plugins::OutputFormat::Native,
     };
-    print_machine_json(
-        "keyword",
-        ast_sgrep_plugins::format_response_with(&response, format, cli.excerpt_lines),
-    )
+    print_search_response("keyword", &response, format, cli)
 }
 
 fn run_search(root: &Path, cli: &Cli, query: &str, semantic: bool) -> anyhow::Result<()> {
@@ -493,14 +519,37 @@ fn run_search(root: &Path, cli: &Cli, query: &str, semantic: bool) -> anyhow::Re
     let format = match cli.format.as_deref() {
         Some(raw) => ast_sgrep_plugins::OutputFormat::parse(raw).ok_or_else(|| {
             usage_error(format!(
-                "unknown output format {raw:?}; expected native, agent, agent-capsule, github, or gitlab"
+                "unknown output format {raw:?}; expected native, agent, agent-capsule, compact, github, or gitlab"
             ))
         })?,
         None => default,
     };
-    print_machine_json(
+    print_search_response(
         if semantic { "semantic" } else { "search" },
-        ast_sgrep_plugins::format_response_with(&response, format, cli.excerpt_lines),
+        &response,
+        format,
+        cli,
+    )
+}
+fn print_search_response(
+    command: &str,
+    response: &ast_sgrep_core::SearchResponse,
+    format: ast_sgrep_plugins::OutputFormat,
+    cli: &Cli,
+) -> anyhow::Result<()> {
+    let value = ast_sgrep_plugins::format_response_with_budget(
+        response,
+        format,
+        cli.excerpt_lines,
+        ast_sgrep_plugins::CompactBudget {
+            per_result_tokens: cli.snippet_tokens,
+            response_tokens: cli.response_snippet_tokens,
+        },
+    );
+    print_machine_json_with_style(
+        command,
+        value,
+        format == ast_sgrep_plugins::OutputFormat::Compact,
     )
 }
 fn print_json_or<T: serde::Serialize>(

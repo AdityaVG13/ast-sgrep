@@ -38,6 +38,33 @@ fn cli_smoke() {
     assert!(keyword_hits.iter().all(|hit| hit["ref"].is_string()));
     assert!(keyword_hits.iter().all(|hit| hit.get("excerpt").is_none()));
 
+    let compact = session.run_success(&[
+        "--index-path",
+        session.index_path.to_str().unwrap(),
+        "--json",
+        "--no-embed",
+        "--format",
+        "compact",
+        "--snippet-tokens",
+        "8",
+        "--response-snippet-tokens",
+        "10",
+        "--",
+        "process_request",
+        session.root.to_str().unwrap(),
+    ]);
+    assert_eq!(
+        compact.stdout.iter().filter(|byte| **byte == b'\n').count(),
+        1,
+        "compact output has no pretty-print decoration"
+    );
+    let compact: serde_json::Value = serde_json::from_slice(&compact.stdout).unwrap();
+    assert_eq!(compact["b"][0], 8);
+    assert_eq!(compact["b"][1], 10);
+    assert!(compact["b"][2].as_u64().unwrap() <= 10);
+    assert!(!compact["h"].as_array().unwrap().is_empty());
+    assert!(compact["p"].is_object());
+
     let github = session.search_json("process_request", &["--format", "github"]);
     assert!(github["items"].is_array());
     assert!(github["items"]

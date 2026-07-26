@@ -151,7 +151,7 @@ Canonical table: [head-to-head.md](benchmarks/results/head-to-head.md). Index: [
 | **MCP** | `cargo build --release -p ast-sgrep-mcp` | AI agents (stdio) |
 | **LSP** | `cargo build --release -p ast-sgrep-lsp` | Editor navigation |
 | **Library** | `ast-sgrep-core` | Embed search in Rust tools |
-| **JSON plugins** | `--format agent\|github\|gitlab\|agent-capsule` | Agents / CI |
+| **JSON plugins** | `--format compact\|agent\|agent-capsule\|github\|gitlab` | Agents / CI |
 
 ---
 

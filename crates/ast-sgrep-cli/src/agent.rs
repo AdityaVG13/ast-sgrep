@@ -59,20 +59,20 @@ pub(crate) fn capabilities_json(_cli: &Cli) -> anyhow::Result<Value> {
         "description": "Polyglot hybrid code search (lexical + structural + semantic)",
         "agent_contract": {"stdout": "data payloads only when --json / robot modes are set", "stderr": "human hints and diagnostics", "deterministic": "stable JSON key ordering via serde_json; disable color with NO_COLOR=1"},
         "commands": [
-            {"name": "search", "usage": "asgrep [--json] [--format agent] \"QUERY\" [ROOT]", "robot_output": "--json [--format native|agent|agent-capsule|github|gitlab]"},
-            {"name": "keyword", "usage": "asgrep keyword \"QUERY\" [ROOT] [--json]", "robot_output": "--json [--format native|agent-capsule]"},
+            {"name": "search", "usage": "asgrep [--json] [--format compact] \"QUERY\" [ROOT]", "robot_output": "--json [--format native|agent|agent-capsule|compact|github|gitlab]"},
+            {"name": "keyword", "usage": "asgrep keyword \"QUERY\" [ROOT] [--json]", "robot_output": "--json [--format native|agent-capsule|compact]"},
             {"name": "semantic", "usage": "asgrep semantic \"QUERY\" [ROOT] [--json]", "robot_output": "--json (defaults to agent format)"},
             {"name": "index", "usage": "asgrep index [ROOT] [--json]"}, {"name": "status", "usage": "asgrep status [ROOT] [--json]"},
             {"name": "reindex", "usage": "asgrep reindex [ROOT] [--json]"}, {"name": "capabilities", "usage": "asgrep capabilities --json"},
             {"name": "version", "usage": "asgrep version --json"}, {"name": "robot-docs", "usage": "asgrep robot-docs guide"},
             {"name": "doctor", "usage": "asgrep doctor [ROOT] --json | --robot-triage"},
         ],
-        "global_flags": ["--json", "--root", "--limit", "--index-path", "--lang", "--format", "--no-embed", "--tantivy", "--ann-threshold"],
+        "global_flags": ["--json", "--root", "--limit", "--index-path", "--lang", "--format", "--snippet-tokens", "--response-snippet-tokens", "--no-embed", "--tantivy", "--ann-threshold"],
         "environment": ["ASGREP_LIMIT", "ASGREP_INDEX_PATH", "ASGREP_NO_EMBED", "ASGREP_CLOUD_EMBED", "ASGREP_OLLAMA_EMBED", "ASGREP_SEMANTIC_ONLY", "ASGREP_TANTIVY", "ASGREP_ANN_THRESHOLD", "NO_COLOR", "CI"],
-        "output_limits": {"max_results": 1000, "max_excerpt_lines": 100, "max_error_message_chars": 4096},
-        "search_formats": ["native", "agent", "agent-capsule", "github", "gitlab"],
+        "output_limits": {"max_results": 1000, "max_excerpt_lines": 100, "default_snippet_tokens": 96, "default_response_snippet_tokens": 768, "max_snippet_tokens": 4096, "max_response_snippet_tokens": 65536, "max_error_message_chars": 4096},
+        "search_formats": ["native", "agent", "agent-capsule", "compact", "github", "gitlab"],
         "exit_codes": [{"code": 0, "meaning": "success"}, {"code": 1, "meaning": "user input / usage error"}, {"code": 2, "meaning": "index or search operation failed"}],
-        "canonical_tasks": ["asgrep index . && asgrep --json --format agent \"where is auth refreshed\" .", "asgrep status . --json", "asgrep doctor . --robot-triage"],
+        "canonical_tasks": ["asgrep index . && asgrep --json --format compact \"where is auth refreshed\" .", "asgrep status . --json", "asgrep doctor . --robot-triage"],
     }))
 }
 fn doctor_triage_json(cli: &Cli, root: &Path) -> anyhow::Result<Value> {
@@ -107,7 +107,7 @@ fn doctor_triage_json(cli: &Cli, root: &Path) -> anyhow::Result<Value> {
         }
     }
     if next.is_empty() {
-        next.push("asgrep --json --format agent \"<your query>\" .");
+        next.push("asgrep --json --format compact \"<your query>\" .");
     }
     next.extend(["asgrep capabilities --json", "asgrep robot-docs guide"]);
     Ok(
@@ -120,7 +120,7 @@ fn print_robot_guide() {
 ## Quick start
 1. `asgrep index . --json` — build or refresh the index (required once per checkout).
 2. `asgrep doctor . --robot-triage` — one-shot health + suggested commands.
-3. `asgrep --json --format agent "natural language intent" .` — ranked hits with follow-up hints.
+3. `asgrep --json --format compact "natural language intent" .` — ranked hits with bounded snippets.
 ## Subcommands (always use explicit subcommands; bare tokens are treated as search queries)
 - `index`, `status`, `reindex`, `keyword`, `semantic`, `bench`, `watch`
 - `capabilities --json` — machine-readable contract
@@ -128,7 +128,7 @@ fn print_robot_guide() {
 - `doctor --json` or `doctor --robot-triage` — triage bundle
 ## JSON / automation
 - Pass `--json` on any read-side command for stdout JSON.
-- Prefer `--format agent` for LLM consumption.
+- Prefer `--format compact` for bounded LLM consumption; expand selected IDs with `code_read`.
 - Diagnostics and hints go to stderr; parse stdout only.
 ## Exit codes
 - 0 success
