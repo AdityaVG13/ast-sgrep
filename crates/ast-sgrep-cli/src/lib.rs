@@ -34,28 +34,31 @@ pub(crate) struct Cli {
     command: Option<Commands>,
     #[arg(value_name = "QUERY")]
     query: Option<String>,
-    #[arg(long, global = true)]
+    #[arg(id = "global-root", long = "root", global = true)]
     root: Option<PathBuf>,
     #[arg(long, global = true, env = "ASGREP_LIMIT", value_parser = parse_output_limit)]
     limit: Option<usize>,
     #[arg(long, global = true)]
     json: bool,
+    /// Print the agent handbook and exit
+    #[arg(long, global = true)]
+    robot_help: bool,
     #[arg(long, global = true, env = "ASGREP_INDEX_PATH")]
     index_path: Option<PathBuf>,
     #[arg(long, global = true)]
     lang: Option<String>,
-    #[arg(long, global = true, env = "ASGREP_NO_EMBED")]
+    #[arg(long, global = true, env = "ASGREP_NO_EMBED", action = clap::ArgAction::SetTrue, value_parser = clap::builder::BoolishValueParser::new())]
     no_embed: bool,
-    #[arg(long, global = true, env = "ASGREP_CLOUD_EMBED")]
+    #[arg(long, global = true, env = "ASGREP_CLOUD_EMBED", action = clap::ArgAction::SetTrue, value_parser = clap::builder::BoolishValueParser::new())]
     cloud_embed: bool,
-    #[arg(long, global = true, env = "ASGREP_OLLAMA_EMBED")]
+    #[arg(long, global = true, env = "ASGREP_OLLAMA_EMBED", action = clap::ArgAction::SetTrue, value_parser = clap::builder::BoolishValueParser::new())]
     ollama_embed: bool,
     /// Use local neural embeddings (fastembed/ONNX; needs `neural-embed` feature)
-    #[arg(long, global = true, env = "ASGREP_NEURAL_EMBED")]
+    #[arg(long, global = true, env = "ASGREP_NEURAL_EMBED", action = clap::ArgAction::SetTrue, value_parser = clap::builder::BoolishValueParser::new())]
     neural_embed: bool,
-    #[arg(long, global = true, env = "ASGREP_SEMANTIC_ONLY")]
+    #[arg(long, global = true, env = "ASGREP_SEMANTIC_ONLY", action = clap::ArgAction::SetTrue, value_parser = clap::builder::BoolishValueParser::new())]
     semantic_only: bool,
-    #[arg(long, global = true, env = "ASGREP_TANTIVY")]
+    #[arg(long, global = true, env = "ASGREP_TANTIVY", action = clap::ArgAction::SetTrue, value_parser = clap::builder::BoolishValueParser::new())]
     tantivy: bool,
     #[arg(long, global = true, env = "ASGREP_ANN_THRESHOLD")]
     ann_threshold: Option<usize>,
@@ -63,11 +66,11 @@ pub(crate) struct Cli {
     #[arg(long, global = true, env = "ASGREP_ANN_PROBES")]
     ann_probes: Option<usize>,
     /// Rerank fused top candidates with local ONNX cross-encoder (`rerank` feature)
-    #[arg(long, global = true, env = "ASGREP_RERANK", action = clap::ArgAction::Set, default_value_t = false, num_args = 0..=1, default_missing_value = "true", value_parser = clap::builder::BoolishValueParser::new())]
+    #[arg(long, global = true, env = "ASGREP_RERANK", action = clap::ArgAction::SetTrue, value_parser = clap::builder::BoolishValueParser::new())]
     rerank: bool,
     #[arg(long, global = true, env = "ASGREP_RERANK_TOP_K", default_value_t = 20)]
     rerank_top_k: usize,
-    #[arg(long, global = true, value_name = "FORMAT")]
+    #[arg(long, global = true, value_name = "FORMAT", value_parser = parse_output_format)]
     format: Option<String>,
     #[arg(long, global = true, default_value = "0", value_name = "N", value_parser = parse_excerpt_lines)]
     excerpt_lines: usize,
@@ -82,9 +85,16 @@ pub(crate) struct Cli {
 }
 #[derive(Subcommand)]
 enum Commands {
+    /// Build or incrementally refresh an index
     Index(RootArg),
+    /// Show index and embedding status
     Status(RootArg),
+    /// Clear and rebuild an index
     Reindex(RootArg),
+    /// Search explicitly; aliases: find, query
+    #[command(alias = "find", alias = "query")]
+    Search(QueryRootArg),
+    /// Run fixed performance and identity suites
     Bench {
         #[command(flatten)]
         root: RootArg,
@@ -101,24 +111,33 @@ enum Commands {
         #[arg(long, default_value_t = false)]
         skip_index: bool,
     },
+    /// Watch files and update the index incrementally
     Watch {
         #[command(flatten)]
         root: RootArg,
         #[arg(long, default_value = "300")]
         debounce_ms: u64,
     },
+    /// Run lexical-only search
     Keyword(QueryRootArg),
+    /// Run embedding-only search
     Semantic(QueryRootArg),
+    /// Expand a bounded symbol/caller/import graph
     Chain(QueryRootArg),
+    /// Print the machine-readable CLI contract
     Capabilities(agent::CapabilitiesArgs),
+    /// Print package and machine schema versions
     Version(VersionArgs),
+    /// Print the agent handbook
     RobotDocs(agent::RobotDocsArgs),
+    /// Diagnose index health and return recovery commands
     Doctor {
         #[command(flatten)]
         root: RootArg,
         #[command(flatten)]
         args: agent::DoctorArgs,
     },
+    /// Evaluate retrieval against a gold fixture
     Eval(eval::EvalArgs),
 }
 #[derive(Parser)]
@@ -160,6 +179,13 @@ fn parse_output_limit(raw: &str) -> Result<usize, String> {
 }
 fn parse_excerpt_lines(raw: &str) -> Result<usize, String> {
     parse_bounded_usize(raw, MAX_EXCERPT_LINES, "--excerpt-lines")
+}
+fn parse_output_format(raw: &str) -> Result<String, String> {
+    ast_sgrep_plugins::OutputFormat::parse(raw)
+        .map(|_| raw.to_ascii_lowercase())
+        .ok_or_else(|| {
+            "format must be one of: native, agent, agent-capsule, compact, github, gitlab".into()
+        })
 }
 fn parse_snippet_tokens(raw: &str) -> Result<usize, String> {
     parse_bounded_usize(raw, MAX_SNIPPET_TOKENS, "--snippet-tokens")
@@ -203,8 +229,9 @@ fn run_process() -> ! {
                     exit_code,
                     &error.to_string(),
                 );
+            } else {
+                let _ = error.print();
             }
-            let _ = error.print();
             std::process::exit(exit_code);
         }
     };
@@ -220,9 +247,8 @@ fn run_process() -> ! {
                     exit_code,
                     &format!("{error:#}"),
                 );
-            }
-            eprintln!("{error:#}");
-            if !cli.machine_output_requested() {
+            } else {
+                eprintln!("{error:#}");
                 agent::print_agent_help_footer();
             }
             std::process::exit(exit_code);
@@ -233,11 +259,14 @@ pub fn run() -> anyhow::Result<()> {
     run_cli(&Cli::parse())
 }
 impl Cli {
+    fn search_machine_output(&self) -> bool {
+        self.json || self.format.is_some()
+    }
     fn machine_output_requested(&self) -> bool {
-        self.json
-            || matches!(self.command.as_ref(), Some(Commands::Capabilities(a)) if a.json)
+        self.search_machine_output()
+            || matches!(self.command.as_ref(), Some(Commands::Capabilities(_)))
             || matches!(self.command.as_ref(), Some(Commands::Version(a)) if a.json)
-            || matches!(self.command.as_ref(), Some(Commands::Doctor { args, .. }) if args.json || args.robot_triage)
+            || matches!(self.command.as_ref(), Some(Commands::Doctor { .. }))
     }
     fn command_name(&self) -> &'static str {
         match self.command.as_ref() {
@@ -245,6 +274,7 @@ impl Cli {
             Some(Commands::Index(_)) => "index",
             Some(Commands::Status(_)) => "status",
             Some(Commands::Reindex(_)) => "reindex",
+            Some(Commands::Search(_)) => "search",
             Some(Commands::Bench { .. }) => "bench",
             Some(Commands::Watch { .. }) => "watch",
             Some(Commands::Keyword(_)) => "keyword",
@@ -259,13 +289,19 @@ impl Cli {
     }
 }
 fn raw_machine_output_requested(args: &[std::ffi::OsString]) -> bool {
-    args.iter().any(|a| a == "--json" || a == "--robot-triage")
+    args.iter().any(|a| {
+        a == "--json"
+            || a == "--robot-triage"
+            || a == "--format"
+            || a.to_str().is_some_and(|raw| raw.starts_with("--format="))
+    }) || args.iter().any(|a| a == "capabilities" || a == "doctor")
 }
 fn raw_command_name(args: &[std::ffi::OsString]) -> &'static str {
     const C: &[&str] = &[
         "index",
         "status",
         "reindex",
+        "search",
         "bench",
         "watch",
         "semantic",
@@ -297,7 +333,7 @@ fn machine_value(command: &str, value: impl serde::Serialize) -> anyhow::Result<
         _ => {
             return Ok(serde_json::json!({
                 "schema_version": MACHINE_SCHEMA_VERSION, "tool": "asgrep",
-                "command": command, "ok": true, "data": value
+                "command": command, "ok": true, "exit_code": 0, "data": value
             }));
         }
     };
@@ -311,6 +347,7 @@ fn machine_value(command: &str, value: impl serde::Serialize) -> anyhow::Result<
     object.insert("tool".into(), "asgrep".into());
     object.insert("command".into(), command.into());
     object.insert("ok".into(), true.into());
+    object.insert("exit_code".into(), 0.into());
     Ok(value)
 }
 pub(crate) fn print_machine_json(
@@ -344,6 +381,20 @@ fn print_machine_failure(command: &str, kind: &str, exit_code: i32, message: &st
     );
 }
 fn run_cli(cli: &Cli) -> anyhow::Result<()> {
+    if cli.robot_help {
+        agent::print_robot_guide();
+        return Ok(());
+    }
+    if cli.format.is_some()
+        && !matches!(
+            cli.command.as_ref(),
+            None | Some(Commands::Search(_) | Commands::Keyword(_) | Commands::Semantic(_))
+        )
+    {
+        return Err(usage_error(
+            "--format applies only to search, keyword, or semantic commands",
+        ));
+    }
     match cli.command.as_ref() {
         Some(c) => run_command(cli, c),
         None => run_default_search(cli),
@@ -372,6 +423,7 @@ fn run_command(cli: &Cli, command: &Commands) -> anyhow::Result<()> {
             |i| i.reindex_all().context("reindex failed"),
             print_index_stats,
         ),
+        Commands::Search(q) => run_search(&q.root, cli, &q.query, false),
         Commands::Bench {
             root,
             query,
@@ -436,15 +488,52 @@ pub(crate) fn effective_root(cli: &Cli, fallback: &Path) -> PathBuf {
 pub(crate) fn resolve_root_index(cli: &Cli, root: &Path) -> (PathBuf, Option<PathBuf>) {
     (effective_root(cli, root), cli.index_path.clone())
 }
+fn ensure_unambiguous_root(root: &Path, cli: &Cli) -> anyhow::Result<()> {
+    if cli.root.is_some() && root != Path::new(".") {
+        return Err(usage_error(
+            "ROOT is ambiguous: use either --root ROOT or a positional ROOT, not both",
+        ));
+    }
+    Ok(())
+}
+fn ensure_existing_root(root: &Path, cli: &Cli) -> anyhow::Result<PathBuf> {
+    ensure_unambiguous_root(root, cli)?;
+    let root = effective_root(cli, root);
+    if !root.is_dir() {
+        anyhow::bail!(
+            "project root does not exist or is not a directory: {}",
+            root.display()
+        );
+    }
+    Ok(root)
+}
 fn open_indexer(root: &Path, cli: &Cli) -> anyhow::Result<Indexer> {
+    ensure_existing_root(root, cli)?;
     Indexer::new(index_options(root, cli)).context("failed to open index")
 }
 fn open_searcher(root: &Path, cli: &Cli) -> anyhow::Result<Searcher> {
-    Searcher::new(search_options(root, cli)).context("failed to open index")
+    let root = ensure_existing_root(root, cli)?;
+    let searcher = Searcher::new(search_options(&root, cli)).context("failed to open index")?;
+    if searcher.store().status()?.file_count == 0 {
+        anyhow::bail!(
+            "index is empty for {}; run: asgrep index {} --json",
+            root.display(),
+            root.display()
+        );
+    }
+    Ok(searcher)
 }
 fn run_chain(root: &Path, cli: &Cli, query: &str) -> anyhow::Result<()> {
-    let (root, index_path) = resolve_root_index(cli, root);
+    let root = ensure_existing_root(root, cli)?;
+    let (_, index_path) = resolve_root_index(cli, &root);
     let store = IndexStore::open(&root, index_path.as_deref()).context("failed to open index")?;
+    if store.status()?.file_count == 0 {
+        anyhow::bail!(
+            "index is empty for {}; run: asgrep index {} --json",
+            root.display(),
+            root.display()
+        );
+    }
     let config = ChainConfig {
         limit: cli.limit.unwrap_or(ChainConfig::default().limit),
         top_n: 1,
@@ -481,7 +570,7 @@ fn run_keyword_search(root: &Path, cli: &Cli, query: &str) -> anyhow::Result<()>
     let response = open_searcher(root, cli)?
         .search_lexical(query)
         .context("keyword search failed")?;
-    if !cli.json {
+    if !cli.search_machine_output() {
         for hit in &response.hits {
             println!("{}", format_hit_line(hit));
         }
@@ -505,7 +594,7 @@ fn run_search(root: &Path, cli: &Cli, query: &str, semantic: bool) -> anyhow::Re
         "search failed"
     };
     let response = do_search(&open_searcher(root, cli)?, query, semantic).context(ctx)?;
-    if !cli.json {
+    if !cli.search_machine_output() {
         for hit in &response.hits {
             println!("{}", format_hit_line(hit));
         }

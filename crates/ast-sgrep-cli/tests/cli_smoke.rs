@@ -14,7 +14,12 @@ fn cli_smoke() {
             session.root.to_str().unwrap(),
         ])
         .unwrap();
-    assert!(status.status.success());
+    assert!(
+        status.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&status.stdout),
+        String::from_utf8_lossy(&status.stderr)
+    );
     let json = session.search_json("callers:process_request", &[]);
     let hits = json["hits"].as_array().unwrap();
     assert!(!hits.is_empty());

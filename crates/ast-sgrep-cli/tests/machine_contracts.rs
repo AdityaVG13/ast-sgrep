@@ -39,6 +39,7 @@ fn assert_success(output: &Output, command: &str) -> Value {
     assert_eq!(value["tool"], "asgrep");
     assert_eq!(value["command"], command);
     assert_eq!(value["ok"], true);
+    assert_eq!(value["exit_code"], 0);
     value
 }
 fn fixture(name: &str) -> Value {
@@ -300,9 +301,135 @@ fn bounded_arguments_are_json_usage_errors() {
     ] {
         let output = run(&bin, &args);
         assert_eq!(output.status.code(), Some(1));
+        assert!(output.stderr.is_empty());
         let mut value = parse_stdout(&output);
         assert_eq!(value["error"]["kind"], "usage");
         value["error"]["message"] = "<message>".into();
         assert_eq!(&value, golden);
     }
+}
+
+#[test]
+fn agent_discovery_defaults_and_boolish_envs_are_round_trip_free() {
+    let bin = asgrep_bin();
+    for value in ["1", "0", "true", "false", "yes", "no", "on", "off"] {
+        let output = Command::new(&bin)
+            .arg("capabilities")
+            .env("ASGREP_NO_EMBED", value)
+            .env("NO_COLOR", "1")
+            .output()
+            .expect("run capabilities");
+        assert_success(&output, "capabilities");
+    }
+    let output = run(&bin, &["--robot-help"]);
+    assert_eq!(output.status.code(), Some(0));
+    assert!(String::from_utf8_lossy(&output.stdout).contains("agent handbook"));
+    let missing = TempDir::new().expect("tempdir").path().join("missing");
+    let doctor = assert_success(
+        &run(&bin, &["doctor", missing.to_str().expect("utf8")]),
+        "doctor",
+    );
+    assert_eq!(doctor["healthy"], false);
+    assert_eq!(doctor["issues"][0]["kind"], "missing_root");
+}
+
+#[test]
+fn format_aliases_typos_and_root_failures_are_unambiguous() {
+    let session = CliSession::sample(asgrep_bin());
+    let index = session.index_path.to_str().expect("index utf8");
+    let root = session.root.to_str().expect("root utf8");
+    for command in ["search", "find", "query"] {
+        let output = run(
+            &session.bin,
+            &[
+                "--no-embed",
+                "--index-path",
+                index,
+                "--format",
+                "compact",
+                command,
+                "process_request",
+                root,
+            ],
+        );
+        let value = assert_success(&output, "search");
+        assert_eq!(value["v"], 1);
+    }
+    for args in [
+        vec!["--json", "serach"],
+        vec!["--json", "chian"],
+        vec!["--json", "evall"],
+        vec!["--format", "invalid", "query", "/definitely/missing"],
+        vec!["--format", "compact", "status", root],
+        vec!["--json", "--root", root, "status", root],
+    ] {
+        let output = run(&session.bin, &args);
+        assert_eq!(output.status.code(), Some(1));
+        assert!(output.stderr.is_empty());
+        assert_eq!(parse_stdout(&output)["error"]["kind"], "usage");
+    }
+    let static_query = assert_success(
+        &run(
+            &session.bin,
+            &[
+                "--no-embed",
+                "--index-path",
+                index,
+                "--format",
+                "compact",
+                "static",
+                root,
+            ],
+        ),
+        "search",
+    );
+    assert_eq!(static_query["q"], "static");
+    let missing = session._temp.path().join("missing");
+    let output = run(
+        &session.bin,
+        &[
+            "--format",
+            "compact",
+            "search",
+            "needle",
+            missing.to_str().expect("utf8"),
+        ],
+    );
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stderr.is_empty());
+    assert!(parse_stdout(&output)["error"]["message"]
+        .as_str()
+        .expect("message")
+        .contains("project root does not exist"));
+    let empty = TempDir::new().expect("tempdir");
+    let output = run(
+        &session.bin,
+        &[
+            "--json",
+            "--no-embed",
+            "search",
+            "needle",
+            empty.path().to_str().expect("utf8"),
+        ],
+    );
+    assert_eq!(output.status.code(), Some(2));
+    assert!(parse_stdout(&output)["error"]["message"]
+        .as_str()
+        .expect("message")
+        .contains("index is empty"));
+    let chain = run(
+        &session.bin,
+        &[
+            "--json",
+            "--no-embed",
+            "chain",
+            "needle",
+            empty.path().to_str().expect("utf8"),
+        ],
+    );
+    assert_eq!(chain.status.code(), Some(2));
+    assert!(parse_stdout(&chain)["error"]["message"]
+        .as_str()
+        .expect("message")
+        .contains("index is empty"));
 }
