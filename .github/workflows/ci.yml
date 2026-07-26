@@ -128,13 +128,19 @@ jobs:
         with:
           workspaces: fuzz -> target
 
+      - name: Cache cargo-fuzz
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-fuzz
+          key: cargo-fuzz-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'fuzz/Cargo.toml') }}
+
       - name: Install cargo-fuzz
-        run: cargo install cargo-fuzz --locked
+        run: command -v cargo-fuzz >/dev/null || cargo install cargo-fuzz --locked
 
       - name: Fuzz legacy query parser
         working-directory: fuzz
         run: cargo +nightly fuzz run parsed_query -- -max_total_time=30 -timeout=5
 
-      - name: Fuzz query grammar
+      - name: Fuzz ranking invariants
         working-directory: fuzz
-        run: cargo +nightly fuzz run query_grammar -- -max_total_time=30 -timeout=5
+        run: cargo +nightly fuzz run rank -- -max_total_time=30 -timeout=5

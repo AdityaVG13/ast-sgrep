@@ -294,7 +294,10 @@ const selfTest = async () => {
 const command = process.argv[2];
 if (command === 'pack') await pack();
 else if (command === 'verify') await verify();
-else if (command === 'gate') await gate();
+else if (command === 'gate') {
+  run('bash', ['scripts/local-release-gate.sh']);
+  await gate();
+}
 else if (command === 'publish') await publish();
 else if (command === 'fixture-native') await fixtureNative();
 else if (command === 'self-test') await selfTest();

@@ -1,18 +1,29 @@
-# Benchmark harnesses are not shipped in-tree (docs/numbers only under benchmarks/).
-# This workflow is retained as a manual stub so Actions history stays clear.
 name: Offline retrieval bake-off
 
 on:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
-  docs-only:
+  bakeoff-gate:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-      - name: Confirm published benchmark docs exist
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Run self-repository retrieval harness
         run: |
-          test -f benchmarks/results/bakeoff.md
-          test -f benchmarks/results/head-to-head.md
-          test -f benchmarks/results/losses.md
-          echo "Bake-off write-ups are documentation-only; no automated corpus run."
+          cargo run --locked --release -p ast-sgrep-cli --bin asgrep -- \
+            --json --index-path "$RUNNER_TEMP/bakeoff-index.db" \
+            bench . --suite self --fixture self \
+            --iterations 5 > bakeoff-results.json
+      - name: Enforce identity and latency threshold
+        run: python3 scripts/check-bench-output.py bakeoff-results.json --max-average-ms 100
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: bakeoff-results
+          path: bakeoff-results.json

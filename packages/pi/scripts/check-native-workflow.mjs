@@ -137,7 +137,7 @@ const signerMutations = [
   allowedSignersText.replace('AAAAC3NzaC1lZDI1NTE5AAAAICeIowlFrWVQpSI2f/8qjz1KZY7Uif+cFR0u5Jwin8oH', 'AAAAC3NzaC1lZDI1NTE5AAAAICorrupted')
 ];
 for (const [index, mutation] of signerMutations.entries()) if (validateOfficial(officialText, mutation).length === 0) errors.push('negative allowed-signers mutation ' + (index + 1) + ' was not rejected');
-for (const token of ['ASGREP_RELEASE_DIRTY', 'ASGREP_RELEASE_TAG_VERSION', 'ASGREP_RELEASE_TAG_COMMIT', 'ASGREP_RELEASE_CHECKSUM_MISSING', 'ASGREP_RELEASE_CHECKSUM_MISMATCH', 'ASGREP_RELEASE_VERSION_SKEW', 'ASGREP_RELEASE_DUPLICATE_VERSION', 'ASGREP_RELEASE_OIDC_REQUIRED', 'ASGREP_RELEASE_PROTECTED_ENVIRONMENT', 'ASGREP_RELEASE_OWNERSHIP_APPROVAL', 'ASGREP_RELEASE_REGISTRY_INTEGRITY', "['publish'", "'--provenance'"]) if (!releaseHelper.includes(token)) errors.push('release acceptance helper is missing ' + token);
+for (const token of ['ASGREP_RELEASE_DIRTY', 'ASGREP_RELEASE_TAG_VERSION', 'ASGREP_RELEASE_TAG_COMMIT', 'ASGREP_RELEASE_CHECKSUM_MISSING', 'ASGREP_RELEASE_CHECKSUM_MISMATCH', 'ASGREP_RELEASE_VERSION_SKEW', 'ASGREP_RELEASE_DUPLICATE_VERSION', 'ASGREP_RELEASE_OIDC_REQUIRED', 'ASGREP_RELEASE_PROTECTED_ENVIRONMENT', 'ASGREP_RELEASE_OWNERSHIP_APPROVAL', 'ASGREP_RELEASE_REGISTRY_INTEGRITY', 'scripts/local-release-gate.sh', "['publish'", "'--provenance'"]) if (!releaseHelper.includes(token)) errors.push('release acceptance helper is missing ' + token);
 if (errors.length) {
   for (const error of errors) console.error('Pi native workflow: ' + error);
   process.exitCode = 1;

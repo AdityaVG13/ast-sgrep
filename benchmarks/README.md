@@ -1,10 +1,11 @@
 # Benchmarks
 
-Published **numbers and write-ups** only. No harness scripts, gold corpora, or
-large worktrees live here. Consequently, every numeric row under the results
-directory is explicitly historical and unreproducible from this tree. External
-artifacts, when retained, are stored by the [Speed benchmark workflow](https://github.com/AdityaVG13/ast-sgrep/actions/workflows/speed.yml);
-no retained artifact has been identified for the currently published rows.
+Published result documents remain historical, but release-time gates now run
+the in-tree CLI benchmark suites against the checked-in sample fixture and the
+repository itself. The [Speed benchmark workflow](https://github.com/AdityaVG13/ast-sgrep/actions/workflows/speed.yml)
+and bake-off workflow upload their JSON measurements and fail when result
+identity, minimum-hit, or latency thresholds regress. Large external corpora
+are still not vendored.
 
 ```text
 benchmarks/
@@ -41,11 +42,24 @@ benchmarks/
 
 Methodology for readers: [docs/benchmarks.md](../docs/benchmarks.md).
 
-## Correctness smoke (not benchmarks)
+## Executable release gates
 
 ```bash
-cargo test -p ast-sgrep-core --test parity -j1 -- --test-threads=1
+cargo run --locked --release -p ast-sgrep-cli --bin asgrep -- \
+  --json --index-path /tmp/asgrep-speed.db \
+  bench tests/fixtures/sample --suite default --fixture sample --iterations 10 \
+  > speed-results.json
+python3 scripts/check-bench-output.py speed-results.json --max-average-ms 15
+
+cargo run --locked --release -p ast-sgrep-cli --bin asgrep -- \
+  --json --index-path /tmp/asgrep-bakeoff.db \
+  bench . --suite self --fixture self --iterations 5 \
+  > bakeoff-results.json
+python3 scripts/check-bench-output.py bakeoff-results.json --max-average-ms 100
 ```
+
+Both suites fail inside the CLI when hit counts or expected result identities
+miss. The checker adds a finite measured-latency threshold.
 
 ## Latency error budgets
 

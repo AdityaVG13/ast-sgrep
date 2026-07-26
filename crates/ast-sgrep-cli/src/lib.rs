@@ -720,7 +720,8 @@ fn run_bench_suite(
     let results: Vec<serde_json::Value> = cases.iter().map(|case| {
         let expected = ast_sgrep_core::bench_suite::benchmark_expectation(case)
             .ok_or_else(|| anyhow::anyhow!("benchmark case '{}' has no identity contract", case.name))?;
-        let (times, last) = timed_searches(&searcher, case.query, false, iterations)?;
+        let semantic_only = expected.kind == Some(ast_sgrep_core::search::HitKind::Embed);
+        let (times, last) = timed_searches(&searcher, case.query, semantic_only, iterations)?;
         let hits = last.as_ref().map_or(0, |r| r.hits.len());
         let identity_ok = last.as_ref().is_some_and(|response| {
             response

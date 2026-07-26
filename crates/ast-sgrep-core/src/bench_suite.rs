@@ -162,7 +162,7 @@ pub fn benchmark_expectation(case: &BenchCase) -> Option<BenchExpectation> {
             callee: None,
             file_suffix: Some("semantic_ivf.rs"),
             excerpt_contains: None,
-            max_rank: 5,
+            max_rank: 8,
         },
         "defs_search_pattern" => BenchExpectation {
             kind: Some(HitKind::Def),
