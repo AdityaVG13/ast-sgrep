@@ -2,11 +2,9 @@
 //!
 //! **Why this exists (vs shelling out to ast-grep):**
 //! - Indexed hybrid search needs a fast, in-process structural channel.
-//! - External `ast-grep` is excellent for full metavariable rules, but process
-//!   spawn + JSON parse is too heavy for tight loops and offline agents.
-//! - We implement the common ~80% of patterns natively (function/method/class
-//!   decls and calls with `$NAME` / `$$$` holes). Complex rules still fall
-//!   through to external ast-grep when installed.
+//! - Process spawn + JSON parsing is too heavy for tight loops and offline agents.
+//! - Production search implements declarations, calls, kind predicates, and exact
+//!   indexed signatures natively. Unsupported exotic rule syntax returns no hits.
 
 use crate::extract::{byte_to_line, is_in_comment_or_string, node_lines, node_text};
 use crate::{Language, PatternNode};
@@ -19,11 +17,10 @@ pub struct PatternMatch {
     pub excerpt: String,
 }
 
-/// True when the pattern needs external ast-grep (we cannot handle it natively).
+/// True when syntax is outside the native structural subset.
 ///
-/// Patterns without `$` always run in-process. Patterns with `$`/`$$$` use the
-/// native structural matcher when they fit a known shape; only exotic shapes
-/// still require the external binary.
+/// Production callers use this for capability reporting only; they never spawn
+/// an external matcher.
 pub fn needs_ast_grep_fallback(pattern: &str) -> bool {
     let p = pattern.trim();
     if p.is_empty() || !p.contains('$') {
@@ -60,7 +57,7 @@ pub fn match_pattern(
     }
     match classify_native(pattern) {
         Some(kind) => match_structural(lang, source, &kind),
-        None => Ok(Vec::new()), // caller may fall back to external ast-grep
+        None => Ok(Vec::new()),
     }
 }
 
