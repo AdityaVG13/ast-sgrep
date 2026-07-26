@@ -41,7 +41,7 @@ pub use index::{EmbedBackend, FileIndexStats, IndexOptions, IndexStats, Indexer}
 pub use output::format_hit_line;
 pub use pattern::search_pattern;
 pub use query::{ParsedQuery, QueryMode};
-pub use search::{SearchHit, SearchOptions, SearchResponse, Searcher};
+pub use search::{HitSignal, SearchHit, SearchOptions, SearchResponse, Searcher};
 pub use store::{index_db_path, IndexStatus, IndexStore};
 #[derive(Debug, Error)]
 pub enum StoreError {

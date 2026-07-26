@@ -1,5 +1,23 @@
 use crate::EmbedBackend;
 use std::path::PathBuf;
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum HitSignal {
+    Exact,
+    Structural,
+    Semantic,
+}
+impl HitSignal {
+    pub const ALL: [Self; 3] = [Self::Exact, Self::Structural, Self::Semantic];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Exact => "exact",
+            Self::Structural => "structural",
+            Self::Semantic => "semantic",
+        }
+    }
+}
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum HitKind {
@@ -13,6 +31,18 @@ pub enum HitKind {
     Embed,
 }
 impl HitKind {
+    pub fn signal(self) -> HitSignal {
+        match self {
+            HitKind::Asgrep => HitSignal::Exact,
+            HitKind::Embed => HitSignal::Semantic,
+            HitKind::Def
+            | HitKind::Caller
+            | HitKind::Graph
+            | HitKind::Anchor
+            | HitKind::Import
+            | HitKind::Pattern => HitSignal::Structural,
+        }
+    }
     pub fn as_str(self) -> &'static str {
         match self {
             HitKind::Asgrep => "asgrep",
@@ -26,7 +56,7 @@ impl HitKind {
         }
     }
 }
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct SearchHit {
     pub kind: HitKind,
     pub file: String,
@@ -41,7 +71,53 @@ pub struct SearchHit {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub language: Option<String>,
     pub score: f64,
+    pub signal: HitSignal,
+    pub margin: f64,
     pub excerpt: String,
+}
+#[derive(serde::Deserialize)]
+struct SearchHitWire {
+    kind: HitKind,
+    file: String,
+    line_start: u32,
+    line_end: u32,
+    symbol: Option<String>,
+    caller: Option<String>,
+    callee: Option<String>,
+    language: Option<String>,
+    score: f64,
+    #[serde(default)]
+    signal: Option<HitSignal>,
+    #[serde(default)]
+    margin: f64,
+    excerpt: String,
+}
+impl<'de> serde::Deserialize<'de> for SearchHit {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let wire = <SearchHitWire as serde::Deserialize>::deserialize(deserializer)?;
+        let _untrusted_signal = wire.signal;
+        Ok(Self {
+            kind: wire.kind,
+            file: wire.file,
+            line_start: wire.line_start,
+            line_end: wire.line_end,
+            symbol: wire.symbol,
+            caller: wire.caller,
+            callee: wire.callee,
+            language: wire.language,
+            score: wire.score,
+            signal: wire.kind.signal(),
+            margin: if wire.margin.is_finite() {
+                wire.margin.max(0.0)
+            } else {
+                0.0
+            },
+            excerpt: wire.excerpt,
+        })
+    }
 }
 #[derive(Debug, Clone)]
 pub struct SpanHitInput {
@@ -73,6 +149,8 @@ impl SearchHit {
             callee: None,
             language: None,
             score,
+            signal: kind.signal(),
+            margin: 0.0,
             excerpt,
         }
     }
@@ -282,6 +360,48 @@ pub fn format_hit_line(hit: &SearchHit) -> String {
 pub fn matches_lang(language: Option<&str>, filter: Option<&str>) -> bool {
     filter.is_none_or(|lang| language == Some(lang))
 }
+pub fn assign_signal_margins(hits: &mut [SearchHit]) {
+    for hit in hits.iter_mut() {
+        hit.signal = hit.kind.signal();
+        hit.margin = 0.0;
+    }
+    for signal in HitSignal::ALL {
+        let mut indices = hits
+            .iter()
+            .enumerate()
+            .filter_map(|(index, hit)| {
+                (hit.signal == signal && hit.score.is_finite()).then_some(index)
+            })
+            .collect::<Vec<_>>();
+        indices.sort_unstable_by(|left, right| hits[*right].score.total_cmp(&hits[*left].score));
+        let mut start = 0;
+        while start < indices.len() {
+            let score = hits[indices[start]].score;
+            let mut end = start + 1;
+            while end < indices.len() && hits[indices[end]].score == score {
+                end += 1;
+            }
+            let margin = if end - start > 1 || end == indices.len() {
+                0.0
+            } else {
+                let next = hits[indices[end]].score;
+                let delta = score - next;
+                if delta.is_finite() {
+                    delta.max(0.0)
+                } else if score > next {
+                    f64::MAX
+                } else {
+                    0.0
+                }
+            };
+            for index in &indices[start..end] {
+                hits[*index].margin = margin;
+            }
+            start = end;
+        }
+    }
+}
+
 pub fn dedup_hits(hits: Vec<SearchHit>) -> Vec<SearchHit> {
     let mut best: Vec<SearchHit> = Vec::with_capacity(hits.len());
     let mut positions: std::collections::HashMap<_, usize> = std::collections::HashMap::new();

@@ -15,10 +15,12 @@ fn lsp_smoke() {
         command: "asgrep.search".into(),
         arguments: vec![serde_json::json!("process_request")],
     };
-    assert!(!backend.execute_command(&search).unwrap()["hits"]
-        .as_array()
-        .unwrap()
-        .is_empty());
+    let search_response = backend.execute_command(&search).unwrap();
+    let search_hits = search_response["hits"].as_array().unwrap();
+    assert!(!search_hits.is_empty());
+    assert!(search_hits.iter().all(|hit| hit["signal"].is_string()));
+    assert!(search_hits.iter().all(|hit| hit["score"].is_number()));
+    assert!(search_hits.iter().all(|hit| hit["margin"].is_number()));
     backend.apply_document_changes(&uri, &[TextDocumentContentChangeEvent { range: None, range_length: None, text: "fn main() {\n    process_request(\"edited\");\n}\nfn process_request(input: &str) {}\n".into() }]).unwrap();
     let edited = ExecuteCommandParams {
         command: "asgrep.search".into(),

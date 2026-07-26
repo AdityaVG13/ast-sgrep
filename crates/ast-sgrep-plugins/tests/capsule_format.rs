@@ -1,5 +1,5 @@
 //! Capsule format: refs + previews by default, bodies only on request; hit order matches agent format.
-use ast_sgrep_core::search::{HitKind, SearchHit};
+use ast_sgrep_core::search::{HitKind, HitSignal, SearchHit};
 use ast_sgrep_core::SearchResponse;
 use ast_sgrep_plugins::{format_response_with, to_github_json, to_gitlab_json, OutputFormat};
 fn sample() -> SearchResponse {
@@ -18,6 +18,8 @@ fn sample() -> SearchResponse {
                 callee: None,
                 language: Some("rust".into()),
                 score: 5.5,
+                signal: HitSignal::Structural,
+                margin: 0.0,
                 excerpt: "fn auth_refresh() {\n    renew_token();\n    log();\n}".into(),
             },
             SearchHit {
@@ -30,6 +32,8 @@ fn sample() -> SearchResponse {
                 callee: Some("auth_refresh".into()),
                 language: Some("rust".into()),
                 score: 3.2,
+                signal: HitSignal::Structural,
+                margin: 0.0,
                 excerpt: format!("   \n{long}"),
             },
         ],
@@ -49,6 +53,8 @@ fn capsule_hits_carry_refs_and_previews_without_bodies() {
     assert_eq!(hits[0]["ref"], "src/auth.rs#L10-L42");
     assert_eq!(hits[0]["symbol"], "auth_refresh");
     assert_eq!(hits[0]["preview"], "fn auth_refresh() {");
+    assert_eq!(hits[0]["signal"], "structural");
+    assert_eq!(hits[0]["margin"], 0.0);
     assert!(hits[0].get("excerpt").is_none(), "no body by default");
     assert_eq!(hits[1]["symbol"], serde_json::Value::Null);
     assert_eq!(hits[1]["caller"], "open_session");
@@ -59,6 +65,8 @@ fn capsule_hits_carry_refs_and_previews_without_bodies() {
     let agent = format_response_with(&response, OutputFormat::Agent, 0);
     assert_ne!(capsule["returned_excerpt_bytes"], 350);
     assert_eq!(agent["prevented_read_bytes"], 650);
+    assert_eq!(agent["hits"][0]["signal"], "structural");
+    assert_eq!(agent["hits"][0]["margin"], 0.0);
     assert_eq!(capsule["prevented_read_bytes"], 650);
 }
 #[test]
@@ -68,6 +76,8 @@ fn github_page_at_limit_is_marked_incomplete() {
     let github = to_github_json(&response);
     assert_eq!(github["total_count"], response.hits.len());
     assert_eq!(github["incomplete_results"], true);
+    assert_eq!(github["items"][0]["metadata"]["signal"], "structural");
+    assert_eq!(github["items"][0]["metadata"]["margin"], 0.0);
 }
 #[test]
 fn gitlab_projection_documents_absent_repository_context() {
@@ -78,4 +88,6 @@ fn gitlab_projection_documents_absent_repository_context() {
     assert!(
         hits.iter().all(|h| h["ref"] == "HEAD") && hits.iter().all(|h| h["project_id"].is_null())
     );
+    assert!(hits.iter().all(|hit| hit["meta"]["signal"] == "structural"));
+    assert!(hits.iter().all(|hit| hit["meta"]["margin"] == 0.0));
 }

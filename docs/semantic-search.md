@@ -145,6 +145,8 @@ Agent format exposes semantic signal explicitly:
   "has_semantic_hits": true,
   "hits": [{
     "kind": "embed",
+    "signal": "semantic",
+    "margin": 0.18,
     "semantic": true,
     "symbol": "auth_refresh",
     "score": 3.42,
@@ -153,7 +155,7 @@ Agent format exposes semantic signal explicitly:
 }
 ```
 
-LSP `workspace/symbol` includes `detail: "semantic · score 3.42"` and `data.semantic: true` for embed hits.
+LSP `workspace/symbol` includes `detail: "semantic · score 3.42 · margin 0.18"` and `data.signal`, `data.score`, and `data.margin` for every hit. `data.semantic` remains available for compatibility.
 
 ## Related docs
 

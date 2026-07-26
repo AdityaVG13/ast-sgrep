@@ -16,9 +16,19 @@ fn cli_smoke() {
         .unwrap();
     assert!(status.status.success());
     let json = session.search_json("callers:process_request", &[]);
-    assert!(!json["hits"].as_array().unwrap().is_empty());
+    let hits = json["hits"].as_array().unwrap();
+    assert!(!hits.is_empty());
+    assert!(hits.iter().all(|hit| hit["signal"].is_string()));
+    assert!(hits.iter().all(|hit| hit["margin"].is_number()));
     let github = session.search_json("process_request", &["--format", "github"]);
     assert!(github["items"].is_array());
+    assert!(github["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(
+            |item| item["metadata"]["signal"].is_string() && item["metadata"]["margin"].is_number()
+        ));
 }
 #[test]
 fn cli_failure_oracle_preserves_diagnostics() {

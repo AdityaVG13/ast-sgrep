@@ -17,8 +17,10 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
-use types::dedup_hits;
-pub use types::{format_hit_line, HitKind, SearchHit, SearchOptions, SearchResponse, SpanHitInput};
+use types::{assign_signal_margins, dedup_hits};
+pub use types::{
+    format_hit_line, HitKind, HitSignal, SearchHit, SearchOptions, SearchResponse, SpanHitInput,
+};
 const PARALLEL_PASS_FILE_THRESHOLD: usize = 128;
 const MAX_HITS_PER_FILE: usize = 3;
 struct SemanticCache {
@@ -471,6 +473,7 @@ pub fn finish_response(
             hits.retain(|h| re.is_match(&h.file));
         }
     }
+    assign_signal_margins(&mut hits);
     if options.count_only {
         let mut counts: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
         for hit in &hits {
@@ -794,6 +797,8 @@ mod tests {
             callee: None,
             language: None,
             score,
+            signal: HitSignal::Exact,
+            margin: 0.0,
             excerpt: String::new(),
         }
     }
