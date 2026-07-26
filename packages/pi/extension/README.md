@@ -28,6 +28,33 @@ Open Pi in a project and search. The first search lazily creates `.asgrep/`. Exa
 
 Run `/asgrep-doctor` to diagnose the runtime, binary, protocol, index, or configuration; run `/asgrep-status` to inspect the current project. The extension refreshes successful Pi write/edit changes before the next search and coalesces concurrent refreshes.
 
+## Typed Code Mode API
+
+Import the search-only programmatic surface from `pi-ast-sgrep/code-mode` and execute related lookups in one typed plan:
+
+```ts
+import { AstSgrepRuntime } from "pi-ast-sgrep/runtime";
+import { createSgrepCodeMode } from "pi-ast-sgrep/code-mode";
+
+const mode = createSgrepCodeMode(new AstSgrepRuntime(pi), { cwd: process.cwd() });
+const result = await mode.execute(async (sgrep) => {
+  const [text, ast, semantic] = await Promise.all([
+    sgrep.find("refresh token"),
+    sgrep.astFind("function_declaration"),
+    sgrep.semantic("credential renewal"),
+  ]);
+  const bodies = await sgrep.read(text.hits.slice(0, 3), { contextLines: 2 });
+  return { text, ast, semantic, bodies };
+});
+```
+
+- `find` runs the ordinary cascade search.
+- `astFind` runs `pattern:` structural search.
+- `semantic` runs the dedicated zero-overlap semantic path.
+- `read` streams bounded `file#Lx-Ly` refs inside the project, including symlink containment, strict UTF-8 validation, cancellation, and an aggregate output budget.
+
+The API exposes no rewrite or mutation operation. Structural rewrites remain delegated to ast-grep. Search responses retain signal, contributor, score, and margin provenance.
+
 ## Local by default
 
 Local semantic indexing/search works offline with no credential, telemetry, first-use model download, executable download, PATH lookup, or MCP adapter. Optional external embedding providers are opt-in and may receive the source text and queries needed to create embeddings.

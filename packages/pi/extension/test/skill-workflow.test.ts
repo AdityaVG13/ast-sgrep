@@ -62,7 +62,7 @@ test("a deterministic agent can discover and complete the documented fixture wor
     ["doctor", ".", "--json"],
     ["status", ".", "--json"],
     ["index", ".", "--json"],
-    ["--json", "--format", "agent-capsule", "--limit", "8", "--excerpt-lines", "0", "refresh the index after edits", "."],
-    ["--json", "--format", "agent-capsule", "--limit", "8", "--excerpt-lines", "0", "callers: ensureFresh", "."],
+    ["--json", "--format", "agent-capsule", "--limit", "8", "--excerpt-lines", "0", "--", "refresh the index after edits", "."],
+    ["--json", "--format", "agent-capsule", "--limit", "8", "--excerpt-lines", "0", "--", "callers: ensureFresh", "."],
   ]);
 });

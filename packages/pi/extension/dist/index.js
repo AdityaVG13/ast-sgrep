@@ -67,8 +67,8 @@ function searchArgs(params) {
     const query = queryForMode(params.query, mode);
     const output = ["--json", "--format", "agent-capsule", "--limit", String(params.limit ?? DEFAULT_LIMIT), "--excerpt-lines", String(params.excerptLines ?? 0)];
     return mode === "chain" || mode === "semantic"
-        ? [mode, query, ".", ...output]
-        : [...output, query, "."];
+        ? [...output, mode, "--", query, "."]
+        : [...output, "--", query, "."];
 }
 async function execute(runtime, command, args, signal, onUpdate, ctx, before) {
     report(onUpdate, command, "started");
