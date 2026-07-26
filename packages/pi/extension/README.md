@@ -39,21 +39,22 @@ import { createSgrepCodeMode } from "pi-ast-sgrep/code-mode";
 const mode = createSgrepCodeMode(new AstSgrepRuntime(pi), { cwd: process.cwd() });
 const result = await mode.execute(async (sgrep) => {
   const [text, ast, semantic] = await Promise.all([
-    sgrep.find("refresh token"),
-    sgrep.astFind("function_declaration"),
-    sgrep.semantic("credential renewal"),
+    sgrep.keywordSearch("refresh token"),
+    sgrep.astSearch("function_declaration"),
+    sgrep.semanticSearch("credential renewal"),
   ]);
-  const bodies = await sgrep.read(text.hits.slice(0, 3), { contextLines: 2 });
+  const bodies = await sgrep.codeRead(text.hits.slice(0, 3), { contextLines: 2 });
   return { text, ast, semantic, bodies };
 });
 ```
 
-- `find` runs the ordinary cascade search.
-- `astFind` runs `pattern:` structural search.
-- `semantic` runs the dedicated zero-overlap semantic path.
-- `read` streams bounded `file#Lx-Ly` refs inside the project, including symlink containment, strict UTF-8 validation, cancellation, and an aggregate output budget.
+- `keywordSearch` runs lexical retrieval only.
+- `astSearch` runs `pattern:` structural search only.
+- `semanticSearch` runs embedding retrieval only.
+- `codeRead` streams bounded `file#Lx-Ly` refs inside the project, including adjacent context, symlink containment, strict UTF-8 validation, cancellation, and an aggregate output budget.
+- `find`, `astFind`, `semantic`, and `read` remain typed aliases for the four methods above.
 
-The API exposes no rewrite or mutation operation. Structural rewrites remain delegated to ast-grep. Search responses retain signal, contributor, score, and margin provenance.
+The agent chooses the retrieval granularity; these methods never auto-fuse channels. One-shot CLI search retains fusion for human/direct engine use. The API exposes no rewrite or mutation operation. Structural rewrites remain delegated to ast-grep. Search responses retain signal, contributor, score, and margin provenance.
 
 ## Local by default
 

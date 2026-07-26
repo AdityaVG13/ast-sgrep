@@ -71,16 +71,16 @@ describe("SgrepCodeMode", () => {
       assert.equal(Object.isFrozen(sgrep), true);
       assert.equal("rewrite" in sgrep, false);
       return await Promise.all([
-        sgrep.find("renew token", { limit: 7 }),
-        sgrep.astFind("function_declaration", { excerptLines: 3 }),
-        sgrep.semantic("credential rotation"),
+        sgrep.keywordSearch("renew token", { limit: 7 }),
+        sgrep.astSearch("function_declaration", { excerptLines: 3 }),
+        sgrep.semanticSearch("credential rotation"),
       ]);
     });
 
     assert.equal(result.length, 3);
     assert.deepEqual(result[0]!.hits[0]!.contributors, ["def", "embed"]);
     assert.deepEqual(runtime.calls[0]!.args, [
-      "--json", "--format", "agent-capsule", "--limit", "7", "--excerpt-lines", "0", "--", "renew token", ".",
+      "--json", "--format", "agent-capsule", "--limit", "7", "--excerpt-lines", "0", "keyword", "--", "renew token", ".",
     ]);
     assert.deepEqual(runtime.calls[1]!.args, [
       "--json", "--format", "agent-capsule", "--limit", "20", "--excerpt-lines", "3", "--", "pattern: function_declaration", ".",
@@ -89,13 +89,13 @@ describe("SgrepCodeMode", () => {
       "--json", "--format", "agent-capsule", "--limit", "20", "--excerpt-lines", "0", "semantic", "--", "credential rotation", ".",
     ]);
     await mode.find("--help");
-    assert.deepEqual(runtime.calls[3]!.args.slice(-3), ["--", "--help", "."]);
+    assert.deepEqual(runtime.calls[3]!.args.slice(-4), ["keyword", "--", "--help", "."]);
   });
 
   it("reads bounded refs with optional adjacent context", async () => {
     const root = await project();
     const mode = createSgrepCodeMode(new FakeRuntime(root), { cwd: root });
-    const [read] = await mode.read(hit.ref as SgrepRef, { contextLines: 1, maxChars: 48 });
+    const [read] = await mode.codeRead(hit.ref as SgrepRef, { contextLines: 1, maxChars: 48 });
     assert.ok(read);
     assert.equal(read.lines.start, 1);
     assert.ok(read.lines.end <= 5);
@@ -133,16 +133,22 @@ describe("SgrepCodeMode", () => {
       "src/auth.ts#L1-L2" as SgrepRef,
       "src/auth.ts#L3-L5" as SgrepRef,
     ], { maxChars: 10 });
-    assert.ok(aggregate.reduce((total, item) => total + item.content.length, 0) <= 10);
+    assert.ok(aggregate.reduce((total, item) => total + [...item.content].length, 0) <= 10);
+    const tiny = await mode.read([
+      "src/auth.ts#L1-L1" as SgrepRef,
+      "src/auth.ts#L2-L2" as SgrepRef,
+    ], { maxChars: 1 });
+    assert.ok(tiny.reduce((total, item) => total + [...item.content].length, 0) <= 1);
     assert.equal((await mode.read("..cache/valid.ts#L1-L1" as SgrepRef))[0]!.content, "valid");
-    assert.equal((await mode.read("src/emoji.ts#L1-L1" as SgrepRef, { maxChars: 1 }))[0]!.content, "");
-    assert.equal((await mode.read("src/crlf.ts#L1-L3" as SgrepRef))[0]!.content, "\nalpha");
+    assert.equal((await mode.read("src/emoji.ts#L1-L1" as SgrepRef, { maxChars: 1 }))[0]!.content, "😀");
+    assert.equal((await mode.read("src/crlf.ts#L1-L2" as SgrepRef))[0]!.content, "\nalpha");
     await runtimeError(() => mode.read("src/crlf.ts#L3-L3" as SgrepRef), "RANGE_OUT_OF_BOUNDS");
     assert.equal((await mode.read("src/empty.ts#L1-L1" as SgrepRef))[0]!.content, "");
     const long = (await mode.read("src/long.ts#L1-L1" as SgrepRef, { maxChars: 17 }))[0]!;
     assert.equal(long.content, "x".repeat(17));
     assert.equal(long.truncated, true);
     await runtimeError(() => mode.read("src/auth.ts#L100-L101" as SgrepRef), "RANGE_OUT_OF_BOUNDS");
+    await runtimeError(() => mode.read("src/auth.ts#L2-L999" as SgrepRef, { maxChars: 1 }), "RANGE_OUT_OF_BOUNDS");
     await runtimeError(() => mode.read("src/auth.ts#L9007199254740992-L9007199254740992" as SgrepRef), "INVALID_REF");
     await runtimeError(() => mode.read("src/binary.ts#L1-L1" as SgrepRef), "BINARY_FILE");
     const controller = new AbortController();

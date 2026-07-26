@@ -101,6 +101,7 @@ enum Commands {
         #[arg(long, default_value = "300")]
         debounce_ms: u64,
     },
+    Keyword(QueryRootArg),
     Semantic(QueryRootArg),
     Chain(QueryRootArg),
     Capabilities(agent::CapabilitiesArgs),
@@ -226,6 +227,7 @@ impl Cli {
             Some(Commands::Reindex(_)) => "reindex",
             Some(Commands::Bench { .. }) => "bench",
             Some(Commands::Watch { .. }) => "watch",
+            Some(Commands::Keyword(_)) => "keyword",
             Some(Commands::Semantic(_)) => "semantic",
             Some(Commands::Chain(_)) => "chain",
             Some(Commands::Capabilities(_)) => "capabilities",
@@ -360,6 +362,7 @@ fn run_command(cli: &Cli, command: &Commands) -> anyhow::Result<()> {
             *skip_index,
         ),
         Commands::Watch { root, debounce_ms } => run_watch(&root.root, cli, *debounce_ms),
+        Commands::Keyword(q) => run_keyword_search(&q.root, cli, &q.query),
         Commands::Semantic(q) => run_search(&q.root, cli, &q.query, true),
         Commands::Chain(q) => run_chain(&q.root, cli, &q.query),
         Commands::Capabilities(args) => agent::run_capabilities(cli, args),
@@ -445,6 +448,30 @@ fn run_chain(root: &Path, cli: &Cli, query: &str) -> anyhow::Result<()> {
     }
     Ok(())
 }
+fn run_keyword_search(root: &Path, cli: &Cli, query: &str) -> anyhow::Result<()> {
+    let response = open_searcher(root, cli)?
+        .search_lexical(query)
+        .context("keyword search failed")?;
+    if !cli.json {
+        for hit in &response.hits {
+            println!("{}", format_hit_line(hit));
+        }
+        return Ok(());
+    }
+    let format = match cli.format.as_deref() {
+        Some(raw) => ast_sgrep_plugins::OutputFormat::parse(raw).ok_or_else(|| {
+            usage_error(format!(
+                "unknown output format {raw:?}; expected native, agent, agent-capsule, github, or gitlab"
+            ))
+        })?,
+        None => ast_sgrep_plugins::OutputFormat::Native,
+    };
+    print_machine_json(
+        "keyword",
+        ast_sgrep_plugins::format_response_with(&response, format, cli.excerpt_lines),
+    )
+}
+
 fn run_search(root: &Path, cli: &Cli, query: &str, semantic: bool) -> anyhow::Result<()> {
     let ctx = if semantic {
         "semantic search failed"

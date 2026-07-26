@@ -7,6 +7,7 @@ const MAX_CONTENT_CHARS = 1_200;
 const searchParameters = Type.Object({
     query: Type.String({ minLength: 1, maxLength: 4_096, description: "Natural-language query, symbol, or structural pattern" }),
     mode: Type.Optional(Type.Union([
+        Type.Literal("keyword"),
         Type.Literal("natural"),
         Type.Literal("pattern"),
         Type.Literal("defs"),
@@ -17,7 +18,7 @@ const searchParameters = Type.Object({
         Type.Literal("literal"),
         Type.Literal("regex"),
         Type.Literal("imports"),
-    ], { default: "natural", description: "Search strategy (CLI-aligned modes)" })),
+    ], { default: "keyword", description: "Nonfused search strategy; natural is a keyword alias" })),
     limit: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_LIMIT, default: DEFAULT_LIMIT })),
     excerptLines: Type.Optional(Type.Integer({ minimum: 0, maximum: MAX_EXCERPT_LINES, default: 0, description: "Opt in to excerpt body lines" })),
 }, { additionalProperties: false });
@@ -63,9 +64,11 @@ function queryForMode(query, mode) {
     return query;
 }
 function searchArgs(params) {
-    const mode = params.mode ?? "natural";
+    const mode = params.mode ?? "keyword";
     const query = queryForMode(params.query, mode);
     const output = ["--json", "--format", "agent-capsule", "--limit", String(params.limit ?? DEFAULT_LIMIT), "--excerpt-lines", String(params.excerptLines ?? 0)];
+    if (mode === "keyword" || mode === "natural")
+        return [...output, "keyword", "--", query, "."];
     return mode === "chain" || mode === "semantic"
         ? [...output, mode, "--", query, "."]
         : [...output, "--", query, "."];
@@ -95,7 +98,7 @@ export function registerAstSgrepTools(pi, runtime = new AstSgrepRuntime(pi), fre
     pi.registerTool({
         name: "asgrep_search",
         label: "ast-sgrep search",
-        description: "Search project code with natural language, structural patterns, symbol relationships, chains, or semantic retrieval.",
+        description: "Choose nonfused keyword, structural, symbol, chain, or semantic retrieval for project code.",
         parameters: searchParameters,
         async execute(_toolCallId, params, signal, onUpdate, ctx) {
             const options = signal ? { signal } : {};

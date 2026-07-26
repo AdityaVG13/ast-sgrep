@@ -60,6 +60,7 @@ pub(crate) fn capabilities_json(_cli: &Cli) -> anyhow::Result<Value> {
         "agent_contract": {"stdout": "data payloads only when --json / robot modes are set", "stderr": "human hints and diagnostics", "deterministic": "stable JSON key ordering via serde_json; disable color with NO_COLOR=1"},
         "commands": [
             {"name": "search", "usage": "asgrep [--json] [--format agent] \"QUERY\" [ROOT]", "robot_output": "--json [--format native|agent|agent-capsule|github|gitlab]"},
+            {"name": "keyword", "usage": "asgrep keyword \"QUERY\" [ROOT] [--json]", "robot_output": "--json [--format native|agent-capsule]"},
             {"name": "semantic", "usage": "asgrep semantic \"QUERY\" [ROOT] [--json]", "robot_output": "--json (defaults to agent format)"},
             {"name": "index", "usage": "asgrep index [ROOT] [--json]"}, {"name": "status", "usage": "asgrep status [ROOT] [--json]"},
             {"name": "reindex", "usage": "asgrep reindex [ROOT] [--json]"}, {"name": "capabilities", "usage": "asgrep capabilities --json"},
@@ -121,7 +122,7 @@ fn print_robot_guide() {
 2. `asgrep doctor . --robot-triage` — one-shot health + suggested commands.
 3. `asgrep --json --format agent "natural language intent" .` — ranked hits with follow-up hints.
 ## Subcommands (always use explicit subcommands; bare tokens are treated as search queries)
-- `index`, `status`, `reindex`, `semantic`, `bench`, `watch`
+- `index`, `status`, `reindex`, `keyword`, `semantic`, `bench`, `watch`
 - `capabilities --json` — machine-readable contract
 - `robot-docs guide` — this document
 - `doctor --json` or `doctor --robot-triage` — triage bundle
@@ -154,6 +155,7 @@ pub(crate) fn query_looks_like_subcommand_typo(query: &str) -> Option<&'static s
         "reindex",
         "bench",
         "watch",
+        "keyword",
         "semantic",
         "capabilities",
         "capability",

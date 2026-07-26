@@ -108,13 +108,16 @@ function checkAbort(signal) {
     if (signal?.aborted)
         throw new RuntimeError("CANCELLED", "ast-sgrep read was cancelled");
 }
-function safePrefix(value, maxChars) {
-    if (value.length <= maxChars)
-        return value;
-    let end = maxChars;
-    if (end > 0 && /[\uD800-\uDBFF]/.test(value[end - 1]))
-        end -= 1;
-    return value.slice(0, end);
+function boundedPrefix(value, maxChars) {
+    let chars = 0;
+    let end = 0;
+    for (const codePoint of value) {
+        if (chars >= maxChars)
+            return { text: value.slice(0, end), chars, truncated: true };
+        end += codePoint.length;
+        chars += 1;
+    }
+    return { text: value, chars, truncated: false };
 }
 async function readLineWindow(handle, parsed, contextLines, maxChars, signal) {
     const stat = await handle.stat();
@@ -134,39 +137,38 @@ async function readLineWindow(handle, parsed, contextLines, maxChars, signal) {
     let selectedEnd;
     let selectedLines = 0;
     let content = "";
+    let contentChars = 0;
     let truncated = false;
-    let complete = false;
+    let rangeComplete = false;
     let scannedBytes = 0;
     const consumeLine = (line) => {
         if (lineNumber >= wantedStart && lineNumber <= wantedEnd) {
             selectedStart ??= lineNumber;
             selectedEnd = lineNumber;
-            const addition = `${selectedLines > 0 ? "\n" : ""}${line.endsWith("\r") ? line.slice(0, -1) : line}`;
+            if (!truncated) {
+                const addition = `${selectedLines > 0 ? "\n" : ""}${line.endsWith("\r") ? line.slice(0, -1) : line}`;
+                const bounded = boundedPrefix(addition, maxChars - contentChars);
+                content += bounded.text;
+                contentChars += bounded.chars;
+                truncated = bounded.truncated;
+            }
             selectedLines += 1;
-            const remaining = maxChars - content.length;
-            if (addition.length > remaining) {
-                content += safePrefix(addition, remaining);
-                truncated = true;
-                complete = true;
-            }
-            else {
-                content += addition;
-            }
         }
         if (lineNumber >= wantedEnd)
-            complete = true;
+            rangeComplete = true;
         lineNumber += 1;
     };
     try {
         for await (const chunk of stream) {
             checkAbort(signal);
             const bytes = chunk;
-            scannedBytes += bytes.length;
-            if (scannedBytes > MAX_SCAN_BYTES) {
-                throw new RuntimeError("READ_SCAN_LIMIT", `${parsed.file} exceeds the ${MAX_SCAN_BYTES}-byte scan limit`);
-            }
+            const remainingScan = MAX_SCAN_BYTES - scannedBytes;
+            const scanned = bytes.length > remainingScan + 1
+                ? bytes.subarray(0, remainingScan + 1)
+                : bytes;
+            scannedBytes += scanned.length;
             try {
-                pending += decoder.decode(bytes, { stream: true });
+                pending += decoder.decode(scanned, { stream: true });
             }
             catch {
                 throw new RuntimeError("BINARY_FILE", `${parsed.file} is not valid UTF-8 text`);
@@ -175,20 +177,19 @@ async function readLineWindow(handle, parsed, contextLines, maxChars, signal) {
             while (newline >= 0) {
                 consumeLine(pending.slice(0, newline));
                 pending = pending.slice(newline + 1);
-                if (complete)
+                if (rangeComplete)
                     break;
                 newline = pending.indexOf("\n");
             }
-            if (complete)
+            if (rangeComplete)
                 break;
+            if (scannedBytes > MAX_SCAN_BYTES || scanned.length < bytes.length) {
+                throw new RuntimeError("READ_SCAN_LIMIT", `${parsed.file} exceeds the ${MAX_SCAN_BYTES}-byte scan limit`);
+            }
             if (newline < 0 && lineNumber < wantedStart)
                 pending = "";
-            if (lineNumber >= wantedStart && pending.length > maxChars - content.length) {
-                consumeLine(pending);
-                pending = "";
-            }
         }
-        if (!complete) {
+        if (!rangeComplete) {
             try {
                 pending += decoder.decode();
             }
@@ -208,8 +209,8 @@ async function readLineWindow(handle, parsed, contextLines, maxChars, signal) {
         stream.destroy();
     }
     checkAbort(signal);
-    if (parsed.start >= lineNumber && selectedStart === undefined) {
-        throw new RuntimeError("RANGE_OUT_OF_BOUNDS", `${parsed.file} has fewer than ${parsed.start} lines`);
+    if (parsed.start >= lineNumber || parsed.end >= lineNumber) {
+        throw new RuntimeError("RANGE_OUT_OF_BOUNDS", `${parsed.file} has fewer than ${parsed.end} lines`);
     }
     return {
         file: parsed.file,
@@ -226,6 +227,10 @@ export class SgrepCodeMode {
         this.runtime = runtime;
         this.context = context;
         this.#api = Object.freeze({
+            keywordSearch: this.keywordSearch.bind(this),
+            astSearch: this.astSearch.bind(this),
+            semanticSearch: this.semanticSearch.bind(this),
+            codeRead: this.codeRead.bind(this),
             find: this.find.bind(this),
             astFind: this.astFind.bind(this),
             semantic: this.semantic.bind(this),
@@ -237,31 +242,41 @@ export class SgrepCodeMode {
             throw new RuntimeError("INVALID_PLAN", "Code Mode plan must be a function");
         return await plan(this.#api);
     }
-    async find(query, options = {}) {
-        const value = await this.runtime.run([...outputArgs(options), "--", requiredText(query, "query"), "."], this.context, options);
+    async keywordSearch(query, options = {}) {
+        const value = await this.runtime.run([...outputArgs(options), "keyword", "--", requiredText(query, "query"), "."], this.context, options);
         return asSearchResponse(value);
     }
-    async astFind(pattern, options = {}) {
+    async astSearch(pattern, options = {}) {
         const query = `pattern: ${requiredText(pattern, "pattern")}`;
         const value = await this.runtime.run([...outputArgs(options), "--", query, "."], this.context, options);
         return asSearchResponse(value);
     }
-    async semantic(query, options = {}) {
+    async semanticSearch(query, options = {}) {
         const value = await this.runtime.run([...outputArgs(options), "semantic", "--", requiredText(query, "query"), "."], this.context, options);
         return asSearchResponse(value);
     }
-    async read(ids, options = {}) {
+    async find(query, options) {
+        return await this.keywordSearch(query, options);
+    }
+    async astFind(pattern, options) {
+        return await this.astSearch(pattern, options);
+    }
+    async semantic(query, options) {
+        return await this.semanticSearch(query, options);
+    }
+    async codeRead(ids, options = {}) {
         const values = Array.isArray(ids) ? ids : [ids];
         if (values.length === 0 || values.length > MAX_READ_REFS) {
             throw new RuntimeError("INVALID_ARGUMENT", `read requires 1 to ${MAX_READ_REFS} refs`);
         }
         const contextLines = boundedInteger(options.contextLines, 0, 0, 100, "contextLines");
-        const maxChars = boundedInteger(options.maxChars, DEFAULT_MAX_READ_CHARS, values.length, MAX_READ_CHARS, "maxChars");
+        const maxChars = boundedInteger(options.maxChars, DEFAULT_MAX_READ_CHARS, 1, MAX_READ_CHARS, "maxChars");
         const perRefChars = Math.floor(maxChars / values.length);
+        const remainder = maxChars % values.length;
         checkAbort(options.signal);
         const root = await realpath(await this.runtime.resolveRoot(this.context));
         const results = [];
-        for (const value of values) {
+        for (const [index, value] of values.entries()) {
             checkAbort(options.signal);
             const ref = refValue(value);
             const parsed = parseRef(ref);
@@ -301,13 +316,17 @@ export class SgrepCodeMode {
                     || actualStat.dev !== expectedStat.dev || actualStat.ino !== expectedStat.ino) {
                     throw new RuntimeError("PATH_CHANGED", `Ref changed while opening: ${ref}`);
                 }
-                results.push({ ref, ...await readLineWindow(handle, parsed, contextLines, perRefChars, options.signal) });
+                const budget = perRefChars + (index < remainder ? 1 : 0);
+                results.push({ ref, ...await readLineWindow(handle, parsed, contextLines, budget, options.signal) });
             }
             finally {
                 await handle.close();
             }
         }
         return results;
+    }
+    async read(ids, options) {
+        return await this.codeRead(ids, options);
     }
 }
 export function createSgrepCodeMode(runtime, context) {

@@ -47,9 +47,17 @@ export interface SgrepReadResult {
     truncated: boolean;
 }
 export interface SgrepApi {
+    keywordSearch(query: string, options?: SgrepSearchOptions): Promise<SgrepSearchResponse>;
+    astSearch(pattern: string, options?: SgrepSearchOptions): Promise<SgrepSearchResponse>;
+    semanticSearch(query: string, options?: SgrepSearchOptions): Promise<SgrepSearchResponse>;
+    codeRead(ids: SgrepRef | Pick<SgrepHit, "ref"> | readonly (SgrepRef | Pick<SgrepHit, "ref">)[], options?: SgrepReadOptions): Promise<SgrepReadResult[]>;
+    /** Alias for keywordSearch. */
     find(query: string, options?: SgrepSearchOptions): Promise<SgrepSearchResponse>;
+    /** Alias for astSearch. */
     astFind(pattern: string, options?: SgrepSearchOptions): Promise<SgrepSearchResponse>;
+    /** Alias for semanticSearch. */
     semantic(query: string, options?: SgrepSearchOptions): Promise<SgrepSearchResponse>;
+    /** Alias for codeRead. */
     read(ids: SgrepRef | Pick<SgrepHit, "ref"> | readonly (SgrepRef | Pick<SgrepHit, "ref">)[], options?: SgrepReadOptions): Promise<SgrepReadResult[]>;
 }
 export type SgrepPlan<T> = (sgrep: Readonly<SgrepApi>) => T | Promise<T>;
@@ -60,9 +68,13 @@ export declare class SgrepCodeMode implements SgrepApi {
     private readonly context;
     constructor(runtime: RuntimeLike, context: RuntimeContext);
     execute<T>(plan: SgrepPlan<T>): Promise<T>;
+    keywordSearch(query: string, options?: SgrepSearchOptions): Promise<SgrepSearchResponse>;
+    astSearch(pattern: string, options?: SgrepSearchOptions): Promise<SgrepSearchResponse>;
+    semanticSearch(query: string, options?: SgrepSearchOptions): Promise<SgrepSearchResponse>;
     find(query: string, options?: SgrepSearchOptions): Promise<SgrepSearchResponse>;
     astFind(pattern: string, options?: SgrepSearchOptions): Promise<SgrepSearchResponse>;
     semantic(query: string, options?: SgrepSearchOptions): Promise<SgrepSearchResponse>;
+    codeRead(ids: SgrepRef | Pick<SgrepHit, "ref"> | readonly (SgrepRef | Pick<SgrepHit, "ref">)[], options?: SgrepReadOptions): Promise<SgrepReadResult[]>;
     read(ids: SgrepRef | Pick<SgrepHit, "ref"> | readonly (SgrepRef | Pick<SgrepHit, "ref">)[], options?: SgrepReadOptions): Promise<SgrepReadResult[]>;
 }
 export declare function createSgrepCodeMode(runtime: RuntimeLike, context: RuntimeContext): SgrepCodeMode;

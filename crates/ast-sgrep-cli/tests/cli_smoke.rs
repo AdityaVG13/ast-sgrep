@@ -20,6 +20,24 @@ fn cli_smoke() {
     assert!(!hits.is_empty());
     assert!(hits.iter().all(|hit| hit["signal"].is_string()));
     assert!(hits.iter().all(|hit| hit["margin"].is_number()));
+    let keyword = session.run_success(&[
+        "--index-path",
+        session.index_path.to_str().unwrap(),
+        "--json",
+        "--format",
+        "agent-capsule",
+        "keyword",
+        "--",
+        "process_request",
+        session.root.to_str().unwrap(),
+    ]);
+    let keyword: serde_json::Value = serde_json::from_slice(&keyword.stdout).unwrap();
+    let keyword_hits = keyword["hits"].as_array().unwrap();
+    assert!(!keyword_hits.is_empty());
+    assert!(keyword_hits.iter().all(|hit| hit["kind"] == "asgrep"));
+    assert!(keyword_hits.iter().all(|hit| hit["ref"].is_string()));
+    assert!(keyword_hits.iter().all(|hit| hit.get("excerpt").is_none()));
+
     let github = session.search_json("process_request", &["--format", "github"]);
     assert!(github["items"].is_array());
     assert!(github["items"]

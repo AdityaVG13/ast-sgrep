@@ -12,7 +12,7 @@ test("a deterministic agent can discover and complete the documented fixture wor
   };
   assert.deepEqual(manifest.pi.skills, ["./skills"]);
   const skill = await readFile(new URL("skills/ast-sgrep/SKILL.md", packageRoot), "utf8");
-  for (const instruction of ["exact-text search", "`natural`:", "`defs`:", "`callers`:", "/asgrep-doctor", "/asgrep-index"]) {
+  for (const instruction of ["exact-text search", "`keyword`:", "`semantic`:", "`defs`:", "`callers`:", "/asgrep-doctor", "/asgrep-index"]) {
     assert.match(skill, new RegExp(instruction.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   }
 
@@ -52,7 +52,7 @@ test("a deterministic agent can discover and complete the documented fixture wor
   await commands.get("asgrep-status")!.handler("", commandContext);
   await commands.get("asgrep-index")!.handler("", commandContext);
   const search = tools.get("asgrep_search")!;
-  assert.match(search.description, /natural language.*symbol relationships/i);
+  assert.match(search.description, /nonfused keyword.*semantic retrieval/i);
   const signal = new AbortController().signal;
   await search.execute("intent", { query: "refresh the index after edits", mode: "natural" }, signal, undefined, { cwd: "/fixture" });
   await search.execute("callers", { query: "ensureFresh", mode: "callers", limit: 8 }, signal, undefined, { cwd: "/fixture" });
@@ -62,7 +62,7 @@ test("a deterministic agent can discover and complete the documented fixture wor
     ["doctor", ".", "--json"],
     ["status", ".", "--json"],
     ["index", ".", "--json"],
-    ["--json", "--format", "agent-capsule", "--limit", "8", "--excerpt-lines", "0", "--", "refresh the index after edits", "."],
+    ["--json", "--format", "agent-capsule", "--limit", "8", "--excerpt-lines", "0", "keyword", "--", "refresh the index after edits", "."],
     ["--json", "--format", "agent-capsule", "--limit", "8", "--excerpt-lines", "0", "--", "callers: ensureFresh", "."],
   ]);
 });

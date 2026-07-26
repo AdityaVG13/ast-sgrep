@@ -41,18 +41,19 @@ Environment variables:
 
 ## Tools
 
-### `code_search`
+### `keyword_search`, `ast_search`, `semantic_search`
 
-Hybrid search: lexical + symbols + call graph + semantic.
+Three nonfused retrieval channels. Each accepts `query`, optional `root`, and optional `limit`, and returns abbreviated one-line previews plus stable `file#Lstart-Lend` node IDs. The agent chooses the granularity; MCP never auto-fuses channels.
 
-Arguments:
+- `keyword_search`: indexed lexical evidence only.
+- `ast_search`: AST pattern evidence only.
+- `semantic_search`: embedding evidence only.
 
-- `query` (required), e.g. `auth refresh`, `defs:auth_refresh`, `callers:process_request`
-- `root` (optional), override `ASGREP_ROOT`
-- `semantic_only` (optional), embed pass only
-- `limit` (optional), max hits
+`code_search` remains a deprecated compatibility alias for `keyword_search`; it no longer auto-fuses channels.
 
-Returns agent JSON (`follow_up_queries`, excerpts, stack hints). See [use-cases.md](use-cases.md).
+### `code_read`
+
+Expands 1 to 20 selected node IDs into full code. Optional `context_lines` reads adjacent lines and `max_chars` sets an aggregate response budget. Reads enforce project containment, strict UTF-8, regular files, and scan bounds.
 
 ### `index_status`
 
@@ -64,10 +65,11 @@ Build or incrementally update the index. Pass `force: true` for full reindex.
 
 ## Recommended agent loop
 
-1. `index_repo` on first open (or rely on prior `asgrep index .`)
-2. `code_search` with a natural-language or graph query
-3. Follow `follow_up_queries` in hits (`defs:…`, `callers:…`)
-4. Use `pattern:…` in the CLI for structural shapes; ast-grep metavariables still delegate to the ast-grep CLI when installed
+1. `index_repo` on first open (or rely on prior `asgrep index .`).
+2. Choose one of `keyword_search`, `ast_search`, or `semantic_search` with a bounded limit.
+3. Inspect abbreviated previews and retain only relevant node IDs.
+4. Call `code_read` for selected IDs, adding adjacent context only when needed.
+5. Use the one-shot CLI when automatic fusion is explicitly desired. Structural rewrites remain delegated to ast-grep.
 
 ## LSP vs MCP
 
