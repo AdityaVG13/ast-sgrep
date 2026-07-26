@@ -9,7 +9,6 @@ use std::cell::Cell;
 use std::path::{Component, Path};
 const DEFAULT_EMBED_CACHE_CAP: usize = 100_000;
 pub(super) struct EmbeddedChunk {
-    pub text: String,
     pub vector_bytes: Vec<u8>,
     pub dim: usize,
     pub backend: ast_sgrep_embed::EmbedBackendKind,
@@ -82,17 +81,8 @@ fn cache_model_id_for_pref(p: ast_sgrep_embed::EmbedPreference) -> Option<String
         }
     }
 }
-fn cache_model_id_for_backend(b: ast_sgrep_embed::EmbedBackendKind) -> Option<String> {
-    use ast_sgrep_embed::EmbedBackendKind::*;
-    match b {
-        Semantic => Some(semantic_mid()),
-        Neural => Some(neural_mid()),
-        Cloud => {
-            ast_sgrep_embed::CloudEmbeddingConfig::from_env().map(|c| format!("cloud:{}", c.model))
-        }
-        Ollama => ast_sgrep_embed::OllamaEmbeddingConfig::from_env()
-            .map(|c| format!("ollama:{}", c.model)),
-    }
+fn cache_model_id_for_backend(backend: ast_sgrep_embed::EmbedBackendKind) -> Option<String> {
+    ast_sgrep_embed::configured_backend_model_id(backend, ast_sgrep_embed::default_semantic_dim())
 }
 pub(super) fn init_cache_seq(conn: &Connection, seq: &Cell<i64>) -> Result<()> {
     let max: i64 = conn.query_row(
@@ -246,10 +236,9 @@ fn embed_parallel(
         let out = texts
             .into_iter()
             .zip(cached)
-            .map(|(text, row)| {
+            .map(|(_, row)| {
                 let row = row.expect("hit");
                 EmbeddedChunk {
-                    text,
                     vector_bytes: row.vector,
                     dim: row.dim,
                     backend: row.backend,
@@ -273,7 +262,6 @@ fn embed_parallel(
     for (i, text) in texts.into_iter().enumerate() {
         if let Some(row) = cached[i].take() {
             out.push(EmbeddedChunk {
-                text,
                 vector_bytes: row.vector,
                 dim: row.dim,
                 backend: row.backend,
@@ -295,7 +283,6 @@ fn embed_parallel(
             });
         }
         out.push(EmbeddedChunk {
-            text,
             vector_bytes: vb,
             dim,
             backend: r.backend,

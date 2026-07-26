@@ -17,7 +17,7 @@ use rusqlite::{params, Connection, ToSql};
 use std::collections::{BTreeSet, HashMap};
 use std::path::Path;
 use std::sync::Arc;
-const SCHEMA_VERSION: i64 = 5;
+const SCHEMA_VERSION: i64 = 6;
 const IMPORT_SELECT: &str =
     "SELECT f.path, f.language, i.module_path, i.line_no FROM imports i JOIN files f ON f.id = i.file_id";
 const SYM_LOC: &str = "SELECT f.path, s.name, f.language, s.line_start, s.line_end FROM symbols s JOIN files f ON f.id = s.file_id";
@@ -130,6 +130,17 @@ impl IndexStore {
         if version < 3 {
             self.conn.execute_batch(
                 "INSERT INTO lines_trigram(rowid, content) SELECT rowid, content FROM lines;",
+            )?;
+        }
+        if version < 6 {
+            self.conn.execute_batch(
+                "DELETE FROM semantic_chunks;
+                 DELETE FROM embeddings;
+                 DELETE FROM embed_cache;
+                 DELETE FROM meta WHERE key LIKE 'body:%' OR key LIKE 'struct:%'
+                   OR key IN ('embed_backend', 'embed_model', 'embed_dim');
+                 UPDATE files SET content_hash = 'semantic-layout-v2:' || content_hash
+                   WHERE content_hash NOT LIKE 'semantic-layout-v2:%';",
             )?;
         }
         self.conn
@@ -495,15 +506,12 @@ impl IndexStore {
         if emb.is_empty() {
             return Ok(());
         }
-        if emb.len() < chunks.len() && emb[0].backend == ast_sgrep_embed::EmbedBackendKind::Neural {
-            let (first, last) = (&chunks[0], &chunks[chunks.len() - 1]);
-            for e in emb {
-                self.conn.execute(
-                    "INSERT INTO semantic_chunks(file_id, symbol_id, chunk_kind, line_start, line_end, symbol_name, text, vector) VALUES(?1, NULL, ?2, ?3, ?4, ?5, ?6, ?7)",
-                    params![file_id, "file", first.line_start, last.line_end, "", &e.text, &e.vector_bytes], )?;
-            }
-            let last = &emb[emb.len() - 1];
-            return self.persist_embed_metadata(Some(last.dim), Some(last.backend));
+        if emb.len() != chunks.len() {
+            return Err(crate::StoreError::Other(format!(
+                "embedding result count {} does not match semantic child count {}",
+                emb.len(),
+                chunks.len()
+            )));
         }
         let name_to_id: HashMap<String, i64> = symbols
             .iter()
@@ -519,11 +527,11 @@ impl IndexStore {
             st.execute(params![
                 file_id,
                 sid,
-                "symbol",
+                if c.kind == "file" { "file" } else { "symbol" },
                 c.line_start,
                 c.line_end,
                 c.symbol_name,
-                e.text,
+                c.excerpt,
                 e.vector_bytes
             ])?;
         }
@@ -537,8 +545,9 @@ impl IndexStore {
     ) -> Result<()> {
         if let Some(k) = kind {
             self.set_meta("embed_backend", k.as_meta_str())?;
-            if k == ast_sgrep_embed::EmbedBackendKind::Neural {
-                self.set_meta("embed_model", ast_sgrep_embed::neural_configured_model_id())?;
+            let model = dim.and_then(|dim| ast_sgrep_embed::configured_backend_model_id(k, dim));
+            if let Some(model) = model {
+                self.set_meta("embed_model", &model)?;
             } else {
                 self.delete_meta("embed_model")?;
             }

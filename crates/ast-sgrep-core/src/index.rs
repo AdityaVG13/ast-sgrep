@@ -479,26 +479,28 @@ impl Indexer {
         let split = split_content_lines(content);
         let body_hash = body_structure_hash(content);
         let body_key = format!("body:{rel_path}");
-        if let Some(file_id) = self.store.file_id(rel_path)? {
-            if self.store.get_meta(&body_key)?.as_deref() == Some(body_hash.as_str()) {
-                self.store.begin_file_tx()?;
-                match self.store.refresh_lines_only(RefreshLinesInput {
-                    file_id,
-                    language: language.map(|l| l.as_str()),
-                    mtime_secs,
-                    mtime_nanos,
-                    content_hash: &hash,
-                    lines: &split.lines,
-                    eol: split.eol,
-                    rel_path,
-                }) {
-                    Ok(_) => {
-                        self.store.commit_file_tx()?;
-                        return Ok(FileIndexStats::default());
-                    }
-                    Err(e) => {
-                        self.store.rollback_file_tx()?;
-                        return Err(e);
+        if !self.options.embed_semantic {
+            if let Some(file_id) = self.store.file_id(rel_path)? {
+                if self.store.get_meta(&body_key)?.as_deref() == Some(body_hash.as_str()) {
+                    self.store.begin_file_tx()?;
+                    match self.store.refresh_lines_only(RefreshLinesInput {
+                        file_id,
+                        language: language.map(|l| l.as_str()),
+                        mtime_secs,
+                        mtime_nanos,
+                        content_hash: &hash,
+                        lines: &split.lines,
+                        eol: split.eol,
+                        rel_path,
+                    }) {
+                        Ok(_) => {
+                            self.store.commit_file_tx()?;
+                            return Ok(FileIndexStats::default());
+                        }
+                        Err(e) => {
+                            self.store.rollback_file_tx()?;
+                            return Err(e);
+                        }
                     }
                 }
             }
@@ -506,7 +508,12 @@ impl Indexer {
         let (symbols, callers, imports, pattern_nodes) =
             self.extract_rows(rel_path, content, language)?;
         let semantic_chunks = if self.options.embed_semantic {
-            crate::semantic_chunk::build_semantic_chunks(&symbols, &callers, &split.lines)
+            crate::semantic_chunk::build_semantic_chunks(
+                &symbols,
+                &callers,
+                &pattern_nodes,
+                &split.lines,
+            )
         } else {
             vec![]
         };
@@ -548,6 +555,18 @@ impl Indexer {
                 && stored.as_deref() != Some("auto")
                 && active != "auto"
             {
+                return Ok(false);
+            }
+            let dim = self
+                .store
+                .get_meta("embed_dim")?
+                .and_then(|value| value.parse::<usize>().ok())
+                .unwrap_or_else(ast_sgrep_embed::default_semantic_dim);
+            let current_model = stored
+                .as_deref()
+                .and_then(ast_sgrep_embed::EmbedBackendKind::parse)
+                .and_then(|backend| ast_sgrep_embed::configured_backend_model_id(backend, dim));
+            if self.store.get_meta("embed_model")? != current_model {
                 return Ok(false);
             }
         }
@@ -687,7 +706,12 @@ fn prepare_file(
         None => (vec![], vec![], vec![], vec![]),
     };
     let semantic_chunks = if embed_semantic {
-        crate::semantic_chunk::build_semantic_chunks(&symbols, &callers, &split.lines)
+        crate::semantic_chunk::build_semantic_chunks(
+            &symbols,
+            &callers,
+            &pattern_nodes,
+            &split.lines,
+        )
     } else {
         vec![]
     };

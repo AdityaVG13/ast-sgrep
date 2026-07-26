@@ -68,8 +68,7 @@ pub fn embed_pass_lazy_ivf(
         };
         chunks.push(row);
     }
-    let ranked =
-        ast_sgrep_embed::rank_chunk_indices_by_vector(&query_vec, &chunks, EMBED_HIT_LIMIT);
+    let ranked = ast_sgrep_embed::rank_chunk_indices_by_vector(&query_vec, &chunks, chunks.len());
     Ok(Some(embed_similarity_hits(&chunks, ranked)))
 }
 pub fn embed_pass_for_files(
@@ -105,7 +104,7 @@ pub fn embed_pass_for_files(
         survivors.first().map(|chunk| chunk.5.len()),
     )?;
     let ranked =
-        ast_sgrep_embed::rank_chunk_indices_by_vector(&query_vec, &survivors, EMBED_HIT_LIMIT);
+        ast_sgrep_embed::rank_chunk_indices_by_vector(&query_vec, &survivors, survivors.len());
     Ok(embed_similarity_hits(&survivors, ranked))
 }
 
@@ -137,7 +136,7 @@ pub fn embed_pass_with_context(
         &query_vec,
         chunks,
         flat,
-        EMBED_HIT_LIMIT,
+        chunks.len(),
         options.ann_threshold,
     )?;
     Ok(embed_similarity_hits(chunks, indices))
@@ -151,20 +150,26 @@ fn embed_query_vector(
     use std::sync::{Mutex, OnceLock};
     static QCACHE: OnceLock<Mutex<HashMap<String, Vec<f32>>>> = OnceLock::new();
     let stored_backend = store.get_meta("embed_backend")?;
-    if stored_backend.as_deref() == Some("neural") {
-        let stored_model = store.get_meta("embed_model")?;
-        let active_model = ast_sgrep_embed::neural_configured_model_id();
-        if stored_model.as_deref() != Some(active_model) {
-            return Err(crate::StoreError::Other(format!( "stored neural model {:?} does not match active model {active_model}; reindex with: asgrep reindex",
-                stored_model.as_deref().unwrap_or("unknown")
+    let stored_model = store.get_meta("embed_model")?;
+    let dim = stored_dim.unwrap_or(ast_sgrep_embed::default_semantic_dim());
+    if let Some(backend_name) = stored_backend.as_deref() {
+        let backend = ast_sgrep_embed::EmbedBackendKind::parse(backend_name).ok_or_else(|| {
+            crate::StoreError::Other(format!("unknown stored embedding backend {backend_name:?}"))
+        })?;
+        let active_model = ast_sgrep_embed::configured_backend_model_id(backend, dim);
+        if stored_model != active_model {
+            return Err(crate::StoreError::Other(format!(
+                "stored embedding model {:?} does not match active model {:?}; reindex with: asgrep reindex",
+                stored_model.as_deref().unwrap_or("unknown"),
+                active_model.as_deref().unwrap_or("unavailable")
             )));
         }
     }
-    let dim = stored_dim.unwrap_or(ast_sgrep_embed::default_semantic_dim());
     let cache_key = format!(
-        "{}|{}|{}|{:?}",
+        "{}|{}|{}|{}|{:?}",
         query,
         stored_backend.as_deref().unwrap_or(""),
+        stored_model.as_deref().unwrap_or(""),
         dim,
         options.embed_preference()
     );
@@ -192,17 +197,67 @@ fn embed_query_vector(
     Ok(vector)
 }
 fn embed_similarity_hits(chunks: &[SemanticChunkRow], ranked: Vec<(usize, f32)>) -> Vec<SearchHit> {
-    ranked
+    #[derive(Debug)]
+    struct ParentMatch {
+        best_index: usize,
+        best_similarity: f32,
+        children: Vec<(f32, String)>,
+    }
+
+    let mut parents = HashMap::<(String, u32, u32, String), ParentMatch>::new();
+    for (index, similarity) in ranked {
+        let Some((file, line_start, line_end, symbol, excerpt, _)) = chunks.get(index) else {
+            continue;
+        };
+        let parent = parents
+            .entry((file.clone(), *line_start, *line_end, symbol.clone()))
+            .or_insert_with(|| ParentMatch {
+                best_index: index,
+                best_similarity: similarity,
+                children: Vec::new(),
+            });
+        if similarity > parent.best_similarity {
+            parent.best_index = index;
+            parent.best_similarity = similarity;
+        }
+        if !parent.children.iter().any(|(_, child)| child == excerpt) {
+            parent.children.push((similarity, excerpt.clone()));
+        }
+    }
+    let mut parents = parents.into_values().collect::<Vec<_>>();
+    parents.sort_by(|left, right| {
+        right
+            .best_similarity
+            .total_cmp(&left.best_similarity)
+            .then_with(|| chunks[left.best_index].0.cmp(&chunks[right.best_index].0))
+            .then_with(|| chunks[left.best_index].1.cmp(&chunks[right.best_index].1))
+            .then_with(|| chunks[left.best_index].2.cmp(&chunks[right.best_index].2))
+            .then_with(|| chunks[left.best_index].3.cmp(&chunks[right.best_index].3))
+    });
+    parents.truncate(EMBED_HIT_LIMIT);
+    parents
         .into_iter()
-        .map(|(idx, sim)| {
-            let (file, line_start, line_end, symbol, excerpt, _) = &chunks[idx];
+        .map(|mut parent| {
+            parent.children.sort_by(|left, right| {
+                right
+                    .0
+                    .total_cmp(&left.0)
+                    .then_with(|| left.1.cmp(&right.1))
+            });
+            parent.children.truncate(3);
+            let (file, line_start, line_end, symbol, _, _) = &chunks[parent.best_index];
             SearchHit::span(SpanHitInput {
                 kind: HitKind::Embed,
                 file: file.clone(),
                 line_start: *line_start,
                 line_end: *line_end,
-                score: SCORE_EMBED * f64::from(sim),
-                excerpt: excerpt.clone(),
+                score: SCORE_EMBED * f64::from(parent.best_similarity),
+                excerpt: parent
+                    .children
+                    .into_iter()
+                    .map(|(_, excerpt)| excerpt)
+                    .collect::<Vec<_>>()
+                    .join("\n...\n"),
                 symbol: (!symbol.is_empty()).then_some(symbol.clone()),
                 language: None,
             })
@@ -221,19 +276,55 @@ fn embed_legacy_hits(
     let query_vec = embed_query_vector(store, options, query, chunks.first().map(|c| c.5.len()))?;
     Ok(embed_similarity_hits(
         &chunks,
-        ast_sgrep_embed::rank_chunk_indices_by_vector(&query_vec, &chunks, EMBED_HIT_LIMIT),
+        ast_sgrep_embed::rank_chunk_indices_by_vector(&query_vec, &chunks, chunks.len()),
     ))
 }
 
 #[cfg(test)]
 mod cascade_tests {
-    use super::embed_pass_for_files;
+    use super::{embed_pass_for_files, embed_similarity_hits};
     use crate::query::ParsedQuery;
     use crate::search::SearchOptions;
     use crate::semantic_chunk::SemanticChunkInput;
     use crate::store::{IndexStore, UpsertFileInput};
     use std::collections::HashSet;
     use tempfile::TempDir;
+
+    #[test]
+    fn child_scores_use_parent_max_and_return_one_parent_hit() {
+        let chunks = vec![
+            (
+                "parent.rs".into(),
+                10,
+                20,
+                "parent".into(),
+                "weaker child".into(),
+                vec![0.0],
+            ),
+            (
+                "parent.rs".into(),
+                10,
+                20,
+                "parent".into(),
+                "best child".into(),
+                vec![0.0],
+            ),
+            (
+                "other.rs".into(),
+                1,
+                3,
+                "other".into(),
+                "other child".into(),
+                vec![0.0],
+            ),
+        ];
+        let hits = embed_similarity_hits(&chunks, vec![(0, 0.2), (2, 0.8), (1, 0.9)]);
+        assert_eq!(hits.len(), 2);
+        assert_eq!(hits[0].file, "parent.rs");
+        assert_eq!((hits[0].line_start, hits[0].line_end), (10, 20));
+        assert_eq!(hits[0].score, super::SCORE_EMBED * f64::from(0.9_f32));
+        assert_eq!(hits[0].excerpt, "best child\n...\nweaker child");
+    }
 
     #[test]
     fn cascade_ranks_modern_and_legacy_vectors_in_allowed_files() {
@@ -307,6 +398,11 @@ mod cascade_tests {
             .unwrap();
 
         let allowed = HashSet::from(["allowed.rs".to_string(), "modern.rs".to_string()]);
+        let stored = store.semantic_chunks_for_files(&allowed, None).unwrap();
+        assert!(stored.iter().any(|chunk| {
+            chunk.0 == "modern.rs" && chunk.4 == "payment renewal modern handler"
+        }));
+        assert!(stored.iter().all(|chunk| !chunk.4.starts_with("symbol:")));
         let hits = embed_pass_for_files(
             &store,
             &SearchOptions {
@@ -323,5 +419,19 @@ mod cascade_tests {
             .map(|hit| hit.file.as_str())
             .collect::<HashSet<_>>();
         assert_eq!(hit_files, HashSet::from(["allowed.rs", "modern.rs"]));
+
+        store.set_meta("embed_model", "stale-model").unwrap();
+        let error = embed_pass_for_files(
+            &store,
+            &SearchOptions {
+                root: temp.path().to_path_buf(),
+                use_embed: true,
+                ..SearchOptions::default()
+            },
+            &ParsedQuery::parse("renewal handler"),
+            &allowed,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("does not match active model"));
     }
 }

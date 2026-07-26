@@ -402,6 +402,21 @@ fn try_backend(kind: EmbedBackendKind, text: &str) -> Option<Vec<f32>> {
 fn try_backend_batch(kind: EmbedBackendKind, texts: &[&str]) -> Option<Vec<Vec<f32>>> {
     embedder_for(kind)?.embed_batch(texts).ok()
 }
+pub fn configured_backend_model_id(kind: EmbedBackendKind, dim: usize) -> Option<String> {
+    match kind {
+        EmbedBackendKind::Semantic => Some(format!("semantic:hashed-v1:{dim}")),
+        EmbedBackendKind::Neural => {
+            Some(format!("neural:{}", crate::neural::configured_model_id()))
+        }
+        EmbedBackendKind::Cloud => {
+            CloudEmbeddingConfig::from_env().map(|config| format!("cloud:{}", config.model))
+        }
+        EmbedBackendKind::Ollama => {
+            OllamaEmbeddingConfig::from_env().map(|config| format!("ollama:{}", config.model))
+        }
+    }
+}
+
 pub fn default_semantic_dim() -> usize {
     SEMANTIC_DIM
 }

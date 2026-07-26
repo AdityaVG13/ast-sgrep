@@ -5,10 +5,10 @@ mod neural;
 mod rerank;
 mod semantic;
 pub use embedder::{
-    default_semantic_dim, embed_batch_with_chain, embed_query, embed_via_api, embed_via_ollama,
-    embed_with_chain, embedder_for, CloudEmbedder, CloudEmbeddingConfig, CostHint,
-    EmbedBackendKind, EmbedPreference, EmbedResult, Embedder, HashedEmbedder, OllamaEmbedder,
-    OllamaEmbeddingConfig,
+    configured_backend_model_id, default_semantic_dim, embed_batch_with_chain, embed_query,
+    embed_via_api, embed_via_ollama, embed_with_chain, embedder_for, CloudEmbedder,
+    CloudEmbeddingConfig, CostHint, EmbedBackendKind, EmbedPreference, EmbedResult, Embedder,
+    HashedEmbedder, OllamaEmbedder, OllamaEmbeddingConfig,
 };
 pub use math::{
     cosine_scores_for, cosine_similarity, dot_similarity, top_by_similarity, top_k_flat_similarity,
@@ -84,6 +84,17 @@ mod tests {
     fn chunk(vector: Vec<f32>) -> SemanticChunkRow {
         (String::new(), 0, 0, String::new(), String::new(), vector)
     }
+    #[test]
+    fn semantic_backend_identity_includes_layout_and_dimension() {
+        assert_eq!(
+            configured_backend_model_id(EmbedBackendKind::Semantic, 256).as_deref(),
+            Some("semantic:hashed-v1:256")
+        );
+        assert!(configured_backend_model_id(EmbedBackendKind::Neural, 256)
+            .unwrap()
+            .starts_with("neural:"));
+    }
+
     #[test]
     fn chunk_ranking_is_invariant_to_vector_magnitude() {
         let chunks = vec![chunk(vec![10.0, 1.0]), chunk(vec![1.0, 0.0])];

@@ -2,9 +2,9 @@
 
 ast-sgrep’s semantic layer answers **intent queries** when the words in your question do not appear in the code, *“credential renewal”* finding `auth_refresh`, *“sanitize user input”* finding `validate_input`. It is **on by default** and works **offline without an API key**.
 
-## Why symbol chunks, not lines
+## Why child chunks mapped to symbols
 
-Line-level embeddings treat every line equally. Code navigation needs **symbols in context**:
+Whole-file or independent line embeddings lose code structure. ast-sgrep embeds bounded AST-derived child excerpts while keeping each child mapped to its enclosing function or method:
 
 ```
 symbol: auth_refresh kind: function
@@ -13,9 +13,11 @@ calls: fetch_token store_token
 excerpt: fn auth_refresh() { ... }
 ```
 
-Each extracted symbol becomes an enriched text chunk, embedded into a vector stored in `semantic_chunks`. At search time, the query is embedded with the same provider and compared via cosine similarity (or IVF-ANN at scale).
+Each function or method contributes up to 32 distinct child spans. One-line functions retain their best nested child, and top-level nodes map to a bounded file parent. If extraction yields no function child, the parent excerpt is the fallback. Every child is enriched and embedded into `semantic_chunks`, but retains its parent symbol or file range.
 
-This is what makes ast-sgrep semantic search **code-aware**: similarity reflects naming, neighborhood in the call graph, and excerpt content, not just adjacent lines in a file.
+At search time, child vectors are compared by cosine similarity (or IVF-ANN at scale), grouped by parent, and ranked by the maximum child score. One parent result is returned with up to three highest-scoring raw source children as its snippet; enrichment text is used only to produce vectors and is never exposed as source. This gives fine-grained matching without losing a meaningful read unit or letting a large function consume multiple result slots.
+
+Schema version 6 clears legacy whole-symbol vectors, cached vectors, backend/model identity, and stored file fingerprints. The next index refresh rebuilds every file into the child-to-parent layout, so old and new layouts cannot mix. Backend model identity is persisted for semantic, neural, cloud, and Ollama vectors; indexing refreshes and search refuses stale vectors after a configured model change.
 
 ## Concept expansion
 
