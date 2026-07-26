@@ -52,6 +52,7 @@ pub fn compute_ann_fingerprint(
     max_chunk_id: i64,
     dim: usize,
     embed_backend: Option<&str>,
+    source_generation: i64,
 ) -> [u8; 32] {
     let mut hasher = Hasher::new();
     hasher.update(b"asgrep-semantic-ivf-v2");
@@ -59,6 +60,7 @@ pub fn compute_ann_fingerprint(
     hasher.update(&max_chunk_id.to_le_bytes());
     hasher.update(&(dim as u32).to_le_bytes());
     hasher.update(embed_backend.unwrap_or("semantic").as_bytes());
+    hasher.update(&source_generation.to_le_bytes());
     *hasher.finalize().as_bytes()
 }
 

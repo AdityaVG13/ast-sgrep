@@ -230,14 +230,32 @@ impl Indexer {
         let force = self.options.force_reindex;
         let lang_filter = self.options.lang_filter.clone();
         let embed_semantic = self.options.embed_semantic;
+        let current_hashes = candidates
+            .iter()
+            .map(|(_, rel)| self.store.file_hash(rel))
+            .collect::<Result<Vec<_>>>()?;
         let prepared: Vec<PrepareOutcome> = candidates
             .par_iter()
-            .map(|(abs, rel)| prepare_file(abs, rel, force, lang_filter.as_deref(), embed_semantic))
+            .zip(current_hashes.par_iter())
+            .map(|((abs, rel), current_hash)| {
+                prepare_file(
+                    abs,
+                    rel,
+                    force,
+                    current_hash.as_deref(),
+                    lang_filter.as_deref(),
+                    embed_semantic,
+                )
+            })
             .collect();
         self.store.begin_bulk_tx()?;
         let write_result = (|| -> Result<()> {
             for (rel_str, outcome) in candidates.iter().map(|(_, r)| r).zip(prepared) {
                 match outcome {
+                    PrepareOutcome::Unchanged => {
+                        seen_paths.insert(rel_str.clone());
+                        stats.files_skipped += 1;
+                    }
                     PrepareOutcome::Filtered => {
                         if self.store.file_hash(rel_str)?.is_some() {
                             self.store.remove_file(rel_str)?;
@@ -249,10 +267,6 @@ impl Indexer {
                     }
                     PrepareOutcome::Ready(prep) => {
                         seen_paths.insert(rel_str.clone());
-                        if self.is_unchanged(rel_str, &prep.hash)? {
-                            stats.files_skipped += 1;
-                            continue;
-                        }
                         self.store.upsert_file(UpsertFileInput {
                             rel_path: rel_str,
                             language: prep.language.as_deref(),
@@ -315,10 +329,9 @@ impl Indexer {
         }
         Ok(())
     }
-    fn rebuild_dirty_sidecars(&self, stats: &IndexStats, semantic_ivf_dirty: bool) -> Result<()> {
-        if self.options.use_tantivy
-            || crate::tantivy_index::should_use_tantivy(stats.files_indexed, false)
-        {
+    fn rebuild_dirty_sidecars(&self, _stats: &IndexStats, semantic_ivf_dirty: bool) -> Result<()> {
+        let file_count = self.store.status()?.file_count;
+        if crate::tantivy_index::should_use_tantivy(file_count, self.options.use_tantivy) {
             self.rebuild_tantivy_sidecar()?;
         }
         if self.options.embed_semantic && semantic_ivf_dirty {
@@ -340,12 +353,19 @@ impl Indexer {
         )
     }
     fn rebuild_tantivy_sidecar(&self) -> Result<()> {
+        let before = self.store.index_data_version()?;
         let lines = self.store.all_indexed_lines()?;
+        let after = self.store.index_data_version()?;
+        if before != after {
+            return Err(crate::StoreError::Other(
+                "index changed while preparing lexical sidecar; retry the rebuild".into(),
+            ));
+        }
         crate::tantivy_index::TantivySidecar::open_for_index(
             &self.options.root,
             self.options.index_path.as_deref(),
         )?
-        .rebuild_from_lines(&lines)
+        .rebuild_from_lines(&lines, after)
     }
     pub fn reindex_all(&mut self) -> Result<IndexStats> {
         self.store.clear_all_data()?;
@@ -393,7 +413,7 @@ impl Indexer {
                     Ok(fs) if fs.skipped => stats.files_skipped += 1,
                     Ok(_) => {
                         stats.files_indexed += 1;
-                        self.mark_sidecars_dirty();
+                        self.mark_sidecars_dirty()?;
                     }
                     Err(e) => {
                         eprintln!("[asgrep] failed to index {rel_str}: {e}");
@@ -403,7 +423,7 @@ impl Indexer {
             } else if self.store.file_hash(&rel_str)?.is_some() {
                 self.store.remove_file(&rel_str)?;
                 stats.files_removed += 1;
-                self.mark_sidecars_dirty();
+                self.mark_sidecars_dirty()?;
             }
         }
         Ok(stats)
@@ -422,13 +442,20 @@ impl Indexer {
     pub fn deferred_rebuilds_pending(&self) -> bool {
         self.sidecars_dirty.tantivy || self.sidecars_dirty.semantic_ivf
     }
-    fn mark_sidecars_dirty(&mut self) {
-        if self.options.use_tantivy {
-            self.sidecars_dirty.tantivy = true;
-        }
+    fn mark_sidecars_dirty(&mut self) -> Result<()> {
+        let lexical_exists = crate::tantivy_index::sidecar_path(
+            &self.options.root,
+            self.options.index_path.as_deref(),
+        )
+        .exists();
+        let file_count = self.store.status()?.file_count;
+        self.sidecars_dirty.tantivy = self.sidecars_dirty.tantivy
+            || lexical_exists
+            || crate::tantivy_index::should_use_tantivy(file_count, self.options.use_tantivy);
         if self.options.embed_semantic {
             self.sidecars_dirty.semantic_ivf = true;
         }
+        Ok(())
     }
     pub fn index_file(&mut self, abs_path: &Path, rel_path: &str) -> Result<FileIndexStats> {
         let metadata = fs::metadata(abs_path)?;
@@ -477,7 +504,7 @@ impl Indexer {
             return Ok(FileIndexStats::default());
         }
         let split = split_content_lines(content);
-        let body_hash = body_structure_hash(content);
+        let body_hash = body_structure_hash(content, language);
         let body_key = format!("body:{rel_path}");
         if !self.options.embed_semantic {
             if let Some(file_id) = self.store.file_id(rel_path)? {
@@ -618,12 +645,13 @@ struct PreparedFile {
 }
 #[allow(clippy::large_enum_variant)]
 enum PrepareOutcome {
+    Unchanged,
     Filtered,
     Failed(String),
     Ready(PreparedFile),
 }
 /// Hash with trailing blank/line-comment trivia removed. Equal ⇒ structure unchanged for trailing edits.
-fn body_structure_hash(content: &str) -> String {
+fn body_structure_hash(content: &str, language: Option<Language>) -> String {
     let mut end = content.len();
     let bytes = content.as_bytes();
     while end > 0 {
@@ -636,11 +664,18 @@ fn body_structure_hash(content: &str) -> String {
         let line_start = content[..end].rfind('\n').map(|i| i + 1).unwrap_or(0);
         let line = content[line_start..end].trim();
         let trivia = line.is_empty()
-            || line.starts_with("//")
-            || line.starts_with('#')
-            || line.starts_with("/*")
-            || line.starts_with('*')
-            || line.starts_with("--");
+            || match language {
+                Some(Language::Python | Language::Ruby) => line.starts_with('#'),
+                Some(
+                    Language::Rust
+                    | Language::TypeScript
+                    | Language::JavaScript
+                    | Language::Go
+                    | Language::Java
+                    | Language::CSharp,
+                ) => line.starts_with("//") || line.starts_with("/*") || line.starts_with('*'),
+                None => false,
+            };
         if !trivia {
             break;
         }
@@ -659,7 +694,8 @@ fn body_structure_hash(content: &str) -> String {
 fn prepare_file(
     abs: &Path,
     rel: &str,
-    _force: bool,
+    force: bool,
+    current_hash: Option<&str>,
     lang_filter: Option<&str>,
     embed_semantic: bool,
 ) -> PrepareOutcome {
@@ -684,6 +720,9 @@ fn prepare_file(
         if language.is_none_or(|l| l.as_str() != filter) {
             return PrepareOutcome::Filtered;
         }
+    }
+    if !force && current_hash == Some(hash.as_str()) {
+        return PrepareOutcome::Unchanged;
     }
     let split = split_content_lines(&content);
     let (symbols, callers, imports, pattern_nodes) = match language {
@@ -717,7 +756,7 @@ fn prepare_file(
     };
     PrepareOutcome::Ready(PreparedFile {
         hash,
-        body_hash: body_structure_hash(&content),
+        body_hash: body_structure_hash(&content, language),
         language: language.map(|l| l.as_str().to_string()),
         mtime_secs,
         mtime_nanos,
@@ -787,10 +826,24 @@ mod tests {
 #[cfg(test)]
 mod body_hash_tests {
     use super::body_structure_hash;
+    use ast_sgrep_lang::Language;
+
     #[test]
-    fn trailing_comment_preserves_body_hash() {
+    fn trailing_comment_preserves_body_hash_for_its_language() {
         let a = "export function x() {\n  return 1;\n}\n";
-        let b = format!("{a}\n// sub1ms-bench-marker\n");
-        assert_eq!(body_structure_hash(a), body_structure_hash(&b));
+        let js_comment = format!("{a}\n// sub1ms-bench-marker\n");
+        assert_eq!(
+            body_structure_hash(a, Some(Language::JavaScript)),
+            body_structure_hash(&js_comment, Some(Language::JavaScript))
+        );
+        let hash_line = format!("{a}\n# not-a-javascript-comment\n");
+        assert_ne!(
+            body_structure_hash(a, Some(Language::JavaScript)),
+            body_structure_hash(&hash_line, Some(Language::JavaScript))
+        );
+        assert_eq!(
+            body_structure_hash(a, Some(Language::Python)),
+            body_structure_hash(&hash_line, Some(Language::Python))
+        );
     }
 }

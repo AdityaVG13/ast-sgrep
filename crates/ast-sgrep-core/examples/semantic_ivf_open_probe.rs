@@ -8,7 +8,7 @@ const COUNT: usize = 10_000;
 const DIM: usize = 8;
 
 fn fingerprint() -> [u8; 32] {
-    compute_ann_fingerprint(COUNT, COUNT as i64, DIM, Some("open-probe"))
+    compute_ann_fingerprint(COUNT, COUNT as i64, DIM, Some("open-probe"), 0)
 }
 
 fn vectors() -> Vec<f32> {

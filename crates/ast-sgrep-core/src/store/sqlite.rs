@@ -1,7 +1,7 @@
 use super::embed_support::{
     embed_cache_cap, embed_chunks, evict_embed_cache, init_cache_seq, insert_embed_cache_entries,
-    normalize_rel, read_sym_loc, structure_fingerprint, touch_embed_cache_entries, EmbeddedChunk,
-    EmbeddedChunks,
+    normalize_rel, read_sym_loc, requested_model_identity, structure_fingerprint,
+    touch_embed_cache_entries, EmbeddedChunk, EmbeddedChunks,
 };
 use super::index_db_path;
 use super::sql::configure_connection;
@@ -292,16 +292,24 @@ impl IndexStore {
         Ok(())
     }
     pub fn upsert_file(&self, input: UpsertFileInput<'_>) -> Result<i64> {
+        let requested_identity = input
+            .embed_semantic
+            .then(|| requested_model_identity(input.embed_backend));
         let struct_fp = structure_fingerprint(
             input.symbols,
             input.callers,
             input.imports,
             input.pattern_nodes,
             input.semantic_chunks,
+            requested_identity.as_deref(),
         );
         let struct_key = format!("struct:{}", input.rel_path);
+        let embed_identity_matches = !input.embed_semantic
+            || self.get_meta("embed_model")?.as_deref() == requested_identity.as_deref();
         if let Some(file_id) = self.file_id(input.rel_path)? {
-            if self.get_meta(&struct_key)?.as_deref() == Some(struct_fp.as_str()) {
+            if embed_identity_matches
+                && self.get_meta(&struct_key)?.as_deref() == Some(struct_fp.as_str())
+            {
                 return self.with_file_tx(|| {
                     self.refresh_lines_only(RefreshLinesInput {
                         file_id,
@@ -603,6 +611,8 @@ impl IndexStore {
                 self.conn
                     .execute("DELETE FROM files WHERE id = ?1", params![id])?;
                 self.delete_meta(&format!("eol:{rel_path}"))?;
+                self.delete_meta(&format!("body:{rel_path}"))?;
+                self.delete_meta(&format!("struct:{rel_path}"))?;
                 crate::semantic_ann::mark_semantic_ivf_stale(self);
                 self.bump_index_data_version()?;
             }

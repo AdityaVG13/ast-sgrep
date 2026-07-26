@@ -84,6 +84,30 @@ fn cache_model_id_for_pref(p: ast_sgrep_embed::EmbedPreference) -> Option<String
 fn cache_model_id_for_backend(backend: ast_sgrep_embed::EmbedBackendKind) -> Option<String> {
     ast_sgrep_embed::configured_backend_model_id(backend, ast_sgrep_embed::default_semantic_dim())
 }
+pub(super) fn requested_model_identity(preference: ast_sgrep_embed::EmbedPreference) -> String {
+    use ast_sgrep_embed::{EmbedBackendKind, EmbedPreference};
+    let configured = |kind| {
+        ast_sgrep_embed::configured_backend_model_id(kind, ast_sgrep_embed::default_semantic_dim())
+    };
+    match preference {
+        EmbedPreference::Cloud => {
+            configured(EmbedBackendKind::Cloud).unwrap_or_else(|| "cloud:unconfigured".into())
+        }
+        EmbedPreference::Ollama => {
+            configured(EmbedBackendKind::Ollama).unwrap_or_else(|| "ollama:unconfigured".into())
+        }
+        EmbedPreference::Neural => neural_mid(),
+        EmbedPreference::Semantic => semantic_mid(),
+        EmbedPreference::Auto => configured(EmbedBackendKind::Cloud)
+            .or_else(|| configured(EmbedBackendKind::Ollama))
+            .or_else(|| {
+                std::env::var("ASGREP_NEURAL_EMBED")
+                    .is_ok_and(|value| value == "1")
+                    .then(neural_mid)
+            })
+            .unwrap_or_else(semantic_mid),
+    }
+}
 pub(super) fn init_cache_seq(conn: &Connection, seq: &Cell<i64>) -> Result<()> {
     let max: i64 = conn.query_row(
         "SELECT COALESCE(MAX(accessed_at), 0) FROM embed_cache",
@@ -320,8 +344,11 @@ pub(super) fn structure_fingerprint(
     imports: &[ImportRow],
     pattern_nodes: &[PatternNode],
     semantic_chunks: &[crate::semantic_chunk::SemanticChunkInput],
+    embed_identity: Option<&str>,
 ) -> String {
     let mut h = Hasher::new();
+    h.update(b"|embed|");
+    h.update(embed_identity.unwrap_or("disabled").as_bytes());
     for s in symbols {
         h.update(s.name.as_bytes());
         h.update(b"\0");

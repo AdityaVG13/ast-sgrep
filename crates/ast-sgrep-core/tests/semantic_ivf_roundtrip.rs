@@ -19,7 +19,7 @@ fn semantic_ivf_roundtrip_and_fingerprint_gate() {
     let dim = 4usize;
     let vectors: Vec<f32> = (0..24).map(|i| i as f32 * 0.1).collect();
     let index = SemanticAnnIndex::build_from_flat(&vectors, dim);
-    let fingerprint = compute_ann_fingerprint(6, 6, dim, Some("test"));
+    let fingerprint = compute_ann_fingerprint(6, 6, dim, Some("test"), 0);
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("semantic.ivf");
     save_semantic_ivf(&path, fingerprint, dim, &vectors, &index).unwrap();
@@ -41,9 +41,13 @@ fn semantic_ivf_roundtrip_and_fingerprint_gate() {
             .collect::<HashSet<_>>(),
         (0..6).collect()
     );
-    let wrong_fp = compute_ann_fingerprint(6, 5, dim, Some("test"));
+    let wrong_fp = compute_ann_fingerprint(6, 5, dim, Some("test"), 0);
     assert!(load_semantic_ivf(&path, wrong_fp).unwrap().is_none());
     assert!(load_semantic_ivf_index(&path, wrong_fp).unwrap().is_none());
+    let wrong_generation = compute_ann_fingerprint(6, 6, dim, Some("test"), 1);
+    assert!(load_semantic_ivf(&path, wrong_generation)
+        .unwrap()
+        .is_none());
     let unchecked = load_semantic_ivf_unchecked(&path)
         .unwrap()
         .expect("unchecked load");
@@ -62,7 +66,7 @@ fn save_rejects_an_index_for_a_different_vector_population() {
     let indexed = vec![0.5_f32; 32];
     let supplied = vec![0.5_f32; 16];
     let index = SemanticAnnIndex::build_from_flat(&indexed, dim);
-    let fingerprint = compute_ann_fingerprint(4, 4, dim, Some("mismatch"));
+    let fingerprint = compute_ann_fingerprint(4, 4, dim, Some("mismatch"), 0);
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("semantic.ivf");
     assert!(save_semantic_ivf(&path, fingerprint, dim, &supplied, &index).is_err());
@@ -73,7 +77,7 @@ fn save_rejects_an_index_for_a_different_vector_population() {
 fn mapped_reader_rejects_corrupt_or_truncated_frames_without_panicking() {
     let dim = 4;
     let vectors = vec![0.5_f32; 32];
-    let fingerprint = compute_ann_fingerprint(8, 8, dim, Some("corruption"));
+    let fingerprint = compute_ann_fingerprint(8, 8, dim, Some("corruption"), 0);
     let index = SemanticAnnIndex::build_from_flat(&vectors, dim);
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("semantic.ivf");
@@ -115,7 +119,7 @@ fn mapped_reader_survives_atomic_sidecar_replacement() {
     let dim = 4;
     let first = vec![0.25_f32; 32];
     let second = vec![0.75_f32; 32];
-    let fingerprint = compute_ann_fingerprint(8, 8, dim, Some("mapped"));
+    let fingerprint = compute_ann_fingerprint(8, 8, dim, Some("mapped"), 0);
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("semantic.ivf");
     save_semantic_ivf(
@@ -149,7 +153,7 @@ fn medium_mapped_sidecar_reports_open_p99() {
     let dim = 8;
     let count = 10_000;
     let vectors = normalized_flat_vectors(count, dim, 0x0F3_0009);
-    let fingerprint = compute_ann_fingerprint(count, count as i64, dim, Some("open-bench"));
+    let fingerprint = compute_ann_fingerprint(count, count as i64, dim, Some("open-bench"), 0);
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("semantic.ivf");
     save_semantic_ivf(

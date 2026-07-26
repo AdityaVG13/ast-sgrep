@@ -244,21 +244,10 @@ impl SemanticAnnIndex {
         score_members(&q, flat, dim, n, &self.candidate_indices(&q, probes), limit)
     }
     pub fn reassign_all(&mut self, flat: &[f32], dim: usize) {
-        let n = flat.len().checked_div(dim).unwrap_or(0);
-        if n == 0 || self.centroids.is_empty() {
+        if flat.is_empty() || dim == 0 {
             return;
         }
-        self.clusters = vec![Vec::new(); self.centroids.len()];
-        for idx in 0..n {
-            let start = idx * dim;
-            if start + dim > flat.len() {
-                break;
-            }
-            let best = nearest_centroid(&flat[start..start + dim], &self.centroids);
-            if best < self.clusters.len() {
-                self.clusters[best].push(idx);
-            }
-        }
+        *self = Self::build_from_flat(flat, dim);
     }
 }
 pub fn flatten_vectors_for_search(chunks: &[SemanticChunkRow], dim: usize) -> Result<Vec<f32>> {
@@ -486,7 +475,13 @@ fn ann_session_key(store: &IndexStore, chunks: &[SemanticChunkRow]) -> Result<([
         .get_meta("embed_backend")?
         .unwrap_or_else(|| "semantic".into());
     Ok((
-        compute_ann_fingerprint(chunks.len(), max_id, dim, Some(&backend)),
+        compute_ann_fingerprint(
+            chunks.len(),
+            max_id,
+            dim,
+            Some(&backend),
+            store.index_data_version()?,
+        ),
         store.db_path().to_string_lossy().into_owned(),
     ))
 }

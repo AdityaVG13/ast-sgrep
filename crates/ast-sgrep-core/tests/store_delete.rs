@@ -113,6 +113,8 @@ fn remove_file_clears_all_per_file_tables() {
     input.imports = &imports;
     input.pattern_nodes = &pattern_nodes;
     let file_id = store.upsert_file(input).unwrap();
+    store.set_meta(&format!("body:{path}"), "body").unwrap();
+    assert!(store.get_meta(&format!("struct:{path}")).unwrap().is_some());
     store
         .connection()
         .execute(
@@ -124,6 +126,8 @@ fn remove_file_clears_all_per_file_tables() {
         "INSERT INTO semantic_chunks (file_id, symbol_id, chunk_kind, line_start, line_end, symbol_name, text, vector) VALUES (?1, NULL, 'file', 1, 2, '', 'text', ?2)", rusqlite::params![file_id, vec![0u8; 8]],
     ).unwrap();
     store.remove_file(path).unwrap();
+    assert_eq!(store.get_meta(&format!("body:{path}")).unwrap(), None);
+    assert_eq!(store.get_meta(&format!("struct:{path}")).unwrap(), None);
     for table in [
         "lines",
         "lines_fts",

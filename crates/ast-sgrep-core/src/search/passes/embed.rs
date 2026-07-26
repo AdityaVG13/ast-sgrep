@@ -35,6 +35,7 @@ pub fn embed_pass_lazy_ivf(
         stats.max_id,
         stats.dim,
         Some(&backend),
+        store.index_data_version()?,
     );
     let path = crate::semantic_ivf::semantic_ivf_path(store.db_path());
     let Some(ivf) = crate::semantic_ivf::load_semantic_ivf_index(&path, fingerprint)? else {
