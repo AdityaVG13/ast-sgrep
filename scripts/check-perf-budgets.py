@@ -11,12 +11,22 @@ def validate(path: Path) -> list[str]:
     errors: list[str] = []
     for metric in document.get("metrics", []):
         name = metric["name"]
-        baseline = float(metric["measured_p95_ms"])
+        percentile = metric.get("percentile", "p95")
+        if percentile not in {"p50", "p95", "p99"}:
+            errors.append(f"{name}: unsupported percentile {percentile}")
+            continue
+        measured = metric.get("measured_ms", metric.get("measured_p95_ms"))
+        if measured is None:
+            errors.append(f"{name}: missing measured_ms")
+            continue
+        baseline = float(measured)
         variance = float(metric["variance_percent"])
         budget = float(metric["budget_ms"])
         envelope = baseline * (1.0 + variance / 100.0)
         if baseline > budget:
-            errors.append(f"{name}: baseline {baseline:g} ms exceeds budget {budget:g} ms")
+            errors.append(
+                f"{name}: measured {percentile} {baseline:g} ms exceeds budget {budget:g} ms"
+            )
         elif envelope > budget:
             errors.append(
                 f"{name}: variance envelope {envelope:.1f} ms exceeds budget {budget:g} ms"

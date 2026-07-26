@@ -1,9 +1,19 @@
+use ast_sgrep_core::bench_suite::measure_semantic_ivf_open_p99;
 use ast_sgrep_core::semantic_ann::{SemanticAnnIndex, DEFAULT_ANN_THRESHOLD};
 use ast_sgrep_core::semantic_ivf::{
-    compute_ann_fingerprint, load_semantic_ivf, load_semantic_ivf_unchecked, save_semantic_ivf,
+    compute_ann_fingerprint, invalidate_semantic_ivf, load_semantic_ivf, load_semantic_ivf_index,
+    load_semantic_ivf_unchecked, save_semantic_ivf,
 };
 use ast_sgrep_embed::{top_k_flat_similarity, MIN_SIMILARITY};
 use std::collections::HashSet;
+#[test]
+fn invalidating_a_missing_sidecar_is_idempotent() {
+    let dir = tempfile::tempdir().unwrap();
+    let database = dir.path().join("index.db");
+    invalidate_semantic_ivf(&database).unwrap();
+    invalidate_semantic_ivf(&database).unwrap();
+}
+
 #[test]
 fn semantic_ivf_roundtrip_and_fingerprint_gate() {
     let dim = 4usize;
@@ -17,20 +27,160 @@ fn semantic_ivf_roundtrip_and_fingerprint_gate() {
         .unwrap()
         .expect("valid sidecar");
     assert_eq!(loaded.dim, dim);
-    assert_eq!(loaded.vectors, vectors);
+    assert!(loaded.is_mapped());
+    assert_eq!(loaded.vectors(), vectors);
     assert_eq!(loaded.fingerprint, fingerprint);
+    let lazy = load_semantic_ivf_index(&path, fingerprint)
+        .unwrap()
+        .expect("valid lazy sidecar");
+    assert_eq!(lazy.dim, dim);
+    assert_eq!(lazy.chunk_count(), 6);
+    assert_eq!(
+        lazy.candidate_indices(&[0.1; 4], Some(usize::MAX))
+            .into_iter()
+            .collect::<HashSet<_>>(),
+        (0..6).collect()
+    );
     let wrong_fp = compute_ann_fingerprint(6, 5, dim, Some("test"));
     assert!(load_semantic_ivf(&path, wrong_fp).unwrap().is_none());
+    assert!(load_semantic_ivf_index(&path, wrong_fp).unwrap().is_none());
     let unchecked = load_semantic_ivf_unchecked(&path)
         .unwrap()
         .expect("unchecked load");
-    assert_eq!(unchecked.vectors, vectors);
+    assert!(unchecked.is_mapped());
+    assert_eq!(unchecked.vectors(), vectors);
     let query = vec![0.1f32; dim];
     assert_eq!(
         index.search_flat(&vectors, dim, &query, 3),
-        loaded.index.search_flat(&loaded.vectors, dim, &query, 3)
+        loaded.index.search_flat(loaded.vectors(), dim, &query, 3)
     );
 }
+
+#[test]
+fn save_rejects_an_index_for_a_different_vector_population() {
+    let dim = 4;
+    let indexed = vec![0.5_f32; 32];
+    let supplied = vec![0.5_f32; 16];
+    let index = SemanticAnnIndex::build_from_flat(&indexed, dim);
+    let fingerprint = compute_ann_fingerprint(4, 4, dim, Some("mismatch"));
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("semantic.ivf");
+    assert!(save_semantic_ivf(&path, fingerprint, dim, &supplied, &index).is_err());
+    assert!(!path.exists());
+}
+
+#[test]
+fn mapped_reader_rejects_corrupt_or_truncated_frames_without_panicking() {
+    let dim = 4;
+    let vectors = vec![0.5_f32; 32];
+    let fingerprint = compute_ann_fingerprint(8, 8, dim, Some("corruption"));
+    let index = SemanticAnnIndex::build_from_flat(&vectors, dim);
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("semantic.ivf");
+    save_semantic_ivf(&path, fingerprint, dim, &vectors, &index).unwrap();
+    let valid = std::fs::read(&path).unwrap();
+
+    let mut cases = Vec::new();
+    let mut bad_magic = valid.clone();
+    bad_magic[0] ^= 0xff;
+    cases.push(("magic", bad_magic));
+    let mut old_version = valid.clone();
+    old_version[6..10].copy_from_slice(&1_u32.to_le_bytes());
+    cases.push(("version", old_version));
+    let mut bad_header = valid.clone();
+    bad_header[10..12].copy_from_slice(&79_u16.to_le_bytes());
+    cases.push(("header", bad_header));
+    let mut zero_clusters = valid.clone();
+    zero_clusters[56..60].copy_from_slice(&0_u32.to_le_bytes());
+    cases.push(("clusters", zero_clusters));
+    let mut reserved = valid.clone();
+    reserved[76] = 1;
+    cases.push(("reserved", reserved));
+    let mut trailing = valid.clone();
+    trailing.push(0);
+    cases.push(("trailing", trailing));
+    cases.push(("truncated", valid[..valid.len() - 4].to_vec()));
+
+    for (name, bytes) in cases {
+        std::fs::write(&path, bytes).unwrap();
+        assert!(
+            load_semantic_ivf(&path, fingerprint).unwrap().is_none(),
+            "accepted corrupt {name} frame"
+        );
+    }
+}
+
+#[test]
+fn mapped_reader_survives_atomic_sidecar_replacement() {
+    let dim = 4;
+    let first = vec![0.25_f32; 32];
+    let second = vec![0.75_f32; 32];
+    let fingerprint = compute_ann_fingerprint(8, 8, dim, Some("mapped"));
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("semantic.ivf");
+    save_semantic_ivf(
+        &path,
+        fingerprint,
+        dim,
+        &first,
+        &SemanticAnnIndex::build_from_flat(&first, dim),
+    )
+    .unwrap();
+    let old = load_semantic_ivf(&path, fingerprint).unwrap().unwrap();
+    let published = save_semantic_ivf(
+        &path,
+        fingerprint,
+        dim,
+        &second,
+        &SemanticAnnIndex::build_from_flat(&second, dim),
+    )
+    .unwrap();
+    let current = load_semantic_ivf(&path, fingerprint).unwrap().unwrap();
+    assert_eq!(old.vectors(), first);
+    if published {
+        assert_eq!(current.vectors(), second);
+    } else {
+        assert_eq!(current.vectors(), first);
+    }
+}
+
+#[test]
+fn medium_mapped_sidecar_reports_open_p99() {
+    let dim = 8;
+    let count = 10_000;
+    let vectors = normalized_flat_vectors(count, dim, 0x0F3_0009);
+    let fingerprint = compute_ann_fingerprint(count, count as i64, dim, Some("open-bench"));
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("semantic.ivf");
+    save_semantic_ivf(
+        &path,
+        fingerprint,
+        dim,
+        &vectors,
+        &SemanticAnnIndex::build_from_flat(&vectors, dim),
+    )
+    .unwrap();
+    let latency = measure_semantic_ivf_open_p99(&path, fingerprint, 100).unwrap();
+    eprintln!(
+        "semantic_ivf mmap open samples={} fresh_inode_p99_ns={} warm_p99_ns={} sidecar_bytes={} mapped_vector_bytes={} resident_index_bytes={}",
+        latency.samples,
+        latency.fresh_inode_p99_ns,
+        latency.warm_p99_ns,
+        latency.sidecar_bytes,
+        latency.mapped_vector_bytes,
+        latency.resident_index_bytes
+    );
+    assert_eq!(latency.samples, 100);
+    assert_eq!(latency.mapped_vector_bytes, count * dim * 4);
+    assert!(latency.mapped_vector_bytes > latency.resident_index_bytes);
+    if std::env::var("ASGREP_PERF_ASSERTS").as_deref() == Ok("1") {
+        assert!(
+            latency.warm_p99_ns < 1_000_000,
+            "warm mmap open p99 must remain below 1ms: {latency:?}"
+        );
+    }
+}
+
 /// Deterministic LCG unit vectors for IVF regression (CE-003).
 fn normalized_flat_vectors(count: usize, dim: usize, seed: u64) -> Vec<f32> {
     let mut state = seed;

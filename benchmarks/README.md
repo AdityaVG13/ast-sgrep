@@ -90,3 +90,17 @@ deterministic queries and fails when burn rate exceeds 1:
 ```bash
 cargo test -p ast-sgrep-core --test semantic_ivf_roundtrip adaptive_ivf_recall_at_10_stays_within_quality_error_budget -- --nocapture
 ```
+
+## Semantic IVF mmap open budget
+
+The medium fixture contains 10,000 vectors. Dedicated release-perf runs enable the 1 ms warm-open p99 gate explicitly; ordinary correctness runs avoid timing failures on contended hosts while still requiring mapped vectors and byte accounting.
+
+```bash
+ASGREP_PERF_ASSERTS=1 cargo test --locked --profile release-perf \
+  -p ast-sgrep-core --test semantic_ivf_roundtrip \
+  medium_mapped_sidecar_reports_open_p99 -- \
+  --exact --nocapture --test-threads=1
+python3 scripts/check-perf-budgets.py
+```
+
+Cold, fresh-inode, and warm definitions plus the isolated probe are in [`docs/validation/semantic-ivf-mmap.md`](../docs/validation/semantic-ivf-mmap.md).

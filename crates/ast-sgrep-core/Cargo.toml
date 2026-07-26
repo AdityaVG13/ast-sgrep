@@ -11,8 +11,8 @@ keywords = ["code-search", "call-graph", "sqlite", "hybrid-search"]
 categories = ["development-tools"]
 documentation = "https://docs.rs/ast-sgrep-core"
 
-[lints]
-workspace = true
+[lints.rust]
+unsafe_code = "deny"
 
 [features]
 default = ["cloud-embed"]
@@ -35,6 +35,8 @@ walkdir.workspace = true
 rayon.workspace = true
 regex.workspace = true
 memchr.workspace = true
+memmap2.workspace = true
+bytemuck.workspace = true
 
 [dev-dependencies]
 ast-sgrep-testkit = { path = "../ast-sgrep-testkit" }

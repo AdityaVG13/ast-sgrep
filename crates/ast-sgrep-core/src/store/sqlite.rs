@@ -142,6 +142,7 @@ impl IndexStore {
                  UPDATE files SET content_hash = 'semantic-layout-v2:' || content_hash
                    WHERE content_hash NOT LIKE 'semantic-layout-v2:%';",
             )?;
+            crate::semantic_ivf::invalidate_semantic_ivf(&self.db_path)?;
         }
         self.conn
             .execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION}"))?;

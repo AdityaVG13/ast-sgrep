@@ -88,10 +88,100 @@ impl SemanticAnnIndex {
             clusters,
         })
     }
+    pub fn read_clusters_bounded(
+        bytes: &[u8],
+        k: usize,
+        dim: usize,
+        chunk_count: usize,
+    ) -> std::io::Result<Self> {
+        let mut offset = 0usize;
+        if take_u32(bytes, &mut offset)? as usize != k {
+            return Err(invalid_ivf_index());
+        }
+        let centroid_values = k.checked_mul(dim).ok_or_else(invalid_ivf_index)?;
+        let mut centroids = Vec::with_capacity(k);
+        for _ in 0..k {
+            let mut centroid = Vec::with_capacity(dim);
+            for _ in 0..dim {
+                centroid.push(f32::from_bits(take_u32(bytes, &mut offset)?));
+            }
+            centroids.push(centroid);
+        }
+        if centroids.iter().map(Vec::len).sum::<usize>() != centroid_values
+            || take_u32(bytes, &mut offset)? as usize != k
+        {
+            return Err(invalid_ivf_index());
+        }
+        let mut clusters = Vec::with_capacity(k);
+        let mut seen = vec![false; chunk_count];
+        let mut members = 0usize;
+        for _ in 0..k {
+            let length = take_u32(bytes, &mut offset)? as usize;
+            members = members
+                .checked_add(length)
+                .filter(|total| *total <= chunk_count)
+                .ok_or_else(invalid_ivf_index)?;
+            if offset
+                .checked_add(length.checked_mul(4).ok_or_else(invalid_ivf_index)?)
+                .is_none_or(|end| end > bytes.len())
+            {
+                return Err(invalid_ivf_index());
+            }
+            let mut cluster = Vec::with_capacity(length);
+            for _ in 0..length {
+                let index = take_u32(bytes, &mut offset)? as usize;
+                let slot = seen.get_mut(index).ok_or_else(invalid_ivf_index)?;
+                if *slot {
+                    return Err(invalid_ivf_index());
+                }
+                *slot = true;
+                cluster.push(index);
+            }
+            clusters.push(cluster);
+        }
+        if members != chunk_count
+            || offset != bytes.len()
+            || seen.into_iter().any(|present| !present)
+        {
+            return Err(invalid_ivf_index());
+        }
+        Ok(Self {
+            centroids,
+            clusters,
+        })
+    }
+
+    pub fn heap_bytes(&self) -> usize {
+        self.centroids
+            .iter()
+            .map(|centroid| centroid.capacity() * std::mem::size_of::<f32>())
+            .sum::<usize>()
+            .saturating_add(
+                self.clusters
+                    .iter()
+                    .map(|cluster| cluster.capacity() * std::mem::size_of::<usize>())
+                    .sum::<usize>(),
+            )
+    }
+
     pub fn validate_member_indices(&self, chunk_count: usize) -> bool {
         self.clusters
             .iter()
-            .all(|c| c.iter().all(|&i| i < chunk_count))
+            .all(|cluster| cluster.iter().all(|&index| index < chunk_count))
+    }
+
+    pub fn validate_partition(&self, chunk_count: usize) -> bool {
+        let mut seen = vec![false; chunk_count];
+        for &index in self.clusters.iter().flatten() {
+            let Some(slot) = seen.get_mut(index) else {
+                return false;
+            };
+            if *slot {
+                return false;
+            }
+            *slot = true;
+        }
+        seen.into_iter().all(|present| present)
     }
     /// `probes`: None/0 = at most 90% of populated clusters; ≥ n_clusters = exact.
     pub fn candidate_indices(&self, query: &[f32], probes: Option<usize>) -> Vec<usize> {
@@ -199,6 +289,24 @@ pub fn flatten_vectors_for_search(chunks: &[SemanticChunkRow], dim: usize) -> Re
 fn write_u32<W: Write>(w: &mut W, v: u32) -> std::io::Result<()> {
     w.write_all(&v.to_le_bytes())
 }
+fn invalid_ivf_index() -> std::io::Error {
+    std::io::Error::new(
+        std::io::ErrorKind::InvalidData,
+        "invalid semantic IVF cluster index",
+    )
+}
+
+fn take_u32(bytes: &[u8], offset: &mut usize) -> std::io::Result<u32> {
+    let end = offset.checked_add(4).ok_or_else(invalid_ivf_index)?;
+    let raw: [u8; 4] = bytes
+        .get(*offset..end)
+        .ok_or_else(invalid_ivf_index)?
+        .try_into()
+        .map_err(|_| invalid_ivf_index())?;
+    *offset = end;
+    Ok(u32::from_le_bytes(raw))
+}
+
 fn read_u32<R: Read>(r: &mut R) -> std::io::Result<u32> {
     let mut b = [0u8; 4];
     r.read_exact(&mut b)?;
@@ -368,8 +476,8 @@ pub fn mark_semantic_ivf_stale(store: &IndexStore) {
     {
         let _ = store.set_meta("semantic_ivf_stale", "1");
     }
-    let _ = invalidate_semantic_ivf(store.db_path());
     clear_semantic_ivf_session_cache();
+    let _ = invalidate_semantic_ivf(store.db_path());
 }
 fn ann_session_key(store: &IndexStore, chunks: &[SemanticChunkRow]) -> Result<([u8; 32], String)> {
     let dim = chunks.first().map(|c| c.5.len()).unwrap_or(0);
@@ -382,7 +490,7 @@ fn ann_session_key(store: &IndexStore, chunks: &[SemanticChunkRow]) -> Result<([
         store.db_path().to_string_lossy().into_owned(),
     ))
 }
-fn cache_session(db_key: &str, fingerprint: [u8; 32], ivf: &PersistedSemanticIvf) {
+fn cache_session(db_key: &str, fingerprint: [u8; 32], ivf: Arc<PersistedSemanticIvf>) {
     let mut cache = SESSION_CACHE.lock().unwrap_or_else(|e| e.into_inner());
     if let Some(pos) = cache.iter().position(|(key, _)| key == db_key) {
         cache.remove(pos);
@@ -390,13 +498,7 @@ fn cache_session(db_key: &str, fingerprint: [u8; 32], ivf: &PersistedSemanticIvf
     if cache.len() == 4 {
         cache.remove(0);
     }
-    cache.push((
-        db_key.to_string(),
-        SessionCache {
-            fingerprint,
-            ivf: Arc::new(ivf.clone()),
-        },
-    ));
+    cache.push((db_key.to_string(), SessionCache { fingerprint, ivf }));
 }
 pub fn load_or_build_semantic_ivf(
     store: &IndexStore,
@@ -409,21 +511,28 @@ pub fn load_or_build_semantic_ivf(
     }
     let (fingerprint, db_key) = ann_session_key(store, chunks)?;
     let ivf_path = semantic_ivf_path(store.db_path());
-    if let Ok(Some(ivf)) = load_semantic_ivf(&ivf_path, fingerprint) {
-        cache_session(&db_key, fingerprint, &ivf);
-        return Ok(Some(Arc::new(ivf)));
+    match load_semantic_ivf(&ivf_path, fingerprint) {
+        Ok(Some(ivf)) => {
+            let _ = store.set_meta("semantic_ivf_stale", "0");
+            let ivf = Arc::new(ivf);
+            cache_session(&db_key, fingerprint, Arc::clone(&ivf));
+            return Ok(Some(ivf));
+        }
+        Ok(None) => {}
+        Err(error) => return Err(error),
     }
     let flat = flatten_vectors_for_search(chunks, dim)?;
     let index = SemanticAnnIndex::build_from_flat(&flat, dim);
-    save_semantic_ivf(&ivf_path, fingerprint, dim, &flat, &index)?;
-    let ivf = PersistedSemanticIvf {
+    let published = save_semantic_ivf(&ivf_path, fingerprint, dim, &flat, &index)?;
+    let _ = store.set_meta("semantic_ivf_stale", if published { "0" } else { "1" });
+    let ivf = Arc::new(PersistedSemanticIvf::from_owned(
         fingerprint,
         dim,
-        vectors: flat,
+        flat,
         index,
-    };
-    cache_session(&db_key, fingerprint, &ivf);
-    Ok(Some(Arc::new(ivf)))
+    ));
+    cache_session(&db_key, fingerprint, Arc::clone(&ivf));
+    Ok(Some(ivf))
 }
 pub fn cached_semantic_ivf(
     store: &IndexStore,
@@ -486,26 +595,27 @@ pub fn rebuild_semantic_ivf_sidecar(
     }
     let dim = chunks[0].5.len();
     if store.get_meta("semantic_ivf_stale")?.as_deref() == Some("1") {
-        if let Some(mut ivf) = load_semantic_ivf_unchecked(&semantic_ivf_path(store.db_path()))? {
+        if let Some(ivf) = load_semantic_ivf_unchecked(&semantic_ivf_path(store.db_path()))? {
             if ivf.chunk_count() == chunks.len() && ivf.dim == dim {
-                ivf.vectors = flatten_vectors_for_search(chunks, dim)?;
-                ivf.index.reassign_all(&ivf.vectors, dim);
+                let vectors = flatten_vectors_for_search(chunks, dim)?;
+                let mut index = ivf.index.clone();
+                drop(ivf);
+                index.reassign_all(&vectors, dim);
                 let (fingerprint, db_key) = ann_session_key(store, chunks)?;
-                ivf.fingerprint = fingerprint;
-                save_semantic_ivf(
+                let published = save_semantic_ivf(
                     &semantic_ivf_path(store.db_path()),
                     fingerprint,
                     dim,
-                    &ivf.vectors,
-                    &ivf.index,
+                    &vectors,
+                    &index,
                 )?;
-                cache_session(&db_key, fingerprint, &ivf);
-                let _ = store.set_meta("semantic_ivf_stale", "0");
+                let rebuilt = PersistedSemanticIvf::from_owned(fingerprint, dim, vectors, index);
+                cache_session(&db_key, fingerprint, Arc::new(rebuilt));
+                let _ = store.set_meta("semantic_ivf_stale", if published { "0" } else { "1" });
                 return Ok(());
             }
         }
     }
     let _ = load_or_build_semantic_ivf(store, chunks, override_threshold)?;
-    let _ = store.set_meta("semantic_ivf_stale", "0");
     Ok(())
 }

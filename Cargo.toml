@@ -39,6 +39,8 @@ anyhow = "1"
 # version-independent. The range lets downstream consumers unify on one
 # blake3 in their dependency graph.
 blake3 = "1.5"
+memmap2 = "0.9"
+bytemuck = "1.21"
 clap = { version = "=4.5.23", features = ["derive", "env"] }
 criterion = "=0.5.1"
 idna = "=1.0.3"

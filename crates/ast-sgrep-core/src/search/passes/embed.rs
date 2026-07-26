@@ -20,7 +20,10 @@ pub fn embed_pass_lazy_ivf(
     if parsed.terms.is_empty() || !options.use_embed {
         return Ok(Some(Vec::new()));
     }
-    let stats = store.semantic_chunk_stats(options.lang_filter.as_deref())?;
+    if options.lang_filter.is_some() {
+        return Ok(None);
+    }
+    let stats = store.semantic_chunk_stats(None)?;
     if !crate::semantic_ann::should_use_ann(stats.count, options.ann_threshold) || stats.dim == 0 {
         return Ok(None);
     }
@@ -46,7 +49,7 @@ pub fn embed_pass_lazy_ivf(
     if candidate_indices.is_empty() {
         return Ok(None);
     }
-    let ids = store.semantic_chunk_ids(options.lang_filter.as_deref())?;
+    let ids = store.semantic_chunk_ids(None)?;
     if ids.len() != stats.count {
         return Ok(None);
     }
@@ -131,14 +134,13 @@ pub fn embed_pass_with_context(
     }
     let flat = ctx.as_ref().map(|c| c.flat_vectors.as_slice());
     let query_vec = embed_query_vector(store, options, &query, chunks.first().map(|c| c.5.len()))?;
-    let indices = rank_chunk_indices_flat(
-        store,
-        &query_vec,
-        chunks,
-        flat,
-        chunks.len(),
-        options.ann_threshold,
-    )?;
+    let ann_threshold = if options.lang_filter.is_some() {
+        Some(usize::MAX)
+    } else {
+        options.ann_threshold
+    };
+    let indices =
+        rank_chunk_indices_flat(store, &query_vec, chunks, flat, chunks.len(), ann_threshold)?;
     Ok(embed_similarity_hits(chunks, indices))
 }
 fn embed_query_vector(
@@ -282,7 +284,7 @@ fn embed_legacy_hits(
 
 #[cfg(test)]
 mod cascade_tests {
-    use super::{embed_pass_for_files, embed_similarity_hits};
+    use super::{embed_pass_for_files, embed_pass_with_context, embed_similarity_hits};
     use crate::query::ParsedQuery;
     use crate::search::SearchOptions;
     use crate::semantic_chunk::SemanticChunkInput;
@@ -324,6 +326,57 @@ mod cascade_tests {
         assert_eq!((hits[0].line_start, hits[0].line_end), (10, 20));
         assert_eq!(hits[0].score, super::SCORE_EMBED * f64::from(0.9_f32));
         assert_eq!(hits[0].excerpt, "best child\n...\nweaker child");
+    }
+
+    #[test]
+    fn language_filtered_semantic_search_does_not_publish_global_sidecar() {
+        let temp = TempDir::new().unwrap();
+        let store = IndexStore::open(temp.path(), None).unwrap();
+        let lines = [(1, "fn filtered_handler() {}".to_string())];
+        let chunks = [SemanticChunkInput {
+            symbol_name: "filtered_handler".into(),
+            kind: "function".into(),
+            line_start: 1,
+            line_end: 1,
+            excerpt: "filtered semantic handler".into(),
+            callers: Vec::new(),
+            callees: Vec::new(),
+            doc: String::new(),
+            scope: String::new(),
+        }];
+        store
+            .upsert_file(UpsertFileInput {
+                rel_path: "filtered.rs",
+                language: Some("rust"),
+                mtime_secs: 1,
+                mtime_nanos: 0,
+                content_hash: "filtered",
+                lines: &lines,
+                eol: "\n",
+                symbols: &[],
+                callers: &[],
+                imports: &[],
+                pattern_nodes: &[],
+                semantic_chunks: &chunks,
+                embed_semantic: true,
+                embed_backend: ast_sgrep_embed::EmbedPreference::Semantic,
+            })
+            .unwrap();
+        let hits = embed_pass_with_context(
+            &store,
+            &SearchOptions {
+                root: temp.path().to_path_buf(),
+                use_embed: true,
+                lang_filter: Some("rust".into()),
+                ann_threshold: Some(1),
+                ..SearchOptions::default()
+            },
+            &ParsedQuery::parse("filtered semantic"),
+            None,
+        )
+        .unwrap();
+        assert!(!hits.is_empty());
+        assert!(!crate::semantic_ivf::semantic_ivf_path(store.db_path()).exists());
     }
 
     #[test]

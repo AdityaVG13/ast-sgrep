@@ -1,3 +1,4 @@
+use ast_sgrep_core::semantic_ivf::semantic_ivf_path;
 use ast_sgrep_core::{EmbedBackend, IndexOptions, IndexStore, Indexer};
 use rusqlite::params;
 use tempfile::TempDir;
@@ -48,9 +49,12 @@ fn schema_upgrade_invalidates_legacy_semantic_layouts() {
         .connection()
         .execute_batch("PRAGMA user_version = 5")
         .unwrap();
+    let sidecar = semantic_ivf_path(store.db_path());
+    std::fs::write(&sidecar, b"legacy semantic sidecar").unwrap();
     drop(store);
 
     let migrated = IndexStore::open(temp.path(), None).unwrap();
+    assert!(!sidecar.exists());
     for table in ["semantic_chunks", "embeddings", "embed_cache"] {
         let count: i64 = migrated
             .connection()
