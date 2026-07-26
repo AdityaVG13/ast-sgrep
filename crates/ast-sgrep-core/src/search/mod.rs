@@ -408,6 +408,55 @@ fn run_parallel_passes(
 fn join_worker<T>(join: thread::Result<Result<T>>) -> Result<T> {
     join.map_err(|e| crate::StoreError::Other(format!("search worker panicked: {e:?}")))?
 }
+fn identifier_tokens(symbol: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+    let mut previous_lower_or_digit = false;
+    for ch in symbol.chars() {
+        if !ch.is_alphanumeric() {
+            if !current.is_empty() {
+                tokens.push(std::mem::take(&mut current));
+            }
+            previous_lower_or_digit = false;
+            continue;
+        }
+        if ch.is_uppercase() && previous_lower_or_digit && !current.is_empty() {
+            tokens.push(std::mem::take(&mut current));
+        }
+        current.extend(ch.to_lowercase());
+        previous_lower_or_digit = ch.is_lowercase() || ch.is_ascii_digit();
+    }
+    if !current.is_empty() {
+        tokens.push(current);
+    }
+    tokens
+}
+
+fn definition_query_affinity(parsed: &ParsedQuery, hit: &SearchHit) -> u8 {
+    let Some(symbol) = hit.symbol.as_deref() else {
+        return 0;
+    };
+    let symbol_tokens = identifier_tokens(symbol);
+    if symbol_tokens.is_empty() || symbol_tokens.len() > parsed.terms.len() {
+        return 0;
+    }
+    let matches_boundary = parsed.terms.windows(symbol_tokens.len()).any(|window| {
+        window
+            .iter()
+            .map(String::as_str)
+            .eq(symbol_tokens.iter().map(String::as_str))
+    });
+    if !matches_boundary {
+        return 0;
+    }
+    let snake_spelling = symbol_tokens.join("_");
+    if symbol.to_lowercase() == snake_spelling {
+        3
+    } else {
+        2
+    }
+}
+
 pub fn finish_response(
     parsed: &ParsedQuery,
     options: &SearchOptions,
@@ -442,12 +491,30 @@ pub fn finish_response(
         return response;
     }
     let gate_limit = rerank_candidate_limit(options);
-    let keep = if parsed.mode == QueryMode::Hybrid {
+    let hybrid = parsed.mode == QueryMode::Hybrid;
+    let best_definition = if hybrid {
+        hits.iter()
+            .filter(|hit| hit.kind == HitKind::Def)
+            .max_by(|a, b| {
+                a.score
+                    .partial_cmp(&b.score)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+                    .then_with(|| {
+                        definition_query_affinity(parsed, a)
+                            .cmp(&definition_query_affinity(parsed, b))
+                    })
+                    .then_with(|| b.file.cmp(&a.file))
+            })
+            .cloned()
+    } else {
+        None
+    };
+    let keep = if hybrid {
         gate_limit.saturating_mul(MAX_HITS_PER_FILE).max(gate_limit)
     } else {
         gate_limit
     };
-    if hits.len() > keep.saturating_mul(4).max(keep + 32) {
+    if hits.len() > keep.saturating_mul(4).max(keep.saturating_add(32)) {
         hits.select_nth_unstable_by(keep, |a, b| {
             b.score
                 .partial_cmp(&a.score)
@@ -475,7 +542,18 @@ pub fn finish_response(
     }
     keyed.sort_unstable_by(compare);
     let mut hits: Vec<_> = keyed.into_iter().map(|(_, h)| h).collect();
-    hits = enforce_result_gates(hits, parsed.mode == QueryMode::Hybrid, gate_limit);
+    if let Some(definition) = best_definition {
+        let retained = hits.iter().any(|hit| {
+            hit.kind == HitKind::Def
+                && hit.file == definition.file
+                && hit.line_start == definition.line_start
+                && hit.symbol == definition.symbol
+        });
+        if !retained {
+            hits.push(definition);
+        }
+    }
+    hits = enforce_result_gates(hits, hybrid, gate_limit);
     if options.use_rerank {
         hits = maybe_rerank(&parsed.raw, hits, options.rerank_top_k);
         hits = enforce_result_gates(hits, parsed.mode == QueryMode::Hybrid, options.limit);
@@ -567,7 +645,22 @@ fn apply_rerank_order(
 }
 fn enforce_result_gates(mut hits: Vec<SearchHit>, hybrid: bool, limit: usize) -> Vec<SearchHit> {
     if hybrid {
+        let preferred_definition = hits.iter().find(|hit| hit.kind == HitKind::Def).cloned();
         hits = cap_per_file(hits);
+        let head = limit.min(hits.len());
+        if head > 0 && !hits[..head].iter().any(|hit| hit.kind == HitKind::Def) {
+            if let Some(definition) = preferred_definition {
+                if let Some(index) = hits.iter().position(|hit| {
+                    hit.kind == HitKind::Def
+                        && hit.file == definition.file
+                        && hit.line_start == definition.line_start
+                        && hit.symbol == definition.symbol
+                }) {
+                    hits.remove(index);
+                }
+                hits.insert(head - 1, definition);
+            }
+        }
     }
     hits.truncate(limit);
     hits
@@ -704,6 +797,46 @@ mod tests {
             excerpt: String::new(),
         }
     }
+    #[test]
+    fn definition_affinity_prefers_phrase_boundary_spelling() {
+        let parsed = ParsedQuery::parse("how does auth refresh work");
+        let mut snake = hit("snake.rs", 1, 1.0);
+        snake.kind = HitKind::Def;
+        snake.symbol = Some("auth_refresh".into());
+        let mut camel = hit("camel.rs", 1, 1.0);
+        camel.kind = HitKind::Def;
+        camel.symbol = Some("authRefresh".into());
+        assert!(
+            definition_query_affinity(&parsed, &snake) > definition_query_affinity(&parsed, &camel)
+        );
+
+        let unrelated = ParsedQuery::parse("authorization workflow");
+        let mut short = hit("short.rs", 1, 1.0);
+        short.kind = HitKind::Def;
+        short.symbol = Some("auth".into());
+        assert_eq!(definition_query_affinity(&unrelated, &short), 0);
+
+        let suffix = ParsedQuery::parse("refreshable token");
+        short.symbol = Some("refresh".into());
+        assert_eq!(definition_query_affinity(&suffix, &short), 0);
+    }
+
+    #[test]
+    fn hybrid_window_retains_definition_evidence() {
+        let mut hits = vec![
+            hit("embed-a.rs", 1, 1.0),
+            hit("embed-b.rs", 1, 0.9),
+            hit("def.rs", 1, 0.2),
+        ];
+        hits[0].kind = HitKind::Embed;
+        hits[1].kind = HitKind::Embed;
+        hits[2].kind = HitKind::Def;
+        let gated = enforce_result_gates(hits, true, 2);
+        assert_eq!(gated.len(), 2);
+        assert_eq!(gated[0].kind, HitKind::Embed);
+        assert_eq!(gated[1].kind, HitKind::Def);
+    }
+
     #[test]
     fn rerank_can_promote_candidate_beyond_final_limit() {
         let options = SearchOptions {

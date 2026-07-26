@@ -110,6 +110,15 @@ pub fn default_weights(intent: QueryIntent) -> ChannelWeights {
             embed: 1.1,
             pattern: 0.1,
         },
+        QueryIntent::Symbol => ChannelWeights {
+            lexical: 1.0,
+            def: 2.0,
+            caller: 1.15,
+            graph: 0.9,
+            anchor: 1.0,
+            embed: 0.8,
+            pattern: 0.25,
+        },
         _ => ChannelWeights::default(),
     }
 }

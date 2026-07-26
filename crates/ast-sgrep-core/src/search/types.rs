@@ -159,7 +159,7 @@ pub struct SearchOptions {
     pub use_neural_embed: bool,
     pub use_semantic_only: bool,
     pub ann_threshold: Option<usize>,
-    /// IVF clusters to probe (0/None = adaptive √k; ≥ n_clusters = exact).
+    /// IVF clusters to probe (0/None = adaptive, at most 90% populated; ≥ n_clusters = exact).
     pub ann_probes: Option<usize>,
     pub use_rerank: bool,
     pub rerank_top_k: usize,

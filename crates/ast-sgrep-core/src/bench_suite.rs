@@ -1,4 +1,42 @@
+use crate::search::{HitKind, SearchHit};
 use std::path::PathBuf;
+
+#[derive(Debug, Clone, Copy)]
+pub struct BenchExpectation {
+    pub kind: Option<HitKind>,
+    pub symbol: Option<&'static str>,
+    pub callee: Option<&'static str>,
+    pub file_suffix: Option<&'static str>,
+    pub excerpt_contains: Option<&'static str>,
+    pub max_rank: usize,
+}
+
+impl BenchExpectation {
+    pub fn matches(&self, hit: &SearchHit) -> bool {
+        self.kind.is_none_or(|kind| hit.kind == kind)
+            && self
+                .symbol
+                .is_none_or(|symbol| hit.symbol.as_deref() == Some(symbol))
+            && self
+                .callee
+                .is_none_or(|callee| hit.callee.as_deref() == Some(callee))
+            && self
+                .file_suffix
+                .is_none_or(|suffix| hit.file.ends_with(suffix))
+            && self
+                .excerpt_contains
+                .is_none_or(|needle| hit.excerpt.contains(needle))
+    }
+
+    pub fn is_specific(&self) -> bool {
+        self.kind.is_some()
+            || self.symbol.is_some()
+            || self.callee.is_some()
+            || self.file_suffix.is_some()
+            || self.excerpt_contains.is_some()
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct BenchCase {
     pub name: &'static str,
@@ -60,6 +98,85 @@ pub const SELF_SUITE: &[BenchCase] = &[
         min_hits: 1,
     },
 ];
+pub fn benchmark_expectation(case: &BenchCase) -> Option<BenchExpectation> {
+    let expected = match case.name {
+        "literal_symbol" => BenchExpectation {
+            kind: Some(HitKind::Def),
+            symbol: Some("process_request"),
+            callee: None,
+            file_suffix: None,
+            excerpt_contains: None,
+            max_rank: 5,
+        },
+        "defs_prefix" => BenchExpectation {
+            kind: Some(HitKind::Def),
+            symbol: Some("auth_refresh"),
+            callee: None,
+            file_suffix: None,
+            excerpt_contains: None,
+            max_rank: 3,
+        },
+        "callers_prefix" => BenchExpectation {
+            kind: Some(HitKind::Caller),
+            symbol: None,
+            callee: Some("process_request"),
+            file_suffix: None,
+            excerpt_contains: None,
+            max_rank: 3,
+        },
+        "nl_auth_refresh" => BenchExpectation {
+            kind: Some(HitKind::Def),
+            symbol: Some("auth_refresh"),
+            callee: None,
+            file_suffix: None,
+            excerpt_contains: None,
+            max_rank: 8,
+        },
+        "synonym_credential_renewal" => BenchExpectation {
+            kind: Some(HitKind::Embed),
+            symbol: Some("auth_refresh"),
+            callee: None,
+            file_suffix: None,
+            excerpt_contains: None,
+            max_rank: 16,
+        },
+        "core_searcher" => BenchExpectation {
+            kind: Some(HitKind::Def),
+            symbol: Some("Searcher"),
+            callee: None,
+            file_suffix: None,
+            excerpt_contains: None,
+            max_rank: 5,
+        },
+        "semantic_ivf" => BenchExpectation {
+            kind: None,
+            symbol: None,
+            callee: None,
+            file_suffix: Some("semantic_ivf.rs"),
+            excerpt_contains: None,
+            max_rank: 5,
+        },
+        "defs_search_pattern" => BenchExpectation {
+            kind: Some(HitKind::Def),
+            symbol: Some("search_pattern"),
+            callee: None,
+            file_suffix: None,
+            excerpt_contains: None,
+            max_rank: 3,
+        },
+        "nl_hybrid_search" => BenchExpectation {
+            kind: None,
+            symbol: None,
+            callee: None,
+            file_suffix: Some("search/mod.rs"),
+            excerpt_contains: None,
+            max_rank: 8,
+        },
+        _ => return None,
+    };
+    Some(expected)
+}
+
 pub fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
@@ -103,23 +220,30 @@ pub struct RankingStability {
 }
 pub fn ranking_stability(left: &[String], right: &[String]) -> RankingStability {
     use std::collections::{HashMap, HashSet};
-    let ls: HashSet<&str> = left.iter().map(String::as_str).collect();
-    let rs: HashSet<&str> = right.iter().map(String::as_str).collect();
+    fn unique_ids(values: &[String]) -> Vec<&str> {
+        let mut seen = HashSet::new();
+        values
+            .iter()
+            .map(String::as_str)
+            .filter(|id| seen.insert(*id))
+            .collect()
+    }
+    let left = unique_ids(left);
+    let right = unique_ids(right);
+    let ls: HashSet<&str> = left.iter().copied().collect();
+    let rs: HashSet<&str> = right.iter().copied().collect();
     let union = ls.union(&rs).count();
     let jaccard = if union == 0 {
         1.0
     } else {
         ls.intersection(&rs).count() as f64 / union as f64
     };
-    let right_rank: HashMap<&str, usize> = right
-        .iter()
-        .enumerate()
-        .map(|(r, id)| (id.as_str(), r))
-        .collect();
+    let right_rank: HashMap<&str, usize> =
+        right.iter().enumerate().map(|(r, id)| (*id, r)).collect();
     let shared: Vec<(usize, usize)> = left
         .iter()
         .enumerate()
-        .filter_map(|(rank, id)| right_rank.get(id.as_str()).map(|&o| (rank, o)))
+        .filter_map(|(rank, id)| right_rank.get(id).map(|&o| (rank, o)))
         .collect();
     let rank_correlation = if shared.len() < 2 {
         if shared.len() == 1 {
@@ -168,6 +292,20 @@ pub fn ranking_stability(left: &[String], right: &[String]) -> RankingStability 
 mod tests {
     use super::*;
 
+    #[test]
+    fn every_benchmark_case_has_a_specific_identity_oracle() {
+        for case in DEFAULT_SUITE.iter().chain(SELF_SUITE) {
+            let expected = benchmark_expectation(case)
+                .unwrap_or_else(|| panic!("{} has no identity oracle", case.name));
+            assert!(
+                expected.is_specific(),
+                "{} has no identity oracle",
+                case.name
+            );
+            assert!(expected.max_rank > 0, "{} has a vacuous rank", case.name);
+        }
+    }
+
     /// e2hc.19d: Shared items in the same relative order must produce
     /// rank_correlation = 1.0, even when their full-list positions differ
     /// (e.g. left has extra non-shared items shifting positions). Pre-fix,
@@ -189,9 +327,7 @@ mod tests {
     /// could return values like -127.
     #[test]
     fn rank_correlation_does_not_explode_on_position_offset() {
-        let left: Vec<String> = (0..50)
-            .map(|i| format!("item{i}"))
-            .collect();
+        let left: Vec<String> = (0..50).map(|i| format!("item{i}")).collect();
         // Right list: same items but reversed, with 50 non-shared items prepended
         let mut right: Vec<String> = (0..50).map(|i| format!("noise{i}")).collect();
         right.extend(left.iter().rev().cloned());

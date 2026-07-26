@@ -93,7 +93,7 @@ impl SemanticAnnIndex {
             .iter()
             .all(|c| c.iter().all(|&i| i < chunk_count))
     }
-    /// `probes`: None/0 = adaptive √k; ≥ n_clusters = all (exact).
+    /// `probes`: None/0 = at most 90% of populated clusters; ≥ n_clusters = exact.
     pub fn candidate_indices(&self, query: &[f32], probes: Option<usize>) -> Vec<usize> {
         if self.centroids.is_empty() {
             return vec![];
@@ -106,17 +106,22 @@ impl SemanticAnnIndex {
             .map(|(i, c)| (i, cosine_similarity(&q, c)))
             .collect();
         scores.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-        let k = self.centroids.len();
+        scores.retain(|(id, _)| self.clusters.get(*id).is_some_and(|c| !c.is_empty()));
+        let populated = scores.len();
+        if populated == 0 {
+            return vec![];
+        }
         let take = match probes {
-            None | Some(0) => ((k as f64).sqrt() as usize).clamp(1, k),
-            Some(p) if p >= k => k,
-            Some(p) => p.max(1).min(k),
+            None | Some(0) if populated > 1 => populated
+                .saturating_mul(9)
+                .div_euclid(10)
+                .clamp(1, populated - 1),
+            None | Some(0) => 1,
+            Some(p) => p.max(1).min(populated),
         };
         let mut members = Vec::new();
         for (id, _) in scores.into_iter().take(take) {
-            if let Some(cluster) = self.clusters.get(id) {
-                members.extend_from_slice(cluster);
-            }
+            members.extend_from_slice(&self.clusters[id]);
         }
         members.sort_unstable();
         members
@@ -283,11 +288,11 @@ fn kmeans(vectors: &[Vec<f32>], k: usize, max_iters: usize) -> (Vec<Vec<f32>>, V
                 .iter()
                 .enumerate()
                 .map(|(i, v)| {
-                    let min_sim = c
+                    let nearest_sim = c
                         .iter()
                         .map(|cent| cosine_similarity(v, cent))
-                        .fold(f32::INFINITY, f32::min);
-                    (i, 1.0 - min_sim)
+                        .fold(f32::NEG_INFINITY, f32::max);
+                    (i, 1.0 - nearest_sim)
                 })
                 .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
                 .map(|(i, _)| i)

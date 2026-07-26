@@ -8,11 +8,14 @@ use ast_sgrep_testkit::index_sample;
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct RankingCases {
+    fixture: String,
     cases: Vec<RankingCase>,
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct RankingCase {
     name: String,
     query: String,
@@ -20,9 +23,23 @@ struct RankingCase {
     must_include: Vec<MustInclude>,
 }
 
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum RequiredKind {
+    Asgrep,
+    Def,
+    Caller,
+    Graph,
+    Anchor,
+    Import,
+    Pattern,
+    Embed,
+}
+
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct MustInclude {
-    kind: String,
+    kind: RequiredKind,
     #[serde(default)]
     symbol: Option<String>,
     #[serde(default)]
@@ -34,20 +51,21 @@ struct MustInclude {
     max_rank: usize,
 }
 
-fn hit_kind_from_str(s: &str) -> HitKind {
-    match s {
-        "def" => HitKind::Def,
-        "caller" => HitKind::Caller,
-        "embed" => HitKind::Embed,
-        "graph" => HitKind::Graph,
-        "anchor" => HitKind::Anchor,
-        "pattern" => HitKind::Pattern,
-        _ => HitKind::Asgrep,
+fn required_hit_kind(kind: RequiredKind) -> HitKind {
+    match kind {
+        RequiredKind::Asgrep => HitKind::Asgrep,
+        RequiredKind::Def => HitKind::Def,
+        RequiredKind::Caller => HitKind::Caller,
+        RequiredKind::Graph => HitKind::Graph,
+        RequiredKind::Anchor => HitKind::Anchor,
+        RequiredKind::Import => HitKind::Import,
+        RequiredKind::Pattern => HitKind::Pattern,
+        RequiredKind::Embed => HitKind::Embed,
     }
 }
 
 fn hit_matches(hit: &ast_sgrep_core::SearchHit, req: &MustInclude) -> bool {
-    if hit.kind != hit_kind_from_str(&req.kind) {
+    if hit.kind != required_hit_kind(req.kind) {
         return false;
     }
     if let Some(ref sym) = req.symbol {
@@ -82,28 +100,57 @@ fn ranking_oracle_cases_json() {
     let cases: RankingCases =
         serde_json::from_str(&json).unwrap_or_else(|e| panic!("parse cases.json: {e}"));
 
+    assert_eq!(
+        cases.fixture, "sample",
+        "ranking fixture must target sample corpus"
+    );
     let indexed = index_sample(IndexOptions {
         force_reindex: true,
         ..IndexOptions::default()
     });
-    let searcher = Searcher::new(SearchOptions {
-        root: indexed.indexer.store().root().to_path_buf(),
-        index_path: Some(indexed.indexer.store().db_path().to_path_buf()),
-        limit: 32,
-        use_embed: true,
-        ..SearchOptions::default()
-    })
-    .expect("searcher");
+    let root = indexed.indexer.store().root().to_path_buf();
+    let index_path = indexed.indexer.store().db_path().to_path_buf();
 
     let mut failures = Vec::new();
     for case in &cases.cases {
+        let top_k = usize::try_from(case.top_k).expect("top_k fits usize");
+        assert!(
+            !case.must_include.is_empty(),
+            "case {} must contain at least one identity expectation",
+            case.name
+        );
+        assert!(
+            top_k > 0,
+            "case {} must request at least one hit",
+            case.name
+        );
+        let searcher = Searcher::new(SearchOptions {
+            root: root.clone(),
+            index_path: Some(index_path.clone()),
+            limit: top_k,
+            use_embed: true,
+            ..SearchOptions::default()
+        })
+        .expect("searcher");
         let resp = searcher.search(&case.query).expect("search");
         let hits = &resp.hits;
+        assert!(
+            hits.len() <= top_k,
+            "case {} returned {} hits beyond top_k={top_k}",
+            case.name,
+            hits.len()
+        );
         for req in &case.must_include {
+            assert!(
+                req.max_rank > 0 && req.max_rank <= top_k,
+                "case {} max_rank={} must be within top_k={top_k}",
+                case.name,
+                req.max_rank
+            );
             let found = hits.iter().take(req.max_rank).any(|h| hit_matches(h, req));
             if !found {
                 failures.push(format!(
-                    "case '{}' must_include kind={} symbol={:?} callee={:?} file={:?} max_rank={} not satisfied; hits: {}",
+                    "case '{}' must_include kind={:?} symbol={:?} callee={:?} file={:?} max_rank={} not satisfied; hits: {}",
                     case.name,
                     req.kind,
                     req.symbol,
@@ -115,5 +162,9 @@ fn ranking_oracle_cases_json() {
             }
         }
     }
-    assert!(failures.is_empty(), "ranking oracle failures:\n{}", failures.join("\n"));
+    assert!(
+        failures.is_empty(),
+        "ranking oracle failures:\n{}",
+        failures.join("\n")
+    );
 }

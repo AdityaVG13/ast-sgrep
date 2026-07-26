@@ -59,7 +59,7 @@ pub(crate) struct Cli {
     tantivy: bool,
     #[arg(long, global = true, env = "ASGREP_ANN_THRESHOLD")]
     ann_threshold: Option<usize>,
-    /// IVF clusters to probe (0 = adaptive √k; ≥ n_clusters = exact)
+    /// IVF clusters to probe (0 = adaptive, at most 90% populated; ≥ n_clusters = exact)
     #[arg(long, global = true, env = "ASGREP_ANN_PROBES")]
     ann_probes: Option<usize>,
     /// Rerank fused top candidates with local ONNX cross-encoder (`rerank` feature)
@@ -642,12 +642,23 @@ fn run_bench_suite(
     let (stats, _) = maybe_index(&bench_root, cli, skip_index)?;
     let searcher = bench_searcher(&bench_root, cli, skip_index)?;
     let results: Vec<serde_json::Value> = cases.iter().map(|case| {
+        let expected = ast_sgrep_core::bench_suite::benchmark_expectation(case)
+            .ok_or_else(|| anyhow::anyhow!("benchmark case '{}' has no identity contract", case.name))?;
         let (times, last) = timed_searches(&searcher, case.query, false, iterations)?;
         let hits = last.as_ref().map_or(0, |r| r.hits.len());
+        let identity_ok = last.as_ref().is_some_and(|response| {
+            response
+                .hits
+                .iter()
+                .take(expected.max_rank)
+                .any(|hit| expected.matches(hit))
+        });
         let avg = times.iter().sum::<f64>() / f64::from(iterations.max(1));
         let ag_pat = ast_sgrep_core::pattern::ast_grep_pattern_for_query(case.query);
         let ag_ms = ag_pat.as_ref().and_then(|p| ast_sgrep_core::pattern::bench_ast_grep(p, &bench_root, iterations.min(3)));
-        Ok(serde_json::json!({"name": case.name, "query": case.query, "avg_search_ms": avg, "hits": hits, "min_hits": case.min_hits, "ok": hits >= case.min_hits,
+        Ok(serde_json::json!({"name": case.name, "query": case.query, "avg_search_ms": avg, "hits": hits, "min_hits": case.min_hits,
+            "identity_ok": identity_ok, "identity_max_rank": expected.max_rank,
+            "ok": hits >= case.min_hits && identity_ok,
             "ast_grep_pattern": ag_pat, "avg_ast_grep_ms": ag_ms, "speedup_vs_ast_grep": ag_ms.map(|ag| ag / avg)}))
     }).collect::<anyhow::Result<_>>()?;
     if cli.json {
@@ -687,7 +698,7 @@ fn run_bench_suite(
         }
     }
     if results.iter().any(|r| r["ok"] == false) {
-        anyhow::bail!("benchmark suite had cases below min_hits threshold");
+        anyhow::bail!("benchmark suite failed hit-count or result-identity thresholds");
     }
     Ok(())
 }

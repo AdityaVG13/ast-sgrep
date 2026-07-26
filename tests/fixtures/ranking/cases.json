@@ -22,15 +22,15 @@
       "query": "process_request",
       "top_k": 5,
       "must_include": [
-        { "kind": "anchor", "symbol": "process_request", "max_rank": 5 }
+        { "kind": "def", "symbol": "process_request", "max_rank": 3 }
       ]
     },
     {
       "name": "nl_auth_refresh",
       "query": "how does auth refresh work",
-      "top_k": 16,
+      "top_k": 8,
       "must_include": [
-        { "kind": "asgrep", "excerpt_contains": "auth_refresh", "max_rank": 16 }
+        { "kind": "def", "symbol": "auth_refresh", "max_rank": 8 }
       ]
     },
     {

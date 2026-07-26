@@ -115,19 +115,12 @@ fn ivf_search_matches_brute_force_top_k_indices_ce003() {
 /// brute_force_flat` early return, so recall=1.0 by construction and the ANN
 /// cluster path was never exercised.
 ///
-/// With vector_count=2048 (> threshold), the adaptive arm (search_flat,
-/// √k probes ≈ 6 of ~45 clusters) achieves recall@10 ≈ 0.716 against the exact
-/// arm (all-cluster probe). The 0.99 target is NOT met with √k probing — that
-/// is a real ANN quality gap, not a test artifact. Follow-up bead filed for
-/// probe-count tuning (e.g. k/2 or k*3/4) to reach 0.99.
-///
-/// The SLO is set to 0.70 (just below the measured 0.716 with margin for
-/// kmeans nondeterminism) so the test is meaningful: it FAILS if the ANN
-/// quality regresses further, while honestly documenting that the 0.99 target
-/// is not yet achieved.
+/// With vector_count=2048 (> threshold), the adaptive arm probes at most 90%
+/// of populated clusters. It must preserve recall@10 >= 0.99 while examining
+/// no more than 95% of the exact all-cluster candidates.
 #[test]
 fn adaptive_ivf_recall_at_10_stays_within_quality_error_budget() {
-    const RECALL_SLO: f64 = 0.70;
+    const RECALL_SLO: f64 = 0.99;
     let dim = 32usize;
     let vector_count = 2048usize;
     assert!(
@@ -146,6 +139,13 @@ fn adaptive_ivf_recall_at_10_stays_within_quality_error_budget() {
             .into_iter()
             .map(|(idx, _)| idx)
             .collect();
+        let candidates = index.candidate_indices(query, None);
+        let candidate_ceiling = (vector_count * 95).div_ceil(100);
+        assert!(
+            candidates.len() <= candidate_ceiling,
+            "adaptive probing scanned {} of {vector_count} candidates, above the 95% ceiling",
+            candidates.len()
+        );
         let adaptive: HashSet<_> = index
             .search_flat(&flat, dim, query, limit)
             .into_iter()
