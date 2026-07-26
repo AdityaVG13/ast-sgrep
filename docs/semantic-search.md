@@ -77,15 +77,15 @@ OpenAI-compatible embedding API. Dimension depends on model; stored in index met
 
 ### Hybrid (default)
 
-Semantic is one pass among lexical, symbol, graph, and anchor. Semantic hits appear as kind `EMBED` in output.
+Default search is a constraint cascade: lexical candidates must survive AST-derived symbol, graph, anchor, or pattern evidence before semantic chunks are ranked. Semantic hits appear as kind `EMBED`, but they cannot widen the survivor file set.
 
 ```bash
-asgrep "credential renewal"
+asgrep "auth refresh"
 ```
 
 ### Semantic-only
 
-Skips lexical/symbol/graph passes; useful for pure synonym or NL probes.
+Skips lexical and structural gates; use this for pure synonym or zero-token-overlap NL probes.
 
 ```bash
 asgrep semantic "credential renewal" --json

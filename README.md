@@ -63,7 +63,7 @@ Verify: run ./target/release/asgrep index . then search for defs: of a symbol in
 
 Most code search is either **fast text** (ripgrep) or **pattern matching** (ast-grep). Neither answers questions like *"where does credential renewal happen?"* when the words in your question do not appear in the code.
 
-**ast-sgrep** builds a **persistent index**: symbols, caller/callee edges, imports, lexical FTS, and **symbol-level semantic vectors** enriched with call-graph context. Query in natural language or with graph prefixes; get ranked hits with excerpts for humans or agents.
+**ast-sgrep** builds a **persistent index**: symbols, caller/callee edges, imports, lexical FTS, and **symbol-level semantic vectors** enriched with call-graph context. Default queries cascade lexical candidates through AST-derived evidence and semantic reranking; the dedicated `semantic` command handles zero-token-overlap discovery.
 
 **No API key required.** Offline semantic search works out of the box. Cloud, Ollama, and optional neural embeddings are upgrades.
 
@@ -72,7 +72,7 @@ Most code search is either **fast text** (ripgrep) or **pattern matching** (ast-
 | Where is X defined? | `defs:` + ranked hybrid hits |
 | Who calls this? | `callers:` + call hierarchy (LSP) |
 | How does auth refresh work? | NL → symbols + anchors + semantic similarity |
-| "credential renewal" (no token overlap) | Semantic hit on `auth_refresh` |
+| "credential renewal" (no token overlap) | `asgrep semantic "credential renewal"` → `auth_refresh` |
 | Structured JSON for an agent | `--json --format agent` |
 | Structural rewrite / codemod | `pattern:` (ast-grep when available) |
 

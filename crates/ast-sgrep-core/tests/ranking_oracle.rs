@@ -19,8 +19,18 @@ struct RankingCases {
 struct RankingCase {
     name: String,
     query: String,
+    #[serde(default)]
+    mode: RetrievalMode,
     top_k: u32,
     must_include: Vec<MustInclude>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum RetrievalMode {
+    #[default]
+    Hybrid,
+    Semantic,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize)]
@@ -132,7 +142,11 @@ fn ranking_oracle_cases_json() {
             ..SearchOptions::default()
         })
         .expect("searcher");
-        let resp = searcher.search(&case.query).expect("search");
+        let resp = match case.mode {
+            RetrievalMode::Hybrid => searcher.search(&case.query),
+            RetrievalMode::Semantic => searcher.search_semantic(&case.query),
+        }
+        .expect("search");
         let hits = &resp.hits;
         assert!(
             hits.len() <= top_k,

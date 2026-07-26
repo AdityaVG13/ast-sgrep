@@ -473,7 +473,7 @@ fn parity_index_defs_hybrid_chain() {
         "callers:process_request; got {:#?}",
         callers.hits
     );
-    let nl = searcher.search("credential renewal").unwrap();
+    let nl = searcher.search_semantic("credential renewal").unwrap();
     // e2hc.19(b): The old oracle accepted ANY Embed hit via
     // `|| h.kind == HitKind::Embed`, making the assertion vacuous — an
     // irrelevant semantic chunk would satisfy it. Removed that clause so the
@@ -486,7 +486,7 @@ fn parity_index_defs_hybrid_chain() {
                 .iter()
                 .any(|h| h.symbol.as_deref() == Some("auth_refresh")
                     || h.excerpt.contains("auth_refresh")),
-        "NL/hybrid should surface auth_refresh; got {:#?}",
+        "semantic search should surface auth_refresh; got {:#?}",
         nl.hits
     );
     let root = indexed.indexer.store().root().to_path_buf();

@@ -163,6 +163,22 @@ impl IndexStore {
             .execute("DELETE FROM meta WHERE key = ?1", params![key])?;
         Ok(())
     }
+    /// Monotonic generation for searchable-index mutations on every connection.
+    pub fn index_data_version(&self) -> Result<i64> {
+        Ok(self
+            .get_meta("index_data_version")?
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(0))
+    }
+    fn bump_index_data_version(&self) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO meta(key, value) VALUES('index_data_version', '1') \
+             ON CONFLICT(key) DO UPDATE SET value = \
+             CAST(COALESCE(meta.value, '0') AS INTEGER) + 1",
+            [],
+        )?;
+        Ok(())
+    }
     pub fn file_id(&self, rel_path: &str) -> Result<Option<i64>> {
         optional_row(
             &self.conn,
@@ -256,7 +272,10 @@ impl IndexStore {
         Ok(())
     }
     pub fn clear_all_data(&self) -> Result<()> {
-        self.conn.execute_batch(CLEAR_ALL_SQL)?;
+        self.with_file_tx(|| {
+            self.conn.execute_batch(CLEAR_ALL_SQL)?;
+            self.bump_index_data_version()
+        })?;
         let _ = self.conn.execute_batch("VACUUM");
         Ok(())
     }
@@ -374,6 +393,7 @@ impl IndexStore {
             )?
             .execute(params![lang, mtime_secs, mtime_nanos, hash, file_id])?;
         self.set_meta(&format!("eol:{rel_path}"), eol)?;
+        self.bump_index_data_version()?;
         Ok(file_id)
     }
     fn upsert_file_inner(
@@ -405,6 +425,7 @@ impl IndexStore {
         self.insert_pattern_nodes(file_id, input.pattern_nodes)?;
         self.set_meta(struct_key, struct_fp)?;
         crate::semantic_ann::mark_semantic_ivf_stale(self);
+        self.bump_index_data_version()?;
         Ok(file_id)
     }
     fn upsert_file_row(
@@ -566,14 +587,17 @@ impl IndexStore {
         Ok(())
     }
     pub fn remove_file(&self, rel_path: &str) -> Result<()> {
-        if let Some(id) = self.file_id(rel_path)? {
-            delete_file_children(&self.conn, id)?;
-            self.conn
-                .execute("DELETE FROM files WHERE id = ?1", params![id])?;
-            self.delete_meta(&format!("eol:{rel_path}"))?;
-            crate::semantic_ann::mark_semantic_ivf_stale(self);
-        }
-        Ok(())
+        self.with_file_tx(|| {
+            if let Some(id) = self.file_id(rel_path)? {
+                delete_file_children(&self.conn, id)?;
+                self.conn
+                    .execute("DELETE FROM files WHERE id = ?1", params![id])?;
+                self.delete_meta(&format!("eol:{rel_path}"))?;
+                crate::semantic_ann::mark_semantic_ivf_stale(self);
+                self.bump_index_data_version()?;
+            }
+            Ok(())
+        })
     }
     pub fn file_hash(&self, rel_path: &str) -> Result<Option<String>> {
         optional_row(
@@ -730,6 +754,74 @@ impl IndexStore {
         );
         query_map_rows(&self.conn, &sql, lang, read_sem_row)
     }
+    pub fn semantic_chunks_for_files(
+        &self,
+        files: &std::collections::HashSet<String>,
+        lang: Option<&str>,
+    ) -> Result<Vec<ast_sgrep_embed::SemanticChunkRow>> {
+        let mut paths = files.iter().collect::<Vec<_>>();
+        paths.sort_unstable();
+        let mut chunks = Vec::new();
+        for path in paths {
+            let rows = match lang {
+                Some(language) => query_cached_map(
+                    &self.conn,
+                    "SELECT f.path, sc.line_start, sc.line_end, sc.symbol_name, sc.text, sc.vector \
+                     FROM semantic_chunks sc JOIN files f ON f.id=sc.file_id \
+                     WHERE f.path=?1 AND f.language=?2 ORDER BY sc.id",
+                    params![path, language],
+                    read_sem_row,
+                )?,
+                None => query_cached_map(
+                    &self.conn,
+                    "SELECT f.path, sc.line_start, sc.line_end, sc.symbol_name, sc.text, sc.vector \
+                     FROM semantic_chunks sc JOIN files f ON f.id=sc.file_id \
+                     WHERE f.path=?1 ORDER BY sc.id",
+                    params![path],
+                    read_sem_row,
+                )?,
+            };
+            chunks.extend(rows);
+        }
+        Ok(chunks)
+    }
+
+    pub fn legacy_embeddings_for_files(
+        &self,
+        files: &std::collections::HashSet<String>,
+        lang: Option<&str>,
+    ) -> Result<Vec<ast_sgrep_embed::SemanticChunkRow>> {
+        let mut paths = files.iter().collect::<Vec<_>>();
+        paths.sort_unstable();
+        let mut chunks = Vec::new();
+        for path in paths {
+            let rows = match lang {
+                Some(language) => query_cached_map(
+                    &self.conn,
+                    "SELECT f.path, l.line_no, l.content, sc.symbol_name, e.vector \
+                     FROM embeddings e JOIN lines l ON l.file_id=e.file_id AND l.line_no=e.line_no \
+                     JOIN files f ON f.id=e.file_id \
+                     LEFT JOIN semantic_chunks sc ON sc.file_id=f.id AND sc.line_start=l.line_no \
+                     WHERE f.path=?1 AND f.language=?2 ORDER BY l.line_no LIMIT 5000",
+                    params![path, language],
+                    read_legacy_emb,
+                )?,
+                None => query_cached_map(
+                    &self.conn,
+                    "SELECT f.path, l.line_no, l.content, sc.symbol_name, e.vector \
+                     FROM embeddings e JOIN lines l ON l.file_id=e.file_id AND l.line_no=e.line_no \
+                     JOIN files f ON f.id=e.file_id \
+                     LEFT JOIN semantic_chunks sc ON sc.file_id=f.id AND sc.line_start=l.line_no \
+                     WHERE f.path=?1 ORDER BY l.line_no LIMIT 5000",
+                    params![path],
+                    read_legacy_emb,
+                )?,
+            };
+            chunks.extend(rows);
+        }
+        Ok(chunks)
+    }
+
     pub fn symbols_in_file(&self, rel_path: &str) -> Result<Vec<SymbolRow>> {
         query_cached_map(
             &self.conn,

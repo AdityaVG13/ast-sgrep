@@ -5,35 +5,45 @@ use crate::semantic_ann::flatten_vectors_for_search;
 use crate::store::IndexStore;
 use crate::Result;
 use ast_sgrep_embed::SemanticChunkRow;
-use passes::embed::{embed_pass_lazy_ivf, embed_pass_with_context, EmbedContext};
+use passes::embed::{
+    embed_pass_for_files, embed_pass_lazy_ivf, embed_pass_with_context, EmbedContext,
+};
 use passes::lexical::lexical_pass;
 use passes::literal::literal_pass;
 use passes::regex::regex_pass;
-use passes::symbol::{anchor_pass, search_callers, search_defs, search_imports, symbol_pass};
+use passes::symbol::{
+    anchor_pass, anchor_pass_for_files, search_callers, search_defs, search_imports, symbol_pass,
+    symbol_pass_for_files,
+};
 use std::collections::HashSet;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
-use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 use types::{assign_signal_margins, dedup_hits};
 pub use types::{
     format_hit_line, HitKind, HitSignal, SearchHit, SearchOptions, SearchResponse, SpanHitInput,
 };
-const PARALLEL_PASS_FILE_THRESHOLD: usize = 128;
+const CASCADE_PREFILTER_FILE_LIMIT: usize = 100;
 const MAX_HITS_PER_FILE: usize = 3;
 struct SemanticCache {
     lang_filter: Option<String>,
     max_id: i64,
+    data_version: i64,
     embed_backend: String,
     chunks: Arc<Vec<SemanticChunkRow>>,
     flat_vectors: Arc<Vec<f32>>,
 }
 /// Hybrid search may combine adjacent committed snapshots under concurrent reindex.
-/// Semantic cache drops on chunk max-id change; IVF fingerprint-validated with flat fallback.
+/// Semantic cache drops on database generation changes; IVF fingerprint-validates with flat fallback.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct IndexGeneration {
+    external: i64,
+    local: i64,
+}
 struct ResponseCache {
-    gen: u64,
+    gen: IndexGeneration,
     map: std::collections::HashMap<String, SearchResponse>,
 }
 pub struct Searcher {
@@ -55,7 +65,10 @@ impl Searcher {
             options,
             semantic_cache: Arc::new(Mutex::new(None)),
             response_cache: Mutex::new(ResponseCache {
-                gen: 0,
+                gen: IndexGeneration {
+                    external: 0,
+                    local: 0,
+                },
                 map: std::collections::HashMap::new(),
             }),
         }
@@ -66,12 +79,15 @@ impl Searcher {
     pub fn options(&self) -> &SearchOptions {
         &self.options
     }
-    fn index_gen(&self) -> u64 {
-        self.store
-            .connection()
-            .query_row("PRAGMA data_version", [], |r| r.get::<_, i64>(0))
-            .map(|v| v as u64)
-            .unwrap_or(0)
+    fn index_gen(&self) -> IndexGeneration {
+        IndexGeneration {
+            external: self
+                .store
+                .connection()
+                .query_row("PRAGMA data_version", [], |row| row.get::<_, i64>(0))
+                .unwrap_or(0),
+            local: self.store.index_data_version().unwrap_or(0),
+        }
     }
     fn cached(
         &self,
@@ -196,64 +212,85 @@ impl Searcher {
         })
     }
     fn search_hybrid(&self, parsed: &ParsedQuery) -> Result<Vec<SearchHit>> {
-        let parallel = self
-            .store
-            .status()
-            .map(|s| s.file_count >= PARALLEL_PASS_FILE_THRESHOLD)
-            .unwrap_or(false);
-        if parallel {
-            return self.search_hybrid_large(parsed);
+        // Constraint cascade: each stage receives only files that survived the prior stage.
+        let mut lexical = literal_prefilter_pass(&self.store, &self.options, parsed)?;
+        let lexical_files = lexical
+            .iter()
+            .map(|hit| hit.file.clone())
+            .collect::<HashSet<_>>();
+        if lexical_files.is_empty() {
+            return Ok(Vec::new());
         }
-        let mut hits = run_serial_passes(&self.store, &self.options, parsed)?;
+
+        let ast_matches =
+            structural_index_pass(&self.store, &self.options, parsed, &lexical_files)?;
+        let mut structural =
+            symbol_pass_for_files(&self.store, &self.options, parsed, &lexical_files)?;
+        structural.extend(anchor_pass_for_files(
+            &self.store,
+            &self.options,
+            parsed,
+            &lexical_files,
+        )?);
+        structural.extend(ast_matches);
+        let structural_files = structural
+            .iter()
+            .map(|hit| hit.file.clone())
+            .collect::<HashSet<_>>();
+        if structural_files.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        lexical.retain(|hit| structural_files.contains(&hit.file));
+        let mut hits = lexical;
+        hits.extend(structural);
         if self.options.use_embed {
-            if let Some(ctx) =
-                load_semantic_context(&self.store, &self.options, &self.semantic_cache)?
-            {
-                hits.extend(embed_pass_with_context(
-                    &self.store,
-                    &self.options,
-                    parsed,
-                    Some(ctx),
-                )?);
-            }
+            hits.extend(embed_pass_for_files(
+                &self.store,
+                &self.options,
+                parsed,
+                &structural_files,
+            )?);
         }
         Ok(hits)
     }
-    fn search_hybrid_large(&self, parsed: &ParsedQuery) -> Result<Vec<SearchHit>> {
-        let root = self.options.root.clone();
-        let index_path = self.options.index_path.clone();
-        let options = self.options.clone();
-        let parsed_c = parsed.clone();
-        let parsed_sql = parsed.clone();
-        thread::scope(|scope| -> Result<Vec<SearchHit>> {
-            let embed = self.options.use_embed.then(|| {
-                let cache = Arc::clone(&self.semantic_cache);
-                let (root_e, index_path_e, options_e, parsed_e) = (
-                    root.clone(),
-                    index_path.clone(),
-                    options.clone(),
-                    parsed_c.clone(),
-                );
-                scope.spawn(move || {
-                    run_embed_pass(
-                        &IndexStore::open(&root_e, index_path_e.as_deref())?,
-                        &options_e,
-                        &parsed_e,
-                        &cache,
-                    )
-                })
-            });
-            let sql = scope.spawn(move || {
-                run_parallel_passes(&root, index_path.as_deref(), &options, &parsed_sql)
-            });
-            let mut hits = join_worker(sql.join())?;
-            if let Some(embed) = embed {
-                hits.extend(join_worker(embed.join())?);
-            }
-            Ok(hits)
-        })
-    }
 }
+fn literal_prefilter_pass(
+    store: &IndexStore,
+    options: &SearchOptions,
+    parsed: &ParsedQuery,
+) -> Result<Vec<SearchHit>> {
+    let mut terms = parsed
+        .terms
+        .iter()
+        .filter(|term| !term.is_empty())
+        .collect::<Vec<_>>();
+    terms.sort_by_key(|term| std::cmp::Reverse(term.chars().count()));
+    let mut prefilter_options = options.clone();
+    prefilter_options.case_insensitive = true;
+    prefilter_options.limit = CASCADE_PREFILTER_FILE_LIMIT;
+    let mut hits = Vec::new();
+    let mut file_scores = std::collections::HashMap::<String, f64>::new();
+    for term in terms {
+        for hit in literal_pass(store, &prefilter_options, &ParsedQuery::literal(term))? {
+            *file_scores.entry(hit.file.clone()).or_default() +=
+                hit.score * term.chars().count() as f64;
+            hits.push(hit);
+        }
+    }
+    let mut ranked_files = file_scores.into_iter().collect::<Vec<_>>();
+    ranked_files.sort_by(|(file_a, score_a), (file_b, score_b)| {
+        score_b.total_cmp(score_a).then_with(|| file_a.cmp(file_b))
+    });
+    let allowed_files = ranked_files
+        .into_iter()
+        .take(CASCADE_PREFILTER_FILE_LIMIT)
+        .map(|(file, _)| file)
+        .collect::<HashSet<_>>();
+    hits.retain(|hit| allowed_files.contains(&hit.file));
+    Ok(hits)
+}
+
 fn run_embed_pass(
     store: &IndexStore,
     options: &SearchOptions,
@@ -278,6 +315,7 @@ fn load_semantic_context(
     }
     let lang_filter = options.lang_filter.clone();
     let max_id = store.semantic_chunk_max_id()?.unwrap_or(0);
+    let data_version = store.index_data_version()?;
     let embed_backend = store
         .get_meta("embed_backend")?
         .unwrap_or_else(|| "semantic".into());
@@ -286,6 +324,7 @@ fn load_semantic_context(
         if let Some(c) = guard.as_ref() {
             if c.lang_filter == lang_filter
                 && c.max_id == max_id
+                && c.data_version == data_version
                 && c.embed_backend == embed_backend
             {
                 return Ok(Some(EmbedContext {
@@ -303,6 +342,7 @@ fn load_semantic_context(
     let entry = SemanticCache {
         lang_filter,
         max_id,
+        data_version,
         embed_backend,
         chunks: Arc::new(chunks),
         flat_vectors: Arc::new(flat_vectors),
@@ -314,25 +354,13 @@ fn load_semantic_context(
     *cache.lock().unwrap_or_else(|e| e.into_inner()) = Some(entry);
     Ok(Some(ctx))
 }
-fn run_serial_passes(
-    store: &IndexStore,
-    options: &SearchOptions,
-    parsed: &ParsedQuery,
-) -> Result<Vec<SearchHit>> {
-    let mut hits = Vec::with_capacity(64);
-    hits.extend(lexical_pass(store, options, parsed)?);
-    hits.extend(symbol_pass(store, options, parsed)?);
-    hits.extend(anchor_pass(store, options, parsed)?);
-    // Indexed structural signatures (AST-derived) — cheap, no re-parse.
-    hits.extend(structural_index_pass(store, options, parsed)?);
-    Ok(hits)
-}
 
 /// Boost hybrid recall with pre-indexed pattern_nodes (decls/calls extracted at index time).
 fn structural_index_pass(
     store: &IndexStore,
     options: &SearchOptions,
     parsed: &ParsedQuery,
+    allowed_files: &HashSet<String>,
 ) -> Result<Vec<SearchHit>> {
     use crate::rank::SCORE_PATTERN;
     use crate::search::types::{HitKind, SpanHitInput};
@@ -353,7 +381,9 @@ fn structural_index_pass(
         ];
         for sig in &signatures {
             for row in store.pattern_nodes_matching(sig, lang)? {
-                if !seen.insert((row.path.clone(), row.line_start, row.line_end)) {
+                if !allowed_files.contains(&row.path)
+                    || !seen.insert((row.path.clone(), row.line_start, row.line_end))
+                {
                     continue;
                 }
                 hits.push(SearchHit::span(SpanHitInput {
@@ -370,45 +400,6 @@ fn structural_index_pass(
         }
     }
     Ok(hits)
-}
-fn run_parallel_passes(
-    root: &Path,
-    index_path: Option<&Path>,
-    options: &SearchOptions,
-    parsed: &ParsedQuery,
-) -> Result<Vec<SearchHit>> {
-    let (parsed, options, root, index_path) = (
-        parsed.clone(),
-        options.clone(),
-        root.to_path_buf(),
-        index_path.map(|p| p.to_path_buf()),
-    );
-    thread::scope(|scope| {
-        let lex = scope.spawn(|| {
-            let store = IndexStore::open(&root, index_path.as_deref())?;
-            lexical_pass(&store, &options, &parsed)
-        });
-        let sym = scope.spawn(|| {
-            let store = IndexStore::open(&root, index_path.as_deref())?;
-            symbol_pass(&store, &options, &parsed)
-        });
-        let anchor = scope.spawn(|| {
-            let store = IndexStore::open(&root, index_path.as_deref())?;
-            anchor_pass(&store, &options, &parsed)
-        });
-        let structural = scope.spawn(|| {
-            let store = IndexStore::open(&root, index_path.as_deref())?;
-            structural_index_pass(&store, &options, &parsed)
-        });
-        let mut hits = join_worker(lex.join())?;
-        hits.extend(join_worker(sym.join())?);
-        hits.extend(join_worker(anchor.join())?);
-        hits.extend(join_worker(structural.join())?);
-        Ok(hits)
-    })
-}
-fn join_worker<T>(join: thread::Result<Result<T>>) -> Result<T> {
-    join.map_err(|e| crate::StoreError::Other(format!("search worker panicked: {e:?}")))?
 }
 fn identifier_tokens(symbol: &str) -> Vec<String> {
     let mut tokens = Vec::new();
@@ -893,6 +884,83 @@ mod tests {
             ]
         );
     }
+    #[test]
+    fn literal_prefilter_handles_trigram_casefold_short_terms_and_bounds() {
+        use crate::store::UpsertFileInput;
+        use tempfile::TempDir;
+
+        let temp = TempDir::new().unwrap();
+        let store = IndexStore::open(temp.path(), None).unwrap();
+        let mut lines = (1..=1_000)
+            .map(|line| (line, format!("filler line {line}")))
+            .collect::<Vec<_>>();
+        lines.push((1_001, "NeedleCase id".to_string()));
+        store
+            .upsert_file(UpsertFileInput {
+                rel_path: "large.rs",
+                language: Some("rust"),
+                mtime_secs: 1,
+                mtime_nanos: 0,
+                content_hash: "large",
+                lines: &lines,
+                eol: "\n",
+                symbols: &[],
+                callers: &[],
+                imports: &[],
+                pattern_nodes: &[],
+                semantic_chunks: &[],
+                embed_semantic: false,
+                embed_backend: ast_sgrep_embed::EmbedPreference::Semantic,
+            })
+            .unwrap();
+        let options = SearchOptions {
+            root: temp.path().to_path_buf(),
+            ..SearchOptions::default()
+        };
+        let hits =
+            literal_prefilter_pass(&store, &options, &ParsedQuery::parse("needlecase id")).unwrap();
+        assert!(hits.iter().any(|hit| hit.excerpt == "NeedleCase id"));
+
+        for index in 0..120 {
+            let path = format!("bound-{index:03}.rs");
+            let term = if index < 60 {
+                "alphauniqueterm"
+            } else {
+                "betauniqueterm"
+            };
+            let bound_lines = [(1, term.to_string())];
+            store
+                .upsert_file(UpsertFileInput {
+                    rel_path: &path,
+                    language: Some("rust"),
+                    mtime_secs: 1,
+                    mtime_nanos: 0,
+                    content_hash: &path,
+                    lines: &bound_lines,
+                    eol: "\n",
+                    symbols: &[],
+                    callers: &[],
+                    imports: &[],
+                    pattern_nodes: &[],
+                    semantic_chunks: &[],
+                    embed_semantic: false,
+                    embed_backend: ast_sgrep_embed::EmbedPreference::Semantic,
+                })
+                .unwrap();
+        }
+        let bounded = literal_prefilter_pass(
+            &store,
+            &options,
+            &ParsedQuery::parse("alphauniqueterm betauniqueterm"),
+        )
+        .unwrap();
+        let files = bounded
+            .iter()
+            .map(|hit| hit.file.as_str())
+            .collect::<HashSet<_>>();
+        assert_eq!(files.len(), CASCADE_PREFILTER_FILE_LIMIT);
+    }
+
     #[test]
     fn hybrid_cap_and_limit_are_reapplied_after_rerank() {
         let hits = vec![

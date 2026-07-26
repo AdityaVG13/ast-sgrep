@@ -5,7 +5,7 @@ use crate::semantic_ann::rank_chunk_indices_flat;
 use crate::store::IndexStore;
 use crate::Result;
 use ast_sgrep_embed::{embed_query, SemanticChunkRow};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 const EMBED_HIT_LIMIT: usize = 50;
 pub struct EmbedContext {
@@ -72,6 +72,43 @@ pub fn embed_pass_lazy_ivf(
         ast_sgrep_embed::rank_chunk_indices_by_vector(&query_vec, &chunks, EMBED_HIT_LIMIT);
     Ok(Some(embed_similarity_hits(&chunks, ranked)))
 }
+pub fn embed_pass_for_files(
+    store: &IndexStore,
+    options: &SearchOptions,
+    parsed: &ParsedQuery,
+    allowed_files: &HashSet<String>,
+) -> Result<Vec<SearchHit>> {
+    if parsed.terms.is_empty() || !options.use_embed || allowed_files.is_empty() {
+        return Ok(Vec::new());
+    }
+    let query = parsed.terms.join(" ");
+    let mut survivors =
+        store.semantic_chunks_for_files(allowed_files, options.lang_filter.as_deref())?;
+    let modern_files = survivors
+        .iter()
+        .map(|chunk| chunk.0.clone())
+        .collect::<HashSet<_>>();
+    let legacy_only_files = allowed_files
+        .difference(&modern_files)
+        .cloned()
+        .collect::<HashSet<_>>();
+    survivors.extend(
+        store.legacy_embeddings_for_files(&legacy_only_files, options.lang_filter.as_deref())?,
+    );
+    if survivors.is_empty() {
+        return Ok(Vec::new());
+    }
+    let query_vec = embed_query_vector(
+        store,
+        options,
+        &query,
+        survivors.first().map(|chunk| chunk.5.len()),
+    )?;
+    let ranked =
+        ast_sgrep_embed::rank_chunk_indices_by_vector(&query_vec, &survivors, EMBED_HIT_LIMIT);
+    Ok(embed_similarity_hits(&survivors, ranked))
+}
+
 pub fn embed_pass_with_context(
     store: &IndexStore,
     options: &SearchOptions,
@@ -186,4 +223,105 @@ fn embed_legacy_hits(
         &chunks,
         ast_sgrep_embed::rank_chunk_indices_by_vector(&query_vec, &chunks, EMBED_HIT_LIMIT),
     ))
+}
+
+#[cfg(test)]
+mod cascade_tests {
+    use super::embed_pass_for_files;
+    use crate::query::ParsedQuery;
+    use crate::search::SearchOptions;
+    use crate::semantic_chunk::SemanticChunkInput;
+    use crate::store::{IndexStore, UpsertFileInput};
+    use std::collections::HashSet;
+    use tempfile::TempDir;
+
+    #[test]
+    fn cascade_ranks_modern_and_legacy_vectors_in_allowed_files() {
+        let temp = TempDir::new().unwrap();
+        let store = IndexStore::open(temp.path(), None).unwrap();
+        let lines = [(1, "fn renewal_handler() {}".to_string())];
+        store
+            .upsert_file(UpsertFileInput {
+                rel_path: "allowed.rs",
+                language: Some("rust"),
+                mtime_secs: 1,
+                mtime_nanos: 0,
+                content_hash: "legacy",
+                lines: &lines,
+                eol: "\n",
+                symbols: &[],
+                callers: &[],
+                imports: &[],
+                pattern_nodes: &[],
+                semantic_chunks: &[],
+                embed_semantic: false,
+                embed_backend: ast_sgrep_embed::EmbedPreference::Semantic,
+            })
+            .unwrap();
+        let file_id = store.file_id("allowed.rs").unwrap().unwrap();
+        let vector = ast_sgrep_embed::embed_query(
+            "renewal handler",
+            None,
+            0,
+            ast_sgrep_embed::EmbedPreference::Semantic,
+        )
+        .unwrap()
+        .vector;
+        store
+            .connection()
+            .execute(
+                "INSERT INTO embeddings(file_id, line_no, vector) VALUES(?1, ?2, ?3)",
+                rusqlite::params![file_id, 1, ast_sgrep_embed::embed_to_bytes(&vector)],
+            )
+            .unwrap();
+
+        let modern_lines = [(1, "fn payment_renewal() {}".to_string())];
+        let modern_chunks = [SemanticChunkInput {
+            symbol_name: "payment_renewal".into(),
+            kind: "function".into(),
+            line_start: 1,
+            line_end: 1,
+            excerpt: "payment renewal modern handler".into(),
+            callers: Vec::new(),
+            callees: Vec::new(),
+            doc: String::new(),
+            scope: String::new(),
+        }];
+        store
+            .upsert_file(UpsertFileInput {
+                rel_path: "modern.rs",
+                language: Some("rust"),
+                mtime_secs: 1,
+                mtime_nanos: 0,
+                content_hash: "modern",
+                lines: &modern_lines,
+                eol: "\n",
+                symbols: &[],
+                callers: &[],
+                imports: &[],
+                pattern_nodes: &[],
+                semantic_chunks: &modern_chunks,
+                embed_semantic: true,
+                embed_backend: ast_sgrep_embed::EmbedPreference::Semantic,
+            })
+            .unwrap();
+
+        let allowed = HashSet::from(["allowed.rs".to_string(), "modern.rs".to_string()]);
+        let hits = embed_pass_for_files(
+            &store,
+            &SearchOptions {
+                root: temp.path().to_path_buf(),
+                use_embed: true,
+                ..SearchOptions::default()
+            },
+            &ParsedQuery::parse("renewal handler"),
+            &allowed,
+        )
+        .unwrap();
+        let hit_files = hits
+            .iter()
+            .map(|hit| hit.file.as_str())
+            .collect::<HashSet<_>>();
+        assert_eq!(hit_files, HashSet::from(["allowed.rs", "modern.rs"]));
+    }
 }
