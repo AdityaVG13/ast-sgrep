@@ -220,6 +220,9 @@ mod tests {
         assert_eq!(v.len(), SEMANTIC_DIM);
         assert!(v.iter().all(|x| x.is_finite()));
         let norm: f32 = v.iter().map(|x| x * x).sum::<f32>().sqrt();
-        assert!((norm - 1.0).abs() < 1e-4, "vector must be normalized, got norm {norm}");
+        assert!(
+            (norm - 1.0).abs() < 1e-4,
+            "vector must be normalized, got norm {norm}"
+        );
     }
 }
