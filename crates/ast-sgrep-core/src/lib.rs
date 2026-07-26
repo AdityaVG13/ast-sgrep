@@ -1,6 +1,7 @@
 use thiserror::Error;
 pub mod bench_suite;
 pub mod chain;
+pub mod fusion;
 pub mod gitignore;
 pub mod index;
 pub mod intent;
@@ -37,6 +38,10 @@ pub mod text {
 pub mod output {
     pub use crate::search::format_hit_line;
 }
+pub use fusion::{
+    analyze_weight_sensitivity, learn_fusion_weights, ChannelRanks, FusionCandidate, FusionChannel,
+    FusionExample, LearnedFusionModel, WeightSensitivity,
+};
 pub use index::{EmbedBackend, FileIndexStats, IndexOptions, IndexStats, Indexer};
 pub use output::format_hit_line;
 pub use pattern::search_pattern;

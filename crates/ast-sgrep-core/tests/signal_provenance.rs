@@ -89,11 +89,13 @@ fn legacy_and_spoofed_json_decode_to_kind_derived_signal() {
     });
     let decoded: SearchHit = serde_json::from_value(legacy).unwrap();
     assert_eq!(decoded.signal, HitSignal::Semantic);
+    assert_eq!(decoded.contributors, vec![HitKind::Embed]);
     assert_eq!(decoded.margin, 0.0);
 
     let spoofed = serde_json::json!({
         "kind": "embed",
         "signal": "exact",
+        "contributors": ["asgrep", "def"],
         "margin": -4.0,
         "file": "src/lib.rs",
         "line_start": 1,
@@ -103,6 +105,7 @@ fn legacy_and_spoofed_json_decode_to_kind_derived_signal() {
     });
     let decoded: SearchHit = serde_json::from_value(spoofed).unwrap();
     assert_eq!(decoded.signal, HitSignal::Semantic);
+    assert_eq!(decoded.contributors, vec![HitKind::Embed]);
     assert_eq!(decoded.margin, 0.0);
 }
 

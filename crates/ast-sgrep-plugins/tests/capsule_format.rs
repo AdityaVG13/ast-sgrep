@@ -19,6 +19,7 @@ fn sample() -> SearchResponse {
                 language: Some("rust".into()),
                 score: 5.5,
                 signal: HitSignal::Structural,
+                contributors: vec![HitKind::Def, HitKind::Embed],
                 margin: 0.0,
                 excerpt: "fn auth_refresh() {\n    renew_token();\n    log();\n}".into(),
             },
@@ -33,6 +34,7 @@ fn sample() -> SearchResponse {
                 language: Some("rust".into()),
                 score: 3.2,
                 signal: HitSignal::Structural,
+                contributors: vec![HitKind::Caller],
                 margin: 0.0,
                 excerpt: format!("   \n{long}"),
             },
@@ -54,6 +56,7 @@ fn capsule_hits_carry_refs_and_previews_without_bodies() {
     assert_eq!(hits[0]["symbol"], "auth_refresh");
     assert_eq!(hits[0]["preview"], "fn auth_refresh() {");
     assert_eq!(hits[0]["signal"], "structural");
+    assert_eq!(hits[0]["contributors"], serde_json::json!(["def", "embed"]));
     assert_eq!(hits[0]["margin"], 0.0);
     assert!(hits[0].get("excerpt").is_none(), "no body by default");
     assert_eq!(hits[1]["symbol"], serde_json::Value::Null);
@@ -66,6 +69,11 @@ fn capsule_hits_carry_refs_and_previews_without_bodies() {
     assert_ne!(capsule["returned_excerpt_bytes"], 350);
     assert_eq!(agent["prevented_read_bytes"], 650);
     assert_eq!(agent["hits"][0]["signal"], "structural");
+    assert_eq!(
+        agent["hits"][0]["contributors"],
+        serde_json::json!(["def", "embed"])
+    );
+    assert_eq!(agent["hits"][0]["semantic"], true);
     assert_eq!(agent["hits"][0]["margin"], 0.0);
     assert_eq!(capsule["prevented_read_bytes"], 650);
 }
@@ -77,6 +85,10 @@ fn github_page_at_limit_is_marked_incomplete() {
     assert_eq!(github["total_count"], response.hits.len());
     assert_eq!(github["incomplete_results"], true);
     assert_eq!(github["items"][0]["metadata"]["signal"], "structural");
+    assert_eq!(
+        github["items"][0]["metadata"]["contributors"],
+        serde_json::json!(["def", "embed"])
+    );
     assert_eq!(github["items"][0]["metadata"]["margin"], 0.0);
 }
 #[test]
@@ -89,5 +101,8 @@ fn gitlab_projection_documents_absent_repository_context() {
         hits.iter().all(|h| h["ref"] == "HEAD") && hits.iter().all(|h| h["project_id"].is_null())
     );
     assert!(hits.iter().all(|hit| hit["meta"]["signal"] == "structural"));
+    assert!(hits
+        .iter()
+        .all(|hit| hit["meta"]["contributors"].is_array()));
     assert!(hits.iter().all(|hit| hit["meta"]["margin"] == 0.0));
 }

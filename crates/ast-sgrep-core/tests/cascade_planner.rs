@@ -39,7 +39,21 @@ fn hybrid_query_cascades_lexical_files_into_structural_and_semantic_stages() {
         .map(|hit| hit.signal)
         .collect::<HashSet<_>>();
     assert!(signals.contains(&HitSignal::Structural));
-    assert!(signals.contains(&HitSignal::Semantic));
+    let identities = response
+        .hits
+        .iter()
+        .map(|hit| (hit.file.as_str(), hit.line_start))
+        .collect::<HashSet<_>>();
+    assert_eq!(identities.len(), response.hits.len());
+    assert!(response.hits.iter().all(|hit| !hit.contributors.is_empty()));
+    assert!(response.hits.iter().any(|hit| hit
+        .contributors
+        .contains(&ast_sgrep_core::search::HitKind::Embed)));
+    assert!(
+        response.hits.iter().any(|hit| hit.contributors.len() > 1),
+        "fixture must exercise multi-channel fusion: {:#?}",
+        response.hits
+    );
     assert!(
         response
             .hits

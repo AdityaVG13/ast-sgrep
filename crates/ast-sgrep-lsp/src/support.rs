@@ -330,8 +330,8 @@ pub fn workspace_symbol(root: &Path, file: &str, hit: &SearchHit) -> Option<Valu
     );
     Some(json!({
         "name": name, "kind": kind, "location": location_value(root, file, hit.line_start, hit.line_end), "containerName": file, "detail": detail,
-        "data": { "asgrepKind": hit.kind.as_str(), "signal": hit.signal, "score": hit.score, "margin": hit.margin,
-            "excerpt": hit.excerpt.chars().take(120).collect::<String>(), "semantic": hit.kind == HitKind::Embed }
+        "data": { "asgrepKind": hit.kind.as_str(), "signal": hit.signal, "contributors": hit.contributors, "score": hit.score, "margin": hit.margin,
+            "excerpt": hit.excerpt.chars().take(120).collect::<String>(), "semantic": hit.contributors.contains(&HitKind::Embed) }
     }))
 }
 pub fn location_value(root: &Path, file: &str, line_start: u32, line_end: u32) -> Value {

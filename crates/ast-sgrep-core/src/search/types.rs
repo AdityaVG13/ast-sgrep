@@ -72,6 +72,7 @@ pub struct SearchHit {
     pub language: Option<String>,
     pub score: f64,
     pub signal: HitSignal,
+    pub contributors: Vec<HitKind>,
     pub margin: f64,
     pub excerpt: String,
 }
@@ -89,6 +90,8 @@ struct SearchHitWire {
     #[serde(default)]
     signal: Option<HitSignal>,
     #[serde(default)]
+    contributors: Vec<HitKind>,
+    #[serde(default)]
     margin: f64,
     excerpt: String,
 }
@@ -99,6 +102,7 @@ impl<'de> serde::Deserialize<'de> for SearchHit {
     {
         let wire = <SearchHitWire as serde::Deserialize>::deserialize(deserializer)?;
         let _untrusted_signal = wire.signal;
+        let _untrusted_contributors = wire.contributors;
         Ok(Self {
             kind: wire.kind,
             file: wire.file,
@@ -110,6 +114,7 @@ impl<'de> serde::Deserialize<'de> for SearchHit {
             language: wire.language,
             score: wire.score,
             signal: wire.kind.signal(),
+            contributors: vec![wire.kind],
             margin: if wire.margin.is_finite() {
                 wire.margin.max(0.0)
             } else {
@@ -150,6 +155,7 @@ impl SearchHit {
             language: None,
             score,
             signal: kind.signal(),
+            contributors: vec![kind],
             margin: 0.0,
             excerpt,
         }

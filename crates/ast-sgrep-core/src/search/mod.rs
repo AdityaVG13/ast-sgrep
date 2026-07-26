@@ -161,6 +161,8 @@ impl Searcher {
                 QueryMode::Hybrid => {
                     let mut hits = self.search_hybrid(&parsed)?;
                     crate::intent::route_hits(&parsed, &mut hits);
+                    let weights = crate::intent::weights_for(crate::intent::classify(&parsed));
+                    crate::fusion::apply_weighted_rrf(&mut hits, &weights);
                     hits
                 }
             };
@@ -789,6 +791,7 @@ mod tests {
             language: None,
             score,
             signal: HitSignal::Exact,
+            contributors: vec![HitKind::Asgrep],
             margin: 0.0,
             excerpt: String::new(),
         }

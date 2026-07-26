@@ -4,6 +4,7 @@ use crate::rank::{
     SCORE_EMBED, SCORE_EXACT_SYMBOL, SCORE_GRAPH, SCORE_PATTERN,
 };
 use crate::search::{HitKind, SearchHit};
+use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum QueryIntent {
     Literal,
@@ -76,7 +77,7 @@ fn ident_like(token: &str) -> bool {
     }
     false
 }
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ChannelWeights {
     pub lexical: f64,
     pub def: f64,
@@ -85,6 +86,7 @@ pub struct ChannelWeights {
     pub anchor: f64,
     pub embed: f64,
     pub pattern: f64,
+    pub import: f64,
 }
 impl Default for ChannelWeights {
     fn default() -> Self {
@@ -96,6 +98,7 @@ impl Default for ChannelWeights {
             anchor: 1.0,
             embed: 1.0,
             pattern: 1.0,
+            import: 1.0,
         }
     }
 }
@@ -108,7 +111,8 @@ pub fn default_weights(intent: QueryIntent) -> ChannelWeights {
             graph: 0.7,
             anchor: 0.8,
             embed: 1.1,
-            pattern: 0.1,
+            pattern: 0.25,
+            import: 0.8,
         },
         QueryIntent::Symbol => ChannelWeights {
             lexical: 1.0,
@@ -118,6 +122,7 @@ pub fn default_weights(intent: QueryIntent) -> ChannelWeights {
             anchor: 1.0,
             embed: 0.8,
             pattern: 0.25,
+            import: 1.0,
         },
         _ => ChannelWeights::default(),
     }
@@ -156,6 +161,7 @@ fn apply_spec(weights: &mut ChannelWeights, intent: QueryIntent, spec: &str) {
                 "anchor" => weights.anchor = v,
                 "embed" => weights.embed = v,
                 "pattern" => weights.pattern = v,
+                "import" => weights.import = v,
                 _ => {}
             }
         }
@@ -198,7 +204,7 @@ pub fn route_hits(parsed: &ParsedQuery, hits: &mut [SearchHit]) {
             HitKind::Anchor => w.anchor,
             HitKind::Embed => w.embed,
             HitKind::Pattern => w.pattern,
-            HitKind::Import => 1.0,
+            HitKind::Import => w.import,
         };
         hit.score =
             (hit.score / channel_ceiling(hit.kind, substantive_terms)).clamp(0.0, 1.0) * weight;

@@ -19,7 +19,8 @@ Canonical entry points for humans and agents. Prefer this list over scavenging t
 | [how-it-works.md](how-it-works.md) | Pipeline narrative and incremental indexing |
 | [QUERY_GRAMMAR.md](QUERY_GRAMMAR.md) | Prefixes, composition, routing contract |
 | [semantic-search.md](semantic-search.md) | Symbol chunks, provider chain, IVF-ANN, tuning |
-| [cascade-query-planner.md](cascade-query-planner.md) | Lexical, AST, and semantic stage-survivor contract |
+| [cascade-query-planner.md](cascade-query-planner.md) | Literal/trigram, AST, and semantic stage-survivor contract |
+| [fusion-ranking.md](fusion-ranking.md) | Weighted RRF, learned weights, and sensitivity analysis |
 | [signal-provenance.md](signal-provenance.md) | Exact, structural, semantic tiers and margin semantics |
 | [mcp.md](mcp.md) | `asgrep-mcp` setup for agents |
 | [use-cases.md](use-cases.md) | Agents, LSP, JSON formats, CI patterns |

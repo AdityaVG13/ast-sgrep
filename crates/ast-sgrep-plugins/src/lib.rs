@@ -43,7 +43,7 @@ pub fn to_github_json(response: &SearchResponse) -> serde_json::Value {
         "name": hit.file.rsplit('/').next().unwrap_or(&hit.file), "path": hit.file, "score": hit.score, "language": hit.language,
         "text_matches": [{"fragment": hit.excerpt, "matches": [ { "text": hit.symbol.as_deref().or(hit.callee.as_deref()).unwrap_or(""), "indices": [0] }]}],
         "metadata": {
-            "kind": hit.kind.as_str(), "signal": hit.signal, "score": hit.score, "margin": hit.margin,
+            "kind": hit.kind.as_str(), "signal": hit.signal, "contributors": hit.contributors, "score": hit.score, "margin": hit.margin,
             "line_start": hit.line_start, "line_end": hit.line_end,
             "symbol": hit.symbol, "caller": hit.caller, "callee": hit.callee, }
     })).collect();
@@ -59,7 +59,7 @@ pub fn to_gitlab_json(response: &SearchResponse) -> serde_json::Value {
         "basename": hit.file.rsplit('/').next().unwrap_or(&hit.file), "data": hit.excerpt,
         "path": hit.file, "filename": hit.file, "ref": "HEAD", "startline": hit.line_start, "project_id": null,
         "meta": {
-            "kind": hit.kind.as_str(), "signal": hit.signal, "score": hit.score, "margin": hit.margin,
+            "kind": hit.kind.as_str(), "signal": hit.signal, "contributors": hit.contributors, "score": hit.score, "margin": hit.margin,
             "language": hit.language,
             "line_end": hit.line_end, "symbol": hit.symbol, "caller": hit.caller, "callee": hit.callee, }
     })).collect();
@@ -77,7 +77,7 @@ pub fn to_agent_json(response: &SearchResponse) -> serde_json::Value {
         let mut follow_ups = Vec::new();
         if let Some(sym) = symbol { follow_ups.push(format!("defs:{sym}")); follow_ups.push(format!("callers:{sym}")); }
         serde_json::json!({
-            "kind": hit.kind.as_str(), "signal": hit.signal, "semantic": hit.kind == HitKind::Embed,
+            "kind": hit.kind.as_str(), "signal": hit.signal, "contributors": hit.contributors, "semantic": hit.contributors.contains(&HitKind::Embed),
             "score": hit.score, "margin": hit.margin,
             "file": hit.file, "lines": {"start": hit.line_start, "end": hit.line_end},
             "symbol": hit.symbol, "caller": hit.caller, "callee": hit.callee, "language": hit.language,
@@ -110,7 +110,7 @@ pub fn to_agent_capsule_json(response: &SearchResponse, excerpt_lines: usize) ->
     let hits: Vec<_> = response.hits.iter().map(|hit| {
         let mut capsule = serde_json::json!({
             "file": hit.file, "lines": {"start": hit.line_start, "end": hit.line_end}, "symbol": hit.symbol, "caller": hit.caller, "callee": hit.callee,
-            "kind": hit.kind.as_str(), "signal": hit.signal, "score": hit.score, "margin": hit.margin,
+            "kind": hit.kind.as_str(), "signal": hit.signal, "contributors": hit.contributors, "score": hit.score, "margin": hit.margin,
             "preview": preview_line(&hit.excerpt),
             "ref": format!("{}#L{}-L{}", hit.file, hit.line_start, hit.line_end), });
         if excerpt_lines > 0 {
