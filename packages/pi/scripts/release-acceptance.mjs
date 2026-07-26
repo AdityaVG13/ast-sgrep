@@ -10,6 +10,14 @@ const fail = (code, message) => { throw new Error(`${code}: ${message}`); };
 const readJson = async (file) => JSON.parse(await readFile(file, 'utf8'));
 const canonical = (value) => JSON.stringify(value, null, 2) + '\n';
 const sha256 = async (file) => createHash('sha256').update(await readFile(file)).digest('hex');
+const matchesSha512Integrity = async (file, integrity) => {
+  if (typeof integrity !== 'string') return false;
+  const actual = createHash('sha512').update(await readFile(file)).digest('base64');
+  return integrity.trim().split(/\s+/u).some((token) => {
+    const value = token.split('?', 1)[0];
+    return value.startsWith('sha512-') && value.slice('sha512-'.length) === actual;
+  });
+};
 const delay = (ms) => new Promise((resolve) => { setTimeout(resolve, ms); });
 const option = (name, fallback) => {
   const index = process.argv.indexOf(`--${name}`);
@@ -151,18 +159,24 @@ const verify = async (directoryOption) => {
   console.log(`[pi-release] verified ${manifest.artifacts.length} immutable artifacts at ${manifest.version}`);
   return { state, directory, manifest };
 };
-const registryVersions = async (state, snapshotPath) => {
-  if (snapshotPath) return await readJson(path.resolve(snapshotPath));
-  const observed = {};
-  for (const name of packageOrder(state)) {
-    const spec = `${name}@${state.version}`;
-    const result = spawnSync('npm', ['view', spec, 'version', '--json'], { cwd: root, encoding: 'utf8', windowsHide: true });
-    if (result.status === 0) observed[spec] = JSON.parse(result.stdout || 'null');
-    else if (/E404|404 Not Found|is not in this registry/u.test(result.stderr + result.stdout)) observed[spec] = null;
-    else fail('ASGREP_RELEASE_REGISTRY', `could not establish immutability for ${spec}: ${(result.stderr || result.stdout).trim()}`);
-  }
-  return observed;
-};
+  const registryVersions = async (state, snapshotPath) => {
+    if (snapshotPath) return await readJson(path.resolve(snapshotPath));
+    const observed = {};
+    for (const name of packageOrder(state)) {
+      const spec = `${name}@${state.version}`;
+      const versionResult = spawnSync('npm', ['view', spec, 'version', '--json'], { cwd: root, encoding: 'utf8', windowsHide: true });
+      if (versionResult.status === 0) {
+        const integrityResult = spawnSync('npm', ['view', spec, 'dist.integrity', '--json'], { cwd: root, encoding: 'utf8', windowsHide: true });
+        if (integrityResult.status !== 0) fail('ASGREP_RELEASE_REGISTRY', `could not read integrity for ${spec}: ${(integrityResult.stderr || integrityResult.stdout).trim()}`);
+        observed[spec] = {
+          version: JSON.parse(versionResult.stdout || 'null'),
+          integrity: JSON.parse(integrityResult.stdout || 'null'),
+        };
+      } else if (/E404|404 Not Found|is not in this registry/u.test(versionResult.stderr + versionResult.stdout)) observed[spec] = null;
+      else fail('ASGREP_RELEASE_REGISTRY', `could not establish immutability for ${spec}: ${(versionResult.stderr || versionResult.stdout).trim()}`);
+    }
+    return observed;
+  };
 const gateState = (state, input, observed) => {
   if (!input.clean) fail('ASGREP_RELEASE_DIRTY', 'release checkout must be clean');
   if (input.refType !== 'tag' || input.tag !== state.contract.canonicalVersion.tag) fail('ASGREP_RELEASE_TAG_VERSION', `expected official tag ${state.contract.canonicalVersion.tag}`);
@@ -191,6 +205,7 @@ const gate = async () => {
 const validatePublishContext = (state, manifest, environment = process.env) => {
   if (environment.GITHUB_ACTIONS !== 'true' || !environment.ACTIONS_ID_TOKEN_REQUEST_URL) fail('ASGREP_RELEASE_OIDC_REQUIRED', 'publication is only allowed from GitHub Actions OIDC');
   if (environment.ASGREP_NPM_PROTECTED_ENVIRONMENT !== 'npm-production') fail('ASGREP_RELEASE_PROTECTED_ENVIRONMENT', 'npm-production approval marker is required');
+  if (environment.ASGREP_NPM_OWNERSHIP_APPROVED !== 'true') fail('ASGREP_RELEASE_OWNERSHIP_APPROVAL', 'protected environment must record package-name and publisher-ownership approval');
   if (environment.GITHUB_REF_TYPE !== 'tag' || environment.GITHUB_REF_NAME !== state.contract.canonicalVersion.tag) fail('ASGREP_RELEASE_TAG_VERSION', 'publication context is not the canonical official tag');
   if (environment.GITHUB_SHA?.toLowerCase() !== manifest.commit?.toLowerCase()) fail('ASGREP_RELEASE_TAG_COMMIT', 'preserved artifacts do not match the workflow commit');
 };
@@ -205,11 +220,18 @@ const publish = async () => {
   if (JSON.stringify(receipt.published) !== JSON.stringify(expectedPrior)) fail('ASGREP_RELEASE_PUBLISH_ORDER', `${layer} cannot publish after [${receipt.published.join(', ')}]`);
   const selected = manifest.artifacts.filter((artifact) => artifact.layer === layer);
   const observed = await registryVersions(state);
-  const publishDelayMs = Math.max(0, Number(process.env.ASGREP_PUBLISH_DELAY_MS ?? '0'));
+  for (const artifact of manifest.artifacts) {
+      const live = observed[`${artifact.name}@${manifest.version}`];
+      if (live !== null && (typeof live !== 'object' || live.version !== manifest.version || !await matchesSha512Integrity(path.join(directory, artifact.filename), live.integrity))) {
+        fail('ASGREP_RELEASE_REGISTRY_INTEGRITY', `${artifact.name}@${manifest.version} differs from the preserved release artifact`);
+      }
+    }
+    const publishDelayMs = Math.max(0, Number(process.env.ASGREP_PUBLISH_DELAY_MS ?? '0'));
   const published = [];
   for (const artifact of selected) {
-    if (observed[`${artifact.name}@${manifest.version}`] !== null) {
-      console.log(`[pi-release] skip ${artifact.name}@${manifest.version}: already live (idempotent re-run)`);
+    const live = observed[`${artifact.name}@${manifest.version}`];
+    if (live !== null) {
+      console.log(`[pi-release] skip ${artifact.name}@${manifest.version}: identical tarball already live (idempotent re-run)`);
     } else {
       if (publishDelayMs > 0) await delay(publishDelayMs);
       run('npm', ['publish', path.join(directory, artifact.filename), '--access', 'public', '--provenance'], { stdio: 'inherit' });
@@ -258,7 +280,13 @@ const selfTest = async () => {
   expect('missing-checksum', () => validateChecksumRecord(state.matrix.targets[0], null, '0'.repeat(64)));
   expect('checksum-mismatch', () => validateChecksumRecord(state.matrix.targets[0], `${'1'.repeat(64)}  asgrep`, '0'.repeat(64)));
   expect('local-publish', () => validatePublishContext(state, { commit }, {}));
-  console.log(`[pi-release] gate self-test accepted canonical input and rejected ${rejected.join(', ')}`);
+  const sriRoot = await mkdtemp(path.join(tmpdir(), 'asgrep-sri-'));
+    const sriFile = path.join(sriRoot, 'artifact.tgz');
+    await writeFile(sriFile, 'immutable tarball');
+    const digest = createHash('sha512').update(await readFile(sriFile)).digest('base64');
+    if (!await matchesSha512Integrity(sriFile, `sha256-ignored sha512-${digest}?foo=bar`) || await matchesSha512Integrity(sriFile, 'sha512-wrong')) fail('ASGREP_RELEASE_SELF_TEST', 'SRI semantic verification failed');
+    await rm(sriRoot, { recursive: true, force: true });
+    console.log(`[pi-release] gate self-test accepted canonical input and rejected ${rejected.join(', ')}`);
   console.log(`[pi-release] publish order: ${packageOrder(state).join(' -> ')}`);
   console.log('[pi-release] publication: disabled (self-test only)');
 };

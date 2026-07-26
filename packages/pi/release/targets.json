@@ -16,7 +16,7 @@
       "id": "darwin-x64",
       "package": "@ast-sgrep/darwin-x64",
       "rustTarget": "x86_64-apple-darwin",
-      "runner": "macos-14",
+      "runner": "macos-15-intel",
       "os": "darwin",
       "cpu": "x64",
       "libc": null,

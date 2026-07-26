@@ -32,6 +32,7 @@ const validate = (text) => {
   report(load?.outputs?.matrix === '${{ steps.targets.outputs.matrix }}', 'target matrix output expression is invalid');
   report(native?.strategy?.matrix === '${{ fromJSON(needs.target-matrix.outputs.matrix) }}', 'native matrix expression is invalid');
   report(native?.['runs-on'] === '${{ matrix.runner }}', 'native job must run on the matrix runner');
+  report((native?.steps ?? []).some((step) => step.uses === 'dtolnay/rust-toolchain@1.97.1'), 'native workflow must pin Rust 1.97.1');
   const loadRuns = (load?.steps ?? []).map(activeRun);
   report(loadRuns.some((run) => run.includes('node packages/pi/scripts/release-artifact.mjs matrix')), 'authoritative matrix command is missing');
   report(loadRuns.some((run) => run.includes('node packages/pi/scripts/check-contract.mjs') && run.includes('node packages/pi/scripts/check-native-workflow.mjs')), 'contract checker commands are missing');
@@ -71,6 +72,10 @@ const validateOfficial = (text, signersText = allowedSignersText) => {
   const publish = workflow.jobs?.publish;
   const bootstrapToken = "${{ inputs.bootstrap_token && secrets.NPM_TOKEN || '' }}";
   report(build?.strategy?.matrix === '${{ fromJSON(needs.release-gate.outputs.matrix) }}' && build?.['runs-on'] === '${{ matrix.runner }}', 'official native build must use the authoritative native matrix once');
+  report((build?.steps ?? []).some((step) => step.uses === 'dtolnay/rust-toolchain@1.97.1'), 'official native builds must pin Rust 1.97.1');
+  report((text.match(/dtolnay\/rust-toolchain@1\.97\.1/gu) ?? []).length === 2, 'both official Rust setup steps must pin 1.97.1');
+  const buildRuns = (build?.steps ?? []).map(activeRun).join('\n');
+  report(buildRuns.includes('npm install --no-audit --no-fund --prefix "$clean"') && buildRuns.includes('ci-install-smoke.mjs'), 'official native artifacts must be clean-installed and executed on every matrix runner');
   const gateRuns = (gate?.steps ?? []).map(activeRun);
   const sshSetup = 'git config --local gpg.format ssh\ngit config --local gpg.ssh.allowedSignersFile \"$GITHUB_WORKSPACE/packages/pi/release/allowed-signers\"';
   const sshSetupIndex = gateRuns.indexOf(sshSetup);
@@ -82,7 +87,9 @@ const validateOfficial = (text, signersText = allowedSignersText) => {
   const verifyRuns = (verify?.steps ?? []).map(activeRun).join('\n');
   report(verifyRuns.includes('release-acceptance.mjs pack --native-root dist/native') && verifyRuns.includes('release-acceptance.mjs verify --artifacts npm-packs') && verifyRuns.includes('npm run test:pi-e2e'), 'official release must pack and verify the complete family exactly once');
   report(verify?.permissions?.['id-token'] === 'write' && verify?.permissions?.attestations === 'write' && (verify?.steps ?? []).some((step) => step.uses === 'actions/attest-build-provenance@v2'), 'artifact provenance attestation is missing');
-  report(publish?.environment === 'npm-production' && publish?.env?.ASGREP_NPM_PROTECTED_ENVIRONMENT === 'npm-production' && publish?.permissions?.['id-token'] === 'write' && publish?.needs === 'verify-release', 'npm publication must use protected npm-production OIDC after verification');
+  report(publish?.environment === 'npm-production' && publish?.env?.ASGREP_NPM_PROTECTED_ENVIRONMENT === 'npm-production' && publish?.env?.ASGREP_NPM_OWNERSHIP_APPROVED === '${{ secrets.NPM_OWNERSHIP_APPROVED }}' && publish?.permissions?.['id-token'] === 'write' && publish?.needs === 'verify-release', 'npm publication must use protected npm-production OIDC with ownership approval after verification');
+  report(!text.includes('--clobber') && text.includes('cmp --silent "$artifact" "$remote/$name"'), 'durable release assets must be immutable and byte-verified on rerun');
+  report(text.includes("gh release download \"${{ github.ref_name }}\" --pattern '*.tgz' --pattern release-manifest.json --dir npm-packs"), 'publish must consume immutable GitHub Release assets');
   report(publish?.env?.NODE_AUTH_TOKEN === bootstrapToken, 'npm bootstrap token must use the exact default-off opt-in expression');
   report(text.split('\n').filter((line) => line.trim() === 'NODE_AUTH_TOKEN: ' + bootstrapToken).length === 1 && (text.match(/secrets\.NPM_TOKEN/gu) ?? []).length === 1, 'npm bootstrap token wiring must appear exactly once in the publish job');
   const publishSteps = (publish?.steps ?? []).filter((step) => step.name).map((step) => [step.name, activeRun(step)]);
@@ -118,7 +125,11 @@ const officialMutations = [
   officialText.replace("      NODE_AUTH_TOKEN: ${{ inputs.bootstrap_token && secrets.NPM_TOKEN || '' }}", "      # NODE_AUTH_TOKEN omitted"),
   officialText.replace("      NODE_AUTH_TOKEN: ${{ inputs.bootstrap_token && secrets.NPM_TOKEN || '' }}", "      NODE_AUTH_TOKEN: ${{ inputs.bootstrap_token && secrets.NPM_TOKEN }}"),
   officialText.replace("      - name: Configure SSH tag verification\n        run: |\n          git config --local gpg.format ssh\n          git config --local gpg.ssh.allowedSignersFile \"$GITHUB_WORKSPACE/packages/pi/release/allowed-signers\"\n", ''),
-  officialText.replace('packages/pi/release/allowed-signers', 'packages/pi/release/wrong-signers')
+  officialText.replace('packages/pi/release/allowed-signers', 'packages/pi/release/wrong-signers'),
+  officialText.replace('dtolnay/rust-toolchain@1.97.1', 'dtolnay/rust-toolchain@stable'),
+  officialText.replace('node packages/pi/scripts/ci-install-smoke.mjs', '# native smoke removed'),
+  officialText.replace('ASGREP_NPM_OWNERSHIP_APPROVED: ${{ secrets.NPM_OWNERSHIP_APPROVED }}', 'ASGREP_NPM_OWNERSHIP_APPROVED: false'),
+  officialText.replace('gh release upload "${{ github.ref_name }}" "${upload[@]}"', 'gh release upload "${{ github.ref_name }}" "${upload[@]}" --clobber')
 ];
 for (const [index, mutation] of officialMutations.entries()) if (validateOfficial(mutation).length === 0) errors.push('negative official mutation ' + (index + 1) + ' was not rejected');
 const signerMutations = [
@@ -126,7 +137,7 @@ const signerMutations = [
   allowedSignersText.replace('AAAAC3NzaC1lZDI1NTE5AAAAICeIowlFrWVQpSI2f/8qjz1KZY7Uif+cFR0u5Jwin8oH', 'AAAAC3NzaC1lZDI1NTE5AAAAICorrupted')
 ];
 for (const [index, mutation] of signerMutations.entries()) if (validateOfficial(officialText, mutation).length === 0) errors.push('negative allowed-signers mutation ' + (index + 1) + ' was not rejected');
-for (const token of ['ASGREP_RELEASE_DIRTY', 'ASGREP_RELEASE_TAG_VERSION', 'ASGREP_RELEASE_TAG_COMMIT', 'ASGREP_RELEASE_CHECKSUM_MISSING', 'ASGREP_RELEASE_CHECKSUM_MISMATCH', 'ASGREP_RELEASE_VERSION_SKEW', 'ASGREP_RELEASE_DUPLICATE_VERSION', 'ASGREP_RELEASE_OIDC_REQUIRED', 'ASGREP_RELEASE_PROTECTED_ENVIRONMENT', "['publish'", "'--provenance'"]) if (!releaseHelper.includes(token)) errors.push('release acceptance helper is missing ' + token);
+for (const token of ['ASGREP_RELEASE_DIRTY', 'ASGREP_RELEASE_TAG_VERSION', 'ASGREP_RELEASE_TAG_COMMIT', 'ASGREP_RELEASE_CHECKSUM_MISSING', 'ASGREP_RELEASE_CHECKSUM_MISMATCH', 'ASGREP_RELEASE_VERSION_SKEW', 'ASGREP_RELEASE_DUPLICATE_VERSION', 'ASGREP_RELEASE_OIDC_REQUIRED', 'ASGREP_RELEASE_PROTECTED_ENVIRONMENT', 'ASGREP_RELEASE_OWNERSHIP_APPROVAL', 'ASGREP_RELEASE_REGISTRY_INTEGRITY', "['publish'", "'--provenance'"]) if (!releaseHelper.includes(token)) errors.push('release acceptance helper is missing ' + token);
 if (errors.length) {
   for (const error of errors) console.error('Pi native workflow: ' + error);
   process.exitCode = 1;

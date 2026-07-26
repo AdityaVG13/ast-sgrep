@@ -23,6 +23,8 @@ const cargo = await readFile(path.join(root, 'Cargo.toml'), 'utf8');
 const extensionManifest = JSON.parse(await readFile(path.join(root, 'packages/pi/extension/package.json'), 'utf8'));
 const launcherManifest = JSON.parse(await readFile(path.join(root, 'packages/pi/launcher/package.json'), 'utf8'));
 const runtimeSource = await readFile(path.join(root, 'packages/pi/extension/src/runtime.ts'), 'utf8');
+const runtimeDist = await readFile(path.join(root, 'packages/pi/extension/dist/runtime.js'), 'utf8');
+const runtimeDeclarations = await readFile(path.join(root, 'packages/pi/extension/dist/runtime.d.ts'), 'utf8');
 const launcherSource = await readFile(path.join(root, 'packages/pi/launcher/src/index.js'), 'utf8');
 const workspaceSection = cargo.match(/^\[workspace\.package\]\s*$([\s\S]*?)(?=^\[|(?![\s\S]))/m)?.[1] ?? "";
 const cargoVersion = workspaceSection.match(/^version\s*=\s*"([^"]+)"\s*$/m)?.[1];
@@ -48,8 +50,8 @@ required(contract.updates, ['mainBranch', 'officialTag', 'selection', 'runtimeDo
 required(contract.registries, ['sharedAnchor', 'npm', 'cratesIo'], 'registries');
 required(contract.registries?.npm, ['requiresCratesIoPublication', 'availabilityObserved', 'policy'], 'registries.npm');
 required(contract.registries?.cratesIo, ['requiresNpmPublication', 'policy'], 'registries.cratesIo');
-required(contract.firstPublication, ['humanAuthorizationRequired', 'automatedFirstPublishForbidden', 'protectedEnvironmentApprovalRequired', 'packageNameAndOwnershipVerificationRequired', 'trustedPublishingRequired', 'provenanceRequired', 'authorizationRecordRequired', 'gate'], 'firstPublication');
-required(contract.releaseAutomation, ['dryRunWorkflow', 'officialWorkflow', 'officialTrigger', 'protectedEnvironment', 'trustedPublishing', 'provenance', 'packageOrder', 'idempotence'], 'releaseAutomation');
+required(contract.firstPublication, ['humanAuthorizationRequired', 'automatedFirstPublishForbidden', 'protectedEnvironmentApprovalRequired', 'packageNameAndOwnershipVerificationRequired', 'trustedPublishingRequired', 'provenanceRequired', 'authorizationRecordRequired', 'ownershipApprovalVariable', 'gate'], 'firstPublication');
+required(contract.releaseAutomation, ['dryRunWorkflow', 'officialWorkflow', 'officialTrigger', 'protectedEnvironment', 'trustedPublishing', 'provenance', 'packageOrder', 'idempotence', 'rustToolchain', 'nativeExecution', 'durableAssetPolicy'], 'releaseAutomation');
 report(contract.schemaVersion === 2, 'unsupported contract schemaVersion');
 const version = contract.canonicalVersion?.version;
 const nativeVersion = contract.canonicalVersion?.nativeCliVersion;
@@ -104,7 +106,7 @@ report(extensionManifest.version === version && launcherManifest.version === ver
 report(runtimeSource.includes(`export const RUNTIME_VERSION = "${nativeVersion}";`) && launcherSource.includes(`const VERSION = "${version}";`), 'runtime native CLI expectation or launcher package version drifts from the compatibility matrix');
 report(layers.machineSchema?.version === '1.0.0' && equal(layers.machineSchema.readable, ['1.0.0']) && runtimeSource.includes('export const MACHINE_SCHEMA_VERSION = "1.0.0";'), 'machine schema compatibility matrix is inconsistent');
 report(layers.configSchema?.current === 1 && equal(layers.configSchema.readable, [0, 1]) && equal(layers.configSchema.rollback, [0]) && runtimeSource.includes('export const CONFIG_SCHEMA_VERSION = 1 as const;'), 'config schema migration/rollback matrix is inconsistent');
-report(layers.indexFormat?.current === 5 && equal(layers.indexFormat.reusable, [5]) && equal(layers.indexFormat.rebuild, [0, 1, 2, 3, 4]) && layers.indexFormat.newer === 'reject-and-preserve' && runtimeSource.includes('export const INDEX_FORMAT_VERSION = 5 as const;'), 'index format reuse/rebuild matrix is inconsistent');
+report(layers.indexFormat?.current === 6 && equal(layers.indexFormat.reusable, [6]) && equal(layers.indexFormat.rebuild, [0, 1, 2, 3, 4, 5]) && layers.indexFormat.newer === 'reject-and-preserve' && runtimeSource.includes('export const INDEX_FORMAT_VERSION = 6 as const;') && runtimeDist.includes('export const INDEX_FORMAT_VERSION = 6;') && runtimeDeclarations.includes('export declare const INDEX_FORMAT_VERSION: 6;'), 'index format reuse/rebuild matrix is inconsistent');
 report(equal(contract.config?.precedenceHighToLow, ['explicit-project-config', 'project-settings', 'global-settings', 'environment', 'defaults']), 'config precedence changed');
 report(contract.offlineSemantics?.defaultBackend === 'local' && contract.offlineSemantics.localSemanticSearchAlwaysAvailable === true && contract.offlineSemantics.firstUseModelDownload === false && contract.offlineSemantics.credentialsRequired === false && contract.offlineSemantics.lazyIndexOnFirstSearch === true, 'offline local semantic contract changed');
 report(contract.dataLifecycle?.path === '<project-root>/.asgrep' && contract.dataLifecycle.gitignoreMutation === false && /preserves/.test(contract.dataLifecycle.uninstall ?? '') && /explicit user request/.test(contract.dataLifecycle.deletion ?? ''), '.asgrep lifecycle is incomplete');
@@ -122,7 +124,10 @@ const automation = contract.releaseAutomation ?? {};
 report(automation.dryRunWorkflow === '.github/workflows/pi-native-artifacts.yml' && automation.officialWorkflow === '.github/workflows/pi-npm-release.yml', 'release workflow paths changed');
 report(automation.officialTrigger === 'signed canonical version tag only' && automation.protectedEnvironment === 'npm-production' && automation.trustedPublishing === 'npm OIDC' && automation.provenance === true, 'official release protection/OIDC/provenance contract changed');
 report(equal(automation.packageOrder, [...expectedPlatforms.map(([name]) => name), 'ast-sgrep', 'pi-ast-sgrep']), 'release package order must be native -> launcher -> extension');
-report(/dirty/.test(automation.idempotence ?? '') && /wrong-tag/.test(automation.idempotence ?? '') && /already-published/.test(automation.idempotence ?? ''), 'release idempotence refusal contract is incomplete');
+report(/dirty/.test(automation.idempotence ?? '') && /wrong-tag/.test(automation.idempotence ?? '') && /fully published/.test(automation.idempotence ?? ''), 'release idempotence refusal contract is incomplete');
+
+report(contract.releaseAutomation?.rustToolchain === '1.97.1', 'release Rust toolchain must be pinned to 1.97.1');
+report(contract.firstPublication?.ownershipApprovalVariable === 'npm-production environment secret NPM_OWNERSHIP_APPROVED=true', 'ownership approval variable contract changed');
 
 if (errors.length) {
   for (const error of errors) console.error('Pi contract: ' + error);
