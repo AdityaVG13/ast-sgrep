@@ -1,7 +1,7 @@
 use crate::query::{ParsedQuery, QueryMode};
 use crate::rank::{
-    rrf_score, LEXICAL_RRF_SCALE, RRF_K, SCORE_ANCHOR, SCORE_CALLER_BASE, SCORE_DEF_BASE,
-    SCORE_EMBED, SCORE_EXACT_SYMBOL, SCORE_GRAPH, SCORE_PATTERN,
+    rrf_score, score_symbol, LEXICAL_RRF_SCALE, RRF_K, SCORE_ANCHOR, SCORE_CALLER_BASE,
+    SCORE_DEF_BASE, SCORE_EMBED, SCORE_EXACT_SYMBOL, SCORE_GRAPH, SCORE_PATTERN,
 };
 use crate::search::{HitKind, SearchHit};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -152,9 +152,26 @@ fn apply_spec(weights: &mut ChannelWeights, intent: QueryIntent, spec: &str) {
         }
     }
 }
-fn channel_ceiling(kind: HitKind, term_count: usize) -> f64 {
-    let terms = term_count.max(1) as f64;
-    match kind {
+fn matched_term_count(parsed: &ParsedQuery, target: Option<&str>) -> usize {
+    target
+        .map(|target| {
+            parsed
+                .terms
+                .iter()
+                .filter(|term| score_symbol(term, target) > 0.0)
+                .count()
+        })
+        .unwrap_or(0)
+}
+
+fn channel_ceiling(parsed: &ParsedQuery, hit: &SearchHit) -> f64 {
+    let matched_terms = match hit.kind {
+        HitKind::Def => matched_term_count(parsed, hit.symbol.as_deref()),
+        HitKind::Caller => matched_term_count(parsed, hit.callee.as_deref()),
+        _ => 0,
+    }
+    .max(1) as f64;
+    match hit.kind {
         // e2hc.14(a): lexical issues ONE OR-query so fuse_rrf never fuses —
         // each hit has a single rank. The max raw score is rrf_score(0, RRF_K)
         // * LEXICAL_RRF_SCALE, NOT terms × that. The old `terms *` multiplier
@@ -162,8 +179,11 @@ fn channel_ceiling(kind: HitKind, term_count: usize) -> f64 {
         // binary Graph hits structurally outrank perfect lexical matches on
         // multi-term queries.
         HitKind::Asgrep => rrf_score(0, RRF_K) * LEXICAL_RRF_SCALE,
-        HitKind::Def => 2.0 * SCORE_EXACT_SYMBOL * terms + SCORE_DEF_BASE,
-        HitKind::Caller => 2.0 * SCORE_EXACT_SYMBOL * terms + SCORE_CALLER_BASE,
+        // Def/Caller producers sum only terms that match this hit's target.
+        // Normalize against the same matched-term set so unrelated query context
+        // cannot dilute evidence, while exact matches still outrank substrings.
+        HitKind::Def => 2.0 * SCORE_EXACT_SYMBOL * matched_terms + SCORE_DEF_BASE,
+        HitKind::Caller => 2.0 * SCORE_EXACT_SYMBOL * matched_terms + SCORE_CALLER_BASE,
         HitKind::Graph => SCORE_GRAPH,
         HitKind::Anchor => SCORE_ANCHOR,
         HitKind::Embed => SCORE_EMBED,
@@ -173,11 +193,7 @@ fn channel_ceiling(kind: HitKind, term_count: usize) -> f64 {
 }
 pub fn route_hits(parsed: &ParsedQuery, hits: &mut [SearchHit]) {
     let w = weights_for(classify(parsed));
-    let substantive_terms = parsed
-        .terms
-        .iter()
-        .filter(|term| !term.is_empty())
-        .count();
+    let substantive_terms = parsed.terms.iter().filter(|term| !term.is_empty()).count();
     for hit in hits {
         let text_channel = matches!(
             hit.kind,
@@ -197,8 +213,7 @@ pub fn route_hits(parsed: &ParsedQuery, hits: &mut [SearchHit]) {
             HitKind::Pattern => w.pattern,
             HitKind::Import => 1.0,
         };
-        hit.score =
-            (hit.score / channel_ceiling(hit.kind, substantive_terms)).clamp(0.0, 1.0) * weight;
+        hit.score = (hit.score / channel_ceiling(parsed, hit)).clamp(0.0, 1.0) * weight;
     }
 }
 
@@ -206,7 +221,7 @@ pub fn route_hits(parsed: &ParsedQuery, hits: &mut [SearchHit]) {
 mod tests {
     use super::*;
     use crate::query::{ParsedQuery, QueryMode};
-    use crate::rank::{score_def, LEXICAL_RRF_SCALE, RRF_K, SCORE_DEF_BASE, SCORE_EXACT_SYMBOL};
+    use crate::rank::{score_def, LEXICAL_RRF_SCALE, RRF_K};
     use crate::search::{HitKind, SearchHit};
 
     /// e2hc.14(a): The Asgrep (lexical) channel ceiling must NOT scale with
@@ -217,8 +232,38 @@ mod tests {
     /// perfect lexical matches on multi-term queries.
     #[test]
     fn asgrep_ceiling_does_not_scale_with_term_count() {
-        let ceiling_1 = channel_ceiling(HitKind::Asgrep, 1);
-        let ceiling_5 = channel_ceiling(HitKind::Asgrep, 5);
+        let parsed_1 = ParsedQuery {
+            raw: "foo".into(),
+            mode: QueryMode::Hybrid,
+            target: None,
+            terms: vec!["foo".into()],
+        };
+        let parsed_5 = ParsedQuery {
+            raw: "foo bar baz qux quux".into(),
+            mode: QueryMode::Hybrid,
+            target: None,
+            terms: vec![
+                "foo".into(),
+                "bar".into(),
+                "baz".into(),
+                "qux".into(),
+                "quux".into(),
+            ],
+        };
+        let lexical_hit = SearchHit {
+            kind: HitKind::Asgrep,
+            file: "test.rs".into(),
+            line_start: 1,
+            line_end: 1,
+            symbol: None,
+            caller: None,
+            callee: None,
+            language: None,
+            score: 1.0,
+            excerpt: "foo".into(),
+        };
+        let ceiling_1 = channel_ceiling(&parsed_1, &lexical_hit);
+        let ceiling_5 = channel_ceiling(&parsed_5, &lexical_hit);
         assert_eq!(
             ceiling_1, ceiling_5,
             "Asgrep ceiling must be term-count-independent"
@@ -243,7 +288,10 @@ mod tests {
             terms: vec!["i".into()],
         };
         let raw_score = score_def(&["i".to_string()], "i");
-        assert!(raw_score > 0.0, "score_def for exact single-char must be > 0");
+        assert!(
+            raw_score > 0.0,
+            "score_def for exact single-char must be > 0"
+        );
         let mut hits = vec![SearchHit {
             kind: HitKind::Def,
             file: "test.rs".into(),
@@ -263,7 +311,7 @@ mod tests {
             hits[0].score
         );
         // The normalized score should be ~1.0 (exact match, 1 term) * weight.
-        let ceiling = 2.0 * SCORE_EXACT_SYMBOL + SCORE_DEF_BASE;
+        let ceiling = channel_ceiling(&parsed, &hits[0]);
         let expected_normalized = (raw_score / ceiling).clamp(0.0, 1.0);
         assert!(
             hits[0].score >= expected_normalized * 0.5,
@@ -273,9 +321,88 @@ mod tests {
         );
     }
 
-    /// e2hc.14(a) regression: multi-term lexical hits must not be capped at
-    /// 1/terms. With the fix, a rank-0 lexical hit on a 3-term query should
-    /// normalize to ~1.0, not ~1/3.
+    /// Adding unrelated query context must not reduce exact symbol evidence.
+    #[test]
+    fn def_and_caller_scores_ignore_unmatched_query_context() {
+        let focused = ParsedQuery {
+            raw: "foo".into(),
+            mode: QueryMode::Hybrid,
+            target: None,
+            terms: vec!["foo".into()],
+        };
+        let expanded = ParsedQuery {
+            raw: "foo noise junk".into(),
+            mode: QueryMode::Hybrid,
+            target: None,
+            terms: vec!["foo".into(), "noise".into(), "junk".into()],
+        };
+        for kind in [HitKind::Def, HitKind::Caller] {
+            let raw_score = match kind {
+                HitKind::Def => crate::rank::score_def(&focused.terms, "foo"),
+                HitKind::Caller => crate::rank::score_caller(&focused.terms, "foo"),
+                _ => unreachable!(),
+            };
+            let make_hit = || SearchHit {
+                kind,
+                file: "test.rs".into(),
+                line_start: 1,
+                line_end: 1,
+                symbol: (kind == HitKind::Def).then(|| "foo".into()),
+                caller: (kind == HitKind::Caller).then(|| "caller".into()),
+                callee: (kind == HitKind::Caller).then(|| "foo".into()),
+                language: None,
+                score: raw_score,
+                excerpt: "foo".into(),
+            };
+            let mut focused_hits = vec![make_hit()];
+            let mut expanded_hits = vec![make_hit()];
+            route_hits(&focused, &mut focused_hits);
+            route_hits(&expanded, &mut expanded_hits);
+            assert_eq!(
+                focused_hits[0].score, expanded_hits[0].score,
+                "{kind:?} score must not fall when only unmatched terms are added"
+            );
+        }
+    }
+
+    #[test]
+    fn exact_def_match_still_outranks_substring_match() {
+        let parsed = ParsedQuery {
+            raw: "foo".into(),
+            mode: QueryMode::Hybrid,
+            target: None,
+            terms: vec!["foo".into()],
+        };
+        let mut hits = [
+            SearchHit {
+                kind: HitKind::Def,
+                file: "exact.rs".into(),
+                line_start: 1,
+                line_end: 1,
+                symbol: Some("foo".into()),
+                caller: None,
+                callee: None,
+                language: None,
+                score: crate::rank::score_def(&parsed.terms, "foo"),
+                excerpt: "foo".into(),
+            },
+            SearchHit {
+                kind: HitKind::Def,
+                file: "substring.rs".into(),
+                line_start: 1,
+                line_end: 1,
+                symbol: Some("foobar".into()),
+                caller: None,
+                callee: None,
+                language: None,
+                score: crate::rank::score_def(&parsed.terms, "foobar"),
+                excerpt: "foobar".into(),
+            },
+        ];
+        route_hits(&parsed, &mut hits);
+        assert!(hits[0].score > hits[1].score);
+    }
+
     #[test]
     fn multi_term_lexical_hit_not_capped_at_inverse_terms() {
         let parsed = ParsedQuery {
