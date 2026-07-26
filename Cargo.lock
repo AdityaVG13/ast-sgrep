@@ -138,6 +138,7 @@ dependencies = [
  "ast-sgrep-testkit",
  "blake3",
  "criterion",
+ "memchr",
  "proptest",
  "rayon",
  "regex",
