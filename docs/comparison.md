@@ -14,7 +14,7 @@ Three tools, three jobs. ast-sgrep is the **navigation and intent layer** you ad
 | **Caller / callee graph** | Yes (`callers:`) | No | No |
 | **Import tracking** | Yes (`imports:`) | No | No |
 | **Structural patterns** | Yes (`pattern:` → ast-grep) | Native | No |
-| **Polyglot AST** | 8 languages, unified index | Yes | Text only |
+| **Polyglot AST** | 9 languages, unified index | Yes | Text only |
 | **CI / platform JSON** | GitHub & GitLab shapes | No | `--json` (ripgrep format) |
 | **LSP** | `asgrep-lsp` | Separate ecosystem | No |
 | **Agent-oriented JSON** | `--format agent` + follow-ups | Limited | Line-based JSON |

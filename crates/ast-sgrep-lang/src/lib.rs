@@ -159,8 +159,8 @@ use langs::{
     SwiftParser, TypeScriptParser,
 };
 pub use pattern::{
-    match_literal_pattern, match_pattern, needs_ast_grep_fallback, tree_sitter_language,
-    PatternMatch,
+    match_literal_pattern, match_pattern, needs_ast_grep_fallback, parse_is_error_free,
+    tree_sitter_language, PatternMatch,
 };
 fn make_parser(lang: Language) -> Box<dyn LanguageParser> {
     match lang {

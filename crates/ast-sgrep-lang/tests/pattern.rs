@@ -87,9 +87,17 @@ fn function_pattern_matches_all_languages() {
         (Language::Python, "def my_func():\n    pass\n", "my_func"),
         (Language::Go, "func myFunc() {}\n", "myFunc"),
         (Language::Java, "class Foo { void myFunc() {} }\n", "myFunc"),
-        (Language::CSharp, "class Foo { void MyFunc() {} }\n", "MyFunc"),
+        (
+            Language::CSharp,
+            "class Foo { void MyFunc() {} }\n",
+            "MyFunc",
+        ),
         (Language::JavaScript, "function myFunc() {}\n", "myFunc"),
-        (Language::TypeScript, "function myFunc(): void {}\n", "myFunc"),
+        (
+            Language::TypeScript,
+            "function myFunc(): void {}\n",
+            "myFunc",
+        ),
         (Language::Ruby, "def my_func\nend\n", "my_func"),
         (Language::Swift, "func myFunc() {}\n", "myFunc"),
     ];

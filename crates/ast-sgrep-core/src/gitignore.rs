@@ -14,8 +14,8 @@ pub const DEFAULT_SKIP_DIR_NAMES: &[&str] = &[
     "~",
 ];
 pub const INDEXABLE_EXTENSIONS: &[&str] = &[
-    "rs", "ts", "tsx", "js", "jsx", "mjs", "cjs", "py", "pyi", "go", "java", "cs", "rb", "toml",
-    "md", "txt", "json", "yaml", "yml",
+    "rs", "ts", "tsx", "js", "jsx", "mjs", "cjs", "py", "pyi", "go", "java", "cs", "rb", "swift",
+    "toml", "md", "txt", "json", "yaml", "yml",
 ];
 pub fn should_skip_dir(path: &Path) -> bool {
     path.file_name()
@@ -225,11 +225,17 @@ fn dir_ignored(dir_path: &str, rules: &[Rule]) -> bool {
 }
 #[cfg(test)]
 mod tests {
-    use super::should_skip_dir;
+    use super::{should_skip_dir, should_skip_file};
     use std::path::Path;
+
     #[test]
     fn skips_path_escape_noise_directory() {
         assert!(should_skip_dir(Path::new("~")));
         assert!(!should_skip_dir(Path::new("src")));
+    }
+
+    #[test]
+    fn indexes_swift_source_files() {
+        assert!(!should_skip_file(Path::new("Sources/App/Main.swift")));
     }
 }

@@ -72,14 +72,17 @@ pub fn node_text<'a>(node: &Node, source: &'a str) -> Option<&'a str> {
 }
 pub fn last_identifier_in_chain(node: &Node, source: &str) -> Option<String> {
     match node.kind() {
-        "identifier" | "type_identifier" | "field_identifier" | "property_identifier" => {
-            node_text(node, source).map(str::to_string)
-        }
+        "identifier"
+        | "simple_identifier"
+        | "type_identifier"
+        | "field_identifier"
+        | "property_identifier" => node_text(node, source).map(str::to_string),
         "field_expression"
         | "scoped_identifier"
         | "scoped_type_identifier"
         | "member_expression"
         | "member_access_expression"
+        | "navigation_expression"
         | "selector_expression" => {
             let mut cursor = node.walk();
             let mut last = None;
@@ -111,9 +114,12 @@ pub fn is_in_comment_or_string(node: &Node) -> bool {
             "comment"
                 | "line_comment"
                 | "block_comment"
+                | "multiline_comment"
                 | "string_literal"
                 | "raw_string_literal"
                 | "string"
+                | "line_string_literal"
+                | "multi_line_string_literal"
                 | "template_string"
                 | "interpreted_string_literal"
                 | "quoted_string_literal"
@@ -169,6 +175,8 @@ pub enum KindRule {
     SymParent(&'static str, SymbolKind),
     /// Call site; callee from child field name.
     Call(&'static str),
+    /// Call site whose grammar exposes the callee as its first named child.
+    CallFirstNamed,
     /// Call via field; if callee text ∈ import_names, import string under args field.
     CallOrImport(&'static str, &'static [&'static str], &'static str),
     /// Import = identifiers under node joined by separator.
@@ -241,6 +249,11 @@ fn apply_kind_rule(ext: &mut Extractor, node: &Node, source: &str, rule: KindRul
         }
         KindRule::Call(field) => {
             if let Some(func) = field_child(node, field) {
+                ext.add_call(node, source, &func);
+            }
+        }
+        KindRule::CallFirstNamed => {
+            if let Some(func) = node.named_child(0) {
                 ext.add_call(node, source, &func);
             }
         }
@@ -363,7 +376,10 @@ pub fn enclosing_symbol_name(node: &Node, source: &str) -> Option<String> {
             | "function_definition"
             | "method_declaration"
             | "method_definition"
-            | "method" => {
+            | "method"
+            | "local_function_statement"
+            | "constructor_declaration"
+            | "protocol_function_declaration" => {
                 if let Some(name_node) = n.child_by_field_name("name") {
                     return node_text(&name_node, source).map(str::to_string);
                 }
@@ -457,7 +473,11 @@ pub fn collect_identifiers(node: &Node, source: &str) -> Vec<String> {
 fn collect_identifiers_rec(node: &Node, source: &str, ids: &mut Vec<String>) {
     if matches!(
         node.kind(),
-        "identifier" | "type_identifier" | "property_identifier" | "package_identifier"
+        "identifier"
+            | "simple_identifier"
+            | "type_identifier"
+            | "property_identifier"
+            | "package_identifier"
     ) {
         if let Some(text) = node_text(node, source) {
             ids.push(text.to_string());

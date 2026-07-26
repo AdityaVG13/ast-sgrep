@@ -193,6 +193,11 @@ fn is_ident(s: &str) -> bool {
         && chars.all(|c| c == '_' || c.is_alphanumeric())
 }
 
+/// Return whether the selected grammar parses the source without ERROR nodes.
+pub fn parse_is_error_free(lang: Language, source: &str) -> anyhow::Result<bool> {
+    Ok(!parse_source(lang, source)?.root_node().has_error())
+}
+
 fn parse_source(lang: Language, source: &str) -> anyhow::Result<tree_sitter::Tree> {
     let mut parser = Parser::new();
     parser
@@ -269,7 +274,8 @@ fn function_queries(lang: Language) -> Vec<&'static str> {
             "(singleton_method name: (identifier) @name) @match",
         ],
         Language::Swift => vec![
-            "(function_declaration name: (identifier) @name) @match",
+            "(function_declaration name: (simple_identifier) @name) @match",
+            "(protocol_function_declaration name: (simple_identifier) @name) @match",
         ],
     }
 }
@@ -300,10 +306,10 @@ fn class_queries(lang: Language) -> Vec<&'static str> {
         }
         Language::Ruby => vec!["(class name: (constant) @name) @match"],
         Language::Swift => vec![
-            "(class_declaration name: (identifier) @name) @match",
-            "(struct_declaration name: (identifier) @name) @match",
-            "(protocol_declaration name: (identifier) @name) @match",
-            "(enum_declaration name: (identifier) @name) @match",
+            // Swift represents class, struct, actor, enum, and extension with
+            // one class_declaration node distinguished by declaration_kind.
+            "(class_declaration name: (type_identifier) @name) @match",
+            "(protocol_declaration name: (type_identifier) @name) @match",
         ],
     }
 }
@@ -370,17 +376,23 @@ fn walk_calls(node: Node, source: &str, path: &[Option<String>], out: &mut Vec<P
 fn call_target_path(node: &Node, source: &str) -> Option<Vec<String>> {
     let target = ["function", "name"]
         .into_iter()
-        .find_map(|f| node.child_by_field_name(f))?;
+        .find_map(|f| node.child_by_field_name(f))
+        // tree-sitter-swift exposes call_expression without fields; the
+        // callee is the first named child and call_suffix follows it.
+        .or_else(|| node.named_child(0))?;
     path_from_node(&target, source)
 }
 
 fn path_from_node(node: &Node, source: &str) -> Option<Vec<String>> {
     match node.kind() {
-        "identifier" | "type_identifier" | "field_identifier" | "property_identifier" => {
-            node_text(node, source).map(|t| vec![t.to_string()])
-        }
+        "identifier"
+        | "simple_identifier"
+        | "type_identifier"
+        | "field_identifier"
+        | "property_identifier" => node_text(node, source).map(|t| vec![t.to_string()]),
         "field_expression"
         | "member_expression"
+        | "navigation_expression"
         | "selector_expression"
         | "member_access_expression"
         | "scoped_identifier" => {
@@ -452,6 +464,7 @@ fn is_identifier_kind(kind: &str) -> bool {
             | "field_identifier"
             | "property_identifier"
             | "package_identifier"
+            | "simple_identifier"
             | "constant"
     )
 }
@@ -475,7 +488,7 @@ fn collect_node_signatures(
                 push_pattern_node(node, source, text, out, seen);
             }
         }
-        if let Some(prefix) = declaration_prefix(node.kind()) {
+        if let Some(prefix) = declaration_prefix(&node, source) {
             push_pattern_node(node, source, &format!("kind:{}", node.kind()), out, seen);
             if let Some(name) = node
                 .child_by_field_name("name")
@@ -501,20 +514,29 @@ fn collect_node_signatures(
     }
 }
 
-fn declaration_prefix(kind: &str) -> Option<&'static str> {
-    match kind {
+fn declaration_prefix(node: &Node, source: &str) -> Option<&'static str> {
+    match node.kind() {
         "function_item" => Some("fn"),
-        "struct_item" => Some("struct"),
+        "struct_item" | "struct_declaration" | "actor_declaration" => Some("struct"),
         "function_definition" => Some("def"),
-        "function_declaration" | "method_definition" | "method_declaration"
-        | "method" | "local_function_statement" => Some("function"),
-        "class_definition" | "class_declaration" | "class" | "record_declaration" => {
-            Some("class")
-        }
+        "function_declaration"
+        | "protocol_function_declaration"
+        | "method_definition"
+        | "method_declaration"
+        | "method"
+        | "local_function_statement" => Some("function"),
+        "class_definition" | "class" | "record_declaration" => Some("class"),
+        "class_declaration" => match node
+            .child_by_field_name("declaration_kind")
+            .and_then(|kind| node_text(&kind, source))
+        {
+            Some("struct" | "actor") => Some("struct"),
+            Some("enum") => Some("enum"),
+            Some("extension") => Some("type"),
+            _ => Some("class"),
+        },
         "trait_item" | "interface_declaration" | "protocol_declaration" => Some("interface"),
-        "enum_item" | "enum_declaration" | "struct_declaration" | "actor_declaration" => {
-            Some("struct")
-        }
+        "enum_item" | "enum_declaration" => Some("enum"),
         _ => None,
     }
 }
@@ -533,6 +555,7 @@ fn call_target<'a>(node: &Node<'a>, source: &'a str) -> Option<&'a str> {
     ["function", "name"]
         .into_iter()
         .find_map(|f| node.child_by_field_name(f))
+        .or_else(|| node.named_child(0))
         .and_then(|t| node_text(&t, source))
 }
 

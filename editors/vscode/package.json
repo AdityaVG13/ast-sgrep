@@ -38,6 +38,7 @@
     "onLanguage:java",
     "onLanguage:ruby",
     "onLanguage:csharp",
+    "onLanguage:swift",
     "onCommand:asgrep.search"
   ],
   "contributes": {

@@ -41,8 +41,15 @@ const CS_TYPES: &[&str] = &[
     "record_declaration",
 ];
 const RB_CLASS: &[&str] = &["class"];
-const SWIFT_TYPES: &[&str] = &["class_declaration", "struct_declaration", "actor_declaration"];
+const SWIFT_TYPES: &[&str] = &["class_declaration", "protocol_declaration"];
 const GO_TYPE_CASES: &[(&str, SymbolKind)] = &[("interface_type", Interface)];
+const SWIFT_TYPE_CASES: &[(&str, SymbolKind)] = &[
+    ("class", Class),
+    ("struct", Type),
+    ("actor", Type),
+    ("enum", Enum),
+    ("extension", Type),
+];
 const RUBY_REQUIRE: &[&str] = &["require", "require_relative", "load"];
 
 // ─── Kind maps ──────────────────────────────────────────────────────────────
@@ -133,14 +140,20 @@ const RUBY: &[(&str, KindRule)] = &[
 
 #[rustfmt::skip]
 const SWIFT: &[(&str, KindRule)] = &[
-    ("function_declaration",     MethodIn(SWIFT_TYPES)),
-    ("class_declaration",        Sym(Class)),
-    ("struct_declaration",       Sym(Type)),
-    ("actor_declaration",        Sym(Type)),
-    ("protocol_declaration",     Sym(Interface)),
-    ("enum_declaration",         Sym(Enum)),
-    ("call_expression",          Call("function")),
-    ("import_declaration",       ImportJoin(".")),
+    ("function_declaration",          MethodIn(SWIFT_TYPES)),
+    ("protocol_function_declaration", MethodIn(SWIFT_TYPES)),
+    ("class_declaration",             SymByField("declaration_kind", SWIFT_TYPE_CASES, Type)),
+    ("protocol_declaration",          Sym(Interface)),
+    ("call_expression",               CallFirstNamed),
+    (
+        "import_declaration",
+        ImportPath(
+            &["identifier"],
+            &["import", "class", "enum", "func", "let", "protocol", "struct", "typealias", "var"],
+            false,
+            None,
+        ),
+    ),
 ];
 
 /// Shared TypeScript + JavaScript rules (same grammar shape for decls/calls/imports).
@@ -160,7 +173,7 @@ const TS_JS: &[(&str, KindRule)] = &[
     ("import_statement",               ImportQuoted("source")),
 ];
 
-// ─── Parsers (all 8 languages) ──────────────────────────────────────────────
+// ─── Parsers ────────────────────────────────────────────────────────────────
 
 parser!(RustParser, Rust, tree_sitter_rust::LANGUAGE, RUST);
 parser!(PythonParser, Python, tree_sitter_python::LANGUAGE, PYTHON);

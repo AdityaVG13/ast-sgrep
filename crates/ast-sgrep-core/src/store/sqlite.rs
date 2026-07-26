@@ -831,7 +831,7 @@ impl IndexStore {
             }
         }
         const EXTS: &[&str] = &[
-            "rs", "ts", "tsx", "js", "jsx", "py", "go", "java", "cs", "rb",
+            "rs", "ts", "tsx", "js", "jsx", "py", "go", "java", "cs", "rb", "swift",
         ];
         let mut cands = BTreeSet::new();
         for base in bases {
