@@ -177,6 +177,18 @@ impl IndexStore {
         let v = self.semantic_data_version()?.saturating_add(1);
         self.set_meta("semantic_data_version", &v.to_string())
     }
+    /// Monotonic counter for every searchable-index mutation, including writes
+    /// made through this connection (which SQLite PRAGMA data_version omits).
+    pub fn index_data_version(&self) -> Result<i64> {
+        Ok(self
+            .get_meta("index_data_version")?
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0))
+    }
+    fn bump_index_data_version(&self) -> Result<()> {
+        let v = self.index_data_version()?.saturating_add(1);
+        self.set_meta("index_data_version", &v.to_string())
+    }
     pub fn file_id(&self, rel_path: &str) -> Result<Option<i64>> {
         optional_row(
             &self.conn,
@@ -273,6 +285,7 @@ impl IndexStore {
         self.conn.execute_batch(CLEAR_ALL_SQL)?;
         let _ = self.conn.execute_batch("VACUUM");
         self.bump_semantic_data_version()?;
+        self.bump_index_data_version()?;
         Ok(())
     }
     pub fn upsert_file(&self, input: UpsertFileInput<'_>) -> Result<i64> {
@@ -389,6 +402,7 @@ impl IndexStore {
             )?
             .execute(params![lang, mtime_secs, mtime_nanos, hash, file_id])?;
         self.set_meta(&format!("eol:{rel_path}"), eol)?;
+        self.bump_index_data_version()?;
         Ok(file_id)
     }
     fn upsert_file_inner(
@@ -420,6 +434,7 @@ impl IndexStore {
         self.insert_pattern_nodes(file_id, input.pattern_nodes)?;
         self.set_meta(struct_key, struct_fp)?;
         crate::semantic_ann::mark_semantic_ivf_stale(self);
+        self.bump_index_data_version()?;
         Ok(file_id)
     }
     fn upsert_file_row(
@@ -597,6 +612,7 @@ impl IndexStore {
             self.delete_meta(&format!("eol:{rel_path}"))?;
             crate::semantic_ann::mark_semantic_ivf_stale(self);
             self.bump_semantic_data_version()?;
+            self.bump_index_data_version()?;
         }
         Ok(())
     }

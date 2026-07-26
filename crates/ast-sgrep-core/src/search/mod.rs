@@ -31,8 +31,13 @@ struct SemanticCache {
 }
 /// Hybrid search may combine adjacent committed snapshots under concurrent reindex.
 /// Semantic cache drops on chunk max-id change; IVF fingerprint-validated with flat fallback.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct IndexGeneration {
+    external: i64,
+    local: i64,
+}
 struct ResponseCache {
-    gen: u64,
+    gen: IndexGeneration,
     map: std::collections::HashMap<String, SearchResponse>,
 }
 pub struct Searcher {
@@ -54,7 +59,10 @@ impl Searcher {
             options,
             semantic_cache: Arc::new(Mutex::new(None)),
             response_cache: Mutex::new(ResponseCache {
-                gen: 0,
+                gen: IndexGeneration {
+                    external: 0,
+                    local: 0,
+                },
                 map: std::collections::HashMap::new(),
             }),
         }
@@ -65,12 +73,17 @@ impl Searcher {
     pub fn options(&self) -> &SearchOptions {
         &self.options
     }
-    fn index_gen(&self) -> u64 {
-        self.store
-            .connection()
-            .query_row("PRAGMA data_version", [], |r| r.get::<_, i64>(0))
-            .map(|v| v as u64)
-            .unwrap_or(0)
+    fn index_gen(&self) -> IndexGeneration {
+        IndexGeneration {
+            // SQLite changes this only for commits made by other connections.
+            external: self
+                .store
+                .connection()
+                .query_row("PRAGMA data_version", [], |r| r.get::<_, i64>(0))
+                .unwrap_or(0),
+            // The store bumps this for writes on every connection, including ours.
+            local: self.store.index_data_version().unwrap_or(0),
+        }
     }
     fn cached(
         &self,
