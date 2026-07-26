@@ -316,3 +316,60 @@ fn adaptive_ivf_recall_at_10_stays_within_quality_error_budget() {
     );
     assert!(burn_rate <= 1.0 + f64::EPSILON, "adaptive IVF quality error budget exceeded: recall@10={recall:.6}, burn_rate={burn_rate:.3}");
 }
+
+#[test]
+#[ignore = "release-mode ANN recall/latency tradeoff"]
+fn adaptive_ivf_tradeoff_at_2048_and_10000_vectors() {
+    let dim = 32usize;
+    let limit = 10usize;
+    for &(vector_count, seed) in &[(2_048usize, 0x5D0_036_u64), (10_000, 0x07A1_0000_u64)] {
+        let flat = normalized_flat_vectors(vector_count, dim, seed);
+        let index = SemanticAnnIndex::build_from_flat(&flat, dim);
+        let cluster_count = ((vector_count as f64).sqrt() as usize).clamp(16, 256);
+        let query_indices = (0..64)
+            .map(|index| index * (vector_count / 64))
+            .collect::<Vec<_>>();
+        let exact = query_indices
+            .iter()
+            .map(|query_index| {
+                let query = &flat[query_index * dim..(query_index + 1) * dim];
+                index
+                    .search_flat_with_probes(&flat, dim, query, limit, Some(usize::MAX))
+                    .into_iter()
+                    .map(|(index, _)| index)
+                    .collect::<HashSet<_>>()
+            })
+            .collect::<Vec<_>>();
+        for percent in [50usize, 75, 90, 100] {
+            let probes = (cluster_count * percent).div_ceil(100);
+            let selected_probes = (percent != 90).then_some(probes);
+            let started = std::time::Instant::now();
+            let mut matches = 0usize;
+            let mut expected = 0usize;
+            let mut candidates = 0usize;
+            for (slot, query_index) in query_indices.iter().enumerate() {
+                let query = &flat[query_index * dim..(query_index + 1) * dim];
+                candidates += index.candidate_indices(query, selected_probes).len();
+                let actual = index
+                    .search_flat_with_probes(&flat, dim, query, limit, selected_probes)
+                    .into_iter()
+                    .map(|(index, _)| index)
+                    .collect::<HashSet<_>>();
+                matches += exact[slot].intersection(&actual).count();
+                expected += exact[slot].len();
+            }
+            let recall = matches as f64 / expected as f64;
+            let average_us =
+                started.elapsed().as_secs_f64() * 1_000_000.0 / query_indices.len() as f64;
+            let candidate_fraction =
+                candidates as f64 / (vector_count * query_indices.len()) as f64;
+            eprintln!(
+                "ivf_tradeoff n={vector_count} probes={percent}% recall_at_10={recall:.6} avg_us={average_us:.3} candidate_fraction={candidate_fraction:.6}"
+            );
+            if percent == 90 {
+                assert!(recall >= 0.99, "n={vector_count} recall={recall}");
+                assert!(candidate_fraction <= 0.95);
+            }
+        }
+    }
+}

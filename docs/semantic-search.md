@@ -102,6 +102,27 @@ With `--json`, defaults to **agent** format.
 | &lt; `ann_threshold` symbols (default 2000) | Brute-force cosine over all vectors | Sub-millisecond |
 | ≥ threshold | IVF-ANN with persisted `.asgrep/semantic.ivf` | Fast approximate NN; no k-means rebuild on restart |
 
+Adaptive search probes at most 90% of populated clusters by default. The bound
+is deliberate: the 2048-vector quality fixture misses the 0.99 recall target at
+75%, while 90% restores exact top-10 recall and remains below the 95% candidate
+ceiling.
+
+Release-mode RCH measurements use 64 deterministic queries at dimension 32:
+
+| vectors | probes | recall@10 | average query | candidate fraction |
+|--------:|-------:|----------:|--------------:|-------------------:|
+| 2,048 | 50% | 0.931250 | 276.794 µs | 0.511459 |
+| 2,048 | 75% | 0.989062 | 296.533 µs | 0.754547 |
+| 2,048 | default ≤90% | 0.998437 | 325.768 µs | 0.888893 |
+| 10,000 | 50% | 0.982812 | 565.221 µs | 0.499580 |
+| 10,000 | 75% | 0.996875 | 694.175 µs | 0.749023 |
+| 10,000 | default ≤90% | 1.000000 | 780.488 µs | 0.899686 |
+
+Full-cluster reference latency was 323.250 µs at 2,048 vectors and 849.215 µs
+at 10,000 vectors on the same run. Timings are comparative within that run;
+the enforced invariant is recall@10 at least 0.99 with no more than 95% of
+candidates. `--ann-probes` can still request an explicit probe count.
+
 Tune threshold:
 
 ```bash
