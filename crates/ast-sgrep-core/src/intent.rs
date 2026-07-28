@@ -167,11 +167,10 @@ fn channel_ceiling(kind: HitKind, term_count: usize) -> f64 {
 }
 pub fn route_hits(parsed: &ParsedQuery, hits: &mut [SearchHit]) {
     let w = weights_for(classify(parsed));
-    let substantive_terms = parsed
-        .terms
-        .iter()
-        .filter(|term| term.chars().count() > 1)
-        .count();
+    // Count every non-empty term, including single-character identifiers (`i`, `x`,
+    // `T`). Previously `chars().count() > 1` forced score 0 on all text channels for
+    // one-char hybrid queries while embed still ranked — exact defs disappeared.
+    let substantive_terms = parsed.terms.iter().filter(|term| !term.is_empty()).count();
     for hit in hits {
         let text_channel = matches!(
             hit.kind,
@@ -193,5 +192,58 @@ pub fn route_hits(parsed: &ParsedQuery, hits: &mut [SearchHit]) {
         };
         hit.score =
             (hit.score / channel_ceiling(hit.kind, substantive_terms)).clamp(0.0, 1.0) * weight;
+    }
+}
+
+#[cfg(test)]
+mod route_hits_tests {
+    use super::route_hits;
+    use crate::query::{ParsedQuery, QueryMode};
+    use crate::search::{HitKind, SearchHit};
+
+    fn hit(kind: HitKind, score: f64) -> SearchHit {
+        SearchHit {
+            kind,
+            file: "a.rs".into(),
+            line_start: 1,
+            line_end: 1,
+            symbol: Some("i".into()),
+            caller: None,
+            callee: None,
+            language: None,
+            score,
+            excerpt: "fn i() {}".into(),
+        }
+    }
+
+    #[test]
+    fn single_char_hybrid_keeps_def_score() {
+        let parsed = ParsedQuery {
+            raw: "i".into(),
+            mode: QueryMode::Hybrid,
+            target: None,
+            terms: vec!["i".into()],
+        };
+        let mut hits = vec![hit(HitKind::Def, 10.0), hit(HitKind::Embed, 0.5)];
+        route_hits(&parsed, &mut hits);
+        assert!(
+            hits[0].score > 0.0,
+            "def score zeroed for single-char term: {}",
+            hits[0].score
+        );
+        assert!(hits[1].score > 0.0);
+    }
+
+    #[test]
+    fn empty_terms_still_zero_text_channels() {
+        let parsed = ParsedQuery {
+            raw: "".into(),
+            mode: QueryMode::Hybrid,
+            target: None,
+            terms: vec![],
+        };
+        let mut hits = vec![hit(HitKind::Def, 10.0)];
+        route_hits(&parsed, &mut hits);
+        assert_eq!(hits[0].score, 0.0);
     }
 }
