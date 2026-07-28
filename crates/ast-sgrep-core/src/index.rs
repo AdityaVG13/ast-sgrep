@@ -246,6 +246,9 @@ impl Indexer {
                     PrepareOutcome::Failed(msg) => {
                         eprintln!("[asgrep] failed to index {rel_str}: {msg}");
                         stats.files_failed += 1;
+                        // Still "seen": a transient prepare/IO failure must not cause prune to
+                        // delete a previously good index row for this path.
+                        seen_paths.insert(rel_str.clone());
                     }
                     PrepareOutcome::Ready(prep) => {
                         seen_paths.insert(rel_str.clone());
@@ -774,6 +777,7 @@ mod tests {
         assert!(!should_prune_missing_files(true));
         assert!(should_prune_missing_files(false));
     }
+
 }
 #[cfg(test)]
 mod body_hash_tests {

@@ -185,7 +185,7 @@ impl IndexStore {
             |r| r.get(0),
         )
     }
-    /// File-tx stays OFF until bulk commit (no re-NORMAL after each file).
+    /// Drop durability for a short single-file write; always restored in `end_file_tx`.
     pub fn begin_file_tx(&self) -> Result<()> {
         if !self.conn.is_autocommit() {
             return Ok(());
@@ -202,15 +202,31 @@ impl IndexStore {
         self.end_file_tx(false)
     }
     fn end_file_tx(&self, commit: bool) -> Result<()> {
-        if !self.file_tx_active.replace(false) {
+        // Only clear the flag after COMMIT/ROLLBACK so a failed COMMIT cannot leave a
+        // live transaction while `file_tx_active` claims idle (silent upsert loss).
+        if !self.file_tx_active.get() {
             return Ok(());
         }
-        if commit {
-            self.conn.execute_batch("COMMIT")?;
+        let end = if commit {
+            self.conn.execute_batch("COMMIT")
         } else {
-            let _ = self.conn.execute_batch("ROLLBACK");
+            self.conn.execute_batch("ROLLBACK")
+        };
+        match end {
+            Ok(()) => {
+                self.file_tx_active.set(false);
+                let _ = self.conn.execute_batch("PRAGMA synchronous = NORMAL");
+                Ok(())
+            }
+            Err(e) => {
+                if commit {
+                    let _ = self.conn.execute_batch("ROLLBACK");
+                }
+                self.file_tx_active.set(false);
+                let _ = self.conn.execute_batch("PRAGMA synchronous = NORMAL");
+                Err(e.into())
+            }
         }
-        Ok(())
     }
     fn with_file_tx<T>(&self, f: impl FnOnce() -> Result<T>) -> Result<T> {
         self.begin_file_tx()?;
@@ -256,18 +272,24 @@ impl IndexStore {
     }
     fn end_bulk_tx(&self, commit: bool) -> Result<()> {
         if self.conn.is_autocommit() {
-            return Ok(());
-        }
-        self.file_tx_active.set(false);
-        if commit {
-            self.conn.execute_batch("COMMIT")?;
+            // Still restore NORMAL in case a prior file-tx left OFF (defensive).
             let _ = self
                 .conn
                 .execute_batch("PRAGMA synchronous = NORMAL; PRAGMA cache_size = -16384");
-        } else {
-            let _ = self.conn.execute_batch("ROLLBACK");
+            self.file_tx_active.set(false);
+            return Ok(());
         }
-        Ok(())
+        let end = if commit {
+            self.conn.execute_batch("COMMIT")
+        } else {
+            self.conn.execute_batch("ROLLBACK")
+        };
+        self.file_tx_active.set(false);
+        // Always restore durable pragmas after bulk commit *or* rollback.
+        let _ = self
+            .conn
+            .execute_batch("PRAGMA synchronous = NORMAL; PRAGMA cache_size = -16384");
+        end.map_err(Into::into)
     }
     pub fn clear_all_data(&self) -> Result<()> {
         self.conn.execute_batch(CLEAR_ALL_SQL)?;

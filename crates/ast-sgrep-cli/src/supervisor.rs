@@ -4,6 +4,9 @@ const WORKER_MARKER: &str = "ASGREP_WORKER_MARKER";
 const SUPERVISOR_PID_ENV: &str = "ASGREP_SUPERVISOR_PID";
 #[cfg(unix)]
 const WORKER_NONCE_ENV: &str = "ASGREP_WORKER_NONCE";
+/// Minimum hex chars for a worker nonce (16 random bytes → 32 hex).
+#[cfg(unix)]
+const WORKER_NONCE_MIN_LEN: usize = 32;
 const CPU_LIMIT_ENV: &str = "ASGREP_CPU_LIMIT_PERCENT";
 pub const DEFAULT_CPU_LIMIT: u8 = 80;
 pub const MIN_CPU_LIMIT: u8 = 1;
@@ -56,6 +59,80 @@ pub fn supervise() -> anyhow::Result<()> {
     unix_impl::supervise()
 }
 #[cfg(unix)]
+fn generate_worker_nonce() -> String {
+    use std::io::Read;
+    let mut bytes = [0u8; 16];
+    if let Ok(mut f) = std::fs::File::open("/dev/urandom") {
+        let _ = f.read_exact(&mut bytes);
+    } else {
+        // Fallback mix if urandom is unavailable (extremely rare).
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let mut hasher = DefaultHasher::new();
+        std::process::id().hash(&mut hasher);
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+            .hash(&mut hasher);
+        nix::unistd::getpid().as_raw().hash(&mut hasher);
+        let a = hasher.finish().to_le_bytes();
+        bytes[..8].copy_from_slice(&a);
+        bytes[8..].copy_from_slice(&a);
+    }
+    let mut out = String::with_capacity(32);
+    for b in bytes {
+        out.push_str(&format!("{b:02x}"));
+    }
+    out
+}
+
+#[cfg(unix)]
+fn parent_exe_matches(supervisor_pid: i32) -> bool {
+    let Some(self_exe) = std::env::current_exe().ok() else {
+        return false;
+    };
+    #[cfg(target_os = "linux")]
+    {
+        let parent_exe = std::fs::read_link(format!("/proc/{supervisor_pid}/exe")).ok();
+        return parent_exe.as_ref() == Some(&self_exe);
+    }
+    #[cfg(target_os = "macos")]
+    {
+        // No unsafe/libproc (workspace `unsafe_code = forbid`). Best-effort: parent
+        // process command name from `ps` must match our binary basename.
+        let Some(self_name) = self_exe.file_name().and_then(|s| s.to_str()) else {
+            return false;
+        };
+        let output = std::process::Command::new("/bin/ps")
+            .args(["-p", &supervisor_pid.to_string(), "-o", "comm="])
+            .output()
+            .ok();
+        let Some(out) = output.filter(|o| o.status.success()) else {
+            return false;
+        };
+        let comm = String::from_utf8_lossy(&out.stdout);
+        let comm = comm.trim();
+        // ps may return basename or truncated name; accept prefix/suffix matches.
+        !comm.is_empty()
+            && (comm == self_name
+                || self_name.starts_with(comm)
+                || comm.ends_with(self_name)
+                || std::path::Path::new(comm)
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    == Some(self_name))
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        let _ = (supervisor_pid, self_exe);
+        // Other Unix: long nonce + parent pid only (see worker_authenticate).
+        true
+    }
+}
+
+#[cfg(unix)]
 pub fn worker_authenticate() -> bool {
     if std::env::var(WORKER_MARKER).is_err() {
         return false;
@@ -73,17 +150,13 @@ pub fn worker_authenticate() -> bool {
     if nix::unistd::getppid().as_raw() != supervisor_pid {
         return fail();
     }
+    // Reject constant/"1" nonces: supervisor always emits >= 32 hex chars.
     match std::env::var(WORKER_NONCE_ENV) {
-        Ok(ref v) if !v.is_empty() => {}
+        Ok(ref v) if v.len() >= WORKER_NONCE_MIN_LEN && v.bytes().all(|b| b.is_ascii_hexdigit()) => {}
         _ => return fail(),
     }
-    #[cfg(target_os = "linux")]
-    {
-        let parent_exe = std::fs::read_link(format!("/proc/{supervisor_pid}/exe")).ok();
-        let self_exe = std::env::current_exe().ok();
-        if !matches!((parent_exe, self_exe), (Some(p), Some(s)) if p == s) {
-            return fail();
-        }
+    if !parent_exe_matches(supervisor_pid) {
+        return fail();
     }
     true
 }
@@ -180,7 +253,7 @@ mod unix_impl {
         cmd.args(std::env::args_os().skip(1));
         cmd.env(WORKER_MARKER, "1");
         cmd.env(SUPERVISOR_PID_ENV, std::process::id().to_string());
-        cmd.env(WORKER_NONCE_ENV, "1");
+        cmd.env(WORKER_NONCE_ENV, generate_worker_nonce());
         for var in THREAD_ENV_VARS {
             cmd.env(var, "1");
         }

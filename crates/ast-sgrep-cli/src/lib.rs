@@ -167,7 +167,10 @@ pub fn main() -> anyhow::Result<()> {
                 supervisor::worker_start();
                 run_process()
             } else {
-                supervisor::supervise()
+                // Fail closed: never re-enter supervise() with a spoofed/partial
+                // worker marker (nested supervisors), and never SIGSTOP. Run as a
+                // normal process after clearing internal envs (done in authenticate).
+                run_process()
             }
         } else {
             supervisor::supervise()

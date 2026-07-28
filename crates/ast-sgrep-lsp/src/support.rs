@@ -285,6 +285,9 @@ pub fn extract_identifier_at(line: &str, byte_offset: usize) -> Option<String> {
     (!ident.is_empty()).then(|| ident.to_string())
 }
 fn ident_idx(chars: &[(usize, char)], byte_offset: usize) -> Option<usize> {
+    if chars.is_empty() {
+        return None;
+    }
     let mut idx = chars
         .iter()
         .position(|(o, _)| *o >= byte_offset)
@@ -310,6 +313,31 @@ fn ident_span(line: &str, chars: &[(usize, char)], idx: usize) -> (usize, usize)
 }
 fn is_ident(c: char) -> bool {
     c.is_alphanumeric() || c == '_'
+}
+
+#[cfg(test)]
+mod ident_tests {
+    use super::extract_identifier_at;
+
+    #[test]
+    fn empty_line_does_not_panic() {
+        assert_eq!(extract_identifier_at("", 0), None);
+        assert_eq!(extract_identifier_at("", 5), None);
+    }
+
+    #[test]
+    fn whitespace_only_line_returns_none() {
+        assert_eq!(extract_identifier_at("   ", 1), None);
+        assert_eq!(extract_identifier_at("\t", 0), None);
+    }
+
+    #[test]
+    fn finds_identifier() {
+        assert_eq!(
+            extract_identifier_at("  foo_bar  ", 4).as_deref(),
+            Some("foo_bar")
+        );
+    }
 }
 pub fn workspace_symbol(root: &Path, file: &str, hit: &SearchHit) -> Option<Value> {
     let name = hit
