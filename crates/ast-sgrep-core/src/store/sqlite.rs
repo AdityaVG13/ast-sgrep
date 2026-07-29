@@ -15,9 +15,9 @@ use ast_sgrep_lang::PatternNode;
 use rusqlite::types::{Type, ValueRef};
 use rusqlite::{params, Connection, ToSql};
 use std::collections::{BTreeSet, HashMap};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
-const SCHEMA_VERSION: i64 = 5;
+const SCHEMA_VERSION: i64 = 6;
 const IMPORT_SELECT: &str =
     "SELECT f.path, f.language, i.module_path, i.line_no FROM imports i JOIN files f ON f.id = i.file_id";
 const SYM_LOC: &str = "SELECT f.path, s.name, f.language, s.line_start, s.line_end FROM symbols s JOIN files f ON f.id = s.file_id";
@@ -163,6 +163,20 @@ impl IndexStore {
             .execute("DELETE FROM meta WHERE key = ?1", params![key])?;
         Ok(())
     }
+    /// Monotonic counter bumped on every semantic_chunks mutation (insert or delete).
+    /// Used by SemanticCache and the IVF fingerprint to detect delete+re-add
+    /// collisions where max_id is reused but chunk content/vectors differ.
+    /// See bead ast-sgrep-44a4 (F-02).
+    pub fn semantic_data_version(&self) -> Result<i64> {
+        Ok(self
+            .get_meta("semantic_data_version")?
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0))
+    }
+    pub fn bump_semantic_data_version(&self) -> Result<()> {
+        let v = self.semantic_data_version()?.saturating_add(1);
+        self.set_meta("semantic_data_version", &v.to_string())
+    }
     pub fn file_id(&self, rel_path: &str) -> Result<Option<i64>> {
         optional_row(
             &self.conn,
@@ -258,6 +272,7 @@ impl IndexStore {
     pub fn clear_all_data(&self) -> Result<()> {
         self.conn.execute_batch(CLEAR_ALL_SQL)?;
         let _ = self.conn.execute_batch("VACUUM");
+        self.bump_semantic_data_version()?;
         Ok(())
     }
     pub fn upsert_file(&self, input: UpsertFileInput<'_>) -> Result<i64> {
@@ -472,6 +487,12 @@ impl IndexStore {
         emb: &[EmbeddedChunk],
     ) -> Result<()> {
         if emb.is_empty() {
+            // A re-upsert of an EXISTING file reaches here AFTER upsert_file_row's
+            // delete_file_children already removed its old semantic_chunks. Bump so
+            // SemanticCache + IVF fingerprint detect the mutation (bead ast-sgrep-44a4).
+            // Benign over-bump when the file never had chunks (new file, no chunks):
+            // an extra cache miss, never a stale hit.
+            self.bump_semantic_data_version()?;
             return Ok(());
         }
         if emb.len() < chunks.len() && emb[0].backend == ast_sgrep_embed::EmbedBackendKind::Neural {
@@ -525,6 +546,9 @@ impl IndexStore {
         if let Some(d) = dim {
             self.set_meta("embed_dim", &d.to_string())?;
         }
+        // Bump semantic_data_version on every chunk insertion so SemanticCache and
+        // the IVF fingerprint detect delete+re-add collisions (bead ast-sgrep-44a4).
+        self.bump_semantic_data_version()?;
         Ok(())
     }
     fn insert_callers(&self, file_id: i64, callers: &[CallerRow]) -> Result<()> {
@@ -572,6 +596,7 @@ impl IndexStore {
                 .execute("DELETE FROM files WHERE id = ?1", params![id])?;
             self.delete_meta(&format!("eol:{rel_path}"))?;
             crate::semantic_ann::mark_semantic_ivf_stale(self);
+            self.bump_semantic_data_version()?;
         }
         Ok(())
     }
@@ -772,7 +797,7 @@ impl IndexStore {
         query_cached_map(
             &self.conn,
             &format!(
-                "{SYM_LOC} WHERE s.name=?1 ORDER BY f.path, s.line_start, s.line_end LIMIT ?2"
+                "{SYM_LOC} WHERE lower(s.name)=lower(?1) ORDER BY f.path, s.line_start, s.line_end LIMIT ?2"
             ),
             params![name, limit as i64],
             read_sym_loc,
@@ -797,53 +822,55 @@ impl IndexStore {
         if module.is_empty() {
             return Ok(Vec::new());
         }
+        let lang = self.file_language(from_file)?;
         let parent = Path::new(from_file)
             .parent()
             .unwrap_or_else(|| Path::new(""));
-        let crate_src = from_file
-            .find("/src/")
-            .map(|i| Path::new(&from_file[..i + 4]));
-        let slash = module.replace("::", "/");
-        let mut bases = Vec::new();
-        if let Some(rest) = slash.strip_prefix("crate/") {
-            if let Some(src) = crate_src {
-                bases.push(src.join(rest));
-            }
-        } else if slash == "crate" {
-            if let Some(src) = crate_src {
-                bases.push(src.to_path_buf());
-            }
-        } else if slash.starts_with("super/") || slash.starts_with("self/") {
-            let mut base = parent.to_path_buf();
-            let mut rest = slash.as_str();
-            while let Some(n) = rest.strip_prefix("super/") {
-                base.pop();
-                rest = n;
-            }
-            rest = rest.strip_prefix("self/").unwrap_or(rest);
-            bases.push(base.join(rest));
-        } else if module.starts_with('.') {
-            bases.push(parent.join(module));
-        } else {
-            bases.push(parent.join(&slash));
-            if let Some(src) = crate_src {
-                bases.push(src.join(&slash));
-            }
-        }
-        const EXTS: &[&str] = &[
-            "rs", "ts", "tsx", "js", "jsx", "py", "go", "java", "cs", "rb",
-        ];
+        let bases = match lang.as_deref() {
+            Some("python") => resolve_bases_python(parent, module),
+            Some("javascript") | Some("typescript") => resolve_bases_js(parent, module),
+            Some("go") => resolve_bases_go(from_file, parent, module),
+            // Rust (default): :: paths, crate/super/self, /src/ layout.
+            _ => resolve_bases_rust(from_file, parent, module),
+        };
+        let exts: &[&str] = match lang.as_deref() {
+            Some("python") => &["py"],
+            Some("javascript") => &["js", "jsx", "mjs", "cjs"],
+            Some("typescript") => &["ts", "tsx", "js", "jsx"],
+            Some("go") => &["go"],
+            Some("rust") => &["rs"],
+            _ => &[
+                "rs", "ts", "tsx", "js", "jsx", "py", "go", "java", "cs", "rb",
+            ],
+        };
         let mut cands = BTreeSet::new();
         for base in bases {
             let n = normalize_rel(&base);
             cands.insert(n.clone());
             if base.extension().is_none() {
-                for e in EXTS {
+                for e in exts {
                     cands.insert(format!("{n}.{e}"));
                 }
-                cands.insert(format!("{n}/mod.rs"));
-                for e in ["ts", "tsx", "js", "jsx"] {
-                    cands.insert(format!("{n}/index.{e}"));
+                match lang.as_deref() {
+                    Some("python") => {
+                        cands.insert(format!("{n}/__init__.py"));
+                    }
+                    Some("javascript") | Some("typescript") => {
+                        for e in ["ts", "tsx", "js", "jsx"] {
+                            cands.insert(format!("{n}/index.{e}"));
+                        }
+                    }
+                    Some("go") => {
+                        // package dir: any .go file under the package path is matched
+                        // via file_exists on exact candidates; also try package.go.
+                        cands.insert(format!("{n}/{}.go", base.file_name().and_then(|s| s.to_str()).unwrap_or("pkg")));
+                    }
+                    _ => {
+                        cands.insert(format!("{n}/mod.rs"));
+                        for e in ["ts", "tsx", "js", "jsx"] {
+                            cands.insert(format!("{n}/index.{e}"));
+                        }
+                    }
                 }
             }
         }
@@ -854,6 +881,15 @@ impl IndexStore {
             }
         }
         Ok(out)
+    }
+
+    fn file_language(&self, path: &str) -> Result<Option<String>> {
+        optional_row(
+            &self.conn,
+            "SELECT language FROM files WHERE path=?1",
+            &[&path],
+            |r| r.get(0),
+        )
     }
     pub fn pattern_node_count(&self) -> Result<usize> {
         count_star(&self.conn, "pattern_nodes")
@@ -959,4 +995,114 @@ impl IndexStore {
             .prepare_cached("SELECT 1 FROM files WHERE path=?1")?
             .exists(params![path])?)
     }
+}
+
+fn resolve_bases_rust(from_file: &str, parent: &Path, module: &str) -> Vec<PathBuf> {
+    let crate_src = from_file
+        .find("/src/")
+        .map(|i| Path::new(&from_file[..i + 4]));
+    let slash = module.replace("::", "/");
+    let mut bases = Vec::new();
+    if let Some(rest) = slash.strip_prefix("crate/") {
+        if let Some(src) = crate_src {
+            bases.push(src.join(rest));
+        }
+    } else if slash == "crate" {
+        if let Some(src) = crate_src {
+            bases.push(src.to_path_buf());
+        }
+    } else if slash.starts_with("super/") || slash.starts_with("self/") {
+        let mut base = parent.to_path_buf();
+        let mut rest = slash.as_str();
+        while let Some(n) = rest.strip_prefix("super/") {
+            base.pop();
+            rest = n;
+        }
+        rest = rest.strip_prefix("self/").unwrap_or(rest);
+        bases.push(base.join(rest));
+    } else if module.starts_with('.') {
+        bases.push(parent.join(module));
+    } else {
+        bases.push(parent.join(&slash));
+        if let Some(src) = crate_src {
+            bases.push(src.join(&slash));
+        }
+    }
+    bases
+}
+
+fn resolve_bases_python(parent: &Path, module: &str) -> Vec<PathBuf> {
+    let mut bases = Vec::new();
+    if module.starts_with('.') {
+        let dots = module.chars().take_while(|c| *c == '.').count();
+        let cleaned = module.trim_start_matches('.');
+        let mut base = parent.to_path_buf();
+        // PEP 328: one leading dot = current package; each extra pops one level.
+        for _ in 1..dots {
+            base.pop();
+        }
+        if cleaned.is_empty() {
+            bases.push(base);
+        } else {
+            bases.push(base.join(cleaned.replace('.', "/")));
+        }
+    } else {
+        let slash = module.replace('.', "/");
+        bases.push(PathBuf::from(&slash));
+        let mut cur = parent.to_path_buf();
+        for _ in 0..6 {
+            bases.push(cur.join(&slash));
+            if !cur.pop() {
+                break;
+            }
+        }
+    }
+    bases
+}
+
+fn resolve_bases_js(parent: &Path, module: &str) -> Vec<PathBuf> {
+    let mut bases = Vec::new();
+    if module.starts_with('.') {
+        bases.push(parent.join(module));
+    } else {
+        // Bare specifier: walk up for node_modules/<name>, plus same-dir fallback.
+        bases.push(parent.join(module));
+        let mut cur = parent.to_path_buf();
+        for _ in 0..8 {
+            bases.push(cur.join("node_modules").join(module));
+            if !cur.pop() {
+                break;
+            }
+        }
+    }
+    bases
+}
+
+fn resolve_bases_go(from_file: &str, parent: &Path, module: &str) -> Vec<PathBuf> {
+    let mut bases = Vec::new();
+    if module.starts_with('.') {
+        bases.push(parent.join(module));
+        return bases;
+    }
+    let parts: Vec<&str> = module.split('/').filter(|p| !p.is_empty()).collect();
+    if parts.is_empty() {
+        return bases;
+    }
+    // Match local packages by import-path suffix against indexed tree roots.
+    for n in 1..=parts.len().min(4) {
+        let suffix = parts[parts.len() - n..].join("/");
+        bases.push(PathBuf::from(&suffix));
+        let mut cur = parent.to_path_buf();
+        for _ in 0..6 {
+            bases.push(cur.join(&suffix));
+            if !cur.pop() {
+                break;
+            }
+        }
+        // Also try beside the importing file's module root (first path segment).
+        if let Some(root) = Path::new(from_file).components().next() {
+            bases.push(PathBuf::from(root.as_os_str()).join(&suffix));
+        }
+    }
+    bases
 }
