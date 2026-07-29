@@ -165,12 +165,6 @@ fn matched_term_count(parsed: &ParsedQuery, target: Option<&str>) -> usize {
 }
 
 fn channel_ceiling(parsed: &ParsedQuery, hit: &SearchHit) -> f64 {
-    let matched_terms = match hit.kind {
-        HitKind::Def => matched_term_count(parsed, hit.symbol.as_deref()),
-        HitKind::Caller => matched_term_count(parsed, hit.callee.as_deref()),
-        _ => 0,
-    }
-    .max(1) as f64;
     match hit.kind {
         // e2hc.14(a): lexical issues ONE OR-query so fuse_rrf never fuses —
         // each hit has a single rank. The max raw score is rrf_score(0, RRF_K)
@@ -182,8 +176,14 @@ fn channel_ceiling(parsed: &ParsedQuery, hit: &SearchHit) -> f64 {
         // Def/Caller producers sum only terms that match this hit's target.
         // Normalize against the same matched-term set so unrelated query context
         // cannot dilute evidence, while exact matches still outrank substrings.
-        HitKind::Def => 2.0 * SCORE_EXACT_SYMBOL * matched_terms + SCORE_DEF_BASE,
-        HitKind::Caller => 2.0 * SCORE_EXACT_SYMBOL * matched_terms + SCORE_CALLER_BASE,
+        HitKind::Def => {
+            let matched = matched_term_count(parsed, hit.symbol.as_deref()).max(1) as f64;
+            2.0 * SCORE_EXACT_SYMBOL * matched + SCORE_DEF_BASE
+        }
+        HitKind::Caller => {
+            let matched = matched_term_count(parsed, hit.callee.as_deref()).max(1) as f64;
+            2.0 * SCORE_EXACT_SYMBOL * matched + SCORE_CALLER_BASE
+        }
         HitKind::Graph => SCORE_GRAPH,
         HitKind::Anchor => SCORE_ANCHOR,
         HitKind::Embed => SCORE_EMBED,
@@ -193,13 +193,14 @@ fn channel_ceiling(parsed: &ParsedQuery, hit: &SearchHit) -> f64 {
 }
 pub fn route_hits(parsed: &ParsedQuery, hits: &mut [SearchHit]) {
     let w = weights_for(classify(parsed));
-    let substantive_terms = parsed.terms.iter().filter(|term| !term.is_empty()).count();
+    // Count nonempty terms (single-char queries like hybrid "i" must remain live).
+    let nonempty_terms = parsed.terms.iter().filter(|term| !term.is_empty()).count();
     for hit in hits {
         let text_channel = matches!(
             hit.kind,
             HitKind::Asgrep | HitKind::Def | HitKind::Caller | HitKind::Graph | HitKind::Anchor
         );
-        if substantive_terms == 0 && text_channel {
+        if nonempty_terms == 0 && text_channel {
             hit.score = 0.0;
             continue;
         }
@@ -275,16 +276,15 @@ mod tests {
         );
     }
 
-    /// e2hc.14(c): Single-char symbol queries (e.g. `defs:i`) must not be
-    /// zeroed at routing. The old `> 1` filter set substantive_terms=0 for
-    /// single-char terms, hitting the `score = 0.0; continue;` path for all
-    /// text-channel hits.
+    /// e2hc.14(c): Hybrid single-char queries (e.g. `"i"`) must not zero text
+    /// channels at routing. The old `chars().count() > 1` filter set the term
+    /// count to 0 for single-char tokens and dropped every text-channel hit.
     #[test]
     fn route_hits_preserves_single_char_text_channel_hits() {
         let parsed = ParsedQuery {
-            raw: "defs:i".into(),
-            mode: QueryMode::Defs,
-            target: Some("i".into()),
+            raw: "i".into(),
+            mode: QueryMode::Hybrid,
+            target: None,
             terms: vec!["i".into()],
         };
         let raw_score = score_def(&["i".to_string()], "i");
@@ -305,19 +305,13 @@ mod tests {
             excerpt: "fn i() {}".into(),
         }];
         route_hits(&parsed, &mut hits);
+        let weight = weights_for(classify(&parsed)).def;
+        let expected = (raw_score / channel_ceiling(&parsed, &hits[0])).clamp(0.0, 1.0) * weight;
         assert!(
-            hits[0].score > 0.0,
-            "single-char Def hit must not be zeroed at routing; got score={}",
-            hits[0].score
-        );
-        // The normalized score should be ~1.0 (exact match, 1 term) * weight.
-        let ceiling = channel_ceiling(&parsed, &hits[0]);
-        let expected_normalized = (raw_score / ceiling).clamp(0.0, 1.0);
-        assert!(
-            hits[0].score >= expected_normalized * 0.5,
-            "single-char Def hit score {} should be close to normalized {} * weight",
+            (hits[0].score - expected).abs() < 1e-12,
+            "single-char Def hit score {} must equal normalized*weight {}",
             hits[0].score,
-            expected_normalized
+            expected
         );
     }
 
@@ -425,11 +419,12 @@ mod tests {
             excerpt: "foo bar baz".into(),
         }];
         route_hits(&parsed, &mut hits);
-        // With the fix, normalized = raw / ceiling = raw / raw = 1.0, then * weight.
+        // With the fix, normalized = raw / ceiling = 1.0, then * weight.
         // Pre-fix, normalized = raw / (3 * raw) = 1/3, then * weight.
+        let expected = weights_for(classify(&parsed)).lexical;
         assert!(
-            hits[0].score > 0.5,
-            "rank-0 lexical hit on 3-term query should normalize near 1.0 * weight, not 1/3; got {}",
+            (hits[0].score - expected).abs() < 1e-12,
+            "rank-0 lexical hit on 3-term query should equal 1.0 * weight ({expected}); got {}",
             hits[0].score
         );
     }
