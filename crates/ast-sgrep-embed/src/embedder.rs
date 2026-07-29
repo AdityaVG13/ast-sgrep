@@ -166,22 +166,42 @@ impl Embedder for HashedEmbedder {
 pub struct OllamaEmbedder {
     config: OllamaEmbeddingConfig,
     model_id: String,
+    dim: std::sync::OnceLock<usize>,
+    embed_one: fn(&str, &OllamaEmbeddingConfig) -> Result<Vec<f32>, String>,
 }
 impl OllamaEmbedder {
     pub fn new(config: OllamaEmbeddingConfig) -> Self {
+        Self::with_embed_fn(config, embed_via_ollama)
+    }
+    /// Construct with a custom single-text embedder (used in tests to avoid network).
+    pub fn with_embed_fn(
+        config: OllamaEmbeddingConfig,
+        embed_one: fn(&str, &OllamaEmbeddingConfig) -> Result<Vec<f32>, String>,
+    ) -> Self {
         let model_id = format!("ollama:{}", config.model);
-        Self { config, model_id }
+        Self {
+            config,
+            model_id,
+            dim: std::sync::OnceLock::new(),
+            embed_one,
+        }
     }
 }
 impl Embedder for OllamaEmbedder {
     fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
-        texts
+        let out: Result<Vec<Vec<f32>>> = texts
             .iter()
-            .map(|t| embed_via_ollama(t, &self.config).map_err(|e| anyhow!(e)))
-            .collect()
+            .map(|t| (self.embed_one)(t, &self.config).map_err(|e| anyhow!(e)))
+            .collect();
+        let out = out?;
+        if let Some(first) = out.first().filter(|v| !v.is_empty()) {
+            let _ = self.dim.set(first.len());
+        }
+        Ok(out)
     }
     fn dim(&self) -> usize {
-        0
+        // 0 until the first successful embed probes and caches the true dim.
+        self.dim.get().copied().unwrap_or(0)
     }
     fn model_id(&self) -> &str {
         &self.model_id
@@ -193,22 +213,41 @@ impl Embedder for OllamaEmbedder {
 pub struct CloudEmbedder {
     config: CloudEmbeddingConfig,
     model_id: String,
+    dim: std::sync::OnceLock<usize>,
+    embed_one: fn(&str, &CloudEmbeddingConfig) -> Result<Vec<f32>, String>,
 }
 impl CloudEmbedder {
     pub fn new(config: CloudEmbeddingConfig) -> Self {
+        Self::with_embed_fn(config, embed_via_api)
+    }
+    /// Construct with a custom single-text embedder (used in tests to avoid network).
+    pub fn with_embed_fn(
+        config: CloudEmbeddingConfig,
+        embed_one: fn(&str, &CloudEmbeddingConfig) -> Result<Vec<f32>, String>,
+    ) -> Self {
         let model_id = format!("cloud:{}", config.model);
-        Self { config, model_id }
+        Self {
+            config,
+            model_id,
+            dim: std::sync::OnceLock::new(),
+            embed_one,
+        }
     }
 }
 impl Embedder for CloudEmbedder {
     fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
-        texts
+        let out: Result<Vec<Vec<f32>>> = texts
             .iter()
-            .map(|t| embed_via_api(t, &self.config).map_err(|e| anyhow!(e)))
-            .collect()
+            .map(|t| (self.embed_one)(t, &self.config).map_err(|e| anyhow!(e)))
+            .collect();
+        let out = out?;
+        if let Some(first) = out.first().filter(|v| !v.is_empty()) {
+            let _ = self.dim.set(first.len());
+        }
+        Ok(out)
     }
     fn dim(&self) -> usize {
-        0
+        self.dim.get().copied().unwrap_or(0)
     }
     fn model_id(&self) -> &str {
         &self.model_id
@@ -404,4 +443,48 @@ fn try_backend_batch(kind: EmbedBackendKind, texts: &[&str]) -> Option<Vec<Vec<f
 }
 pub fn default_semantic_dim() -> usize {
     SEMANTIC_DIM
+}
+
+#[cfg(test)]
+mod dim_probe_tests {
+    use super::*;
+
+    fn stub_ollama(_text: &str, _cfg: &OllamaEmbeddingConfig) -> Result<Vec<f32>, String> {
+        Ok(vec![0.25; 384])
+    }
+
+    fn stub_cloud(_text: &str, _cfg: &CloudEmbeddingConfig) -> Result<Vec<f32>, String> {
+        Ok(vec![0.5; 1536])
+    }
+
+    #[test]
+    fn ollama_dim_matches_embedded_vector_after_probe() {
+        let embedder = OllamaEmbedder::with_embed_fn(
+            OllamaEmbeddingConfig {
+                api_url: "http://127.0.0.1:9".into(),
+                model: "stub".into(),
+            },
+            stub_ollama,
+        );
+        assert_eq!(embedder.dim(), 0, "dim is 0 before first embed");
+        let vector = Embedder::embed(&embedder, "hello").unwrap();
+        assert_eq!(embedder.dim(), vector.len());
+        assert_eq!(embedder.dim(), 384);
+    }
+
+    #[test]
+    fn cloud_dim_matches_embedded_vector_after_probe() {
+        let embedder = CloudEmbedder::with_embed_fn(
+            CloudEmbeddingConfig {
+                api_url: "http://127.0.0.1:9".into(),
+                api_key: "test".into(),
+                model: "stub".into(),
+            },
+            stub_cloud,
+        );
+        assert_eq!(embedder.dim(), 0, "dim is 0 before first embed");
+        let vector = Embedder::embed(&embedder, "hello").unwrap();
+        assert_eq!(embedder.dim(), vector.len());
+        assert_eq!(embedder.dim(), 1536);
+    }
 }
