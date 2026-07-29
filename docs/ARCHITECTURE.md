@@ -6,7 +6,7 @@ ast-sgrep is a persistent, hybrid retrieval system. Indexing turns source files 
 source tree
   -> language extraction
   -> SQLite index + optional sidecars
-  -> query grammar / intent routing
+  -> query prefixes / intent routing
   -> retrieval passes
   -> fusion + reranking
   -> CLI, JSON, MCP, or LSP output
@@ -54,7 +54,7 @@ Large semantic indexes may also persist `.asgrep/semantic.ivf`, an IVF approxima
 
 ## Query and search pipeline
 
-The [query grammar](QUERY_GRAMMAR.md) is the public routing contract. Prefixes such as `defs:`, `callers:`, and `pattern:` select a mode; the `semantic` command explicitly isolates semantic retrieval; an unprefixed query uses hybrid retrieval.
+The [query prefixes](QUERY_GRAMMAR.md) doc is the public routing contract. Prefixes such as `defs:`, `callers:`, and `pattern:` select a mode; the `semantic` command explicitly isolates semantic retrieval; an unprefixed query uses hybrid retrieval. There is no composable `AND` / `path:` / `lang:` clause grammar.
 
 ### Candidate passes
 
@@ -90,7 +90,7 @@ Protocol consumers should discover capabilities first, treat stdout JSON as data
 
 ## Further reading
 
-- [Query grammar](QUERY_GRAMMAR.md)
+- [Query prefixes](QUERY_GRAMMAR.md)
 - [Semantic search](semantic-search.md)
 - [Index and retrieval walkthrough](how-it-works.md)
 - [MCP setup](mcp.md)

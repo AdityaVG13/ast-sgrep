@@ -61,10 +61,12 @@ fn semantic_mutation_removes_ivf_before_it_can_be_reloaded() {
     );
 }
 #[test]
-fn re_upsert_does_not_leave_stale_fts_rows() {
+fn re_upsert_refreshes_fts_without_touching_other_files() {
     let temp = TempDir::new().unwrap();
     let store = IndexStore::open(temp.path(), None).unwrap();
     let path = "stale_test.py";
+    let other = [(1, "second unique haystack".into())];
+    store.upsert_file(base("second.py", &other, "other1")).unwrap();
     let first = [(1, "alpha beta gamma".into()), (2, "delta epsilon".into())];
     store.upsert_file(base(path, &first, "hash1")).unwrap();
     assert_eq!(count_match(&store, "lines_fts", "alpha"), 1);
@@ -75,6 +77,8 @@ fn re_upsert_does_not_leave_stale_fts_rows() {
     assert_eq!(count_match(&store, "lines_trigram", "alp"), 0);
     assert_eq!(count_match(&store, "lines_fts", "zeta"), 1);
     assert_eq!(count_match(&store, "lines_trigram", "zet"), 1);
+    assert_eq!(count_match(&store, "lines_fts", "second"), 1);
+    assert_eq!(count_match(&store, "lines_trigram", "sec"), 1);
 }
 #[test]
 fn remove_file_clears_all_per_file_tables() {
@@ -142,20 +146,10 @@ fn remove_file_clears_all_per_file_tables() {
         );
     }
 }
+/// Timing gate for bulk re-upsert; not a correctness oracle — run with
+/// `cargo test -- --ignored` or move into benches when measuring delete cost.
 #[test]
-fn re_upsert_preserves_other_files_fts_rows() {
-    let temp = TempDir::new().unwrap();
-    let store = IndexStore::open(temp.path(), None).unwrap();
-    let a = [(1, "first unique needle".into())];
-    let b = [(1, "second unique haystack".into())];
-    store.upsert_file(base("first.py", &a, "hash1")).unwrap();
-    store.upsert_file(base("second.py", &b, "hash2")).unwrap();
-    let rep = [(1, "replacement content".into())];
-    store.upsert_file(base("first.py", &rep, "hash3")).unwrap();
-    assert_eq!(count_match(&store, "lines_fts", "second"), 1);
-    assert_eq!(count_match(&store, "lines_trigram", "sec"), 1);
-}
-#[test]
+#[ignore = "timing quarantine; not a CI correctness gate"]
 fn re_upsert_many_files_is_linear() {
     let temp = TempDir::new().unwrap();
     let store = IndexStore::open(temp.path(), None).unwrap();

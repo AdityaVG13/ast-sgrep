@@ -104,7 +104,7 @@ cargo build --release -p ast-sgrep-cli
 ./target/release/asgrep chain 'auth_refresh' . --limit 3
 ```
 
-Unprefixed queries run **hybrid** retrieval. See the [query grammar](docs/QUERY_GRAMMAR.md).
+Unprefixed queries run **hybrid** retrieval. See the [query prefixes](docs/QUERY_GRAMMAR.md).
 
 [Getting started →](docs/getting-started.md) · [Architecture →](docs/ARCHITECTURE.md) · [Docs index →](docs/README.md)
 
@@ -163,7 +163,7 @@ Canonical table: [head-to-head.md](benchmarks/results/head-to-head.md). Index: [
 | [Getting started](docs/getting-started.md) | Install, index, queries, flags |
 | [Pi package guide](docs/pi-package.md) | Pi install, tools, data, security, updates, rollback, uninstall |
 | [Architecture](docs/ARCHITECTURE.md) | Index schema, search pipeline, crates |
-| [Query grammar](docs/QUERY_GRAMMAR.md) | Prefixes and composition |
+| [Query prefixes](docs/QUERY_GRAMMAR.md) | Mode prefixes (`defs:`, `callers:`, …) |
 | [Semantic search](docs/semantic-search.md) | Chunks, providers, IVF-ANN |
 | [Benchmarks](docs/benchmarks.md) | Methodology, reproduction, losses |
 | [Comparison](docs/comparison.md) | vs ripgrep / ast-grep |

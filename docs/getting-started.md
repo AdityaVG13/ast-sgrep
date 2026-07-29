@@ -42,7 +42,7 @@ cargo build --release -j1
 ./target/release/asgrep bench . --query auth_refresh --iterations 1
 ```
 
-The commands above cover installation from source, incremental indexing, grammar-directed search, semantic-only retrieval, relationship traversal, and a one-iteration local benchmark smoke test. See the [query grammar](QUERY_GRAMMAR.md) for prefixes and composition, the [architecture](ARCHITECTURE.md) for data flow, and [benchmark methodology](benchmarks.md) before interpreting timing output.
+The commands above cover installation from source, incremental indexing, grammar-directed search, semantic-only retrieval, relationship traversal, and a one-iteration local benchmark smoke test. See the [query prefixes](QUERY_GRAMMAR.md) for mode prefixes, the [architecture](ARCHITECTURE.md) for data flow, and [benchmark methodology](benchmarks.md) before interpreting timing output.
 
 ## First index
 
