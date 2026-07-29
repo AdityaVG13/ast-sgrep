@@ -744,19 +744,29 @@ fn is_watch_self_event(paths: &[PathBuf], root: &Path, index_db: &Path) -> bool 
     }
     let default_index_dir = root.join(".asgrep");
     let semantic_ivf = ast_sgrep_core::semantic_ivf::semantic_ivf_path(index_db);
-    let sidecar = |suffix: &str| {
-        let mut path = index_db.as_os_str().to_owned();
+    let sidecar = |base: &Path, suffix: &str| {
+        let mut path = base.as_os_str().to_owned();
         path.push(suffix);
         PathBuf::from(path)
     };
-    let wal = sidecar("-wal");
-    let shm = sidecar("-shm");
+    let wal = sidecar(index_db, "-wal");
+    let shm = sidecar(index_db, "-shm");
+    // Tantivy lexical.db (+ wal/shm) lives beside the sqlite index, including
+    // under a custom --index-path parent (jsfn / thermos P2).
+    let lexical = index_db
+        .parent()
+        .map(|p| p.join(ast_sgrep_core::tantivy_index::LEXICAL_DB));
+    let lexical_wal = lexical.as_ref().map(|p| sidecar(p, "-wal"));
+    let lexical_shm = lexical.as_ref().map(|p| sidecar(p, "-shm"));
     paths.iter().all(|path| {
         path.starts_with(&default_index_dir)
             || path == index_db
             || path == &semantic_ivf
             || path == &wal
             || path == &shm
+            || lexical.as_ref().is_some_and(|p| path == p)
+            || lexical_wal.as_ref().is_some_and(|p| path == p)
+            || lexical_shm.as_ref().is_some_and(|p| path == p)
     })
 }
 
@@ -1053,6 +1063,21 @@ mod watch_batch_tests {
         let db = Path::new("/repo/custom/index.sqlite");
         assert!(is_watch_self_event(
             &[PathBuf::from("/repo/custom/index.sqlite-wal")],
+            root,
+            db
+        ));
+        assert!(is_watch_self_event(
+            &[PathBuf::from("/repo/custom/lexical.db")],
+            root,
+            db
+        ));
+        assert!(is_watch_self_event(
+            &[PathBuf::from("/repo/custom/lexical.db-wal")],
+            root,
+            db
+        ));
+        assert!(is_watch_self_event(
+            &[PathBuf::from("/repo/custom/semantic.ivf")],
             root,
             db
         ));

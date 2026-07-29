@@ -1,5 +1,8 @@
 use ast_sgrep_lsp::backend::path_to_uri;
-use ast_sgrep_lsp::types::{ExecuteCommandParams, TextDocumentContentChangeEvent};
+use ast_sgrep_lsp::types::{
+    ExecuteCommandParams, Position, ReferenceContext, ReferenceParams, TextDocumentContentChangeEvent,
+    TextDocumentIdentifier, TextDocumentPositionParams,
+};
 use ast_sgrep_testkit::sample_backend;
 #[test]
 fn lsp_smoke() {
@@ -47,4 +50,90 @@ fn successful_read_does_not_heal_failed_index() {
     backend.set_index_path(healthy);
     assert!(backend.search("process_request", false, 1).is_ok());
     assert!(!backend.is_index_ready());
+}
+
+// Regression for bead ast-sgrep-nuli (F-04): find_references/goto_definition
+// returned empty on uppercase/mixed-case symbols (inherited from F-01). Pin the
+// full public navigation path: identifier-at-position -> defs:/callers: search ->
+// LSP locations. Also pin case-mismatched prefixed search (defs:foobar against
+// symbol FooBar) so a same-case-only regression cannot silently pass.
+#[test]
+fn uppercase_symbol_resolves_through_definition_and_reference_endpoints() {
+    let (_indexed, backend) = sample_backend();
+    let uri = path_to_uri(&backend.root().join("src/main.rs"));
+    backend
+        .apply_document_changes(
+            &uri,
+            &[TextDocumentContentChangeEvent {
+                range: None,
+                range_length: None,
+                text: "fn FooBar() { baz(); }\nfn baz() { FooBar(); }\n".into(),
+            }],
+        )
+        .unwrap();
+
+    let defs = backend.search("defs:foobar", false, 32).unwrap();
+    let defs_hits = defs["hits"].as_array().unwrap();
+    assert!(
+        !defs_hits.is_empty(),
+        "defs:foobar returned no hits; case-insensitive symbol lookup is broken"
+    );
+    assert!(defs_hits.iter().any(|h| h["excerpt"]
+        .as_str()
+        .unwrap_or("")
+        .contains("fn FooBar")));
+    let callers = backend.search("callers:foobar", false, 32).unwrap();
+    let callers_hits = callers["hits"].as_array().unwrap();
+    assert!(
+        !callers_hits.is_empty(),
+        "callers:foobar returned no hits; case-insensitive symbol lookup is broken"
+    );
+
+    // Position on FooBar call site in baz (line 1).
+    let at = TextDocumentPositionParams {
+        text_document: TextDocumentIdentifier { uri: uri.clone() },
+        position: Position {
+            line: 1,
+            character: 12,
+        },
+    };
+    let definition = backend.goto_definition(&at).unwrap();
+    assert_eq!(definition["uri"], uri);
+    assert_eq!(definition["range"]["start"]["line"], 0);
+
+    let references = backend
+        .find_references(&ReferenceParams {
+            at: at.clone(),
+            context: Some(ReferenceContext {
+                include_declaration: false,
+            }),
+        })
+        .unwrap();
+    let references = references.as_array().unwrap();
+    assert!(
+        !references.is_empty(),
+        "find_references(FooBar) returned empty; uppercase symbol navigation is broken"
+    );
+    assert!(references
+        .iter()
+        .any(|location| location["range"]["start"]["line"] == 1));
+    assert!(!references
+        .iter()
+        .any(|location| location["range"]["start"]["line"] == 0));
+
+    let with_declaration = backend
+        .find_references(&ReferenceParams {
+            at,
+            context: Some(ReferenceContext {
+                include_declaration: true,
+            }),
+        })
+        .unwrap();
+    let with_declaration = with_declaration.as_array().unwrap();
+    assert!(with_declaration
+        .iter()
+        .any(|location| location["range"]["start"]["line"] == 0));
+    assert!(with_declaration
+        .iter()
+        .any(|location| location["range"]["start"]["line"] == 1));
 }

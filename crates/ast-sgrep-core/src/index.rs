@@ -295,6 +295,15 @@ impl Indexer {
             }
         }
         self.rebuild_dirty_sidecars(&stats, semantic_ivf_dirty)?;
+        // Promote only after a complete walk rewrote every reachable file. Partial
+        // update_paths must not advertise semantic-v2 while v1 vectors remain.
+        if self.options.embed_semantic
+            && stats.files_failed == 0
+            && !stats.walk_errors
+            && self.store.needs_semantic_v1_rewrite()?
+        {
+            self.store.set_meta("embed_backend", "semantic-v2")?;
+        }
         Ok(stats)
     }
     fn prune_missing_files(
@@ -479,26 +488,30 @@ impl Indexer {
         let split = split_content_lines(content);
         let body_hash = body_structure_hash(content);
         let body_key = format!("body:{rel_path}");
-        if let Some(file_id) = self.store.file_id(rel_path)? {
-            if self.store.get_meta(&body_key)?.as_deref() == Some(body_hash.as_str()) {
-                self.store.begin_file_tx()?;
-                match self.store.refresh_lines_only(RefreshLinesInput {
-                    file_id,
-                    language: language.map(|l| l.as_str()),
-                    mtime_secs,
-                    mtime_nanos,
-                    content_hash: &hash,
-                    lines: &split.lines,
-                    eol: split.eol,
-                    rel_path,
-                }) {
-                    Ok(_) => {
-                        self.store.commit_file_tx()?;
-                        return Ok(FileIndexStats::default());
-                    }
-                    Err(e) => {
-                        self.store.rollback_file_tx()?;
-                        return Err(e);
+        // refresh_lines_only skips semantic re-embed; refuse it while v1 vectors
+        // still need rewriting (e2hc.13).
+        if !self.store.needs_semantic_v1_rewrite()? {
+            if let Some(file_id) = self.store.file_id(rel_path)? {
+                if self.store.get_meta(&body_key)?.as_deref() == Some(body_hash.as_str()) {
+                    self.store.begin_file_tx()?;
+                    match self.store.refresh_lines_only(RefreshLinesInput {
+                        file_id,
+                        language: language.map(|l| l.as_str()),
+                        mtime_secs,
+                        mtime_nanos,
+                        content_hash: &hash,
+                        lines: &split.lines,
+                        eol: split.eol,
+                        rel_path,
+                    }) {
+                        Ok(_) => {
+                            self.store.commit_file_tx()?;
+                            return Ok(FileIndexStats::default());
+                        }
+                        Err(e) => {
+                            self.store.rollback_file_tx()?;
+                            return Err(e);
+                        }
                     }
                 }
             }
@@ -506,7 +519,12 @@ impl Indexer {
         let (symbols, callers, imports, pattern_nodes) =
             self.extract_rows(rel_path, content, language)?;
         let semantic_chunks = if self.options.embed_semantic {
-            crate::semantic_chunk::build_semantic_chunks(&symbols, &callers, &split.lines)
+            crate::semantic_chunk::build_semantic_chunks(
+                &symbols,
+                &callers,
+                &split.lines,
+                language.map(|l| l.as_str()),
+            )
         } else {
             vec![]
         };
@@ -542,6 +560,13 @@ impl Indexer {
             return Ok(false);
         }
         if self.options.embed_semantic {
+            // Legacy unversioned semantic-v1 (e2hc.13): force rewrite even under
+            // Auto. Without this, Auto skips the backend mismatch check and a
+            // single-file update can flip meta to semantic-v2 while sibling
+            // chunks remain v1.
+            if self.store.needs_semantic_v1_rewrite()? {
+                return Ok(false);
+            }
             let stored = self.store.get_meta("embed_backend")?;
             let active = self.options.embed_backend.to_preference_str();
             if stored.as_deref() != Some(active)
@@ -687,7 +712,12 @@ fn prepare_file(
         None => (vec![], vec![], vec![], vec![]),
     };
     let semantic_chunks = if embed_semantic {
-        crate::semantic_chunk::build_semantic_chunks(&symbols, &callers, &split.lines)
+        crate::semantic_chunk::build_semantic_chunks(
+            &symbols,
+            &callers,
+            &split.lines,
+            language.map(|l| l.as_str()),
+        )
     } else {
         vec![]
     };
