@@ -25,6 +25,7 @@ pub fn compute_ann_fingerprint(
     max_chunk_id: i64,
     dim: usize,
     embed_backend: Option<&str>,
+    data_version: i64,
 ) -> [u8; 32] {
     let mut h = Hasher::new();
     h.update(b"asgrep-semantic-ivf-v1");
@@ -32,6 +33,10 @@ pub fn compute_ann_fingerprint(
     h.update(&max_chunk_id.to_le_bytes());
     h.update(&(dim as u32).to_le_bytes());
     h.update(embed_backend.unwrap_or("semantic").as_bytes());
+    // data_version disambiguates delete+re-add where max_chunk_id is reused but
+    // chunk content/vectors differ (bead ast-sgrep-44a4). Monotonic, bumped on
+    // every semantic_chunks mutation in IndexStore.
+    h.update(&data_version.to_le_bytes());
     *h.finalize().as_bytes()
 }
 #[derive(Debug, Clone)]

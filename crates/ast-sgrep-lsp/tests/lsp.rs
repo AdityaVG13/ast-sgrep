@@ -81,8 +81,7 @@ fn pure_insertion_preserves_following_char() {
     assert_eq!(insert_at(0, 0, "😂ab", "X"), "X😂ab");
 }
 
-// Companion: non-zero range_length still replaces the correct span (no regression
-// from the zero-length early-return).
+// Companion: non-zero range_length still replaces the correct span.
 #[test]
 fn nonzero_range_length_replaces_correct_span() {
     let out = apply_text_edit(
@@ -105,8 +104,11 @@ fn nonzero_range_length_replaces_correct_span() {
     assert_eq!(out, "hXYlo");
 }
 
-// Uppercase symbols must survive the complete public navigation path: extracting
-// the identifier from a document position, searching, and shaping LSP locations.
+// Regression for bead ast-sgrep-nuli (F-04): find_references/goto_definition
+// returned empty on uppercase/mixed-case symbols (inherited from F-01). Pin the
+// full public navigation path: identifier-at-position -> defs:/callers: search ->
+// LSP locations. Also pin case-mismatched prefixed search (defs:foobar against
+// symbol FooBar) so a same-case-only regression cannot silently pass.
 #[test]
 fn uppercase_symbol_resolves_through_definition_and_reference_endpoints() {
     let (_indexed, backend) = sample_backend();
@@ -121,6 +123,25 @@ fn uppercase_symbol_resolves_through_definition_and_reference_endpoints() {
             }],
         )
         .unwrap();
+
+    let defs = backend.search("defs:foobar", false, 32).unwrap();
+    let defs_hits = defs["hits"].as_array().unwrap();
+    assert!(
+        !defs_hits.is_empty(),
+        "defs:foobar returned no hits; case-insensitive symbol lookup is broken"
+    );
+    assert!(defs_hits.iter().any(|h| h["excerpt"]
+        .as_str()
+        .unwrap_or("")
+        .contains("fn FooBar")));
+    let callers = backend.search("callers:foobar", false, 32).unwrap();
+    let callers_hits = callers["hits"].as_array().unwrap();
+    assert!(
+        !callers_hits.is_empty(),
+        "callers:foobar returned no hits; case-insensitive symbol lookup is broken"
+    );
+
+    // Position on FooBar call site in baz (line 1).
     let at = TextDocumentPositionParams {
         text_document: TextDocumentIdentifier { uri: uri.clone() },
         position: Position {
@@ -128,7 +149,6 @@ fn uppercase_symbol_resolves_through_definition_and_reference_endpoints() {
             character: 12,
         },
     };
-
     let definition = backend.goto_definition(&at).unwrap();
     assert_eq!(definition["uri"], uri);
     assert_eq!(definition["range"]["start"]["line"], 0);
@@ -142,6 +162,10 @@ fn uppercase_symbol_resolves_through_definition_and_reference_endpoints() {
         })
         .unwrap();
     let references = references.as_array().unwrap();
+    assert!(
+        !references.is_empty(),
+        "find_references(FooBar) returned empty; uppercase symbol navigation is broken"
+    );
     assert!(references
         .iter()
         .any(|location| location["range"]["start"]["line"] == 1));

@@ -256,20 +256,16 @@ pub fn apply_text_edit(content: &str, change: &TextDocumentContentChangeEvent) -
     out
 }
 fn utf16_span_end(content: &str, start: &Position, utf16_len: u32) -> usize {
+    // Check length before consuming a char (same shape as utf16_char_to_byte).
+    // Pre-fix the loop advanced first, so utf16_len==0 (VS Code pure insertion)
+    // deleted the character after the cursor. Bead ast-sgrep-c9os.
     let sb = pos_to_byte(content, start);
-    // Zero-length span (pure insertion): consume no chars. Without this the loop
-    // below would advance by the first char's len_utf8 before checking u>=utf16_len,
-    // deleting the char after the cursor on every keystroke VS Code sends
-    // (rangeLength=0 on every insertion). See bead ast-sgrep-c9os.
-    if utf16_len == 0 {
-        return sb;
-    }
     let mut u = 0u32;
     for (bi, ch) in content[sb..].char_indices() {
-        u += ch.len_utf16() as u32;
         if u >= utf16_len {
-            return sb + bi + ch.len_utf8();
+            return sb + bi;
         }
+        u += ch.len_utf16() as u32;
     }
     content.len()
 }
