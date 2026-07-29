@@ -506,7 +506,12 @@ impl Indexer {
         let (symbols, callers, imports, pattern_nodes) =
             self.extract_rows(rel_path, content, language)?;
         let semantic_chunks = if self.options.embed_semantic {
-            crate::semantic_chunk::build_semantic_chunks(&symbols, &callers, &split.lines)
+            crate::semantic_chunk::build_semantic_chunks(
+                &symbols,
+                &callers,
+                &split.lines,
+                language.map(|l| l.as_str()),
+            )
         } else {
             vec![]
         };
@@ -687,7 +692,12 @@ fn prepare_file(
         None => (vec![], vec![], vec![], vec![]),
     };
     let semantic_chunks = if embed_semantic {
-        crate::semantic_chunk::build_semantic_chunks(&symbols, &callers, &split.lines)
+        crate::semantic_chunk::build_semantic_chunks(
+            &symbols,
+            &callers,
+            &split.lines,
+            language.map(|l| l.as_str()),
+        )
     } else {
         vec![]
     };
