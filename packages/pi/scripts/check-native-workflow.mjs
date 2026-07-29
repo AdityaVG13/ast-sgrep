@@ -11,10 +11,16 @@ const expectedAllowedSigner = 'adityavgcode@gmail.com ssh-ed25519 AAAAC3NzaC1lZD
 const releaseHelper = await readFile(path.join(root, 'packages/pi/scripts/release-acceptance.mjs'), 'utf8');
 const targets = JSON.parse(await readFile(path.join(root, 'packages/pi/release/targets.json'), 'utf8')).targets;
 const helper = await readFile(path.join(root, 'packages/pi/scripts/ci-install-smoke.mjs'), 'utf8');
-const ruby = 'document = YAML.safe_load(STDIN.read, aliases: true); puts JSON.generate(document)';
 const parse = (text) => {
-  const result = spawnSync('ruby', ['-rjson', '-ryaml', '-e', ruby], { input: text, encoding: 'utf8', windowsHide: true });
-  if (result.status !== 0) throw new Error(result.stderr.trim() || 'Ruby YAML parser failed');
+  const result = spawnSync('python3', ['-c', 'import json,sys,yaml; print(json.dumps(yaml.safe_load(sys.stdin.read())))'], {
+    input: text,
+    encoding: 'utf8',
+    windowsHide: true,
+  });
+  if (result.status !== 0) {
+    const detail = String(result.stderr || result.error?.message || '').trim() || 'Python YAML parser failed';
+    throw new Error(detail);
+  }
   const value = JSON.parse(result.stdout);
   if (value.on === undefined && value.true !== undefined) { value.on = value.true; delete value.true; }
   return value;
