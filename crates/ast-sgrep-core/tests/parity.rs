@@ -3,7 +3,7 @@
 use ast_sgrep_core::chain::{expand_chain, ChainConfig};
 use ast_sgrep_core::search::HitKind;
 use ast_sgrep_core::store::IndexStore;
-use ast_sgrep_core::{EmbedBackend, IndexOptions, Indexer, SearchOptions, Searcher};
+use ast_sgrep_core::{EmbedBackend, IndexOptions, Indexer, SearchOptions};
 use ast_sgrep_embed::EmbedPreference;
 use ast_sgrep_testkit::{index_sample, reopen_indexer, searcher_from};
 use std::fs;
