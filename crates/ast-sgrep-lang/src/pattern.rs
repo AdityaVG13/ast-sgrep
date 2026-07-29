@@ -93,8 +93,12 @@ pub fn match_literal_pattern(
 enum NativeKind {
     /// Function-like declaration; `name == None` means any name (`$NAME`).
     Function { name: Option<String> },
-    /// Class/struct/type declaration.
-    Class { name: Option<String> },
+    /// Class/struct/type declaration. `keyword` is the pattern prefix
+    /// (`class`, `struct`, `interface`, or `type`) so queries stay kind-specific.
+    Class {
+        keyword: &'static str,
+        name: Option<String>,
+    },
     /// Free or method call; method path segments may be `$` wildcards.
     Call {
         /// Exact path like `foo.bar` or single name; segments that were `$X` are None.
@@ -132,7 +136,10 @@ fn classify_native(pattern: &str) -> Option<NativeKind> {
                 return None;
             };
             return Some(if is_class {
-                NativeKind::Class { name }
+                NativeKind::Class {
+                    keyword: prefix.trim(),
+                    name,
+                }
             } else {
                 NativeKind::Function { name }
             });
@@ -228,8 +235,8 @@ fn match_structural(
                 &mut out,
             )?;
         }
-        NativeKind::Class { name } => {
-            let queries = class_queries(lang);
+        NativeKind::Class { keyword, name } => {
+            let queries = class_queries(lang, keyword);
             run_queries(
                 &language,
                 tree.root_node(),
@@ -280,37 +287,77 @@ fn function_queries(lang: Language) -> Vec<&'static str> {
     }
 }
 
-fn class_queries(lang: Language) -> Vec<&'static str> {
+fn class_queries(lang: Language, keyword: &str) -> Vec<&'static str> {
     match lang {
-        Language::Rust => vec![
-            "(struct_item name: (type_identifier) @name) @match",
-            "(enum_item name: (type_identifier) @name) @match",
-            "(trait_item name: (type_identifier) @name) @match",
-        ],
-        Language::Python => vec!["(class_definition name: (identifier) @name) @match"],
-        Language::Go => vec!["(type_declaration (type_spec name: (type_identifier) @name) @match)"],
-        Language::Java => vec![
-            "(class_declaration name: (identifier) @name) @match",
-            "(interface_declaration name: (identifier) @name) @match",
-        ],
-        // e2hc/difu.5: C# has struct, record, and enum declarations.
-        Language::CSharp => vec![
-            "(class_declaration name: (identifier) @name) @match",
-            "(interface_declaration name: (identifier) @name) @match",
-            "(struct_declaration name: (identifier) @name) @match",
-            "(record_declaration name: (identifier) @name) @match",
-            "(enum_declaration name: (identifier) @name) @match",
-        ],
-        Language::JavaScript | Language::TypeScript => {
-            vec!["(class_declaration name: (identifier) @name) @match"]
-        }
-        Language::Ruby => vec!["(class name: (constant) @name) @match"],
-        Language::Swift => vec![
-            // Swift represents class, struct, actor, enum, and extension with
-            // one class_declaration node distinguished by declaration_kind.
-            "(class_declaration name: (type_identifier) @name) @match",
-            "(protocol_declaration name: (type_identifier) @name) @match",
-        ],
+        Language::Rust => match keyword {
+            "struct" => vec!["(struct_item name: (type_identifier) @name) @match"],
+            "interface" => vec!["(trait_item name: (type_identifier) @name) @match"],
+            "type" => vec![
+                "(struct_item name: (type_identifier) @name) @match",
+                "(enum_item name: (type_identifier) @name) @match",
+                "(trait_item name: (type_identifier) @name) @match",
+            ],
+            // Rust has no `class`; keep empty rather than over-matching.
+            _ => vec![],
+        },
+        Language::Python => match keyword {
+            "class" | "type" => vec!["(class_definition name: (identifier) @name) @match"],
+            _ => vec![],
+        },
+        Language::Go => match keyword {
+            "type" | "struct" | "interface" | "class" => {
+                vec!["(type_declaration (type_spec name: (type_identifier) @name) @match)"]
+            }
+            _ => vec![],
+        },
+        Language::Java => match keyword {
+            "class" => vec!["(class_declaration name: (identifier) @name) @match"],
+            "interface" => vec!["(interface_declaration name: (identifier) @name) @match"],
+            "type" => vec![
+                "(class_declaration name: (identifier) @name) @match",
+                "(interface_declaration name: (identifier) @name) @match",
+            ],
+            _ => vec![],
+        },
+        Language::CSharp => match keyword {
+            "class" => vec!["(class_declaration name: (identifier) @name) @match"],
+            "interface" => vec!["(interface_declaration name: (identifier) @name) @match"],
+            "struct" => vec!["(struct_declaration name: (identifier) @name) @match"],
+            // `type` remains the broad catch-all for any type declaration.
+            "type" => vec![
+                "(class_declaration name: (identifier) @name) @match",
+                "(interface_declaration name: (identifier) @name) @match",
+                "(struct_declaration name: (identifier) @name) @match",
+                "(record_declaration name: (identifier) @name) @match",
+                "(enum_declaration name: (identifier) @name) @match",
+            ],
+            _ => vec![],
+        },
+        Language::JavaScript | Language::TypeScript => match keyword {
+            "class" | "type" => vec!["(class_declaration name: (identifier) @name) @match"],
+            _ => vec![],
+        },
+        Language::Ruby => match keyword {
+            "class" | "type" => vec!["(class name: (constant) @name) @match"],
+            _ => vec![],
+        },
+        // Swift uses one class_declaration node; declaration_kind selects the form.
+        Language::Swift => match keyword {
+            "class" => vec![
+                r#"(class_declaration declaration_kind: "class" name: (type_identifier) @name) @match"#,
+            ],
+            "struct" => vec![
+                r#"(class_declaration declaration_kind: "struct" name: (type_identifier) @name) @match"#,
+            ],
+            "interface" => {
+                vec!["(protocol_declaration name: (type_identifier) @name) @match"]
+            }
+            "type" => vec![
+                "(class_declaration name: (type_identifier) @name) @match",
+                "(protocol_declaration name: (type_identifier) @name) @match",
+            ],
+            _ => vec![],
+        },
     }
 }
 
@@ -377,9 +424,14 @@ fn call_target_path(node: &Node, source: &str) -> Option<Vec<String>> {
     let target = ["function", "name"]
         .into_iter()
         .find_map(|f| node.child_by_field_name(f))
-        // tree-sitter-swift exposes call_expression without fields; the
-        // callee is the first named child and call_suffix follows it.
-        .or_else(|| node.named_child(0))?;
+        // Swift call_expression has no function/name fields; callee is the
+        // first named child. Do not apply this fallback to other languages
+        // (e.g. Ruby receivers would be misread as callees).
+        .or_else(|| {
+            (node.kind() == "call_expression")
+                .then(|| node.named_child(0))
+                .flatten()
+        })?;
     path_from_node(&target, source)
 }
 
@@ -517,7 +569,7 @@ fn collect_node_signatures(
 fn declaration_prefix(node: &Node, source: &str) -> Option<&'static str> {
     match node.kind() {
         "function_item" => Some("fn"),
-        "struct_item" | "struct_declaration" | "actor_declaration" => Some("struct"),
+        "struct_item" | "struct_declaration" => Some("struct"),
         "function_definition" => Some("def"),
         "function_declaration"
         | "protocol_function_declaration"
@@ -555,7 +607,11 @@ fn call_target<'a>(node: &Node<'a>, source: &'a str) -> Option<&'a str> {
     ["function", "name"]
         .into_iter()
         .find_map(|f| node.child_by_field_name(f))
-        .or_else(|| node.named_child(0))
+        .or_else(|| {
+            (node.kind() == "call_expression")
+                .then(|| node.named_child(0))
+                .flatten()
+        })
         .and_then(|t| node_text(&t, source))
 }
 

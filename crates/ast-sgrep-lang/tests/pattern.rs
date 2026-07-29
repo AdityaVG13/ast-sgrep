@@ -113,3 +113,49 @@ fn function_pattern_matches_all_languages() {
         );
     }
 }
+
+#[test]
+fn csharp_struct_pattern_does_not_match_class() {
+    let source = r#"
+class Alpha {}
+struct Beta {}
+interface Gamma {}
+"#;
+    let class_hits = match_pattern(Language::CSharp, source, "class $NAME").unwrap();
+    let struct_hits = match_pattern(Language::CSharp, source, "struct $NAME").unwrap();
+    let interface_hits = match_pattern(Language::CSharp, source, "interface $NAME").unwrap();
+    assert_eq!(class_hits.len(), 1, "got {class_hits:?}");
+    assert!(class_hits[0].excerpt.contains("Alpha"), "{class_hits:?}");
+    assert!(!class_hits.iter().any(|h| h.excerpt.contains("Beta")));
+    assert_eq!(struct_hits.len(), 1, "got {struct_hits:?}");
+    assert!(struct_hits[0].excerpt.contains("Beta"), "{struct_hits:?}");
+    assert!(!struct_hits.iter().any(|h| h.excerpt.contains("Alpha")));
+    assert_eq!(interface_hits.len(), 1, "got {interface_hits:?}");
+    assert!(
+        interface_hits[0].excerpt.contains("Gamma"),
+        "{interface_hits:?}"
+    );
+}
+
+#[test]
+fn swift_struct_pattern_does_not_match_class_or_protocol() {
+    let source = r#"
+class Alpha {}
+struct Beta {}
+protocol Gamma {}
+"#;
+    let class_hits = match_pattern(Language::Swift, source, "class $NAME").unwrap();
+    let struct_hits = match_pattern(Language::Swift, source, "struct $NAME").unwrap();
+    let interface_hits = match_pattern(Language::Swift, source, "interface $NAME").unwrap();
+    assert_eq!(class_hits.len(), 1, "got {class_hits:?}");
+    assert!(class_hits[0].excerpt.contains("Alpha"), "{class_hits:?}");
+    assert!(!class_hits.iter().any(|h| h.excerpt.contains("Beta")));
+    assert_eq!(struct_hits.len(), 1, "got {struct_hits:?}");
+    assert!(struct_hits[0].excerpt.contains("Beta"), "{struct_hits:?}");
+    assert!(!struct_hits.iter().any(|h| h.excerpt.contains("Alpha")));
+    assert_eq!(interface_hits.len(), 1, "got {interface_hits:?}");
+    assert!(
+        interface_hits[0].excerpt.contains("Gamma"),
+        "{interface_hits:?}"
+    );
+}
