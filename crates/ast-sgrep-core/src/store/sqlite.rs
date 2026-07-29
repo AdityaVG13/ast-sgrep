@@ -163,6 +163,20 @@ impl IndexStore {
             .execute("DELETE FROM meta WHERE key = ?1", params![key])?;
         Ok(())
     }
+    /// Monotonic counter bumped on every semantic_chunks mutation (insert or delete).
+    /// Used by SemanticCache and the IVF fingerprint to detect delete+re-add
+    /// collisions where max_id is reused but chunk content/vectors differ.
+    /// See bead ast-sgrep-44a4 (F-02).
+    pub fn semantic_data_version(&self) -> Result<i64> {
+        Ok(self
+            .get_meta("semantic_data_version")?
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0))
+    }
+    pub fn bump_semantic_data_version(&self) -> Result<()> {
+        let v = self.semantic_data_version()?.saturating_add(1);
+        self.set_meta("semantic_data_version", &v.to_string())
+    }
     pub fn file_id(&self, rel_path: &str) -> Result<Option<i64>> {
         optional_row(
             &self.conn,
@@ -258,6 +272,7 @@ impl IndexStore {
     pub fn clear_all_data(&self) -> Result<()> {
         self.conn.execute_batch(CLEAR_ALL_SQL)?;
         let _ = self.conn.execute_batch("VACUUM");
+        self.bump_semantic_data_version()?;
         Ok(())
     }
     pub fn upsert_file(&self, input: UpsertFileInput<'_>) -> Result<i64> {
@@ -472,6 +487,12 @@ impl IndexStore {
         emb: &[EmbeddedChunk],
     ) -> Result<()> {
         if emb.is_empty() {
+            // A re-upsert of an EXISTING file reaches here AFTER upsert_file_row's
+            // delete_file_children already removed its old semantic_chunks. Bump so
+            // SemanticCache + IVF fingerprint detect the mutation (bead ast-sgrep-44a4).
+            // Benign over-bump when the file never had chunks (new file, no chunks):
+            // an extra cache miss, never a stale hit.
+            self.bump_semantic_data_version()?;
             return Ok(());
         }
         if emb.len() < chunks.len() && emb[0].backend == ast_sgrep_embed::EmbedBackendKind::Neural {
@@ -525,6 +546,9 @@ impl IndexStore {
         if let Some(d) = dim {
             self.set_meta("embed_dim", &d.to_string())?;
         }
+        // Bump semantic_data_version on every chunk insertion so SemanticCache and
+        // the IVF fingerprint detect delete+re-add collisions (bead ast-sgrep-44a4).
+        self.bump_semantic_data_version()?;
         Ok(())
     }
     fn insert_callers(&self, file_id: i64, callers: &[CallerRow]) -> Result<()> {
@@ -572,6 +596,7 @@ impl IndexStore {
                 .execute("DELETE FROM files WHERE id = ?1", params![id])?;
             self.delete_meta(&format!("eol:{rel_path}"))?;
             crate::semantic_ann::mark_semantic_ivf_stale(self);
+            self.bump_semantic_data_version()?;
         }
         Ok(())
     }
