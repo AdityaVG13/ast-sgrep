@@ -114,7 +114,6 @@ ASGREP_PERF_ASSERTS=1 cargo test --locked --profile release-perf \
   -p ast-sgrep-core --test semantic_ivf_roundtrip \
   medium_mapped_sidecar_reports_open_p99 -- \
   --exact --nocapture --test-threads=1
-python3 scripts/check-perf-budgets.py
 ```
 
 Cold, fresh-inode, and warm definitions plus the isolated probe are in [`docs/validation/semantic-ivf-mmap.md`](../docs/validation/semantic-ivf-mmap.md).

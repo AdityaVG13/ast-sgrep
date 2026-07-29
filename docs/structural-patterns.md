@@ -27,17 +27,5 @@ Use the standalone `ast-grep` CLI directly when those features are required.
 They are not silently delegated, so structural search latency has no process
 startup tail.
 
-The fixed 29-pattern bake-off contains declarations and bare identifiers only.
-All 29 are pinned by `pattern_native_suite.rs` and run through the native index
-without requiring an `ast-grep` installation.
-
-A release-mode RCH probe populated 23,001 indexed files, ran 101 exact
-`struct RegexMatcherBuilder` lookups, and measured a 0.00375ms p50. This isolates
-the in-process indexed matcher rather than CLI startup and is over four orders
-of magnitude below the 50ms acceptance ceiling. Reproduce with:
-
-```bash
-cargo test --locked --release -p ast-sgrep-core \
-  --test pattern_native_suite indexed_pattern_p50_is_below_50ms_at_23k_files \
-  -- --ignored --exact --nocapture --test-threads=1
-```
+Smoke coverage lives in `crates/ast-sgrep-lang` pattern tests and the ranking
+oracle on this branch — not a bake-off name list.

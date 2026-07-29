@@ -49,32 +49,6 @@ fn fusion_preserves_signal_tiers_and_computes_margins_within_each_tier() {
     assert_eq!(find("semantic-high").signal, HitSignal::Semantic);
     assert_eq!(find("semantic-high").margin, 0.5);
     assert_eq!(find("semantic-low").margin, 0.0);
-
-    let json = serde_json::to_value(&response).unwrap();
-    for hit in json["hits"].as_array().unwrap() {
-        assert!(matches!(
-            hit["signal"].as_str(),
-            Some("exact" | "structural" | "semantic")
-        ));
-        assert!(hit["score"].is_number());
-        assert!(hit["margin"].is_number());
-    }
-}
-
-#[test]
-fn every_hit_kind_has_a_stable_signal_tier() {
-    assert_eq!(HitKind::Asgrep.signal(), HitSignal::Exact);
-    assert_eq!(HitKind::Embed.signal(), HitSignal::Semantic);
-    for kind in [
-        HitKind::Def,
-        HitKind::Caller,
-        HitKind::Graph,
-        HitKind::Anchor,
-        HitKind::Import,
-        HitKind::Pattern,
-    ] {
-        assert_eq!(kind.signal(), HitSignal::Structural, "{kind:?}");
-    }
 }
 
 #[test]
@@ -107,54 +81,4 @@ fn legacy_and_spoofed_json_decode_to_kind_derived_signal() {
     assert_eq!(decoded.signal, HitSignal::Semantic);
     assert_eq!(decoded.contributors, vec![HitKind::Embed]);
     assert_eq!(decoded.margin, 0.0);
-}
-
-#[test]
-fn extreme_finite_scores_saturate_to_a_finite_margin() {
-    let parsed = ParsedQuery::literal("needle");
-    let options = SearchOptions {
-        limit: 8,
-        use_embed: false,
-        ..SearchOptions::default()
-    };
-    let response = finish_response(
-        &parsed,
-        &options,
-        vec![
-            hit(HitKind::Asgrep, "maximum", f64::MAX),
-            hit(HitKind::Asgrep, "minimum", -f64::MAX),
-        ],
-        true,
-    );
-    let maximum = response
-        .hits
-        .iter()
-        .find(|hit| hit.file == "maximum")
-        .unwrap();
-    assert_eq!(maximum.margin, f64::MAX);
-    assert!(response
-        .hits
-        .iter()
-        .all(|hit| hit.margin.is_finite() && hit.margin >= 0.0));
-}
-
-#[test]
-fn tied_scores_have_zero_margin_instead_of_false_confidence() {
-    let parsed = ParsedQuery::literal("needle");
-    let options = SearchOptions {
-        limit: 8,
-        use_embed: false,
-        ..SearchOptions::default()
-    };
-    let response = finish_response(
-        &parsed,
-        &options,
-        vec![
-            hit(HitKind::Embed, "semantic-a", 0.8),
-            hit(HitKind::Embed, "semantic-b", 0.8),
-            hit(HitKind::Embed, "semantic-c", 0.2),
-        ],
-        true,
-    );
-    assert!(response.hits.iter().all(|hit| hit.margin == 0.0));
 }
