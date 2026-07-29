@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS symbols (id INTEGER PRIMARY KEY, file_id INTEGER NOT 
   byte_start INTEGER NOT NULL, byte_end INTEGER NOT NULL,\
   FOREIGN KEY (file_id) REFERENCES files(id) ON DELETE CASCADE);\
 CREATE INDEX IF NOT EXISTS idx_symbols_name ON symbols(name);\
+CREATE INDEX IF NOT EXISTS idx_symbols_name_lower ON symbols(lower(name));\
 CREATE INDEX IF NOT EXISTS idx_symbols_file_id ON symbols(file_id);\
 CREATE TABLE IF NOT EXISTS callers (id INTEGER PRIMARY KEY, file_id INTEGER NOT NULL, caller TEXT NOT NULL,\
   callee TEXT NOT NULL, line_no INTEGER NOT NULL, byte_start INTEGER NOT NULL, byte_end INTEGER NOT NULL,\
@@ -88,7 +89,8 @@ pub fn where_clause(parts: &[String]) -> String {
         format!(" WHERE {}", parts.join(" AND "))
     }
 }
-fn escape_like_term(term: &str) -> String {
+/// Escape `%`, `_`, and `\` for use with `LIKE ... ESCAPE '\'`.
+pub fn escape_like_term(term: &str) -> String {
     let mut out = String::with_capacity(term.len());
     for ch in term.chars() {
         match ch {
@@ -100,6 +102,39 @@ fn escape_like_term(term: &str) -> String {
     }
     out
 }
+
+/// Escape SQLite GLOB metacharacters so `needle` matches literally.
+/// GLOB has no ESCAPE clause; wrap `*`, `?`, `[`, `]` in one-char classes.
+pub fn escape_glob_literal(term: &str) -> String {
+    let mut out = String::with_capacity(term.len());
+    for ch in term.chars() {
+        match ch {
+            '*' => out.push_str("[*]"),
+            '?' => out.push_str("[?]"),
+            '[' => out.push_str("[[]"),
+            ']' => out.push_str("[]]"),
+            other => out.push(other),
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod escape_tests {
+    use super::{escape_glob_literal, escape_like_term};
+
+    #[test]
+    fn glob_escapes_metachars() {
+        assert_eq!(escape_glob_literal("arr[0]"), "arr[[]0[]]");
+        assert_eq!(escape_glob_literal("a*b?c"), "a[*]b[?]c");
+    }
+
+    #[test]
+    fn like_escapes_metachars() {
+        assert_eq!(escape_like_term("a%b_c\\d"), "a\\%b\\_c\\\\d");
+    }
+}
+
 /// OR of `lower(col) LIKE %term%` over `columns` × `terms`, plus optional lang filter.
 fn or_like_filter(
     columns: &[&str],

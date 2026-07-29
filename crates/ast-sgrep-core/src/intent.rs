@@ -181,7 +181,8 @@ fn channel_ceiling(kind: HitKind, term_count: usize) -> f64 {
     }
 }
 pub fn route_hits(parsed: &ParsedQuery, hits: &mut [SearchHit]) {
-    let w = weights_for(classify(parsed));
+    // Normalize only. Intent channel weights are owned by
+    // `fusion::apply_weighted_rrf` so hybrid search does not multiply them twice.
     let substantive_terms = parsed
         .terms
         .iter()
@@ -196,17 +197,6 @@ pub fn route_hits(parsed: &ParsedQuery, hits: &mut [SearchHit]) {
             hit.score = 0.0;
             continue;
         }
-        let weight = match hit.kind {
-            HitKind::Asgrep => w.lexical,
-            HitKind::Def => w.def,
-            HitKind::Caller => w.caller,
-            HitKind::Graph => w.graph,
-            HitKind::Anchor => w.anchor,
-            HitKind::Embed => w.embed,
-            HitKind::Pattern => w.pattern,
-            HitKind::Import => w.import,
-        };
-        hit.score =
-            (hit.score / channel_ceiling(hit.kind, substantive_terms)).clamp(0.0, 1.0) * weight;
+        hit.score = (hit.score / channel_ceiling(hit.kind, substantive_terms)).clamp(0.0, 1.0);
     }
 }

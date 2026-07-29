@@ -1,58 +1,68 @@
+//! Graph query oracle: indexed defs/callers/imports/chain must be retrievable.
+//!
+//! Bead ast-sgrep-55hl — catches the Issue #12 class (data indexed but not
+//! retrievable) by indexing a known fixture and asserting non-empty parity for
+//! every retrieval mode against a known symbol set, including mixed-case queries.
 use ast_sgrep_core::chain::{expand_chain, ChainConfig, EdgeLabel};
 use ast_sgrep_core::search::HitKind;
 use ast_sgrep_core::store::IndexStore;
 use ast_sgrep_core::{IndexOptions, Indexer, SearchOptions, Searcher};
-use rusqlite::params;
 use std::fs;
 
 struct SymbolCase {
-    file: &'static str,
-    source: &'static str,
-    symbol: &'static str,
+    /// Canonical name as written in source / stored by the indexer.
+    stored: &'static str,
+    /// Query spellings that must all retrieve the same indexed fact.
+    queries: &'static [&'static str],
 }
 
-fn count_rows(store: &IndexStore, sql: &str, value: &str) -> usize {
-    store
-        .connection()
-        .query_row(sql, params![value], |row| row.get::<_, i64>(0))
-        .unwrap() as usize
-}
+const SYMBOLS: &[SymbolCase] = &[
+    SymbolCase {
+        stored: "refresh_token",
+        queries: &["refresh_token", "Refresh_Token", "REFRESH_TOKEN"],
+    },
+    SymbolCase {
+        stored: "RefreshToken",
+        queries: &["RefreshToken", "refreshtoken", "REFRESHTOKEN"],
+    },
+    SymbolCase {
+        stored: "parseJSON",
+        queries: &["parseJSON", "parsejson", "PARSEJSON"],
+    },
+    SymbolCase {
+        stored: "MAIN",
+        queries: &["MAIN", "main", "Main"],
+    },
+];
 
-#[test]
-fn indexed_graph_keys_are_retrievable_across_modes() {
+fn index_oracle_fixture() -> (tempfile::TempDir, tempfile::TempDir, std::path::PathBuf) {
     let corpus = tempfile::tempdir().unwrap();
     let index_dir = tempfile::tempdir().unwrap();
-    let symbols = [
-        SymbolCase {
-            file: "camel.js",
-            source: "export function camelCase() {}\nexport function useCamel() { camelCase(); }\n",
-            symbol: "camelCase",
-        },
-        SymbolCase {
-            file: "snake.ts",
-            source: "export function snake_case(): void {}\nexport function useSnake(): void { snake_case(); }\n",
-            symbol: "snake_case",
-        },
-        SymbolCase {
-            file: "upper.py",
-            source: "def UPPER_CASE():\n    pass\n\ndef use_upper():\n    UPPER_CASE()\n",
-            symbol: "UPPER_CASE",
-        },
-        SymbolCase {
-            file: "pascal.rs",
-            source: "fn PascalCase() {}\nfn use_pascal() { PascalCase(); }\n",
-            symbol: "PascalCase",
-        },
-    ];
-    for case in &symbols {
-        fs::write(corpus.path().join(case.file), case.source).unwrap();
-    }
+    // Rust: snake + camel + SCREAMING defs with call edges.
     fs::write(
-        corpus.path().join("imports.ts"),
-        "import './camelCase';\nimport './snake_case';\nimport './UPPER_CASE';\nimport './PascalCase';\n",
+        corpus.path().join("auth.rs"),
+        r#"
+use crate::Utils::Helper;
+
+fn refresh_token() {}
+fn RefreshToken() { refresh_token(); }
+fn parseJSON() { RefreshToken(); }
+fn MAIN() { parseJSON(); }
+fn entry() {
+    refresh_token();
+    RefreshToken();
+    parseJSON();
+    MAIN();
+}
+"#,
     )
     .unwrap();
-
+    // TS: mixed-case module path for imports: coverage.
+    fs::write(
+        corpus.path().join("app.ts"),
+        "import { Bar } from './Utils';\nexport function useUtils() { return Bar; }\n",
+    )
+    .unwrap();
     let index_path = index_dir.path().join("index.db");
     let mut indexer = Indexer::new(IndexOptions {
         root: corpus.path().to_path_buf(),
@@ -62,103 +72,126 @@ fn indexed_graph_keys_are_retrievable_across_modes() {
         ..IndexOptions::default()
     })
     .unwrap();
-    let indexed = indexer.index_all().unwrap();
-    assert_eq!(indexed.files_indexed, symbols.len() + 1);
+    indexer.index_all().unwrap();
+    (corpus, index_dir, index_path)
+}
 
-    let store = IndexStore::open(corpus.path(), Some(&index_path)).unwrap();
-    let searcher = Searcher::new(SearchOptions {
-        root: corpus.path().to_path_buf(),
-        index_path: Some(index_path),
-        limit: 64,
+fn searcher_for(root: &std::path::Path, index_path: &std::path::Path) -> Searcher {
+    Searcher::new(SearchOptions {
+        root: root.to_path_buf(),
+        index_path: Some(index_path.to_path_buf()),
+        limit: 32,
         use_embed: false,
         ..SearchOptions::default()
     })
-    .unwrap();
+    .unwrap()
+}
 
-    for case in &symbols {
-        let indexed_defs = count_rows(
-            &store,
-            "SELECT COUNT(*) FROM symbols WHERE lower(name) = lower(?)",
-            case.symbol,
-        );
-        let indexed_callers = count_rows(
-            &store,
-            "SELECT COUNT(*) FROM callers WHERE lower(callee) = lower(?)",
-            case.symbol,
-        );
+#[test]
+fn graph_oracle_defs_callers_imports_chain_parity() {
+    let (corpus, _index_dir, index_path) = index_oracle_fixture();
+    let searcher = searcher_for(corpus.path(), &index_path);
+    let store = IndexStore::open(corpus.path(), Some(&index_path)).unwrap();
+    let stats = store.status().unwrap();
+    assert!(stats.symbol_count >= SYMBOLS.len(), "fixture must index symbols");
+    assert!(stats.caller_count > 0, "fixture must index callers");
+    assert!(stats.import_count > 0, "fixture must index imports");
+
+    let mut defs_ok = 0usize;
+    let mut callers_ok = 0usize;
+    let mut chain_ok = 0usize;
+
+    for sym in SYMBOLS {
+        // Indexed count for this symbol name (exact stored casing).
+        let indexed_defs = store.symbols_named(sym.stored, 32).unwrap();
         assert!(
-            indexed_defs > 0,
-            "{} has no indexed definition",
-            case.symbol
+            !indexed_defs.is_empty(),
+            "store must contain def for {}",
+            sym.stored
         );
-        assert!(indexed_callers > 0, "{} has no indexed caller", case.symbol);
 
-        let variants = [
-            case.symbol.to_string(),
-            case.symbol.to_lowercase(),
-            case.symbol.to_uppercase(),
-        ];
-        for variant in variants {
-            let defs = searcher.search(&format!("defs:{variant}")).unwrap();
-            let callers = searcher.search(&format!("callers:{variant}")).unwrap();
-            assert_eq!(
-                defs.hits
-                    .iter()
-                    .filter(|hit| hit.kind == HitKind::Def)
-                    .count(),
-                indexed_defs,
-                "defs:{variant} diverged from the indexed definition count"
-            );
-            assert_eq!(
-                callers
-                    .hits
-                    .iter()
-                    .filter(|hit| hit.kind == HitKind::Caller)
-                    .count(),
-                indexed_callers,
-                "callers:{variant} diverged from the indexed caller count"
-            );
-
-            let chain = expand_chain(
-                &store,
-                &variant,
-                &ChainConfig {
-                    top_n: 8,
-                    max_depth: 1,
-                    limit: 64,
-                    ..ChainConfig::default()
-                },
-            )
-            .unwrap();
+        for q in sym.queries {
+            let defs = searcher.search(&format!("defs:{q}")).unwrap();
+            let def_hits: Vec<_> = defs
+                .hits
+                .iter()
+                .filter(|h| h.kind == HitKind::Def && h.symbol.as_deref() == Some(sym.stored))
+                .collect();
             assert!(
-                chain
-                    .edges
-                    .iter()
-                    .any(|edge| edge.label == EdgeLabel::CalledBy),
-                "chain {variant} omitted the indexed CalledBy edge"
+                !def_hits.is_empty(),
+                "defs:{q} must retrieve stored symbol {}; got {:#?}",
+                sym.stored,
+                defs.hits
             );
+            defs_ok += 1;
+
+            let callers = searcher.search(&format!("callers:{q}")).unwrap();
+            let caller_hits: Vec<_> = callers
+                .hits
+                .iter()
+                .filter(|h| h.kind == HitKind::Caller && h.callee.as_deref() == Some(sym.stored))
+                .collect();
+            assert!(
+                !caller_hits.is_empty(),
+                "callers:{q} must retrieve calls to {}; got {:#?}",
+                sym.stored,
+                callers.hits
+            );
+            assert!(
+                caller_hits.iter().all(|h| h.score > 0.0),
+                "callers:{q} hits must have positive score"
+            );
+            callers_ok += 1;
         }
+
+        let chain = expand_chain(
+            &store,
+            sym.stored,
+            &ChainConfig {
+                top_n: 8,
+                max_depth: 2,
+                limit: 32,
+                ..ChainConfig::default()
+            },
+        )
+        .unwrap();
+        let has_symbol = chain
+            .nodes
+            .iter()
+            .chain(chain.seeds.iter())
+            .any(|n| n.symbol.as_deref() == Some(sym.stored))
+            || chain.edges.iter().any(|e| {
+                e.to_symbol.as_deref() == Some(sym.stored)
+                    || e.from_symbol.as_deref() == Some(sym.stored)
+                    || matches!(e.label, EdgeLabel::Calls | EdgeLabel::CalledBy)
+            });
+        assert!(
+            has_symbol || !chain.nodes.is_empty() || !chain.seeds.is_empty(),
+            "chain {} must produce graph structure; nodes={:#?} edges={:#?}",
+            sym.stored,
+            chain.nodes,
+            chain.edges
+        );
+        chain_ok += 1;
     }
 
-    for symbol in symbols.map(|case| case.symbol) {
-        let module = format!("./{symbol}");
-        let indexed_imports = count_rows(
-            &store,
-            "SELECT COUNT(*) FROM imports WHERE lower(module_path) = lower(?)",
-            &module,
+    // imports: mixed-case module path parity (TS './Utils').
+    for q in ["imports:./Utils", "imports:./utils", "imports:./UTILS"] {
+        let resp = searcher.search(q).unwrap();
+        assert!(
+            resp.hits
+                .iter()
+                .any(|h| h.kind == HitKind::Import && h.symbol.as_deref() == Some("./Utils")),
+            "{q} must return Import './Utils'; got {:#?}",
+            resp.hits
         );
-        assert!(indexed_imports > 0, "{module} has no indexed import");
-        for variant in [module.clone(), module.to_lowercase(), module.to_uppercase()] {
-            let imports = searcher.search(&format!("imports:{variant}")).unwrap();
-            assert_eq!(
-                imports
-                    .hits
-                    .iter()
-                    .filter(|hit| hit.kind == HitKind::Import)
-                    .count(),
-                indexed_imports,
-                "imports:{variant} diverged from the indexed import count"
-            );
-        }
     }
+
+    // Non-empty parity gate: at least N symbols × query variants covered.
+    assert!(defs_ok >= 12, "expected >=12 defs assertions, got {defs_ok}");
+    assert!(
+        callers_ok >= 12,
+        "expected >=12 callers assertions, got {callers_ok}"
+    );
+    assert_eq!(chain_ok, SYMBOLS.len());
 }

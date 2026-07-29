@@ -30,7 +30,8 @@ const MAX_HITS_PER_FILE: usize = 3;
 struct SemanticCache {
     lang_filter: Option<String>,
     max_id: i64,
-    data_version: i64,
+    index_data_version: i64,
+    semantic_data_version: i64,
     embed_backend: String,
     chunks: Arc<Vec<SemanticChunkRow>>,
     flat_vectors: Arc<Vec<f32>>,
@@ -317,7 +318,8 @@ fn load_semantic_context(
     }
     let lang_filter = options.lang_filter.clone();
     let max_id = store.semantic_chunk_max_id()?.unwrap_or(0);
-    let data_version = store.index_data_version()?;
+    let index_data_version = store.index_data_version()?;
+    let semantic_data_version = store.semantic_data_version()?;
     let embed_backend = store
         .get_meta("embed_backend")?
         .unwrap_or_else(|| "semantic".into());
@@ -326,7 +328,8 @@ fn load_semantic_context(
         if let Some(c) = guard.as_ref() {
             if c.lang_filter == lang_filter
                 && c.max_id == max_id
-                && c.data_version == data_version
+                && c.index_data_version == index_data_version
+                && c.semantic_data_version == semantic_data_version
                 && c.embed_backend == embed_backend
             {
                 return Ok(Some(EmbedContext {
@@ -344,7 +347,8 @@ fn load_semantic_context(
     let entry = SemanticCache {
         lang_filter,
         max_id,
-        data_version,
+        index_data_version,
+        semantic_data_version,
         embed_backend,
         chunks: Arc::new(chunks),
         flat_vectors: Arc::new(flat_vectors),

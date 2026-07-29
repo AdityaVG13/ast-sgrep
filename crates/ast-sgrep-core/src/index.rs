@@ -540,6 +540,7 @@ impl Indexer {
                 &callers,
                 &pattern_nodes,
                 &split.lines,
+                language.map(|l| l.as_str()),
             )
         } else {
             vec![]
@@ -750,6 +751,7 @@ fn prepare_file(
             &callers,
             &pattern_nodes,
             &split.lines,
+            language.map(|l| l.as_str()),
         )
     } else {
         vec![]

@@ -301,8 +301,8 @@ fn same_span_body_edit_refreshes_semantic_chunks() {
         (2, "    return BETA_TOKEN_222".into()),
         (3, "".into()),
     ];
-    let chunks_v1 = build_semantic_chunks(&symbols, &callers, &[], &lines_v1);
-    let chunks_v2 = build_semantic_chunks(&symbols, &callers, &[], &lines_v2);
+    let chunks_v1 = build_semantic_chunks(&symbols, &callers, &[], &lines_v1, Some("python"));
+    let chunks_v2 = build_semantic_chunks(&symbols, &callers, &[], &lines_v2, Some("python"));
     assert!(!chunks_v1.is_empty() && !chunks_v2.is_empty());
     assert_ne!(chunks_v1[0].excerpt, chunks_v2[0].excerpt);
     let pat_v1 = [PatternNode {

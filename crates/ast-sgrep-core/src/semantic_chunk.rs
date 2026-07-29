@@ -21,6 +21,7 @@ pub fn build_semantic_chunks(
     callers: &[CallerRow],
     pattern_nodes: &[PatternNode],
     lines: &[(u32, String)],
+    language: Option<&str>,
 ) -> Vec<SemanticChunkInput> {
     let mut chunks = Vec::new();
     let parents = symbols
@@ -57,7 +58,7 @@ pub fn build_semantic_chunks(
             .collect::<Vec<_>>();
         callee_names.sort();
         callee_names.dedup();
-        let doc = doc_comment_above(lines, sym.line_start);
+        let doc = doc_comment_above(lines, sym.line_start, language);
         let scope = enclosing_scope(symbols, sym);
         for excerpt in excerpts {
             chunks.push(SemanticChunkInput {
@@ -204,7 +205,25 @@ fn enclosing_scope(symbols: &[SymbolRow], sym: &SymbolRow) -> String {
         .unwrap_or_default()
 }
 const DOC_LOOKBACK_LINES: usize = 8;
-fn doc_comment_above(lines: &[(u32, String)], line_start: u32) -> String {
+/// `#` is only a comment marker for hash-comment languages (python/ruby).
+/// Rust attributes (`#[derive]`) and JS/TS private fields (`#foo`) must not
+/// be treated as docs (bead ast-sgrep-pwfm).
+fn comment_markers_for(language: Option<&str>) -> &'static [&'static str] {
+    match language {
+        Some("python") | Some("ruby") => &["#"],
+        Some("rust")
+        | Some("typescript")
+        | Some("javascript")
+        | Some("java")
+        | Some("go")
+        | Some("csharp") => &["///", "//!", "//", "/**", "/*", "*/", "*"],
+        // Unknown: C-style only — never bare `#`.
+        _ => &["///", "//!", "//", "/**", "/*", "*/", "*", "--"],
+    }
+}
+
+fn doc_comment_above(lines: &[(u32, String)], line_start: u32, language: Option<&str>) -> String {
+    let markers = comment_markers_for(language);
     let mut collected = Vec::new();
     let mut expect = line_start.saturating_sub(1);
     for (no, content) in lines.iter().rev() {
@@ -214,7 +233,7 @@ fn doc_comment_above(lines: &[(u32, String)], line_start: u32) -> String {
         if *no < expect || collected.len() >= DOC_LOOKBACK_LINES {
             break;
         }
-        let Some(text) = strip_comment_marker(content) else {
+        let Some(text) = strip_comment_marker(content, markers) else {
             break;
         };
         collected.push(text);
@@ -223,10 +242,10 @@ fn doc_comment_above(lines: &[(u32, String)], line_start: u32) -> String {
     collected.reverse();
     collected.join(" ").trim().to_string()
 }
-fn strip_comment_marker(line: &str) -> Option<&str> {
+fn strip_comment_marker<'a>(line: &'a str, markers: &[&str]) -> Option<&'a str> {
     let trimmed = line.trim();
-    ["///", "//!", "//", "/**", "/*", "*/", "*", "#", "--"]
-        .into_iter()
+    markers
+        .iter()
         .find_map(|m| trimmed.strip_prefix(m).map(str::trim))
 }
 fn excerpt_for_span(lines: &[(u32, String)], line_start: u32, line_end: u32) -> String {
@@ -283,7 +302,7 @@ mod tests {
             },
         ];
         let lines = [(2, "whole parent".into())];
-        let chunks = build_semantic_chunks(&[symbol], &[], &nodes, &lines);
+        let chunks = build_semantic_chunks(&[symbol], &[], &nodes, &lines, None);
         assert_eq!(chunks.len(), 3);
         assert!(chunks
             .iter()
@@ -315,7 +334,7 @@ mod tests {
             line_end: 4,
             excerpt: "inside_call()".into(),
         }];
-        let chunks = build_semantic_chunks(&[outer, inner], &[], &nodes, &lines);
+        let chunks = build_semantic_chunks(&[outer, inner], &[], &nodes, &lines, None);
         let owners = chunks
             .iter()
             .filter(|chunk| chunk.excerpt == "inside_call()")
@@ -341,7 +360,7 @@ mod tests {
                 excerpt: "charge()".into(),
             },
         ];
-        let chunks = build_semantic_chunks(&[function(1, 1)], &[], &nodes, &lines);
+        let chunks = build_semantic_chunks(&[function(1, 1)], &[], &nodes, &lines, None);
         assert_eq!(chunks.len(), 1);
         assert_eq!(chunks[0].excerpt, "charge()");
         assert_eq!((chunks[0].line_start, chunks[0].line_end), (1, 1));
@@ -359,7 +378,7 @@ mod tests {
             line_end: 1,
             excerpt: "const TIMEOUT: u64 = 30;".into(),
         }];
-        let chunks = build_semantic_chunks(&[], &[], &nodes, &lines);
+        let chunks = build_semantic_chunks(&[], &[], &nodes, &lines, None);
         assert_eq!(chunks.len(), 1);
         assert_eq!(chunks[0].kind, "file");
         assert!(chunks[0].symbol_name.is_empty());
@@ -376,12 +395,99 @@ mod tests {
                 excerpt: format!("child_{line}"),
             })
             .collect::<Vec<_>>();
-        let chunks = build_semantic_chunks(&[function(1, 60)], &[], &nodes, &[]);
+        let chunks = build_semantic_chunks(&[function(1, 60)], &[], &nodes, &[], None);
         assert_eq!(chunks.len(), MAX_CHILD_CHUNKS_PER_PARENT);
 
         let lines = [(1, "fn renew_account() {}".into())];
-        let fallback = build_semantic_chunks(&[function(1, 1)], &[], &[], &lines);
+        let fallback = build_semantic_chunks(&[function(1, 1)], &[], &[], &lines, None);
         assert_eq!(fallback.len(), 1);
         assert_eq!(fallback[0].excerpt, "fn renew_account() {}");
+    }
+
+    #[test]
+    fn rust_derive_attribute_is_not_doc_comment() {
+        let symbols = [SymbolRow {
+            name: "foo".into(),
+            kind: "function".into(),
+            line_start: 2,
+            line_end: 2,
+            byte_start: 20,
+            byte_end: 40,
+        }];
+        let lines = [
+            (1u32, "#[derive(Debug)]".into()),
+            (2, "fn foo() {}".into()),
+        ];
+        let chunks = build_semantic_chunks(&symbols, &[], &[], &lines, Some("rust"));
+        assert_eq!(chunks.len(), 1);
+        assert!(
+            chunks[0].doc.is_empty(),
+            "#[derive] must not become doc text; got {:?}",
+            chunks[0].doc
+        );
+        let rendered = render_chunk_text(&chunks[0]);
+        assert!(
+            !rendered.contains("doc:"),
+            "rendered chunk must not inject derive as doc; got {rendered}"
+        );
+    }
+
+    #[test]
+    fn rust_line_doc_comments_still_captured() {
+        let symbols = [SymbolRow {
+            name: "foo".into(),
+            kind: "function".into(),
+            line_start: 2,
+            line_end: 2,
+            byte_start: 20,
+            byte_end: 40,
+        }];
+        let lines = [
+            (1u32, "/// does a thing".into()),
+            (2, "fn foo() {}".into()),
+        ];
+        let chunks = build_semantic_chunks(&symbols, &[], &[], &lines, Some("rust"));
+        assert_eq!(chunks[0].doc, "does a thing");
+    }
+
+    #[test]
+    fn typescript_private_field_hash_is_not_doc_comment() {
+        let symbols = [SymbolRow {
+            name: "method".into(),
+            kind: "method".into(),
+            line_start: 2,
+            line_end: 2,
+            byte_start: 20,
+            byte_end: 40,
+        }];
+        let lines = [
+            (1u32, "  #foo = 1;".into()),
+            (2, "  method() {}".into()),
+        ];
+        let chunks = build_semantic_chunks(&symbols, &[], &[], &lines, Some("typescript"));
+        assert_eq!(chunks.len(), 1);
+        assert!(
+            chunks[0].doc.is_empty(),
+            "TS private field #foo must not become doc; got {:?}",
+            chunks[0].doc
+        );
+    }
+
+    #[test]
+    fn python_hash_comments_still_captured() {
+        let symbols = [SymbolRow {
+            name: "foo".into(),
+            kind: "function".into(),
+            line_start: 2,
+            line_end: 2,
+            byte_start: 20,
+            byte_end: 40,
+        }];
+        let lines = [
+            (1u32, "# helper".into()),
+            (2, "def foo():".into()),
+        ];
+        let chunks = build_semantic_chunks(&symbols, &[], &[], &lines, Some("python"));
+        assert_eq!(chunks[0].doc, "helper");
     }
 }

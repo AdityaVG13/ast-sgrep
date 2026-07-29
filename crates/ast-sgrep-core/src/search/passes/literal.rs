@@ -70,17 +70,26 @@ fn literal_sql(
     parsed: &ParsedQuery,
     needle: &str,
 ) -> Result<Vec<SearchHit>> {
-    let (op, pattern) = if options.case_insensitive {
-        ("LIKE", format!("%{needle}%"))
+    // Escape metacharacters so the needle is matched literally.
+    // Case-insensitive path uses LIKE ESCAPE; case-sensitive uses GLOB with
+    // character-class escaping (GLOB has no ESCAPE clause). Bead ast-sgrep-c2j5.
+    let (sql, pattern) = if options.case_insensitive {
+        let pattern = format!("%{}%", crate::store::sql::escape_like_term(needle));
+        (
+            "SELECT f.path, f.language, l.line_no, l.content
+         FROM lines l JOIN files f ON f.id = l.file_id WHERE l.content LIKE ?1 ESCAPE '\\' ORDER BY f.path, l.line_no LIMIT ?2",
+            pattern,
+        )
     } else {
-        ("GLOB", format!("*{needle}*"))
+        let pattern = format!("*{}*", crate::store::sql::escape_glob_literal(needle));
+        (
+            "SELECT f.path, f.language, l.line_no, l.content
+         FROM lines l JOIN files f ON f.id = l.file_id WHERE l.content GLOB ?1 ORDER BY f.path, l.line_no LIMIT ?2",
+            pattern,
+        )
     };
     let limit = options.limit.max(100);
-    let sql = format!(
-        "SELECT f.path, f.language, l.line_no, l.content
-         FROM lines l JOIN files f ON f.id = l.file_id WHERE l.content {op} ?1 ORDER BY f.path, l.line_no LIMIT ?2"
-    );
-    let mut stmt = store.connection().prepare_cached(&sql)?;
+    let mut stmt = store.connection().prepare_cached(sql)?;
     let rows = stmt.query_map(params![pattern, limit as i64], map_line_row)?;
     let word_mode = parsed.mode == QueryMode::Word;
     let needle_lower = (word_mode && options.case_insensitive).then(|| needle.to_lowercase());

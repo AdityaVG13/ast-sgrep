@@ -72,6 +72,51 @@ fn schema_upgrade_invalidates_legacy_semantic_layouts() {
         migrated.file_hash("legacy.rs").unwrap().as_deref(),
         Some("semantic-layout-v2:original-hash")
     );
+    let version: i64 = migrated
+        .connection()
+        .query_row("PRAGMA user_version", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(version, 7, "semantic wipe must land as schema 7");
+}
+
+#[test]
+fn schema_6_main_indexes_still_get_semantic_wipe_at_7() {
+    // Main independently used SCHEMA_VERSION=6 for symbols_name_lower. A store
+    // already at 6 must still run the semantic-layout wipe when opening with 7.
+    let temp = TempDir::new().unwrap();
+    let store = IndexStore::open(temp.path(), None).unwrap();
+    store
+        .connection()
+        .execute(
+            "INSERT INTO files(path, language, mtime_secs, mtime_nanos, content_hash) VALUES(?1, ?2, 1, 0, ?3)",
+            params!["legacy.rs", "rust", "original-hash"],
+        )
+        .unwrap();
+    let file_id = store.connection().last_insert_rowid();
+    store
+        .connection()
+        .execute(
+            "INSERT INTO semantic_chunks(file_id, symbol_id, chunk_kind, line_start, line_end, symbol_name, text, vector) VALUES(?1, NULL, 'symbol', 1, 3, 'legacy', 'whole parent', ?2)",
+            params![file_id, vec![0_u8; 4]],
+        )
+        .unwrap();
+    store
+        .connection()
+        .execute_batch("PRAGMA user_version = 6")
+        .unwrap();
+    drop(store);
+
+    let migrated = IndexStore::open(temp.path(), None).unwrap();
+    let count: i64 = migrated
+        .connection()
+        .query_row("SELECT COUNT(*) FROM semantic_chunks", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(count, 0, "schema-6 stores must still wipe semantic layout at 7");
+    let version: i64 = migrated
+        .connection()
+        .query_row("PRAGMA user_version", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(version, 7);
 }
 
 #[test]

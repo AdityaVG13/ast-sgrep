@@ -60,6 +60,8 @@ pub fn compute_ann_fingerprint(
     hasher.update(&max_chunk_id.to_le_bytes());
     hasher.update(&(dim as u32).to_le_bytes());
     hasher.update(embed_backend.unwrap_or("semantic").as_bytes());
+    // source_generation (index_data_version) disambiguates delete+re-add where
+    // max_chunk_id is reused but chunk content/vectors differ (44a4 / e2hc.15).
     hasher.update(&source_generation.to_le_bytes());
     *hasher.finalize().as_bytes()
 }

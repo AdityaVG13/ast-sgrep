@@ -7,7 +7,7 @@ import { resolveBinary } from "ast-sgrep";
 export const RUNTIME_VERSION = "1.3.2";
 export const MACHINE_SCHEMA_VERSION = "1.0.0";
 export const CONFIG_SCHEMA_VERSION = 1;
-export const INDEX_FORMAT_VERSION = 6;
+export const INDEX_FORMAT_VERSION = 7;
 export const DEFAULT_TIMEOUT_MS = 30_000;
 export const DEFAULT_MAX_OUTPUT_BYTES = 4 * 1024 * 1024;
 export const DEFAULT_REFRESH_INTERVAL_MS = 30_000;
