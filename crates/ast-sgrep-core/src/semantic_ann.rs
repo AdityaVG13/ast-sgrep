@@ -5,8 +5,8 @@ use crate::semantic_ivf::{
 use crate::store::IndexStore;
 use crate::Result;
 use ast_sgrep_embed::{
-    cosine_similarity, top_k_flat_similarity, top_k_similarity, SemanticChunkRow, MIN_SIMILARITY,
-    PARALLEL_CHUNK_THRESHOLD,
+    cosine_similarity, normalize_vec, normalize_vec_in_place, top_k_flat_similarity,
+    top_k_similarity, SemanticChunkRow, MIN_SIMILARITY, PARALLEL_CHUNK_THRESHOLD,
 };
 use rayon::prelude::*;
 use std::io::{Read, Write};
@@ -344,19 +344,6 @@ fn normalize_flat(vectors: &[f32], dim: usize) -> Vec<f32> {
     for i in 0..vectors.len() / dim {
         normalize_vec_in_place(&mut out[i * dim..(i + 1) * dim]);
     }
-    out
-}
-fn normalize_vec_in_place(vec: &mut [f32]) {
-    let norm: f32 = vec.iter().map(|x| x * x).sum::<f32>().sqrt();
-    if norm > 0.0 {
-        for x in vec {
-            *x /= norm;
-        }
-    }
-}
-fn normalize_vec(vec: &[f32]) -> Vec<f32> {
-    let mut out = vec.to_vec();
-    normalize_vec_in_place(&mut out);
     out
 }
 fn brute_force_flat(flat: &[f32], dim: usize, query: &[f32], limit: usize) -> Vec<(usize, f32)> {
