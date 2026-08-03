@@ -230,8 +230,20 @@ Lean end-state pass: densest remaining modules become table-driven / early-retur
 
 ```bash
 cargo test -p ast-sgrep-lang --lib --test pattern
+# → lib: 6 passed; pattern: 5 passed
+
 cargo test -p ast-sgrep-core --lib search::
+# → 13 passed (37 filtered out)
+
+cargo test -p ast-sgrep-core --test pattern_prefilter --test pattern_routing
+# → pattern_prefilter: 3 passed; pattern_routing: 3 passed
+
 cargo test -p ast-sgrep-cli --test machine_contracts
+# → 13 passed
+
 node packages/pi/scripts/release-acceptance.mjs self-test
+# → gate self-test accepted; rejection codes unchanged
+
 cd packages/pi/extension && npm run build && npm test
+# → tsc ok; 59 passed (runtime + extension suites)
 ```
