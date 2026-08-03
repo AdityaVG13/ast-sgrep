@@ -394,7 +394,7 @@ fn cache_session(db_key: &str, fingerprint: [u8; 32], ivf: &PersistedSemanticIvf
         },
     ));
 }
-pub fn load_or_build_semantic_ivf(
+fn load_or_build_semantic_ivf(
     store: &IndexStore,
     chunks: &[SemanticChunkRow],
     override_threshold: Option<usize>,
@@ -421,7 +421,7 @@ pub fn load_or_build_semantic_ivf(
     cache_session(&db_key, fingerprint, &ivf);
     Ok(Some(Arc::new(ivf)))
 }
-pub fn cached_semantic_ivf(
+fn cached_semantic_ivf(
     store: &IndexStore,
     chunks: &[SemanticChunkRow],
     override_threshold: Option<usize>,

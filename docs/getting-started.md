@@ -38,7 +38,7 @@ cargo build --release -j1
 ./target/release/asgrep index .
 ./target/release/asgrep 'defs:auth_refresh' . --limit 3
 ./target/release/asgrep semantic 'credential renewal' . --limit 3
-./target/release/asgrep chain 'auth_refresh' . --limit 3
+./target/release/asgrep chain 'auth_refresh' . --limit 3  # graph node cap; chain seeds use top_n=1
 ./target/release/asgrep bench . --query auth_refresh --iterations 1
 ```
 
@@ -188,7 +188,7 @@ ASGREP_USE_CACHE=1 asgrep index .
 | `GRAPH` | Graph neighborhood summary |
 | `ANCHOR` | Excerpt around a matched symbol |
 | `IMPORT` | Import statement |
-| `PATTERN` | Structural match via ast-grep |
+| `PATTERN` | Structural match (native tree-sitter; optional ast-grep fallback) |
 | `EMBED` | Semantic symbol-chunk hit |
 
 ### Example line output

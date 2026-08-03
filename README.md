@@ -101,7 +101,7 @@ cargo build --release -p ast-sgrep-cli
 ./target/release/asgrep index .
 ./target/release/asgrep 'defs:auth_refresh' . --limit 3
 ./target/release/asgrep semantic 'credential renewal' . --limit 3
-./target/release/asgrep chain 'auth_refresh' . --limit 3
+./target/release/asgrep chain 'auth_refresh' . --limit 3  # graph node cap; seeds use top_n=1
 ```
 
 Unprefixed queries run **hybrid** retrieval. See the [query prefixes](docs/QUERY_GRAMMAR.md).

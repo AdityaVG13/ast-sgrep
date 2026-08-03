@@ -84,13 +84,13 @@ ast-grep matches **structure**, not **meaning**. ripgrep matches **text**, not *
 
 ### Structural patterns
 
-ast-grep is the specialist. ast-sgrep exposes it:
+ast-grep is the specialist for codemods. ast-sgrep runs **native tree-sitter** patterns first:
 
 ```bash
 asgrep "pattern:fn $NAME($$$)"
 ```
 
-Requires ast-grep CLI installed. Results appear as `PATTERN` hits in ast-sgrep output.
+Optional ast-grep CLI fallback only for exotic metavariable shapes. Results appear as `PATTERN` hits in ast-sgrep output.
 
 ### Output for automation
 

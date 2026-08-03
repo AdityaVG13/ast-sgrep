@@ -195,3 +195,50 @@ node packages/pi/scripts/check-native-workflow.mjs
 - Neural/rerank feature fail-closed.
 - `.beads/` untouched.
 - No new PR; branch `cursor/anti-bloat-cleanup-da21` pushed only.
+
+---
+
+## Batch C — dead surface + doc honesty (this session)
+
+### Deleted / demoted symbols
+
+| Symbol | Callers outside definition | Action |
+|--------|----------------------------|--------|
+| `ast_grep_pattern_for_query` | 0 | deleted (`pattern.rs`) |
+| `ranking_stability` / `RankingStability` | 0 | deleted (`bench_suite.rs`) |
+| `gitignore::is_ignored` (free fn) | 0 | deleted; use `IgnoreMatcher` |
+| `load_or_build_semantic_ivf` | internal only | demoted `fn` (private) |
+| `cached_semantic_ivf` | internal only | demoted `fn` (private) |
+| `skip` / `text` / `output` facades | n/a | already absent; no action |
+
+### `index_all` IgnoreMatcher
+
+Before: `self.ignore.clear()` then a second `IgnoreMatcher::new` for walk pruning while file checks used `self.ignore`.
+
+After: single `self.ignore` for dir + file gitignore checks (no duplicate matcher).
+
+### Doc fixes (minimal)
+
+| File | Change |
+|------|--------|
+| `docs/comparison.md` | Structural patterns: native tree-sitter first; ast-grep optional fallback (not required) |
+| `docs/getting-started.md` | `PATTERN` hit kind aligned; chain quickstart notes `--limit` = graph node cap, seeds `top_n=1` |
+| `README.md` | Chain quickstart inline note for `top_n=1` vs `--limit` |
+
+Preserved: `docs/benchmarks.md`, bench `cv_pct`, QUERY_GRAMMAR native-first `pattern:` wording.
+
+### Tests run (this session)
+
+```bash
+export PATH="/usr/local/cargo/bin:$PATH"
+cd /workspace/.worktrees/pr25
+cargo test -p ast-sgrep-cli --test machine_contracts
+cargo test -p ast-sgrep-core --lib
+cargo test -p ast-sgrep-lang --lib
+```
+
+### Skips
+
+- pr22 ranking/ANN behavior port (explicit out of scope).
+- `skip`/`text`/`output` facade deletion (no surviving symbols).
+- `.beads/` sync (not authorized).
