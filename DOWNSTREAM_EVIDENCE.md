@@ -26,11 +26,26 @@ PR21 tip (`test/quality-batch-e2hc-19-oxbj`) still has ResponseCache unlock-comp
 export CARGO_BUILD_RUSTC_WRAPPER= RUSTC_WRAPPER=
 /usr/local/cargo/bin/cargo test -p ast-sgrep-core --test p1_correctness_batch --test durability_epics --test response_cache_version --test semantic_cache_version --test semantic_ivf_roundtrip --test store_pragmas --test store_delete
 /usr/local/cargo/bin/cargo test -p ast-sgrep-core --lib
+/usr/local/cargo/bin/cargo test -p ast-sgrep-embed --lib math::contract_tests
 ```
+
+## Observed results (2026-08-03)
+
+| Suite | Result |
+|-------|--------|
+| `durability_epics` | **16 passed** |
+| `p1_correctness_batch` | **4 passed** |
+| `response_cache_version` | **2 passed** |
+| `semantic_cache_version` | **4 passed** |
+| `semantic_ivf_roundtrip` | **3 passed** |
+| `store_delete` | **8 passed** |
+| `store_pragmas` | **1 passed** |
+| `ast-sgrep-core --lib` | **24 passed** (includes naiv/hdwh/21pn/whitelist unit tests) |
+| `ast-sgrep-embed` `contract_tests` | **3 passed** |
 
 ## Implementation notes
 
-- **28vo:** `CLEAR_ALL_SQL` deletes all meta except whitelist `root`; `is_unchanged` requires exact `embed_backend` string match (Auto ≠ concrete).
+- **28vo:** `CLEAR_ALL_SQL` deletes meta except whitelist `root` + generation counters; `is_unchanged` requires exact `embed_backend` string match (Auto ≠ concrete).
 - **naiv:** `execute_rollback` propagates errors; file/bulk tx flags cleared only after successful COMMIT/ROLLBACK.
 - **21pn:** `check_ivf_embed_integrity` returns `Err` on count/dim/ids skew; missing sidecar remains `Ok(None)` for flat fallback.
 - **hdwh:** insert only when pre/post gen match and cache is not a newer populated generation; PRAGMA failure disables insert.
