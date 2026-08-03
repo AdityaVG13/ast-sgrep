@@ -72,6 +72,13 @@ function sameSetting(current: unknown, legacy: unknown, currentName: string, leg
   return current ?? legacy;
 }
 
+/** Legacy schema-0 numeric fields ↔ current names (migrate/rollback share one table). */
+const LEGACY_NUMBER_FIELDS = [
+  ["timeoutMs", "timeout"],
+  ["maxOutputBytes", "maxOutput"],
+  ["refreshIntervalMs", "refreshInterval"],
+] as const;
+
 /** Convert schema 0/unversioned settings without mutating the rollback source. */
 export function migrateConfig(input: RuntimeConfigInput = {}): RuntimeConfig {
   const value = { ...input } as RuntimeConfigInput & Record<string, unknown>;
@@ -82,15 +89,12 @@ export function migrateConfig(input: RuntimeConfigInput = {}): RuntimeConfig {
   if (schema === CONFIG_SCHEMA_VERSION) return value as RuntimeConfig;
   const legacy = value as LegacyRuntimeConfig & Record<string, unknown>;
   const migrated: RuntimeConfig = { ...legacy, schemaVersion: CONFIG_SCHEMA_VERSION };
-  const timeoutMs = sameSetting(value.timeoutMs, legacy.timeout, "timeoutMs", "timeout");
-  const maxOutputBytes = sameSetting(value.maxOutputBytes, legacy.maxOutput, "maxOutputBytes", "maxOutput");
-  const refreshIntervalMs = sameSetting(value.refreshIntervalMs, legacy.refreshInterval, "refreshIntervalMs", "refreshInterval");
-  if (timeoutMs !== undefined) migrated.timeoutMs = timeoutMs as number;
-  if (maxOutputBytes !== undefined) migrated.maxOutputBytes = maxOutputBytes as number;
-  if (refreshIntervalMs !== undefined) migrated.refreshIntervalMs = refreshIntervalMs as number;
-  delete (migrated as Record<string, unknown>).timeout;
-  delete (migrated as Record<string, unknown>).maxOutput;
-  delete (migrated as Record<string, unknown>).refreshInterval;
+  const mutable = migrated as Record<string, unknown>;
+  for (const [currentName, legacyName] of LEGACY_NUMBER_FIELDS) {
+    const next = sameSetting(value[currentName], legacy[legacyName], currentName, legacyName);
+    if (next !== undefined) mutable[currentName] = next as number;
+    delete mutable[legacyName];
+  }
   return migrated;
 }
 
@@ -98,12 +102,12 @@ export function migrateConfig(input: RuntimeConfigInput = {}): RuntimeConfig {
 export function rollbackConfig(input: RuntimeConfig): LegacyRuntimeConfig {
   const current = migrateConfig(input);
   const legacy: LegacyRuntimeConfig = { ...current, schemaVersion: 0 };
-  if (current.timeoutMs !== undefined) legacy.timeout = current.timeoutMs;
-  if (current.maxOutputBytes !== undefined) legacy.maxOutput = current.maxOutputBytes;
-  if (current.refreshIntervalMs !== undefined) legacy.refreshInterval = current.refreshIntervalMs;
-  delete (legacy as Record<string, unknown>).timeoutMs;
-  delete (legacy as Record<string, unknown>).maxOutputBytes;
-  delete (legacy as Record<string, unknown>).refreshIntervalMs;
+  const mutable = legacy as Record<string, unknown>;
+  for (const [currentName, legacyName] of LEGACY_NUMBER_FIELDS) {
+    const next = current[currentName];
+    if (next !== undefined) mutable[legacyName] = next;
+    delete mutable[currentName];
+  }
   return legacy;
 }
 
@@ -140,7 +144,8 @@ export function resolveConfig(sources: ConfigSources = {}): Required<Pick<Runtim
   return merged as Required<Pick<RuntimeConfig, "timeoutMs" | "maxOutputBytes">> & RuntimeConfig;
 }
 
-function isContained(parent: string, child: string): boolean {
+/** True when `child` is `parent` or a path under it (no `..` escape). */
+function pathContained(parent: string, child: string): boolean {
   const rel = relative(parent, child);
   return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
 }
@@ -154,7 +159,7 @@ export async function resolveRuntimeRoot(projectCwd: string, requestedRoot?: str
   } catch (cause) {
     throw new RuntimeError("INVALID_ROOT", "Project or requested root does not exist", { projectCwd, requestedRoot, cause: cause instanceof Error ? cause.message : String(cause) });
   }
-  if (!allowOutsideProject && !isContained(project, candidate)) {
+  if (!allowOutsideProject && !pathContained(project, candidate)) {
     throw new RuntimeError("ROOT_OUTSIDE_PROJECT", "Requested root resolves outside the project", { project, requestedRoot, resolvedRoot: candidate });
   }
   return candidate;
@@ -205,11 +210,6 @@ function incompatibleStatusFailure(cause: unknown): boolean {
   if (!(cause instanceof RuntimeError) || (cause.code !== "OPERATIONAL_ERROR" && cause.code !== "PROCESS_FAILED")) return false;
   const text = `${cause.message} ${JSON.stringify(cause.details)}`;
   return /incompatib|unsupported.{0,24}schema|schema.{0,24}(version|mismatch)/i.test(text);
-}
-
-function pathContained(root: string, path: string): boolean {
-  const rel = relative(root, path);
-  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
 }
 
 function canonicalizeAffectedPath(path: string): string {

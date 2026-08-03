@@ -1,6 +1,7 @@
 /**
- * Pure helpers mirrored from extension.ts for multi-root path binding tests
- * without loading the vscode module in node:test.
+ * Multi-root folder binding and hit path resolve.
+ * Pure helpers (no vscode module) so node tests can exercise the same rules
+ * the extension uses when opening search hits.
  */
 import * as path from 'path';
 
@@ -9,6 +10,7 @@ export interface FolderLike {
   fsPath: string;
 }
 
+/** Pick the workspace folder that owns a document path; fail closed in multi-root. */
 export function folderForUriPath(
   documentPath: string | undefined,
   folders: FolderLike[],
@@ -25,6 +27,11 @@ export function folderForUriPath(
   return folders.length === 1 ? folders[0] : undefined;
 }
 
+/**
+ * Resolve a hit file against the preferred search folder, then other roots.
+ * Absolute paths pass through. Missing files fall back to preferred join
+ * (never silently prefer folders[0] when preferred misses).
+ */
 export function resolveHitPath(
   file: string,
   preferred: FolderLike,
@@ -38,4 +45,20 @@ export function resolveHitPath(
     if (exists(candidate)) return candidate;
   }
   return path.join(preferred.fsPath, file);
+}
+
+export function hitFilePath(hit: {
+  path?: string;
+  file?: string;
+  file_path?: string;
+}): string | undefined {
+  return hit.path ?? hit.file_path ?? hit.file;
+}
+
+export function hitLineNumber(hit: {
+  line?: number;
+  start_line?: number;
+  line_start?: number;
+}): number {
+  return hit.line_start ?? hit.start_line ?? hit.line ?? 1;
 }

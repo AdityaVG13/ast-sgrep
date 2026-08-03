@@ -1,7 +1,13 @@
 import * as fs from 'fs';
-import * as path from 'path';
 import * as vscode from 'vscode';
 import { Executable, LanguageClient, LanguageClientOptions, ServerOptions } from 'vscode-languageclient/node';
+import {
+  folderForUriPath,
+  hitFilePath,
+  hitLineNumber,
+  resolveHitPath,
+  type FolderLike,
+} from './multiRoot';
 
 interface SearchHit {
   path?: string;
@@ -30,34 +36,13 @@ export function folderForUri(
     const match = vscode.workspace.getWorkspaceFolder(uri);
     if (match) return match;
   }
-  return folders.length === 1 ? folders[0] : undefined;
+  // Same fail-closed rule as multiRoot.folderForUriPath (single-root only without a doc).
+  const picked = folderForUriPath(uri?.fsPath, toFolderLikes(folders));
+  return picked ? folders.find((f) => f.uri.fsPath === picked.fsPath) : undefined;
 }
 
-/** Resolve a hit path against the folder that produced it (not always folders[0]). */
-export function resolveHitUri(file: string, folder: vscode.WorkspaceFolder): vscode.Uri {
-  if (path.isAbsolute(file)) {
-    return vscode.Uri.file(file);
-  }
-  return vscode.Uri.joinPath(folder.uri, file);
-}
-
-/** Prefer an existing on-disk path when a relative hit might belong to another root. */
-export function resolveHitUriMultiRoot(
-  file: string,
-  preferred: vscode.WorkspaceFolder,
-  folders: readonly vscode.WorkspaceFolder[],
-): vscode.Uri {
-  if (path.isAbsolute(file)) {
-    return vscode.Uri.file(file);
-  }
-  const candidates = [preferred, ...folders.filter((f) => f.uri.toString() !== preferred.uri.toString())];
-  for (const folder of candidates) {
-    const uri = vscode.Uri.joinPath(folder.uri, file);
-    if (fs.existsSync(uri.fsPath)) {
-      return uri;
-    }
-  }
-  return resolveHitUri(file, preferred);
+function toFolderLikes(folders: readonly vscode.WorkspaceFolder[]): FolderLike[] {
+  return folders.map((f) => ({ name: f.name, fsPath: f.uri.fsPath }));
 }
 
 const DOCUMENT_SELECTOR: LanguageClientOptions['documentSelector'] = [
@@ -119,32 +104,31 @@ async function stopClient(key: string): Promise<void> {
   await client.stop();
 }
 
-async function reconcileClients(context: vscode.ExtensionContext): Promise<void> {
+async function reconcileClients(): Promise<void> {
   const configuration = vscode.workspace.getConfiguration('asgrep');
   const serverPath = configuration.get<string>('serverPath', 'asgrep-lsp').trim() || 'asgrep-lsp';
   const indexPath = configuration.get<string>('indexPath', '').trim();
   const folders = vscode.workspace.workspaceFolders ?? [];
   const live = new Set(folders.map(folderKey));
   for (const key of [...clients.keys()]) {
-    if (!live.has(key)) {
-      await stopClient(key);
-    }
+    if (!live.has(key)) await stopClient(key);
   }
   for (const folder of folders) {
     await startClientForFolder(folder, serverPath, indexPath);
   }
-  // Keep a disposable that stops all clients on deactivate via context.
-  void context;
 }
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   context.subscriptions.push(
     vscode.commands.registerCommand('asgrep.search', searchWorkspace),
     vscode.workspace.onDidChangeWorkspaceFolders(() => {
-      void reconcileClients(context);
+      void reconcileClients();
+    }),
+    new vscode.Disposable(() => {
+      void Promise.all([...clients.keys()].map((key) => stopClient(key)));
     }),
   );
-  await reconcileClients(context);
+  await reconcileClients();
 }
 
 export async function deactivate(): Promise<void> {
@@ -176,20 +160,25 @@ async function clientForSearch(): Promise<{ client: LanguageClient; folder: vsco
 async function searchWorkspace(): Promise<void> {
   const bound = await clientForSearch();
   if (!bound) return;
+
   const { client, folder } = bound;
   const query = await vscode.window.showInputBox({
     prompt: `Search “${folder.name}” with ast-sgrep`,
     placeHolder: 'Symbol, text, callers:name, defs:name, or pattern:...',
   });
   if (!query?.trim()) return;
+
+  const trimmed = query.trim();
   try {
     const semantic = vscode.workspace.getConfiguration('asgrep').get<boolean>('semantic', true);
     const response = await client.sendRequest<SearchResponse>('asgrep/search', {
-      query: query.trim(), semantic, limit: 100,
+      query: trimmed,
+      semantic,
+      limit: 100,
     });
     const hits = Array.isArray(response.hits) ? response.hits : [];
     if (hits.length === 0) {
-      void vscode.window.showInformationMessage(`ast-sgrep: no results for “${query.trim()}” in ${folder.name}.`);
+      void vscode.window.showInformationMessage(`ast-sgrep: no results for “${trimmed}” in ${folder.name}.`);
       return;
     }
     const selected = await vscode.window.showQuickPick(
@@ -208,8 +197,8 @@ async function searchWorkspace(): Promise<void> {
 }
 
 function toQuickPickItem(hit: SearchHit, folder: vscode.WorkspaceFolder): SearchQuickPickItem {
-  const file = hitPath(hit) || '(unknown file)';
-  const line = hitLine(hit);
+  const file = hitFilePath(hit) || '(unknown file)';
+  const line = hitLineNumber(hit);
   const excerpt = hit.excerpt?.trim() || '(no excerpt)';
   return {
     label: excerpt.split(/\r?\n/, 1)[0],
@@ -221,20 +210,20 @@ function toQuickPickItem(hit: SearchHit, folder: vscode.WorkspaceFolder): Search
 }
 
 async function openHit(hit: SearchHit, folder: vscode.WorkspaceFolder): Promise<void> {
-  const file = hitPath(hit);
+  const file = hitFilePath(hit);
   if (!file) {
     void vscode.window.showWarningMessage('ast-sgrep result did not include a file path.');
     return;
   }
   const folders = vscode.workspace.workspaceFolders ?? [folder];
-  const uri = resolveHitUriMultiRoot(file, folder, folders);
-  const document = await vscode.workspace.openTextDocument(uri);
-  const line = Math.max(0, hitLine(hit) - 1);
+  const fsPath = resolveHitPath(file, { name: folder.name, fsPath: folder.uri.fsPath }, toFolderLikes(folders), (p) =>
+    fs.existsSync(p),
+  );
+  const document = await vscode.workspace.openTextDocument(vscode.Uri.file(fsPath));
+  const line = Math.max(0, hitLineNumber(hit) - 1);
   const column = Math.max(0, hit.start_column ?? hit.column ?? 0);
   const position = new vscode.Position(line, column);
   const editor = await vscode.window.showTextDocument(document);
   editor.selection = new vscode.Selection(position, position);
   editor.revealRange(new vscode.Range(position, position), vscode.TextEditorRevealType.InCenterIfOutsideViewport);
 }
-function hitPath(hit: SearchHit): string | undefined { return hit.path ?? hit.file_path ?? hit.file; }
-function hitLine(hit: SearchHit): number { return hit.line_start ?? hit.start_line ?? hit.line ?? 1; }

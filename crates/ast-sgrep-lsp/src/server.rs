@@ -1,10 +1,11 @@
 use crate::backend::LspBackend;
 use crate::support::{
     canonicalize_workspace_root, file_uri_to_path, read_message, send_error, send_response,
-    write_message, AsgrepSettings,
+    uri_to_rel_path, write_message, AsgrepSettings,
 };
 use crate::types::{
-    CallHierarchyItemParams, CallHierarchyPrepareParams, DocumentSymbolParams,
+    CallHierarchyItemParams, CallHierarchyPrepareParams, DidChangeTextDocumentParams,
+    DidOpenTextDocumentParams, DidSaveTextDocumentParams, DocumentSymbolParams,
     ExecuteCommandParams, InitializeParams, NotificationMessage, ReferenceParams, RequestMessage,
     SearchParams, TextDocumentPositionParams, WorkspaceSymbolParams,
 };
@@ -12,11 +13,14 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 use std::io::{self, BufReader, Write};
 use std::path::PathBuf;
+
 pub struct LspServer {
     backend: Option<LspBackend>,
     shutdown: bool,
 }
+
 type ReqH = fn(&mut LspServer, &Value) -> anyhow::Result<Value>;
+
 const HANDLERS: &[(&str, ReqH)] = &[
     ("initialize", LspServer::h_init),
     ("shutdown", LspServer::h_shutdown),
@@ -30,11 +34,13 @@ const HANDLERS: &[(&str, ReqH)] = &[
     ("callHierarchy/outgoingCalls", LspServer::h_out_calls),
     ("workspace/executeCommand", LspServer::h_exec),
 ];
+
 impl Default for LspServer {
     fn default() -> Self {
         Self::new()
     }
 }
+
 impl LspServer {
     pub fn new() -> Self {
         Self {
@@ -42,6 +48,7 @@ impl LspServer {
             shutdown: false,
         }
     }
+
     pub fn run(&mut self) -> io::Result<()> {
         let stdin = io::stdin();
         let mut stdout = io::stdout();
@@ -58,6 +65,7 @@ impl LspServer {
         }
         Ok(())
     }
+
     fn handle_request(&mut self, stdout: &mut impl Write, req: RequestMessage) -> io::Result<()> {
         match self.dispatch(&req.method, &req.params) {
             Ok(v) => send_response(stdout, &req.id, v)?,
@@ -72,6 +80,7 @@ impl LspServer {
         }
         Ok(())
     }
+
     fn handle_notification(
         &mut self,
         stdout: &mut impl Write,
@@ -80,59 +89,62 @@ impl LspServer {
         match notif.method.as_str() {
             "initialized" => {}
             "textDocument/didOpen" => {
-                if let (Some(b), Ok(p)) = (
-                    &self.backend,
-                    serde_json::from_value::<crate::types::DidOpenTextDocumentParams>(notif.params),
-                ) {
-                    match crate::support::uri_to_rel_path(&p.text_document.uri, b.root()) {
-                        Ok(rel) => {
-                            if let Err(e) = b.index_content(&rel, &p.text_document.text) {
-                                show_index_error(stdout, "didOpen", &e)?;
-                            }
-                        }
-                        Err(e) => show_index_error(stdout, "didOpen", &e)?,
-                    }
-                }
+                self.sync_rel_path::<DidOpenTextDocumentParams>(stdout, "didOpen", notif.params, |b, p| {
+                    let rel = uri_to_rel_path(&p.text_document.uri, b.root())?;
+                    b.index_content(&rel, &p.text_document.text)
+                })?;
             }
             "textDocument/didSave" => {
-                if let (Some(b), Ok(p)) = (
-                    &self.backend,
-                    serde_json::from_value::<crate::types::DidSaveTextDocumentParams>(notif.params),
-                ) {
-                    match crate::support::uri_to_rel_path(&p.text_document.uri, b.root()) {
-                        Ok(rel) => {
-                            if let Err(e) = b.reindex_file(&rel) {
-                                show_index_error(stdout, "didSave", &e)?;
-                            }
-                        }
-                        Err(e) => show_index_error(stdout, "didSave", &e)?,
-                    }
-                }
+                self.sync_rel_path::<DidSaveTextDocumentParams>(stdout, "didSave", notif.params, |b, p| {
+                    let rel = uri_to_rel_path(&p.text_document.uri, b.root())?;
+                    b.reindex_file(&rel)
+                })?;
             }
             "textDocument/didChange" => {
-                if let (Some(b), Ok(p)) = (
-                    &self.backend,
-                    serde_json::from_value::<crate::types::DidChangeTextDocumentParams>(
-                        notif.params,
-                    ),
-                ) {
-                    if let Err(e) = b.apply_document_changes(&p.text_document.uri, &p.content_changes)
-                    {
-                        show_index_error(stdout, "didChange", &e)?;
-                    }
-                }
+                self.sync_rel_path::<DidChangeTextDocumentParams>(
+                    stdout,
+                    "didChange",
+                    notif.params,
+                    |b, p| b.apply_document_changes(&p.text_document.uri, &p.content_changes),
+                )?;
             }
             "exit" => self.shutdown = true,
             _ => {}
         }
         Ok(())
     }
+
+    /// Parse a sync notification and surface index errors via `window/showMessage`.
+    fn sync_rel_path<P, F>(
+        &self,
+        stdout: &mut impl Write,
+        surface: &str,
+        params: Value,
+        f: F,
+    ) -> io::Result<()>
+    where
+        P: DeserializeOwned,
+        F: FnOnce(&LspBackend, P) -> anyhow::Result<()>,
+    {
+        let Some(backend) = self.backend.as_ref() else {
+            return Ok(());
+        };
+        let Ok(parsed) = serde_json::from_value::<P>(params) else {
+            return Ok(());
+        };
+        if let Err(e) = f(backend, parsed) {
+            show_index_error(stdout, surface, &e)?;
+        }
+        Ok(())
+    }
+
     fn dispatch(&mut self, method: &str, params: &Value) -> anyhow::Result<Value> {
         HANDLERS
             .iter()
             .find_map(|(n, h)| (*n == method).then_some(*h))
             .ok_or_else(|| anyhow::anyhow!("Method not found: {method}"))?(self, params)
     }
+
     fn with_parsed<P, F>(&self, params: &Value, f: F) -> anyhow::Result<Value>
     where
         P: DeserializeOwned,
@@ -140,6 +152,7 @@ impl LspServer {
     {
         f(self.backend()?, serde_json::from_value(params.clone())?)
     }
+
     fn h_init(&mut self, params: &Value) -> anyhow::Result<Value> {
         let params: InitializeParams = serde_json::from_value(params.clone())?;
         let mut backend = LspBackend::new(canonicalize_workspace_root(resolve_root(&params)));
@@ -151,55 +164,67 @@ impl LspServer {
         self.backend = Some(backend);
         Ok(result)
     }
+
     fn h_shutdown(&mut self, _: &Value) -> anyhow::Result<Value> {
         self.shutdown = true;
         Ok(Value::Null)
     }
+
     fn h_wsym(&mut self, params: &Value) -> anyhow::Result<Value> {
         self.with_parsed(params, |b, p: WorkspaceSymbolParams| {
             b.workspace_symbols(&p.query)
         })
     }
+
     fn h_search(&mut self, params: &Value) -> anyhow::Result<Value> {
         self.with_parsed(params, |b, p: SearchParams| {
             b.search(&p.query, p.semantic, clamp_lsp_search_limit(p.limit))
         })
     }
+
     fn h_dsym(&mut self, params: &Value) -> anyhow::Result<Value> {
         self.with_parsed(params, |b, p: DocumentSymbolParams| b.document_symbols(&p))
     }
+
     fn h_def(&mut self, params: &Value) -> anyhow::Result<Value> {
         self.with_parsed(params, |b, p: TextDocumentPositionParams| {
             b.goto_definition(&p)
         })
     }
+
     fn h_refs(&mut self, params: &Value) -> anyhow::Result<Value> {
         self.with_parsed(params, |b, p: ReferenceParams| b.find_references(&p))
     }
+
     fn h_prep_ch(&mut self, params: &Value) -> anyhow::Result<Value> {
         self.with_parsed(params, |b, p: CallHierarchyPrepareParams| {
             b.prepare_call_hierarchy(&p)
         })
     }
+
     fn h_in_calls(&mut self, params: &Value) -> anyhow::Result<Value> {
         self.with_parsed(params, |b, p: CallHierarchyItemParams| {
             b.incoming_calls(&p.item)
         })
     }
+
     fn h_out_calls(&mut self, params: &Value) -> anyhow::Result<Value> {
         self.with_parsed(params, |b, p: CallHierarchyItemParams| {
             b.outgoing_calls(&p.item)
         })
     }
+
     fn h_exec(&mut self, params: &Value) -> anyhow::Result<Value> {
         self.with_parsed(params, |b, p: ExecuteCommandParams| b.execute_command(&p))
     }
+
     fn backend(&self) -> anyhow::Result<&LspBackend> {
         self.backend
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("server not initialized"))
     }
 }
+
 fn resolve_root(params: &InitializeParams) -> PathBuf {
     params
         .workspace_folders
@@ -253,6 +278,7 @@ fn show_index_error(stdout: &mut impl Write, surface: &str, err: &anyhow::Error)
         .to_string(),
     )
 }
+
 pub fn log(msg: &str) {
     let _ = writeln!(io::stderr(), "[asgrep-lsp] {msg}");
 }

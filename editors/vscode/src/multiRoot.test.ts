@@ -1,6 +1,6 @@
 import * as assert from 'assert';
 import * as path from 'path';
-import { folderForUriPath, resolveHitPath } from './multiRoot';
+import { folderForUriPath, hitFilePath, hitLineNumber, resolveHitPath } from './multiRoot';
 
 function test(name: string, fn: () => void): void {
   try {
@@ -41,6 +41,11 @@ test('resolveHitPath does not silently use folders[0] when preferred misses', ()
   const exists = () => false;
   const resolved = resolveHitPath('missing.rs', folders[1], folders, exists);
   assert.strictEqual(resolved, path.join('/workspaces/beta', 'missing.rs'));
+});
+
+test('hitFilePath / hitLineNumber prefer canonical fields', () => {
+  assert.strictEqual(hitFilePath({ path: 'a.rs', file: 'b.rs' }), 'a.rs');
+  assert.strictEqual(hitLineNumber({ line_start: 9, line: 1 }), 9);
 });
 
 console.log('multi-root helpers: all tests passed');

@@ -1,5 +1,5 @@
-use ast_sgrep_lsp::backend::{path_to_uri, LspBackend};
-use ast_sgrep_lsp::support::{apply_text_edit, extract_identifier_at};
+use ast_sgrep_lsp::backend::LspBackend;
+use ast_sgrep_lsp::support::{apply_text_edit, extract_identifier_at, path_to_file_uri};
 use ast_sgrep_lsp::types::{
     ExecuteCommandParams, Position, Range, ReferenceContext, ReferenceParams,
     TextDocumentContentChangeEvent, TextDocumentIdentifier, TextDocumentPositionParams,
@@ -15,7 +15,7 @@ fn lsp_smoke() {
     };
     backend.execute_command(&reindex).unwrap();
     assert!(backend.is_index_ready());
-    let uri = path_to_uri(&backend.root().join("src/main.rs"));
+    let uri = path_to_file_uri(&backend.root().join("src/main.rs"));
     let search = ExecuteCommandParams {
         command: "asgrep.search".into(),
         arguments: vec![serde_json::json!("process_request")],
@@ -115,7 +115,7 @@ fn nonzero_range_length_replaces_correct_span() {
 #[test]
 fn uppercase_symbol_resolves_through_definition_and_reference_endpoints() {
     let (_indexed, backend) = sample_backend();
-    let uri = path_to_uri(&backend.root().join("src/main.rs"));
+    let uri = path_to_file_uri(&backend.root().join("src/main.rs"));
     backend
         .apply_document_changes(
             &uri,
@@ -233,7 +233,7 @@ fn dirty_buffer_survives_full_disk_reindex() {
     let rel = "src/main.rs";
     let path = backend.root().join(rel);
     let original = fs::read_to_string(&path).expect("read fixture");
-    let uri = path_to_uri(&path);
+    let uri = path_to_file_uri(&path);
     let marker = "dirty_buffer_unique_marker_zblv3";
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         backend
@@ -299,7 +299,7 @@ fn blank_line_navigation_does_not_panic() {
     assert_eq!(extract_identifier_at("   ", 1), None);
 
     let (_indexed, backend) = sample_backend();
-    let uri = path_to_uri(&backend.root().join("src/main.rs"));
+    let uri = path_to_file_uri(&backend.root().join("src/main.rs"));
     backend
         .apply_document_changes(
             &uri,

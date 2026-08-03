@@ -36,6 +36,12 @@ function sameSetting(current, legacy, currentName, legacyName) {
     }
     return current ?? legacy;
 }
+/** Legacy schema-0 numeric fields ↔ current names (migrate/rollback share one table). */
+const LEGACY_NUMBER_FIELDS = [
+    ["timeoutMs", "timeout"],
+    ["maxOutputBytes", "maxOutput"],
+    ["refreshIntervalMs", "refreshInterval"],
+];
 /** Convert schema 0/unversioned settings without mutating the rollback source. */
 export function migrateConfig(input = {}) {
     const value = { ...input };
@@ -47,33 +53,26 @@ export function migrateConfig(input = {}) {
         return value;
     const legacy = value;
     const migrated = { ...legacy, schemaVersion: CONFIG_SCHEMA_VERSION };
-    const timeoutMs = sameSetting(value.timeoutMs, legacy.timeout, "timeoutMs", "timeout");
-    const maxOutputBytes = sameSetting(value.maxOutputBytes, legacy.maxOutput, "maxOutputBytes", "maxOutput");
-    const refreshIntervalMs = sameSetting(value.refreshIntervalMs, legacy.refreshInterval, "refreshIntervalMs", "refreshInterval");
-    if (timeoutMs !== undefined)
-        migrated.timeoutMs = timeoutMs;
-    if (maxOutputBytes !== undefined)
-        migrated.maxOutputBytes = maxOutputBytes;
-    if (refreshIntervalMs !== undefined)
-        migrated.refreshIntervalMs = refreshIntervalMs;
-    delete migrated.timeout;
-    delete migrated.maxOutput;
-    delete migrated.refreshInterval;
+    const mutable = migrated;
+    for (const [currentName, legacyName] of LEGACY_NUMBER_FIELDS) {
+        const next = sameSetting(value[currentName], legacy[legacyName], currentName, legacyName);
+        if (next !== undefined)
+            mutable[currentName] = next;
+        delete mutable[legacyName];
+    }
     return migrated;
 }
 /** Serialize current settings for a schema-0 rollback without mutating the current value. */
 export function rollbackConfig(input) {
     const current = migrateConfig(input);
     const legacy = { ...current, schemaVersion: 0 };
-    if (current.timeoutMs !== undefined)
-        legacy.timeout = current.timeoutMs;
-    if (current.maxOutputBytes !== undefined)
-        legacy.maxOutput = current.maxOutputBytes;
-    if (current.refreshIntervalMs !== undefined)
-        legacy.refreshInterval = current.refreshIntervalMs;
-    delete legacy.timeoutMs;
-    delete legacy.maxOutputBytes;
-    delete legacy.refreshIntervalMs;
+    const mutable = legacy;
+    for (const [currentName, legacyName] of LEGACY_NUMBER_FIELDS) {
+        const next = current[currentName];
+        if (next !== undefined)
+            mutable[legacyName] = next;
+        delete mutable[currentName];
+    }
     return legacy;
 }
 function envConfig(env = {}) {
@@ -112,7 +111,8 @@ export function resolveConfig(sources = {}) {
     merged.schemaVersion = CONFIG_SCHEMA_VERSION;
     return merged;
 }
-function isContained(parent, child) {
+/** True when `child` is `parent` or a path under it (no `..` escape). */
+function pathContained(parent, child) {
     const rel = relative(parent, child);
     return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
 }
@@ -126,7 +126,7 @@ export async function resolveRuntimeRoot(projectCwd, requestedRoot, allowOutside
     catch (cause) {
         throw new RuntimeError("INVALID_ROOT", "Project or requested root does not exist", { projectCwd, requestedRoot, cause: cause instanceof Error ? cause.message : String(cause) });
     }
-    if (!allowOutsideProject && !isContained(project, candidate)) {
+    if (!allowOutsideProject && !pathContained(project, candidate)) {
         throw new RuntimeError("ROOT_OUTSIDE_PROJECT", "Requested root resolves outside the project", { project, requestedRoot, resolvedRoot: candidate });
     }
     return candidate;
@@ -154,10 +154,6 @@ function incompatibleStatusFailure(cause) {
         return false;
     const text = `${cause.message} ${JSON.stringify(cause.details)}`;
     return /incompatib|unsupported.{0,24}schema|schema.{0,24}(version|mismatch)/i.test(text);
-}
-function pathContained(root, path) {
-    const rel = relative(root, path);
-    return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
 }
 function canonicalizeAffectedPath(path) {
     const unresolved = [];
