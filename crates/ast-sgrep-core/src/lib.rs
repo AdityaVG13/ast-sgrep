@@ -8,6 +8,8 @@ pub mod fusion;
 pub mod gitignore;
 pub mod index;
 pub mod intent;
+pub mod io_bounds;
+pub mod limits;
 pub mod pattern;
 pub mod pipeline_parts;
 pub mod query;
@@ -46,6 +48,11 @@ pub use fusion::{
     FusionExample, LearnedFusionModel, WeightSensitivity,
 };
 pub use index::{EmbedBackend, FileIndexStats, IndexOptions, IndexStats, Indexer};
+pub use io_bounds::{read_text_capped, MAX_INDEX_FILE_BYTES};
+pub use limits::{
+    clamp_agent_limit, clamp_output_limit, DEFAULT_AGENT_LIMIT, MAX_EXCERPT_LINES,
+    MAX_OUTPUT_RESULTS,
+};
 pub use output::format_hit_line;
 pub use pattern::search_pattern;
 pub use query::{ParsedQuery, QueryMode};

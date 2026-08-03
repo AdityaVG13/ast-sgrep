@@ -31,6 +31,8 @@ pub fn needs_ast_grep_fallback(pattern: &str) -> bool {
 }
 
 pub fn tree_sitter_language(lang: Language) -> tree_sitter::Language {
+    // Re-exports each grammar's LANGUAGE constant via `.into()`. CSharp currently
+    // shares the Java grammar as a stand-in (documented limitation; see l115).
     match lang {
         Language::Rust => tree_sitter_rust::LANGUAGE.into(),
         Language::TypeScript => tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),

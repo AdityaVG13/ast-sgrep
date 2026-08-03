@@ -288,10 +288,12 @@ impl Default for SearchOptions {
 }
 impl SearchOptions {
     pub fn default_limit() -> usize {
-        std::env::var("ASGREP_LIMIT")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(16)
+        crate::limits::clamp_output_limit(
+            std::env::var("ASGREP_LIMIT")
+                .ok()
+                .and_then(|v| v.parse().ok()),
+            16,
+        )
     }
     pub fn embed_preference(&self) -> ast_sgrep_embed::EmbedPreference {
         EmbedBackend::from_flags(

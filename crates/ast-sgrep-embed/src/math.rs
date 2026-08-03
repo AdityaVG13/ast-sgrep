@@ -340,3 +340,64 @@ mod contract_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod property_tests {
+    use super::*;
+
+    #[test]
+    fn scored_heap_never_admits_nan_across_seeded_inputs() {
+        // Lightweight property micro-harness (g799) without pulling proptest into
+        // the default lib build graph for embed.
+        let seeds: &[f32] = &[
+            0.0,
+            -0.0,
+            1.0,
+            -1.0,
+            f32::MIN_POSITIVE,
+            f32::MAX,
+            f32::NAN,
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+            0.08,
+            0.0799999,
+        ];
+        for (i, &sim) in seeds.iter().enumerate() {
+            let out = top_k_similarity([(i, sim), (i + 100, 0.5)], 2, None);
+            assert!(out.iter().all(|(_, s)| s.is_finite()));
+            assert!(!out.iter().any(|(idx, _)| *idx == i) || sim.is_finite());
+            let scored = Scored::new(i, sim);
+            assert_eq!(scored.is_some(), sim.is_finite());
+        }
+        let mixed: Vec<_> = seeds
+            .iter()
+            .enumerate()
+            .map(|(i, s)| (i, *s))
+            .collect();
+        let ranked = top_by_similarity(mixed, 8, None);
+        assert!(ranked.iter().all(|(_, s)| s.is_finite()));
+        for window in ranked.windows(2) {
+            let ord = score_order(window[0].1, window[1].1);
+            assert!(
+                matches!(ord, Ordering::Greater | Ordering::Equal),
+                "expected non-ascending scores, got {:?} then {:?}",
+                window[0].1,
+                window[1].1
+            );
+        }
+    }
+
+    #[test]
+    fn normalize_then_rank_rejects_nan_query_residuals() {
+        let q = normalize_vec(&[f32::NAN, 1.0, f32::INFINITY]);
+        assert!(q.iter().all(|x| x.is_finite()));
+        let flat = {
+            let mut v = vec![1.0f32, 0.0, 0.0, 0.0, 1.0, 0.0];
+            normalize_vec_in_place(&mut v[0..3]);
+            normalize_vec_in_place(&mut v[3..6]);
+            v
+        };
+        let hits = top_k_flat_similarity(&q, &flat, 3, 2, Some(MIN_SIMILARITY));
+        assert!(hits.iter().all(|(_, s)| s.is_finite()));
+    }
+}

@@ -77,8 +77,10 @@ impl McpServer {
             limit: std::env::var("ASGREP_LIMIT")
                 .ok()
                 .and_then(|v| v.parse().ok())
-                .unwrap_or_else(SearchOptions::default_limit)
-                .clamp(1, MAX_AGENT_LIMIT),
+                .map(|n| ast_sgrep_core::clamp_agent_limit(Some(n), SearchOptions::default_limit()))
+                .unwrap_or_else(|| {
+                    ast_sgrep_core::clamp_agent_limit(None, SearchOptions::default_limit())
+                }),
             use_embed: std::env::var("ASGREP_NO_EMBED")
                 .ok()
                 .filter(|v| {
@@ -151,24 +153,24 @@ impl McpServer {
             "limit": {"type": "integer", "minimum": 1, "maximum": MAX_AGENT_LIMIT}
         });
         json!({"tools": [
-            {"name": "keyword_search", "description": "Lexical-only search returning abbreviated snippets and stable node IDs.",
+            {"name": "keyword_search", "description": "Lexical-only search (FTS/trigram). Returns abbreviated snippets and stable node IDs. Does not fuse AST or semantic channels.",
              "inputSchema": {"type": "object", "properties": search_properties.clone(), "required": ["query"], "additionalProperties": false}},
-            {"name": "ast_search", "description": "AST pattern search returning abbreviated snippets and stable node IDs.",
+            {"name": "ast_search", "description": "Native AST/pattern search (pattern: semantics). No external ast-grep process. Returns abbreviated snippets and stable node IDs.",
              "inputSchema": {"type": "object", "properties": search_properties.clone(), "required": ["query"], "additionalProperties": false}},
-            {"name": "semantic_search", "description": "Embedding-only search returning abbreviated snippets and stable node IDs.",
+            {"name": "semantic_search", "description": "Embedding-only search. Requires a non-empty index with semantic chunks. Returns abbreviated snippets and stable node IDs.",
              "inputSchema": {"type": "object", "properties": search_properties.clone(), "required": ["query"], "additionalProperties": false}},
-            {"name": "code_search", "description": "Deprecated compatibility alias for keyword_search; no automatic fusion.",
+            {"name": "code_search", "description": "Deprecated compatibility alias for keyword_search; no automatic fusion across channels.",
              "inputSchema": {"type": "object", "properties": search_properties, "required": ["query"], "additionalProperties": false}},
-            {"name": "code_read", "description": "Read full code for result node IDs with optional adjacent-line context.",
+            {"name": "code_read", "description": "Read full code for result node IDs with optional adjacent-line context. Paths are sandboxed under ASGREP_ROOT.",
              "inputSchema": {"type": "object", "properties": {
                 "ids": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": MAX_READ_REFS},
-                "root": {"type": "string", "description": "Project root"},
+                "root": {"type": "string", "description": "Project root under the configured workspace"},
                 "context_lines": {"type": "integer", "minimum": 0, "maximum": MAX_CONTEXT_LINES},
                 "max_chars": {"type": "integer", "minimum": 1, "maximum": MAX_READ_CHARS}
              }, "required": ["ids"], "additionalProperties": false}},
-            {"name": "index_status", "description": "Show ast-sgrep index statistics for a project root.",
+            {"name": "index_status", "description": "Show ast-sgrep index statistics for a project root under the configured workspace.",
              "inputSchema": {"type": "object", "properties": {"root": {"type": "string"}}, "additionalProperties": false}},
-            {"name": "index_repo", "description": "Build or incrementally update the ast-sgrep index.",
+            {"name": "index_repo", "description": "Build or incrementally update the index. Single-flight with a wall-clock deadline; concurrent calls serialize.",
              "inputSchema": {"type": "object", "properties": {
                 "root": {"type": "string"}, "force": {"type": "boolean"}}, "additionalProperties": false}}
         ]})

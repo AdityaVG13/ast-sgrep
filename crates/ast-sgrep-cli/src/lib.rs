@@ -148,8 +148,8 @@ struct VersionArgs {
     json: bool,
 }
 const MACHINE_SCHEMA_VERSION: &str = "1.0.0";
-const MAX_OUTPUT_RESULTS: usize = 1_000;
-const MAX_EXCERPT_LINES: usize = 100;
+const MAX_OUTPUT_RESULTS: usize = ast_sgrep_core::MAX_OUTPUT_RESULTS;
+const MAX_EXCERPT_LINES: usize = ast_sgrep_core::MAX_EXCERPT_LINES;
 const DEFAULT_SNIPPET_TOKENS: usize = 96;
 const DEFAULT_RESPONSE_SNIPPET_TOKENS: usize = 768;
 const MAX_SNIPPET_TOKENS: usize = 4_096;

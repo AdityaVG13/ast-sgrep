@@ -16,6 +16,10 @@ fn env_flag(name: &str) -> bool {
         .is_some_and(is_boolish_true)
 }
 
+fn env_allows_neural_fallback() -> bool {
+    env_flag("ASGREP_NEURAL_FALLBACK")
+}
+
 /// Allowlist env-driven embed HTTP endpoints against SSRF (j0x4 / 2lbz / rl1p.7).
 ///
 /// Default hosts: `api.openai.com`, `api.azure.com`, loopback for Ollama.
@@ -388,7 +392,16 @@ fn neural_embedder() -> Option<Box<dyn Embedder>> {
     let cached = match NeuralEmbedder::new(config.clone()) {
         Ok(embedder) => Some(Arc::new(embedder)),
         Err(err) => {
-            eprintln!("asgrep: neural embedder unavailable, falling back: {err}");
+            // Fail closed unless the operator explicitly opts into hashed fallback (2058).
+            if env_allows_neural_fallback() {
+                eprintln!(
+                    "asgrep: neural embedder unavailable; ASGREP_NEURAL_FALLBACK=1 acknowledged hashed fallback: {err}"
+                );
+            } else {
+                eprintln!(
+                    "asgrep: neural embedder unavailable (set ASGREP_NEURAL_FALLBACK=1 to acknowledge hashed fallback): {err}"
+                );
+            }
             None
         }
     };
@@ -448,6 +461,12 @@ pub fn embed_with_chain(text: &str, preference: EmbedPreference) -> EmbedResult 
                 backend: kind,
             };
         }
+    }
+    if matches!(preference, EmbedPreference::Neural) && !env_allows_neural_fallback() {
+        eprintln!(
+            "asgrep: neural preference requested but neural embedder unavailable; \
+             refusing silent hashed swap — set ASGREP_NEURAL_FALLBACK=1 to acknowledge"
+        );
     }
     EmbedResult {
         vector: try_backend(EmbedBackendKind::Semantic, text)

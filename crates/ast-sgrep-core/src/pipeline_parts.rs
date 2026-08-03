@@ -58,11 +58,11 @@ pub fn measure(root: &Path, index_dir: &Path, cfg: &Config) -> Result<Report> {
     let searcher = warm_searcher(root, index_dir)?;
     let parts = vec![
         measure_query_parse_intent(&searcher, cfg)?,
-        measure_literal(&searcher, cfg),
-        measure_lexical(&searcher, cfg),
-        measure_symbol_graph(&searcher, cfg),
+        measure_literal(&searcher, cfg)?,
+        measure_lexical(&searcher, cfg)?,
+        measure_symbol_graph(&searcher, cfg)?,
         measure_hybrid_fusion(&searcher, cfg)?,
-        measure_semantic(&searcher, cfg),
+        measure_semantic(&searcher, cfg)?,
         measure_format(&searcher, cfg)?,
         measure_index_update(root, index_dir, cfg)?,
     ];
@@ -147,40 +147,30 @@ fn measure_query_parse_intent(searcher: &Searcher, cfg: &Config) -> Result<PartT
             intent::route_hits(&parsed, &mut hits);
             units += parsed.terms.len() as u64 + intent.as_str().len() as u64;
         }
-        units
-    });
+        Ok::<_, crate::StoreError>(units)
+    })?;
     Ok(summarize("query_parse_intent", cfg, samples, work))
 }
-fn measure_literal(searcher: &Searcher, cfg: &Config) -> PartTiming {
+fn measure_literal(searcher: &Searcher, cfg: &Config) -> Result<PartTiming> {
     let (samples, work) = time_loop(cfg, || {
-        searcher
-            .search_literal("process_request")
-            .expect("literal")
-            .hits
-            .len() as u64
-    });
-    summarize("literal_retrieval", cfg, samples, work)
+        Ok::<_, crate::StoreError>(searcher.search_literal("process_request")?.hits.len() as u64)
+    })?;
+    Ok(summarize("literal_retrieval", cfg, samples, work))
 }
-fn measure_lexical(searcher: &Searcher, cfg: &Config) -> PartTiming {
+fn measure_lexical(searcher: &Searcher, cfg: &Config) -> Result<PartTiming> {
     let (samples, work) = time_loop(cfg, || {
-        searcher
-            .search_lexical("auth refresh")
-            .expect("lexical")
-            .hits
-            .len() as u64
-    });
-    summarize("lexical_fts", cfg, samples, work)
+        Ok::<_, crate::StoreError>(searcher.search_lexical("auth refresh")?.hits.len() as u64)
+    })?;
+    Ok(summarize("lexical_fts", cfg, samples, work))
 }
-fn measure_symbol_graph(searcher: &Searcher, cfg: &Config) -> PartTiming {
+fn measure_symbol_graph(searcher: &Searcher, cfg: &Config) -> Result<PartTiming> {
     let (samples, work) = time_loop(cfg, || {
-        let defs = searcher.search("defs:auth_refresh").expect("defs");
-        let callers = searcher.search("callers:process_request").expect("callers");
-        let sym = searcher
-            .search_symbol_pass("process_request")
-            .expect("symbol");
-        (defs.hits.len() + callers.hits.len() + sym.hits.len()) as u64
-    });
-    summarize("symbol_graph", cfg, samples, work)
+        let defs = searcher.search("defs:auth_refresh")?;
+        let callers = searcher.search("callers:process_request")?;
+        let sym = searcher.search_symbol_pass("process_request")?;
+        Ok::<_, crate::StoreError>((defs.hits.len() + callers.hits.len() + sym.hits.len()) as u64)
+    })?;
+    Ok(summarize("symbol_graph", cfg, samples, work))
 }
 fn measure_hybrid_fusion(searcher: &Searcher, cfg: &Config) -> Result<PartTiming> {
     let query = "how does auth refresh work";
@@ -188,43 +178,53 @@ fn measure_hybrid_fusion(searcher: &Searcher, cfg: &Config) -> Result<PartTiming
     let mut candidates = searcher.search_lexical(query)?.hits;
     candidates.extend(searcher.search_symbol_pass(query)?.hits);
     candidates.extend(searcher.search_semantic(query)?.hits);
-    assert!(
-        candidates.len() >= 2,
-        "hybrid fusion needs multi-pass candidates, got {}",
-        candidates.len()
-    );
+    if candidates.len() < 2 {
+        return Err(crate::StoreError::Other(format!(
+            "hybrid fusion needs multi-pass candidates, got {}",
+            candidates.len()
+        )));
+    }
     let opts = searcher.options().clone();
     let (samples, work) = time_loop(cfg, || {
         let mut hits = candidates.clone();
         intent::route_hits(&parsed, &mut hits);
         let weights = intent::weights_for(intent::classify(&parsed));
         crate::fusion::apply_weighted_rrf(&mut hits, &weights);
-        crate::search::finish_response(&parsed, &opts, hits, true)
-            .hits
-            .len() as u64
-    });
+        Ok::<_, crate::StoreError>(
+            crate::search::finish_response(&parsed, &opts, hits, true)
+                .hits
+                .len() as u64,
+        )
+    })?;
     Ok(summarize("hybrid_fusion_rank", cfg, samples, work))
 }
-fn measure_semantic(searcher: &Searcher, cfg: &Config) -> PartTiming {
+fn measure_semantic(searcher: &Searcher, cfg: &Config) -> Result<PartTiming> {
     let (samples, work) = time_loop(cfg, || {
-        searcher
-            .search_semantic("how does auth refresh work")
-            .expect("semantic")
-            .hits
-            .len() as u64
-    });
-    summarize("semantic_embed", cfg, samples, work)
+        Ok::<_, crate::StoreError>(
+            searcher
+                .search_semantic("how does auth refresh work")?
+                .hits
+                .len() as u64,
+        )
+    })?;
+    Ok(summarize("semantic_embed", cfg, samples, work))
 }
 fn measure_format(searcher: &Searcher, cfg: &Config) -> Result<PartTiming> {
     let hits = searcher.search("process_request")?.hits;
-    assert!(!hits.is_empty(), "format part needs real hits");
+    if hits.is_empty() {
+        return Err(crate::StoreError::Other(
+            "format part needs real hits".into(),
+        ));
+    }
     let (samples, work) = time_loop(cfg, || {
         let mut bytes = 0u64;
         for h in &hits {
             bytes += format_hit_line(h).len() as u64;
         }
-        bytes + serde_json::to_string(&hits).expect("json").len() as u64
-    });
+        let json = serde_json::to_string(&hits)
+            .map_err(|e| crate::StoreError::Other(format!("json format: {e}")))?;
+        Ok::<_, crate::StoreError>(bytes + json.len() as u64)
+    })?;
     Ok(summarize("result_format", cfg, samples, work))
 }
 fn measure_index_update(root: &Path, index_dir: &Path, cfg: &Config) -> Result<PartTiming> {
@@ -265,22 +265,29 @@ fn measure_index_update(root: &Path, index_dir: &Path, cfg: &Config) -> Result<P
         last_work =
             (stats.files_indexed + stats.files_skipped + stats.files_removed + stats.files_failed)
                 as u64;
-        assert!(last_work > 0, "update_paths did no work for {REL}");
+        if last_work == 0 {
+            return Err(crate::StoreError::Other(format!(
+                "update_paths did no work for {REL}"
+            )));
+        }
     }
     Ok(summarize("index_update_one_file", cfg, samples, last_work))
 }
-fn time_loop(cfg: &Config, mut body: impl FnMut() -> u64) -> (Vec<f64>, u64) {
+fn time_loop<E>(
+    cfg: &Config,
+    mut body: impl FnMut() -> std::result::Result<u64, E>,
+) -> std::result::Result<(Vec<f64>, u64), E> {
     for _ in 0..cfg.warmup {
-        let _ = body();
+        let _ = body()?;
     }
     let mut samples = Vec::with_capacity(cfg.iterations as usize);
     let mut last_work = 0u64;
     for _ in 0..cfg.iterations {
         let t0 = Instant::now();
-        last_work = body();
+        last_work = body()?;
         samples.push(ms(t0.elapsed()));
     }
-    (samples, last_work)
+    Ok((samples, last_work))
 }
 fn summarize(name: &str, cfg: &Config, mut samples: Vec<f64>, work: u64) -> PartTiming {
     samples.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));

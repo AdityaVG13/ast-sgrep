@@ -461,13 +461,7 @@ impl Indexer {
         let metadata = fs::metadata(abs_path)?;
         let mtime = metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH);
         let (mtime_secs, mtime_nanos) = system_time_to_parts(mtime);
-        let content = match fs::read_to_string(abs_path) {
-            Ok(c) => c,
-            Err(e) if e.kind() == std::io::ErrorKind::InvalidData => {
-                return Err(crate::StoreError::Other(format!("binary file: {rel_path}")));
-            }
-            Err(e) => return Err(e.into()),
-        };
+        let content = crate::io_bounds::read_text_capped(abs_path, crate::io_bounds::MAX_INDEX_FILE_BYTES)?;
         self.index_content_at(rel_path, &content, abs_path, mtime_secs, mtime_nanos)
     }
     pub fn index_content(&mut self, rel_path: &str, content: &str) -> Result<FileIndexStats> {
@@ -706,11 +700,9 @@ fn prepare_file(
     };
     let mtime = metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH);
     let (mtime_secs, mtime_nanos) = system_time_to_parts(mtime);
-    let content = match fs::read_to_string(abs) {
+    let content = match crate::io_bounds::read_text_capped(abs, crate::io_bounds::MAX_INDEX_FILE_BYTES)
+    {
         Ok(c) => c,
-        Err(e) if e.kind() == std::io::ErrorKind::InvalidData => {
-            return PrepareOutcome::Failed(format!("binary file: {rel}"));
-        }
         Err(e) => return PrepareOutcome::Failed(e.to_string()),
     };
     let mut hasher = Hasher::new();

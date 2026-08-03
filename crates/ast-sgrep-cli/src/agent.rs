@@ -75,11 +75,25 @@ pub(crate) fn capabilities_json(_cli: &Cli) -> anyhow::Result<Value> {
             {"name": "doctor", "usage": "asgrep doctor [ROOT]"},
         ],
         "global_flags": ["--json", "--robot-help", "--root", "--limit", "--index-path", "--lang", "--format", "--excerpt-lines", "--snippet-tokens", "--response-snippet-tokens", "--no-embed", "--cloud-embed", "--ollama-embed", "--neural-embed", "--semantic-only", "--tantivy", "--ann-threshold", "--ann-probes", "--rerank", "--rerank-top-k"],
-        "environment": ["ASGREP_LIMIT", "ASGREP_INDEX_PATH", "ASGREP_NO_EMBED", "ASGREP_CLOUD_EMBED", "ASGREP_OLLAMA_EMBED", "ASGREP_NEURAL_EMBED", "ASGREP_SEMANTIC_ONLY", "ASGREP_TANTIVY", "ASGREP_ANN_THRESHOLD", "ASGREP_ANN_PROBES", "ASGREP_RERANK", "ASGREP_RERANK_TOP_K", "NO_COLOR", "CI"],
+        "environment": ["ASGREP_LIMIT", "ASGREP_INDEX_PATH", "ASGREP_NO_EMBED", "ASGREP_CLOUD_EMBED", "ASGREP_OLLAMA_EMBED", "ASGREP_NEURAL_EMBED", "ASGREP_NEURAL_FALLBACK", "ASGREP_SEMANTIC_ONLY", "ASGREP_TANTIVY", "ASGREP_ANN_THRESHOLD", "ASGREP_ANN_PROBES", "ASGREP_RERANK", "ASGREP_RERANK_TOP_K", "ASGREP_EMBED_URL_ALLOWLIST", "ASGREP_ALLOW_AST_GREP", "ASGREP_AST_GREP", "ASGREP_LEDGER_PATH", "NO_COLOR", "CI"],
         "environment_bool_values": ["1", "0", "true", "false", "yes", "no", "on", "off"],
         "sibling_binaries": [{"name":"asgrep-mcp","purpose":"MCP stdio server"},{"name":"asgrep-lsp","purpose":"Language Server Protocol server"}],
         "aliases": ["ast-sgrep"],
-        "output_limits": {"max_results": 1000, "max_excerpt_lines": 100, "default_snippet_tokens": 96, "default_response_snippet_tokens": 768, "max_snippet_tokens": 4096, "max_response_snippet_tokens": 65536, "max_error_message_chars": 4096},
+        "output_limits": {
+            "max_results": ast_sgrep_core::MAX_OUTPUT_RESULTS,
+            "max_excerpt_lines": ast_sgrep_core::MAX_EXCERPT_LINES,
+            "default_snippet_tokens": 96,
+            "default_response_snippet_tokens": 768,
+            "max_snippet_tokens": 4096,
+            "max_response_snippet_tokens": 65536,
+            "max_error_message_chars": 4096
+        },
+        "machine_schema": {
+            "schema_version": "1.0.0",
+            "ok_field": "boolean",
+            "exit_code_field": "integer",
+            "notes": "ok:true only on successful operations; doctor uses ok:false when healthy:false; operational faults use exit_code 2"
+        },
         "search_formats": ["native", "agent", "agent-capsule", "compact", "github", "gitlab"],
         "exit_codes": [{"code": 0, "meaning": "success"}, {"code": 1, "meaning": "user input / usage error"}, {"code": 2, "meaning": "index or search operation failed"}],
         "canonical_tasks": ["asgrep index . && asgrep --json --format compact \"where is auth refreshed\" .", "asgrep status . --json", "asgrep doctor . --robot-triage"],

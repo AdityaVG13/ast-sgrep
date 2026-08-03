@@ -253,6 +253,16 @@ impl SemanticAnnIndex {
     }
 }
 pub fn flatten_vectors_for_search(chunks: &[SemanticChunkRow], dim: usize) -> Result<Vec<f32>> {
+    if dim == 0 {
+        return if chunks.is_empty() {
+            Ok(vec![])
+        } else {
+            Err(crate::StoreError::Other(
+                "semantic embedding dimension is 0 (corrupt store or unset backend; reindex)"
+                    .into(),
+            ))
+        };
+    }
     for (i, chunk) in chunks.iter().enumerate() {
         if chunk.5.len() != dim {
             return Err(crate::StoreError::Other(format!(
@@ -613,3 +623,33 @@ pub fn rebuild_semantic_ivf_sidecar(
     let _ = load_or_build_semantic_ivf(store, chunks, override_threshold)?;
     Ok(())
 }
+
+#[cfg(test)]
+mod flatten_bounds_tests {
+    use super::flatten_vectors_for_search;
+    use ast_sgrep_embed::SemanticChunkRow;
+
+    #[test]
+    fn flatten_rejects_zero_dim_with_chunks() {
+        let chunks: Vec<SemanticChunkRow> = vec![(
+            "a.rs".into(),
+            1u32,
+            1u32,
+            "sym".into(),
+            "x".into(),
+            vec![],
+        )];
+        let err = flatten_vectors_for_search(&chunks, 0).expect_err("dim=0 must fail");
+        assert!(
+            err.to_string().contains("dimension is 0"),
+            "unexpected: {err}"
+        );
+    }
+
+    #[test]
+    fn flatten_allows_empty_chunks_with_zero_dim() {
+        let out = flatten_vectors_for_search(&[], 0).expect("empty ok");
+        assert!(out.is_empty());
+    }
+}
+

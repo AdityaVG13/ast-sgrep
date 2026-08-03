@@ -369,8 +369,17 @@ function parseEnvelope(result: ExecResult, limit: number): MachineEnvelope {
     const message = typeof failure?.message === "string" ? failure.message : "ast-sgrep reported an operational failure";
     throw new RuntimeError("OPERATIONAL_ERROR", message, { command: envelope.command, error: failure });
   }
-  if (envelope.version !== undefined && envelope.version !== RUNTIME_VERSION) throw new RuntimeError("VERSION_MISMATCH", "ast-sgrep binary version does not match the extension", { expected: RUNTIME_VERSION, actual: envelope.version });
-  if (envelope.machine_schema_version !== undefined && envelope.machine_schema_version !== MACHINE_SCHEMA_VERSION) throw new RuntimeError("PROTOCOL_MISMATCH", "ast-sgrep binary reports an incompatible machine protocol", { expected: MACHINE_SCHEMA_VERSION, actual: envelope.machine_schema_version });
+  // Version-triple conjunction (ls6.2): when either identity field is present, both must be present and match.
+  const hasVersion = envelope.version !== undefined;
+  const hasMachineSchema = envelope.machine_schema_version !== undefined;
+  if (hasVersion !== hasMachineSchema) {
+    throw new RuntimeError("PROTOCOL_MISMATCH", "Incomplete version triple: version and machine_schema_version must appear together", {
+      hasVersion,
+      hasMachineSchema,
+    });
+  }
+  if (hasVersion && envelope.version !== RUNTIME_VERSION) throw new RuntimeError("VERSION_MISMATCH", "ast-sgrep binary version does not match the extension", { expected: RUNTIME_VERSION, actual: envelope.version });
+  if (hasMachineSchema && envelope.machine_schema_version !== MACHINE_SCHEMA_VERSION) throw new RuntimeError("PROTOCOL_MISMATCH", "ast-sgrep binary reports an incompatible machine protocol", { expected: MACHINE_SCHEMA_VERSION, actual: envelope.machine_schema_version });
   return envelope as MachineEnvelope;
 }
 function indexPathFor(root: string, env: NodeJS.ProcessEnv): string {

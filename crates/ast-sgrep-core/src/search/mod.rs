@@ -71,7 +71,9 @@ pub struct Searcher {
     response_cache: Mutex<ResponseCache>,
 }
 impl Searcher {
-    pub fn new(options: SearchOptions) -> Result<Self> {
+    pub fn new(mut options: SearchOptions) -> Result<Self> {
+        // Match Indexer: canonicalize roots so relative/symlink inputs share identity (0f7r).
+        options.root = options.root.canonicalize().unwrap_or(options.root.clone());
         Ok(Self::with_store(
             IndexStore::open(&options.root, options.index_path.as_deref())?,
             options,
@@ -693,7 +695,9 @@ fn enforce_result_gates(mut hits: Vec<SearchHit>, hybrid: bool, limit: usize) ->
     hits
 }
 fn estimate_prevented_reads(root: &Path, hits: &[SearchHit]) -> (u64, u64, u64) {
+    use std::path::Component;
     use std::sync::OnceLock;
+    const META_CACHE_CAP: usize = 4_096;
     static META_CACHE: OnceLock<Mutex<std::collections::HashMap<String, u64>>> = OnceLock::new();
     let cache = META_CACHE.get_or_init(|| Mutex::new(std::collections::HashMap::new()));
     let mut files = HashSet::new();
@@ -704,15 +708,26 @@ fn estimate_prevented_reads(root: &Path, hits: &[SearchHit]) -> (u64, u64, u64) 
             if !files.insert(h.file.as_str()) {
                 continue;
             }
-            let key = if Path::new(&h.file).is_absolute() {
-                h.file.clone()
-            } else {
-                root.join(&h.file).to_string_lossy().into_owned()
-            };
+            // Sanitize: reject absolute escapes and parent-directory joins (89er).
+            let hit_path = Path::new(&h.file);
+            if hit_path.is_absolute()
+                || hit_path.components().any(|c| {
+                    matches!(c, Component::ParentDir | Component::RootDir | Component::Prefix(_))
+                })
+            {
+                continue;
+            }
+            let key = root.join(hit_path).to_string_lossy().into_owned();
             let len = if let Some(&n) = guard.get(&key) {
                 n
             } else {
                 let n = std::fs::metadata(&key).ok().map(|m| m.len()).unwrap_or(0);
+                if guard.len() >= META_CACHE_CAP {
+                    // Bound growth: drop arbitrary entry when full.
+                    if let Some(evict) = guard.keys().next().cloned() {
+                        guard.remove(&evict);
+                    }
+                }
                 guard.insert(key, n);
                 n
             };
@@ -730,7 +745,37 @@ fn record_ledger_from_env(response: &SearchResponse) {
     let Some(path) = std::env::var_os("ASGREP_LEDGER_PATH") else {
         return;
     };
-    let _ = append_ledger_entry(Path::new(&path), response);
+    let path = Path::new(&path);
+    // Constrain ledger writes: absolute path required; no `..`; must stay under cwd (5xf2).
+    if !path.is_absolute()
+        || path
+            .components()
+            .any(|c| matches!(c, std::path::Component::ParentDir))
+    {
+        eprintln!("[asgrep] ignoring ASGREP_LEDGER_PATH: must be an absolute path without '..'");
+        return;
+    }
+    let Ok(cwd) = std::env::current_dir() else {
+        return;
+    };
+    let Ok(cwd) = cwd.canonicalize() else {
+        return;
+    };
+    let parent = path.parent().unwrap_or(path);
+    let Ok(parent_canon) = parent.canonicalize() else {
+        // Parent may not exist yet; require it under cwd by prefix check on the raw absolute path.
+        if !path.starts_with(&cwd) {
+            eprintln!("[asgrep] ignoring ASGREP_LEDGER_PATH: outside process cwd");
+            return;
+        }
+        let _ = append_ledger_entry(path, response);
+        return;
+    };
+    if !parent_canon.starts_with(&cwd) {
+        eprintln!("[asgrep] ignoring ASGREP_LEDGER_PATH: outside process cwd");
+        return;
+    }
+    let _ = append_ledger_entry(path, response);
 }
 fn append_ledger_entry(path: &Path, response: &SearchResponse) -> std::io::Result<()> {
     let ts = SystemTime::now()

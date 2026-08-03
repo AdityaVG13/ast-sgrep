@@ -159,6 +159,11 @@ impl IndexStore {
         &self.db_path
     }
     pub fn connection(&self) -> &Connection {
+        // Sealed for first-party use: external crates should prefer typed store
+        // APIs (status/query helpers). Direct connection access remains for
+        // in-tree search passes and integration tests that need prepared SQL
+        // beyond the public facade (l115). Do not open a second connection to
+        // the same db_path from agent surfaces.
         &self.conn
     }
     pub fn set_meta(&self, key: &str, value: &str) -> Result<()> {

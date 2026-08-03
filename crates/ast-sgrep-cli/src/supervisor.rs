@@ -168,7 +168,10 @@ mod unix_impl {
     }
     impl Drop for ChildGuard {
         fn drop(&mut self) {
+            // Always reap when still armed (panic unwind, early return, signal exit path).
+            // kill_and_reap is signal-safe enough for Drop: best-effort TERM→KILL→wait.
             if self.armed {
+                self.armed = false;
                 kill_and_reap(self.child_pid);
             }
         }
@@ -188,6 +191,8 @@ mod unix_impl {
         cmd.stdout(std::process::Stdio::inherit());
         cmd.stderr(std::process::Stdio::inherit());
         let mut child = cmd.spawn().context("failed to spawn worker")?;
+        // Pid::from_raw bridges std Child::id() into nix. Child ids are OS PIDs;
+        // casting to i32 matches nix's Pid representation on supported unix targets (l115/732x).
         let child_pid = Pid::from_raw(child.id() as i32);
         let mut guard = ChildGuard::new(child_pid);
         let _ = nix::unistd::setpgid(child_pid, child_pid);
@@ -312,5 +317,36 @@ mod unix_impl {
                     .min(Duration::from_millis(10)),
             );
         }
+    }
+}
+
+#[cfg(all(test, unix))]
+mod childguard_tests {
+    use super::unix_impl::*;
+    use nix::unistd::Pid;
+
+    // Re-export helpers through a thin test surface: ChildGuard is private inside
+    // unix_impl, so we validate public duty-cycle / kill contracts and document
+    // Drop semantics in docs/validation/childguard.md (732x).
+
+    #[test]
+    fn duty_cycle_respects_cpu_cap() {
+        let (work, sleep) = crate::supervisor::duty_cycle_ms(50);
+        assert_eq!(work + sleep, crate::supervisor::CYCLE_MS);
+        assert!(work > 0 && sleep > 0);
+    }
+
+    #[test]
+    fn parse_cpu_limit_clamps() {
+        assert_eq!(crate::supervisor::parse_cpu_limit(""), crate::supervisor::DEFAULT_CPU_LIMIT);
+        assert_eq!(crate::supervisor::parse_cpu_limit("0"), crate::supervisor::DEFAULT_CPU_LIMIT);
+        assert_eq!(crate::supervisor::parse_cpu_limit("80"), 80);
+        assert_eq!(crate::supervisor::parse_cpu_limit("99"), crate::supervisor::DEFAULT_CPU_LIMIT);
+    }
+
+    #[test]
+    fn kill_and_reap_tolerates_missing_pid() {
+        // Pid 1<<22 is extremely unlikely to exist; must not panic (732x).
+        kill_and_reap(Pid::from_raw(1 << 22));
     }
 }
