@@ -83,10 +83,16 @@ Combines lexical FTS, symbol name match, caller/callee graph, anchor excerpts ar
 
 | Prefix | Example | Returns |
 |--------|---------|---------|
+| *(none)* | `asgrep "auth refresh"` | Hybrid retrieval |
 | `callers:` | `asgrep "callers:main"` | Who calls `main` |
 | `defs:` | `asgrep "defs:auth_refresh"` | Where `auth_refresh` is defined |
 | `imports:` | `asgrep "imports:serde"` | Import statements mentioning `serde` |
 | `pattern:` | `asgrep "pattern:fn $NAME($$$)"` | Structural match via native tree-sitter (ast-grep fallback only for exotic shapes) |
+| `literal:` | `asgrep "literal:foo_bar"` | Exact substring |
+| `regex:` | `asgrep "regex:foo.*bar"` | Line regex |
+| `word:` | `asgrep "word:token"` | Word-boundary token match |
+
+See [QUERY_GRAMMAR.md](QUERY_GRAMMAR.md) for the normative prefix table and unsupported grammar.
 
 ### Semantic / synonym queries
 
@@ -121,32 +127,48 @@ Details and examples: [use-cases.md](use-cases.md).
 
 ## CLI reference
 
+Full query mode prefixes: [QUERY_GRAMMAR.md](QUERY_GRAMMAR.md)
+(`callers:`, `defs:`, `imports:`, `pattern:`, `literal:`, `regex:`, `word:`, or unprefixed hybrid).
+Machine-oriented catalog: `asgrep capabilities --json` (clap-derived; preferred for agents).
+
 ### Commands
 
 | Command | Description |
 |---------|-------------|
+| `asgrep "QUERY" [ROOT]` | Hybrid search (default when no subcommand) |
 | `asgrep index [ROOT]` | Build or incrementally update the index |
 | `asgrep reindex [ROOT]` | Force full reindex |
 | `asgrep status [ROOT]` | Index statistics |
 | `asgrep semantic "QUERY" [ROOT]` | Semantic-only search |
-| `asgrep bench [ROOT]` | Search latency benchmark |
-| `asgrep "QUERY" [ROOT]` | Hybrid search (default) |
+| `asgrep chain "QUERY" [ROOT]` | Relationship / neighborhood expansion |
+| `asgrep bench [ROOT]` | Search latency benchmark (`--query`, `--iterations`, `--suite`, `--fixture`, `--queries-file`, `--skip-index`) |
+| `asgrep watch [ROOT]` | Incremental reindex on save (`--debounce-ms`) |
+| `asgrep eval` | Gold / A/B evaluation harness |
+| `asgrep capabilities` | Machine-readable command/flag catalog (`--json`) |
+| `asgrep version` | Version (`--json`) |
+| `asgrep robot-docs` | Agent-oriented docs / guides |
+| `asgrep doctor [ROOT]` | Environment / index triage (`--robot-triage`) |
 
 ### Important flags
 
 | Flag | Env var | Description |
 |------|---------|-------------|
-| `--root` |, | Project root (default `.`) |
-| `--limit` | `ASGREP_LIMIT` | Max results (default 16) |
-| `--json` |, | JSON output |
-| `--format` |, | `native`, `agent`, `github`, `gitlab` |
+| `--root` | | Project root (default `.`; also positional `ROOT` on many commands) |
+| `--limit` | `ASGREP_LIMIT` | Max results (default 16; hard-capped) |
+| `--json` | | JSON output on stdout |
+| `--format` | | `native`, `agent` (`llm`/`ai`), `github` (`gh`), `gitlab` (`gl`), `agent-capsule` |
+| `--excerpt-lines` | | Extra excerpt lines in structured formats (capped) |
 | `--no-embed` | `ASGREP_NO_EMBED=1` | Disable semantic indexing + search |
 | `--tantivy` | `ASGREP_TANTIVY=1` | Force secondary FTS5 lexical DB (`.asgrep/lexical.db`; flag name is historical) |
 | `--cloud-embed` | `ASGREP_CLOUD_EMBED=1` | Prefer cloud neural embeddings |
 | `--ollama-embed` | `ASGREP_OLLAMA_EMBED=1` | Prefer Ollama embeddings |
+| `--neural-embed` | `ASGREP_NEURAL_EMBED=1` | Prefer local neural embeddings (feature-gated) |
 | `--semantic-only` | `ASGREP_SEMANTIC_ONLY=1` | Force offline semantic only |
 | `--ann-threshold` | `ASGREP_ANN_THRESHOLD` | Symbol count before IVF-ANN (default 2000) |
-| `--lang` |, | Filter: `rust`, `typescript`, `javascript`, `python`, `go`, etc. |
+| `--ann-probes` | `ASGREP_ANN_PROBES` | IVF clusters to probe |
+| `--rerank` | `ASGREP_RERANK` | Local cross-encoder rerank (feature-gated) |
+| `--rerank-top-k` | `ASGREP_RERANK_TOP_K` | Rerank candidate pool (default 20) |
+| `--lang` | | Filter: `rust`, `typescript`, `javascript`, `python`, `go`, … |
 | `--index-path` | `ASGREP_INDEX_PATH` | Custom index DB path |
 
 Store index in cache instead of repo:
@@ -205,11 +227,12 @@ Tune ANN: `--ann-threshold N` or `ASGREP_ANN_THRESHOLD`.
 
 ## Benchmarks
 
-On the sample fixture (5 files, 25 symbols):
+On the sample fixture (tiny corpus; informational only — not a CI-enforced product SLO):
 
 ```bash
 asgrep bench . --iterations 100
-# Index: ~0.19 ms · Avg search: ~0.29 ms (target < 20 ms)
+# Example local medians can land under 1 ms; real indexed repos are typically tens of ms warm.
+# See benchmarks/results/baselines.md for published corpus latencies (UNREPRODUCIBLE from this tree).
 ```
 
 ## Troubleshooting

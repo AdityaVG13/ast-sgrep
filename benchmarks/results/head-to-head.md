@@ -20,7 +20,7 @@ This consolidated GATE table reports only measurements already recorded in repos
 | Structural query | 23,000 files | **18.93 ms** query-median p50 | ast-grep 188.77 ms | **9.97x faster; parity clean** | *(historical machine-readable dump; not in-tree)* |
 | Structural query | 100,000 files | **19.34 ms** query-median p50 | ast-grep 1,347.97 ms | **69.68x faster; parity clean** | *(historical machine-readable dump; not in-tree)* |
 | Structural hand-pattern suite | 29 unchanged patterns | **1,520.6 ms** sum of per-pattern p50s | Semgrep 31,875.3 ms | **20.96x faster** | *(historical machine-readable dump; not in-tree)* |
-| Retrieval quality | ripgrep, 14 gold queries | **0.605 MRR** | Semgrep hand-patterns 0.536 MRR | **+0.069 MRR** | [`losses.md`](losses.md) |
+| Retrieval quality | ripgrep, 14 gold queries | **0.605 MRR** (`rg-neural-rerank-d3eab74`; not default hybrid 0.290) | Semgrep hand-patterns 0.536 MRR | **+0.069 MRR** | [`losses.md`](losses.md) / [`baselines.md`](baselines.md) |
 
 The three speed win classes hold in the artifacts:
 
@@ -42,7 +42,7 @@ Retrieval quality is separate because it is a relevance result, not a speed resu
 | structural `ast_grep_over_asgrep` | `9.970108836018053` | `69.68092647277379` |
 | structural `parity_clean` | `true` | `true` |
 
-The Semgrep artifact stores `asgrep_sum_p50_ms = 1520.555`, `semgrep_sum_p50_ms = 31875.276`, `speedup_x = 20.96`, `patterns = 29`, match totals `51 / 19`, and `semgrep_unique_locations = 0`. The retrieval publication records `0.605 / 0.536` in [`losses.md`](losses.md), alongside all 14 reciprocal-rank rows.
+The Semgrep artifact stores `asgrep_sum_p50_ms = 1520.555`, `semgrep_sum_p50_ms = 31875.276`, `speedup_x = 20.96`, `patterns = 29`, match totals `51 / 19`, and `semgrep_unique_locations = 0`. The neural+rerank retrieval publication records `0.605 / 0.536` in [`losses.md`](losses.md) (fingerprint `rg-neural-rerank-d3eab74`); the canonical **default hybrid** ripgrep MRR remains **0.290** in [`baselines.md`](baselines.md).
 
 ## Losses and caveats
 

@@ -83,4 +83,15 @@ br does not stage, commit, pull, push, or otherwise execute Git commands. The Gi
 - Explicit user or orchestrator instructions override this block.
 - Do not commit or push without clear authority.
 - Report the exact command and error when a required tracker operation fails.
+
 <!-- END BEADS INTEGRATION -->
+
+## Benchmark and published-number claims
+
+Agents and humans must not invent or restate performance/quality numbers without provenance.
+
+1. **No bare quotes.** Do not quote MRR, Recall, nDCG, latency, speedup, or dimension claims in docs, README, commit messages, PR bodies, or bead close reasons unless the number traces to a row in [`benchmarks/results/baselines.md`](benchmarks/results/baselines.md) (or another results file that points at that canonical row) **or** the claim is explicitly tagged `UNREPRODUCIBLE` with the missing harness/corpus named.
+2. **Harness path required for "reproducible".** A number may be called reproducible only when this tree contains the exact command, gold fixture, and competitor pins needed to regenerate it. Otherwise label it historical / unreproducible.
+3. **Negative ledger.** When an eval, bake-off, or gate fails or is withdrawn, update the relevant results doc (or add a short note under `benchmarks/results/`) rather than deleting the failure. Do not close honesty beads by omitting the miss.
+4. **Conflicting figures.** Never leave two different values for the same metric+corpus+config both labeled canonical. Prefer one versioned fingerprint row in `baselines.md`; demote the other to "superseded" or "different config".
+

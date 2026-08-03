@@ -37,7 +37,7 @@ At **index** and **search** time, the same chain is used:
 ```
 1. Cloud    , if ASGREP_EMBED_API_KEY is set
 2. Ollama   , if Ollama is reachable (ASGREP_OLLAMA_URL)
-3. Semantic local, always available (256-dim, offline)
+3. Semantic local, always available (offline hashed embedder; see dimension note below)
 ```
 
 | Backend | Flag | Env |
@@ -52,10 +52,11 @@ At **index** and **search** time, the same chain is used:
 
 ### Semantic local (default, no API key)
 
-- 256-dimensional vectors
+- Vectors are stored as length-`SEMANTIC_DIM` (**256**) `f32` arrays
+- **Honesty note:** sign bits come from a 32-byte BLAKE3 digest (`hash_feature` walks `i % 32`), so the independent sign pattern has period 32 until a denser feature hash lands. Treat “256-dim” as the storage width, not 256 independent random projections.
 - Char n-gram features + concept expansion
 - Deterministic, offline, fast
-- Regression-tested: zero token-overlap queries must rank the correct symbol
+- Regression-tested: zero token-overlap queries must rank the correct symbol on the fixture suite (not a statistical guarantee on arbitrary corpora)
 
 ### Ollama (optional)
 

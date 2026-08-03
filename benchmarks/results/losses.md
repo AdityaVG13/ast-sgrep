@@ -11,7 +11,14 @@
 
 Measured 2026-07-10 on Apple M5 Max, 48 GiB RAM. The corpus is ripgrep 14.1.1 at `4649aa9700619f94cf9c66876e9549d83420e16c`; the 14-query gold fixture is unchanged. Full machine, corpus, and tool provenance is in [`BASELINES.md`](baselines.md). Machine-readable aggregate and per-query results are under `bakeoff.corpora.ripgrep` in *(historical dump; not in-tree)*.
 
-The default local neural plus cross-encoder pipeline reaches **0.605 MRR**, above the committed semgrep hand-pattern reference at **0.536 MRR**. This comparison is intentionally difficult for asgrep: semgrep receives a hand-authored structural pattern for each natural-language intent, while asgrep receives the natural-language query directly.
+The **neural-embed + cross-encoder** pipeline (fingerprint
+`rg-neural-rerank-d3eab74` in [`baselines.md`](baselines.md)) reaches **0.605 MRR**,
+above the committed semgrep hand-pattern reference at **0.536 MRR**. This is **not**
+the default hybrid row (`rg-hybrid-default-d3eab74` = **0.290 MRR**). Do not cite
+0.605 as “asgrep hybrid” without the neural/rerank config. This comparison is
+intentionally difficult for asgrep: semgrep receives a hand-authored structural
+pattern for each natural-language intent, while asgrep receives the
+natural-language query directly.
 
 ## Reproduce
 

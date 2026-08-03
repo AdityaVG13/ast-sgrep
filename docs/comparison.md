@@ -18,7 +18,7 @@ Three tools, three jobs. ast-sgrep is the **navigation and intent layer** you ad
 | **CI / platform JSON** | GitHub & GitLab shapes | No | `--json` (ripgrep format) |
 | **LSP** | `asgrep-lsp` | Separate ecosystem | No |
 | **Agent-oriented JSON** | `--format agent` + follow-ups | Limited | Line-based JSON |
-| **Typical latency** | ~0.3 ms/search (indexed) | Pattern-dependent | ms–s per full scan |
+| **Typical latency** | Indexed warm search often tens of ms on real corpora; sub-ms medians appear only on tiny fixture benches (unenforced) | Pattern-dependent | ms–s per full scan |
 | **Index required** | Yes (`.asgrep/`) | No | No |
 | **API key for semantic** | No (offline default) | N/A | N/A |
 

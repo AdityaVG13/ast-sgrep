@@ -147,7 +147,7 @@ Incremental skip: if `content_hash` and mtime match, file is not re-parsed.
 
 ## Caller graph safety
 
-Caller edges are extracted from AST call expressions, not naive substring match. This avoids false positives like matching `auth_refresh` inside a string literal or comment. Regression tests enforce 0% false caller rate on fixtures.
+Caller edges are extracted from AST call expressions, not naive substring match. This avoids many false positives like matching `auth_refresh` inside a string literal or comment. Conformance goldens assert a **finite, hand-picked forbid list** of doc/string/comment tokens must not appear as callers (`extraction_goldens.rs`); that is **not** a measured 0% false-caller rate on arbitrary code, and language-specific gaps can still miss edges or mis-attribute ownership.
 
 ## Library usage
 
