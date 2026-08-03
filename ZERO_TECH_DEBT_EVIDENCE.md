@@ -318,8 +318,37 @@ Dig past Batches A–D into densest remaining modules (sqlite / extract / runtim
 - Freshness lease + incompatible rebuild swap/backup semantics preserved.
 - Code-mode search argv shape unchanged (`keyword` / bare `--` pattern / `semantic`).
 
+### Clippy dead_code (touched crates)
+
+```bash
+cargo clippy -p ast-sgrep-core -p ast-sgrep-lang -p ast-sgrep-embed -p ast-sgrep-mcp -p ast-sgrep-cli --lib -- -W dead_code
+# → no dead_code diagnostics on Batch E surfaces
+# → applied clippy::manual_contains on extract kind tables
+```
+
 ### Commands run
 
 ```bash
-# (filled after test pass)
+cargo test -p ast-sgrep-core -p ast-sgrep-lang -p ast-sgrep-embed --lib
+# → core: 50 passed; lang: 6 passed; embed: 16 passed
+
+cargo test -p ast-sgrep-cli --lib --test machine_contracts
+# → cli lib: 3 passed; machine_contracts: 13 passed
+
+cargo test -p ast-sgrep-mcp --test protocol
+# → 9 passed (includes code_search listing + dispatch)
+
+cargo test -p ast-sgrep-lsp --tests
+# → lsp.rs: 4 passed
+
+cargo test -p ast-sgrep-lang --test pattern --test extraction_goldens
+# → pattern: 5 passed; extraction_goldens: 1 passed
+
+cargo test -p ast-sgrep-core --test store_delete --test semantic_ivf_roundtrip --test e2e_smoke
+# → store_delete: 8 passed
+# → semantic_ivf_roundtrip: 8 passed; 1 ignored
+# → e2e_smoke: 5 passed; 1 ignored
+
+cd packages/pi/extension && npm run build && npm test
+# → tsc ok; 59 passed
 ```

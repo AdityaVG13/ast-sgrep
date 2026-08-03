@@ -93,12 +93,12 @@ pub(crate) const MEMBER_EXPR_KINDS: &[&str] = &[
 
 #[inline]
 pub(crate) fn is_ident_kind(kind: &str) -> bool {
-    IDENT_KINDS.iter().any(|&k| k == kind)
+    IDENT_KINDS.contains(&kind)
 }
 
 #[inline]
 pub(crate) fn is_member_expr_kind(kind: &str) -> bool {
-    MEMBER_EXPR_KINDS.iter().any(|&k| k == kind)
+    MEMBER_EXPR_KINDS.contains(&kind)
 }
 
 pub(crate) fn last_identifier_in_chain(node: &Node, source: &str) -> Option<String> {
@@ -139,7 +139,7 @@ pub(crate) fn is_in_comment_or_string(node: &Node) -> bool {
     ];
     let mut current = Some(*node);
     while let Some(n) = current {
-        if KINDS.iter().any(|&k| n.kind() == k) {
+        if KINDS.contains(&n.kind()) {
             return true;
         }
         current = n.parent();
@@ -398,11 +398,11 @@ pub(crate) fn enclosing_symbol_name(node: &Node, source: &str) -> Option<String>
     let mut current = node.parent();
     while let Some(n) = current {
         let kind = n.kind();
-        if ENCLOSING_NAMED_FN_KINDS.iter().any(|&k| k == kind) {
+        if ENCLOSING_NAMED_FN_KINDS.contains(&kind) {
             if let Some(name) = field_name_text(&n, source) {
                 return Some(name);
             }
-        } else if ENCLOSING_ARROW_FN_KINDS.iter().any(|&k| k == kind) {
+        } else if ENCLOSING_ARROW_FN_KINDS.contains(&kind) {
             if let Some(name) = field_name_text(&n, source) {
                 return Some(name);
             }
