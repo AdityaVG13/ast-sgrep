@@ -9,7 +9,7 @@ thread_local! {
 }
 
 /// Parse `source` and run `extract` on the tree. When `lang_key` is set, reuses a thread-local parser for that language.
-pub fn parse_and_extract_for(
+pub(crate) fn parse_and_extract_for(
     lang_key: Option<Language>,
     language: tree_sitter::Language,
     source: &str,
@@ -54,87 +54,129 @@ fn parse_tree(
         .parse(source, None)
         .ok_or_else(|| anyhow::anyhow!("failed to parse source"))
 }
-pub fn byte_to_line(source: &str, byte: usize) -> u32 {
+
+pub(crate) fn byte_to_line(source: &str, byte: usize) -> u32 {
     source[..byte.min(source.len())]
         .bytes()
         .filter(|&b| b == b'\n')
         .count() as u32
         + 1
 }
-pub fn node_lines(node: &Node, source: &str) -> (u32, u32) {
+
+pub(crate) fn node_lines(node: &Node, source: &str) -> (u32, u32) {
     (
         byte_to_line(source, node.start_byte()),
         byte_to_line(source, node.end_byte()),
     )
 }
-pub fn node_text<'a>(node: &Node, source: &'a str) -> Option<&'a str> {
+
+pub(crate) fn node_text<'a>(node: &Node, source: &'a str) -> Option<&'a str> {
     source.get(node.start_byte()..node.end_byte())
 }
-pub fn last_identifier_in_chain(node: &Node, source: &str) -> Option<String> {
-    match node.kind() {
-        "identifier"
-        | "simple_identifier"
-        | "type_identifier"
-        | "field_identifier"
-        | "property_identifier"
-        | "name" => node_text(node, source).map(str::to_string),
-        "field_expression"
-        | "scoped_identifier"
-        | "scoped_type_identifier"
-        | "member_expression"
-        | "member_access_expression"
-        | "navigation_expression"
-        | "selector_expression"
-        | "qualified_identifier"
-        | "qualified_name" => {
-            let mut cursor = node.walk();
-            let mut last = None;
-            for child in node.children(&mut cursor) {
-                if let Some(name) = last_identifier_in_chain(&child, source) {
-                    last = Some(name);
-                }
+
+/// Identifier-like tree-sitter kinds used by pattern matching and extraction.
+pub(crate) const IDENT_KINDS: &[&str] = &[
+    "identifier",
+    "simple_identifier",
+    "type_identifier",
+    "field_identifier",
+    "property_identifier",
+    "package_identifier",
+    "constant",
+    "name",
+    "namespace_identifier",
+];
+
+/// Member / scoped expression kinds that chain identifiers.
+pub(crate) const MEMBER_EXPR_KINDS: &[&str] = &[
+    "field_expression",
+    "scoped_identifier",
+    "scoped_type_identifier",
+    "member_expression",
+    "member_access_expression",
+    "navigation_expression",
+    "selector_expression",
+    "qualified_identifier",
+    "qualified_name",
+];
+
+/// Comment / string trivia kinds skipped by pattern and call extraction.
+pub(crate) const COMMENT_OR_STRING_KINDS: &[&str] = &[
+    "comment",
+    "line_comment",
+    "block_comment",
+    "multiline_comment",
+    "string_literal",
+    "raw_string_literal",
+    "string",
+    "line_string_literal",
+    "multi_line_string_literal",
+    "template_string",
+    "interpreted_string_literal",
+    "quoted_string_literal",
+];
+
+/// String-like kinds used when resolving import path literals.
+pub(crate) const STRING_KINDS: &[&str] = &[
+    "string",
+    "string_content",
+    "interpreted_string_literal",
+    "bare_string_literal",
+];
+
+#[inline]
+pub(crate) fn is_ident_kind(kind: &str) -> bool {
+    IDENT_KINDS.contains(&kind)
+}
+
+#[inline]
+pub(crate) fn is_member_expr_kind(kind: &str) -> bool {
+    MEMBER_EXPR_KINDS.contains(&kind)
+}
+
+#[inline]
+fn is_comment_or_string_kind(kind: &str) -> bool {
+    COMMENT_OR_STRING_KINDS.contains(&kind)
+}
+
+pub(crate) fn last_identifier_in_chain(node: &Node, source: &str) -> Option<String> {
+    if is_ident_kind(node.kind()) {
+        return node_text(node, source).map(str::to_string);
+    }
+    if is_member_expr_kind(node.kind()) {
+        let mut cursor = node.walk();
+        let mut last = None;
+        for child in node.children(&mut cursor) {
+            if let Some(name) = last_identifier_in_chain(&child, source) {
+                last = Some(name);
             }
-            last
         }
-        _ => {
-            let mut cursor = node.walk();
-            let mut found = None;
-            for c in node.children(&mut cursor) {
-                if let Some(name) = last_identifier_in_chain(&c, source) {
-                    found = Some(name);
-                    break;
-                }
-            }
-            found
+        return last;
+    }
+    let mut cursor = node.walk();
+    let mut found = None;
+    for c in node.children(&mut cursor) {
+        if let Some(name) = last_identifier_in_chain(&c, source) {
+            found = Some(name);
+            break;
         }
     }
+    found
 }
-pub fn is_in_comment_or_string(node: &Node) -> bool {
+
+pub(crate) fn is_in_comment_or_string(node: &Node) -> bool {
     let mut current = Some(*node);
     while let Some(n) = current {
-        if matches!(
-            n.kind(),
-            "comment"
-                | "line_comment"
-                | "block_comment"
-                | "multiline_comment"
-                | "string_literal"
-                | "raw_string_literal"
-                | "string"
-                | "line_string_literal"
-                | "multi_line_string_literal"
-                | "template_string"
-                | "interpreted_string_literal"
-                | "quoted_string_literal"
-        ) {
+        if is_comment_or_string_kind(n.kind()) {
             return true;
         }
         current = n.parent();
     }
     false
 }
+
 /// True if any ancestor node has a kind in `kinds`.
-pub fn is_inside_any(node: &Node, kinds: &[&str]) -> bool {
+pub(crate) fn is_inside_any(node: &Node, kinds: &[&str]) -> bool {
     let mut current = node.parent();
     while let Some(n) = current {
         if kinds.iter().any(|&k| n.kind() == k) {
@@ -145,7 +187,7 @@ pub fn is_inside_any(node: &Node, kinds: &[&str]) -> bool {
     false
 }
 
-pub fn add_named_symbol(ext: &mut Extractor, node: &Node, source: &str, kind: SymbolKind) {
+pub(crate) fn add_named_symbol(ext: &mut Extractor, node: &Node, source: &str, kind: SymbolKind) {
     if let Some(name_node) = node.child_by_field_name("name") {
         if let Some(name) = node_text(&name_node, source) {
             ext.add_symbol(node, source, name, kind);
@@ -153,7 +195,7 @@ pub fn add_named_symbol(ext: &mut Extractor, node: &Node, source: &str, kind: Sy
     }
 }
 
-pub fn trim_string_literal(raw: &str) -> &str {
+pub(crate) fn trim_string_literal(raw: &str) -> &str {
     raw.trim().trim_matches(|c| matches!(c, '"' | '\'' | '`'))
 }
 
@@ -161,7 +203,7 @@ pub fn trim_string_literal(raw: &str) -> &str {
 ///
 /// Prefer positional variants so language kind-maps stay compact and scannable.
 #[derive(Clone, Copy)]
-pub enum KindRule {
+pub(crate) enum KindRule {
     /// Named symbol with fixed kind.
     Sym(SymbolKind),
     /// Named symbol: Method if inside any of these parents, else Function.
@@ -204,7 +246,7 @@ pub enum KindRule {
 }
 
 /// Apply the first matching kind rule. Returns true if a rule fired.
-pub fn apply_kind_table(
+pub(crate) fn apply_kind_table(
     ext: &mut Extractor,
     node: &Node,
     source: &str,
@@ -350,7 +392,7 @@ fn apply_kind_rule(ext: &mut Extractor, node: &Node, source: &str, rule: KindRul
 }
 
 /// Resolve a C/C++-style name from `name` or nested `declarator` fields.
-pub fn declarator_name(node: &Node, source: &str) -> Option<String> {
+pub(crate) fn declarator_name(node: &Node, source: &str) -> Option<String> {
     if let Some(name_node) = node.child_by_field_name("name") {
         if let Some(text) = node_text(&name_node, source) {
             return Some(text.to_string());
@@ -358,35 +400,28 @@ pub fn declarator_name(node: &Node, source: &str) -> Option<String> {
     }
     let mut current = node.child_by_field_name("declarator")?;
     for _ in 0..8 {
-        match current.kind() {
-            "identifier" | "field_identifier" | "type_identifier" | "name" => {
-                return node_text(&current, source).map(str::to_string);
+        if is_ident_kind(current.kind()) {
+            return node_text(&current, source).map(str::to_string);
+        }
+        if let Some(inner) = current.child_by_field_name("declarator") {
+            current = inner;
+            continue;
+        }
+        let mut cursor = current.walk();
+        for child in current.children(&mut cursor) {
+            if !child.is_named() {
+                continue;
             }
-            _ => {
-                if let Some(inner) = current.child_by_field_name("declarator") {
-                    current = inner;
-                    continue;
+            if let Some(name) = declarator_name(&child, source) {
+                return Some(name);
+            }
+            if is_ident_kind(child.kind()) {
+                if let Some(text) = node_text(&child, source) {
+                    return Some(text.to_string());
                 }
-                let mut cursor = current.walk();
-                for child in current.children(&mut cursor) {
-                    if !child.is_named() {
-                        continue;
-                    }
-                    if let Some(name) = declarator_name(&child, source) {
-                        return Some(name);
-                    }
-                    if matches!(
-                        child.kind(),
-                        "identifier" | "field_identifier" | "type_identifier" | "name"
-                    ) {
-                        if let Some(text) = node_text(&child, source) {
-                            return Some(text.to_string());
-                        }
-                    }
-                }
-                return None;
             }
         }
+        return None;
     }
     None
 }
@@ -427,7 +462,7 @@ fn keyword_symbol_kind(
 }
 
 /// First direct (or recursive) child whose kind is in `name_kinds` and text is not in `skip`.
-pub fn path_from_name_children(
+pub(crate) fn path_from_name_children(
     node: &Node,
     source: &str,
     name_kinds: &[&str],
@@ -452,16 +487,9 @@ pub fn path_from_name_children(
     None
 }
 
-const STRING_KINDS: &[&str] = &[
-    "string",
-    "string_content",
-    "interpreted_string_literal",
-    "bare_string_literal",
-];
-
 /// First string-like descendant (quoted literals / string content nodes).
-pub fn first_string_literal(node: &Node, source: &str) -> Option<String> {
-    if STRING_KINDS.iter().any(|&k| node.kind() == k) {
+pub(crate) fn first_string_literal(node: &Node, source: &str) -> Option<String> {
+    if STRING_KINDS.contains(&node.kind()) {
         return node_text(node, source).map(|raw| trim_string_literal(raw).to_string());
     }
     let mut cursor = node.walk();
@@ -472,57 +500,60 @@ pub fn first_string_literal(node: &Node, source: &str) -> Option<String> {
     }
     None
 }
-pub fn enclosing_symbol_name(node: &Node, source: &str) -> Option<String> {
+
+const ENCLOSING_FN_KINDS: &[&str] = &[
+    "function_item",
+    "function_declaration",
+    "method_declaration",
+    "method_definition",
+    "method",
+    "singleton_method",
+    "local_function_statement",
+    "constructor_declaration",
+    "protocol_function_declaration",
+];
+
+pub(crate) fn enclosing_symbol_name(node: &Node, source: &str) -> Option<String> {
     let mut current = node.parent();
     while let Some(n) = current {
-        match n.kind() {
-            "function_item"
-            | "function_declaration"
-            | "method_declaration"
-            | "method_definition"
-            | "method"
-            | "singleton_method"
-            | "local_function_statement"
-            | "constructor_declaration"
-            | "protocol_function_declaration" => {
-                if let Some(name_node) = n.child_by_field_name("name") {
-                    return node_text(&name_node, source).map(str::to_string);
-                }
+        let kind = n.kind();
+        if ENCLOSING_FN_KINDS.contains(&kind) {
+            if let Some(name_node) = n.child_by_field_name("name") {
+                return node_text(&name_node, source).map(str::to_string);
             }
+        } else if kind == "function_definition" {
             // C/C++ definitions store the name under nested declarators.
-            "function_definition" => {
-                if let Some(name_node) = n.child_by_field_name("name") {
-                    return node_text(&name_node, source).map(str::to_string);
-                }
-                if let Some(name) = declarator_name(&n, source) {
-                    return Some(name);
-                }
+            if let Some(name_node) = n.child_by_field_name("name") {
+                return node_text(&name_node, source).map(str::to_string);
             }
-            "arrow_function" | "function_expression" => {
-                if let Some(name_node) = n.child_by_field_name("name") {
-                    return node_text(&name_node, source).map(str::to_string);
-                }
-                if let Some(parent) = n.parent() {
-                    if parent.kind() == "variable_declarator" {
-                        if let Some(name_node) = parent.child_by_field_name("name") {
-                            return node_text(&name_node, source).map(str::to_string);
-                        }
+            if let Some(name) = declarator_name(&n, source) {
+                return Some(name);
+            }
+        } else if matches!(kind, "arrow_function" | "function_expression") {
+            if let Some(name_node) = n.child_by_field_name("name") {
+                return node_text(&name_node, source).map(str::to_string);
+            }
+            if let Some(parent) = n.parent() {
+                if parent.kind() == "variable_declarator" {
+                    if let Some(name_node) = parent.child_by_field_name("name") {
+                        return node_text(&name_node, source).map(str::to_string);
                     }
                 }
             }
-            _ => {}
         }
         current = n.parent();
     }
     None
 }
-pub struct Extractor {
-    pub symbols: Vec<SymbolDef>,
-    pub calls: Vec<CallSite>,
-    pub imports: Vec<ImportSite>,
+
+pub(crate) struct Extractor {
+    pub(crate) symbols: Vec<SymbolDef>,
+    pub(crate) calls: Vec<CallSite>,
+    pub(crate) imports: Vec<ImportSite>,
 }
+
 impl Extractor {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             symbols: vec![],
             calls: vec![],
@@ -530,7 +561,7 @@ impl Extractor {
         }
     }
 
-    pub fn into_result(self) -> ExtractionResult {
+    pub(crate) fn into_result(self) -> ExtractionResult {
         ExtractionResult {
             symbols: self.symbols,
             calls: self.calls,
@@ -539,7 +570,7 @@ impl Extractor {
         }
     }
 
-    pub fn add_symbol(&mut self, node: &Node, source: &str, name: &str, kind: SymbolKind) {
+    pub(crate) fn add_symbol(&mut self, node: &Node, source: &str, name: &str, kind: SymbolKind) {
         let (line_start, line_end) = node_lines(node, source);
         self.symbols.push(SymbolDef {
             name: name.to_string(),
@@ -551,7 +582,7 @@ impl Extractor {
         });
     }
 
-    pub fn add_call(&mut self, node: &Node, source: &str, callee_node: &Node) {
+    pub(crate) fn add_call(&mut self, node: &Node, source: &str, callee_node: &Node) {
         if is_in_comment_or_string(node) {
             return;
         }
@@ -567,35 +598,22 @@ impl Extractor {
         });
     }
 
-    pub fn add_import(&mut self, node: &Node, source: &str, module: &str) {
+    pub(crate) fn add_import(&mut self, node: &Node, source: &str, module: &str) {
         self.imports.push(ImportSite {
             module_path: module.to_string(),
             line: byte_to_line(source, node.start_byte()),
         });
     }
 }
-impl Default for Extractor {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-pub fn collect_identifiers(node: &Node, source: &str) -> Vec<String> {
+
+pub(crate) fn collect_identifiers(node: &Node, source: &str) -> Vec<String> {
     let mut ids = Vec::new();
     collect_identifiers_rec(node, source, &mut ids);
     ids
 }
+
 fn collect_identifiers_rec(node: &Node, source: &str, ids: &mut Vec<String>) {
-    if matches!(
-        node.kind(),
-        "identifier"
-            | "simple_identifier"
-            | "type_identifier"
-            | "property_identifier"
-            | "package_identifier"
-            | "name"
-            | "field_identifier"
-            | "namespace_identifier"
-    ) {
+    if is_ident_kind(node.kind()) {
         if let Some(text) = node_text(node, source) {
             ids.push(text.to_string());
         }
@@ -607,10 +625,12 @@ fn collect_identifiers_rec(node: &Node, source: &str, ids: &mut Vec<String>) {
         }
     }
 }
-pub fn field_child<'a>(node: &'a Node, name: &str) -> Option<Node<'a>> {
+
+pub(crate) fn field_child<'a>(node: &'a Node, name: &str) -> Option<Node<'a>> {
     node.child_by_field_name(name)
 }
-pub fn parse_ts_language_for(
+
+pub(crate) fn parse_ts_language_for(
     lang_key: Option<Language>,
     language: tree_sitter::Language,
     source: &str,
@@ -622,6 +642,7 @@ pub fn parse_ts_language_for(
         extractor.into_result()
     })
 }
+
 fn walk_mut(
     ext: &mut Extractor,
     node: &Node,

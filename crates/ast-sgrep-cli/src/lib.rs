@@ -248,6 +248,7 @@ fn raw_command_name(args: &[std::ffi::OsString]) -> &'static str {
         "watch",
         "semantic",
         "chain",
+        "keyword",
         "capabilities",
         "version",
         "robot-docs",
@@ -463,18 +464,25 @@ fn run_search(root: &Path, cli: &Cli, query: &str, semantic: bool) -> anyhow::Re
     } else {
         ast_sgrep_plugins::OutputFormat::Native
     };
-    let format = match cli.format.as_deref() {
-        Some(raw) => ast_sgrep_plugins::OutputFormat::parse(raw).ok_or_else(|| {
-            usage_error(format!(
-                "unknown output format {raw:?}; expected native, agent, agent-capsule, github, or gitlab"
-            ))
-        })?,
-        None => default,
-    };
+    let format = resolve_output_format(cli.format.as_deref(), default)?;
     print_machine_json(
         if semantic { "semantic" } else { "search" },
         ast_sgrep_plugins::format_response_with(&response, format, cli.excerpt_lines),
     )
+}
+
+fn resolve_output_format(
+    raw: Option<&str>,
+    default: ast_sgrep_plugins::OutputFormat,
+) -> anyhow::Result<ast_sgrep_plugins::OutputFormat> {
+    match raw {
+        Some(raw) => ast_sgrep_plugins::OutputFormat::parse(raw).ok_or_else(|| {
+            usage_error(format!(
+                "unknown output format {raw:?}; expected native, agent, agent-capsule, github, or gitlab"
+            ))
+        }),
+        None => Ok(default),
+    }
 }
 fn print_json_or<T: serde::Serialize>(
     json: bool,

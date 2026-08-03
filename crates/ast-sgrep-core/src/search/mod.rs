@@ -347,14 +347,7 @@ fn structural_index_pass(
         if term.len() < 3 || !term.chars().all(|c| c == '_' || c.is_alphanumeric()) {
             continue;
         }
-        let signatures = [
-            format!("call-name:{term}"),
-            format!("call:{term}"),
-            format!("decl:fn:{term}"),
-            format!("decl:def:{term}"),
-            format!("decl:function:{term}"),
-            term.clone(),
-        ];
+        let signatures = ast_sgrep_lang::structural_term_signatures(term);
         for sig in &signatures {
             for row in store.pattern_nodes_matching(sig, lang)? {
                 if !seen.insert((row.path.clone(), row.line_start, row.line_end)) {

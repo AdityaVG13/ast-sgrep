@@ -231,13 +231,19 @@ impl Default for ParserRegistry {
 mod extract;
 mod langs;
 mod pattern;
+mod pattern_queries;
+mod signature;
 use langs::{
     CParser, CSharpParser, CppParser, GoParser, JavaParser, JavaScriptParser, KotlinParser,
     PhpParser, PythonParser, RubyParser, RustParser, SwiftParser, TypeScriptParser,
 };
 pub use pattern::{
-    match_literal_pattern, match_pattern, needs_ast_grep_fallback, parse_is_error_free,
-    tree_sitter_language, PatternMatch,
+    classify_native, declaration_prefix, match_literal_pattern, match_pattern,
+    needs_ast_grep_fallback, parse_is_error_free, tree_sitter_language, DECL_KIND_PREFIXES,
+    DECL_PATTERN_PREFIXES, NativeKind, PatternMatch,
+};
+pub use signature::{
+    cached_pattern_signatures, required_pattern_literal, structural_term_signatures, DECL_PREFIXES,
 };
 fn make_parser(lang: Language) -> Box<dyn LanguageParser> {
     match lang {

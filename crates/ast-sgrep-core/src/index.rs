@@ -461,11 +461,7 @@ impl Indexer {
         mtime_secs: i64,
         mtime_nanos: u32,
     ) -> Result<FileIndexStats> {
-        let hash = {
-            let mut h = Hasher::new();
-            h.update(content.as_bytes());
-            h.finalize().to_hex().to_string()
-        };
+        let hash = hash_content(content);
         if self.is_unchanged(rel_path, &hash)? {
             return Ok(FileIndexStats {
                 skipped: true,
@@ -621,13 +617,7 @@ fn body_structure_hash(content: &str) -> String {
         }
         let line_start = content[..end].rfind('\n').map(|i| i + 1).unwrap_or(0);
         let line = content[line_start..end].trim();
-        let trivia = line.is_empty()
-            || line.starts_with("//")
-            || line.starts_with('#')
-            || line.starts_with("/*")
-            || line.starts_with('*')
-            || line.starts_with("--");
-        if !trivia {
+        if !is_trailing_trivia_line(line) {
             break;
         }
         end = line_start;
@@ -642,6 +632,23 @@ fn body_structure_hash(content: &str) -> String {
     h.update(&bytes[..end]);
     h.finalize().to_hex().to_string()
 }
+
+const HASH_TRIVIA_PREFIXES: &[&str] = &["#", "--"];
+const C_FAMILY_TRIVIA_PREFIXES: &[&str] = &["//", "/*", "*"];
+
+fn is_trailing_trivia_line(line: &str) -> bool {
+    line.is_empty()
+        || HASH_TRIVIA_PREFIXES
+            .iter()
+            .chain(C_FAMILY_TRIVIA_PREFIXES.iter())
+            .any(|p| line.starts_with(p))
+}
+fn hash_content(content: &str) -> String {
+    let mut h = Hasher::new();
+    h.update(content.as_bytes());
+    h.finalize().to_hex().to_string()
+}
+
 fn prepare_file(
     abs: &Path,
     rel: &str,
@@ -662,9 +669,7 @@ fn prepare_file(
         }
         Err(e) => return PrepareOutcome::Failed(e.to_string()),
     };
-    let mut hasher = Hasher::new();
-    hasher.update(content.as_bytes());
-    let hash = hasher.finalize().to_hex().to_string();
+    let hash = hash_content(&content);
     let language = detect_language(abs, Some(&content));
     if let Some(filter) = lang_filter {
         if language.is_none_or(|l| l.as_str() != filter) {
