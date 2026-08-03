@@ -49,6 +49,10 @@ pub fn tree_sitter_language(lang: Language) -> tree_sitter::Language {
         Language::CSharp => tree_sitter_c_sharp::LANGUAGE.into(),
         Language::Ruby => tree_sitter_ruby::LANGUAGE.into(),
         Language::Swift => tree_sitter_swift::LANGUAGE.into(),
+        Language::C => tree_sitter_c::LANGUAGE.into(),
+        Language::Cpp => tree_sitter_cpp::LANGUAGE.into(),
+        Language::Kotlin => tree_sitter_kotlin_ng::LANGUAGE.into(),
+        Language::Php => tree_sitter_php::LANGUAGE_PHP.into(),
     }
 }
 
@@ -232,6 +236,7 @@ fn match_structural(
                 source,
                 &queries,
                 name.as_deref(),
+                None,
                 &mut out,
             )?;
         }
@@ -243,6 +248,7 @@ fn match_structural(
                 source,
                 &queries,
                 name.as_deref(),
+                Some((lang, keyword)),
                 &mut out,
             )?;
         }
@@ -283,6 +289,16 @@ fn function_queries(lang: Language) -> Vec<&'static str> {
         Language::Swift => vec![
             "(function_declaration name: (simple_identifier) @name) @match",
             "(protocol_function_declaration name: (simple_identifier) @name) @match",
+        ],
+        Language::C | Language::Cpp => vec![
+            "(function_definition declarator: (function_declarator declarator: (identifier) @name)) @match",
+            "(function_definition declarator: (function_declarator declarator: (field_identifier) @name)) @match",
+            "(function_definition declarator: (pointer_declarator declarator: (function_declarator declarator: (identifier) @name))) @match",
+        ],
+        Language::Kotlin => vec!["(function_declaration name: (identifier) @name) @match"],
+        Language::Php => vec![
+            "(function_definition name: (name) @name) @match",
+            "(method_declaration name: (name) @name) @match",
         ],
     }
 }
@@ -358,6 +374,41 @@ fn class_queries(lang: Language, keyword: &str) -> Vec<&'static str> {
             ],
             _ => vec![],
         },
+        Language::C => match keyword {
+            "struct" => vec!["(struct_specifier name: (type_identifier) @name) @match"],
+            "type" => vec![
+                "(struct_specifier name: (type_identifier) @name) @match",
+                "(enum_specifier name: (type_identifier) @name) @match",
+            ],
+            _ => vec![],
+        },
+        Language::Cpp => match keyword {
+            "class" => vec!["(class_specifier name: (type_identifier) @name) @match"],
+            "struct" => vec!["(struct_specifier name: (type_identifier) @name) @match"],
+            "type" => vec![
+                "(class_specifier name: (type_identifier) @name) @match",
+                "(struct_specifier name: (type_identifier) @name) @match",
+                "(enum_specifier name: (type_identifier) @name) @match",
+            ],
+            _ => vec![],
+        },
+        // Kotlin reuses class_declaration for class/interface/enum; filter in run_queries.
+        Language::Kotlin => match keyword {
+            "class" | "interface" | "type" => {
+                vec!["(class_declaration name: (identifier) @name) @match"]
+            }
+            _ => vec![],
+        },
+        Language::Php => match keyword {
+            "class" => vec!["(class_declaration name: (name) @name) @match"],
+            "interface" => vec!["(interface_declaration name: (name) @name) @match"],
+            "type" => vec![
+                "(class_declaration name: (name) @name) @match",
+                "(interface_declaration name: (name) @name) @match",
+                "(enum_declaration name: (name) @name) @match",
+            ],
+            _ => vec![],
+        },
     }
 }
 
@@ -367,6 +418,7 @@ fn run_queries(
     source: &str,
     queries: &[&str],
     name_filter: Option<&str>,
+    class_filter: Option<(Language, &str)>,
     out: &mut Vec<PatternMatch>,
 ) -> anyhow::Result<()> {
     for qsrc in queries {
@@ -395,6 +447,11 @@ fn run_queries(
             if is_in_comment_or_string(&node) {
                 continue;
             }
+            if let Some((lang, keyword)) = class_filter {
+                if !class_keyword_matches(lang, &node, source, keyword) {
+                    continue;
+                }
+            }
             if let Some(want) = name_filter {
                 if name_text != Some(want) {
                     continue;
@@ -404,6 +461,40 @@ fn run_queries(
         }
     }
     Ok(())
+}
+
+fn class_keyword_matches(lang: Language, node: &Node, source: &str, keyword: &str) -> bool {
+    match lang {
+        Language::Kotlin => {
+            let kind = kotlin_class_keyword(node, source);
+            match keyword {
+                "class" => kind == "class",
+                "interface" => kind == "interface",
+                "type" => true,
+                _ => false,
+            }
+        }
+        _ => true,
+    }
+}
+
+fn kotlin_class_keyword(node: &Node, source: &str) -> &'static str {
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if child.kind() == "modifiers" || child.kind() == "class_modifier" {
+            if kotlin_class_keyword(&child, source) == "enum" {
+                return "enum";
+            }
+        }
+        if let Some(text) = node_text(&child, source) {
+            match text.trim() {
+                "enum" => return "enum",
+                "interface" => return "interface",
+                _ => {}
+            }
+        }
+    }
+    "class"
 }
 
 fn walk_calls(node: Node, source: &str, path: &[Option<String>], out: &mut Vec<PatternMatch>) {
@@ -441,13 +532,16 @@ fn path_from_node(node: &Node, source: &str) -> Option<Vec<String>> {
         | "simple_identifier"
         | "type_identifier"
         | "field_identifier"
-        | "property_identifier" => node_text(node, source).map(|t| vec![t.to_string()]),
+        | "property_identifier"
+        | "name" => node_text(node, source).map(|t| vec![t.to_string()]),
         "field_expression"
         | "member_expression"
         | "navigation_expression"
         | "selector_expression"
         | "member_access_expression"
-        | "scoped_identifier" => {
+        | "scoped_identifier"
+        | "qualified_identifier"
+        | "qualified_name" => {
             let mut segs = Vec::new();
             let mut cursor = node.walk();
             for child in node.children(&mut cursor) {
@@ -518,6 +612,8 @@ fn is_identifier_kind(kind: &str) -> bool {
             | "package_identifier"
             | "simple_identifier"
             | "constant"
+            | "name"
+            | "namespace_identifier"
     )
 }
 
@@ -569,15 +665,16 @@ fn collect_node_signatures(
 fn declaration_prefix(node: &Node, source: &str) -> Option<&'static str> {
     match node.kind() {
         "function_item" => Some("fn"),
-        "struct_item" | "struct_declaration" => Some("struct"),
+        "struct_item" | "struct_declaration" | "struct_specifier" => Some("struct"),
         "function_definition" => Some("def"),
         "function_declaration"
         | "protocol_function_declaration"
         | "method_definition"
         | "method_declaration"
         | "method"
+        | "singleton_method"
         | "local_function_statement" => Some("function"),
-        "class_definition" | "class" | "record_declaration" => Some("class"),
+        "class_definition" | "class" | "record_declaration" | "class_specifier" => Some("class"),
         "class_declaration" => match node
             .child_by_field_name("declaration_kind")
             .and_then(|kind| node_text(&kind, source))
@@ -585,10 +682,17 @@ fn declaration_prefix(node: &Node, source: &str) -> Option<&'static str> {
             Some("struct" | "actor") => Some("struct"),
             Some("enum") => Some("enum"),
             Some("extension") => Some("type"),
-            _ => Some("class"),
+            _ => {
+                // Kotlin reuses class_declaration for class/interface/enum.
+                match kotlin_class_keyword(node, source) {
+                    "interface" => Some("interface"),
+                    "enum" => Some("enum"),
+                    _ => Some("class"),
+                }
+            }
         },
         "trait_item" | "interface_declaration" | "protocol_declaration" => Some("interface"),
-        "enum_item" | "enum_declaration" => Some("enum"),
+        "enum_item" | "enum_declaration" | "enum_specifier" => Some("enum"),
         _ => None,
     }
 }
@@ -599,7 +703,13 @@ fn is_call_kind(kind: &str) -> bool {
     // for C# files.
     matches!(
         kind,
-        "call_expression" | "call" | "method_invocation" | "invocation_expression"
+        "call_expression"
+            | "call"
+            | "method_invocation"
+            | "invocation_expression"
+            | "function_call_expression"
+            | "member_call_expression"
+            | "scoped_call_expression"
     )
 }
 

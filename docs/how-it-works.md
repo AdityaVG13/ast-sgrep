@@ -50,7 +50,7 @@ flowchart TB
 ast-sgrep/
 ├── crates/ast-sgrep-core/    # Index + hybrid search engine
 ├── crates/ast-sgrep-cli/     # asgrep / ast-sgrep binaries
-├── crates/ast-sgrep-lang/    # tree-sitter parsers (9 languages)
+├── crates/ast-sgrep-lang/    # tree-sitter parsers (13 languages)
 ├── crates/ast-sgrep-embed/   # Semantic local + Ollama + cloud
 ├── crates/ast-sgrep-plugins/ # GitHub / GitLab / agent JSON
 ├── crates/ast-sgrep-lsp/     # asgrep-lsp
@@ -137,7 +137,7 @@ Below the ANN threshold, semantic search uses brute-force cosine over all symbol
 
 1. **Walk** project tree (respect `.gitignore`, `.asgrepignore`)
 2. **Detect language** from extension / shebang
-3. **Parse** with tree-sitter, including native C# and Swift grammars
+3. **Parse** with tree-sitter, including native C, C++, C#, Swift, Kotlin, and PHP grammars
 4. **Extract** symbols, caller edges, imports
 5. **Build semantic chunks** per symbol (name, kind, callers, callees, excerpt) → embed → `semantic_chunks`
 6. **Upsert** file row, lines, symbols, graph edges; remove stale rows for changed files
@@ -191,7 +191,7 @@ let agent = format_response(&response, OutputFormat::Agent);
 
 ## Supported languages
 
-Rust, TypeScript, JavaScript, Python, Go, Java, C#, Ruby, and Swift -- unified index, single query surface.
+Rust, TypeScript, JavaScript, Python, Go, Java, C#, Ruby, Swift, C, C++, Kotlin, and PHP -- unified index, single query surface.
 
 Adding a language (contributors): tree-sitter grammar in `ast-sgrep-lang`, implement `LanguageParser`, register in `ParserRegistry`, map extensions in `detect_language()`.
 

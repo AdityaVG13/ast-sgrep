@@ -76,14 +76,17 @@ pub fn last_identifier_in_chain(node: &Node, source: &str) -> Option<String> {
         | "simple_identifier"
         | "type_identifier"
         | "field_identifier"
-        | "property_identifier" => node_text(node, source).map(str::to_string),
+        | "property_identifier"
+        | "name" => node_text(node, source).map(str::to_string),
         "field_expression"
         | "scoped_identifier"
         | "scoped_type_identifier"
         | "member_expression"
         | "member_access_expression"
         | "navigation_expression"
-        | "selector_expression" => {
+        | "selector_expression"
+        | "qualified_identifier"
+        | "qualified_name" => {
             let mut cursor = node.walk();
             let mut last = None;
             for child in node.children(&mut cursor) {
@@ -192,6 +195,12 @@ pub enum KindRule {
         bool,
         Option<&'static str>,
     ),
+    /// Named symbol whose name lives under the C/C++ `declarator` chain.
+    SymDeclarator(SymbolKind),
+    /// Like [`KindRule::MethodIn`], but the name is under the `declarator` chain.
+    MethodInDeclarator(&'static [&'static str]),
+    /// Symbol kind from anonymous keyword / modifier token text (Kotlin class forms).
+    SymByKeywords(&'static [(&'static str, SymbolKind)], SymbolKind),
 }
 
 /// Apply the first matching kind rule. Returns true if a rule fired.
@@ -318,7 +327,103 @@ fn apply_kind_rule(ext: &mut Extractor, node: &Node, source: &str, rule: KindRul
                 }
             }
         }
+        KindRule::SymDeclarator(sk) => {
+            if let Some(name) = declarator_name(node, source) {
+                ext.add_symbol(node, source, &name, sk);
+            }
+        }
+        KindRule::MethodInDeclarator(parents) => {
+            let sk = if is_inside_any(node, parents) {
+                SymbolKind::Method
+            } else {
+                SymbolKind::Function
+            };
+            if let Some(name) = declarator_name(node, source) {
+                ext.add_symbol(node, source, &name, sk);
+            }
+        }
+        KindRule::SymByKeywords(cases, default) => {
+            let sk = keyword_symbol_kind(node, source, cases, default);
+            add_named_symbol(ext, node, source, sk);
+        }
     }
+}
+
+/// Resolve a C/C++-style name from `name` or nested `declarator` fields.
+pub fn declarator_name(node: &Node, source: &str) -> Option<String> {
+    if let Some(name_node) = node.child_by_field_name("name") {
+        if let Some(text) = node_text(&name_node, source) {
+            return Some(text.to_string());
+        }
+    }
+    let mut current = node.child_by_field_name("declarator")?;
+    for _ in 0..8 {
+        match current.kind() {
+            "identifier" | "field_identifier" | "type_identifier" | "name" => {
+                return node_text(&current, source).map(str::to_string);
+            }
+            _ => {
+                if let Some(inner) = current.child_by_field_name("declarator") {
+                    current = inner;
+                    continue;
+                }
+                let mut cursor = current.walk();
+                for child in current.children(&mut cursor) {
+                    if !child.is_named() {
+                        continue;
+                    }
+                    if let Some(name) = declarator_name(&child, source) {
+                        return Some(name);
+                    }
+                    if matches!(
+                        child.kind(),
+                        "identifier" | "field_identifier" | "type_identifier" | "name"
+                    ) {
+                        if let Some(text) = node_text(&child, source) {
+                            return Some(text.to_string());
+                        }
+                    }
+                }
+                return None;
+            }
+        }
+    }
+    None
+}
+
+fn keyword_symbol_kind(
+    node: &Node,
+    source: &str,
+    cases: &[(&str, SymbolKind)],
+    default: SymbolKind,
+) -> SymbolKind {
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if let Some(text) = node_text(&child, source) {
+            let trimmed = text.trim();
+            if let Some((_, sk)) = cases.iter().find(|(k, _)| *k == trimmed) {
+                if trimmed == "enum" || trimmed == "interface" {
+                    return *sk;
+                }
+            }
+        }
+        if child.kind() == "modifiers" || child.kind() == "class_modifier" {
+            let nested = keyword_symbol_kind(&child, source, cases, default);
+            if nested != default {
+                return nested;
+            }
+        }
+    }
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if let Some(text) = node_text(&child, source) {
+            let trimmed = text.trim();
+            if let Some((_, sk)) = cases.iter().find(|(k, _)| *k == trimmed) {
+                return *sk;
+            }
+        }
+    }
+    default
 }
 
 /// First direct (or recursive) child whose kind is in `name_kinds` and text is not in `skip`.
@@ -373,15 +478,24 @@ pub fn enclosing_symbol_name(node: &Node, source: &str) -> Option<String> {
         match n.kind() {
             "function_item"
             | "function_declaration"
-            | "function_definition"
             | "method_declaration"
             | "method_definition"
             | "method"
+            | "singleton_method"
             | "local_function_statement"
             | "constructor_declaration"
             | "protocol_function_declaration" => {
                 if let Some(name_node) = n.child_by_field_name("name") {
                     return node_text(&name_node, source).map(str::to_string);
+                }
+            }
+            // C/C++ definitions store the name under nested declarators.
+            "function_definition" => {
+                if let Some(name_node) = n.child_by_field_name("name") {
+                    return node_text(&name_node, source).map(str::to_string);
+                }
+                if let Some(name) = declarator_name(&n, source) {
+                    return Some(name);
                 }
             }
             "arrow_function" | "function_expression" => {
@@ -478,6 +592,9 @@ fn collect_identifiers_rec(node: &Node, source: &str, ids: &mut Vec<String>) {
             | "type_identifier"
             | "property_identifier"
             | "package_identifier"
+            | "name"
+            | "field_identifier"
+            | "namespace_identifier"
     ) {
         if let Some(text) = node_text(node, source) {
             ids.push(text.to_string());

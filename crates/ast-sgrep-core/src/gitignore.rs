@@ -15,7 +15,8 @@ pub const DEFAULT_SKIP_DIR_NAMES: &[&str] = &[
 ];
 pub const INDEXABLE_EXTENSIONS: &[&str] = &[
     "rs", "ts", "tsx", "js", "jsx", "mjs", "cjs", "py", "pyi", "go", "java", "cs", "rb", "swift",
-    "toml", "md", "txt", "json", "yaml", "yml",
+    "c", "h", "cpp", "cc", "cxx", "hpp", "hxx", "hh", "ipp", "kt", "kts", "php", "toml", "md",
+    "txt", "json", "yaml", "yml",
 ];
 pub fn should_skip_dir(path: &Path) -> bool {
     path.file_name()
@@ -237,5 +238,14 @@ mod tests {
     #[test]
     fn indexes_swift_source_files() {
         assert!(!should_skip_file(Path::new("Sources/App/Main.swift")));
+    }
+
+    #[test]
+    fn indexes_c_cpp_kotlin_php_source_files() {
+        assert!(!should_skip_file(Path::new("src/main.c")));
+        assert!(!should_skip_file(Path::new("include/app.h")));
+        assert!(!should_skip_file(Path::new("src/main.cpp")));
+        assert!(!should_skip_file(Path::new("src/Main.kt")));
+        assert!(!should_skip_file(Path::new("src/index.php")));
     }
 }

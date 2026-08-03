@@ -39,6 +39,10 @@
     "onLanguage:ruby",
     "onLanguage:csharp",
     "onLanguage:swift",
+    "onLanguage:c",
+    "onLanguage:cpp",
+    "onLanguage:kotlin",
+    "onLanguage:php",
     "onCommand:asgrep.search"
   ],
   "contributes": {

@@ -77,7 +77,7 @@ fn csharp_pattern_uses_real_grammar_not_java() {
 }
 
 /// difu.1: Per-language pattern conformance — function patterns must match
-/// declarations in all 8 supported languages. This complements the extraction
+/// declarations in all supported languages. This complements the extraction
 /// goldens (which test symbol/call/import extraction) by verifying the pattern
 /// channel works for every language, not just Rust and C#.
 #[test]
@@ -99,7 +99,20 @@ fn function_pattern_matches_all_languages() {
             "myFunc",
         ),
         (Language::Ruby, "def my_func\nend\n", "my_func"),
+        (
+            Language::Ruby,
+            "class Foo\n  def self.my_func\n  end\nend\n",
+            "my_func",
+        ),
         (Language::Swift, "func myFunc() {}\n", "myFunc"),
+        (Language::C, "void my_func(void) {}\n", "my_func"),
+        (Language::Cpp, "void my_func() {}\n", "my_func"),
+        (Language::Kotlin, "fun myFunc() {}\n", "myFunc"),
+        (
+            Language::Php,
+            "<?php\nfunction my_func() {}\n",
+            "my_func",
+        ),
     ];
     for &(lang, source, expected_name) in cases {
         let hits = match_pattern(lang, source, "function $NAME($$$)").unwrap();
@@ -157,5 +170,92 @@ protocol Gamma {}
     assert!(
         interface_hits[0].excerpt.contains("Gamma"),
         "{interface_hits:?}"
+    );
+}
+
+#[test]
+fn cpp_class_pattern_does_not_match_struct() {
+    let source = r#"
+class Alpha {};
+struct Beta {};
+"#;
+    let class_hits = match_pattern(Language::Cpp, source, "class $NAME").unwrap();
+    let struct_hits = match_pattern(Language::Cpp, source, "struct $NAME").unwrap();
+    assert_eq!(class_hits.len(), 1, "got {class_hits:?}");
+    assert!(class_hits[0].excerpt.contains("Alpha"), "{class_hits:?}");
+    assert!(!class_hits.iter().any(|h| h.excerpt.contains("Beta")));
+    assert_eq!(struct_hits.len(), 1, "got {struct_hits:?}");
+    assert!(struct_hits[0].excerpt.contains("Beta"), "{struct_hits:?}");
+}
+
+#[test]
+fn kotlin_class_pattern_does_not_match_interface_or_enum() {
+    let source = r#"
+class Alpha {}
+interface Gamma {}
+enum class Beta { A }
+"#;
+    let class_hits = match_pattern(Language::Kotlin, source, "class $NAME").unwrap();
+    let interface_hits = match_pattern(Language::Kotlin, source, "interface $NAME").unwrap();
+    assert_eq!(class_hits.len(), 1, "got {class_hits:?}");
+    assert!(class_hits[0].excerpt.contains("Alpha"), "{class_hits:?}");
+    assert!(!class_hits.iter().any(|h| h.excerpt.contains("Gamma")));
+    assert!(!class_hits.iter().any(|h| h.excerpt.contains("Beta")));
+    assert_eq!(interface_hits.len(), 1, "got {interface_hits:?}");
+    assert!(
+        interface_hits[0].excerpt.contains("Gamma"),
+        "{interface_hits:?}"
+    );
+}
+
+#[test]
+fn php_class_pattern_does_not_match_interface() {
+    let source = r#"
+<?php
+class Alpha {}
+interface Gamma {}
+"#;
+    let class_hits = match_pattern(Language::Php, source, "class $NAME").unwrap();
+    let interface_hits = match_pattern(Language::Php, source, "interface $NAME").unwrap();
+    assert_eq!(class_hits.len(), 1, "got {class_hits:?}");
+    assert!(class_hits[0].excerpt.contains("Alpha"), "{class_hits:?}");
+    assert!(!class_hits.iter().any(|h| h.excerpt.contains("Gamma")));
+    assert_eq!(interface_hits.len(), 1, "got {interface_hits:?}");
+    assert!(
+        interface_hits[0].excerpt.contains("Gamma"),
+        "{interface_hits:?}"
+    );
+}
+
+/// difu.6: Ruby singleton_method nodes must extract as symbols with call ownership.
+#[test]
+fn ruby_singleton_method_is_visible_to_extraction() {
+    use ast_sgrep_lang::ParserRegistry;
+    use ast_sgrep_lang::SymbolKind;
+    let source = r#"
+class Widget
+  def self.build(name)
+    normalize(name)
+  end
+end
+"#;
+    let result = ParserRegistry::new()
+        .parse(Language::Ruby, source)
+        .unwrap();
+    assert!(
+        result
+            .symbols
+            .iter()
+            .any(|s| s.name == "build" && s.kind == SymbolKind::Method),
+        "singleton_method build must be extracted; got {:?}",
+        result.symbols
+    );
+    assert!(
+        result
+            .calls
+            .iter()
+            .any(|c| c.caller == "build" && c.callee == "normalize"),
+        "calls inside singleton_method must attribute to build; got {:?}",
+        result.calls
     );
 }

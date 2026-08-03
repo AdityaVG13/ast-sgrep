@@ -12,6 +12,10 @@ pub enum Language {
     CSharp,
     Ruby,
     Swift,
+    C,
+    Cpp,
+    Kotlin,
+    Php,
 }
 impl Language {
     pub fn as_str(self) -> &'static str {
@@ -25,6 +29,10 @@ impl Language {
             Language::CSharp => "csharp",
             Language::Ruby => "ruby",
             Language::Swift => "swift",
+            Language::C => "c",
+            Language::Cpp => "cpp",
+            Language::Kotlin => "kotlin",
+            Language::Php => "php",
         }
     }
     pub fn all() -> &'static [Language] {
@@ -38,6 +46,10 @@ impl Language {
             Language::CSharp,
             Language::Ruby,
             Language::Swift,
+            Language::C,
+            Language::Cpp,
+            Language::Kotlin,
+            Language::Php,
         ]
     }
 }
@@ -105,6 +117,10 @@ pub fn detect_language(path: &Path, content: Option<&str>) -> Option<Language> {
             "cs" => Some(Language::CSharp),
             "rb" => Some(Language::Ruby),
             "swift" => Some(Language::Swift),
+            "c" | "h" => Some(Language::C),
+            "cpp" | "cc" | "cxx" | "hpp" | "hxx" | "hh" | "ipp" => Some(Language::Cpp),
+            "kt" | "kts" => Some(Language::Kotlin),
+            "php" => Some(Language::Php),
             _ => None,
         };
         if lang.is_some() {
@@ -120,6 +136,9 @@ pub fn detect_language(path: &Path, content: Option<&str>) -> Option<Language> {
     }
     if trimmed.starts_with("#!/usr/bin/env python") || trimmed.starts_with("#!/usr/bin/python") {
         return Some(Language::Python);
+    }
+    if trimmed.starts_with("#!/usr/bin/env php") || trimmed.starts_with("<?php") {
+        return Some(Language::Php);
     }
     None
 }
@@ -155,8 +174,8 @@ mod extract;
 mod langs;
 mod pattern;
 use langs::{
-    CSharpParser, GoParser, JavaParser, JavaScriptParser, PythonParser, RubyParser, RustParser,
-    SwiftParser, TypeScriptParser,
+    CParser, CSharpParser, CppParser, GoParser, JavaParser, JavaScriptParser, KotlinParser,
+    PhpParser, PythonParser, RubyParser, RustParser, SwiftParser, TypeScriptParser,
 };
 pub use pattern::{
     match_literal_pattern, match_pattern, needs_ast_grep_fallback, parse_is_error_free,
@@ -173,5 +192,9 @@ fn make_parser(lang: Language) -> Box<dyn LanguageParser> {
         Language::CSharp => Box::new(CSharpParser),
         Language::Ruby => Box::new(RubyParser),
         Language::Swift => Box::new(SwiftParser),
+        Language::C => Box::new(CParser),
+        Language::Cpp => Box::new(CppParser),
+        Language::Kotlin => Box::new(KotlinParser),
+        Language::Php => Box::new(PhpParser),
     }
 }

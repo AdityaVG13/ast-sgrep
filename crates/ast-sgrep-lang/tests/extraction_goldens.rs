@@ -10,6 +10,10 @@ const JAVA: &str = include_str!("fixtures/extract/java.java");
 const CS: &str = include_str!("fixtures/extract/csharp.cs");
 const RB: &str = include_str!("fixtures/extract/ruby.rb");
 const SWIFT: &str = include_str!("fixtures/extract/swift.swift");
+const C: &str = include_str!("fixtures/extract/c.c");
+const CPP: &str = include_str!("fixtures/extract/cpp.cpp");
+const KT: &str = include_str!("fixtures/extract/kotlin.kt");
+const PHP: &str = include_str!("fixtures/extract/php.php");
 
 use SymbolKind::*;
 
@@ -140,14 +144,22 @@ const CASES: &[LanguageConformanceCase] = &[
         language: Language::Ruby,
         source: RB,
         symbols: &[
+            ("create", Method),
             ("make_widget", Function),
             ("render", Method),
             ("format_widget", Function),
             ("GoldenWidget", Class),
         ],
         imports: &["json"],
-        calls: &[("render", "format_widget")],
-        patterns: &[("function $NAME($$$)", "make_widget")],
+        calls: &[
+            ("create", "format_widget"),
+            ("render", "format_widget"),
+            ("render", "make_widget"),
+        ],
+        patterns: &[
+            ("function $NAME($$$)", "make_widget"),
+            ("function $NAME($$$)", "create"),
+        ],
         forbid: &["doc_only_ruby"],
     },
     LanguageConformanceCase {
@@ -174,5 +186,82 @@ const CASES: &[LanguageConformanceCase] = &[
             "multilineOnlySwift",
             "blockOnlySwift",
         ],
+    },
+    LanguageConformanceCase {
+        language: Language::C,
+        source: C,
+        symbols: &[
+            ("render", Function),
+            ("format_widget", Function),
+            ("GoldenWidget", Type),
+            ("GoldenState", Enum),
+            ("GoldenAlias", Type),
+        ],
+        imports: &["<stdio.h>", "local.h"],
+        calls: &[("render", "helper"), ("format_widget", "render")],
+        patterns: &[("function $NAME($$$)", "render")],
+        forbid: &["doc_only_c"],
+    },
+    LanguageConformanceCase {
+        language: Language::Cpp,
+        source: CPP,
+        symbols: &[
+            ("render", Method),
+            ("move", Method),
+            ("make_widget", Function),
+            ("GoldenWidget", Class),
+            ("GoldenPoint", Type),
+            ("GoldenState", Enum),
+        ],
+        imports: &["<string>", "local.hpp"],
+        calls: &[
+            ("render", "helper"),
+            ("move", "touch"),
+            ("make_widget", "render"),
+        ],
+        patterns: &[("function $NAME($$$)", "make_widget"), ("render($$$)", "render")],
+        forbid: &["doc_only_cpp"],
+    },
+    LanguageConformanceCase {
+        language: Language::Kotlin,
+        source: KT,
+        symbols: &[
+            ("GoldenRenderable", Interface),
+            ("GoldenWidget", Class),
+            ("GoldenState", Enum),
+            ("render", Method),
+            ("makeWidget", Function),
+            ("formatWidget", Function),
+        ],
+        imports: &["kotlin.text.trim"],
+        calls: &[
+            ("render", "formatWidget"),
+            ("formatWidget", "trim"),
+            ("makeWidget", "GoldenWidget"),
+        ],
+        patterns: &[
+            ("function $NAME($$$)", "makeWidget"),
+            ("formatWidget($$$)", "formatWidget"),
+        ],
+        forbid: &["doc_only_kotlin"],
+    },
+    LanguageConformanceCase {
+        language: Language::Php,
+        source: PHP,
+        symbols: &[
+            ("GoldenRenderable", Interface),
+            ("GoldenWidget", Class),
+            ("GoldenState", Enum),
+            ("render", Method),
+            ("make_widget", Function),
+            ("format_widget", Function),
+        ],
+        imports: &["App\\Support\\Helper"],
+        calls: &[("render", "format_widget"), ("format_widget", "trim")],
+        patterns: &[
+            ("function $NAME($$$)", "make_widget"),
+            ("format_widget($$$)", "format_widget"),
+        ],
+        forbid: &["doc_only_php"],
     },
 ];

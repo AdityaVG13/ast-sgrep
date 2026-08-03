@@ -841,8 +841,14 @@ impl IndexStore {
             Some("rust") => &["rs"],
             Some("swift") => &["swift"],
             Some("csharp") => &["cs"],
+            Some("c") => &["c", "h"],
+            Some("cpp") => &["cpp", "cc", "cxx", "hpp", "hxx", "hh", "ipp"],
+            Some("kotlin") => &["kt", "kts"],
+            Some("php") => &["php"],
+            Some("ruby") => &["rb"],
             _ => &[
-                "rs", "ts", "tsx", "js", "jsx", "py", "go", "java", "cs", "rb", "swift",
+                "rs", "ts", "tsx", "js", "jsx", "py", "go", "java", "cs", "rb", "swift", "c", "h",
+                "cpp", "cc", "cxx", "hpp", "kt", "kts", "php",
             ],
         };
         let mut cands = BTreeSet::new();

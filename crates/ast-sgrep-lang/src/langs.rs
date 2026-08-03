@@ -42,6 +42,9 @@ const CS_TYPES: &[&str] = &[
 ];
 const RB_CLASS: &[&str] = &["class"];
 const SWIFT_TYPES: &[&str] = &["class_declaration", "protocol_declaration"];
+const CPP_TYPES: &[&str] = &["class_specifier", "struct_specifier"];
+const KT_CLASS: &[&str] = &["class_declaration", "object_declaration"];
+const PHP_CLASS: &[&str] = &["class_declaration", "interface_declaration", "enum_declaration"];
 const GO_TYPE_CASES: &[(&str, SymbolKind)] = &[("interface_type", Interface)];
 const SWIFT_TYPE_CASES: &[(&str, SymbolKind)] = &[
     ("class", Class),
@@ -50,6 +53,8 @@ const SWIFT_TYPE_CASES: &[(&str, SymbolKind)] = &[
     ("enum", Enum),
     ("extension", Type),
 ];
+const KT_CLASS_CASES: &[(&str, SymbolKind)] =
+    &[("interface", Interface), ("enum", Enum), ("class", Class)];
 const RUBY_REQUIRE: &[&str] = &["require", "require_relative", "load"];
 
 // ─── Kind maps ──────────────────────────────────────────────────────────────
@@ -130,10 +135,12 @@ const CSHARP: &[(&str, KindRule)] = &[
 
 #[rustfmt::skip]
 const RUBY: &[(&str, KindRule)] = &[
-    ("method", MethodIn(RB_CLASS)),
-    ("class",  Sym(Class)),
-    ("module", Sym(Type)),
-    ("call",   CallOrImport("method", RUBY_REQUIRE, "arguments")),
+    ("method",           MethodIn(RB_CLASS)),
+    // difu.6: `def self.foo` / `def obj.foo` are singleton_method nodes, not method.
+    ("singleton_method", MethodIn(RB_CLASS)),
+    ("class",            Sym(Class)),
+    ("module",           Sym(Type)),
+    ("call",             CallOrImport("method", RUBY_REQUIRE, "arguments")),
 ];
 
 // ─── Swift ──────────────────────────────────────────────────────────────────
@@ -173,6 +180,61 @@ const TS_JS: &[(&str, KindRule)] = &[
     ("import_statement",               ImportQuoted("source")),
 ];
 
+// ─── C / C++ ────────────────────────────────────────────────────────────────
+
+#[rustfmt::skip]
+const C: &[(&str, KindRule)] = &[
+    ("function_definition", SymDeclarator(Function)),
+    ("struct_specifier",    Sym(Type)),
+    ("enum_specifier",      Sym(Enum)),
+    ("type_definition",     SymDeclarator(Type)),
+    ("call_expression",     Call("function")),
+    ("preproc_include",     ImportQuoted("path")),
+];
+
+#[rustfmt::skip]
+const CPP: &[(&str, KindRule)] = &[
+    ("function_definition", MethodInDeclarator(CPP_TYPES)),
+    ("class_specifier",     Sym(Class)),
+    ("struct_specifier",    Sym(Type)),
+    ("enum_specifier",      Sym(Enum)),
+    ("type_definition",     SymDeclarator(Type)),
+    ("call_expression",     Call("function")),
+    ("preproc_include",     ImportQuoted("path")),
+];
+
+// ─── Kotlin / PHP ───────────────────────────────────────────────────────────
+
+#[rustfmt::skip]
+const KOTLIN: &[(&str, KindRule)] = &[
+    ("function_declaration", MethodIn(KT_CLASS)),
+    ("class_declaration",    SymByKeywords(KT_CLASS_CASES, Class)),
+    ("object_declaration",   Sym(Class)),
+    ("call_expression",      CallFirstNamed),
+    ("import",               ImportJoin(".")),
+];
+
+#[rustfmt::skip]
+const PHP: &[(&str, KindRule)] = &[
+    ("function_definition",      Sym(Function)),
+    ("method_declaration",       MethodIn(PHP_CLASS)),
+    ("class_declaration",        Sym(Class)),
+    ("interface_declaration",    Sym(Interface)),
+    ("enum_declaration",         Sym(Enum)),
+    ("function_call_expression", Call("function")),
+    ("member_call_expression",   Call("name")),
+    ("scoped_call_expression",   Call("name")),
+    (
+        "namespace_use_declaration",
+        ImportPath(
+            &["qualified_name", "name"],
+            &["use", "function", "const", "as"],
+            true,
+            Some("\\"),
+        ),
+    ),
+];
+
 // ─── Parsers ────────────────────────────────────────────────────────────────
 
 parser!(RustParser, Rust, tree_sitter_rust::LANGUAGE, RUST);
@@ -182,6 +244,10 @@ parser!(JavaParser, Java, tree_sitter_java::LANGUAGE, JAVA);
 parser!(CSharpParser, CSharp, tree_sitter_c_sharp::LANGUAGE, CSHARP);
 parser!(RubyParser, Ruby, tree_sitter_ruby::LANGUAGE, RUBY);
 parser!(SwiftParser, Swift, tree_sitter_swift::LANGUAGE, SWIFT);
+parser!(CParser, C, tree_sitter_c::LANGUAGE, C);
+parser!(CppParser, Cpp, tree_sitter_cpp::LANGUAGE, CPP);
+parser!(KotlinParser, Kotlin, tree_sitter_kotlin_ng::LANGUAGE, KOTLIN);
+parser!(PhpParser, Php, tree_sitter_php::LANGUAGE_PHP, PHP);
 parser!(
     TypeScriptParser,
     TypeScript,

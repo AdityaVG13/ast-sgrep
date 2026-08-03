@@ -6,7 +6,7 @@
 
 **Hybrid code search that understands intent** -- not only text or syntax.
 
-**v1.3.2** · 9 languages · lexical + AST graph + **semantic symbol search** (on by default, no API key)
+**v1.3.2** · 13 languages · lexical + AST graph + **semantic symbol search** (on by default, no API key)
 
 > **ast-grep finds shapes. ripgrep finds strings. ast-sgrep finds intent.**
 
@@ -177,7 +177,7 @@ Canonical table: [head-to-head.md](benchmarks/results/head-to-head.md). Index: [
 |------|------|
 | `crates/ast-sgrep-core` | Index, SQLite store, hybrid search |
 | `crates/ast-sgrep-cli` | `asgrep` / `ast-sgrep` CLI + supervisor |
-| `crates/ast-sgrep-lang` | Tree-sitter extraction (9 languages) |
+| `crates/ast-sgrep-lang` | Tree-sitter extraction (13 languages) |
 | `crates/ast-sgrep-embed` | Embedding backends + optional rerank |
 | `crates/ast-sgrep-lsp` | Language server |
 | `crates/ast-sgrep-mcp` | MCP server |

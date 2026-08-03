@@ -2,6 +2,11 @@
 require "json"
 
 class GoldenWidget
+  # Singleton method docs mention doc_only_ruby.
+  def self.create(name)
+    format_widget(name)
+  end
+
   # Method docs mention doc_only_ruby.
   def render(name)
     format_widget(make_widget(name))
