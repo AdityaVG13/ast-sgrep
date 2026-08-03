@@ -127,3 +127,47 @@ cd packages/pi/extension && npm test
 | `index.rs` | 839 | 867 (shared materialize; single matcher) |
 | `search/mod.rs` | 855 | 830 |
 | `cli/lib.rs` | 1119 | 423 (+ machine/bench/watch/search_cmd) |
+
+---
+
+## Batch C — store/search debt cleanup (this session)
+
+### Caller verification (rg) before deletes
+
+| Symbol | Callers outside definition | Action |
+|--------|----------------------------|--------|
+| `bases_python` / `bases_js` / `bases_go` / `bases_rust` adapters | only `module_resolve_rules` table | deleted; table calls `resolve_bases_*` directly |
+| `ranking_stability` | **zero** | deleted |
+| `RankingStability` | **zero** (only used by deleted fn) | deleted |
+| `gitignore::is_ignored` free fn | **zero** (matcher API remains) | already deleted in Batch A — skip |
+
+### Changes
+
+| Item | Location | Notes |
+|------|----------|-------|
+| Regex `file_map` | `search/passes/regex.rs` | Reuse `lines` when not on trigram path; trigram path still loads full index for context |
+| `with_file_tx` | `index.rs` `index_content_at` | Replaces manual begin/commit/rollback on body-hash refresh path |
+| `delete_meta` | `store/sqlite.rs` | `pub` → private (same-crate callers only) |
+| `refresh_lines_only` | `store/sqlite.rs` | `pub` → `pub(crate)` |
+| `with_file_tx` | `store/sqlite.rs` | `fn` → `pub(crate)` for `index.rs` |
+| `emb_vec` | `store/sql.rs` | `pub(crate)`; shared by `read_sem_row` / `read_legacy_emb` and `semantic_chunks_by_ids` |
+| Module resolve | `store/module_resolve.rs` | Move-only split from `sqlite.rs`; unified `resolve_bases_*` signatures |
+
+### Durability invariants (unchanged)
+
+- Nested `with_file_tx` depth/poison semantics untouched.
+- Body-hash / structure-equal refresh gates unchanged.
+- Ranking scores and hybrid sort keys unchanged.
+
+### Commands run (this session)
+
+```bash
+export PATH="/usr/local/cargo/bin:$PATH"
+cd /workspace/.worktrees/pr20
+cargo test -p ast-sgrep-core --test durability_epics
+# → 16 passed
+cargo test -p ast-sgrep-core --lib
+# → 24 passed
+cargo test -p ast-sgrep-cli --test machine_contracts
+# → 6 passed
+```

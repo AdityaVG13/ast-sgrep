@@ -340,7 +340,7 @@ fn clear_all_meta_whitelist_matches_sql() {
     }
 }
 
-fn emb_vec(r: &rusqlite::Row<'_>, idx: usize) -> rusqlite::Result<Vec<f32>> {
+pub(crate) fn emb_vec(r: &rusqlite::Row<'_>, idx: usize) -> rusqlite::Result<Vec<f32>> {
     let v: Vec<u8> = r.get(idx)?;
     // Fail closed on corrupt blobs (bead ast-sgrep-j97d.5qpa) — never default to zeros.
     ast_sgrep_embed::embed_from_bytes(&v).map_err(|msg| {

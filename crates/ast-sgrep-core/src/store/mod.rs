@@ -1,4 +1,5 @@
 mod embed_support;
+pub(crate) mod module_resolve;
 pub(crate) mod sql;
 mod sqlite;
 pub use sql::{

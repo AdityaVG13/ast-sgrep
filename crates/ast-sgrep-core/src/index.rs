@@ -519,26 +519,19 @@ impl Indexer {
             if let Some(file_id) = self.store.file_id(rel_path)? {
                 if self.store.get_meta(&body_key)?.as_deref() == Some(body_hash.as_str()) {
                     let split = split_content_lines(content);
-                    self.store.begin_file_tx()?;
-                    match self.store.refresh_lines_only(RefreshLinesInput {
-                        file_id,
-                        language: language.map(|l| l.as_str()),
-                        mtime_secs,
-                        mtime_nanos,
-                        content_hash: &hash,
-                        lines: &split.lines,
-                        eol: split.eol,
-                        rel_path,
-                    }) {
-                        Ok(_) => {
-                            self.store.commit_file_tx()?;
-                            return Ok(FileIndexStats::default());
-                        }
-                        Err(e) => {
-                            self.store.rollback_file_tx()?;
-                            return Err(e);
-                        }
-                    }
+                    self.store.with_file_tx(|| {
+                        self.store.refresh_lines_only(RefreshLinesInput {
+                            file_id,
+                            language: language.map(|l| l.as_str()),
+                            mtime_secs,
+                            mtime_nanos,
+                            content_hash: &hash,
+                            lines: &split.lines,
+                            eol: split.eol,
+                            rel_path,
+                        })
+                    })?;
+                    return Ok(FileIndexStats::default());
                 }
             }
         }
