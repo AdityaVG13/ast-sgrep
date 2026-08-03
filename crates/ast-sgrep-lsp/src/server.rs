@@ -89,24 +89,21 @@ impl LspServer {
         match notif.method.as_str() {
             "initialized" => {}
             "textDocument/didOpen" => {
-                self.sync_rel_path::<DidOpenTextDocumentParams>(stdout, "didOpen", notif.params, |b, p| {
+                self.sync_rel_path(stdout, "didOpen", notif.params, |b, p: DidOpenTextDocumentParams| {
                     let rel = uri_to_rel_path(&p.text_document.uri, b.root())?;
                     b.index_content(&rel, &p.text_document.text)
                 })?;
             }
             "textDocument/didSave" => {
-                self.sync_rel_path::<DidSaveTextDocumentParams>(stdout, "didSave", notif.params, |b, p| {
+                self.sync_rel_path(stdout, "didSave", notif.params, |b, p: DidSaveTextDocumentParams| {
                     let rel = uri_to_rel_path(&p.text_document.uri, b.root())?;
                     b.reindex_file(&rel)
                 })?;
             }
             "textDocument/didChange" => {
-                self.sync_rel_path::<DidChangeTextDocumentParams>(
-                    stdout,
-                    "didChange",
-                    notif.params,
-                    |b, p| b.apply_document_changes(&p.text_document.uri, &p.content_changes),
-                )?;
+                self.sync_rel_path(stdout, "didChange", notif.params, |b, p: DidChangeTextDocumentParams| {
+                    b.apply_document_changes(&p.text_document.uri, &p.content_changes)
+                })?;
             }
             "exit" => self.shutdown = true,
             _ => {}
