@@ -337,12 +337,3 @@ pub fn bench_ast_grep(pattern: &str, root: &Path, iterations: u32) -> Option<f64
     }
     Some(total / f64::from(iterations))
 }
-pub fn ast_grep_pattern_for_query(query: &str) -> Option<String> {
-    let q = query.trim();
-    let q = q
-        .strip_prefix("defs:")
-        .or_else(|| q.strip_prefix("callers:"))
-        .unwrap_or(q)
-        .trim();
-    (!q.is_empty() && !q.contains(' ')).then(|| q.to_string())
-}

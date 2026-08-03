@@ -181,7 +181,7 @@ cargo test -p ast-sgrep-cli --test machine_contracts
 | Symbol | Callers outside definition | Action |
 |--------|----------------------------|--------|
 | `pub mod skip` / `text` / `output` facades | **zero** | deleted; `format_hit_line` re-exported from `search` |
-| Vacuous `ast_grep_pattern_for_query` bench speedup | hybrid/token queries | demoted via `ast_grep_comparison` nested object |
+| `ast_grep_pattern_for_query` | **zero** | deleted (bench speedup demoted earlier via `ast_grep_comparison`) |
 
 ### Bench honesty port (from pr25)
 
