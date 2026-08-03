@@ -58,13 +58,36 @@ fn machine_value(command: &str, value: impl serde::Serialize) -> anyhow::Result<
     object.insert("ok".into(), true.into());
     Ok(value)
 }
+fn machine_value_with_ok(
+    command: &str,
+    value: impl serde::Serialize,
+    ok: bool,
+) -> anyhow::Result<serde_json::Value> {
+    let mut value = machine_value(command, value)?;
+    if let Some(object) = value.as_object_mut() {
+        object.insert("ok".into(), ok.into());
+        if !ok {
+            object
+                .entry("exit_code".to_string())
+                .or_insert(serde_json::json!(2));
+        }
+    }
+    Ok(value)
+}
 pub(crate) fn print_machine_json(
     command: &str,
     value: impl serde::Serialize,
 ) -> anyhow::Result<()> {
+    print_machine_json_with_ok(command, value, true)
+}
+pub(crate) fn print_machine_json_with_ok(
+    command: &str,
+    value: impl serde::Serialize,
+    ok: bool,
+) -> anyhow::Result<()> {
     println!(
         "{}",
-        serde_json::to_string_pretty(&machine_value(command, value)?)?
+        serde_json::to_string_pretty(&machine_value_with_ok(command, value, ok)?)?
     );
     Ok(())
 }

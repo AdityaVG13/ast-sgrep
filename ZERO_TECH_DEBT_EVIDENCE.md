@@ -171,3 +171,31 @@ cargo test -p ast-sgrep-core --lib
 cargo test -p ast-sgrep-cli --test machine_contracts
 # → 6 passed
 ```
+
+---
+
+## Batch D — second-pass zero tech debt (PR20)
+
+### Caller verification (rg) before deletes
+
+| Symbol | Callers outside definition | Action |
+|--------|----------------------------|--------|
+| `pub mod skip` / `text` / `output` facades | **zero** | deleted; `format_hit_line` re-exported from `search` |
+| Vacuous `ast_grep_pattern_for_query` bench speedup | hybrid/token queries | demoted via `ast_grep_comparison` nested object |
+
+### Bench honesty port (from pr25)
+
+| Change | Location |
+|--------|----------|
+| `ast_grep_comparison`: pattern-only timing, vacuous speedup demotion | `bench.rs` |
+| `cv_pct`, `mean_ms`, bench history / ratchet | `bench.rs` |
+| `print_machine_json_with_ok` for suite single-envelope failures | `machine.rs` / `bench.rs` |
+
+### Commands run (this session)
+
+```bash
+export PATH="/usr/local/cargo/bin:$PATH"
+cd /workspace/.worktrees/pr20
+cargo test -p ast-sgrep-core --test durability_epics
+cargo test -p ast-sgrep-cli --test machine_contracts
+```
