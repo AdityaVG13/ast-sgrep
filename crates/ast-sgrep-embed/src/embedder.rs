@@ -468,6 +468,14 @@ pub fn embed_with_chain(text: &str, preference: EmbedPreference) -> EmbedResult 
              refusing silent hashed swap — set ASGREP_NEURAL_FALLBACK=1 to acknowledge"
         );
     }
+    if matches!(preference, EmbedPreference::Cloud | EmbedPreference::Ollama)
+        && !env_allows_embed_fallback()
+    {
+        eprintln!(
+            "asgrep: {preference:?} preference unavailable; refusing silent hashed Semantic \
+             — set ASGREP_EMBED_FALLBACK=1 to acknowledge (embed_fallback)"
+        );
+    }
     EmbedResult {
         vector: try_backend(EmbedBackendKind::Semantic, text)
             .expect("local semantic embedder is always available and infallible"),
@@ -489,6 +497,14 @@ pub fn embed_batch_with_chain(texts: &[&str], preference: EmbedPreference) -> Ve
                 .collect();
         }
     }
+    if matches!(preference, EmbedPreference::Cloud | EmbedPreference::Ollama)
+        && !env_allows_embed_fallback()
+    {
+        eprintln!(
+            "asgrep: {preference:?} preference unavailable for batch; refusing silent hashed Semantic \
+             — set ASGREP_EMBED_FALLBACK=1 to acknowledge (embed_fallback)"
+        );
+    }
     try_backend_batch(EmbedBackendKind::Semantic, texts)
         .expect("local semantic embedder is always available and infallible")
         .into_iter()
@@ -499,23 +515,31 @@ pub fn embed_batch_with_chain(texts: &[&str], preference: EmbedPreference) -> Ve
         .collect()
 }
 fn chain_kinds(preference: EmbedPreference) -> Vec<EmbedBackendKind> {
-    let mut kinds = Vec::new();
-    if matches!(preference, EmbedPreference::Cloud | EmbedPreference::Auto) {
-        kinds.push(EmbedBackendKind::Cloud);
+    // Cloud preference must not silently try Ollama (9gfx).
+    match preference {
+        EmbedPreference::Cloud => vec![EmbedBackendKind::Cloud],
+        EmbedPreference::Ollama => vec![EmbedBackendKind::Ollama],
+        EmbedPreference::Neural => vec![EmbedBackendKind::Neural],
+        EmbedPreference::Semantic => vec![],
+        EmbedPreference::Auto => {
+            let mut kinds = vec![EmbedBackendKind::Cloud, EmbedBackendKind::Ollama];
+            if crate::neural::NeuralEmbeddingConfig::from_env().is_some() {
+                kinds.push(EmbedBackendKind::Neural);
+            }
+            kinds
+        }
     }
-    if matches!(
-        preference,
-        EmbedPreference::Cloud | EmbedPreference::Ollama | EmbedPreference::Auto
-    ) {
-        kinds.push(EmbedBackendKind::Ollama);
-    }
-    if matches!(preference, EmbedPreference::Neural)
-        || (matches!(preference, EmbedPreference::Auto)
-            && crate::neural::NeuralEmbeddingConfig::from_env().is_some())
-    {
-        kinds.push(EmbedBackendKind::Neural);
-    }
-    kinds
+}
+fn env_allows_embed_fallback() -> bool {
+    matches!(
+        std::env::var("ASGREP_EMBED_FALLBACK")
+            .ok()
+            .unwrap_or_default()
+            .trim()
+            .to_ascii_lowercase()
+            .as_str(),
+        "1" | "true" | "yes" | "on"
+    )
 }
 pub fn embed_query(
     text: &str,
@@ -619,5 +643,23 @@ mod dim_probe_tests {
         let vector = Embedder::embed(&embedder, "hello").unwrap();
         assert_eq!(embedder.dim(), vector.len());
         assert_eq!(embedder.dim(), 1536);
+    }
+}
+
+#[cfg(test)]
+mod preference_tests {
+    use super::*;
+    #[test]
+    fn cloud_preference_excludes_ollama() {
+        let kinds = chain_kinds(EmbedPreference::Cloud);
+        assert_eq!(kinds, vec![EmbedBackendKind::Cloud]);
+        assert!(!kinds.contains(&EmbedBackendKind::Ollama));
+        assert!(!kinds.contains(&EmbedBackendKind::Semantic));
+    }
+    #[test]
+    fn auto_may_include_cloud_and_ollama() {
+        let kinds = chain_kinds(EmbedPreference::Auto);
+        assert!(kinds.contains(&EmbedBackendKind::Cloud));
+        assert!(kinds.contains(&EmbedBackendKind::Ollama));
     }
 }

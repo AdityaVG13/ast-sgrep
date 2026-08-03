@@ -304,6 +304,31 @@ impl SearchOptions {
         )
         .to_preference()
     }
+    /// Stable fingerprint of options that affect search results (nyui).
+    pub fn cache_identity(&self) -> String {
+        format!(
+            "root={}\0idx={:?}\0lim={}\0lang={:?}\0embed={}\0tantivy={}\0cloud={}\0ollama={}\0neural={}\0sem={}\0ann_t={:?}\0ann_p={:?}\0rerank={}\0rk={}\0ci={}\0cb={}\0ca={}\0co={}\0ff={:?}",
+            self.root.display(),
+            self.index_path,
+            self.limit,
+            self.lang_filter,
+            self.use_embed,
+            self.use_tantivy,
+            self.use_cloud_embed,
+            self.use_ollama_embed,
+            self.use_neural_embed,
+            self.use_semantic_only,
+            self.ann_threshold,
+            self.ann_probes,
+            self.use_rerank,
+            self.rerank_top_k,
+            self.case_insensitive,
+            self.context_before,
+            self.context_after,
+            self.count_only,
+            self.file_filter,
+        )
+    }
 }
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SearchResponse {

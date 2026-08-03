@@ -123,8 +123,8 @@ impl TantivySidecar {
 }
 pub fn sidecar_path(root: &Path, index_path: Option<&Path>) -> PathBuf {
     index_db_path(root, index_path)
-        .parent()
-        .map(|parent| parent.join(LEXICAL_DB))
+        .ok()
+        .and_then(|db| db.parent().map(|parent| parent.join(LEXICAL_DB)))
         .unwrap_or_else(|| root.join(INDEX_DIR).join(LEXICAL_DB))
 }
 

@@ -183,10 +183,11 @@ fn channel_ceiling(kind: HitKind, term_count: usize) -> f64 {
 pub fn route_hits(parsed: &ParsedQuery, hits: &mut [SearchHit]) {
     // Normalize only. Intent channel weights are owned by
     // `fusion::apply_weighted_rrf` so hybrid search does not multiply them twice.
+    // Count all non-empty terms, including single-char (a639).
     let substantive_terms = parsed
         .terms
         .iter()
-        .filter(|term| term.chars().count() > 1)
+        .filter(|term| !term.is_empty())
         .count();
     for hit in hits {
         let text_channel = matches!(

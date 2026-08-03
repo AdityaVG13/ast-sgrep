@@ -16,16 +16,16 @@ fn as_db_path(path: PathBuf) -> PathBuf {
         path.join(INDEX_DB)
     }
 }
-pub fn index_db_path(root: &Path, index_path: Option<&Path>) -> PathBuf {
+pub fn index_db_path(root: &Path, index_path: Option<&Path>) -> crate::Result<PathBuf> {
     if let Some(path) = index_path {
-        return as_db_path(path.to_path_buf());
+        return Ok(as_db_path(path.to_path_buf()));
     }
     if let Ok(env_path) = std::env::var("ASGREP_INDEX_PATH") {
-        return as_db_path(PathBuf::from(env_path));
+        return Ok(as_db_path(PathBuf::from(env_path)));
     }
     let local = root.join(INDEX_DIR).join(INDEX_DB);
     if local.exists() {
-        return local;
+        return Ok(local);
     }
     if std::env::var("ASGREP_USE_CACHE")
         .ok()
@@ -34,17 +34,32 @@ pub fn index_db_path(root: &Path, index_path: Option<&Path>) -> PathBuf {
     {
         return cache_index_path(root);
     }
-    local
+    Ok(local)
 }
-fn cache_index_path(root: &Path) -> PathBuf {
+/// Resolve a private cache index path. Refuses shared `/tmp` when HOME/XDG_CACHE_HOME unset (i5ef).
+fn cache_index_path(root: &Path) -> crate::Result<PathBuf> {
     let hash = blake3::hash(root.to_string_lossy().as_bytes());
-    let home = std::env::var("HOME")
-        .or_else(|_| std::env::var("USERPROFILE"))
-        .unwrap_or_else(|_| "/tmp".into());
-    PathBuf::from(home)
-        .join(".cache/asgrep")
+    let base = std::env::var("XDG_CACHE_HOME")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var("HOME")
+                .or_else(|_| std::env::var("USERPROFILE"))
+                .ok()
+                .filter(|s| !s.trim().is_empty())
+                .map(|home| PathBuf::from(home).join(".cache"))
+        })
+        .ok_or_else(|| {
+            crate::StoreError::Other(
+                "ASGREP_USE_CACHE requires HOME or XDG_CACHE_HOME; refusing shared /tmp fallback"
+                    .into(),
+            )
+        })?;
+    Ok(base
+        .join("asgrep")
         .join(hash.to_hex().to_string())
-        .join(INDEX_DB)
+        .join(INDEX_DB))
 }
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct IndexStatus {

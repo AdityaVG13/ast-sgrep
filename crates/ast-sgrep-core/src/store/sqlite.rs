@@ -104,11 +104,28 @@ pub struct IndexStore {
 }
 impl IndexStore {
     pub fn open(root: &Path, index_path: Option<&Path>) -> Result<Self> {
-        let db_path = index_db_path(root, index_path);
+        let db_path = index_db_path(root, index_path).map_err(|e| {
+            crate::StoreError::Other(format!(
+                "failed to resolve index path for root {}: {e}",
+                root.display()
+            ))
+        })?;
         if let Some(p) = db_path.parent() {
-            std::fs::create_dir_all(p)?;
+            std::fs::create_dir_all(p).map_err(|e| {
+                crate::StoreError::Other(format!(
+                    "failed to create index directory {} (root {}): {e}",
+                    p.display(),
+                    root.display()
+                ))
+            })?;
         }
-        let conn = Connection::open(&db_path)?;
+        let conn = Connection::open(&db_path).map_err(|e| {
+            crate::StoreError::Other(format!(
+                "failed to open index at {} (root {}): {e}",
+                db_path.display(),
+                root.display()
+            ))
+        })?;
         configure_connection(&conn)?;
         let store = Self {
             conn,
@@ -126,7 +143,16 @@ impl IndexStore {
             .conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))?;
         if version >= SCHEMA_VERSION {
-            return Ok(());
+            // Probe core tables even when user_version is current (a639).
+            let core: i64 = self.conn.query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('files','lines','meta','symbols')",
+                [],
+                |r| r.get(0),
+            )?;
+            if core >= 4 {
+                return Ok(());
+            }
+            // Corrupt/partial schema with current user_version — rebuild.
         }
         self.conn.execute_batch(SCHEMA_DDL)?;
         if version < 3 {

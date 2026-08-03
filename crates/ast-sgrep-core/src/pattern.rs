@@ -55,18 +55,32 @@ pub fn search_pattern(
     root: &Path,
     lang_filter: Option<&str>,
 ) -> Result<Vec<SearchHit>> {
-    // 1) Index-backed structural signatures (O(signatures), no re-parse).
+    // Union index signatures with native tree-sitter matches (92nj).
+    // Production does not spawn external ast-grep by default; native-only is the
+    // honest completeness path when the index is partial.
+    let mut hits = Vec::new();
+    let mut seen = std::collections::HashSet::new();
     if store.pattern_node_count()? > 0 {
         if let Some(signatures) = cached_pattern_signatures(pattern) {
-            let indexed = search_pattern_cached(pattern, &signatures, store, lang_filter)?;
-            if !indexed.is_empty() {
-                return Ok(indexed);
+            for hit in search_pattern_cached(pattern, &signatures, store, lang_filter)? {
+                if seen.insert((hit.file.clone(), hit.line_start, hit.line_end)) {
+                    hits.push(hit);
+                }
             }
         }
     }
-    // 2) In-process tree-sitter match. Unsupported exotic rule syntax returns
-    // no hits instead of paying an unbounded process-spawn penalty.
-    search_pattern_native(pattern, root, lang_filter)
+    match search_pattern_native(pattern, root, lang_filter) {
+        Ok(native) => {
+            for hit in native {
+                if seen.insert((hit.file.clone(), hit.line_start, hit.line_end)) {
+                    hits.push(hit);
+                }
+            }
+        }
+        Err(e) if hits.is_empty() => return Err(e),
+        Err(_) => {}
+    }
+    Ok(hits)
 }
 fn cached_pattern_signatures(pattern: &str) -> Option<Vec<String>> {
     let pattern = pattern.trim();

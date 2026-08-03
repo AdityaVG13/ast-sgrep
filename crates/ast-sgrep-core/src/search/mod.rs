@@ -62,8 +62,13 @@ struct IndexGeneration {
 }
 struct ResponseCache {
     gen: IndexGeneration,
+    /// Insertion-order LRU: front = oldest. Cap RESPONSE_CACHE_CAP (fj96).
     map: std::collections::HashMap<String, SearchResponse>,
+    order: std::collections::VecDeque<String>,
+    /// When false, PRAGMA/gen probe failed — never cache (hdwh).
+    enabled: bool,
 }
+const RESPONSE_CACHE_CAP: usize = 128;
 pub struct Searcher {
     store: IndexStore,
     options: SearchOptions,
@@ -72,8 +77,19 @@ pub struct Searcher {
 }
 impl Searcher {
     pub fn new(mut options: SearchOptions) -> Result<Self> {
-        // Match Indexer: canonicalize roots so relative/symlink inputs share identity (0f7r).
-        options.root = options.root.canonicalize().unwrap_or(options.root.clone());
+        // Match Indexer: canonicalize roots so relative/symlink inputs share identity (0fg6/0f7r).
+        options.root = options.root.canonicalize().map_err(|e| {
+            crate::StoreError::Other(format!(
+                "project root does not exist or is not a directory: {}: {e}",
+                options.root.display()
+            ))
+        })?;
+        if !options.root.is_dir() {
+            return Err(crate::StoreError::Other(format!(
+                "project root is not a directory: {}",
+                options.root.display()
+            )));
+        }
         Ok(Self::with_store(
             IndexStore::open(&options.root, options.index_path.as_deref())?,
             options,
@@ -90,6 +106,8 @@ impl Searcher {
                     local: 0,
                 },
                 map: std::collections::HashMap::new(),
+                order: std::collections::VecDeque::new(),
+                enabled: true,
             }),
         }
     }
@@ -99,15 +117,19 @@ impl Searcher {
     pub fn options(&self) -> &SearchOptions {
         &self.options
     }
-    fn index_gen(&self) -> IndexGeneration {
-        IndexGeneration {
-            external: self
-                .store
-                .connection()
-                .query_row("PRAGMA data_version", [], |row| row.get::<_, i64>(0))
-                .unwrap_or(0),
-            local: self.store.index_data_version().unwrap_or(0),
-        }
+    fn index_gen(&self) -> Option<IndexGeneration> {
+        // PRAGMA failure disables caching rather than pinning gen=0 (hdwh).
+        let external = self
+            .store
+            .connection()
+            .query_row("PRAGMA data_version", [], |row| row.get::<_, i64>(0))
+            .ok()?;
+        let local = self.store.index_data_version().ok()?;
+        Some(IndexGeneration { external, local })
+    }
+    fn cache_key(&self, kind: &str, query: &str) -> String {
+        // Full SearchOptions identity (nyui).
+        format!("{kind}\0{query}\0{}", self.options.cache_identity())
     }
     fn cached(
         &self,
@@ -115,35 +137,62 @@ impl Searcher {
         query: &str,
         compute: impl FnOnce() -> Result<SearchResponse>,
     ) -> Result<SearchResponse> {
-        let gen = self.index_gen();
-        let key = format!("{kind}\0{query}");
+        let Some(gen) = self.index_gen() else {
+            return compute();
+        };
+        let key = self.cache_key(kind, query);
         {
             let guard = lock_clear_on_poison(&self.response_cache, |cache| {
                 cache.map.clear();
+                cache.order.clear();
+                cache.enabled = false;
                 cache.gen = IndexGeneration {
                     external: -1,
                     local: -1,
                 };
             });
-            if guard.gen == gen {
+            if guard.enabled && guard.gen == gen {
                 if let Some(hit) = guard.map.get(&key) {
                     return Ok(hit.clone());
                 }
             }
         }
         let response = compute()?;
+        // Re-check generation after compute so concurrent reindex cannot poison wrong-gen (hdwh).
+        let Some(gen_after) = self.index_gen() else {
+            return Ok(response);
+        };
+        if gen_after != gen {
+            return Ok(response);
+        }
         let mut guard = lock_clear_on_poison(&self.response_cache, |cache| {
             cache.map.clear();
+            cache.order.clear();
+            cache.enabled = false;
             cache.gen = IndexGeneration {
                 external: -1,
                 local: -1,
             };
         });
+        if !guard.enabled {
+            return Ok(response);
+        }
         if guard.gen != gen {
             guard.map.clear();
+            guard.order.clear();
             guard.gen = gen;
         }
-        if guard.map.len() < 128 {
+        if guard.map.contains_key(&key) {
+            guard.map.insert(key, response.clone());
+        } else {
+            while guard.map.len() >= RESPONSE_CACHE_CAP {
+                if let Some(old) = guard.order.pop_front() {
+                    guard.map.remove(&old);
+                } else {
+                    break;
+                }
+            }
+            guard.order.push_back(key.clone());
             guard.map.insert(key, response.clone());
         }
         Ok(response)
@@ -185,11 +234,22 @@ impl Searcher {
                 }
                 QueryMode::Regex => regex_pass(&self.store, &self.options, &parsed)?,
                 QueryMode::Hybrid => {
-                    let mut hits = self.search_hybrid(&parsed)?;
-                    crate::intent::route_hits(&parsed, &mut hits);
-                    let weights = crate::intent::weights_for(crate::intent::classify(&parsed));
-                    crate::fusion::apply_weighted_rrf(&mut hits, &weights);
-                    hits
+                    // Quoted → Literal intent must run phrase literal_pass (50hx).
+                    if crate::intent::classify(&parsed) == crate::intent::QueryIntent::Literal {
+                        let phrase = strip_wrapping_quotes(&parsed.raw);
+                        literal_pass(
+                            &self.store,
+                            &self.options,
+                            &ParsedQuery::literal(phrase),
+                        )?
+                    } else {
+                        let mut hits = self.search_hybrid(&parsed)?;
+                        crate::intent::route_hits(&parsed, &mut hits);
+                        let weights =
+                            crate::intent::weights_for(crate::intent::classify(&parsed));
+                        crate::fusion::apply_weighted_rrf(&mut hits, &weights);
+                        hits
+                    }
                 }
             };
             Ok(finish_response(&parsed, &self.options, hits, true))
@@ -543,25 +603,49 @@ pub fn finish_response(
     } else {
         gate_limit
     };
-    if hits.len() > keep.saturating_mul(4).max(keep.saturating_add(32)) {
-        hits.select_nth_unstable_by(keep, |a, b| {
-            b.score
+    let prune_keep = keep.saturating_mul(4).max(keep.saturating_add(32));
+    if hits.len() > prune_keep {
+        // Keep coverage in the pre-truncate sort key so high-coverage lower-score
+        // hits survive the keep*4 prune (8mb8).
+        hits.select_nth_unstable_by(prune_keep, |a, b| {
+            let ca = excerpt_term_coverage(&parsed.terms, a);
+            let cb = excerpt_term_coverage(&parsed.terms, b);
+            // Coverage-first prune for multi-term; score-first otherwise.
+            let score_ord = b
+                .score
                 .partial_cmp(&a.score)
-                .unwrap_or(std::cmp::Ordering::Equal)
+                .unwrap_or(std::cmp::Ordering::Equal);
+            let coverage_ord = cb.cmp(&ca);
+            let primary = if parsed.terms.len() > 1 {
+                coverage_ord.then(score_ord)
+            } else {
+                score_ord.then(coverage_ord)
+            };
+            primary
                 .then_with(|| a.file.cmp(&b.file))
                 .then_with(|| a.line_start.cmp(&b.line_start))
         });
-        hits.truncate(keep);
+        hits.truncate(prune_keep);
     }
     let mut keyed: Vec<(u32, SearchHit)> = hits
         .into_iter()
         .map(|h| (excerpt_term_coverage(&parsed.terms, &h), h))
         .collect();
+    let multi_term = parsed.terms.len() > 1;
     let mut compare = |(ca, a): &(u32, SearchHit), (cb, b): &(u32, SearchHit)| {
-        b.score
+        let score_ord = b
+            .score
             .partial_cmp(&a.score)
-            .unwrap_or(std::cmp::Ordering::Equal)
-            .then_with(|| cb.cmp(ca))
+            .unwrap_or(std::cmp::Ordering::Equal);
+        let coverage_ord = cb.cmp(ca);
+        // Multi-term queries prefer coverage so high-coverage lower-score evidence
+        // is not discarded before final ranking (8mb8).
+        let primary = if multi_term {
+            coverage_ord.then(score_ord)
+        } else {
+            score_ord.then(coverage_ord)
+        };
+        primary
             .then_with(|| a.file.cmp(&b.file))
             .then_with(|| a.line_start.cmp(&b.line_start))
     };
@@ -846,11 +930,25 @@ fn contains_term_token(text: &str, term: &str) -> bool {
         })
 }
 fn excerpt_term_coverage(terms: &[String], hit: &SearchHit) -> u32 {
-    let text = hit.excerpt.to_lowercase();
     terms
         .iter()
-        .filter(|term| contains_term_token(&text, term))
+        .filter(|term| {
+            // Match term casing: mixed/upper terms stay case-sensitive (hhca).
+            if term.chars().any(|c| c.is_uppercase()) {
+                contains_term_token(&hit.excerpt, term)
+            } else {
+                contains_term_token(&hit.excerpt.to_lowercase(), &term.to_lowercase())
+            }
+        })
         .count() as u32
+}
+fn strip_wrapping_quotes(raw: &str) -> &str {
+    let t = raw.trim();
+    if t.len() >= 2 && t.starts_with('"') && t.ends_with('"') {
+        &t[1..t.len() - 1]
+    } else {
+        t
+    }
 }
 #[cfg(test)]
 mod tests {
@@ -872,6 +970,42 @@ mod tests {
             excerpt: String::new(),
         }
     }
+    #[test]
+    fn excerpt_coverage_respects_term_casing() {
+        let mut h = hit("a.rs", 1, 1.0);
+        h.excerpt = "AuthRefresh token".into();
+        assert_eq!(excerpt_term_coverage(&["AuthRefresh".into()], &h), 1);
+        // Lowercase terms are case-insensitive and match the lowered excerpt.
+        assert_eq!(excerpt_term_coverage(&["authrefresh".into()], &h), 1);
+        // Mixed/upper terms stay case-sensitive and miss wrong casing.
+        assert_eq!(excerpt_term_coverage(&["AUTHREFRESH".into()], &h), 0);
+        assert_eq!(excerpt_term_coverage(&["token".into()], &h), 1);
+    }
+
+    #[test]
+    fn pretruncate_keeps_high_coverage_lower_score() {
+        let parsed = ParsedQuery::parse("alpha beta gamma");
+        let mut low = hit("low.rs", 1, 0.1);
+        low.excerpt = "alpha beta gamma present".into();
+        let mut highs: Vec<_> = (0..40)
+            .map(|i| {
+                let mut h = hit(&format!("high-{i}.rs"), 1, 1.0);
+                h.excerpt = "alpha only".into();
+                h
+            })
+            .collect();
+        highs.push(low);
+        let options = SearchOptions {
+            limit: 5,
+            ..SearchOptions::default()
+        };
+        let response = finish_response(&parsed, &options, highs, false);
+        assert!(
+            response.hits.iter().any(|h| h.file == "low.rs"),
+            "high-coverage lower-score hit must survive pre-truncate"
+        );
+    }
+
     #[test]
     fn definition_affinity_prefers_phrase_boundary_spelling() {
         let parsed = ParsedQuery::parse("how does auth refresh work");
