@@ -199,3 +199,6 @@ cd /workspace/.worktrees/pr20
 cargo test -p ast-sgrep-core --test durability_epics
 cargo test -p ast-sgrep-cli --test machine_contracts
 ```
+
+### Pass: delete orphan validate_member_indices
+- Callers: **zero** outside definition; `validate_partition` retained.
