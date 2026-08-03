@@ -188,3 +188,75 @@ node packages/pi/scripts/release-acceptance.mjs self-test
 | `ast-sgrep-lsp` | **12 passed** (1 lib + 11 integration) |
 | `machine_contracts` | **6 passed** |
 | pi release-acceptance self-test | **accepted** (fail codes unchanged) |
+
+---
+
+## Follow-up — core store / index / search visibility (post-CLI ZTD)
+
+Core-layer dead-code removal, index gitignore unification, LSP defs/callers wiring,
+and `module_resolve` split. Same tip; **no new PR**; `.beads/` untouched. Ranking
+semantics, search scores, and LSP fail-closed contracts unchanged.
+
+### Caller verification (rg) before deletes
+
+| Symbol | Callers outside definition | Action |
+|--------|----------------------------|--------|
+| `gitignore::is_ignored` (free fn) | **zero** | deleted |
+| `pub mod skip` / `text` / `output` facades | **zero** | deleted; `format_hit_line` re-exported from `search` |
+| `ranking_stability` / `RankingStability` | **zero** (self-only in `bench_suite`) | deleted |
+| `search_lexical` / `search_symbol_pass` / `search_literal` | same-crate only (`pipeline_parts`; integration test updated) | demoted to `pub(crate)` |
+
+### Extracts / splits
+
+| Helper / change | Location | Purpose |
+|-----------------|----------|---------|
+| `prefixed_hits` | `backend.rs` | one defs:/callers: query → `hit_locations` path |
+| `module_resolve` | `store/module_resolve.rs` | move-only split of `resolve_module_path` + lang bases (~196L) |
+| single `IgnoreMatcher` in `index_all` | `index.rs` | `self.ignore` for dir + file checks (no second matcher) |
+
+### Metrics
+
+| File / surface | Before | After |
+|----------------|--------|-------|
+| `ast-sgrep-core/src/lib.rs` | 61L (3 facade mods) | **49L** |
+| `gitignore.rs` free `is_ignored` | present | **removed** (232L) |
+| `store/sqlite.rs` | ~1109L | **924L** |
+| `store/module_resolve.rs` | — | **196L** (new) |
+| `bench_suite.rs` `ranking_stability` | ~47L dead | **deleted** (98L) |
+| `search_lexical` / `symbol_pass` / `literal` visibility | `pub` | **`pub(crate)`** |
+
+### Behavior invariants (follow-up)
+
+1. Hybrid ranking gate order / score-only pre-truncate unchanged.
+2. `defs:` / `callers:` LSP navigation still uses `Searcher::search` with same prefixed queries.
+3. `index_all` gitignore: one cleared matcher for walk dir pruning and file skip.
+4. `resolve_module_path` logic byte-identical after move-only split.
+
+### Commands run (follow-up)
+
+```bash
+export PATH="/usr/local/cargo/bin:$PATH"
+cd /workspace/.worktrees/pr14
+
+cargo test -p ast-sgrep-lsp --lib
+# → 1 passed (limit_tests)
+
+cargo test -p ast-sgrep-core --lib search::
+# → 3 passed (rerank / hybrid cap tests)
+
+cargo test -p ast-sgrep-cli --test machine_contracts
+# → 6 passed
+```
+
+### Observed results (follow-up)
+
+| Suite | Result |
+|-------|--------|
+| `ast-sgrep-lsp --lib` | **1 passed** |
+| `ast-sgrep-core --lib search::` | **3 passed** |
+| `machine_contracts` | **6 passed** |
+
+### Items skipped
+
+- `execute_command` `asgrep.defs` / `asgrep.callers` still call `search` directly (return JSON hits, not LSP locations — different from `prefixed_hits`).
+- No change to ranking semantics, search scores, or LSP fail-closed contracts.

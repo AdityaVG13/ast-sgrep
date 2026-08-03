@@ -126,6 +126,10 @@ impl LspBackend {
             .collect())
     }
 
+    fn prefixed_hits(&self, s: &Searcher, prefix: &str, symbol: &str) -> anyhow::Result<Vec<Value>> {
+        self.hit_locations(s, &format!("{prefix}{symbol}"))
+    }
+
     fn dirty_map(
         &self,
     ) -> anyhow::Result<std::sync::MutexGuard<'_, HashMap<String, String>>> {
@@ -303,7 +307,7 @@ impl LspBackend {
     pub fn goto_definition(&self, params: &TextDocumentPositionParams) -> anyhow::Result<Value> {
         let symbol = self.symbol_at_position(params)?;
         self.with_locked_searcher(16, |s| {
-            let locs = self.hit_locations(s, &format!("defs:{symbol}"))?;
+            let locs = self.prefixed_hits(s, "defs:", &symbol)?;
             Ok(match locs.len() {
                 0 => Value::Null,
                 1 => locs.into_iter().next().unwrap_or(Value::Null),
@@ -315,14 +319,14 @@ impl LspBackend {
     pub fn find_references(&self, params: &crate::types::ReferenceParams) -> anyhow::Result<Value> {
         let symbol = self.symbol_at_position(&params.at)?;
         self.with_locked_searcher(128, |s| {
-            let mut locs = self.hit_locations(s, &format!("callers:{symbol}"))?;
+            let mut locs = self.prefixed_hits(s, "callers:", &symbol)?;
             let include_decl = params
                 .context
                 .as_ref()
                 .map(|c| c.include_declaration)
                 .unwrap_or(true);
             if include_decl {
-                locs.extend(self.hit_locations(s, &format!("defs:{symbol}"))?);
+                locs.extend(self.prefixed_hits(s, "defs:", &symbol)?);
             }
             Ok(Value::Array(locs))
         })

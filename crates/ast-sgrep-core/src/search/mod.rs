@@ -99,7 +99,7 @@ impl Searcher {
         }
         Ok(response)
     }
-    pub fn search_lexical(&self, query_str: &str) -> Result<SearchResponse> {
+    pub(crate) fn search_lexical(&self, query_str: &str) -> Result<SearchResponse> {
         self.cached("lex", query_str, || {
             let parsed = ParsedQuery::parse(query_str);
             Ok(finish_response(
@@ -110,7 +110,7 @@ impl Searcher {
             ))
         })
     }
-    pub fn search_symbol_pass(&self, query_str: &str) -> Result<SearchResponse> {
+    pub(crate) fn search_symbol_pass(&self, query_str: &str) -> Result<SearchResponse> {
         self.cached("sym", query_str, || {
             let parsed = ParsedQuery::parse(query_str);
             let mut hits = symbol_pass(&self.store, &self.options, &parsed)?;
@@ -155,7 +155,7 @@ impl Searcher {
             ))
         })
     }
-    pub fn search_literal(&self, query: &str) -> Result<SearchResponse> {
+    pub(crate) fn search_literal(&self, query: &str) -> Result<SearchResponse> {
         self.cached("lit", query, || {
             let parsed = ParsedQuery::literal(query);
             Ok(finish_response(

@@ -185,7 +185,6 @@ impl Indexer {
         let mut seen_paths = HashSet::new();
         let mut semantic_ivf_dirty = false;
         let root = self.options.root.clone();
-        let ignore = crate::gitignore::IgnoreMatcher::new(&root);
         let respect_gitignore = self.options.respect_gitignore;
         let mut candidates: Vec<(PathBuf, String)> = Vec::new();
         for entry in WalkDir::new(&self.options.root)
@@ -197,7 +196,7 @@ impl Indexer {
                 }
                 if respect_gitignore && e.file_type().is_dir() {
                     if let Ok(rel) = e.path().strip_prefix(&root) {
-                        if !rel.as_os_str().is_empty() && ignore.is_dir_ignored(rel) {
+                        if !rel.as_os_str().is_empty() && self.ignore.is_dir_ignored(rel) {
                             return false;
                         }
                     }

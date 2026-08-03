@@ -238,8 +238,8 @@ fn structure_stable_append_keeps_trigram_and_search_literal() {
         },
     );
     let resp = searcher
-        .search_literal("UNIQUE_TRAILING_TOKEN_xyzzy_body_hash_append")
-        .expect("search_literal");
+        .search("literal:UNIQUE_TRAILING_TOKEN_xyzzy_body_hash_append")
+        .expect("literal search");
     assert!(
         resp.hits.iter().any(|h| h.excerpt.contains("xyzzy")),
         "search_literal must hit appended trailing token via trigram path; hits={:?}",
