@@ -267,3 +267,42 @@ node packages/pi/scripts/release-acceptance.mjs self-test
 | `parse_is_error_free` pub export | testkit only | removed; inlined in testkit |
 | Vacuous `ast_grep_pattern_for_query` bench speedup claims | hybrid/token queries | demoted via `ast_grep_comparison` |
 
+---
+
+## Batch G — module_resolve split + lib facade cleanup (second-pass ZTD)
+
+### module_resolve split
+
+| Change | Location |
+|--------|----------|
+| Move module resolution (13-lang extension table + `resolve_bases_*`) | `store/module_resolve.rs` (new) |
+| `resolve_module_path` → `collect_module_candidates` + existence filter | `store/sqlite.rs` |
+| Wire `mod module_resolve` | `store/mod.rs` |
+
+Swift/C#/C/C++/Kotlin/PHP/Ruby extension arms preserved byte-identical to pre-split inline match.
+
+### Deleted dead lib facades
+
+| Symbol | Action |
+|--------|--------|
+| `skip` / `text` / `output` re-export modules | deleted from `lib.rs` |
+| `format_hit_line` | direct `pub use search::format_hit_line` |
+
+### Commands run
+
+```bash
+export PATH="/usr/local/cargo/bin:$PATH"
+cd /workspace/.worktrees/pr23
+cargo test -p ast-sgrep-core --test resolve_module
+cargo test -p ast-sgrep-lang --test pattern
+cargo test -p ast-sgrep-cli --test machine_contracts
+```
+
+### Observed results
+
+| Suite | Result |
+|-------|--------|
+| `resolve_module` | **5 passed** |
+| `pattern` (13 langs) | **13 passed** |
+| `machine_contracts` | **6 passed** |
+
