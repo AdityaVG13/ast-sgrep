@@ -334,24 +334,26 @@ function getBinary(config: RuntimeConfig, env: NodeJS.ProcessEnv, resolver: Bina
 function byteLength(value: string): number { return Buffer.byteLength(value, "utf8"); }
 
 /** Version-triple conjunction (ls6.2): when either identity field is present, both must be present and match.
- *  Pass `requireIdentity` for surfaces (version --json) that must always report both fields. */
+ *  Pass `requireIdentity` for surfaces (version --json) that must always report both fields.
+ *  Optional path: report value mismatches on present fields before incompleteness (stable fail codes). */
 function assertVersionTriple(envelope: Partial<MachineEnvelope>, requireIdentity = false): void {
   const hasVersion = envelope.version !== undefined;
   const hasMachineSchema = envelope.machine_schema_version !== undefined;
-  if (!requireIdentity) {
-    if (hasVersion !== hasMachineSchema) {
-      throw new RuntimeError("PROTOCOL_MISMATCH", "Incomplete version triple: version and machine_schema_version must appear together", {
-        hasVersion,
-        hasMachineSchema,
-      });
+  if (requireIdentity || hasVersion) {
+    if (envelope.version !== RUNTIME_VERSION) {
+      throw new RuntimeError("VERSION_MISMATCH", "ast-sgrep binary version does not match the extension", { expected: RUNTIME_VERSION, actual: envelope.version });
     }
-    if (!hasVersion) return;
   }
-  if (envelope.version !== RUNTIME_VERSION) {
-    throw new RuntimeError("VERSION_MISMATCH", "ast-sgrep binary version does not match the extension", { expected: RUNTIME_VERSION, actual: envelope.version });
+  if (requireIdentity || hasMachineSchema) {
+    if (envelope.machine_schema_version !== MACHINE_SCHEMA_VERSION) {
+      throw new RuntimeError("PROTOCOL_MISMATCH", "ast-sgrep binary reports an incompatible machine protocol", { expected: MACHINE_SCHEMA_VERSION, actual: envelope.machine_schema_version });
+    }
   }
-  if (envelope.machine_schema_version !== MACHINE_SCHEMA_VERSION) {
-    throw new RuntimeError("PROTOCOL_MISMATCH", "ast-sgrep binary reports an incompatible machine protocol", { expected: MACHINE_SCHEMA_VERSION, actual: envelope.machine_schema_version });
+  if (!requireIdentity && hasVersion !== hasMachineSchema) {
+    throw new RuntimeError("PROTOCOL_MISMATCH", "Incomplete version triple: version and machine_schema_version must appear together", {
+      hasVersion,
+      hasMachineSchema,
+    });
   }
 }
 
