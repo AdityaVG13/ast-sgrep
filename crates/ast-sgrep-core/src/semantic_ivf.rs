@@ -290,10 +290,7 @@ fn map_and_parse(
         Err(error) => return Err(error.into()),
     };
     let metadata = file.metadata()?;
-    if !metadata.is_file() {
-        return Ok(None);
-    }
-    if metadata.len() < HEADER_SIZE as u64 {
+    if !metadata.is_file() || metadata.len() < HEADER_SIZE as u64 {
         return Ok(None);
     }
     // SAFETY: this module never mutates a published sidecar in place. Writers create and
@@ -303,21 +300,25 @@ fn map_and_parse(
     let Some(header) = read_header(&mmap, expected_fingerprint) else {
         return Ok(None);
     };
-    let index_end = match HEADER_SIZE.checked_add(header.index_len) {
-        Some(end) if end <= header.vector_offset && header.vector_offset <= mmap.len() => end,
-        _ => return Ok(None),
+    let Some(index_end) = HEADER_SIZE
+        .checked_add(header.index_len)
+        .filter(|&end| end <= header.vector_offset && header.vector_offset <= mmap.len())
+    else {
+        return Ok(None);
     };
-    let vector_len = match header
+    let Some(vector_len) = header
         .chunk_count
         .checked_mul(header.dim)
         .and_then(|count| count.checked_mul(std::mem::size_of::<f32>()))
-    {
-        Some(length) => length,
-        None => return Ok(None),
+    else {
+        return Ok(None);
     };
-    let vector_end = match header.vector_offset.checked_add(vector_len) {
-        Some(end) if end == mmap.len() => end,
-        _ => return Ok(None),
+    let Some(vector_end) = header
+        .vector_offset
+        .checked_add(vector_len)
+        .filter(|&end| end == mmap.len())
+    else {
+        return Ok(None);
     };
     if header.vector_offset % VECTOR_ALIGNMENT != 0 {
         return Ok(None);

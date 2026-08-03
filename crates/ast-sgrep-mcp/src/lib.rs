@@ -152,15 +152,24 @@ impl McpServer {
             "root": {"type": "string", "description": "Project root (defaults to ASGREP_ROOT or cwd)"},
             "limit": {"type": "integer", "minimum": 1, "maximum": MAX_AGENT_LIMIT}
         });
+        let search_tool = |name: &str, description: &str, props: Value| {
+            json!({
+                "name": name,
+                "description": description,
+                "inputSchema": {
+                    "type": "object",
+                    "properties": props,
+                    "required": ["query"],
+                    "additionalProperties": false
+                }
+            })
+        };
         json!({"tools": [
-            {"name": "keyword_search", "description": "Lexical-only search (FTS/trigram). Returns abbreviated snippets and stable node IDs. Does not fuse AST or semantic channels.",
-             "inputSchema": {"type": "object", "properties": search_properties.clone(), "required": ["query"], "additionalProperties": false}},
-            {"name": "ast_search", "description": "Native AST/pattern search (pattern: semantics). No external ast-grep process. Returns abbreviated snippets and stable node IDs.",
-             "inputSchema": {"type": "object", "properties": search_properties.clone(), "required": ["query"], "additionalProperties": false}},
-            {"name": "semantic_search", "description": "Embedding-only search. Requires a non-empty index with semantic chunks. Returns abbreviated snippets and stable node IDs.",
-             "inputSchema": {"type": "object", "properties": search_properties.clone(), "required": ["query"], "additionalProperties": false}},
-            {"name": "code_search", "description": "Deprecated compatibility alias for keyword_search; no automatic fusion across channels.",
-             "inputSchema": {"type": "object", "properties": search_properties, "required": ["query"], "additionalProperties": false}},
+            search_tool("keyword_search", "Lexical-only search (FTS/trigram). Returns abbreviated snippets and stable node IDs. Does not fuse AST or semantic channels.", search_properties.clone()),
+            search_tool("ast_search", "Native AST/pattern search (pattern: semantics). No external ast-grep process. Returns abbreviated snippets and stable node IDs.", search_properties.clone()),
+            search_tool("semantic_search", "Embedding-only search. Requires a non-empty index with semantic chunks. Returns abbreviated snippets and stable node IDs.", search_properties.clone()),
+            // Kept for clients still calling the pre-split name; dispatches as Keyword (see dispatch_tool).
+            search_tool("code_search", "Deprecated compatibility alias for keyword_search; no automatic fusion across channels.", search_properties),
             {"name": "code_read", "description": "Read full code for result node IDs with optional adjacent-line context. Paths are sandboxed under ASGREP_ROOT.",
              "inputSchema": {"type": "object", "properties": {
                 "ids": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": MAX_READ_REFS},
@@ -179,22 +188,29 @@ impl McpServer {
     fn handle_tools_call(&self, params: &Value) -> Option<Value> {
         let name = params.get("name").and_then(|v| v.as_str()).unwrap_or("");
         let args = params.get("arguments").cloned().unwrap_or(json!({}));
-        let result = match name {
-            "keyword_search" => self.tool_agent_search(&args, AgentSearchMode::Keyword),
-            "ast_search" => self.tool_agent_search(&args, AgentSearchMode::Ast),
-            "semantic_search" => self.tool_agent_search(&args, AgentSearchMode::Semantic),
-            "code_search" => self.tool_agent_search(&args, AgentSearchMode::Keyword),
-            "code_read" => self.tool_code_read(&args),
-            "index_status" => self.tool_index_status(&args),
-            "index_repo" => self.tool_index_repo(&args),
-            other => Err(anyhow::anyhow!("unknown tool: {other}")),
-        };
+        let result = self.dispatch_tool(name, &args);
         Some(match result {
             Ok(text) => json!({"content": [{"type": "text", "text": text}], "isError": false}),
             Err(e) => {
                 json!({"content": [{"type": "text", "text": e.to_string()}], "isError": true})
             }
         })
+    }
+
+    /// Tool name → handler. `code_search` remains a keyword alias (compat; protocol tests pin it).
+    fn dispatch_tool(&self, name: &str, args: &Value) -> anyhow::Result<String> {
+        match name {
+            // keyword_search and deprecated code_search share Keyword mode (compat alias).
+            "keyword_search" | "code_search" => {
+                self.tool_agent_search(args, AgentSearchMode::Keyword)
+            }
+            "ast_search" => self.tool_agent_search(args, AgentSearchMode::Ast),
+            "semantic_search" => self.tool_agent_search(args, AgentSearchMode::Semantic),
+            "code_read" => self.tool_code_read(args),
+            "index_status" => self.tool_index_status(args),
+            "index_repo" => self.tool_index_repo(args),
+            other => Err(anyhow::anyhow!("unknown tool: {other}")),
+        }
     }
 
     fn validate_fields(args: &Value, allowed: &[&str]) -> anyhow::Result<()> {

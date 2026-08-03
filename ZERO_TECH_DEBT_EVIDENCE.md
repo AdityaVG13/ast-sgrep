@@ -247,3 +247,79 @@ node packages/pi/scripts/release-acceptance.mjs self-test
 cd packages/pi/extension && npm run build && npm test
 # → tsc ok; 59 passed (runtime + extension suites)
 ```
+
+---
+
+## Batch E — deep remaining hotspots
+
+### Philosophy
+
+Dig past Batches A–D into densest remaining modules (sqlite / extract / runtime / code-mode / mcp / fusion / embed / agent / semantic_ivf). Prefer table-drive, insert helpers, private demotion, early-return, and single-helper extracts. **No SQL semantic changes.** MCP `code_search` alias kept with protocol-test proof. `.beads/` untouched.
+
+### Decision counts (Rust: if+match+while+`=>`; JS: if+else+&&+||+ternary)
+
+| File | Before | After | Δ |
+|------|--------|-------|---|
+| `crates/ast-sgrep-core/src/store/sqlite.rs` | 85d / 1303L | 84d / 1323L | −1d (helpers + demotions; SQL strings identical) |
+| `crates/ast-sgrep-lang/src/extract.rs` | 71d / 513L | 60d / 521L | −11d |
+| `packages/pi/extension/src/runtime.ts` | 129d / 520L | 128d / 587L | −1d (freshness/rebuild helpers; dens 0.248→0.218) |
+| `packages/pi/extension/src/code-mode.ts` | 102d / 417L | 102d / 450L | 0d (search/read helpers; dens 0.245→0.227) |
+| `crates/ast-sgrep-mcp/src/lib.rs` | 79d / 618L | 78d / 634L | −1d |
+| `crates/ast-sgrep-core/src/fusion.rs` | 79d / 628L | 80d / 640L | +1d (stencil extract; control flow flatter) |
+| `crates/ast-sgrep-embed/src/math.rs` | 27d / 403L | 26d / 394L | −1d |
+| `crates/ast-sgrep-embed/src/embedder.rs` | 65d / 665L | 65d / 657L | 0d (fallback flag via shared `env_flag`) |
+| `crates/ast-sgrep-cli/src/supervisor.rs` | 33d / 356L | 30d / 358L | −3d |
+| `crates/ast-sgrep-cli/src/agent.rs` | 28d / 345L | 28d / 344L | 0d (early-return doctor) |
+| `crates/ast-sgrep-core/src/semantic_ivf.rs` | 51d / 523L | 39d / 524L | −12d |
+| `crates/ast-sgrep-core/src/search/mod.rs` | 86d / 1186L | 86d / 1186L | 0 (no safe further lean without ranking risk) |
+| `crates/ast-sgrep-lang/src/pattern.rs` | — | inline `call_target_path` | thin single-caller wrapper deleted |
+
+### Refactors pinned
+
+| Change | File |
+|--------|------|
+| `insert_each` helper for callers/pattern_nodes/imports; SQL text byte-identical | `sqlite.rs` |
+| `map_sorted_files` shared by semantic/legacy per-file queries | `sqlite.rs` |
+| Demote zero-external-caller APIs: `delete_meta`, `bump_semantic_data_version`, `file_lines`, `file_exists` → private; many in-crate-only methods → `pub(crate)` | `sqlite.rs` |
+| Early-return `remove_file` | `sqlite.rs` |
+| Kind tables + `field_name_text` for `enclosing_symbol_name`; comment/string kind table; early-return KindRule arms | `extract.rs` |
+| Freshness helpers: `emptyRootFreshness` / `leaseExpired` / `isFresh` / `resolveIndexHealth` / `reconcileIndex` / `#absorbPending` | `runtime.ts` |
+| Rebuild helpers: `swapRebuiltIndex` / `rebuildFailureDetails` | `runtime.ts` |
+| `runSearch` + `resolveReadableFile` / `openStableHandle` (delete search/read dupes) | `code-mode.ts` |
+| `dispatch_tool` merges `keyword_search`\|`code_search`; `search_tool` schema helper; **alias kept** | `mcp/lib.rs` |
+| `channel_sensitivity` stencil extract; empty early-return in `pairwise_loss` | `fusion.rs` |
+| Delete unused `cosine_scores_for`; flatten `top_k_flat_similarity` push path | `math.rs` + `embed/lib.rs` |
+| `ASGREP_EMBED_FALLBACK` via shared `env_flag` | `embedder.rs` |
+| Inline single-caller `call_target_path` | `pattern.rs` |
+| Flatten `map_and_parse` Option/filter chains | `semantic_ivf.rs` |
+| Early-return doctor; early-return nonce auth | `agent.rs` / `supervisor.rs` |
+
+### Thin-wrapper / dead-path audit
+
+| Symbol | Callers | Action |
+|--------|---------|--------|
+| `cosine_scores_for` | **zero** (only re-export) | deleted + dropped from `ast-sgrep-embed` re-exports |
+| `call_target_path` | 1 (`call_match_path`) | inlined |
+| `fuse_rrf` | fuzz target + `score_lexical_rrf` | **kept** (fuzz uses public API) |
+| MCP `code_search` | listed + `dispatch_tool` arm + `tests/protocol.rs` | **kept** (compat) |
+| Code-mode `find`/`astFind`/`semantic`/`read` | public API aliases | **kept** |
+| `field_child` | many KindRule arms | **kept** (multi-caller) |
+| Search ranking helpers | shared by gates | untouched |
+
+### MCP compat proof
+
+- `crates/ast-sgrep-mcp/tests/protocol.rs` still enumerates `code_search` in tools/list and exercises `("code_search", …)` tool calls.
+- `dispatch_tool` documents `keyword_search | code_search` → `AgentSearchMode::Keyword`.
+
+### Behavior invariants
+
+- All sqlite INSERT/UPDATE/DELETE/SELECT SQL strings for mutated paths unchanged; demotions are visibility-only.
+- Hybrid ranking / fusion RRF math unchanged (helper extract only).
+- Freshness lease + incompatible rebuild swap/backup semantics preserved.
+- Code-mode search argv shape unchanged (`keyword` / bare `--` pattern / `semantic`).
+
+### Commands run
+
+```bash
+# (filled after test pass)
+```

@@ -290,7 +290,7 @@ fn call_match_path(node: &Node, source: &str, path: &[Option<String>]) -> Option
     if is_in_comment_or_string(node) || !is_call_kind(node.kind()) {
         return None;
     }
-    let callee = call_target_path(node, source)?;
+    let callee = path_from_node(&call_field_node(node)?, source)?;
     path_matches(&callee, path).then_some(callee)
 }
 
@@ -298,10 +298,6 @@ fn call_field_node<'a>(node: &Node<'a>) -> Option<Node<'a>> {
     ["function", "name"]
         .into_iter()
         .find_map(|f| node.child_by_field_name(f))
-}
-
-fn call_target_path(node: &Node, source: &str) -> Option<Vec<String>> {
-    path_from_node(&call_field_node(node)?, source)
 }
 
 fn path_from_node(node: &Node, source: &str) -> Option<Vec<String>> {

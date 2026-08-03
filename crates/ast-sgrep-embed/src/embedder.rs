@@ -531,15 +531,7 @@ fn chain_kinds(preference: EmbedPreference) -> Vec<EmbedBackendKind> {
     }
 }
 fn env_allows_embed_fallback() -> bool {
-    matches!(
-        std::env::var("ASGREP_EMBED_FALLBACK")
-            .ok()
-            .unwrap_or_default()
-            .trim()
-            .to_ascii_lowercase()
-            .as_str(),
-        "1" | "true" | "yes" | "on"
-    )
+    env_flag("ASGREP_EMBED_FALLBACK")
 }
 pub fn embed_query(
     text: &str,

@@ -125,15 +125,6 @@ pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
     }
 }
 
-pub fn cosine_scores_for<'a>(
-    query_vec: &[f32],
-    rows: impl Iterator<Item = (usize, &'a [f32])>,
-) -> Vec<(usize, f32)> {
-    rows.filter(|(_, emb)| emb.len() == query_vec.len())
-        .map(|(idx, emb)| (idx, cosine_similarity(query_vec, emb)))
-        .collect()
-}
-
 pub fn top_k_similarity(
     scored: impl IntoIterator<Item = (usize, f32)>,
     limit: usize,
@@ -162,23 +153,23 @@ pub fn top_k_flat_similarity(
     if limit == 0 || n == 0 || dim == 0 || query_vec.len() != dim {
         return vec![];
     }
+    let push_sim = |heap: &mut BinaryHeap<Reverse<Scored>>, i: usize| {
+        let sim = cosine_similarity(query_vec, &flat[i * dim..(i + 1) * dim]);
+        if min_similarity.is_none_or(|min| exceeds_threshold(sim, min)) {
+            push_top_k(heap, limit, i, sim);
+        }
+    };
     if n < PARALLEL_CHUNK_THRESHOLD {
         let mut heap = BinaryHeap::new();
         for i in 0..n {
-            let sim = cosine_similarity(query_vec, &flat[i * dim..(i + 1) * dim]);
-            if min_similarity.is_none_or(|min| exceeds_threshold(sim, min)) {
-                push_top_k(&mut heap, limit, i, sim);
-            }
+            push_sim(&mut heap, i);
         }
         return heap_to_sorted(heap);
     }
     let heap = (0..n)
         .into_par_iter()
         .fold(BinaryHeap::new, |mut heap, i| {
-            let sim = cosine_similarity(query_vec, &flat[i * dim..(i + 1) * dim]);
-            if min_similarity.is_none_or(|min| exceeds_threshold(sim, min)) {
-                push_top_k(&mut heap, limit, i, sim);
-            }
+            push_sim(&mut heap, i);
             heap
         })
         .reduce(BinaryHeap::new, |mut left, right| {

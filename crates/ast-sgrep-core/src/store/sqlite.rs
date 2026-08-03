@@ -205,7 +205,7 @@ impl IndexStore {
             |r| r.get(0),
         )
     }
-    pub fn delete_meta(&self, key: &str) -> Result<()> {
+    fn delete_meta(&self, key: &str) -> Result<()> {
         self.conn
             .execute("DELETE FROM meta WHERE key = ?1", params![key])?;
         Ok(())
@@ -234,11 +234,11 @@ impl IndexStore {
             .and_then(|s| s.parse().ok())
             .unwrap_or(0))
     }
-    pub fn bump_semantic_data_version(&self) -> Result<()> {
+    fn bump_semantic_data_version(&self) -> Result<()> {
         let v = self.semantic_data_version()?.saturating_add(1);
         self.set_meta("semantic_data_version", &v.to_string())
     }
-    pub fn file_id(&self, rel_path: &str) -> Result<Option<i64>> {
+    pub(crate) fn file_id(&self, rel_path: &str) -> Result<Option<i64>> {
         optional_row(
             &self.conn,
             "SELECT id FROM files WHERE path = ?1",
@@ -247,7 +247,7 @@ impl IndexStore {
         )
     }
     /// File-tx stays OFF until bulk commit (no re-NORMAL after each file).
-    pub fn begin_file_tx(&self) -> Result<()> {
+    pub(crate) fn begin_file_tx(&self) -> Result<()> {
         if !self.conn.is_autocommit() {
             return Ok(());
         }
@@ -256,10 +256,10 @@ impl IndexStore {
         self.file_tx_active.set(true);
         Ok(())
     }
-    pub fn commit_file_tx(&self) -> Result<()> {
+    pub(crate) fn commit_file_tx(&self) -> Result<()> {
         self.end_file_tx(true)
     }
-    pub fn rollback_file_tx(&self) -> Result<()> {
+    pub(crate) fn rollback_file_tx(&self) -> Result<()> {
         self.end_file_tx(false)
     }
     fn end_file_tx(&self, commit: bool) -> Result<()> {
@@ -312,7 +312,7 @@ impl IndexStore {
     pub fn commit_bulk_tx(&self) -> Result<()> {
         self.end_bulk_tx(true)
     }
-    pub fn rollback_bulk_tx(&self) -> Result<()> {
+    pub(crate) fn rollback_bulk_tx(&self) -> Result<()> {
         self.end_bulk_tx(false)
     }
     fn end_bulk_tx(&self, commit: bool) -> Result<()> {
@@ -418,7 +418,7 @@ impl IndexStore {
         Ok(())
     }
     /// Lines/FTS only when structure fingerprint matches (append / truncate / full rewrite).
-    pub fn refresh_lines_only(&self, input: RefreshLinesInput<'_>) -> Result<i64> {
+    pub(crate) fn refresh_lines_only(&self, input: RefreshLinesInput<'_>) -> Result<i64> {
         let RefreshLinesInput {
             file_id,
             language: lang,
@@ -515,6 +515,20 @@ impl IndexStore {
         )?.execute(params![path, lang, mtime_secs, mtime_nanos, hash])?;
         Ok(self.conn.last_insert_rowid())
     }
+    /// Prepare a cached INSERT and bind each row. SQL text must remain byte-identical.
+    fn insert_each<T>(
+        &self,
+        sql: &'static str,
+        rows: &[T],
+        mut bind: impl FnMut(&mut rusqlite::CachedStatement<'_>, &T) -> rusqlite::Result<()>,
+    ) -> Result<()> {
+        let mut st = self.conn.prepare_cached(sql)?;
+        for row in rows {
+            bind(&mut st, row)?;
+        }
+        Ok(())
+    }
+
     fn insert_lines(&self, file_id: i64, lines: &[(u32, String)]) -> Result<()> {
         let mut ls = self
             .conn
@@ -624,56 +638,62 @@ impl IndexStore {
         Ok(())
     }
     fn insert_callers(&self, file_id: i64, callers: &[CallerRow]) -> Result<()> {
-        let mut st = self.conn.prepare_cached( "INSERT INTO callers(file_id, caller, callee, line_no, byte_start, byte_end) VALUES(?1,?2,?3,?4,?5,?6)",
-        )?;
-        for c in callers {
-            st.execute(params![
-                file_id,
-                c.caller,
-                c.callee,
-                c.line_no,
-                c.byte_start as i64,
-                c.byte_end as i64
-            ])?;
-        }
-        Ok(())
+        self.insert_each(
+            "INSERT INTO callers(file_id, caller, callee, line_no, byte_start, byte_end) VALUES(?1,?2,?3,?4,?5,?6)",
+            callers,
+            |st, c| {
+                st.execute(params![
+                    file_id,
+                    c.caller,
+                    c.callee,
+                    c.line_no,
+                    c.byte_start as i64,
+                    c.byte_end as i64
+                ])?;
+                Ok(())
+            },
+        )
     }
     fn insert_pattern_nodes(&self, file_id: i64, nodes: &[PatternNode]) -> Result<()> {
-        let mut st = self.conn.prepare_cached( "INSERT INTO pattern_nodes(file_id, signature, line_start, line_end, excerpt) VALUES(?1,?2,?3,?4,?5)",
-        )?;
-        for n in nodes {
-            st.execute(params![
-                file_id,
-                n.signature,
-                n.line_start,
-                n.line_end,
-                n.excerpt
-            ])?;
-        }
-        Ok(())
+        self.insert_each(
+            "INSERT INTO pattern_nodes(file_id, signature, line_start, line_end, excerpt) VALUES(?1,?2,?3,?4,?5)",
+            nodes,
+            |st, n| {
+                st.execute(params![
+                    file_id,
+                    n.signature,
+                    n.line_start,
+                    n.line_end,
+                    n.excerpt
+                ])?;
+                Ok(())
+            },
+        )
     }
     fn insert_imports(&self, file_id: i64, imports: &[ImportRow]) -> Result<()> {
-        let mut st = self.conn.prepare_cached(
+        self.insert_each(
             "INSERT INTO imports(file_id, module_path, line_no) VALUES(?1,?2,?3)",
-        )?;
-        for i in imports {
-            st.execute(params![file_id, i.module_path, i.line_no])?;
-        }
-        Ok(())
+            imports,
+            |st, i| {
+                st.execute(params![file_id, i.module_path, i.line_no])?;
+                Ok(())
+            },
+        )
     }
     pub fn remove_file(&self, rel_path: &str) -> Result<()> {
         self.with_file_tx(|| {
-            if let Some(id) = self.file_id(rel_path)? {
-                delete_file_children(&self.conn, id)?;
-                self.conn
-                    .execute("DELETE FROM files WHERE id = ?1", params![id])?;
-                self.delete_meta(&format!("eol:{rel_path}"))?;
-                self.delete_meta(&format!("body:{rel_path}"))?;
-                self.delete_meta(&format!("struct:{rel_path}"))?;
-                crate::semantic_ann::mark_semantic_ivf_stale(self);
-                self.bump_index_data_version()?;
-                self.bump_semantic_data_version()?;
-            }
+            let Some(id) = self.file_id(rel_path)? else {
+                return Ok(());
+            };
+            delete_file_children(&self.conn, id)?;
+            self.conn
+                .execute("DELETE FROM files WHERE id = ?1", params![id])?;
+            self.delete_meta(&format!("eol:{rel_path}"))?;
+            self.delete_meta(&format!("body:{rel_path}"))?;
+            self.delete_meta(&format!("struct:{rel_path}"))?;
+            crate::semantic_ann::mark_semantic_ivf_stale(self);
+            self.bump_index_data_version()?;
+            self.bump_semantic_data_version()?;
             Ok(())
         })
     }
@@ -685,7 +705,7 @@ impl IndexStore {
             |r| r.get(0),
         )
     }
-    pub fn all_file_paths(&self) -> Result<Vec<String>> {
+    pub(crate) fn all_file_paths(&self) -> Result<Vec<String>> {
         query_cached_map(
             &self.conn,
             "SELECT path FROM files ORDER BY path",
@@ -720,7 +740,7 @@ impl IndexStore {
         count_star(&self.conn, "lines")
     }
     /// True when indexed lines ≥ threshold (LIMIT probe; avoids full COUNT).
-    pub fn indexed_line_count_at_least(&self, threshold: usize) -> Result<bool> {
+    pub(crate) fn indexed_line_count_at_least(&self, threshold: usize) -> Result<bool> {
         super::sql::at_least_rows(&self.conn, "lines", threshold)
     }
     pub fn all_indexed_lines(&self) -> Result<Vec<IndexedLineRow>> {
@@ -780,7 +800,7 @@ impl IndexStore {
             dim: dim as usize,
         })
     }
-    pub fn semantic_chunk_ids(&self, lang: Option<&str>) -> Result<Vec<i64>> {
+    pub(crate) fn semantic_chunk_ids(&self, lang: Option<&str>) -> Result<Vec<i64>> {
         let (sql, l) = if lang.is_some() {
             ("SELECT sc.id FROM semantic_chunks sc JOIN files f ON f.id=sc.file_id WHERE f.language=?1 ORDER BY sc.id", lang)
         } else {
@@ -788,7 +808,7 @@ impl IndexStore {
         };
         query_map_rows(&self.conn, sql, l, |r| r.get(0))
     }
-    pub fn semantic_chunks_by_ids(
+    pub(crate) fn semantic_chunks_by_ids(
         &self,
         ids: &[i64],
     ) -> Result<Vec<(i64, ast_sgrep_embed::SemanticChunkRow)>> {
@@ -832,72 +852,72 @@ impl IndexStore {
         );
         query_map_rows(&self.conn, &sql, lang, read_sem_row)
     }
-    pub fn semantic_chunks_for_files(
-        &self,
+    /// Walk sorted file paths and extend with per-path query results (stable path order).
+    fn map_sorted_files<T>(
         files: &std::collections::HashSet<String>,
-        lang: Option<&str>,
-    ) -> Result<Vec<ast_sgrep_embed::SemanticChunkRow>> {
+        mut query: impl FnMut(&str) -> Result<Vec<T>>,
+    ) -> Result<Vec<T>> {
         let mut paths = files.iter().collect::<Vec<_>>();
         paths.sort_unstable();
-        let mut chunks = Vec::new();
+        let mut out = Vec::new();
         for path in paths {
-            let rows = match lang {
-                Some(language) => query_cached_map(
-                    &self.conn,
-                    "SELECT f.path, sc.line_start, sc.line_end, sc.symbol_name, sc.text, sc.vector \
-                     FROM semantic_chunks sc JOIN files f ON f.id=sc.file_id \
-                     WHERE f.path=?1 AND f.language=?2 ORDER BY sc.id",
-                    params![path, language],
-                    read_sem_row,
-                )?,
-                None => query_cached_map(
-                    &self.conn,
-                    "SELECT f.path, sc.line_start, sc.line_end, sc.symbol_name, sc.text, sc.vector \
-                     FROM semantic_chunks sc JOIN files f ON f.id=sc.file_id \
-                     WHERE f.path=?1 ORDER BY sc.id",
-                    params![path],
-                    read_sem_row,
-                )?,
-            };
-            chunks.extend(rows);
+            out.extend(query(path)?);
         }
-        Ok(chunks)
+        Ok(out)
     }
 
-    pub fn legacy_embeddings_for_files(
+    pub(crate) fn semantic_chunks_for_files(
         &self,
         files: &std::collections::HashSet<String>,
         lang: Option<&str>,
     ) -> Result<Vec<ast_sgrep_embed::SemanticChunkRow>> {
-        let mut paths = files.iter().collect::<Vec<_>>();
-        paths.sort_unstable();
-        let mut chunks = Vec::new();
-        for path in paths {
-            let rows = match lang {
-                Some(language) => query_cached_map(
-                    &self.conn,
-                    "SELECT f.path, l.line_no, l.content, sc.symbol_name, e.vector \
-                     FROM embeddings e JOIN lines l ON l.file_id=e.file_id AND l.line_no=e.line_no \
-                     JOIN files f ON f.id=e.file_id \
-                     LEFT JOIN semantic_chunks sc ON sc.file_id=f.id AND sc.line_start=l.line_no \
-                     WHERE f.path=?1 AND f.language=?2 ORDER BY l.line_no LIMIT 5000",
-                    params![path, language],
-                    read_legacy_emb,
-                )?,
-                None => query_cached_map(
-                    &self.conn,
-                    "SELECT f.path, l.line_no, l.content, sc.symbol_name, e.vector \
-                     FROM embeddings e JOIN lines l ON l.file_id=e.file_id AND l.line_no=e.line_no \
-                     JOIN files f ON f.id=e.file_id \
-                     LEFT JOIN semantic_chunks sc ON sc.file_id=f.id AND sc.line_start=l.line_no \
-                     WHERE f.path=?1 ORDER BY l.line_no LIMIT 5000",
-                    params![path],
-                    read_legacy_emb,
-                )?,
-            };
-            chunks.extend(rows);
-        }
-        Ok(chunks)
+        Self::map_sorted_files(files, |path| match lang {
+            Some(language) => query_cached_map(
+                &self.conn,
+                "SELECT f.path, sc.line_start, sc.line_end, sc.symbol_name, sc.text, sc.vector \
+                 FROM semantic_chunks sc JOIN files f ON f.id=sc.file_id \
+                 WHERE f.path=?1 AND f.language=?2 ORDER BY sc.id",
+                params![path, language],
+                read_sem_row,
+            ),
+            None => query_cached_map(
+                &self.conn,
+                "SELECT f.path, sc.line_start, sc.line_end, sc.symbol_name, sc.text, sc.vector \
+                 FROM semantic_chunks sc JOIN files f ON f.id=sc.file_id \
+                 WHERE f.path=?1 ORDER BY sc.id",
+                params![path],
+                read_sem_row,
+            ),
+        })
+    }
+
+    pub(crate) fn legacy_embeddings_for_files(
+        &self,
+        files: &std::collections::HashSet<String>,
+        lang: Option<&str>,
+    ) -> Result<Vec<ast_sgrep_embed::SemanticChunkRow>> {
+        Self::map_sorted_files(files, |path| match lang {
+            Some(language) => query_cached_map(
+                &self.conn,
+                "SELECT f.path, l.line_no, l.content, sc.symbol_name, e.vector \
+                 FROM embeddings e JOIN lines l ON l.file_id=e.file_id AND l.line_no=e.line_no \
+                 JOIN files f ON f.id=e.file_id \
+                 LEFT JOIN semantic_chunks sc ON sc.file_id=f.id AND sc.line_start=l.line_no \
+                 WHERE f.path=?1 AND f.language=?2 ORDER BY l.line_no LIMIT 5000",
+                params![path, language],
+                read_legacy_emb,
+            ),
+            None => query_cached_map(
+                &self.conn,
+                "SELECT f.path, l.line_no, l.content, sc.symbol_name, e.vector \
+                 FROM embeddings e JOIN lines l ON l.file_id=e.file_id AND l.line_no=e.line_no \
+                 JOIN files f ON f.id=e.file_id \
+                 LEFT JOIN semantic_chunks sc ON sc.file_id=f.id AND sc.line_start=l.line_no \
+                 WHERE f.path=?1 ORDER BY l.line_no LIMIT 5000",
+                params![path],
+                read_legacy_emb,
+            ),
+        })
     }
 
     pub fn symbols_in_file(&self, rel_path: &str) -> Result<Vec<SymbolRow>> {
@@ -924,13 +944,13 @@ impl IndexStore {
     pub fn outgoing_calls(&self, caller: &str) -> Result<Vec<CallRow>> {
         calls_matching(&self.conn, "caller", caller)
     }
-    pub fn symbol_at_line(&self, path: &str, line: u32) -> Result<Option<SymbolLocationRow>> {
+    pub(crate) fn symbol_at_line(&self, path: &str, line: u32) -> Result<Option<SymbolLocationRow>> {
         optional_row(
             &self.conn, &format!("{SYM_LOC} WHERE f.path=?1 AND s.line_start<=?2 AND s.line_end>=?2 ORDER BY (s.line_end-s.line_start), s.line_start DESC, s.name LIMIT 1"),
             &[&path as &dyn ToSql, &line as &dyn ToSql], read_sym_loc,
         )
     }
-    pub fn first_symbol_in_file(&self, path: &str) -> Result<Option<SymbolLocationRow>> {
+    pub(crate) fn first_symbol_in_file(&self, path: &str) -> Result<Option<SymbolLocationRow>> {
         optional_row(
             &self.conn,
             &format!("{SYM_LOC} WHERE f.path=?1 ORDER BY s.line_start, s.line_end, s.name LIMIT 1"),
@@ -948,7 +968,7 @@ impl IndexStore {
             read_sym_loc,
         )
     }
-    pub fn imports_from_file(&self, path: &str) -> Result<Vec<ImportRow>> {
+    pub(crate) fn imports_from_file(&self, path: &str) -> Result<Vec<ImportRow>> {
         query_cached_map(
             &self.conn,
             "SELECT i.module_path, i.line_no FROM imports i JOIN files f ON f.id=i.file_id \
@@ -1001,10 +1021,10 @@ impl IndexStore {
             |r| r.get(0),
         )
     }
-    pub fn pattern_node_count(&self) -> Result<usize> {
+    pub(crate) fn pattern_node_count(&self) -> Result<usize> {
         count_star(&self.conn, "pattern_nodes")
     }
-    pub fn pattern_nodes_matching(
+    pub(crate) fn pattern_nodes_matching(
         &self,
         signature: &str,
         lang: Option<&str>,
@@ -1047,7 +1067,7 @@ impl IndexStore {
                 .join(sep),
         ))
     }
-    pub fn file_lines(&self, path: &str) -> Result<Vec<(u32, String)>> {
+    fn file_lines(&self, path: &str) -> Result<Vec<(u32, String)>> {
         query_cached_map( &self.conn, "SELECT l.line_no, l.content FROM lines l JOIN files f ON f.id=l.file_id WHERE f.path=?1 ORDER BY l.line_no",
             params![path], |r| Ok((r.get(0)?, r.get(1)?)), )
     }
@@ -1057,7 +1077,7 @@ impl IndexStore {
             &[&path as &dyn ToSql, &line as &dyn ToSql], |r| r.get(0),
         )
     }
-    pub fn query_imports(
+    pub(crate) fn query_imports(
         &self,
         module: Option<&str>,
         lang: Option<&str>,
@@ -1087,7 +1107,7 @@ impl IndexStore {
             map,
         )
     }
-    pub fn all_legacy_embeddings(
+    pub(crate) fn all_legacy_embeddings(
         &self,
         lang: Option<&str>,
     ) -> Result<Vec<ast_sgrep_embed::SemanticChunkRow>> {
@@ -1099,7 +1119,7 @@ impl IndexStore {
         );
         query_map_rows(&self.conn, &sql, lang, read_legacy_emb)
     }
-    pub fn file_exists(&self, path: &str) -> Result<bool> {
+    fn file_exists(&self, path: &str) -> Result<bool> {
         Ok(self
             .conn
             .prepare_cached("SELECT 1 FROM files WHERE path=?1")?

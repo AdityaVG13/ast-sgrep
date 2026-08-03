@@ -13,9 +13,8 @@ pub use embedder::{
     Embedder, HashedEmbedder, OllamaEmbedder, OllamaEmbeddingConfig,
 };
 pub use math::{
-    cosine_scores_for, cosine_similarity, dot_similarity, normalize_vec, normalize_vec_in_place,
-    top_by_similarity, top_k_flat_similarity, top_k_similarity, MIN_SIMILARITY,
-    PARALLEL_CHUNK_THRESHOLD,
+    cosine_similarity, dot_similarity, normalize_vec, normalize_vec_in_place, top_by_similarity,
+    top_k_flat_similarity, top_k_similarity, MIN_SIMILARITY, PARALLEL_CHUNK_THRESHOLD,
 };
 #[cfg(feature = "neural-embed")]
 pub use neural::NeuralEmbedder;

@@ -73,9 +73,11 @@ pub fn worker_authenticate() -> bool {
     if nix::unistd::getppid().as_raw() != supervisor_pid {
         return fail();
     }
-    match std::env::var(WORKER_NONCE_ENV) {
-        Ok(ref v) if !v.is_empty() => {}
-        _ => return fail(),
+    let Ok(nonce) = std::env::var(WORKER_NONCE_ENV) else {
+        return fail();
+    };
+    if nonce.is_empty() {
+        return fail();
     }
     #[cfg(target_os = "linux")]
     {

@@ -273,6 +273,9 @@ pub fn apply_weighted_rrf(hits: &mut Vec<SearchHit>, weights: &ChannelWeights) {
 }
 
 fn pairwise_loss(examples: &[FusionExample], weights: &ChannelWeights) -> f64 {
+    if examples.is_empty() {
+        return 0.0;
+    }
     let mut loss = 0.0;
     let mut pairs = 0usize;
     for example in examples {
@@ -330,6 +333,57 @@ fn ranking_churn(
     }
 }
 
+fn channel_sensitivity(
+    examples: &[FusionExample],
+    weights: &ChannelWeights,
+    channel: FusionChannel,
+    center: f64,
+    step: f64,
+    base_loss: f64,
+) -> (f64, f64, f64) {
+    let left_room = center - 0.25;
+    let right_room = 2.0 - center;
+    if left_room >= step && right_room >= step {
+        let mut plus = weights.clone();
+        let mut minus = weights.clone();
+        set_weight(&mut plus, channel, center + step);
+        set_weight(&mut minus, channel, center - step);
+        let plus_loss = pairwise_loss(examples, &plus);
+        let minus_loss = pairwise_loss(examples, &minus);
+        return (
+            (plus_loss - minus_loss) / (2.0 * step),
+            ((plus_loss - 2.0 * base_loss + minus_loss) / step.powi(2)).max(0.0),
+            ranking_churn(examples, weights, &plus).max(ranking_churn(examples, weights, &minus)),
+        );
+    }
+    if right_room >= left_room {
+        let h = step.min(right_room / 2.0);
+        let mut first = weights.clone();
+        let mut second = weights.clone();
+        set_weight(&mut first, channel, center + h);
+        set_weight(&mut second, channel, center + 2.0 * h);
+        let first_loss = pairwise_loss(examples, &first);
+        let second_loss = pairwise_loss(examples, &second);
+        return (
+            (-3.0 * base_loss + 4.0 * first_loss - second_loss) / (2.0 * h),
+            ((base_loss - 2.0 * first_loss + second_loss) / h.powi(2)).max(0.0),
+            ranking_churn(examples, weights, &first).max(ranking_churn(examples, weights, &second)),
+        );
+    }
+    let h = step.min(left_room / 2.0);
+    let mut first = weights.clone();
+    let mut second = weights.clone();
+    set_weight(&mut first, channel, center - h);
+    set_weight(&mut second, channel, center - 2.0 * h);
+    let first_loss = pairwise_loss(examples, &first);
+    let second_loss = pairwise_loss(examples, &second);
+    (
+        (3.0 * base_loss - 4.0 * first_loss + second_loss) / (2.0 * h),
+        ((base_loss - 2.0 * first_loss + second_loss) / h.powi(2)).max(0.0),
+        ranking_churn(examples, weights, &first).max(ranking_churn(examples, weights, &second)),
+    )
+}
+
 pub fn analyze_weight_sensitivity(
     examples: &[FusionExample],
     weights: &ChannelWeights,
@@ -344,50 +398,8 @@ pub fn analyze_weight_sensitivity(
     let mut rows = Vec::with_capacity(FusionChannel::ALL.len());
     for channel in FusionChannel::ALL {
         let center = weight(weights, channel);
-        let left_room = center - 0.25;
-        let right_room = 2.0 - center;
-        let (gradient, curvature, rank_churn) = if left_room >= step && right_room >= step {
-            let mut plus = weights.clone();
-            let mut minus = weights.clone();
-            set_weight(&mut plus, channel, center + step);
-            set_weight(&mut minus, channel, center - step);
-            let plus_loss = pairwise_loss(examples, &plus);
-            let minus_loss = pairwise_loss(examples, &minus);
-            (
-                (plus_loss - minus_loss) / (2.0 * step),
-                ((plus_loss - 2.0 * base_loss + minus_loss) / step.powi(2)).max(0.0),
-                ranking_churn(examples, weights, &plus)
-                    .max(ranking_churn(examples, weights, &minus)),
-            )
-        } else if right_room >= left_room {
-            let h = step.min(right_room / 2.0);
-            let mut first = weights.clone();
-            let mut second = weights.clone();
-            set_weight(&mut first, channel, center + h);
-            set_weight(&mut second, channel, center + 2.0 * h);
-            let first_loss = pairwise_loss(examples, &first);
-            let second_loss = pairwise_loss(examples, &second);
-            (
-                (-3.0 * base_loss + 4.0 * first_loss - second_loss) / (2.0 * h),
-                ((base_loss - 2.0 * first_loss + second_loss) / h.powi(2)).max(0.0),
-                ranking_churn(examples, weights, &first)
-                    .max(ranking_churn(examples, weights, &second)),
-            )
-        } else {
-            let h = step.min(left_room / 2.0);
-            let mut first = weights.clone();
-            let mut second = weights.clone();
-            set_weight(&mut first, channel, center - h);
-            set_weight(&mut second, channel, center - 2.0 * h);
-            let first_loss = pairwise_loss(examples, &first);
-            let second_loss = pairwise_loss(examples, &second);
-            (
-                (3.0 * base_loss - 4.0 * first_loss + second_loss) / (2.0 * h),
-                ((base_loss - 2.0 * first_loss + second_loss) / h.powi(2)).max(0.0),
-                ranking_churn(examples, weights, &first)
-                    .max(ranking_churn(examples, weights, &second)),
-            )
-        };
+        let (gradient, curvature, rank_churn) =
+            channel_sensitivity(examples, weights, channel, center, step, base_loss);
         rows.push(WeightSensitivity {
             channel,
             gradient,

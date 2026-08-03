@@ -46,13 +46,12 @@ pub(crate) fn run_doctor(cli: &Cli, root: &Path, args: &DoctorArgs) -> anyhow::R
         .get("healthy")
         .and_then(|value| value.as_bool())
         .unwrap_or(false);
-    if healthy {
-        crate::print_machine_json("doctor", triage)
-    } else {
+    if !healthy {
         // Fail-closed: never emit ok:true / exit 0 when healthy:false (s6ze.1).
         crate::print_machine_json_status("doctor", triage, false, 2)?;
         std::process::exit(2);
     }
+    crate::print_machine_json("doctor", triage)
 }
 pub(crate) fn capabilities_json(_cli: &Cli) -> anyhow::Result<Value> {
     let command = crate::Cli::command();

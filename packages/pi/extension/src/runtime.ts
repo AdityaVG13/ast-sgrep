@@ -227,6 +227,57 @@ function canonicalizeAffectedPath(path: string): string {
   }
 }
 
+function emptyRootFreshness(): RootFreshness {
+  return { dirtyGeneration: 0, cleanGeneration: 0, initialized: false, lastRefreshAt: 0, inFlight: undefined };
+}
+
+function leaseExpired(state: RootFreshness, now: number, interval: number): boolean {
+  if (!state.initialized) return false;
+  const elapsed = now - state.lastRefreshAt;
+  return elapsed < 0 || elapsed >= interval;
+}
+
+function isFresh(state: RootFreshness, now: number, interval: number): boolean {
+  return state.initialized
+    && state.cleanGeneration === state.dirtyGeneration
+    && !leaseExpired(state, now, interval);
+}
+
+async function resolveIndexHealth(
+  runtime: FreshnessRuntime,
+  rootContext: RuntimeContext,
+  options: RunOptions,
+): Promise<IndexHealth | undefined> {
+  let health = await runtime.inspectIndexCompatibility?.(rootContext);
+  if (health === "incompatible") return health;
+  try {
+    const status = await runtime.run(["status", ".", "--json"], rootContext, options);
+    return indexHealth(status);
+  } catch (cause) {
+    if (!incompatibleStatusFailure(cause)) throw cause;
+    return "incompatible";
+  }
+}
+
+async function reconcileIndex(
+  runtime: FreshnessRuntime,
+  rootContext: RuntimeContext,
+  options: RunOptions,
+  health: IndexHealth | undefined,
+  needsIncremental: boolean,
+): Promise<void> {
+  if (health === "incompatible") {
+    if (runtime.rebuildIncompatibleIndex) await runtime.rebuildIncompatibleIndex(rootContext, options);
+    else await runtime.run(["reindex", ".", "--json"], rootContext, options);
+    return;
+  }
+  if (health === "missing" || needsIncremental) {
+    // Missing / first touch / dirty / lease expiry all reconcile via incremental index
+    // (not force reindex) so external create/modify/delete avoid rebuild thrash (5du.9).
+    await runtime.run(["index", ".", "--json"], rootContext, options);
+  }
+}
+
 export class FreshnessCoordinator {
   readonly #states = new Map<string, RootFreshness>();
   readonly #pendingPaths = new Set<string>();
@@ -253,50 +304,43 @@ export class FreshnessCoordinator {
     else this.#pendingPaths.add(canonical);
   }
 
-  async ensureFresh(runtime: FreshnessRuntime, context: RuntimeContext, options: RunOptions = {}): Promise<string> {
-    const root = await runtime.resolveRoot(context);
-    const rootContext: InternalRuntimeContext = { cwd: root, [RESOLVED_ROOT]: true };
-    let state = this.#states.get(root);
-    if (!state) {
-      state = { dirtyGeneration: 0, cleanGeneration: 0, initialized: false, lastRefreshAt: 0, inFlight: undefined };
-      this.#states.set(root, state);
-    }
+  #absorbPending(root: string, state: RootFreshness): void {
     for (const path of this.#pendingPaths) {
       if (!pathContained(root, path)) continue;
       state.dirtyGeneration += 1;
       this.#pendingPaths.delete(path);
     }
+  }
+
+  async ensureFresh(runtime: FreshnessRuntime, context: RuntimeContext, options: RunOptions = {}): Promise<string> {
+    const root = await runtime.resolveRoot(context);
+    const rootContext: InternalRuntimeContext = { cwd: root, [RESOLVED_ROOT]: true };
+    let state = this.#states.get(root);
+    if (!state) {
+      state = emptyRootFreshness();
+      this.#states.set(root, state);
+    }
+    this.#absorbPending(root, state);
     if (state.inFlight) {
       await state.inFlight;
       return this.ensureFresh(runtime, rootContext, options);
     }
     const now = this.#now();
-    const elapsed = now - state.lastRefreshAt;
-    const expired = state.initialized && (elapsed < 0 || elapsed >= this.#interval);
-    if (state.initialized && state.cleanGeneration === state.dirtyGeneration && !expired) return root;
+    if (isFresh(state, now, this.#interval)) return root;
 
     const refreshGeneration = state.dirtyGeneration;
     const wasInitialized = state.initialized;
+    const expired = leaseExpired(state, now, this.#interval);
     const refresh = (async () => {
-      let health = await runtime.inspectIndexCompatibility?.(rootContext);
-      if (health !== "incompatible") {
-        try {
-          const status = await runtime.run(["status", ".", "--json"], rootContext, options);
-          health = indexHealth(status);
-        } catch (cause) {
-          if (!incompatibleStatusFailure(cause)) throw cause;
-          health = "incompatible";
-        }
-      }
+      const health = await resolveIndexHealth(runtime, rootContext, options);
       const dirty = refreshGeneration > state!.cleanGeneration;
-      if (health === "incompatible") {
-        if (runtime.rebuildIncompatibleIndex) await runtime.rebuildIncompatibleIndex(rootContext, options);
-        else await runtime.run(["reindex", ".", "--json"], rootContext, options);
-      } else if (health === "missing" || !wasInitialized || dirty || expired) {
-        // Missing / first touch / dirty / lease expiry all reconcile via incremental index
-        // (not force reindex) so external create/modify/delete avoid rebuild thrash (5du.9).
-        await runtime.run(["index", ".", "--json"], rootContext, options);
-      }
+      await reconcileIndex(
+        runtime,
+        rootContext,
+        options,
+        health,
+        !wasInitialized || dirty || expired,
+      );
       state!.initialized = true;
       state!.cleanGeneration = refreshGeneration;
       state!.lastRefreshAt = this.#now();
@@ -424,6 +468,47 @@ function inspectIndexFile(path: string): IndexHealth {
 }
 
 
+async function swapRebuiltIndex(
+  indexPath: string,
+  replacementPath: string,
+  backupPath: string,
+): Promise<boolean> {
+  let priorMoved = false;
+  if (existsSync(indexPath)) {
+    await rename(indexPath, backupPath);
+    priorMoved = true;
+  }
+  try {
+    await rename(replacementPath, indexPath);
+  } catch (cause) {
+    if (priorMoved) await rename(backupPath, indexPath);
+    throw cause;
+  }
+  if (priorMoved) await rm(backupPath, { force: true });
+  return priorMoved;
+}
+
+function rebuildFailureDetails(
+  indexPath: string,
+  backupPath: string,
+  priorMoved: boolean,
+  cause: unknown,
+): ConstructorParameters<typeof RuntimeError>[2] {
+  let recoveryPath = indexPath;
+  let priorIndexPreserved = existsSync(indexPath);
+  if (priorMoved && !priorIndexPreserved && existsSync(backupPath)) {
+    recoveryPath = backupPath;
+    priorIndexPreserved = true;
+  }
+  return {
+    indexPath,
+    recoveryPath,
+    priorIndexPreserved,
+    expectedIndexFormat: INDEX_FORMAT_VERSION,
+    cause: cause instanceof Error ? cause.message : String(cause),
+  };
+}
+
 export class AstSgrepRuntime {
   readonly config: ReturnType<typeof resolveConfig>;
   readonly #resolver: BinaryResolver;
@@ -459,32 +544,14 @@ export class AstSgrepRuntime {
       if (inspectIndexFile(replacementPath) !== "ready") {
         throw new RuntimeError("INDEX_REBUILD_INVALID", "Replacement index has an incompatible format", { expected: INDEX_FORMAT_VERSION });
       }
-      if (existsSync(indexPath)) {
-        await rename(indexPath, backupPath);
-        priorMoved = true;
-      }
-      try {
-        await rename(replacementPath, indexPath);
-      } catch (cause) {
-        if (priorMoved) await rename(backupPath, indexPath);
-        throw cause;
-      }
-      if (priorMoved) await rm(backupPath, { force: true });
+      priorMoved = await swapRebuiltIndex(indexPath, replacementPath, backupPath);
       return response;
     } catch (cause) {
-      let recoveryPath = indexPath;
-      let priorIndexPreserved = existsSync(indexPath);
-      if (priorMoved && !priorIndexPreserved && existsSync(backupPath)) {
-        recoveryPath = backupPath;
-        priorIndexPreserved = true;
-      }
-      throw new RuntimeError("INDEX_REBUILD_FAILED", "Incompatible index rebuild failed; the prior index remains recoverable", {
-        indexPath,
-        recoveryPath,
-        priorIndexPreserved,
-        expectedIndexFormat: INDEX_FORMAT_VERSION,
-        cause: cause instanceof Error ? cause.message : String(cause),
-      });
+      throw new RuntimeError(
+        "INDEX_REBUILD_FAILED",
+        "Incompatible index rebuild failed; the prior index remains recoverable",
+        rebuildFailureDetails(indexPath, backupPath, priorMoved, cause),
+      );
     } finally {
       await rm(temporaryDirectory, { recursive: true, force: true });
     }

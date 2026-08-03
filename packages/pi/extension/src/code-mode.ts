@@ -296,6 +296,71 @@ async function readLineWindow(
   };
 }
 
+async function runSearch(
+  runtime: RuntimeLike,
+  context: RuntimeContext,
+  command: readonly string[],
+  query: string,
+  options: SgrepSearchOptions,
+): Promise<SgrepSearchResponse> {
+  const value = await runtime.run([...outputArgs(options), ...command, "--", query, "."], context, options);
+  return asSearchResponse(value);
+}
+
+async function resolveReadableFile(
+  root: string,
+  ref: SgrepRef,
+  parsed: { file: string; start: number; end: number },
+): Promise<{ unresolved: string; filePath: string; expectedStat: Stats }> {
+  const unresolved = resolve(root, parsed.file);
+  if (!inside(root, unresolved)) throw new RuntimeError("PATH_OUTSIDE_ROOT", `Ref escapes the project root: ${ref}`);
+  let filePath: string;
+  let expectedStat: Stats;
+  try {
+    filePath = await realpath(unresolved);
+    expectedStat = await lstat(filePath);
+  } catch (cause) {
+    throw new RuntimeError("READ_FAILED", `Unable to resolve ${parsed.file}`, {
+      ref,
+      cause: cause instanceof Error ? cause.message : String(cause),
+    });
+  }
+  if (!inside(root, filePath)) throw new RuntimeError("PATH_OUTSIDE_ROOT", `Ref escapes the project root: ${ref}`);
+  if (!expectedStat.isFile()) throw new RuntimeError("READ_FAILED", `${parsed.file} is not a regular file`);
+  return { unresolved, filePath, expectedStat };
+}
+
+async function openStableHandle(
+  root: string,
+  ref: SgrepRef,
+  fileLabel: string,
+  unresolved: string,
+  filePath: string,
+  expectedStat: Stats,
+): Promise<FileHandle> {
+  let handle: FileHandle;
+  try {
+    const noFollow = typeof constants.O_NOFOLLOW === "number" ? constants.O_NOFOLLOW : 0;
+    handle = await open(filePath, constants.O_RDONLY | noFollow);
+  } catch (cause) {
+    throw new RuntimeError("READ_FAILED", `Unable to open ${fileLabel}`, {
+      ref,
+      cause: cause instanceof Error ? cause.message : String(cause),
+    });
+  }
+  try {
+    const [actualStat, openedPath] = await Promise.all([handle.stat(), realpath(unresolved)]);
+    if (!inside(root, openedPath) || openedPath !== filePath
+      || actualStat.dev !== expectedStat.dev || actualStat.ino !== expectedStat.ino) {
+      throw new RuntimeError("PATH_CHANGED", `Ref changed while opening: ${ref}`);
+    }
+    return handle;
+  } catch (cause) {
+    await handle.close();
+    throw cause;
+  }
+}
+
 export class SgrepCodeMode implements SgrepApi {
   readonly #api: Readonly<SgrepApi>;
 
@@ -318,31 +383,27 @@ export class SgrepCodeMode implements SgrepApi {
   }
 
   async keywordSearch(query: string, options: SgrepSearchOptions = {}): Promise<SgrepSearchResponse> {
-    const value = await this.runtime.run([...outputArgs(options), "keyword", "--", requiredText(query, "query"), "."], this.context, options);
-    return asSearchResponse(value);
+    return runSearch(this.runtime, this.context, ["keyword"], requiredText(query, "query"), options);
   }
 
   async astSearch(pattern: string, options: SgrepSearchOptions = {}): Promise<SgrepSearchResponse> {
-    const query = `pattern: ${requiredText(pattern, "pattern")}`;
-    const value = await this.runtime.run([...outputArgs(options), "--", query, "."], this.context, options);
-    return asSearchResponse(value);
+    return runSearch(this.runtime, this.context, [], `pattern: ${requiredText(pattern, "pattern")}`, options);
   }
 
   async semanticSearch(query: string, options: SgrepSearchOptions = {}): Promise<SgrepSearchResponse> {
-    const value = await this.runtime.run([...outputArgs(options), "semantic", "--", requiredText(query, "query"), "."], this.context, options);
-    return asSearchResponse(value);
+    return runSearch(this.runtime, this.context, ["semantic"], requiredText(query, "query"), options);
   }
 
   async find(query: string, options?: SgrepSearchOptions): Promise<SgrepSearchResponse> {
-    return await this.keywordSearch(query, options);
+    return this.keywordSearch(query, options);
   }
 
   async astFind(pattern: string, options?: SgrepSearchOptions): Promise<SgrepSearchResponse> {
-    return await this.astSearch(pattern, options);
+    return this.astSearch(pattern, options);
   }
 
   async semantic(query: string, options?: SgrepSearchOptions): Promise<SgrepSearchResponse> {
-    return await this.semanticSearch(query, options);
+    return this.semanticSearch(query, options);
   }
 
   async codeRead(
@@ -364,37 +425,9 @@ export class SgrepCodeMode implements SgrepApi {
       checkAbort(options.signal);
       const ref = refValue(value);
       const parsed = parseRef(ref);
-      const unresolved = resolve(root, parsed.file);
-      if (!inside(root, unresolved)) throw new RuntimeError("PATH_OUTSIDE_ROOT", `Ref escapes the project root: ${ref}`);
-      let filePath: string;
-      let expectedStat: Stats;
+      const { unresolved, filePath, expectedStat } = await resolveReadableFile(root, ref, parsed);
+      const handle = await openStableHandle(root, ref, parsed.file, unresolved, filePath, expectedStat);
       try {
-        filePath = await realpath(unresolved);
-        expectedStat = await lstat(filePath);
-      } catch (cause) {
-        throw new RuntimeError("READ_FAILED", `Unable to resolve ${parsed.file}`, {
-          ref,
-          cause: cause instanceof Error ? cause.message : String(cause),
-        });
-      }
-      if (!inside(root, filePath)) throw new RuntimeError("PATH_OUTSIDE_ROOT", `Ref escapes the project root: ${ref}`);
-      if (!expectedStat.isFile()) throw new RuntimeError("READ_FAILED", `${parsed.file} is not a regular file`);
-      let handle: FileHandle;
-      try {
-        const noFollow = typeof constants.O_NOFOLLOW === "number" ? constants.O_NOFOLLOW : 0;
-        handle = await open(filePath, constants.O_RDONLY | noFollow);
-      } catch (cause) {
-        throw new RuntimeError("READ_FAILED", `Unable to open ${parsed.file}`, {
-          ref,
-          cause: cause instanceof Error ? cause.message : String(cause),
-        });
-      }
-      try {
-        const [actualStat, openedPath] = await Promise.all([handle.stat(), realpath(unresolved)]);
-        if (!inside(root, openedPath) || openedPath !== filePath
-          || actualStat.dev !== expectedStat.dev || actualStat.ino !== expectedStat.ino) {
-          throw new RuntimeError("PATH_CHANGED", `Ref changed while opening: ${ref}`);
-        }
         const budget = perRefChars + (index < remainder ? 1 : 0);
         results.push({ ref, ...await readLineWindow(handle, parsed, contextLines, budget, options.signal) });
       } finally {
