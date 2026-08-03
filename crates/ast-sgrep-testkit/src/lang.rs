@@ -1,6 +1,7 @@
 use ast_sgrep_lang::{
-    match_pattern, parse_is_error_free, ExtractionResult, Language, ParserRegistry, SymbolKind,
+    match_pattern, tree_sitter_language, ExtractionResult, Language, ParserRegistry, SymbolKind,
 };
+use tree_sitter::Parser;
 
 pub type ExpectedSymbol = (&'static str, SymbolKind);
 pub type ExpectedCall = (&'static str, &'static str);
@@ -21,9 +22,19 @@ pub fn parse(lang: Language, source: &str) -> ExtractionResult {
     ParserRegistry::new().parse(lang, source).expect("parse")
 }
 
+fn source_parses_without_errors(lang: Language, source: &str) -> bool {
+    let mut parser = Parser::new();
+    if parser.set_language(&tree_sitter_language(lang)).is_err() {
+        return false;
+    }
+    parser
+        .parse(source, None)
+        .is_some_and(|tree| !tree.root_node().has_error())
+}
+
 pub fn assert_language_conformance(case: &LanguageConformanceCase) -> ExtractionResult {
     assert!(
-        parse_is_error_free(case.language, case.source).expect("parse fidelity"),
+        source_parses_without_errors(case.language, case.source),
         "{} fixture must parse without ERROR nodes",
         case.language
     );

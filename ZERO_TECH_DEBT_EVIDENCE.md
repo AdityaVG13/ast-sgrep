@@ -210,3 +210,60 @@ node packages/pi/scripts/release-acceptance.mjs self-test
 | Duplicate `isContained` + `pathContained` | two copies | unified to `pathContained` |
 | Duplicate version checks in `parseEnvelope` / `checkCompatibility` | duplicated | `assertVersionTriple` |
 
+---
+
+## Shared-runtime Zero Tech Debt (third pass)
+
+Branch `fix/csharp-grammar-pattern-difu-5`. Targets shared core/CLI/runtime debt without touching finish_response ranking or 13-lang coverage.
+
+### Changes pinned
+
+| Change | Location |
+|--------|----------|
+| `clear_semantic_ivf_session_cache` demoted to private (only `mark_semantic_ivf_stale` caller) | `semantic_ann.rs` |
+| `lock_response_cache` poison-ok helper for response-cache locks | `search/mod.rs` |
+| `ast_grep_comparison` honesty: pattern-only timing, vacuous speedup demotion, `cv_pct` | `bench.rs` |
+| `print_machine_json_with_ok` for suite single-envelope failures | `machine.rs` / `bench.rs` |
+| Delete dead `ranking_stability` / `RankingStability` | `bench_suite.rs` |
+| Delete dead free `is_ignored(root, rel)` | `gitignore.rs` |
+| `parse_is_error_free` removed from public API; testkit uses `source_parses_without_errors` | `testkit/lang.rs` |
+| `YAML_PARSE` via python3 (shared `reportPush`) replaces Ruby | `check-native-workflow.mjs` |
+
+### Out of scope (preserved)
+
+- `finish_response` excerpt-term ranking (PR22 scope).
+- `ann_result_is_sufficient` / neural sufficiency paths.
+- 13-language extraction/pattern goldens unchanged.
+
+### Commands run
+
+```bash
+export PATH="/usr/local/cargo/bin:$PATH"
+cd /workspace/.worktrees/pr23
+
+cargo test -p ast-sgrep-lang --test pattern
+# → 13 passed
+
+cargo test -p ast-sgrep-core --lib
+# → 24 passed
+
+cargo test -p ast-sgrep-cli --test machine_contracts
+# → 6 passed
+
+node packages/pi/scripts/check-native-workflow.mjs
+# → structurally consistent; 19 negative mutations rejected
+
+node packages/pi/scripts/release-acceptance.mjs self-test
+# → gate self-test accepted
+```
+
+### Thin-wrapper audit (third pass)
+
+| Symbol | Callers | Action |
+|--------|---------|--------|
+| `clear_semantic_ivf_session_cache` | 1 (`mark_semantic_ivf_stale`) | private |
+| `ranking_stability` / `RankingStability` | 0 | deleted |
+| `gitignore::is_ignored` free fn | 0 | deleted |
+| `parse_is_error_free` pub export | testkit only | removed; inlined in testkit |
+| Vacuous `ast_grep_pattern_for_query` bench speedup claims | hybrid/token queries | demoted via `ast_grep_comparison` |
+

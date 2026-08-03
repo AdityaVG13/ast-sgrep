@@ -1,6 +1,6 @@
 //! Benchmark suite / batch helpers.
 
-use crate::machine::print_machine_json;
+use crate::machine::{print_machine_json, print_machine_json_with_ok};
 use crate::search_cmd::do_search;
 use crate::{open_indexer, open_searcher, resolve_root_index, Cli};
 use anyhow::Context;
@@ -66,6 +66,65 @@ fn timed_searches(
     }
     Ok((times, last))
 }
+fn mean_ms(samples: &[f64]) -> f64 {
+    if samples.is_empty() {
+        0.0
+    } else {
+        samples.iter().sum::<f64>() / samples.len() as f64
+    }
+}
+/// Sample coefficient of variation as a percent (0 when fewer than 2 samples).
+fn cv_pct(samples: &[f64]) -> f64 {
+    if samples.len() < 2 {
+        return 0.0;
+    }
+    let mean = mean_ms(samples);
+    if mean == 0.0 {
+        return 0.0;
+    }
+    let var = samples
+        .iter()
+        .map(|x| {
+            let d = x - mean;
+            d * d
+        })
+        .sum::<f64>()
+        / (samples.len() - 1) as f64;
+    (var.sqrt() / mean) * 100.0
+}
+/// Optional ast-grep timing only for `pattern:` queries when the binary exists.
+/// Hybrid/token comparisons are vacuous and must not emit speedup claims.
+fn ast_grep_comparison(query: &str, root: &Path, iterations: u32, avg_ms: f64) -> serde_json::Value {
+    let Some(pat) = query
+        .strip_prefix("pattern:")
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+    else {
+        return serde_json::json!({
+            "compared": false,
+            "skipped_reason": "ast-grep timing only runs for pattern: queries; hybrid/token speedup_vs_ast_grep claims are vacuous"
+        });
+    };
+    match ast_sgrep_core::pattern::bench_ast_grep(pat, root, iterations.max(1)) {
+        Some(ms) if avg_ms > 0.0 => serde_json::json!({
+            "compared": true,
+            "ast_grep_pattern": pat,
+            "avg_ast_grep_ms": ms,
+            "speedup_vs_ast_grep": ms / avg_ms
+        }),
+        Some(ms) => serde_json::json!({
+            "compared": true,
+            "ast_grep_pattern": pat,
+            "avg_ast_grep_ms": ms,
+            "speedup_vs_ast_grep": serde_json::Value::Null
+        }),
+        None => serde_json::json!({
+            "compared": false,
+            "ast_grep_pattern": pat,
+            "skipped_reason": "ast-grep binary not available"
+        }),
+    }
+}
 fn add_index_json(obj: &mut serde_json::Value, stats: Option<&IndexStats>, index_ms: f64) {
     if let Some(s) = stats {
         obj["files_indexed"] = serde_json::json!(s.files_indexed);
@@ -116,17 +175,47 @@ fn run_bench_suite(
     };
     let (stats, _) = maybe_index(&bench_root, cli, skip_index)?;
     let searcher = bench_searcher(&bench_root, cli, skip_index)?;
-    let results: Vec<serde_json::Value> = cases.iter().map(|case| {
+    let mut results: Vec<serde_json::Value> = Vec::with_capacity(cases.len());
+    for case in cases {
         let (times, last) = timed_searches(&searcher, case.query, false, iterations)?;
         let hits = last.as_ref().map_or(0, |r| r.hits.len());
-        let avg = times.iter().sum::<f64>() / f64::from(iterations.max(1));
-        let ag_pat = ast_sgrep_core::pattern::ast_grep_pattern_for_query(case.query);
-        let ag_ms = ag_pat.as_ref().and_then(|p| ast_sgrep_core::pattern::bench_ast_grep(p, &bench_root, iterations.min(3)));
-        Ok(serde_json::json!({"name": case.name, "query": case.query, "avg_search_ms": avg, "hits": hits, "min_hits": case.min_hits, "ok": hits >= case.min_hits,
-            "ast_grep_pattern": ag_pat, "avg_ast_grep_ms": ag_ms, "speedup_vs_ast_grep": ag_ms.map(|ag| ag / avg)}))
-    }).collect::<anyhow::Result<_>>()?;
+        let avg = mean_ms(&times);
+        let cv = cv_pct(&times);
+        let comparison = ast_grep_comparison(case.query, &bench_root, iterations.min(3), avg);
+        results.push(serde_json::json!({
+            "name": case.name,
+            "query": case.query,
+            "avg_search_ms": avg,
+            "cv_pct": cv,
+            "hits": hits,
+            "min_hits": case.min_hits,
+            "ok": hits >= case.min_hits,
+            "ast_grep_comparison": comparison,
+        }));
+    }
+    let suite_ok = results.iter().all(|r| r["ok"] == true);
+    let suite_avg = mean_ms(
+        &results
+            .iter()
+            .filter_map(|r| r["avg_search_ms"].as_f64())
+            .collect::<Vec<_>>(),
+    );
+    let suite_cv = mean_ms(
+        &results
+            .iter()
+            .filter_map(|r| r["cv_pct"].as_f64())
+            .collect::<Vec<_>>(),
+    );
     if cli.json {
-        let mut obj = serde_json::json!({"fixture": fixture_name, "suite": suite_name, "iterations": iterations, "cases": results});
+        let mut obj = serde_json::json!({
+            "fixture": fixture_name,
+            "suite": selected,
+            "iterations": iterations,
+            "cases": results,
+            "suite_ok": suite_ok,
+            "avg_search_ms": suite_avg,
+            "cv_pct": suite_cv,
+        });
         if let Some(s) = &stats {
             obj["files_indexed"] = serde_json::json!(s.files_indexed);
         } else {
@@ -134,9 +223,12 @@ fn run_bench_suite(
             obj["index_ms"] = serde_json::json!(0.0);
             obj["files_indexed"] = serde_json::Value::Null;
         }
-        print_machine_json("bench", &obj)?;
+        print_machine_json_with_ok("bench", &obj, suite_ok)?;
+        if !suite_ok {
+            std::process::exit(2);
+        }
     } else {
-        println!("Benchmark fixture: {fixture_name}, suite: {suite_name}");
+        println!("Benchmark fixture: {fixture_name}, suite: {selected}");
         print_index_skipped(stats.as_ref(), None);
         for row in &results {
             let st = if row["ok"].as_bool().unwrap_or(false) {
@@ -145,24 +237,27 @@ fn run_bench_suite(
                 "FAIL"
             };
             println!(
-                "  {}: {:.2}ms avg, {} hits {st}",
+                "  {}: {:.2}ms avg (cv {:.1}%), {} hits {st}",
                 row["name"].as_str().unwrap_or("?"),
                 row["avg_search_ms"].as_f64().unwrap_or(0.0),
+                row["cv_pct"].as_f64().unwrap_or(0.0),
                 row["hits"].as_u64().unwrap_or(0)
             );
-            if let (Some(p), Some(ms)) = (
-                row["ast_grep_pattern"].as_str(),
-                row["avg_ast_grep_ms"].as_f64(),
-            ) {
-                println!("    ast-grep ({p}): {ms:.2}ms");
-                if let Some(sp) = row["speedup_vs_ast_grep"].as_f64() {
-                    println!("    speedup vs ast-grep: {sp:.1}x");
+            if row["ast_grep_comparison"]["compared"] == true {
+                if let (Some(p), Some(ms)) = (
+                    row["ast_grep_comparison"]["ast_grep_pattern"].as_str(),
+                    row["ast_grep_comparison"]["avg_ast_grep_ms"].as_f64(),
+                ) {
+                    println!("    ast-grep ({p}): {ms:.2}ms");
+                    if let Some(sp) = row["ast_grep_comparison"]["speedup_vs_ast_grep"].as_f64() {
+                        println!("    speedup vs ast-grep: {sp:.1}x");
+                    }
                 }
             }
         }
-    }
-    if results.iter().any(|r| r["ok"] == false) {
-        anyhow::bail!("benchmark suite had cases below min_hits threshold");
+        if !suite_ok {
+            anyhow::bail!("benchmark suite had cases below min_hits threshold");
+        }
     }
     Ok(())
 }
@@ -177,33 +272,47 @@ fn run_bench(
     let searcher = bench_searcher(root, cli, skip_index)?;
     let (times, last) = timed_searches(&searcher, query, cli.semantic_only, iterations)?;
     let hits = last.as_ref().map_or(0, |r| r.hits.len());
-    let avg = times.iter().sum::<f64>() / f64::from(iterations.max(1));
+    let avg = mean_ms(&times);
+    let cv = cv_pct(&times);
     let first = times.first().copied().unwrap_or_default();
     let warm = if times.len() > 1 {
-        times[1..].iter().sum::<f64>() / (times.len() - 1) as f64
+        mean_ms(&times[1..])
     } else {
         first
     };
     let ag_iters = iterations.min(3);
-    let ag_pat = ast_sgrep_core::pattern::ast_grep_pattern_for_query(query);
-    let ag_ms = ag_pat
-        .as_ref()
-        .and_then(|p| ast_sgrep_core::pattern::bench_ast_grep(p, root, ag_iters));
-    let speedup = ag_ms.map(|ag| ag / avg);
+    let comparison = ast_grep_comparison(query, root, ag_iters, avg);
     if cli.json {
-        let mut obj = serde_json::json!({"query": query, "iterations": iterations, "avg_search_ms": avg, "first_search_ms": first, "warm_search_ms": warm, "cold_overhead_ms": first - warm, "hits": hits, "ast_grep_pattern": ag_pat, "ast_grep_iterations": ag_iters, "avg_ast_grep_ms": ag_ms, "speedup_vs_ast_grep": speedup});
+        let mut obj = serde_json::json!({
+            "query": query,
+            "iterations": iterations,
+            "avg_search_ms": avg,
+            "cv_pct": cv,
+            "first_search_ms": first,
+            "warm_search_ms": warm,
+            "cold_overhead_ms": first - warm,
+            "hits": hits,
+            "ast_grep_comparison": comparison,
+        });
         add_index_json(&mut obj, stats_opt.as_ref(), index_ms);
         print_machine_json("bench", &obj)?;
     } else {
         println!("Benchmark (v1.0 targets: search <20ms, 0% false callers)");
         print_index_skipped(stats_opt.as_ref(), Some(index_ms));
         println!("Query: {query}");
-        println!("Avg search: {avg:.2}ms over {iterations} iterations ({hits} hits)");
-        if let (Some(p), Some(ms)) = (&ag_pat, ag_ms) {
-            println!("Avg ast-grep (pattern: {p}): {ms:.2}ms over {ag_iters} iterations");
-            if let Some(sp) = speedup {
-                println!("Speedup vs ast-grep: {sp:.1}x");
+        println!("Avg search: {avg:.2}ms over {iterations} iterations (cv {cv:.1}%, {hits} hits)");
+        if comparison["compared"] == true {
+            if let (Some(p), Some(ms)) = (
+                comparison["ast_grep_pattern"].as_str(),
+                comparison["avg_ast_grep_ms"].as_f64(),
+            ) {
+                println!("Avg ast-grep (pattern: {p}): {ms:.2}ms over {ag_iters} iterations");
+                if let Some(sp) = comparison["speedup_vs_ast_grep"].as_f64() {
+                    println!("Speedup vs ast-grep: {sp:.1}x");
+                }
             }
+        } else if let Some(reason) = comparison["skipped_reason"].as_str() {
+            println!("ast-grep comparison skipped: {reason}");
         }
     }
     Ok(())

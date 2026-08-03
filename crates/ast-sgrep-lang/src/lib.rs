@@ -239,7 +239,7 @@ use langs::{
 };
 pub use pattern::{
     classify_native, declaration_prefix, match_literal_pattern, match_pattern,
-    needs_ast_grep_fallback, parse_is_error_free, tree_sitter_language, DECL_KIND_PREFIXES,
+    needs_ast_grep_fallback, tree_sitter_language, DECL_KIND_PREFIXES,
     DECL_PATTERN_PREFIXES, NativeKind, PatternMatch,
 };
 pub use signature::{

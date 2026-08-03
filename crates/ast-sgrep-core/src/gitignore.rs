@@ -98,9 +98,6 @@ impl IgnoreMatcher {
         rc
     }
 }
-pub fn is_ignored(root: &Path, rel: &Path) -> bool {
-    IgnoreMatcher::new(root).is_ignored(rel)
-}
 fn parent_prefix(rel: &Path) -> String {
     let mut prefix = String::new();
     if let Some(parent) = rel.parent().filter(|p| !p.as_os_str().is_empty()) {

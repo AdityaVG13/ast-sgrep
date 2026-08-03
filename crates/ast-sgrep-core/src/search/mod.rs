@@ -83,10 +83,7 @@ impl Searcher {
         let gen = self.index_gen();
         let key = format!("{kind}\0{query}");
         {
-            let guard = self
-                .response_cache
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
+            let guard = lock_response_cache(&self.response_cache);
             if guard.gen == gen {
                 if let Some(hit) = guard.map.get(&key) {
                     return Ok(hit.clone());
@@ -94,10 +91,7 @@ impl Searcher {
             }
         }
         let response = compute()?;
-        let mut guard = self
-            .response_cache
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let mut guard = lock_response_cache(&self.response_cache);
         if guard.gen != gen {
             guard.map.clear();
             guard.gen = gen;
@@ -384,6 +378,9 @@ fn run_parallel_passes(
 }
 fn join_worker<T>(join: thread::Result<Result<T>>) -> Result<T> {
     join.map_err(|e| crate::StoreError::Other(format!("search worker panicked: {e:?}")))?
+}
+fn lock_response_cache(cache: &Mutex<ResponseCache>) -> std::sync::MutexGuard<'_, ResponseCache> {
+    cache.lock().unwrap_or_else(|e| e.into_inner())
 }
 pub fn finish_response(
     parsed: &ParsedQuery,

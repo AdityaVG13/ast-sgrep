@@ -205,11 +205,6 @@ fn parse_call_path(callee: &str) -> Option<Vec<Option<String>>> {
     (!segs.is_empty()).then_some(segs)
 }
 
-/// Return whether the selected grammar parses the source without ERROR nodes.
-pub fn parse_is_error_free(lang: Language, source: &str) -> anyhow::Result<bool> {
-    Ok(!parse_source(lang, source)?.root_node().has_error())
-}
-
 fn parse_source(lang: Language, source: &str) -> anyhow::Result<tree_sitter::Tree> {
     let mut parser = Parser::new();
     parser
