@@ -202,3 +202,5 @@ cargo test -p ast-sgrep-cli --test machine_contracts
 
 ### Pass: delete orphan validate_member_indices
 - Callers: **zero** outside definition; `validate_partition` retained.
+
+- Restored production visibility for `validate_partition` after sticky `#[cfg(test)]` from deleted sibling.

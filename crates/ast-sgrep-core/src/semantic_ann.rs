@@ -88,7 +88,6 @@ impl SemanticAnnIndex {
             clusters,
         })
     }
-    #[cfg(test)]
     /// Stronger than member bounds: every index in `0..chunk_count` appears exactly once.
     pub fn validate_partition(&self, chunk_count: usize) -> bool {
         let mut seen = vec![false; chunk_count];
