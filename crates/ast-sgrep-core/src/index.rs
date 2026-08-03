@@ -195,60 +195,9 @@ impl Indexer {
     }
     pub fn index_all(&mut self) -> Result<IndexStats> {
         self.ignore.clear();
-        let mut stats = IndexStats::default();
+        let (candidates, mut stats) = self.collect_index_candidates();
         let mut seen_paths = HashSet::new();
         let mut semantic_ivf_dirty = false;
-        let root = self.options.root.clone();
-        let ignore = crate::gitignore::IgnoreMatcher::new(&root);
-        let respect_gitignore = self.options.respect_gitignore;
-        let mut candidates: Vec<(PathBuf, String)> = Vec::new();
-        for entry in WalkDir::new(&self.options.root)
-            .follow_links(false)
-            .into_iter()
-            .filter_entry(|e| {
-                if should_skip_dir(e.path()) {
-                    return false;
-                }
-                if respect_gitignore && e.file_type().is_dir() {
-                    if let Ok(rel) = e.path().strip_prefix(&root) {
-                        if !rel.as_os_str().is_empty() && ignore.is_dir_ignored(rel) {
-                            return false;
-                        }
-                    }
-                }
-                true
-            })
-        {
-            match entry {
-                Ok(entry) if entry.file_type().is_file() => {
-                    let path = entry.path().to_path_buf();
-                    let Ok(rel) = path.strip_prefix(&self.options.root) else {
-                        continue;
-                    };
-                    let rel_str = match indexed_rel_path(rel) {
-                        Ok(s) => s,
-                        Err(e) => {
-                            eprintln!("[asgrep] {e}");
-                            stats.files_failed += 1;
-                            stats.walk_errors = true;
-                            continue;
-                        }
-                    };
-                    if (self.options.respect_gitignore && self.ignore.is_ignored(rel))
-                        || should_skip_file(&path)
-                    {
-                        stats.files_skipped += 1;
-                        continue;
-                    }
-                    candidates.push((path, rel_str));
-                }
-                Ok(_) => {}
-                Err(e) => {
-                    eprintln!("[asgrep] walk error: {e}");
-                    stats.walk_errors = true;
-                }
-            }
-        }
         let force = self.options.force_reindex;
         let lang_filter = self.options.lang_filter.clone();
         let embed_semantic = self.options.embed_semantic;
@@ -327,6 +276,61 @@ impl Indexer {
         }
         Ok(stats)
     }
+    /// Walk the project once using the Indexer's IgnoreMatcher for both directory
+    /// pruning and file skips (single ownership story — no second matcher).
+    fn collect_index_candidates(&self) -> (Vec<(PathBuf, String)>, IndexStats) {
+        let mut stats = IndexStats::default();
+        let mut candidates: Vec<(PathBuf, String)> = Vec::new();
+        let root = &self.options.root;
+        let ignore = &self.ignore;
+        let respect_gitignore = self.options.respect_gitignore;
+        for entry in WalkDir::new(root)
+            .follow_links(false)
+            .into_iter()
+            .filter_entry(|e| {
+                if should_skip_dir(e.path()) {
+                    return false;
+                }
+                if respect_gitignore && e.file_type().is_dir() {
+                    if let Ok(rel) = e.path().strip_prefix(root) {
+                        if !rel.as_os_str().is_empty() && ignore.is_dir_ignored(rel) {
+                            return false;
+                        }
+                    }
+                }
+                true
+            })
+        {
+            match entry {
+                Ok(entry) if entry.file_type().is_file() => {
+                    let path = entry.path().to_path_buf();
+                    let Ok(rel) = path.strip_prefix(root) else {
+                        continue;
+                    };
+                    let rel_str = match indexed_rel_path(rel) {
+                        Ok(s) => s,
+                        Err(e) => {
+                            eprintln!("[asgrep] {e}");
+                            stats.files_failed += 1;
+                            stats.walk_errors = true;
+                            continue;
+                        }
+                    };
+                    if (respect_gitignore && ignore.is_ignored(rel)) || should_skip_file(&path) {
+                        stats.files_skipped += 1;
+                        continue;
+                    }
+                    candidates.push((path, rel_str));
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    eprintln!("[asgrep] walk error: {e}");
+                    stats.walk_errors = true;
+                }
+            }
+        }
+        (candidates, stats)
+    }
     fn prune_missing_files(
         &self,
         seen_paths: &HashSet<String>,
@@ -397,19 +401,8 @@ impl Indexer {
         }
         let mut stats = WatchUpdateStats::default();
         for input_path in paths {
-            // The root is canonicalized, while watcher paths may retain platform symlink prefixes.
-            let normalized;
-            let abs = if input_path.starts_with(&self.options.root) {
-                input_path.as_path()
-            } else {
-                normalized = input_path.canonicalize().ok().or_else(|| {
-                    let parent = input_path.parent()?.canonicalize().ok()?;
-                    Some(parent.join(input_path.file_name()?))
-                });
-                let Some(path) = normalized.as_deref() else {
-                    continue;
-                };
-                path
+            let Some(abs) = normalize_watch_path(&self.options.root, input_path) else {
+                continue;
             };
             let Ok(rel) = abs.strip_prefix(&self.options.root) else {
                 continue;
@@ -428,14 +421,14 @@ impl Indexer {
             if rel
                 .components()
                 .any(|c| should_skip_dir(Path::new(c.as_os_str())))
-                || should_skip_file(abs)
+                || should_skip_file(&abs)
                 || (self.options.respect_gitignore && self.ignore.is_ignored(rel))
             {
                 stats.files_skipped += 1;
                 continue;
             }
             if abs.is_file() {
-                match self.index_file(abs, &rel_str) {
+                match self.index_file(&abs, &rel_str) {
                     Ok(fs) if fs.skipped => stats.files_skipped += 1,
                     Ok(_) => {
                         stats.files_indexed += 1;
@@ -507,11 +500,7 @@ impl Indexer {
         mtime_secs: i64,
         mtime_nanos: u32,
     ) -> Result<FileIndexStats> {
-        let hash = {
-            let mut h = Hasher::new();
-            h.update(content.as_bytes());
-            h.finalize().to_hex().to_string()
-        };
+        let hash = hash_content(content);
         if self.is_unchanged(rel_path, &hash)? {
             return Ok(FileIndexStats {
                 skipped: true,
@@ -522,7 +511,6 @@ impl Indexer {
         if !self.language_filter_allows(rel_path, language)? {
             return Ok(FileIndexStats::default());
         }
-        let split = split_content_lines(content);
         let body_hash = body_structure_hash(content);
         let body_key = format!("body:{rel_path}");
         // refresh_lines_only skips semantic re-embed; refuse it while v1 vectors
@@ -530,6 +518,7 @@ impl Indexer {
         if !self.store.needs_semantic_v1_rewrite()? {
             if let Some(file_id) = self.store.file_id(rel_path)? {
                 if self.store.get_meta(&body_key)?.as_deref() == Some(body_hash.as_str()) {
+                    let split = split_content_lines(content);
                     self.store.begin_file_tx()?;
                     match self.store.refresh_lines_only(RefreshLinesInput {
                         file_id,
@@ -555,34 +544,31 @@ impl Indexer {
         }
         let (symbols, callers, imports, pattern_nodes) =
             self.extract_rows(rel_path, content, language)?;
-        let semantic_chunks = if self.options.embed_semantic {
-            crate::semantic_chunk::build_semantic_chunks(
-                &symbols,
-                &callers,
-                &split.lines,
-                language.map(|l| l.as_str()),
-            )
-        } else {
-            vec![]
-        };
+        let material = materialize_upsert(
+            content,
+            &symbols,
+            &callers,
+            self.options.embed_semantic,
+            language,
+        );
         self.store.upsert_file(UpsertFileInput {
             rel_path,
             language: language.map(|l| l.as_str()),
             mtime_secs,
             mtime_nanos,
             content_hash: &hash,
-            lines: &split.lines,
-            eol: split.eol,
+            lines: &material.split.lines,
+            eol: material.split.eol,
             symbols: &symbols,
             callers: &callers,
             imports: &imports,
             pattern_nodes: &pattern_nodes,
-            semantic_chunks: &semantic_chunks,
+            semantic_chunks: &material.semantic_chunks,
             embed_semantic: self.options.embed_semantic,
             embed_backend: self.options.embed_backend.to_preference(),
         })?;
         // Propagate body-hash meta failures (bead ast-sgrep-j97d.3ddd).
-        self.store.set_meta(&body_key, &body_hash)?;
+        self.store.set_meta(&body_key, &material.body_hash)?;
         Ok(FileIndexStats {
             symbols: symbols.len(),
             callers: callers.len(),
@@ -678,13 +664,7 @@ fn body_structure_hash(content: &str) -> String {
         }
         let line_start = content[..end].rfind('\n').map(|i| i + 1).unwrap_or(0);
         let line = content[line_start..end].trim();
-        let trivia = line.is_empty()
-            || line.starts_with("//")
-            || line.starts_with('#')
-            || line.starts_with("/*")
-            || line.starts_with('*')
-            || line.starts_with("--");
-        if !trivia {
+        if !is_trailing_trivia_line(line) {
             break;
         }
         end = line_start;
@@ -699,6 +679,66 @@ fn body_structure_hash(content: &str) -> String {
     h.update(&bytes[..end]);
     h.finalize().to_hex().to_string()
 }
+
+/// Table-driven trailing trivia prefixes (language-agnostic on this tip).
+fn is_trailing_trivia_line(line: &str) -> bool {
+    if line.is_empty() {
+        return true;
+    }
+    const PREFIXES: &[&str] = &["//", "#", "/*", "*", "--"];
+    PREFIXES.iter().any(|p| line.starts_with(p))
+}
+
+fn hash_content(content: &str) -> String {
+    let mut h = Hasher::new();
+    h.update(content.as_bytes());
+    h.finalize().to_hex().to_string()
+}
+
+/// Shared prepare→upsert materialization: line split, body hash, optional semantic chunks.
+struct UpsertMaterial {
+    split: SplitLines,
+    body_hash: String,
+    semantic_chunks: Vec<crate::semantic_chunk::SemanticChunkInput>,
+}
+
+fn materialize_upsert(
+    content: &str,
+    symbols: &[SymbolRow],
+    callers: &[CallerRow],
+    embed_semantic: bool,
+    language: Option<Language>,
+) -> UpsertMaterial {
+    let split = split_content_lines(content);
+    let body_hash = body_structure_hash(content);
+    let semantic_chunks = if embed_semantic {
+        crate::semantic_chunk::build_semantic_chunks(
+            symbols,
+            callers,
+            &split.lines,
+            language.map(|l| l.as_str()),
+        )
+    } else {
+        vec![]
+    };
+    UpsertMaterial {
+        split,
+        body_hash,
+        semantic_chunks,
+    }
+}
+
+/// Normalize a watcher path against a canonicalized index root.
+fn normalize_watch_path(root: &Path, input_path: &Path) -> Option<PathBuf> {
+    if input_path.starts_with(root) {
+        return Some(input_path.to_path_buf());
+    }
+    input_path.canonicalize().ok().or_else(|| {
+        let parent = input_path.parent()?.canonicalize().ok()?;
+        Some(parent.join(input_path.file_name()?))
+    })
+}
+
 fn prepare_file(
     abs: &Path,
     rel: &str,
@@ -719,16 +759,13 @@ fn prepare_file(
         }
         Err(e) => return PrepareOutcome::Failed(e.to_string()),
     };
-    let mut hasher = Hasher::new();
-    hasher.update(content.as_bytes());
-    let hash = hasher.finalize().to_hex().to_string();
+    let hash = hash_content(&content);
     let language = detect_language(abs, Some(&content));
     if let Some(filter) = lang_filter {
         if language.is_none_or(|l| l.as_str() != filter) {
             return PrepareOutcome::Filtered;
         }
     }
-    let split = split_content_lines(&content);
     let (symbols, callers, imports, pattern_nodes) = match language {
         Some(lang) => {
             // One ParserRegistry per rayon worker — building all language parsers
@@ -748,29 +785,20 @@ fn prepare_file(
         }
         None => (vec![], vec![], vec![], vec![]),
     };
-    let semantic_chunks = if embed_semantic {
-        crate::semantic_chunk::build_semantic_chunks(
-            &symbols,
-            &callers,
-            &split.lines,
-            language.map(|l| l.as_str()),
-        )
-    } else {
-        vec![]
-    };
+    let material = materialize_upsert(&content, &symbols, &callers, embed_semantic, language);
     PrepareOutcome::Ready(PreparedFile {
         hash,
-        body_hash: body_structure_hash(&content),
+        body_hash: material.body_hash,
         language: language.map(|l| l.as_str().to_string()),
         mtime_secs,
         mtime_nanos,
-        lines: split.lines,
-        eol: split.eol.to_string(),
+        lines: material.split.lines,
+        eol: material.split.eol.to_string(),
         symbols,
         callers,
         imports,
         pattern_nodes,
-        semantic_chunks,
+        semantic_chunks: material.semantic_chunks,
     })
 }
 fn rows_from_extraction(extraction: &ExtractionResult) -> ExtractedRows {

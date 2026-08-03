@@ -154,10 +154,7 @@ use langs::{
     CSharpParser, GoParser, JavaParser, JavaScriptParser, PythonParser, RubyParser, RustParser,
     TypeScriptParser,
 };
-pub use pattern::{
-    match_literal_pattern, match_pattern, needs_ast_grep_fallback, tree_sitter_language,
-    PatternMatch,
-};
+pub use pattern::{match_literal_pattern, match_pattern, needs_ast_grep_fallback, PatternMatch};
 fn make_parser(lang: Language) -> Box<dyn LanguageParser> {
     match lang {
         Language::Rust => Box::new(RustParser),

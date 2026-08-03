@@ -88,10 +88,22 @@ impl SemanticAnnIndex {
             clusters,
         })
     }
+    #[cfg(test)]
     pub fn validate_member_indices(&self, chunk_count: usize) -> bool {
         self.clusters
             .iter()
             .all(|c| c.iter().all(|&i| i < chunk_count))
+    }
+    /// Stronger than member bounds: every index in `0..chunk_count` appears exactly once.
+    pub fn validate_partition(&self, chunk_count: usize) -> bool {
+        let mut seen = vec![false; chunk_count];
+        for &index in self.clusters.iter().flatten() {
+            if index >= chunk_count || seen[index] {
+                return false;
+            }
+            seen[index] = true;
+        }
+        seen.into_iter().all(|present| present)
     }
     /// `probes`: None/0 = adaptive √k; ≥ n_clusters = all (exact).
     pub fn candidate_indices(&self, query: &[f32], probes: Option<usize>) -> Vec<usize> {
@@ -347,7 +359,7 @@ struct SessionCache {
     ivf: Arc<PersistedSemanticIvf>,
 }
 static SESSION_CACHE: Mutex<Vec<(String, SessionCache)>> = Mutex::new(Vec::new());
-pub fn clear_semantic_ivf_session_cache() {
+fn clear_semantic_ivf_session_cache() {
     SESSION_CACHE
         .lock()
         .unwrap_or_else(|e| e.into_inner())
@@ -472,31 +484,46 @@ pub fn rebuild_semantic_ivf_sidecar(
         let _ = invalidate_semantic_ivf(store.db_path());
         return Ok(());
     }
-    if chunks.first().is_none_or(|c| c.5.is_empty()) {
+    let Some(first) = chunks.first().filter(|c| !c.5.is_empty()) else {
         return Ok(());
-    }
-    let dim = chunks[0].5.len();
-    if store.get_meta("semantic_ivf_stale")?.as_deref() == Some("1") {
-        if let Some(mut ivf) = load_semantic_ivf_unchecked(&semantic_ivf_path(store.db_path()))? {
-            if ivf.chunk_count() == chunks.len() && ivf.dim == dim {
-                ivf.vectors = flatten_vectors_for_search(chunks, dim)?;
-                ivf.index.reassign_all(&ivf.vectors, dim);
-                let (fingerprint, db_key) = ann_session_key(store, chunks)?;
-                ivf.fingerprint = fingerprint;
-                save_semantic_ivf(
-                    &semantic_ivf_path(store.db_path()),
-                    fingerprint,
-                    dim,
-                    &ivf.vectors,
-                    &ivf.index,
-                )?;
-                cache_session(&db_key, fingerprint, &ivf);
-                store.set_meta("semantic_ivf_stale", "0")?;
-                return Ok(());
-            }
-        }
+    };
+    let dim = first.5.len();
+    if reassign_stale_ivf_partition(store, chunks, dim)? {
+        return Ok(());
     }
     let _ = load_or_build_semantic_ivf(store, chunks, override_threshold)?;
     store.set_meta("semantic_ivf_stale", "0")?;
     Ok(())
+}
+
+/// When the IVF sidecar is marked stale but topology still matches, reassign members
+/// in place instead of a full rebuild.
+fn reassign_stale_ivf_partition(
+    store: &IndexStore,
+    chunks: &[SemanticChunkRow],
+    dim: usize,
+) -> Result<bool> {
+    if store.get_meta("semantic_ivf_stale")?.as_deref() != Some("1") {
+        return Ok(false);
+    }
+    let Some(mut ivf) = load_semantic_ivf_unchecked(&semantic_ivf_path(store.db_path()))? else {
+        return Ok(false);
+    };
+    if ivf.chunk_count() != chunks.len() || ivf.dim != dim {
+        return Ok(false);
+    }
+    ivf.vectors = flatten_vectors_for_search(chunks, dim)?;
+    ivf.index.reassign_all(&ivf.vectors, dim);
+    let (fingerprint, db_key) = ann_session_key(store, chunks)?;
+    ivf.fingerprint = fingerprint;
+    save_semantic_ivf(
+        &semantic_ivf_path(store.db_path()),
+        fingerprint,
+        dim,
+        &ivf.vectors,
+        &ivf.index,
+    )?;
+    cache_session(&db_key, fingerprint, &ivf);
+    store.set_meta("semantic_ivf_stale", "0")?;
+    Ok(true)
 }

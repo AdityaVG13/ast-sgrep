@@ -148,7 +148,7 @@ pub fn load_semantic_ivf_index(
         return Ok(None);
     };
     let index = SemanticAnnIndex::read_clusters_from(&mut file, header.k, header.dim)?;
-    if !index.validate_member_indices(header.chunk_count) {
+    if !index.validate_partition(header.chunk_count) {
         return Ok(None);
     }
     Ok(Some(LazySemanticIvf {
@@ -229,7 +229,7 @@ fn try_parse_semantic_ivf_from_reader<R: Read>(
         .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
         .collect();
     if vectors.len() != header.chunk_count * header.dim
-        || !index.validate_member_indices(header.chunk_count)
+        || !index.validate_partition(header.chunk_count)
     {
         return Ok(None);
     }

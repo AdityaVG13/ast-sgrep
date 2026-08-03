@@ -21,6 +21,9 @@ use types::dedup_hits;
 pub use types::{format_hit_line, HitKind, SearchHit, SearchOptions, SearchResponse, SpanHitInput};
 const PARALLEL_PASS_FILE_THRESHOLD: usize = 128;
 const MAX_HITS_PER_FILE: usize = 3;
+fn lock_response_cache(cache: &Mutex<ResponseCache>) -> std::sync::MutexGuard<'_, ResponseCache> {
+    cache.lock().unwrap_or_else(|e| e.into_inner())
+}
 struct SemanticCache {
     lang_filter: Option<String>,
     max_id: i64,
@@ -118,10 +121,7 @@ impl Searcher {
         let gen = self.index_gen()?;
         let key = format!("{kind}\0{query}");
         {
-            let guard = self
-                .response_cache
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
+            let guard = lock_response_cache(&self.response_cache);
             if guard.gen == gen {
                 if let Some(hit) = guard.map.get(&key) {
                     return Ok(hit.clone());
@@ -133,10 +133,7 @@ impl Searcher {
         // Concurrent reindex must not cache pre-reindex results under a newer gen,
         // and PRAGMA/meta failures disable insert (fail closed for caching).
         let gen_after = self.index_gen().ok();
-        let mut guard = self
-            .response_cache
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let mut guard = lock_response_cache(&self.response_cache);
         if !response_cache_may_insert(gen, gen_after, guard.gen, guard.map.is_empty()) {
             return Ok(response);
         }
@@ -208,28 +205,6 @@ impl Searcher {
     pub fn search_literal(&self, query: &str) -> Result<SearchResponse> {
         self.cached("lit", query, || {
             let parsed = ParsedQuery::literal(query);
-            Ok(finish_response(
-                &parsed,
-                &self.options,
-                literal_pass(&self.store, &self.options, &parsed)?,
-                true,
-            ))
-        })
-    }
-    pub fn search_regex(&self, query: &str) -> Result<SearchResponse> {
-        self.cached("re", query, || {
-            let parsed = ParsedQuery::regex(query);
-            Ok(finish_response(
-                &parsed,
-                &self.options,
-                regex_pass(&self.store, &self.options, &parsed)?,
-                true,
-            ))
-        })
-    }
-    pub fn search_word(&self, query: &str) -> Result<SearchResponse> {
-        self.cached("word", query, || {
-            let parsed = ParsedQuery::word(query);
             Ok(finish_response(
                 &parsed,
                 &self.options,
@@ -497,11 +472,7 @@ pub fn finish_response(
     };
     if hits.len() > keep.saturating_mul(4).max(keep + 32) {
         hits.select_nth_unstable_by(keep, |a, b| {
-            b.score
-                .partial_cmp(&a.score)
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then_with(|| a.file.cmp(&b.file))
-                .then_with(|| a.line_start.cmp(&b.line_start))
+            cmp_ranked_hits(0, a, 0, b)
         });
         hits.truncate(keep);
     }
@@ -510,12 +481,7 @@ pub fn finish_response(
         .map(|h| (excerpt_term_coverage(&parsed.terms, &h), h))
         .collect();
     let mut compare = |(ca, a): &(u32, SearchHit), (cb, b): &(u32, SearchHit)| {
-        b.score
-            .partial_cmp(&a.score)
-            .unwrap_or(std::cmp::Ordering::Equal)
-            .then_with(|| cb.cmp(ca))
-            .then_with(|| a.file.cmp(&b.file))
-            .then_with(|| a.line_start.cmp(&b.line_start))
+        cmp_ranked_hits(*ca, a, *cb, b)
     };
     if keyed.len() > keep {
         keyed.select_nth_unstable_by(keep, &mut compare);
@@ -734,6 +700,15 @@ fn excerpt_term_coverage(terms: &[String], hit: &SearchHit) -> u32 {
         .iter()
         .filter(|term| contains_term_token(&text, term))
         .count() as u32
+}
+/// Shared pre-truncate + final sort key: score desc, coverage desc, file, line.
+fn cmp_ranked_hits(ca: u32, a: &SearchHit, cb: u32, b: &SearchHit) -> std::cmp::Ordering {
+    b.score
+        .partial_cmp(&a.score)
+        .unwrap_or(std::cmp::Ordering::Equal)
+        .then_with(|| cb.cmp(&ca))
+        .then_with(|| a.file.cmp(&b.file))
+        .then_with(|| a.line_start.cmp(&b.line_start))
 }
 #[cfg(test)]
 mod tests {

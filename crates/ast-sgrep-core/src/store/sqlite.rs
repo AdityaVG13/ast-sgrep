@@ -263,6 +263,7 @@ impl IndexStore {
     }
     /// Test-only: nesting depth of an open file_tx (0 = inactive).
     #[cfg(test)]
+    #[cfg(test)]
     pub fn file_tx_depth_for_test(&self) -> u32 {
         self.file_tx_depth.get()
     }
@@ -412,23 +413,21 @@ impl IndexStore {
         let struct_key = format!("struct:{}", input.rel_path);
         // Structure-equal short-circuit skips re-embed; refuse it while legacy
         // semantic-v1 vectors still need rewriting (e2hc.13).
-        if !self.needs_semantic_v1_rewrite()? {
-            if let Some(file_id) = self.file_id(input.rel_path)? {
-                if self.get_meta(&struct_key)?.as_deref() == Some(struct_fp.as_str()) {
-                    return self.with_file_tx(|| {
-                        self.refresh_lines_only(RefreshLinesInput {
-                            file_id,
-                            language: input.language,
-                            mtime_secs: input.mtime_secs,
-                            mtime_nanos: input.mtime_nanos,
-                            content_hash: input.content_hash,
-                            lines: input.lines,
-                            eol: input.eol,
-                            rel_path: input.rel_path,
-                        })
-                    });
-                }
-            }
+        if let Some(file_id) =
+            self.structure_equal_file_id(input.rel_path, &struct_key, &struct_fp)?
+        {
+            return self.with_file_tx(|| {
+                self.refresh_lines_only(RefreshLinesInput {
+                    file_id,
+                    language: input.language,
+                    mtime_secs: input.mtime_secs,
+                    mtime_nanos: input.mtime_nanos,
+                    content_hash: input.content_hash,
+                    lines: input.lines,
+                    eol: input.eol,
+                    rel_path: input.rel_path,
+                })
+            });
         }
         let emb = embed_chunks(
             &self.conn,
@@ -445,6 +444,25 @@ impl IndexStore {
             self.persist_embed_cache_side_effects(&emb, cache_hits, cache_misses)?;
             Ok(id)
         })
+    }
+    /// Structure-fingerprint match eligible for lines-only refresh (not during v1 rewrite).
+    fn structure_equal_file_id(
+        &self,
+        rel_path: &str,
+        struct_key: &str,
+        struct_fp: &str,
+    ) -> Result<Option<i64>> {
+        if self.needs_semantic_v1_rewrite()? {
+            return Ok(None);
+        }
+        let Some(file_id) = self.file_id(rel_path)? else {
+            return Ok(None);
+        };
+        if self.get_meta(struct_key)?.as_deref() == Some(struct_fp) {
+            Ok(Some(file_id))
+        } else {
+            Ok(None)
+        }
     }
     fn persist_embed_cache_side_effects(
         &self,
@@ -628,14 +646,7 @@ impl IndexStore {
             return Ok(());
         }
         if emb.len() < chunks.len() && emb[0].backend == ast_sgrep_embed::EmbedBackendKind::Neural {
-            let (first, last) = (&chunks[0], &chunks[chunks.len() - 1]);
-            for e in emb {
-                self.conn.execute(
-                    "INSERT INTO semantic_chunks(file_id, symbol_id, chunk_kind, line_start, line_end, symbol_name, text, vector) VALUES(?1, NULL, ?2, ?3, ?4, ?5, ?6, ?7)",
-                    params![file_id, "file", first.line_start, last.line_end, "", &e.text, &e.vector_bytes], )?;
-            }
-            let last = &emb[emb.len() - 1];
-            return self.persist_embed_metadata(Some(last.dim), Some(last.backend));
+            return self.insert_neural_file_chunks(file_id, chunks, emb);
         }
         let name_to_id: HashMap<String, i64> = symbols
             .iter()
@@ -661,6 +672,21 @@ impl IndexStore {
         }
         let last = emb.last();
         self.persist_embed_metadata(last.map(|e| e.dim), last.map(|e| e.backend))
+    }
+    fn insert_neural_file_chunks(
+        &self,
+        file_id: i64,
+        chunks: &[crate::semantic_chunk::SemanticChunkInput],
+        emb: &[EmbeddedChunk],
+    ) -> Result<()> {
+        let (first, last) = (&chunks[0], &chunks[chunks.len() - 1]);
+        for e in emb {
+            self.conn.execute(
+                "INSERT INTO semantic_chunks(file_id, symbol_id, chunk_kind, line_start, line_end, symbol_name, text, vector) VALUES(?1, NULL, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![file_id, "file", first.line_start, last.line_end, "", &e.text, &e.vector_bytes], )?;
+        }
+        let last = &emb[emb.len() - 1];
+        self.persist_embed_metadata(Some(last.dim), Some(last.backend))
     }
     fn persist_embed_metadata(
         &self,
@@ -987,23 +1013,8 @@ impl IndexStore {
         let parent = Path::new(from_file)
             .parent()
             .unwrap_or_else(|| Path::new(""));
-        let bases = match lang.as_deref() {
-            Some("python") => resolve_bases_python(parent, module),
-            Some("javascript") | Some("typescript") => resolve_bases_js(parent, module),
-            Some("go") => resolve_bases_go(from_file, parent, module),
-            // Rust (default): :: paths, crate/super/self, /src/ layout.
-            _ => resolve_bases_rust(from_file, parent, module),
-        };
-        let exts: &[&str] = match lang.as_deref() {
-            Some("python") => &["py"],
-            Some("javascript") => &["js", "jsx", "mjs", "cjs"],
-            Some("typescript") => &["ts", "tsx", "js", "jsx"],
-            Some("go") => &["go"],
-            Some("rust") => &["rs"],
-            _ => &[
-                "rs", "ts", "tsx", "js", "jsx", "py", "go", "java", "cs", "rb",
-            ],
-        };
+        let rules = module_resolve_rules(lang.as_deref());
+        let bases = (rules.bases)(from_file, parent, module);
         let mut cands = BTreeSet::new();
         for base in bases {
             let Ok(n) = normalize_rel(&base) else {
@@ -1011,30 +1022,10 @@ impl IndexStore {
             };
             cands.insert(n.clone());
             if base.extension().is_none() {
-                for e in exts {
+                for e in rules.exts {
                     cands.insert(format!("{n}.{e}"));
                 }
-                match lang.as_deref() {
-                    Some("python") => {
-                        cands.insert(format!("{n}/__init__.py"));
-                    }
-                    Some("javascript") | Some("typescript") => {
-                        for e in ["ts", "tsx", "js", "jsx"] {
-                            cands.insert(format!("{n}/index.{e}"));
-                        }
-                    }
-                    Some("go") => {
-                        // package dir: any .go file under the package path is matched
-                        // via file_exists on exact candidates; also try package.go.
-                        cands.insert(format!("{n}/{}.go", base.file_name().and_then(|s| s.to_str()).unwrap_or("pkg")));
-                    }
-                    _ => {
-                        cands.insert(format!("{n}/mod.rs"));
-                        for e in ["ts", "tsx", "js", "jsx"] {
-                            cands.insert(format!("{n}/index.{e}"));
-                        }
-                    }
-                }
+                (rules.add_extras)(&mut cands, &n, &base);
             }
         }
         let mut out = Vec::new();
@@ -1184,6 +1175,91 @@ fn resolve_bases_rust(from_file: &str, parent: &Path, module: &str) -> Vec<PathB
         }
     }
     bases
+}
+
+/// Language → {extensions, base resolver, package-style extras}. Candidate sets must stay
+/// identical to the prior match arms (BTreeSet order is key-ordered).
+struct ModuleResolveRules {
+    exts: &'static [&'static str],
+    bases: fn(&str, &Path, &str) -> Vec<PathBuf>,
+    add_extras: fn(&mut BTreeSet<String>, &str, &Path),
+}
+
+const JS_INDEX_EXTS: &[&str] = &["ts", "tsx", "js", "jsx"];
+const DEFAULT_MODULE_EXTS: &[&str] = &[
+    "rs", "ts", "tsx", "js", "jsx", "py", "go", "java", "cs", "rb",
+];
+
+fn bases_python(_from_file: &str, parent: &Path, module: &str) -> Vec<PathBuf> {
+    resolve_bases_python(parent, module)
+}
+fn bases_js(_from_file: &str, parent: &Path, module: &str) -> Vec<PathBuf> {
+    resolve_bases_js(parent, module)
+}
+fn bases_go(from_file: &str, parent: &Path, module: &str) -> Vec<PathBuf> {
+    resolve_bases_go(from_file, parent, module)
+}
+fn bases_rust(from_file: &str, parent: &Path, module: &str) -> Vec<PathBuf> {
+    resolve_bases_rust(from_file, parent, module)
+}
+
+fn extras_python(cands: &mut BTreeSet<String>, n: &str, _base: &Path) {
+    cands.insert(format!("{n}/__init__.py"));
+}
+fn extras_js_ts(cands: &mut BTreeSet<String>, n: &str, _base: &Path) {
+    for e in JS_INDEX_EXTS {
+        cands.insert(format!("{n}/index.{e}"));
+    }
+}
+fn extras_go(cands: &mut BTreeSet<String>, n: &str, base: &Path) {
+    // package dir: any .go file under the package path is matched
+    // via file_exists on exact candidates; also try package.go.
+    cands.insert(format!(
+        "{n}/{}.go",
+        base.file_name().and_then(|s| s.to_str()).unwrap_or("pkg")
+    ));
+}
+fn extras_default_rustish(cands: &mut BTreeSet<String>, n: &str, _base: &Path) {
+    cands.insert(format!("{n}/mod.rs"));
+    for e in JS_INDEX_EXTS {
+        cands.insert(format!("{n}/index.{e}"));
+    }
+}
+
+fn module_resolve_rules(lang: Option<&str>) -> ModuleResolveRules {
+    match lang {
+        Some("python") => ModuleResolveRules {
+            exts: &["py"],
+            bases: bases_python,
+            add_extras: extras_python,
+        },
+        Some("javascript") => ModuleResolveRules {
+            exts: &["js", "jsx", "mjs", "cjs"],
+            bases: bases_js,
+            add_extras: extras_js_ts,
+        },
+        Some("typescript") => ModuleResolveRules {
+            exts: &["ts", "tsx", "js", "jsx"],
+            bases: bases_js,
+            add_extras: extras_js_ts,
+        },
+        Some("go") => ModuleResolveRules {
+            exts: &["go"],
+            bases: bases_go,
+            add_extras: extras_go,
+        },
+        Some("rust") => ModuleResolveRules {
+            exts: &["rs"],
+            bases: bases_rust,
+            add_extras: extras_default_rustish,
+        },
+        // Unknown / missing language: Rust-shaped bases + broad extension probe.
+        _ => ModuleResolveRules {
+            exts: DEFAULT_MODULE_EXTS,
+            bases: bases_rust,
+            add_extras: extras_default_rustish,
+        },
+    }
 }
 
 fn resolve_bases_python(parent: &Path, module: &str) -> Vec<PathBuf> {

@@ -444,11 +444,6 @@ impl Extractor {
         });
     }
 }
-impl Default for Extractor {
-    fn default() -> Self {
-        Self::new()
-    }
-}
 pub fn collect_identifiers(node: &Node, source: &str) -> Vec<String> {
     let mut ids = Vec::new();
     collect_identifiers_rec(node, source, &mut ids);
