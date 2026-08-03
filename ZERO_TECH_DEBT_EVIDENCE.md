@@ -265,7 +265,7 @@ node packages/pi/scripts/release-acceptance.mjs self-test
 | `ranking_stability` / `RankingStability` | 0 | deleted |
 | `gitignore::is_ignored` free fn | 0 | deleted |
 | `parse_is_error_free` pub export | testkit only | removed; inlined in testkit |
-| Vacuous `ast_grep_pattern_for_query` bench speedup claims | hybrid/token queries | demoted via `ast_grep_comparison` |
+| `ast_grep_pattern_for_query` | **zero** | deleted (bench speedup demoted earlier via `ast_grep_comparison`) |
 
 ---
 
