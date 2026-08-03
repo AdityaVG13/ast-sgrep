@@ -162,7 +162,7 @@ impl LspServer {
     }
     fn h_search(&mut self, params: &Value) -> anyhow::Result<Value> {
         self.with_parsed(params, |b, p: SearchParams| {
-            b.search(&p.query, p.semantic, p.limit.clamp(1, 500))
+            b.search(&p.query, p.semantic, clamp_lsp_search_limit(p.limit))
         })
     }
     fn h_dsym(&mut self, params: &Value) -> anyhow::Result<Value> {
@@ -215,6 +215,29 @@ fn resolve_root(params: &InitializeParams) -> PathBuf {
         .or_else(|| params.root_path.as_ref().map(PathBuf::from))
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
 }
+
+/// ei0i-style clamp for LSP `asgrep/search`: remap 0→default, hard-cap at 1000.
+fn clamp_lsp_search_limit(limit: usize) -> usize {
+    const MAX_OUTPUT_RESULTS: usize = 1000;
+    let default = ast_sgrep_core::SearchOptions::default_limit();
+    let base = if limit == 0 { default.max(1) } else { limit };
+    base.clamp(1, MAX_OUTPUT_RESULTS)
+}
+
+#[cfg(test)]
+mod limit_tests {
+    use super::clamp_lsp_search_limit;
+
+    #[test]
+    fn remaps_zero_and_caps_ceiling() {
+        let def = ast_sgrep_core::SearchOptions::default_limit().max(1);
+        assert_eq!(clamp_lsp_search_limit(0), def.min(1000));
+        assert_eq!(clamp_lsp_search_limit(32), 32);
+        assert_eq!(clamp_lsp_search_limit(500), 500);
+        assert_eq!(clamp_lsp_search_limit(10_000), 1000);
+    }
+}
+
 fn show_index_error(stdout: &mut impl Write, surface: &str, err: &anyhow::Error) -> io::Result<()> {
     let message = format!("asgrep index ({surface}): {err}");
     log(&message);

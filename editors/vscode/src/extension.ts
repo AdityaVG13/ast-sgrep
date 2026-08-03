@@ -1,3 +1,4 @@
+import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { Executable, LanguageClient, LanguageClientOptions, ServerOptions } from 'vscode-languageclient/node';
@@ -14,54 +15,170 @@ interface SearchHit {
   start_column?: number;
 }
 interface SearchResponse { hits: SearchHit[]; }
-interface SearchQuickPickItem extends vscode.QuickPickItem { hit: SearchHit; }
-let client: LanguageClient | undefined;
+interface SearchQuickPickItem extends vscode.QuickPickItem {
+  hit: SearchHit;
+  folder: vscode.WorkspaceFolder;
+}
 
-export async function activate(context: vscode.ExtensionContext): Promise<void> {
-  const configuration = vscode.workspace.getConfiguration('asgrep');
-  const serverPath = configuration.get<string>('serverPath', 'asgrep-lsp').trim() || 'asgrep-lsp';
-  const indexPath = configuration.get<string>('indexPath', '').trim();
-  const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+/** Exported for unit tests — pick the workspace folder that owns a document URI. */
+export function folderForUri(
+  uri: vscode.Uri | undefined,
+  folders: readonly vscode.WorkspaceFolder[] | undefined,
+): vscode.WorkspaceFolder | undefined {
+  if (!folders?.length) return undefined;
+  if (uri) {
+    const match = vscode.workspace.getWorkspaceFolder(uri);
+    if (match) return match;
+  }
+  return folders.length === 1 ? folders[0] : undefined;
+}
+
+/** Resolve a hit path against the folder that produced it (not always folders[0]). */
+export function resolveHitUri(file: string, folder: vscode.WorkspaceFolder): vscode.Uri {
+  if (path.isAbsolute(file)) {
+    return vscode.Uri.file(file);
+  }
+  return vscode.Uri.joinPath(folder.uri, file);
+}
+
+/** Prefer an existing on-disk path when a relative hit might belong to another root. */
+export function resolveHitUriMultiRoot(
+  file: string,
+  preferred: vscode.WorkspaceFolder,
+  folders: readonly vscode.WorkspaceFolder[],
+): vscode.Uri {
+  if (path.isAbsolute(file)) {
+    return vscode.Uri.file(file);
+  }
+  const candidates = [preferred, ...folders.filter((f) => f.uri.toString() !== preferred.uri.toString())];
+  for (const folder of candidates) {
+    const uri = vscode.Uri.joinPath(folder.uri, file);
+    if (fs.existsSync(uri.fsPath)) {
+      return uri;
+    }
+  }
+  return resolveHitUri(file, preferred);
+}
+
+const DOCUMENT_SELECTOR: LanguageClientOptions['documentSelector'] = [
+  { scheme: 'file', language: 'rust' },
+  { scheme: 'file', language: 'python' },
+  { scheme: 'file', language: 'typescript' },
+  { scheme: 'file', language: 'typescriptreact' },
+  { scheme: 'file', language: 'javascript' },
+  { scheme: 'file', language: 'javascriptreact' },
+  { scheme: 'file', language: 'go' },
+  { scheme: 'file', language: 'java' },
+  { scheme: 'file', language: 'ruby' },
+  { scheme: 'file', language: 'csharp' },
+];
+
+const clients = new Map<string, LanguageClient>();
+
+function folderKey(folder: vscode.WorkspaceFolder): string {
+  return folder.uri.toString();
+}
+
+function clientOptionsFor(folder: vscode.WorkspaceFolder, indexPath: string): LanguageClientOptions {
+  return {
+    documentSelector: DOCUMENT_SELECTOR,
+    workspaceFolder: folder,
+    initializationOptions: { asgrep: indexPath ? { indexPath } : {} },
+  };
+}
+
+async function startClientForFolder(
+  folder: vscode.WorkspaceFolder,
+  serverPath: string,
+  indexPath: string,
+): Promise<LanguageClient> {
+  const key = folderKey(folder);
+  const existing = clients.get(key);
+  if (existing) return existing;
   const executable: Executable = {
     command: serverPath,
     args: ['--stdio'],
-    options: workspaceFolder ? { cwd: workspaceFolder.uri.fsPath } : undefined,
+    options: { cwd: folder.uri.fsPath },
   };
   const serverOptions: ServerOptions = executable;
-  const clientOptions: LanguageClientOptions = {
-    documentSelector: [
-      { scheme: 'file', language: 'rust' },
-      { scheme: 'file', language: 'python' },
-      { scheme: 'file', language: 'typescript' },
-      { scheme: 'file', language: 'typescriptreact' },
-      { scheme: 'file', language: 'javascript' },
-      { scheme: 'file', language: 'javascriptreact' },
-      { scheme: 'file', language: 'go' },
-      { scheme: 'file', language: 'java' },
-      { scheme: 'file', language: 'ruby' },
-      { scheme: 'file', language: 'csharp' },
-    ],
-    initializationOptions: { asgrep: indexPath ? { indexPath } : {} },
-  };
-  client = new LanguageClient('asgrep', 'ast-sgrep Language Server', serverOptions, clientOptions);
-  context.subscriptions.push(vscode.commands.registerCommand('asgrep.search', searchWorkspace), client);
+  const client = new LanguageClient(
+    `asgrep-${folder.name}`,
+    `ast-sgrep Language Server (${folder.name})`,
+    serverOptions,
+    clientOptionsFor(folder, indexPath),
+  );
+  clients.set(key, client);
   await client.start();
+  return client;
+}
+
+async function stopClient(key: string): Promise<void> {
+  const client = clients.get(key);
+  if (!client) return;
+  clients.delete(key);
+  await client.stop();
+}
+
+async function reconcileClients(context: vscode.ExtensionContext): Promise<void> {
+  const configuration = vscode.workspace.getConfiguration('asgrep');
+  const serverPath = configuration.get<string>('serverPath', 'asgrep-lsp').trim() || 'asgrep-lsp';
+  const indexPath = configuration.get<string>('indexPath', '').trim();
+  const folders = vscode.workspace.workspaceFolders ?? [];
+  const live = new Set(folders.map(folderKey));
+  for (const key of [...clients.keys()]) {
+    if (!live.has(key)) {
+      await stopClient(key);
+    }
+  }
+  for (const folder of folders) {
+    await startClientForFolder(folder, serverPath, indexPath);
+  }
+  // Keep a disposable that stops all clients on deactivate via context.
+  void context;
+}
+
+export async function activate(context: vscode.ExtensionContext): Promise<void> {
+  context.subscriptions.push(
+    vscode.commands.registerCommand('asgrep.search', searchWorkspace),
+    vscode.workspace.onDidChangeWorkspaceFolders(() => {
+      void reconcileClients(context);
+    }),
+  );
+  await reconcileClients(context);
 }
 
 export async function deactivate(): Promise<void> {
-  if (client) {
-    await client.stop();
-    client = undefined;
+  await Promise.all([...clients.keys()].map((key) => stopClient(key)));
+}
+
+async function clientForSearch(): Promise<{ client: LanguageClient; folder: vscode.WorkspaceFolder } | undefined> {
+  const folders = vscode.workspace.workspaceFolders;
+  if (!folders?.length) {
+    void vscode.window.showErrorMessage('ast-sgrep: open a workspace folder before searching.');
+    return undefined;
   }
+  const activeUri = vscode.window.activeTextEditor?.document.uri;
+  const folder = folderForUri(activeUri, folders);
+  if (!folder) {
+    void vscode.window.showErrorMessage(
+      'ast-sgrep: multi-root workspace requires an active editor in the folder you want to search (refuses folders[0] fallback).',
+    );
+    return undefined;
+  }
+  const client = clients.get(folderKey(folder));
+  if (!client) {
+    void vscode.window.showErrorMessage(`ast-sgrep language server is not running for “${folder.name}”.`);
+    return undefined;
+  }
+  return { client, folder };
 }
 
 async function searchWorkspace(): Promise<void> {
-  if (!client) {
-    void vscode.window.showErrorMessage('ast-sgrep language server is not running.');
-    return;
-  }
+  const bound = await clientForSearch();
+  if (!bound) return;
+  const { client, folder } = bound;
   const query = await vscode.window.showInputBox({
-    prompt: 'Search the workspace with ast-sgrep',
+    prompt: `Search “${folder.name}” with ast-sgrep`,
     placeHolder: 'Symbol, text, callers:name, defs:name, or pattern:...',
   });
   if (!query?.trim()) return;
@@ -72,40 +189,45 @@ async function searchWorkspace(): Promise<void> {
     });
     const hits = Array.isArray(response.hits) ? response.hits : [];
     if (hits.length === 0) {
-      void vscode.window.showInformationMessage(`ast-sgrep: no results for “${query.trim()}”.`);
+      void vscode.window.showInformationMessage(`ast-sgrep: no results for “${query.trim()}” in ${folder.name}.`);
       return;
     }
-    const selected = await vscode.window.showQuickPick(hits.map(toQuickPickItem), {
-      matchOnDescription: true,
-      matchOnDetail: true,
-      placeHolder: `${hits.length} ast-sgrep result${hits.length === 1 ? '' : 's'}`,
-    });
-    if (selected) await openHit(selected.hit);
+    const selected = await vscode.window.showQuickPick(
+      hits.map((hit) => toQuickPickItem(hit, folder)),
+      {
+        matchOnDescription: true,
+        matchOnDetail: true,
+        placeHolder: `${hits.length} ast-sgrep result${hits.length === 1 ? '' : 's'} (${folder.name})`,
+      },
+    );
+    if (selected) await openHit(selected.hit, selected.folder);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     void vscode.window.showErrorMessage(`ast-sgrep search failed: ${message}`);
   }
 }
 
-function toQuickPickItem(hit: SearchHit): SearchQuickPickItem {
+function toQuickPickItem(hit: SearchHit, folder: vscode.WorkspaceFolder): SearchQuickPickItem {
   const file = hitPath(hit) || '(unknown file)';
   const line = hitLine(hit);
   const excerpt = hit.excerpt?.trim() || '(no excerpt)';
-  return { label: excerpt.split(/\r?\n/, 1)[0], description: `${file}:${line}`, detail: excerpt, hit };
+  return {
+    label: excerpt.split(/\r?\n/, 1)[0],
+    description: `${folder.name}:${file}:${line}`,
+    detail: excerpt,
+    hit,
+    folder,
+  };
 }
 
-async function openHit(hit: SearchHit): Promise<void> {
+async function openHit(hit: SearchHit, folder: vscode.WorkspaceFolder): Promise<void> {
   const file = hitPath(hit);
   if (!file) {
     void vscode.window.showWarningMessage('ast-sgrep result did not include a file path.');
     return;
   }
-  const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
-  const uri = path.isAbsolute(file)
-    ? vscode.Uri.file(file)
-    : workspaceFolder
-      ? vscode.Uri.joinPath(workspaceFolder.uri, file)
-      : vscode.Uri.file(path.resolve(file));
+  const folders = vscode.workspace.workspaceFolders ?? [folder];
+  const uri = resolveHitUriMultiRoot(file, folder, folders);
   const document = await vscode.workspace.openTextDocument(uri);
   const line = Math.max(0, hitLine(hit) - 1);
   const column = Math.max(0, hit.start_column ?? hit.column ?? 0);

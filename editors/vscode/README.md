@@ -28,7 +28,7 @@ npm run package
 
 ## Use
 
-Opening a Rust, Python, TypeScript, TSX, or Go file starts `asgrep-lsp --stdio`. Standard **Go to Definition**, **Find All References**, workspace symbol, document symbol, and call hierarchy features are provided by the server.
+Opening a supported source file starts one `asgrep-lsp --stdio` process **per workspace folder** (cwd and index scoped to that folder). In a multi-root window, **ast-sgrep: Search Workspace** uses the active editor’s folder and refuses a silent `workspaceFolders[0]` fallback when no document is active. Relative result paths resolve against the search folder first, then other roots if needed.
 
 Run **ast-sgrep: Search Workspace** from the Command Palette for native `asgrep/search` results. Enter ordinary search text or a query such as `callers:process_request`, `defs:Router`, or `pattern:unwrap()`; choose a result to open it at the matching line.
 

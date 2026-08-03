@@ -42,7 +42,7 @@ For clients that want complete ast-sgrep hits rather than LSP `SymbolInformation
 }
 ```
 
-`query` is required. `semantic` defaults to `false`; `limit` defaults to 32 and is clamped to 1–500. The result is the same serialized search response used by ast-sgrep core, including its `hits` array.
+`query` is required. `semantic` defaults to `false`; `limit` defaults to 32, remaps `0` to the default, and is clamped to 1–1000 (ei0i-style). The result is the same serialized search response used by ast-sgrep core, including its `hits` array.
 
 ## Initialization options
 
