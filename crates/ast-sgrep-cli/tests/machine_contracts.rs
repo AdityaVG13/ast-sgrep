@@ -578,3 +578,77 @@ fn index_dry_run_does_not_mutate() {
     assert_eq!(value["mutates_index"], false);
     assert!(!root.join(".asgrep").exists() || !root.join(".asgrep/index.db").exists());
 }
+
+#[test]
+fn bench_json_emits_cv_pct_and_skips_vacuous_ast_grep_speedup() {
+    let session = CliSession::sample(asgrep_bin());
+    let index = session.index_path.to_str().expect("index utf8");
+    let root = session.root.to_str().expect("root utf8");
+    let history = session._temp.path().join("bench-history.json");
+    let output = Command::new(&session.bin)
+        .args([
+            "--json",
+            "--no-embed",
+            "--index-path",
+            index,
+            "bench",
+            root,
+            "--query",
+            "process_request",
+            "--iterations",
+            "3",
+            "--skip-index",
+        ])
+        .env("NO_COLOR", "1")
+        .env("ASGREP_BENCH_HISTORY_PATH", &history)
+        .output()
+        .expect("bench");
+    let value = assert_success(&output, "bench");
+    assert!(value["cv_pct"].as_f64().is_some());
+    assert_eq!(value["ast_grep_comparison"]["compared"], false);
+    assert!(value["ast_grep_comparison"]["skipped_reason"]
+        .as_str()
+        .unwrap_or("")
+        .contains("pattern:"));
+    assert!(value.get("speedup_vs_ast_grep").is_none());
+    assert!(history.exists(), "bench history file should be written");
+}
+
+#[test]
+fn bench_suite_json_is_single_envelope_even_on_failure() {
+    let session = CliSession::sample(asgrep_bin());
+    let index = session.index_path.to_str().expect("index utf8");
+    let root = session.root.to_str().expect("root utf8");
+    let output = Command::new(&session.bin)
+        .args([
+            "--json",
+            "--no-embed",
+            "--index-path",
+            index,
+            "bench",
+            root,
+            "--suite",
+            "default",
+            "--fixture",
+            "sample",
+            "--iterations",
+            "1",
+            "--skip-index",
+        ])
+        .env("NO_COLOR", "1")
+        .env("ASGREP_BENCH_HISTORY", "0")
+        .output()
+        .expect("bench suite");
+    let value = parse_stdout(&output);
+    assert_eq!(value["command"], "bench");
+    assert_eq!(value["tool"], "asgrep");
+    assert!(value.get("cases").and_then(|c| c.as_array()).is_some());
+    assert!(value.get("suite_ok").is_some());
+    assert!(value.get("cv_pct").is_some());
+    assert_eq!(value["ok"], value["suite_ok"]);
+    if value["suite_ok"] == true {
+        assert_eq!(output.status.code(), Some(0));
+    } else {
+        assert_eq!(output.status.code(), Some(2));
+    }
+}

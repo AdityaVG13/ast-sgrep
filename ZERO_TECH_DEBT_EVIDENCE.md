@@ -431,3 +431,36 @@ cargo test -p ast-sgrep-core --test resolve_module
 cargo test -p ast-sgrep-lang --test pattern
 # → 5 passed
 ```
+
+---
+
+## Batch G — second-pass zero tech debt (PR21)
+
+### Caller verification (rg) before deletes
+
+| Symbol | Callers outside definition | Action |
+|--------|----------------------------|--------|
+| `pub mod skip` / `text` / `output` facades | **zero** | deleted; `format_hit_line` re-exported from `search` |
+| `ranking_stability` / `RankingStability` | **zero** (self-only in `bench_suite`) | deleted with e2hc.19d unit tests |
+| Vacuous `ast_grep_pattern_for_query` bench speedup | hybrid/token queries | demoted via `ast_grep_comparison` |
+
+### Bench honesty port (from pr25)
+
+| Change | Location |
+|--------|----------|
+| `ast_grep_comparison`: pattern-only timing, vacuous speedup demotion | `bench.rs` |
+| `cv_pct`, bench history / ratchet | `bench.rs` |
+| `print_machine_json_status` for suite single-envelope failures | `bench.rs` |
+| Identity oracle checks preserved | `run_bench_suite` |
+
+### Commands run (this session)
+
+```bash
+export PATH="/usr/local/cargo/bin:$PATH"
+cd /workspace/.worktrees/pr21
+cargo test -p ast-sgrep-cli --test machine_contracts
+# → 15 passed
+
+cargo test -p ast-sgrep-core --lib
+# → 48 passed
+```
