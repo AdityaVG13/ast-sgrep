@@ -152,7 +152,8 @@ cargo test -p ast-sgrep-lsp --test lsp -j1 -- --test-threads=1
 
 ## Commits on this agent pass
 
-1. `fix(embed): finite-domain Scored so Eq/Ord stay coherent (0pla)`
-2. `fix(security): restore forbid(unsafe_code) via sealed mmap (p7l3)`
-3. `fix(cli): doctor envelope fails closed when unhealthy (s6ze)`
-4. *(pending)* panic/poison + MCP sandbox + env-trust + pattern allow + ziij + evidence
+1. `6d9e3d5` `fix(embed): finite-domain Scored so Eq/Ord stay coherent (0pla)`
+2. `96e26af` `fix(security): restore forbid(unsafe_code) via sealed mmap (p7l3)`
+3. `eb5577e` `fix(cli): doctor envelope fails closed when unhealthy (s6ze)`
+4. `436d5c3` `fix(security): poison/MCP sandbox/env-trust and fail-closed patterns`
+5. *(this file)* `docs: EPIC_EVIDENCE for quality-batch P0 closure`
