@@ -160,7 +160,7 @@ fn symbol_span_rows_to_hits(
         )
         .collect())
 }
-pub fn symbol_pass(
+pub(crate) fn symbol_pass(
     store: &IndexStore,
     options: &SearchOptions,
     parsed: &ParsedQuery,
@@ -174,7 +174,7 @@ pub fn symbol_pass(
     )?);
     Ok(hits)
 }
-pub fn anchor_pass(
+pub(crate) fn anchor_pass(
     store: &IndexStore,
     options: &SearchOptions,
     parsed: &ParsedQuery,

@@ -250,3 +250,42 @@ cargo test -p ast-sgrep-core --test downstream_correctness
 cargo test -p ast-sgrep-cli --test machine_contracts
 node packages/pi/scripts/release-acceptance.mjs self-test
 ```
+
+---
+
+## Batch F — module_resolve split + dead surface (second-pass ZTD)
+
+### module_resolve split
+
+| Change | Location |
+|--------|----------|
+| Move `resolve_bases_*`, `module_resolve_rules`, `collect_module_candidates` | `store/module_resolve.rs` (new) |
+| `resolve_module_path` delegates to `collect_module_candidates` | `store/sqlite.rs` |
+| Wire `mod module_resolve` | `store/mod.rs` |
+
+Move-only; candidate sets unchanged (pr21 reference shape).
+
+### Dead surface demoted/deleted
+
+| Symbol | Action |
+|--------|--------|
+| `ast_grep_pattern_for_query` | deleted (zero callers) |
+| `symbol_pass` / `anchor_pass` | `pub` → `pub(crate)` |
+
+### Commands run
+
+```bash
+export PATH="/usr/local/cargo/bin:$PATH"
+cd /workspace/.worktrees/pr22
+cargo test -p ast-sgrep-core --test resolve_module
+cargo test -p ast-sgrep-core --test downstream_correctness
+cargo test -p ast-sgrep-cli --test machine_contracts
+```
+
+### Observed results
+
+| Suite | Result |
+|-------|--------|
+| `resolve_module` | **5 passed** |
+| `downstream_correctness` | **6 passed** |
+| `machine_contracts` | **6 passed** |
