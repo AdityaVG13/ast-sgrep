@@ -242,12 +242,9 @@ export class FreshnessCoordinator {
                 else
                     await runtime.run(["reindex", ".", "--json"], rootContext, options);
             }
-            else if (health === "missing" || !wasInitialized || dirty) {
-                await runtime.run(["index", ".", "--json"], rootContext, options);
-            }
-            else if (expired) {
-                // Lease expired without dirty marks: incremental index (not force reindex)
-                // so external create/modify/delete are reconciled without rebuild thrash (5du.9).
+            else if (health === "missing" || !wasInitialized || dirty || expired) {
+                // missing/dirty/uninitialized: full index; lease-expired without dirty marks:
+                // same incremental index path (not force reindex) — no rebuild thrash (5du.9).
                 await runtime.run(["index", ".", "--json"], rootContext, options);
             }
             state.initialized = true;
@@ -287,6 +284,22 @@ function getBinary(config, env, resolver) {
     return binary;
 }
 function byteLength(value) { return Buffer.byteLength(value, "utf8"); }
+function assertVersionTriple(envelope, requireIdentity = false) {
+    if (envelope.tool !== "asgrep")
+        throw new RuntimeError("TOOL_MISMATCH", "Response is not from ast-sgrep", { actual: envelope.tool });
+    if (envelope.schema_version !== MACHINE_SCHEMA_VERSION)
+        throw new RuntimeError("PROTOCOL_MISMATCH", "Unsupported ast-sgrep machine protocol", { expected: MACHINE_SCHEMA_VERSION, actual: envelope.schema_version });
+    if (typeof envelope.ok !== "boolean")
+        throw new RuntimeError("MALFORMED_OUTPUT", "ast-sgrep response is missing boolean ok");
+    if (requireIdentity || envelope.version !== undefined) {
+        if (envelope.version !== RUNTIME_VERSION)
+            throw new RuntimeError("VERSION_MISMATCH", "ast-sgrep binary version does not match the extension", { expected: RUNTIME_VERSION, actual: envelope.version });
+    }
+    if (requireIdentity || envelope.machine_schema_version !== undefined) {
+        if (envelope.machine_schema_version !== MACHINE_SCHEMA_VERSION)
+            throw new RuntimeError("PROTOCOL_MISMATCH", "ast-sgrep binary reports an incompatible machine protocol", { expected: MACHINE_SCHEMA_VERSION, actual: envelope.machine_schema_version });
+    }
+}
 function parseEnvelope(result, limit) {
     const stdoutBytes = byteLength(result.stdout);
     const stderrBytes = byteLength(result.stderr);
@@ -319,21 +332,12 @@ function parseEnvelope(result, limit) {
     if (!value || typeof value !== "object" || Array.isArray(value))
         throw new RuntimeError("MALFORMED_OUTPUT", "ast-sgrep returned a non-object JSON payload");
     const envelope = value;
-    if (envelope.tool !== "asgrep")
-        throw new RuntimeError("TOOL_MISMATCH", "Response is not from ast-sgrep", { actual: envelope.tool });
-    if (envelope.schema_version !== MACHINE_SCHEMA_VERSION)
-        throw new RuntimeError("PROTOCOL_MISMATCH", "Unsupported ast-sgrep machine protocol", { expected: MACHINE_SCHEMA_VERSION, actual: envelope.schema_version });
-    if (typeof envelope.ok !== "boolean")
-        throw new RuntimeError("MALFORMED_OUTPUT", "ast-sgrep response is missing boolean ok");
+    assertVersionTriple(envelope);
     if (!envelope.ok) {
         const failure = envelope.error && typeof envelope.error === "object" ? envelope.error : undefined;
         const message = typeof failure?.message === "string" ? failure.message : "ast-sgrep reported an operational failure";
         throw new RuntimeError("OPERATIONAL_ERROR", message, { command: envelope.command, error: failure });
     }
-    if (envelope.version !== undefined && envelope.version !== RUNTIME_VERSION)
-        throw new RuntimeError("VERSION_MISMATCH", "ast-sgrep binary version does not match the extension", { expected: RUNTIME_VERSION, actual: envelope.version });
-    if (envelope.machine_schema_version !== undefined && envelope.machine_schema_version !== MACHINE_SCHEMA_VERSION)
-        throw new RuntimeError("PROTOCOL_MISMATCH", "ast-sgrep binary reports an incompatible machine protocol", { expected: MACHINE_SCHEMA_VERSION, actual: envelope.machine_schema_version });
     return envelope;
 }
 function indexPathFor(root, env) {
@@ -468,10 +472,7 @@ export class AstSgrepRuntime {
     }
     async checkCompatibility(context, options = {}) {
         const value = await this.run(["version", "--json"], context, options);
-        if (value.version !== RUNTIME_VERSION)
-            throw new RuntimeError("VERSION_MISMATCH", "ast-sgrep binary version does not match the extension", { expected: RUNTIME_VERSION, actual: value.version });
-        if (value.machine_schema_version !== MACHINE_SCHEMA_VERSION)
-            throw new RuntimeError("PROTOCOL_MISMATCH", "ast-sgrep binary reports an incompatible machine protocol", { expected: MACHINE_SCHEMA_VERSION, actual: value.machine_schema_version });
+        assertVersionTriple(value, true);
         return value;
     }
 }

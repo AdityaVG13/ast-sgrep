@@ -2,7 +2,9 @@ use crate::gitignore::{should_skip_dir, should_skip_file};
 use crate::rank::SCORE_PATTERN;
 use crate::search::{HitKind, SearchHit, SpanHitInput};
 use crate::Result;
-use ast_sgrep_lang::{detect_language, match_pattern, needs_ast_grep_fallback};
+use ast_sgrep_lang::{
+    cached_pattern_signatures, detect_language, match_pattern, needs_ast_grep_fallback,
+};
 use std::fs;
 use std::io::Read;
 use std::path::Path;
@@ -40,60 +42,6 @@ pub fn search_pattern(
         return search_pattern_ast_grep(pattern, root, lang_filter);
     }
     Ok(native)
-}
-fn cached_pattern_signatures(pattern: &str) -> Option<Vec<String>> {
-    let pattern = pattern.trim();
-    if pattern.is_empty() {
-        return Some(vec![]);
-    }
-    if !pattern.contains('$') {
-        return Some(vec![pattern.to_string()]);
-    }
-    for (prefix, kind) in [("fn ", "function_item"), ("def ", "function_definition")] {
-        if let Some(rest) = pattern.strip_prefix(prefix) {
-            let name = rest
-                .split(|ch: char| ch == '(' || ch.is_whitespace())
-                .next()
-                .unwrap_or_default();
-            if name.starts_with('$') {
-                return Some(vec![format!("kind:{kind}")]);
-            }
-            if is_pattern_identifier(name) {
-                return Some(vec![format!("decl:{}:{name}", prefix.trim())]);
-            }
-            return None;
-        }
-    }
-    let open = pattern.find('(')?;
-    let close = pattern.rfind(')')?;
-    if close + 1 != pattern.len() || !pattern[open + 1..close].contains("$$$") {
-        return None;
-    }
-    let callee = pattern[..open].trim();
-    if callee.starts_with('$') && !callee.contains('.') {
-        return Some(vec!["kind:call_expression".into(), "kind:call".into()]);
-    }
-    if let Some(name) = callee.rsplit('.').next() {
-        if callee.contains('$') && is_pattern_identifier(name) {
-            return Some(vec![format!("call-name:{name}")]);
-        }
-    }
-    is_pattern_path(callee).then(|| vec![format!("call:{callee}")])
-}
-fn is_pattern_identifier(value: &str) -> bool {
-    let mut chars = value.chars();
-    chars
-        .next()
-        .is_some_and(|ch| ch == '_' || ch.is_alphabetic())
-        && chars.all(|ch| ch == '_' || ch.is_alphanumeric())
-}
-fn is_pattern_path(value: &str) -> bool {
-    !value.is_empty()
-        && !value.contains('$')
-        && value
-            .split(['.', ':'])
-            .filter(|p| !p.is_empty())
-            .all(is_pattern_identifier)
 }
 fn search_pattern_cached(
     pattern: &str,
