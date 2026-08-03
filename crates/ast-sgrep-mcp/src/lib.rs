@@ -14,7 +14,8 @@ use serde_json::{json, Value};
 use std::fs::File;
 use std::io::{self, BufRead, Read, Write};
 use std::path::{Component, Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Mutex, PoisonError};
+use std::time::{Duration, Instant};
 
 const PROTOCOL_VERSION: &str = "2024-11-05";
 const SERVER_NAME: &str = "ast-sgrep";
@@ -25,6 +26,7 @@ const MAX_CONTEXT_LINES: usize = 100;
 const DEFAULT_READ_CHARS: usize = 100_000;
 const MAX_READ_CHARS: usize = 1_000_000;
 const MAX_SCAN_BYTES: u64 = 64 * 1024 * 1024;
+const INDEX_REPO_DEADLINE: Duration = Duration::from_secs(600);
 
 #[derive(Clone, Copy)]
 enum AgentSearchMode {
@@ -50,20 +52,27 @@ struct SearcherKey {
 }
 
 pub struct McpServer {
+    /// Configured workspace root; all tool roots must stay under this path.
     root: PathBuf,
     index_path: Option<PathBuf>,
     limit: usize,
     use_embed: bool,
     /// Reused across search-channel calls; cleared after index mutations.
     searcher_cache: Mutex<Option<(SearcherKey, Searcher)>>,
+    /// Single-flight lock for index_repo (es7u).
+    index_lock: Mutex<()>,
 }
 
 impl McpServer {
     pub fn from_env() -> anyhow::Result<Self> {
+        let root = std::env::var("ASGREP_ROOT")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+        let root = root
+            .canonicalize()
+            .with_context(|| format!("canonicalize ASGREP_ROOT {}", root.display()))?;
         Ok(Self {
-            root: std::env::var("ASGREP_ROOT")
-                .map(PathBuf::from)
-                .unwrap_or_else(|_| std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))),
+            root,
             index_path: std::env::var("ASGREP_INDEX_PATH").ok().map(PathBuf::from),
             limit: std::env::var("ASGREP_LIMIT")
                 .ok()
@@ -80,6 +89,7 @@ impl McpServer {
                 })
                 .is_none(),
             searcher_cache: Mutex::new(None),
+            index_lock: Mutex::new(()),
         })
     }
 
@@ -220,18 +230,50 @@ impl McpServer {
     }
 
     fn root_arg(&self, args: &Value) -> anyhow::Result<PathBuf> {
-        match args.get("root") {
-            None => Ok(self.root.clone()),
-            Some(value) => Ok(PathBuf::from(
-                value.as_str().context("root must be a string")?,
-            )),
-        }
+        let candidate = match args.get("root") {
+            None => self.root.clone(),
+            Some(value) => PathBuf::from(value.as_str().context("root must be a string")?),
+        };
+        self.sandbox_root(candidate)
+    }
+
+    /// Keep MCP tool roots under the configured workspace (v0mg).
+    fn sandbox_root(&self, candidate: PathBuf) -> anyhow::Result<PathBuf> {
+        let canonical = if candidate.exists() {
+            candidate
+                .canonicalize()
+                .with_context(|| format!("canonicalize root {}", candidate.display()))?
+        } else {
+            anyhow::bail!(
+                "project root does not exist or is not a directory: {}",
+                candidate.display()
+            );
+        };
+        anyhow::ensure!(
+            canonical.starts_with(&self.root),
+            "root {} escapes configured workspace {}",
+            canonical.display(),
+            self.root.display()
+        );
+        anyhow::ensure!(
+            canonical.is_dir(),
+            "project root is not a directory: {}",
+            canonical.display()
+        );
+        Ok(canonical)
     }
 
     fn invalidate_searcher_cache(&self) {
-        if let Ok(mut guard) = self.searcher_cache.lock() {
-            *guard = None;
-        }
+        let mut guard = match self.searcher_cache.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => {
+                self.searcher_cache.clear_poison();
+                let mut guard = PoisonError::into_inner(poisoned);
+                *guard = None;
+                guard
+            }
+        };
+        *guard = None;
     }
 
     fn searcher_for(
@@ -245,10 +287,16 @@ impl McpServer {
             limit,
             use_embed: self.use_embed,
         };
-        let mut guard = self
-            .searcher_cache
-            .lock()
-            .map_err(|_| anyhow::anyhow!("searcher cache lock poisoned"))?;
+        let mut guard = match self.searcher_cache.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => {
+                // Poison → drop cache (sxjc) rather than reuse tainted Searcher.
+                self.searcher_cache.clear_poison();
+                let mut guard = PoisonError::into_inner(poisoned);
+                *guard = None;
+                guard
+            }
+        };
         let need_new = match guard.as_ref() {
             None => true,
             Some((k, _)) => k != &key,
@@ -277,7 +325,10 @@ impl McpServer {
         let limit = Self::integer_arg(args, "limit", self.limit, 1, MAX_AGENT_LIMIT)?;
         let root = self.root_arg(args)?;
         let guard = self.searcher_for(root, limit)?;
-        let searcher = &guard.as_ref().expect("searcher_for populates cache").1;
+        let searcher = &guard
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("searcher cache missing after populate"))?
+            .1;
         let response = match mode {
             AgentSearchMode::Keyword => searcher.search_lexical(query)?,
             AgentSearchMode::Ast => searcher.search(&format!("pattern: {query}"))?,
@@ -340,17 +391,37 @@ impl McpServer {
             None => false,
             Some(value) => value.as_bool().context("force must be a boolean")?,
         };
+        let root = self.root_arg(args)?;
+        let _flight = match self.index_lock.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => {
+                self.index_lock.clear_poison();
+                PoisonError::into_inner(poisoned)
+            }
+        };
+        let started = Instant::now();
         let mut indexer = Indexer::new(IndexOptions {
-            root: self.root_arg(args)?,
+            root,
             index_path: self.index_path.clone(),
             embed_backend: EmbedBackend::Auto,
             ..IndexOptions::default()
         })?;
+        // Soft deadline: refuse to start when the prior wait already exhausted the budget.
+        anyhow::ensure!(
+            started.elapsed() < INDEX_REPO_DEADLINE,
+            "index_repo exceeded {}s single-flight deadline before start",
+            INDEX_REPO_DEADLINE.as_secs()
+        );
         let stats = if force {
             indexer.reindex_all()?
         } else {
             indexer.index_all()?
         };
+        anyhow::ensure!(
+            started.elapsed() <= INDEX_REPO_DEADLINE,
+            "index_repo exceeded {}s deadline",
+            INDEX_REPO_DEADLINE.as_secs()
+        );
         // Index changed — drop cached Searcher so next search sees fresh data.
         self.invalidate_searcher_cache();
         Ok(serde_json::to_string_pretty(&stats)?)

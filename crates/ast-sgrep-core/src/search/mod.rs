@@ -19,7 +19,7 @@ use std::collections::HashSet;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{SystemTime, UNIX_EPOCH};
 use types::{assign_signal_margins, dedup_hits};
 pub use types::{
@@ -27,6 +27,23 @@ pub use types::{
 };
 const CASCADE_PREFILTER_FILE_LIMIT: usize = 100;
 const MAX_HITS_PER_FILE: usize = 3;
+
+/// On mutex poison, clear cached state before continuing so a panicked
+/// computation cannot leave a half-written entry visible (sxjc).
+fn lock_clear_on_poison<T>(
+    mutex: &Mutex<T>,
+    clear: impl FnOnce(&mut T),
+) -> MutexGuard<'_, T> {
+    match mutex.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            mutex.clear_poison();
+            let mut guard = PoisonError::into_inner(poisoned);
+            clear(&mut guard);
+            guard
+        }
+    }
+}
 struct SemanticCache {
     lang_filter: Option<String>,
     max_id: i64,
@@ -99,10 +116,13 @@ impl Searcher {
         let gen = self.index_gen();
         let key = format!("{kind}\0{query}");
         {
-            let guard = self
-                .response_cache
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
+            let guard = lock_clear_on_poison(&self.response_cache, |cache| {
+                cache.map.clear();
+                cache.gen = IndexGeneration {
+                    external: -1,
+                    local: -1,
+                };
+            });
             if guard.gen == gen {
                 if let Some(hit) = guard.map.get(&key) {
                     return Ok(hit.clone());
@@ -110,10 +130,13 @@ impl Searcher {
             }
         }
         let response = compute()?;
-        let mut guard = self
-            .response_cache
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let mut guard = lock_clear_on_poison(&self.response_cache, |cache| {
+            cache.map.clear();
+            cache.gen = IndexGeneration {
+                external: -1,
+                local: -1,
+            };
+        });
         if guard.gen != gen {
             guard.map.clear();
             guard.gen = gen;
@@ -324,7 +347,9 @@ fn load_semantic_context(
         .get_meta("embed_backend")?
         .unwrap_or_else(|| "semantic".into());
     {
-        let guard = cache.lock().unwrap_or_else(|e| e.into_inner());
+        let guard = lock_clear_on_poison(cache, |slot| {
+            *slot = None;
+        });
         if let Some(c) = guard.as_ref() {
             if c.lang_filter == lang_filter
                 && c.max_id == max_id
@@ -357,7 +382,9 @@ fn load_semantic_context(
         chunks: Arc::clone(&entry.chunks),
         flat_vectors: Arc::clone(&entry.flat_vectors),
     };
-    *cache.lock().unwrap_or_else(|e| e.into_inner()) = Some(entry);
+    *lock_clear_on_poison(cache, |slot| {
+        *slot = None;
+    }) = Some(entry);
     Ok(Some(ctx))
 }
 
@@ -672,7 +699,7 @@ fn estimate_prevented_reads(root: &Path, hits: &[SearchHit]) -> (u64, u64, u64) 
     let mut files = HashSet::new();
     let mut read_bytes_estimate = 0u64;
     {
-        let mut guard = cache.lock().unwrap_or_else(|e| e.into_inner());
+        let mut guard = lock_clear_on_poison(cache, |map| map.clear());
         for h in hits {
             if !files.insert(h.file.as_str()) {
                 continue;
@@ -993,5 +1020,18 @@ mod tests {
                 ("b.rs", 1, 0.5)
             ]
         );
+    }
+
+    #[test]
+    fn lock_clear_on_poison_resets_state() {
+        let mutex = Mutex::new(vec![1, 2, 3]);
+        let _ = std::panic::catch_unwind(|| {
+            let _guard = mutex.lock().unwrap();
+            panic!("inject poison");
+        });
+        assert!(mutex.is_poisoned());
+        let guard = lock_clear_on_poison(&mutex, |v| v.clear());
+        assert!(guard.is_empty());
+        assert!(!mutex.is_poisoned());
     }
 }

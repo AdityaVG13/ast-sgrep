@@ -10,7 +10,7 @@ use ast_sgrep_embed::{
 };
 use rayon::prelude::*;
 use std::io::{Read, Write};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError};
 pub const DEFAULT_ANN_THRESHOLD: usize = 2_000;
 /// Measured minimum satisfying recall@10 >= 0.99 at 2,048 and 10,000 vectors.
 pub const DEFAULT_ADAPTIVE_PROBE_PERCENT: usize = 90;
@@ -438,11 +438,21 @@ struct SessionCache {
     ivf: Arc<PersistedSemanticIvf>,
 }
 static SESSION_CACHE: Mutex<Vec<(String, SessionCache)>> = Mutex::new(Vec::new());
+
+fn lock_session_cache() -> std::sync::MutexGuard<'static, Vec<(String, SessionCache)>> {
+    match SESSION_CACHE.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            SESSION_CACHE.clear_poison();
+            let mut guard = PoisonError::into_inner(poisoned);
+            guard.clear();
+            guard
+        }
+    }
+}
+
 pub fn clear_semantic_ivf_session_cache() {
-    SESSION_CACHE
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .clear();
+    lock_session_cache().clear();
 }
 pub fn mark_semantic_ivf_stale(store: &IndexStore) {
     if store
@@ -475,7 +485,7 @@ fn ann_session_key(store: &IndexStore, chunks: &[SemanticChunkRow]) -> Result<([
     ))
 }
 fn cache_session(db_key: &str, fingerprint: [u8; 32], ivf: Arc<PersistedSemanticIvf>) {
-    let mut cache = SESSION_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    let mut cache = lock_session_cache();
     if let Some(pos) = cache.iter().position(|(key, _)| key == db_key) {
         cache.remove(pos);
     }
@@ -528,7 +538,7 @@ pub fn cached_semantic_ivf(
     }
     let (fingerprint, db_key) = ann_session_key(store, chunks)?;
     {
-        let mut cache = SESSION_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+        let mut cache = lock_session_cache();
         if let Some(pos) = cache.iter().position(|(key, _)| key == &db_key) {
             let (key, cached) = cache.remove(pos);
             if cached.fingerprint == fingerprint {

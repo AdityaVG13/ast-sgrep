@@ -16,6 +16,77 @@ fn env_flag(name: &str) -> bool {
         .is_some_and(is_boolish_true)
 }
 
+/// Allowlist env-driven embed HTTP endpoints against SSRF (j0x4 / 2lbz / rl1p.7).
+///
+/// Default hosts: `api.openai.com`, `api.azure.com`, loopback for Ollama.
+/// Extra hosts: comma-separated `ASGREP_EMBED_URL_ALLOWLIST`.
+pub fn embed_url_is_allowed(url: &str) -> Result<(), String> {
+    let url = url.trim();
+    let (scheme, rest) = url
+        .split_once("://")
+        .ok_or_else(|| "embed URL missing scheme".to_string())?;
+    let scheme = scheme.to_ascii_lowercase();
+    if scheme != "https" && scheme != "http" {
+        return Err(format!("embed URL scheme {scheme:?} is not allowed"));
+    }
+    let authority = rest
+        .split(|c| c == '/' || c == '?' || c == '#')
+        .next()
+        .unwrap_or("");
+    if authority.is_empty() {
+        return Err("embed URL missing host".to_string());
+    }
+    // Strip userinfo and port: [user@]host[:port]
+    let hostport = authority.rsplit('@').next().unwrap_or(authority);
+    let host = if hostport.starts_with('[') {
+        hostport
+            .trim_start_matches('[')
+            .split(']')
+            .next()
+            .unwrap_or("")
+            .to_ascii_lowercase()
+    } else {
+        hostport
+            .split(':')
+            .next()
+            .unwrap_or(hostport)
+            .to_ascii_lowercase()
+    };
+    if host.is_empty() {
+        return Err("embed URL missing host".to_string());
+    }
+    let mut allowed = vec![
+        "api.openai.com".to_string(),
+        "api.azure.com".to_string(),
+        "127.0.0.1".to_string(),
+        "localhost".to_string(),
+        "::1".to_string(),
+    ];
+    if let Ok(extra) = std::env::var("ASGREP_EMBED_URL_ALLOWLIST") {
+        for part in extra.split(',') {
+            let host = part.trim().to_ascii_lowercase();
+            if !host.is_empty() {
+                allowed.push(host);
+            }
+        }
+    }
+    if allowed.iter().any(|h| h == &host) {
+        if scheme == "http"
+            && !matches!(host.as_str(), "127.0.0.1" | "localhost" | "::1")
+            && !env_flag("ASGREP_EMBED_ALLOW_INSECURE_HTTP")
+        {
+            return Err(
+                "http embed URLs are limited to loopback unless ASGREP_EMBED_ALLOW_INSECURE_HTTP=1"
+                    .into(),
+            );
+        }
+        return Ok(());
+    }
+    Err(format!(
+        "embed URL host {host:?} is not allowlisted; set ASGREP_EMBED_URL_ALLOWLIST"
+    ))
+}
+
 // ---- remote cloud/ollama ----
 #[derive(Debug, Clone)]
 pub struct CloudEmbeddingConfig {
@@ -28,6 +99,7 @@ impl CloudEmbeddingConfig {
         let api_key = std::env::var("ASGREP_EMBED_API_KEY").ok()?;
         let api_url = std::env::var("ASGREP_EMBED_API_URL")
             .unwrap_or_else(|_| "https://api.openai.com/v1/embeddings".to_string());
+        embed_url_is_allowed(&api_url).ok()?;
         let model = std::env::var("ASGREP_EMBED_MODEL")
             .unwrap_or_else(|_| "text-embedding-3-small".to_string());
         Some(Self {
@@ -55,6 +127,7 @@ struct EmbedData {
 }
 #[cfg(feature = "cloud")]
 pub fn embed_via_api(text: &str, config: &CloudEmbeddingConfig) -> Result<Vec<f32>, String> {
+    embed_url_is_allowed(&config.api_url)?;
     let body = EmbedRequest {
         model: &config.model,
         input: text,
@@ -94,6 +167,7 @@ impl OllamaEmbeddingConfig {
         }
         let api_url = std::env::var("ASGREP_OLLAMA_URL")
             .unwrap_or_else(|_| "http://127.0.0.1:11434".to_string());
+        embed_url_is_allowed(&api_url).ok()?;
         let model =
             std::env::var("ASGREP_OLLAMA_MODEL").unwrap_or_else(|_| "nomic-embed-text".to_string());
         Some(Self { api_url, model })
@@ -116,6 +190,7 @@ struct OllamaEmbedResponse {
 }
 #[cfg(feature = "cloud")]
 pub fn embed_via_ollama(text: &str, config: &OllamaEmbeddingConfig) -> Result<Vec<f32>, String> {
+    embed_url_is_allowed(&config.api_url)?;
     let body = OllamaEmbedRequest {
         model: &config.model,
         prompt: text,
@@ -478,6 +553,15 @@ pub fn default_semantic_dim() -> usize {
 #[cfg(test)]
 mod dim_probe_tests {
     use super::*;
+
+    #[test]
+    fn embed_url_allowlist_blocks_ssrf_targets() {
+        assert!(embed_url_is_allowed("https://api.openai.com/v1/embeddings").is_ok());
+        assert!(embed_url_is_allowed("http://127.0.0.1:11434/api/embeddings").is_ok());
+        assert!(embed_url_is_allowed("http://169.254.169.254/latest/meta-data").is_err());
+        assert!(embed_url_is_allowed("https://evil.example/exfil").is_err());
+        assert!(embed_url_is_allowed("file:///etc/passwd").is_err());
+    }
 
     fn stub_ollama(_text: &str, _cfg: &OllamaEmbeddingConfig) -> Result<Vec<f32>, String> {
         Ok(vec![0.25; 384])

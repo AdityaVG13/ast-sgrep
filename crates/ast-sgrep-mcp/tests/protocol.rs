@@ -200,3 +200,26 @@ fn unknown_tool_remains_a_tool_error_result() {
     assert_eq!(r["result"]["isError"], true);
     assert!(r.get("error").is_none());
 }
+
+#[test]
+fn tool_roots_are_sandboxed_under_configured_workspace() {
+    let workspace = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    std::fs::write(workspace.path().join("ok.rs"), "fn ok() {}\n").unwrap();
+    let response = rpc_at(
+        json!({
+            "jsonrpc":"2.0","id":21,"method":"tools/call",
+            "params":{"name":"index_status","arguments":{"root": outside.path().to_string_lossy()}}
+        }),
+        Some(workspace.path()),
+    );
+    assert_eq!(response["result"]["isError"], true, "{response:#}");
+    assert!(
+        response["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap_or("")
+            .contains("escapes configured workspace"),
+        "{response:#}"
+    );
+}
+

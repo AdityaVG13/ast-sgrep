@@ -429,24 +429,52 @@ fn required_pattern_literal(pattern: &str) -> Option<String> {
         .max_by_key(|segment| segment.len())
         .map(str::to_string)
 }
+/// Optional external `ast-grep` for **bench comparison only**.
+/// Disabled by default: never searches PATH or executes untrusted binaries
+/// (`ast-sgrep-j0x4` / `agent-security-rl1p.5`). Requires both
+/// `ASGREP_ALLOW_AST_GREP=1` and an absolute `ASGREP_AST_GREP` file path.
 fn find_ast_grep_binary() -> Option<String> {
-    for name in ["ast-grep", "sg"] {
-        let Ok(output) = Command::new(name).arg("--version").output() else {
-            continue;
-        };
-        if output.status.success() && String::from_utf8_lossy(&output.stdout).contains("ast-grep") {
-            return Some(name.into());
+    if !crate::env_flag::env_flag("ASGREP_ALLOW_AST_GREP") {
+        return None;
+    }
+    let path = std::env::var("ASGREP_AST_GREP").ok()?;
+    let path = Path::new(&path);
+    if !path.is_absolute() || !path.is_file() {
+        return None;
+    }
+    // Timed version probe — reject hung/non-ast-grep binaries.
+    let mut child = Command::new(path)
+        .arg("--version")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    let start = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) if status.success() => break,
+            Ok(Some(_)) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+            Ok(None) if start.elapsed().as_millis() > 1_500 => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+            Ok(None) => std::thread::sleep(std::time::Duration::from_millis(20)),
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
         }
     }
-    if let Ok(path) = std::env::var("ASGREP_AST_GREP") {
-        if Path::new(&path).is_file() {
-            return Some(path);
-        }
-    }
-    let bundled = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.tools/ast-grep");
-    bundled
-        .is_file()
-        .then(|| bundled.to_string_lossy().into_owned())
+    let output = child.wait_with_output().ok()?;
+    String::from_utf8_lossy(&output.stdout)
+        .contains("ast-grep")
+        .then(|| path.to_string_lossy().into_owned())
 }
 pub fn bench_ast_grep(pattern: &str, root: &Path, iterations: u32) -> Option<f64> {
     let ast_grep = find_ast_grep_binary()?;
@@ -458,11 +486,29 @@ pub fn bench_ast_grep(pattern: &str, root: &Path, iterations: u32) -> Option<f64
     let mut total = 0.0f64;
     for _ in 0..iterations {
         let start = Instant::now();
-        let _ = Command::new(&ast_grep)
+        let mut child = Command::new(&ast_grep)
             .args(["run", "--pattern", pattern, &root])
             .stdout(Stdio::null())
             .stderr(Stdio::null())
-            .status();
+            .spawn()
+            .ok()?;
+        let deadline = Instant::now() + std::time::Duration::from_secs(30);
+        loop {
+            match child.try_wait() {
+                Ok(Some(_)) => break,
+                Ok(None) if Instant::now() >= deadline => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return None;
+                }
+                Ok(None) => std::thread::sleep(std::time::Duration::from_millis(20)),
+                Err(_) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return None;
+                }
+            }
+        }
         total += start.elapsed().as_secs_f64() * 1000.0;
     }
     Some(total / f64::from(iterations))
@@ -536,5 +582,14 @@ mod tests {
             cached_pattern_signatures("kind:function_item").unwrap(),
             vec!["kind:function_item"]
         );
+    }
+
+    #[test]
+    fn external_ast_grep_is_disabled_without_explicit_allow() {
+        // Even if PATH has ast-grep, production/bench helpers stay inert.
+        std::env::remove_var("ASGREP_ALLOW_AST_GREP");
+        std::env::remove_var("ASGREP_AST_GREP");
+        assert!(super::find_ast_grep_binary().is_none());
+        assert!(super::bench_ast_grep("fn foo", std::path::Path::new("."), 1).is_none());
     }
 }

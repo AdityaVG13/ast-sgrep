@@ -24,7 +24,10 @@ Canonical entry points for humans and agents. Prefer this list over scavenging t
 | [fusion-ranking.md](fusion-ranking.md) | Weighted RRF, learned weights, and sensitivity analysis |
 | [signal-provenance.md](signal-provenance.md) | Exact, structural, semantic tiers and margin semantics |
 | [mcp.md](mcp.md) | `asgrep-mcp` setup for agents |
+| [env-trust.md](env-trust.md) | Env allowlists, boolish flags, ast-grep / binary overrides |
+| [panic-poison.md](panic-poison.md) | Cache poison and panic fail-closed matrix |
 | [use-cases.md](use-cases.md) | Agents, LSP, JSON formats, CI patterns |
+| [../SECURITY.md](../SECURITY.md) | Forbid-soundness, audit ≠ soundness, reporting |
 
 ## Quality and operations
 

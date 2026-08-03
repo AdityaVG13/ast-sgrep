@@ -8,9 +8,9 @@ mod rerank;
 mod semantic;
 pub use embedder::{
     configured_backend_model_id, default_semantic_dim, embed_batch_with_chain, embed_query,
-    embed_via_api, embed_via_ollama, embed_with_chain, embedder_for, CloudEmbedder,
-    CloudEmbeddingConfig, CostHint, EmbedBackendKind, EmbedPreference, EmbedResult, Embedder,
-    HashedEmbedder, OllamaEmbedder, OllamaEmbeddingConfig,
+    embed_url_is_allowed, embed_via_api, embed_via_ollama, embed_with_chain, embedder_for,
+    CloudEmbedder, CloudEmbeddingConfig, CostHint, EmbedBackendKind, EmbedPreference, EmbedResult,
+    Embedder, HashedEmbedder, OllamaEmbedder, OllamaEmbeddingConfig,
 };
 pub use math::{
     cosine_scores_for, cosine_similarity, dot_similarity, normalize_vec, normalize_vec_in_place,

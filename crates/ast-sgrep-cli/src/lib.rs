@@ -605,19 +605,20 @@ fn run_keyword_search(root: &Path, cli: &Cli, query: &str) -> anyhow::Result<()>
 }
 
 fn run_search(root: &Path, cli: &Cli, query: &str, semantic: bool) -> anyhow::Result<()> {
-    let ctx = if semantic {
+    let ctx = if semantic || cli.semantic_only {
         "semantic search failed"
     } else {
         "search failed"
     };
-    let response = do_search(&open_searcher(root, cli)?, query, semantic).context(ctx)?;
+    let response =
+        do_search_with_cli(&open_searcher(root, cli)?, query, semantic, cli).context(ctx)?;
     if !cli.search_machine_output() {
         for hit in &response.hits {
             println!("{}", format_hit_line(hit));
         }
         return Ok(());
     }
-    let default = if semantic {
+    let default = if semantic || cli.semantic_only {
         ast_sgrep_plugins::OutputFormat::Agent
     } else {
         ast_sgrep_plugins::OutputFormat::Native
@@ -631,7 +632,11 @@ fn run_search(root: &Path, cli: &Cli, query: &str, semantic: bool) -> anyhow::Re
         None => default,
     };
     print_search_response(
-        if semantic { "semantic" } else { "search" },
+        if semantic || cli.semantic_only {
+            "semantic"
+        } else {
+            "search"
+        },
         &response,
         format,
         cli,
@@ -759,6 +764,15 @@ fn do_search(s: &Searcher, q: &str, semantic: bool) -> anyhow::Result<SearchResp
     } else {
         Ok(s.search(q)?)
     }
+}
+fn do_search_with_cli(
+    s: &Searcher,
+    q: &str,
+    semantic: bool,
+    cli: &Cli,
+) -> anyhow::Result<SearchResponse> {
+    // `--semantic-only` / ASGREP_SEMANTIC_ONLY forces the semantic channel (ziij).
+    do_search(s, q, semantic || cli.semantic_only)
 }
 fn timed_searches(
     s: &Searcher,
