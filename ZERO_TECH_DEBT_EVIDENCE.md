@@ -442,7 +442,7 @@ cargo test -p ast-sgrep-lang --test pattern
 |--------|----------------------------|--------|
 | `pub mod skip` / `text` / `output` facades | **zero** | deleted; `format_hit_line` re-exported from `search` |
 | `ranking_stability` / `RankingStability` | **zero** (self-only in `bench_suite`) | deleted with e2hc.19d unit tests |
-| Vacuous `ast_grep_pattern_for_query` bench speedup | hybrid/token queries | demoted via `ast_grep_comparison` |
+| `ast_grep_pattern_for_query` | **zero** | deleted (bench speedup demoted earlier via `ast_grep_comparison`) |
 
 ### Bench honesty port (from pr25)
 
