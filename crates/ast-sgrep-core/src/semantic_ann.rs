@@ -462,9 +462,6 @@ fn lock_session_cache() -> std::sync::MutexGuard<'static, Vec<(String, SessionCa
     }
 }
 
-fn clear_semantic_ivf_session_cache() {
-    lock_session_cache().clear();
-}
 pub fn mark_semantic_ivf_stale(store: &IndexStore) {
     if store
         .get_meta("semantic_ivf_stale")
@@ -475,7 +472,7 @@ pub fn mark_semantic_ivf_stale(store: &IndexStore) {
     {
         let _ = store.set_meta("semantic_ivf_stale", "1");
     }
-    clear_semantic_ivf_session_cache();
+    lock_session_cache().clear();
     let _ = invalidate_semantic_ivf(store.db_path());
 }
 fn ann_session_key(store: &IndexStore, chunks: &[SemanticChunkRow]) -> Result<([u8; 32], String)> {

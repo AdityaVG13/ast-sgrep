@@ -10,6 +10,7 @@ use crate::extract::{
     byte_to_line, is_ident_kind, is_in_comment_or_string, is_member_expr_kind,
     last_identifier_in_chain, node_lines, node_text,
 };
+use crate::pattern_queries::{queries_for, CLASS_QUERY_TABLE, FUNCTION_QUERY_TABLE};
 use crate::{Language, PatternNode};
 use tree_sitter::{Node, Parser, Query, QueryCursor, StreamingIterator};
 
@@ -210,125 +211,24 @@ fn match_structural(
     let language = tree_sitter_language(lang);
     let tree = parse_source(lang, source)?;
     let mut out = Vec::new();
-    match kind {
-        NativeKind::Function { name } => {
-            run_queries(
-                &language,
-                tree.root_node(),
-                source,
-                function_queries(lang),
-                name.as_deref(),
-                &mut out,
-            )?;
-        }
-        NativeKind::Class { name } => {
-            run_queries(
-                &language,
-                tree.root_node(),
-                source,
-                class_queries(lang),
-                name.as_deref(),
-                &mut out,
-            )?;
-        }
+    let (queries, name) = match kind {
+        NativeKind::Function { name } => (queries_for(FUNCTION_QUERY_TABLE, lang), name.as_deref()),
+        NativeKind::Class { name } => (queries_for(CLASS_QUERY_TABLE, lang), name.as_deref()),
         NativeKind::Call { path } => {
             walk_calls(tree.root_node(), source, path, &mut out);
+            return Ok(out);
         }
-    }
+    };
+    run_queries(
+        &language,
+        tree.root_node(),
+        source,
+        queries,
+        name,
+        &mut out,
+    )?;
     Ok(out)
 }
-
-fn function_queries(lang: Language) -> &'static [&'static str] {
-    for &(langs, queries) in FUNCTION_QUERY_TABLE {
-        if langs.contains(&lang) {
-            return queries;
-        }
-    }
-    &[]
-}
-
-fn class_queries(lang: Language) -> &'static [&'static str] {
-    for &(langs, queries) in CLASS_QUERY_TABLE {
-        if langs.contains(&lang) {
-            return queries;
-        }
-    }
-    &[]
-}
-
-const FUNCTION_QUERY_TABLE: &[(&[Language], &[&str])] = &[
-    (
-        &[Language::Rust],
-        &[
-            "(function_item name: (identifier) @name) @match",
-            "(impl_item body: (declaration_list (function_item name: (identifier) @name) @match))",
-        ],
-    ),
-    (
-        &[Language::Python],
-        &["(function_definition name: (identifier) @name) @match"],
-    ),
-    (
-        &[Language::Go],
-        &["(function_declaration name: (identifier) @name) @match"],
-    ),
-    (
-        &[Language::Java, Language::CSharp],
-        &[
-            "(method_declaration name: (identifier) @name) @match",
-            "(constructor_declaration name: (identifier) @name) @match",
-        ],
-    ),
-    (
-        &[Language::JavaScript, Language::TypeScript],
-        &[
-            "(function_declaration name: (identifier) @name) @match",
-            "(method_definition name: (property_identifier) @name) @match",
-            "(lexical_declaration (variable_declarator name: (identifier) @name value: [(arrow_function) (function_expression)]) @match)",
-        ],
-    ),
-    (
-        &[Language::Ruby],
-        &[
-            "(method name: (identifier) @name) @match",
-            "(singleton_method name: (identifier) @name) @match",
-        ],
-    ),
-];
-
-const CLASS_QUERY_TABLE: &[(&[Language], &[&str])] = &[
-    (
-        &[Language::Rust],
-        &[
-            "(struct_item name: (type_identifier) @name) @match",
-            "(enum_item name: (type_identifier) @name) @match",
-            "(trait_item name: (type_identifier) @name) @match",
-        ],
-    ),
-    (
-        &[Language::Python],
-        &["(class_definition name: (identifier) @name) @match"],
-    ),
-    (
-        &[Language::Go],
-        &["(type_declaration (type_spec name: (type_identifier) @name) @match)"],
-    ),
-    (
-        &[Language::Java, Language::CSharp],
-        &[
-            "(class_declaration name: (identifier) @name) @match",
-            "(interface_declaration name: (identifier) @name) @match",
-        ],
-    ),
-    (
-        &[Language::JavaScript, Language::TypeScript],
-        &["(class_declaration name: (identifier) @name) @match"],
-    ),
-    (
-        &[Language::Ruby],
-        &["(class name: (constant) @name) @match"],
-    ),
-];
 
 fn run_queries(
     language: &tree_sitter::Language,
@@ -376,12 +276,8 @@ fn run_queries(
 }
 
 fn walk_calls(node: Node, source: &str, path: &[Option<String>], out: &mut Vec<PatternMatch>) {
-    if !is_in_comment_or_string(&node) && is_call_kind(node.kind()) {
-        if let Some(callee) = call_target_path(&node, source) {
-            if path_matches(&callee, path) {
-                push_match(&node, source, &callee.join("."), out);
-            }
-        }
+    if let Some(callee) = call_match_path(&node, source, path) {
+        push_match(&node, source, &callee.join("."), out);
     }
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
@@ -389,46 +285,52 @@ fn walk_calls(node: Node, source: &str, path: &[Option<String>], out: &mut Vec<P
     }
 }
 
-fn call_target_path(node: &Node, source: &str) -> Option<Vec<String>> {
-    let target = ["function", "name"]
+/// When `node` is a call outside trivia that matches `path`, return its callee segments.
+fn call_match_path(node: &Node, source: &str, path: &[Option<String>]) -> Option<Vec<String>> {
+    if is_in_comment_or_string(node) || !is_call_kind(node.kind()) {
+        return None;
+    }
+    let callee = call_target_path(node, source)?;
+    path_matches(&callee, path).then_some(callee)
+}
+
+fn call_field_node<'a>(node: &Node<'a>) -> Option<Node<'a>> {
+    ["function", "name"]
         .into_iter()
-        .find_map(|f| node.child_by_field_name(f))?;
-    path_from_node(&target, source)
+        .find_map(|f| node.child_by_field_name(f))
+}
+
+fn call_target_path(node: &Node, source: &str) -> Option<Vec<String>> {
+    path_from_node(&call_field_node(node)?, source)
 }
 
 fn path_from_node(node: &Node, source: &str) -> Option<Vec<String>> {
     if is_ident_kind(node.kind()) {
         return node_text(node, source).map(|t| vec![t.to_string()]);
     }
-    if is_member_expr_kind(node.kind()) {
-        let mut segs = Vec::new();
-        let mut cursor = node.walk();
-        for child in node.children(&mut cursor) {
-            if let Some(mut p) = path_from_node(&child, source) {
-                segs.append(&mut p);
-            }
-        }
-        return if segs.is_empty() { None } else { Some(segs) };
+    if !is_member_expr_kind(node.kind()) {
+        return last_identifier_in_chain(node, source).map(|s| vec![s]);
     }
-    last_identifier_in_chain(node, source).map(|s| vec![s])
+    let mut segs = Vec::new();
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if let Some(mut p) = path_from_node(&child, source) {
+            segs.append(&mut p);
+        }
+    }
+    (!segs.is_empty()).then_some(segs)
 }
 
 fn path_matches(actual: &[String], pattern: &[Option<String>]) -> bool {
-    if actual.len() != pattern.len() {
-        // Allow pattern `$M($$$ )` to match last segment of multi-part calls? No — keep exact length.
-        // Exception: single-segment pattern matches last segment of call (method name only).
-        if pattern.len() == 1 {
-            let want = &pattern[0];
-            return actual
-                .last()
-                .is_some_and(|last| want.as_ref().map(|w| w == last).unwrap_or(true));
-        }
+    let segment_ok = |a: &String, p: &Option<String>| p.as_ref().is_none_or(|w| w == a);
+    if actual.len() == pattern.len() {
+        return actual.iter().zip(pattern.iter()).all(|(a, p)| segment_ok(a, p));
+    }
+    // Exact length only — except a single-segment pattern matches the last call segment.
+    if pattern.len() != 1 {
         return false;
     }
-    actual
-        .iter()
-        .zip(pattern.iter())
-        .all(|(a, p)| p.as_ref().map(|w| w == a).unwrap_or(true))
+    actual.last().is_some_and(|last| segment_ok(last, &pattern[0]))
 }
 
 fn walk_literal(node: Node, source: &str, pattern: &str, out: &mut Vec<PatternMatch>) {
@@ -466,30 +368,7 @@ fn collect_node_signatures(
     seen: &mut std::collections::HashSet<(String, u32)>,
 ) {
     if !is_in_comment_or_string(&node) {
-        if is_ident_kind(node.kind()) {
-            if let Some(text) = node_text(&node, source) {
-                push_pattern_node(node, source, text, out, seen);
-            }
-        }
-        if let Some(prefix) = declaration_prefix(node.kind()) {
-            push_pattern_node(node, source, &format!("kind:{}", node.kind()), out, seen);
-            if let Some(name) = node
-                .child_by_field_name("name")
-                .and_then(|n| node_text(&n, source))
-            {
-                push_pattern_node(node, source, &format!("{prefix} {name}"), out, seen);
-                push_pattern_node(node, source, &format!("decl:{prefix}:{name}"), out, seen);
-            }
-        }
-        if is_call_kind(node.kind()) {
-            push_pattern_node(node, source, &format!("kind:{}", node.kind()), out, seen);
-            if let Some(callee) = call_target(&node, source) {
-                push_pattern_node(node, source, &format!("call:{callee}"), out, seen);
-                if let Some(name) = callee.rsplit(['.', ':']).find(|p| !p.is_empty()) {
-                    push_pattern_node(node, source, &format!("call-name:{name}"), out, seen);
-                }
-            }
-        }
+        record_node_signatures(&node, source, out, seen);
     }
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
@@ -497,14 +376,45 @@ fn collect_node_signatures(
     }
 }
 
-/// Map a tree-sitter declaration kind to its indexed `decl:` / display prefix.
-pub fn declaration_prefix(kind: &str) -> Option<&'static str> {
-    for &(node_kind, prefix) in DECL_KIND_PREFIXES {
-        if node_kind == kind {
-            return Some(prefix);
+fn record_node_signatures(
+    node: &Node,
+    source: &str,
+    out: &mut Vec<PatternNode>,
+    seen: &mut std::collections::HashSet<(String, u32)>,
+) {
+    if is_ident_kind(node.kind()) {
+        if let Some(text) = node_text(node, source) {
+            push_pattern_node(*node, source, text, out, seen);
         }
     }
-    None
+    if let Some(prefix) = declaration_prefix(node.kind()) {
+        push_pattern_node(*node, source, &format!("kind:{}", node.kind()), out, seen);
+        if let Some(name) = node
+            .child_by_field_name("name")
+            .and_then(|n| node_text(&n, source))
+        {
+            push_pattern_node(*node, source, &format!("{prefix} {name}"), out, seen);
+            push_pattern_node(*node, source, &format!("decl:{prefix}:{name}"), out, seen);
+        }
+    }
+    if !is_call_kind(node.kind()) {
+        return;
+    }
+    push_pattern_node(*node, source, &format!("kind:{}", node.kind()), out, seen);
+    let Some(callee) = call_target(node, source) else {
+        return;
+    };
+    push_pattern_node(*node, source, &format!("call:{callee}"), out, seen);
+    if let Some(name) = callee.rsplit(['.', ':']).find(|p| !p.is_empty()) {
+        push_pattern_node(*node, source, &format!("call-name:{name}"), out, seen);
+    }
+}
+
+/// Map a tree-sitter declaration kind to its indexed `decl:` / display prefix.
+pub fn declaration_prefix(kind: &str) -> Option<&'static str> {
+    DECL_KIND_PREFIXES
+        .iter()
+        .find_map(|&(node_kind, prefix)| (node_kind == kind).then_some(prefix))
 }
 
 /// AST node kind → short declaration prefix used in `decl:{prefix}:{name}` signatures.
@@ -524,15 +434,14 @@ pub const DECL_KIND_PREFIXES: &[(&str, &str)] = &[
     ("enum_item", "enum"),
 ];
 
+const CALL_KINDS: &[&str] = &["call_expression", "call", "method_invocation"];
+
 fn is_call_kind(kind: &str) -> bool {
-    matches!(kind, "call_expression" | "call" | "method_invocation")
+    CALL_KINDS.contains(&kind)
 }
 
 fn call_target<'a>(node: &Node<'a>, source: &'a str) -> Option<&'a str> {
-    ["function", "name"]
-        .into_iter()
-        .find_map(|f| node.child_by_field_name(f))
-        .and_then(|t| node_text(&t, source))
+    call_field_node(node).and_then(|t| node_text(&t, source))
 }
 
 fn push_pattern_node(

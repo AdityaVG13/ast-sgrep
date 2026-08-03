@@ -174,3 +174,64 @@ cargo test -p ast-sgrep-core --test e2e_smoke --test store_delete --test semanti
 - `resolve_module` candidate sets preserved (BTreeSet key order; regression suite green).
 - Index prepare/upsert semantics unchanged: same hash, body-hash trivia, semantic chunk gating.
 - Dry-run still uses its own source-oriented extension list (not silently merged with `INDEXABLE_EXTENSIONS`).
+
+---
+
+## Batch D — density sweep
+
+### Philosophy
+
+Lean end-state pass: densest remaining modules become table-driven / early-return / single-helper where safe. No ranking-gate or fail-code changes. MCP `code_search` alias kept (compat). `.beads/` untouched. Untracked `package-lock.json` ignored.
+
+### Decision counts (if+match+while+`=>` for Rust; if+else+&&+||+ternary for JS)
+
+| File | Before | After | Δ |
+|------|--------|-------|---|
+| `crates/ast-sgrep-lang/src/pattern.rs` | 90 | 63 | −27 |
+| `pattern.rs` + new `pattern_queries.rs` | 90 | 85 | −5 (tables moved; control-flow thinner) |
+| `packages/pi/scripts/release-acceptance.mjs` | 116 (dens 0.364) | 104 (dens 0.295) | −12 |
+| `packages/pi/extension/src/runtime.ts` | 170 (dens 0.326) | 162 (dens 0.313) | −8 |
+| `crates/ast-sgrep-core/src/search/mod.rs` | 86 | 86 | 0 (helper extract only) |
+| `crates/ast-sgrep-core/src/fusion.rs` | 80 | 79 | −1 |
+| `crates/ast-sgrep-core/src/semantic_ann.rs` | 52 | 52 | 0 (inline dead thin wrapper) |
+| `crates/ast-sgrep-core/src/pipeline_parts.rs` | 16 | 16 | 0 (`measure_hit_len` extract) |
+| `crates/ast-sgrep-mcp/src/lib.rs` | — | unchanged | no proven zero-caller dead code beyond compat alias |
+
+### Refactors pinned
+
+| Change | File |
+|--------|------|
+| Declaration query maps → `pattern_queries` module; shared `queries_for` | `ast-sgrep-lang` |
+| Flatten `match_structural` Function/Class arms; `call_match_path` / `call_field_node`; `CALL_KINDS` table; early-return signature recording | `pattern.rs` |
+| Required-file consts, `COMMANDS` dispatch, `validatePlatformTarget` / `verifyArtifact` / `assertDirectoryEmpty` / `priorPublishedForLayer` / `sameJson` | `release-acceptance.mjs` |
+| `LEGACY_NUMBER_FIELDS` for migrate↔rollback; unified `assertVersionTriple`; merged freshness index branches (missing/dirty/expired) | `runtime.ts` |
+| `same_definition_locus` shared by finish + gates (gate order unchanged) | `search/mod.rs` |
+| `clamp_channel_weight` shared by weight get/set | `fusion.rs` |
+| Inline single-caller `clear_semantic_ivf_session_cache` | `semantic_ann.rs` |
+| `measure_hit_len` for literal/lexical/semantic benches | `pipeline_parts.rs` |
+
+### Thin-wrapper audit
+
+| Symbol | Callers | Action |
+|--------|---------|--------|
+| `clear_semantic_ivf_session_cache` | 1 (`mark_semantic_ivf_stale`) | inlined |
+| `function_queries` / `class_queries` | 1 each | replaced by `queries_for` |
+| CLI `parse_*` clap parsers | 1 each (value_parser) | **kept** (clap requires named fn) |
+| MCP `code_search` | listed + dispatched | **kept** (compat alias) |
+
+### Behavior invariants
+
+- Native pattern match results unchanged (query strings / path rules identical).
+- Release fail codes and self-test rejection labels unchanged.
+- Runtime migrate/rollback retained; version-triple and freshness lease semantics preserved.
+- Hybrid ranking / `enforce_result_gates` order unchanged (shared locus predicate only).
+
+### Commands run
+
+```bash
+cargo test -p ast-sgrep-lang --lib --test pattern
+cargo test -p ast-sgrep-core --lib search::
+cargo test -p ast-sgrep-cli --test machine_contracts
+node packages/pi/scripts/release-acceptance.mjs self-test
+cd packages/pi/extension && npm run build && npm test
+```

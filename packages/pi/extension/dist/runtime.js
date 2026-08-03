@@ -36,6 +36,12 @@ function sameSetting(current, legacy, currentName, legacyName) {
     }
     return current ?? legacy;
 }
+/** Legacy schema-0 numeric fields ↔ current names (migrate/rollback share one table). */
+const LEGACY_NUMBER_FIELDS = [
+    ["timeoutMs", "timeout"],
+    ["maxOutputBytes", "maxOutput"],
+    ["refreshIntervalMs", "refreshInterval"],
+];
 /** Convert schema 0/unversioned settings without mutating the rollback source. */
 export function migrateConfig(input = {}) {
     const value = { ...input };
@@ -47,33 +53,26 @@ export function migrateConfig(input = {}) {
         return value;
     const legacy = value;
     const migrated = { ...legacy, schemaVersion: CONFIG_SCHEMA_VERSION };
-    const timeoutMs = sameSetting(value.timeoutMs, legacy.timeout, "timeoutMs", "timeout");
-    const maxOutputBytes = sameSetting(value.maxOutputBytes, legacy.maxOutput, "maxOutputBytes", "maxOutput");
-    const refreshIntervalMs = sameSetting(value.refreshIntervalMs, legacy.refreshInterval, "refreshIntervalMs", "refreshInterval");
-    if (timeoutMs !== undefined)
-        migrated.timeoutMs = timeoutMs;
-    if (maxOutputBytes !== undefined)
-        migrated.maxOutputBytes = maxOutputBytes;
-    if (refreshIntervalMs !== undefined)
-        migrated.refreshIntervalMs = refreshIntervalMs;
-    delete migrated.timeout;
-    delete migrated.maxOutput;
-    delete migrated.refreshInterval;
+    const mutable = migrated;
+    for (const [currentName, legacyName] of LEGACY_NUMBER_FIELDS) {
+        const next = sameSetting(value[currentName], legacy[legacyName], currentName, legacyName);
+        if (next !== undefined)
+            mutable[currentName] = next;
+        delete mutable[legacyName];
+    }
     return migrated;
 }
 /** Serialize current settings for a schema-0 rollback without mutating the current value. */
 export function rollbackConfig(input) {
     const current = migrateConfig(input);
     const legacy = { ...current, schemaVersion: 0 };
-    if (current.timeoutMs !== undefined)
-        legacy.timeout = current.timeoutMs;
-    if (current.maxOutputBytes !== undefined)
-        legacy.maxOutput = current.maxOutputBytes;
-    if (current.refreshIntervalMs !== undefined)
-        legacy.refreshInterval = current.refreshIntervalMs;
-    delete legacy.timeoutMs;
-    delete legacy.maxOutputBytes;
-    delete legacy.refreshIntervalMs;
+    const mutable = legacy;
+    for (const [currentName, legacyName] of LEGACY_NUMBER_FIELDS) {
+        const next = current[currentName];
+        if (next !== undefined)
+            mutable[legacyName] = next;
+        delete mutable[currentName];
+    }
     return legacy;
 }
 function envConfig(env = {}) {
@@ -144,10 +143,10 @@ function indexHealth(status) {
         return "missing";
     if (state === "ready" || state === "current" || index?.exists === true || status.indexed === true)
         return "ready";
-    if (typeof status.index_path === "string" && typeof status.file_count === "number") {
-        return status.file_count === 0 ? "missing" : "ready";
+    if (typeof status.index_path !== "string" || typeof status.file_count !== "number") {
+        throw new RuntimeError("INDEX_STATUS_UNKNOWN", "ast-sgrep status did not report index freshness", { index: status.index, index_status: status.index_status });
     }
-    throw new RuntimeError("INDEX_STATUS_UNKNOWN", "ast-sgrep status did not report index freshness", { index: status.index, index_status: status.index_status });
+    return status.file_count === 0 ? "missing" : "ready";
 }
 function incompatibleStatusFailure(cause) {
     if (!(cause instanceof RuntimeError) || (cause.code !== "OPERATIONAL_ERROR" && cause.code !== "PROCESS_FAILED"))
@@ -242,12 +241,9 @@ export class FreshnessCoordinator {
                 else
                     await runtime.run(["reindex", ".", "--json"], rootContext, options);
             }
-            else if (health === "missing" || !wasInitialized || dirty) {
-                await runtime.run(["index", ".", "--json"], rootContext, options);
-            }
-            else if (expired) {
-                // Lease expired without dirty marks: incremental index (not force reindex)
-                // so external create/modify/delete are reconciled without rebuild thrash (5du.9).
+            else if (health === "missing" || !wasInitialized || dirty || expired) {
+                // Missing / first touch / dirty / lease expiry all reconcile via incremental index
+                // (not force reindex) so external create/modify/delete avoid rebuild thrash (5du.9).
                 await runtime.run(["index", ".", "--json"], rootContext, options);
             }
             state.initialized = true;
@@ -292,25 +288,20 @@ function byteLength(value) { return Buffer.byteLength(value, "utf8"); }
 function assertVersionTriple(envelope, requireIdentity = false) {
     const hasVersion = envelope.version !== undefined;
     const hasMachineSchema = envelope.machine_schema_version !== undefined;
-    if (requireIdentity) {
-        if (envelope.version !== RUNTIME_VERSION) {
-            throw new RuntimeError("VERSION_MISMATCH", "ast-sgrep binary version does not match the extension", { expected: RUNTIME_VERSION, actual: envelope.version });
+    if (!requireIdentity) {
+        if (hasVersion !== hasMachineSchema) {
+            throw new RuntimeError("PROTOCOL_MISMATCH", "Incomplete version triple: version and machine_schema_version must appear together", {
+                hasVersion,
+                hasMachineSchema,
+            });
         }
-        if (envelope.machine_schema_version !== MACHINE_SCHEMA_VERSION) {
-            throw new RuntimeError("PROTOCOL_MISMATCH", "ast-sgrep binary reports an incompatible machine protocol", { expected: MACHINE_SCHEMA_VERSION, actual: envelope.machine_schema_version });
-        }
-        return;
+        if (!hasVersion)
+            return;
     }
-    if (hasVersion !== hasMachineSchema) {
-        throw new RuntimeError("PROTOCOL_MISMATCH", "Incomplete version triple: version and machine_schema_version must appear together", {
-            hasVersion,
-            hasMachineSchema,
-        });
-    }
-    if (hasVersion && envelope.version !== RUNTIME_VERSION) {
+    if (envelope.version !== RUNTIME_VERSION) {
         throw new RuntimeError("VERSION_MISMATCH", "ast-sgrep binary version does not match the extension", { expected: RUNTIME_VERSION, actual: envelope.version });
     }
-    if (hasMachineSchema && envelope.machine_schema_version !== MACHINE_SCHEMA_VERSION) {
+    if (envelope.machine_schema_version !== MACHINE_SCHEMA_VERSION) {
         throw new RuntimeError("PROTOCOL_MISMATCH", "ast-sgrep binary reports an incompatible machine protocol", { expected: MACHINE_SCHEMA_VERSION, actual: envelope.machine_schema_version });
     }
 }

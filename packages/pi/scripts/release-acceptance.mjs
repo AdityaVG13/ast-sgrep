@@ -10,6 +10,7 @@ const fail = (code, message) => { throw new Error(`${code}: ${message}`); };
 const readJson = async (file) => JSON.parse(await readFile(file, 'utf8'));
 const canonical = (value) => JSON.stringify(value, null, 2) + '\n';
 const sha256 = async (file) => createHash('sha256').update(await readFile(file)).digest('hex');
+const sameJson = (left, right) => JSON.stringify(left) === JSON.stringify(right);
 const matchesSha512Integrity = async (file, integrity) => {
   if (typeof integrity !== 'string') return false;
   const actual = createHash('sha512').update(await readFile(file)).digest('base64');
@@ -29,14 +30,14 @@ const run = (command, args, options = {}) => {
   return result.stdout ?? '';
 };
 const packageSpec = (name, version) => `${name}@${version}`;
+const LAUNCHER_REQUIRED_FILES = ['LICENSE', 'README.md', 'bin/asgrep.js', 'package.json', 'src/index.d.ts', 'src/index.js'];
+const EXTENSION_REQUIRED_FILES = ['LICENSE', 'README.md', 'assets/preview.png', 'dist/index.d.ts', 'dist/index.js', 'dist/runtime.d.ts', 'dist/runtime.js', 'package.json', 'skills/ast-sgrep/SKILL.md', 'skills/ast-sgrep/references/query-guide.md'];
 const requiredFilesFor = (state, artifact) => {
   if (artifact.layer === 'native') {
     return ['LICENSE', 'checksum.sha256', state.matrix.targets.find((target) => target.package === artifact.name).executable, 'package.json'];
   }
-  if (artifact.layer === 'launcher') {
-    return ['LICENSE', 'README.md', 'bin/asgrep.js', 'package.json', 'src/index.d.ts', 'src/index.js'];
-  }
-  return ['LICENSE', 'README.md', 'assets/preview.png', 'dist/index.d.ts', 'dist/index.js', 'dist/runtime.d.ts', 'dist/runtime.js', 'package.json', 'skills/ast-sgrep/SKILL.md', 'skills/ast-sgrep/references/query-guide.md'];
+  if (artifact.layer === 'launcher') return LAUNCHER_REQUIRED_FILES;
+  return EXTENSION_REQUIRED_FILES;
 };
 const isForbiddenPackEntry = (entry) => /(^|\/)(test|node_modules)(\/|$)/u.test(entry) || /\.(rs|toml)$/u.test(entry);
 const expectReject = (label, callback, rejected) => {
@@ -57,21 +58,28 @@ const load = async () => {
   return { contract, matrix, launcher, extension, platforms, version: contract.canonicalVersion.version };
 };
 const packageOrder = (state) => [...state.matrix.targets.map((target) => target.package), state.launcher.name, state.extension.name];
+const packageSpecs = (state, version = state.version) => Object.fromEntries(packageOrder(state).map((name) => [packageSpec(name, version), null]));
+const validatePlatformTarget = (state, index) => {
+  const { matrix, launcher, platforms, version, contract } = state;
+  const target = matrix.targets[index];
+  const manifest = platforms[index];
+  const dependencyVersion = launcher.optionalDependencies?.[target.package];
+  const contractPlatform = contract.packages.platforms[index];
+  if (manifest.name !== target.package || manifest.version !== version || dependencyVersion !== version || contractPlatform?.optionalDependencyVersion !== version) {
+    fail('ASGREP_RELEASE_VERSION_SKEW', `${target.package} is not exactly aligned to ${version}`);
+  }
+  if (!sameJson(manifest.os, [target.os]) || !sameJson(manifest.cpu, [target.cpu]) || !sameJson(manifest.libc ?? [], target.libc ? [target.libc] : [])) {
+    fail('ASGREP_RELEASE_PLATFORM_SKEW', `${target.package} platform selectors do not match the target matrix`);
+  }
+};
 const validateAlignment = (state) => {
-  const { contract, matrix, launcher, extension, platforms, version } = state;
+  const { contract, matrix, launcher, extension, version } = state;
   if (matrix.targets.length !== 5) fail('ASGREP_RELEASE_TARGETS', 'exactly five native targets are required');
   if (new Set(packageOrder(state)).size !== 7) fail('ASGREP_RELEASE_PACKAGE_DUPLICATE', 'release package names must be unique');
   if (contract.canonicalVersion.tag !== `v${version}`) fail('ASGREP_RELEASE_TAG_VERSION', 'canonical tag does not match canonical version');
   if (launcher.version !== version || extension.version !== version || extension.dependencies?.[launcher.name] !== version) fail('ASGREP_RELEASE_VERSION_SKEW', 'launcher/extension versions and dependency must exactly match the canonical version');
   if (contract.compatibility?.layers?.machineSchema?.version !== '1.0.0') fail('ASGREP_RELEASE_PROTOCOL', 'machine protocol version changed without a release-contract update');
-  for (let index = 0; index < matrix.targets.length; index += 1) {
-    const target = matrix.targets[index];
-    const manifest = platforms[index];
-    const dependencyVersion = launcher.optionalDependencies?.[target.package];
-    const contractPlatform = contract.packages.platforms[index];
-    if (manifest.name !== target.package || manifest.version !== version || dependencyVersion !== version || contractPlatform?.optionalDependencyVersion !== version) fail('ASGREP_RELEASE_VERSION_SKEW', `${target.package} is not exactly aligned to ${version}`);
-    if (JSON.stringify(manifest.os) !== JSON.stringify([target.os]) || JSON.stringify(manifest.cpu) !== JSON.stringify([target.cpu]) || JSON.stringify(manifest.libc ?? []) !== JSON.stringify(target.libc ? [target.libc] : [])) fail('ASGREP_RELEASE_PLATFORM_SKEW', `${target.package} platform selectors do not match the target matrix`);
-  }
+  for (let index = 0; index < matrix.targets.length; index += 1) validatePlatformTarget(state, index);
 };
 const classify = (state, name) => state.matrix.targets.some((target) => target.package === name) ? 'native' : name === state.launcher.name ? 'launcher' : name === state.extension.name ? 'extension' : fail('ASGREP_RELEASE_UNKNOWN_PACKAGE', name);
 const validateFiles = (state, artifact) => {
@@ -101,6 +109,11 @@ const verifyNativeSource = async (target) => {
   if (!executableStat.isFile() || executableStat.size === 0) fail('ASGREP_RELEASE_EXECUTABLE_MISSING', target.package);
   const checksumText = await readFile(checksumFile, 'utf8').catch(() => null);
   validateChecksumRecord(target, checksumText, await sha256(executable));
+};
+const assertDirectoryEmpty = async (directory, refuseOverwrite) => {
+  if ((await readdir(directory).catch(() => [])).length) {
+    fail('ASGREP_RELEASE_OUTPUT_NOT_EMPTY', refuseOverwrite ? `${directory} must be empty; refusing to overwrite release evidence` : `${directory} must be empty`);
+  }
 };
 const stageNative = async (state, nativeRoot, commit) => {
   if (!nativeRoot) {
@@ -135,8 +148,7 @@ const pack = async () => {
   run(process.execPath, ['packages/pi/scripts/check-contract.mjs']);
   run(process.execPath, ['packages/pi/scripts/check-native-workflow.mjs']);
   const output = path.resolve(option('output', path.join(root, 'dist/pi-release')));
-  const existing = await readdir(output).catch(() => []);
-  if (existing.length) fail('ASGREP_RELEASE_OUTPUT_NOT_EMPTY', `${output} must be empty; refusing to overwrite release evidence`);
+  await assertDirectoryEmpty(output, true);
   await mkdir(output, { recursive: true });
   const staged = await stageNative(state, option('native-root'), option('commit'));
   const directories = [...staged.directories, path.join(root, 'packages/pi/launcher'), path.join(root, 'packages/pi/extension')];
@@ -153,6 +165,16 @@ const pack = async () => {
   console.log(`[pi-release] packed ${artifacts.length} artifacts in order: ${manifest.packageOrder.join(' -> ')}`);
   console.log('[pi-release] publication: disabled (npm pack only)');
 };
+const verifyArtifact = async (state, directory, manifest, artifact, index) => {
+  if (artifact.name !== manifest.packageOrder[index] || artifact.version !== state.version || artifact.layer !== classify(state, artifact.name)) {
+    fail('ASGREP_RELEASE_ORDER', `${artifact.name} is out of order or version-skewed`);
+  }
+  validateFiles(state, artifact);
+  if (!/^[a-f0-9]{64}$/u.test(artifact.sha256 ?? '') || artifact.sha256 !== await sha256(path.join(directory, artifact.filename))) {
+    fail('ASGREP_RELEASE_CHECKSUM_MISMATCH', artifact.filename);
+  }
+  console.log(`[pi-release] artifact ${index + 1}/${manifest.artifacts.length}: ${artifact.name}@${artifact.version} ${artifact.filename} sha256=${artifact.sha256} files=${artifact.files.length}`);
+};
 const verify = async (directoryOption) => {
   const state = await load();
   validateAlignment(state);
@@ -161,16 +183,12 @@ const verify = async (directoryOption) => {
   const text = await readFile(manifestPath, 'utf8');
   const manifest = JSON.parse(text);
   if (text !== canonical(manifest) || manifest.schemaVersion !== 1 || manifest.version !== state.version || manifest.tag !== state.contract.canonicalVersion.tag) fail('ASGREP_RELEASE_MANIFEST', 'release manifest is non-canonical or version-skewed');
-  if (JSON.stringify(manifest.packageOrder) !== JSON.stringify(packageOrder(state)) || manifest.artifacts.length !== 7) fail('ASGREP_RELEASE_COMPLETENESS', 'release manifest must contain the exact seven-package family in canonical order');
+  if (!sameJson(manifest.packageOrder, packageOrder(state)) || manifest.artifacts.length !== 7) fail('ASGREP_RELEASE_COMPLETENESS', 'release manifest must contain the exact seven-package family in canonical order');
   const entries = (await readdir(directory)).filter((entry) => entry !== 'publish-receipt.json').sort();
   const expected = ['release-manifest.json', ...manifest.artifacts.map((artifact) => artifact.filename)].sort();
-  if (JSON.stringify(entries) !== JSON.stringify(expected)) fail('ASGREP_RELEASE_COMPLETENESS', `artifact directory differs from manifest: ${entries.join(', ')}`);
+  if (!sameJson(entries, expected)) fail('ASGREP_RELEASE_COMPLETENESS', `artifact directory differs from manifest: ${entries.join(', ')}`);
   for (let index = 0; index < manifest.artifacts.length; index += 1) {
-    const artifact = manifest.artifacts[index];
-    if (artifact.name !== manifest.packageOrder[index] || artifact.version !== state.version || artifact.layer !== classify(state, artifact.name)) fail('ASGREP_RELEASE_ORDER', `${artifact.name} is out of order or version-skewed`);
-    validateFiles(state, artifact);
-    if (!/^[a-f0-9]{64}$/u.test(artifact.sha256 ?? '') || artifact.sha256 !== await sha256(path.join(directory, artifact.filename))) fail('ASGREP_RELEASE_CHECKSUM_MISMATCH', artifact.filename);
-    console.log(`[pi-release] artifact ${index + 1}/${manifest.artifacts.length}: ${artifact.name}@${artifact.version} ${artifact.filename} sha256=${artifact.sha256} files=${artifact.files.length}`);
+    await verifyArtifact(state, directory, manifest, manifest.artifacts[index], index);
   }
   console.log(`[pi-release] verified ${manifest.artifacts.length} immutable artifacts at ${manifest.version}`);
   return { state, directory, manifest };
@@ -218,12 +236,20 @@ const gate = async () => {
   const { live, pending } = gateState(state, { clean, refType, tag, commit, tagCommit }, observed);
   console.log(`[pi-release] gate accepted signed ${tag} at ${commit}; publish plan at ${state.version}: ${pending.length} to publish, ${live.length} already live${live.length ? ` (idempotent skip: ${live.join(', ')})` : ''}`);
 };
+const requireEnv = (environment, key, expected, code, message) => {
+  if (environment[key] !== expected) fail(code, message);
+};
 const validatePublishContext = (state, manifest, environment = process.env) => {
   if (environment.GITHUB_ACTIONS !== 'true' || !environment.ACTIONS_ID_TOKEN_REQUEST_URL) fail('ASGREP_RELEASE_OIDC_REQUIRED', 'publication is only allowed from GitHub Actions OIDC');
-  if (environment.ASGREP_NPM_PROTECTED_ENVIRONMENT !== 'npm-production') fail('ASGREP_RELEASE_PROTECTED_ENVIRONMENT', 'npm-production approval marker is required');
-  if (environment.ASGREP_NPM_OWNERSHIP_APPROVED !== 'true') fail('ASGREP_RELEASE_OWNERSHIP_APPROVAL', 'protected environment must record package-name and publisher-ownership approval');
+  requireEnv(environment, 'ASGREP_NPM_PROTECTED_ENVIRONMENT', 'npm-production', 'ASGREP_RELEASE_PROTECTED_ENVIRONMENT', 'npm-production approval marker is required');
+  requireEnv(environment, 'ASGREP_NPM_OWNERSHIP_APPROVED', 'true', 'ASGREP_RELEASE_OWNERSHIP_APPROVAL', 'protected environment must record package-name and publisher-ownership approval');
   if (environment.GITHUB_REF_TYPE !== 'tag' || environment.GITHUB_REF_NAME !== state.contract.canonicalVersion.tag) fail('ASGREP_RELEASE_TAG_VERSION', 'publication context is not the canonical official tag');
   if (environment.GITHUB_SHA?.toLowerCase() !== manifest.commit?.toLowerCase()) fail('ASGREP_RELEASE_TAG_COMMIT', 'preserved artifacts do not match the workflow commit');
+};
+const priorPublishedForLayer = (manifest, layer) => {
+  if (layer === 'native') return [];
+  if (layer === 'launcher') return manifest.artifacts.filter((item) => item.layer === 'native').map((item) => item.name);
+  return manifest.artifacts.filter((item) => item.layer !== 'extension').map((item) => item.name);
 };
 const publish = async () => {
   const { state, directory, manifest } = await verify();
@@ -232,8 +258,8 @@ const publish = async () => {
   if (!['native', 'launcher', 'extension'].includes(layer)) fail('ASGREP_RELEASE_LAYER', 'layer must be native, launcher, or extension');
   const receiptPath = path.join(directory, 'publish-receipt.json');
   const receipt = await readJson(receiptPath).catch(() => ({ schemaVersion: 1, version: manifest.version, published: [] }));
-  const expectedPrior = layer === 'native' ? [] : layer === 'launcher' ? manifest.artifacts.filter((item) => item.layer === 'native').map((item) => item.name) : manifest.artifacts.filter((item) => item.layer !== 'extension').map((item) => item.name);
-  if (JSON.stringify(receipt.published) !== JSON.stringify(expectedPrior)) fail('ASGREP_RELEASE_PUBLISH_ORDER', `${layer} cannot publish after [${receipt.published.join(', ')}]`);
+  const expectedPrior = priorPublishedForLayer(manifest, layer);
+  if (!sameJson(receipt.published, expectedPrior)) fail('ASGREP_RELEASE_PUBLISH_ORDER', `${layer} cannot publish after [${receipt.published.join(', ')}]`);
   const selected = manifest.artifacts.filter((artifact) => artifact.layer === layer);
   const observed = await registryVersions(state);
   for (const artifact of manifest.artifacts) {
@@ -262,7 +288,7 @@ const fixtureNative = async () => {
   const state = await load();
   validateAlignment(state);
   const output = path.resolve(option('output'));
-  if ((await readdir(output).catch(() => [])).length) fail('ASGREP_RELEASE_OUTPUT_NOT_EMPTY', `${output} must be empty`);
+  await assertDirectoryEmpty(output, false);
   await mkdir(output, { recursive: true });
   const commit = 'f'.repeat(40);
   for (const target of state.matrix.targets) {
@@ -279,7 +305,7 @@ const selfTest = async () => {
   const state = await load();
   validateAlignment(state);
   const commit = 'a'.repeat(40);
-  const empty = Object.fromEntries(packageOrder(state).map((name) => [packageSpec(name, state.version), null]));
+  const empty = packageSpecs(state);
   const canonicalInput = { clean: true, refType: 'tag', tag: state.contract.canonicalVersion.tag, commit, tagCommit: commit };
   const fresh = gateState(state, canonicalInput, empty);
   if (fresh.pending.length !== 7 || fresh.live.length !== 0) fail('ASGREP_RELEASE_SELF_TEST', 'a fresh version must plan to publish all seven packages');
@@ -306,14 +332,21 @@ const selfTest = async () => {
   console.log('[pi-release] publication: disabled (self-test only)');
 };
 
-const command = process.argv[2];
-if (command === 'pack') await pack();
-else if (command === 'verify') await verify();
-else if (command === 'gate') {
+const runGateCommand = async () => {
   run('bash', ['scripts/local-release-gate.sh']);
   await gate();
-}
-else if (command === 'publish') await publish();
-else if (command === 'fixture-native') await fixtureNative();
-else if (command === 'self-test') await selfTest();
-else fail('ASGREP_RELEASE_USAGE', 'pack | verify | gate | publish | fixture-native | self-test');
+};
+
+const COMMANDS = {
+  pack,
+  verify,
+  gate: runGateCommand,
+  publish,
+  'fixture-native': fixtureNative,
+  'self-test': selfTest,
+};
+
+const command = process.argv[2];
+const handler = COMMANDS[command];
+if (!handler) fail('ASGREP_RELEASE_USAGE', 'pack | verify | gate | publish | fixture-native | self-test');
+await handler();

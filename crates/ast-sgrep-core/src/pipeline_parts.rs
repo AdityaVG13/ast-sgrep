@@ -152,16 +152,14 @@ fn measure_query_parse_intent(searcher: &Searcher, cfg: &Config) -> Result<PartT
     Ok(summarize("query_parse_intent", cfg, samples, work))
 }
 fn measure_literal(searcher: &Searcher, cfg: &Config) -> Result<PartTiming> {
-    let (samples, work) = time_loop(cfg, || {
-        Ok::<_, crate::StoreError>(searcher.search_literal("process_request")?.hits.len() as u64)
-    })?;
-    Ok(summarize("literal_retrieval", cfg, samples, work))
+    measure_hit_len(searcher, cfg, "literal_retrieval", |s| {
+        Ok(s.search_literal("process_request")?.hits.len())
+    })
 }
 fn measure_lexical(searcher: &Searcher, cfg: &Config) -> Result<PartTiming> {
-    let (samples, work) = time_loop(cfg, || {
-        Ok::<_, crate::StoreError>(searcher.search_lexical("auth refresh")?.hits.len() as u64)
-    })?;
-    Ok(summarize("lexical_fts", cfg, samples, work))
+    measure_hit_len(searcher, cfg, "lexical_fts", |s| {
+        Ok(s.search_lexical("auth refresh")?.hits.len())
+    })
 }
 fn measure_symbol_graph(searcher: &Searcher, cfg: &Config) -> Result<PartTiming> {
     let (samples, work) = time_loop(cfg, || {
@@ -199,15 +197,18 @@ fn measure_hybrid_fusion(searcher: &Searcher, cfg: &Config) -> Result<PartTiming
     Ok(summarize("hybrid_fusion_rank", cfg, samples, work))
 }
 fn measure_semantic(searcher: &Searcher, cfg: &Config) -> Result<PartTiming> {
-    let (samples, work) = time_loop(cfg, || {
-        Ok::<_, crate::StoreError>(
-            searcher
-                .search_semantic("how does auth refresh work")?
-                .hits
-                .len() as u64,
-        )
-    })?;
-    Ok(summarize("semantic_embed", cfg, samples, work))
+    measure_hit_len(searcher, cfg, "semantic_embed", |s| {
+        Ok(s.search_semantic("how does auth refresh work")?.hits.len())
+    })
+}
+fn measure_hit_len(
+    searcher: &Searcher,
+    cfg: &Config,
+    name: &str,
+    mut run: impl FnMut(&Searcher) -> Result<usize>,
+) -> Result<PartTiming> {
+    let (samples, work) = time_loop(cfg, || Ok::<_, crate::StoreError>(run(searcher)? as u64))?;
+    Ok(summarize(name, cfg, samples, work))
 }
 fn measure_format(searcher: &Searcher, cfg: &Config) -> Result<PartTiming> {
     let hits = searcher.search("process_request")?.hits;

@@ -152,6 +152,7 @@ impl Default for ParserRegistry {
 mod extract;
 mod langs;
 mod pattern;
+mod pattern_queries;
 mod signature;
 use langs::{
     CSharpParser, GoParser, JavaParser, JavaScriptParser, PythonParser, RubyParser, RustParser,

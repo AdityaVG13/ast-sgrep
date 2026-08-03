@@ -145,8 +145,16 @@ fn channel_for_kind(kind: HitKind) -> FusionChannel {
     }
 }
 
+fn clamp_channel_weight(value: f64) -> f64 {
+    if value.is_finite() {
+        value.clamp(0.25, 2.0)
+    } else {
+        1.0
+    }
+}
+
 fn weight(weights: &ChannelWeights, channel: FusionChannel) -> f64 {
-    let value = match channel {
+    clamp_channel_weight(match channel {
         FusionChannel::Lexical => weights.lexical,
         FusionChannel::Definition => weights.def,
         FusionChannel::Caller => weights.caller,
@@ -155,12 +163,7 @@ fn weight(weights: &ChannelWeights, channel: FusionChannel) -> f64 {
         FusionChannel::Semantic => weights.embed,
         FusionChannel::Pattern => weights.pattern,
         FusionChannel::Import => weights.import,
-    };
-    if value.is_finite() {
-        value.clamp(0.25, 2.0)
-    } else {
-        1.0
-    }
+    })
 }
 
 fn set_weight(weights: &mut ChannelWeights, channel: FusionChannel, value: f64) {
@@ -174,11 +177,7 @@ fn set_weight(weights: &mut ChannelWeights, channel: FusionChannel, value: f64) 
         FusionChannel::Pattern => &mut weights.pattern,
         FusionChannel::Import => &mut weights.import,
     };
-    *slot = if value.is_finite() {
-        value.clamp(0.25, 2.0)
-    } else {
-        1.0
-    };
+    *slot = clamp_channel_weight(value);
 }
 
 pub fn weighted_rrf_score(ranks: &ChannelRanks, weights: &ChannelWeights) -> f64 {

@@ -536,6 +536,13 @@ fn cmp_ranked_hits(
         .then_with(|| a.line_start.cmp(&b.line_start))
 }
 
+fn same_definition_locus(hit: &SearchHit, definition: &SearchHit) -> bool {
+    hit.kind == HitKind::Def
+        && hit.file == definition.file
+        && hit.line_start == definition.line_start
+        && hit.symbol == definition.symbol
+}
+
 pub fn finish_response(
     parsed: &ParsedQuery,
     options: &SearchOptions,
@@ -624,12 +631,9 @@ pub fn finish_response(
     keyed.sort_unstable_by(compare);
     let mut hits: Vec<_> = keyed.into_iter().map(|(_, h)| h).collect();
     if let Some(definition) = best_definition {
-        let retained = hits.iter().any(|hit| {
-            hit.kind == HitKind::Def
-                && hit.file == definition.file
-                && hit.line_start == definition.line_start
-                && hit.symbol == definition.symbol
-        });
+        let retained = hits
+            .iter()
+            .any(|hit| same_definition_locus(hit, &definition));
         if !retained {
             hits.push(definition);
         }
@@ -731,12 +735,10 @@ fn enforce_result_gates(mut hits: Vec<SearchHit>, hybrid: bool, limit: usize) ->
         let head = limit.min(hits.len());
         if head > 0 && !hits[..head].iter().any(|hit| hit.kind == HitKind::Def) {
             if let Some(definition) = preferred_definition {
-                if let Some(index) = hits.iter().position(|hit| {
-                    hit.kind == HitKind::Def
-                        && hit.file == definition.file
-                        && hit.line_start == definition.line_start
-                        && hit.symbol == definition.symbol
-                }) {
+                if let Some(index) = hits
+                    .iter()
+                    .position(|hit| same_definition_locus(hit, &definition))
+                {
                     hits.remove(index);
                 }
                 hits.insert(head - 1, definition);
