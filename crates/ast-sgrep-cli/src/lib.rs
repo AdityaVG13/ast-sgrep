@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 mod agent;
 mod eval;
 pub mod supervisor;

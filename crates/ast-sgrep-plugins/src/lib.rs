@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 use ast_sgrep_core::search::HitKind;
 use ast_sgrep_core::SearchResponse;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

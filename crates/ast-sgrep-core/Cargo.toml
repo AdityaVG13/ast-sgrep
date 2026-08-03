@@ -11,8 +11,8 @@ keywords = ["code-search", "call-graph", "sqlite", "hybrid-search"]
 categories = ["development-tools"]
 documentation = "https://docs.rs/ast-sgrep-core"
 
-[lints.rust]
-unsafe_code = "deny"
+[lints]
+workspace = true
 
 [features]
 default = ["cloud-embed"]
@@ -35,7 +35,7 @@ walkdir.workspace = true
 rayon.workspace = true
 regex.workspace = true
 memchr.workspace = true
-memmap2.workspace = true
+ast-sgrep-mmap = { path = "../ast-sgrep-mmap", version = "1.3.2" }
 bytemuck.workspace = true
 
 [dev-dependencies]

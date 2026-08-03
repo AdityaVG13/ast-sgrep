@@ -3,6 +3,9 @@
 //! Warm path: a single process reuses one `Searcher` across search-channel calls
 //! (invalidated on `index_repo`) so AI agents avoid per-request SQLite open cost.
 
+
+#![forbid(unsafe_code)]
+
 use anyhow::Context;
 use ast_sgrep_core::{EmbedBackend, IndexOptions, Indexer, SearchOptions, Searcher};
 use ast_sgrep_plugins::{format_response_with, OutputFormat};

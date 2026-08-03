@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 pub mod backend;
 pub mod server;
 pub mod support;

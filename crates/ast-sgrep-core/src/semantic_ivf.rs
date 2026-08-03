@@ -1,7 +1,7 @@
 use crate::semantic_ann::SemanticAnnIndex;
 use crate::Result;
+use ast_sgrep_mmap::{map_readonly, Mmap};
 use blake3::Hasher;
-use memmap2::{Mmap, MmapOptions};
 use std::fs::{self, File, OpenOptions};
 use std::io::{Cursor, Read, Write};
 use std::ops::Range;
@@ -479,13 +479,6 @@ fn open_mappable_file(path: &Path) -> std::io::Result<File> {
 #[cfg(not(windows))]
 fn open_mappable_file(path: &Path) -> std::io::Result<File> {
     File::open(path)
-}
-
-#[allow(unsafe_code)]
-fn map_readonly(file: &File) -> std::io::Result<Mmap> {
-    // SAFETY: callers map a shared read-only handle. This module never mutates a
-    // published inode in place; writers fsync and rename a separate file.
-    unsafe { MmapOptions::new().map(file) }
 }
 
 #[cfg(unix)]

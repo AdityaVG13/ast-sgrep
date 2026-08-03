@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 use anyhow::Context;
 fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().collect();

@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 use thiserror::Error;
 pub mod bench_suite;
 pub mod chain;

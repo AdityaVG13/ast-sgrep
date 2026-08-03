@@ -1,12 +1,32 @@
 name: CI
 
-# Manual-only to avoid burning GitHub Actions minutes on every push/PR.
-# Run from the Actions tab → CI → Run workflow.
+# pull_request: cheap soundness + typecheck gates.
+# Full matrix remains available via workflow_dispatch.
 on:
+  pull_request:
   workflow_dispatch:
 
 jobs:
+  forbid-soundness:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: verify-forbid-soundness
+        run: bash scripts/verify-forbid-soundness
+
+  cargo-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo check workspace
+        run: cargo check --workspace -j1
+
   build-and-test:
+    if: github.event_name == 'workflow_dispatch'
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest]
@@ -25,6 +45,7 @@ jobs:
         run: cargo test --workspace --release
 
   windows-smoke:
+    if: github.event_name == 'workflow_dispatch'
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -79,6 +100,7 @@ jobs:
           }
 
   clippy:
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -93,6 +115,7 @@ jobs:
         run: cargo clippy --workspace --release --all-targets -- -D warnings
 
   fmt:
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -105,6 +128,7 @@ jobs:
         run: cargo fmt --check
 
   audit:
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -115,6 +139,7 @@ jobs:
         run: cargo audit
 
   bounded-fuzz:
+    if: github.event_name == 'workflow_dispatch'
     name: Bounded parser fuzzing
     runs-on: ubuntu-latest
     timeout-minutes: 10

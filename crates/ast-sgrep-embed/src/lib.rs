@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 mod embedder;
 mod math;
 mod neural;
