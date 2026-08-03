@@ -266,6 +266,7 @@ impl McpServer {
     }
 
     fn invalidate_searcher_cache(&self) {
+        // Poison fails closed: clear tainted cache rather than skipping invalidation (bix3).
         let mut guard = match self.searcher_cache.lock() {
             Ok(guard) => guard,
             Err(poisoned) => {
@@ -278,21 +279,17 @@ impl McpServer {
         *guard = None;
     }
 
-    fn searcher_for(
-        &self,
-        root: PathBuf,
-        limit: usize,
-    ) -> anyhow::Result<std::sync::MutexGuard<'_, Option<(SearcherKey, Searcher)>>> {
+    fn searcher_for(&self, root: PathBuf, limit: usize) -> anyhow::Result<Searcher> {
         let key = SearcherKey {
             root: root.clone(),
             index_path: self.index_path.clone(),
             limit,
             use_embed: self.use_embed,
         };
+        // Poison fails closed: clear and rebuild rather than reuse tainted state (bix3/sxjc).
         let mut guard = match self.searcher_cache.lock() {
             Ok(guard) => guard,
             Err(poisoned) => {
-                // Poison → drop cache (sxjc) rather than reuse tainted Searcher.
                 self.searcher_cache.clear_poison();
                 let mut guard = PoisonError::into_inner(poisoned);
                 *guard = None;
@@ -311,9 +308,36 @@ impl McpServer {
                 use_embed: self.use_embed,
                 ..SearchOptions::default()
             })?;
+            *guard = Some((key.clone(), searcher));
+        }
+        // Take searcher out so the mutex is not held across search compute (bix3).
+        let (_cached_key, searcher) = guard
+            .take()
+            .ok_or_else(|| anyhow::anyhow!("searcher cache missing after populate"))?;
+        drop(guard);
+        Ok(searcher)
+    }
+
+    fn restore_searcher(&self, root: PathBuf, limit: usize, searcher: Searcher) {
+        let key = SearcherKey {
+            root,
+            index_path: self.index_path.clone(),
+            limit,
+            use_embed: self.use_embed,
+        };
+        let mut guard = match self.searcher_cache.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => {
+                self.searcher_cache.clear_poison();
+                let mut guard = PoisonError::into_inner(poisoned);
+                *guard = None;
+                guard
+            }
+        };
+        // Only restore if nothing newer was inserted (single-flight index may have cleared).
+        if guard.is_none() {
             *guard = Some((key, searcher));
         }
-        Ok(guard)
     }
 
     fn tool_agent_search(&self, args: &Value, mode: AgentSearchMode) -> anyhow::Result<String> {
@@ -326,16 +350,14 @@ impl McpServer {
             .context("query must contain 1 to 4096 characters")?;
         let limit = Self::integer_arg(args, "limit", self.limit, 1, MAX_AGENT_LIMIT)?;
         let root = self.root_arg(args)?;
-        let guard = self.searcher_for(root, limit)?;
-        let searcher = &guard
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("searcher cache missing after populate"))?
-            .1;
+        let searcher = self.searcher_for(root.clone(), limit)?;
         let response = match mode {
-            AgentSearchMode::Keyword => searcher.search_lexical(query)?,
-            AgentSearchMode::Ast => searcher.search(&format!("pattern: {query}"))?,
-            AgentSearchMode::Semantic => searcher.search_semantic(query)?,
+            AgentSearchMode::Keyword => searcher.search_lexical(query),
+            AgentSearchMode::Ast => searcher.search(&format!("pattern: {query}")),
+            AgentSearchMode::Semantic => searcher.search_semantic(query),
         };
+        self.restore_searcher(root, limit, searcher);
+        let response = response?;
         Ok(serde_json::to_string_pretty(&format_response_with(
             &response,
             OutputFormat::AgentCapsule,
@@ -405,7 +427,12 @@ impl McpServer {
         let mut indexer = Indexer::new(IndexOptions {
             root,
             index_path: self.index_path.clone(),
-            embed_backend: EmbedBackend::Auto,
+            embed_semantic: self.use_embed,
+            embed_backend: if self.use_embed {
+                EmbedBackend::Auto
+            } else {
+                EmbedBackend::Semantic
+            },
             ..IndexOptions::default()
         })?;
         // Soft deadline: refuse to start when the prior wait already exhausted the budget.
