@@ -242,3 +242,39 @@ cargo test -p ast-sgrep-lang --lib
 - pr22 ranking/ANN behavior port (explicit out of scope).
 - `skip`/`text`/`output` facade deletion (no surviving symbols).
 - `.beads/` sync (not authorized).
+
+---
+
+## Batch D — module_resolve split + finish_response demotion (second-pass ZTD)
+
+### module_resolve split
+
+| Change | Location |
+|--------|----------|
+| Move module resolution helpers | `store/module_resolve.rs` (new) |
+| `resolve_module_path` → `collect_module_candidates` | `store/sqlite.rs` |
+| Wire `mod module_resolve` | `store/mod.rs` |
+
+Move-only; no ranking ports.
+
+### Demotion (zero-risk, in-crate only)
+
+| Symbol | Action |
+|--------|--------|
+| `finish_response` | `pub` → `pub(crate)` (only `search/mod.rs` + `pipeline_parts.rs`) |
+
+### Commands run
+
+```bash
+export PATH="/usr/local/cargo/bin:$PATH"
+cd /workspace/.worktrees/pr25
+cargo test -p ast-sgrep-cli --test machine_contracts
+cargo test -p ast-sgrep-core --lib
+```
+
+### Observed results
+
+| Suite | Result |
+|-------|--------|
+| `machine_contracts` | **9 passed** |
+| `ast-sgrep-core --lib` | **21 passed** |

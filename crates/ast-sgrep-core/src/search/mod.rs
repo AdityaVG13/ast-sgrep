@@ -416,7 +416,7 @@ fn lock_response_cache(cache: &Mutex<ResponseCache>) -> std::sync::MutexGuard<'_
 fn lock_poison_ok<T>(cache: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     cache.lock().unwrap_or_else(|e| e.into_inner())
 }
-pub fn finish_response(
+pub(crate) fn finish_response(
     parsed: &ParsedQuery,
     options: &SearchOptions,
     mut hits: Vec<SearchHit>,
