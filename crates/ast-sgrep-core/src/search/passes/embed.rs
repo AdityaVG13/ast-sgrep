@@ -72,6 +72,11 @@ pub fn embed_pass_lazy_ivf(
     }
     let ranked =
         ast_sgrep_embed::rank_chunk_indices_by_vector(&query_vec, &chunks, EMBED_HIT_LIMIT);
+    // iva9.6: empty / under-filled ANN must not short-circuit the flat path.
+    if !crate::semantic_ann::ann_result_is_sufficient(ranked.len(), chunks.len(), EMBED_HIT_LIMIT)
+    {
+        return Ok(None);
+    }
     Ok(Some(embed_similarity_hits(&chunks, ranked)))
 }
 pub fn embed_pass_with_context(

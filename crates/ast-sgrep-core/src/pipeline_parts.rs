@@ -198,6 +198,7 @@ fn measure_hybrid_fusion(searcher: &Searcher, cfg: &Config) -> Result<PartTiming
         let mut hits = candidates.clone();
         intent::route_hits(&parsed, &mut hits);
         crate::search::finish_response(&parsed, &opts, hits, true)
+            .expect("finish_response")
             .hits
             .len() as u64
     });

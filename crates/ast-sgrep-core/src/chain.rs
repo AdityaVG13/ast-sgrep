@@ -75,6 +75,18 @@ fn hit_symbol(store: &IndexStore, hit: &SearchHit) -> Option<(String, u32, u32)>
     if let Some(ref sym) = hit.symbol {
         return Some((sym.clone(), hit.line_start, hit.line_end));
     }
+    // iva9.8: Caller/Graph hits carry callee/caller — prefer those over a
+    // file-scanned first symbol that may ignore the edged relationship.
+    if let Some(ref callee) = hit.callee {
+        if !callee.is_empty() {
+            return Some((callee.clone(), hit.line_start, hit.line_end));
+        }
+    }
+    if let Some(ref caller) = hit.caller {
+        if !caller.is_empty() {
+            return Some((caller.clone(), hit.line_start, hit.line_end));
+        }
+    }
     if let Ok(Some(row)) = store.symbol_at_line(&hit.file, hit.line_start) {
         return Some((row.name, row.line_start, row.line_end));
     }
@@ -280,13 +292,14 @@ pub fn expand_chain(
             e.label,
         ))
     });
+    all_entries.sort_by(entry_cmp);
+    let total_nodes = all_entries.len();
+    all_entries.truncate(config.limit);
+    // iva9.8: after node truncate, edges must be a subset of remaining nodes.
     let node_files: HashSet<&str> = all_entries.iter().map(|e| e.file.as_str()).collect();
     all_edges.retain(|e| {
         node_files.contains(e.from_file.as_str()) && node_files.contains(e.to_file.as_str())
     });
-    all_entries.sort_by(entry_cmp);
-    let total_nodes = all_entries.len();
-    all_entries.truncate(config.limit);
     Ok(ChainResponse {
         query: query.to_string(),
         seeds: seed_nodes,

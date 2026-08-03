@@ -108,12 +108,12 @@ impl Searcher {
     pub fn search_lexical(&self, query_str: &str) -> Result<SearchResponse> {
         self.cached("lex", query_str, || {
             let parsed = ParsedQuery::parse(query_str);
-            Ok(finish_response(
+            finish_response(
                 &parsed,
                 &self.options,
                 lexical_pass(&self.store, &self.options, &parsed)?,
                 true,
-            ))
+            )
         })
     }
     pub fn search_symbol_pass(&self, query_str: &str) -> Result<SearchResponse> {
@@ -121,7 +121,7 @@ impl Searcher {
             let parsed = ParsedQuery::parse(query_str);
             let mut hits = symbol_pass(&self.store, &self.options, &parsed)?;
             hits.extend(anchor_pass(&self.store, &self.options, &parsed)?);
-            Ok(finish_response(&parsed, &self.options, hits, true))
+            finish_response(&parsed, &self.options, hits, true)
         })
     }
     pub fn search(&self, query_str: &str) -> Result<SearchResponse> {
@@ -147,51 +147,51 @@ impl Searcher {
                     hits
                 }
             };
-            Ok(finish_response(&parsed, &self.options, hits, true))
+            finish_response(&parsed, &self.options, hits, true)
         })
     }
     pub fn search_semantic(&self, query_str: &str) -> Result<SearchResponse> {
         self.cached("sem", query_str, || {
             let parsed = ParsedQuery::parse(query_str);
-            Ok(finish_response(
+            finish_response(
                 &parsed,
                 &self.options,
                 run_embed_pass(&self.store, &self.options, &parsed, &self.semantic_cache)?,
                 false,
-            ))
+            )
         })
     }
     pub fn search_literal(&self, query: &str) -> Result<SearchResponse> {
         self.cached("lit", query, || {
             let parsed = ParsedQuery::literal(query);
-            Ok(finish_response(
+            finish_response(
                 &parsed,
                 &self.options,
                 literal_pass(&self.store, &self.options, &parsed)?,
                 true,
-            ))
+            )
         })
     }
     pub fn search_regex(&self, query: &str) -> Result<SearchResponse> {
         self.cached("re", query, || {
             let parsed = ParsedQuery::regex(query);
-            Ok(finish_response(
+            finish_response(
                 &parsed,
                 &self.options,
                 regex_pass(&self.store, &self.options, &parsed)?,
                 true,
-            ))
+            )
         })
     }
     pub fn search_word(&self, query: &str) -> Result<SearchResponse> {
         self.cached("word", query, || {
             let parsed = ParsedQuery::word(query);
-            Ok(finish_response(
+            finish_response(
                 &parsed,
                 &self.options,
                 literal_pass(&self.store, &self.options, &parsed)?,
                 true,
-            ))
+            )
         })
     }
     fn search_hybrid(&self, parsed: &ParsedQuery) -> Result<Vec<SearchHit>> {
@@ -417,15 +417,19 @@ pub fn finish_response(
     options: &SearchOptions,
     mut hits: Vec<SearchHit>,
     dedup: bool,
-) -> SearchResponse {
+) -> Result<SearchResponse> {
     if dedup {
         hits = dedup_hits(hits);
     }
     if let Some(ref filter) = options.file_filter {
-        if let Ok(re) = compile_glob(filter) {
-            hits.retain(|h| re.is_match(&h.file));
-        }
+        // iva9.2: invalid globs error — never silently skip the filter.
+        let re = compile_glob(filter).map_err(|e| {
+            crate::StoreError::Other(format!("invalid file_filter glob '{filter}': {e}"))
+        })?;
+        hits.retain(|h| re.is_match(&h.file));
     }
+    // iva9.4: drop non-positive scores before cap/truncate so zeros cannot fill limit.
+    hits.retain(|h| h.score.is_finite() && h.score > 0.0);
     if options.count_only {
         let mut counts: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
         for hit in &hits {
@@ -443,7 +447,7 @@ pub fn finish_response(
             prevented_read_bytes: 0,
         };
         record_ledger_from_env(&response);
-        return response;
+        return Ok(response);
     }
     let gate_limit = rerank_candidate_limit(options);
     let keep = if parsed.mode == QueryMode::Hybrid {
@@ -496,7 +500,7 @@ pub fn finish_response(
         prevented_read_bytes,
     };
     record_ledger_from_env(&response);
-    response
+    Ok(response)
 }
 fn rerank_candidate_limit(options: &SearchOptions) -> usize {
     if options.use_rerank {
@@ -560,11 +564,13 @@ fn apply_rerank_order(
         .collect();
     ranked.sort_by(|a, b| b.0.total_cmp(&a.0));
     let mut out = Vec::with_capacity(prefix.len() + hits.len());
-    out.extend(
-        ranked
-            .into_iter()
-            .filter_map(|(_, index)| prefix[index].take()),
-    );
+    // iva9.8: write rerank scores so order and score stay consistent.
+    out.extend(ranked.into_iter().filter_map(|(score, index)| {
+        prefix[index].take().map(|mut hit| {
+            hit.score = f64::from(score);
+            hit
+        })
+    }));
     out.extend(prefix.into_iter().flatten());
     out.append(&mut hits);
     out
@@ -649,7 +655,13 @@ fn cap_per_file(hits: Vec<SearchHit>) -> Vec<SearchHit> {
     kept.extend(overflow);
     kept
 }
-fn compile_glob(pattern: &str) -> std::result::Result<regex::Regex, regex::Error> {
+fn compile_glob(pattern: &str) -> std::result::Result<regex::Regex, String> {
+    if pattern.is_empty() {
+        return Err("file_filter must be non-empty".into());
+    }
+    if pattern.chars().any(|c| c == '\0' || (c.is_control() && c != '\t')) {
+        return Err("file_filter contains invalid control characters".into());
+    }
     let mut result = String::from("^");
     let mut chars = pattern.chars().peekable();
     while let Some(c) = chars.next() {
@@ -673,7 +685,7 @@ fn compile_glob(pattern: &str) -> std::result::Result<regex::Regex, regex::Error
         }
     }
     result.push('$');
-    regex::Regex::new(&result)
+    regex::Regex::new(&result).map_err(|e| e.to_string())
 }
 fn contains_term_token(text: &str, term: &str) -> bool {
     !term.is_empty()
@@ -733,7 +745,7 @@ mod tests {
         assert_eq!(final_hits[0].file, "candidate-16.rs");
     }
     #[test]
-    fn rerank_reorders_prefix_without_overwriting_fused_scores() {
+    fn rerank_reorders_prefix_and_writes_rerank_scores() {
         let hits = vec![
             hit("a.rs", 1, 0.9),
             hit("b.rs", 2, 0.8),
@@ -749,15 +761,14 @@ mod tests {
             .iter()
             .map(|h| (h.file.as_str(), h.score))
             .collect();
-        assert_eq!(
-            identity,
-            vec![
-                ("c.rs", 0.7),
-                ("a.rs", 0.9),
-                ("b.rs", 0.8),
-                ("tail.rs", 0.6)
-            ]
-        );
+        assert_eq!(identity[0].0, "c.rs");
+        assert!((identity[0].1 - f64::from(0.99_f32)).abs() < 1e-9);
+        assert_eq!(identity[1].0, "a.rs");
+        assert!((identity[1].1 - f64::from(0.5_f32)).abs() < 1e-9);
+        assert_eq!(identity[2], ("b.rs", 0.8));
+        assert_eq!(identity[3], ("tail.rs", 0.6));
+        // Scores must be monotonically non-increasing across the reranked prefix.
+        assert!(reranked[0].score >= reranked[1].score);
     }
     #[test]
     fn hybrid_cap_and_limit_are_reapplied_after_rerank() {
@@ -775,14 +786,65 @@ mod tests {
             .iter()
             .map(|h| (h.file.as_str(), h.line_start, h.score))
             .collect();
-        assert_eq!(
-            identity,
-            vec![
-                ("a.rs", 4, 0.6),
-                ("a.rs", 3, 0.7),
-                ("a.rs", 2, 0.8),
-                ("b.rs", 1, 0.5)
-            ]
+        assert_eq!(identity.len(), 4);
+        assert_eq!(identity[0].0, "a.rs");
+        assert_eq!(identity[0].1, 4);
+        assert!((identity[0].2 - f64::from(1.0_f32)).abs() < 1e-9);
+        assert_eq!(identity[1].0, "a.rs");
+        assert_eq!(identity[1].1, 3);
+        assert!((identity[1].2 - f64::from(0.9_f32)).abs() < 1e-9);
+        assert_eq!(identity[2].0, "a.rs");
+        assert_eq!(identity[2].1, 2);
+        assert!((identity[2].2 - f64::from(0.8_f32)).abs() < 1e-9);
+        assert_eq!(identity[3].0, "b.rs");
+        assert_eq!(identity[3].1, 1);
+        assert!((identity[3].2 - f64::from(0.1_f32)).abs() < 1e-9);
+    }
+    #[test]
+    fn zero_score_hits_are_dropped_before_limit() {
+        let parsed = ParsedQuery {
+            raw: "q".into(),
+            mode: QueryMode::Hybrid,
+            target: None,
+            terms: vec!["q".into()],
+        };
+        let options = SearchOptions {
+            limit: 2,
+            use_rerank: false,
+            ..SearchOptions::default()
+        };
+        let hits = vec![
+            hit("zero.rs", 1, 0.0),
+            hit("neg.rs", 1, -1.0),
+            hit("a.rs", 1, 0.9),
+            hit("b.rs", 1, 0.8),
+            hit("c.rs", 1, 0.7),
+        ];
+        let resp = finish_response(&parsed, &options, hits, false).unwrap();
+        assert_eq!(resp.hits.len(), 2);
+        assert!(resp.hits.iter().all(|h| h.score > 0.0));
+        assert_eq!(resp.hits[0].file, "a.rs");
+        assert_eq!(resp.hits[1].file, "b.rs");
+    }
+    #[test]
+    fn invalid_file_filter_errors_instead_of_unfiltered() {
+        let parsed = ParsedQuery {
+            raw: "q".into(),
+            mode: QueryMode::Hybrid,
+            target: None,
+            terms: vec!["q".into()],
+        };
+        let options = SearchOptions {
+            file_filter: Some("\0bad".into()),
+            limit: 10,
+            ..SearchOptions::default()
+        };
+        let hits = vec![hit("a.rs", 1, 1.0), hit("b.rs", 1, 0.9)];
+        let err = finish_response(&parsed, &options, hits, false).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("invalid file_filter"),
+            "expected invalid file_filter error, got {msg}"
         );
     }
 }

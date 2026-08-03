@@ -17,7 +17,15 @@ pub fn search_pattern(
     root: &Path,
     lang_filter: Option<&str>,
 ) -> Result<Vec<SearchHit>> {
-    // 1) Index-backed structural signatures (O(signatures), no re-parse).
+    // Three-layer structural stack (iva9.7):
+    // 1) Index-backed pattern_nodes (O(signatures), no re-parse).
+    // 2) In-process tree-sitter native matcher for classifiable shapes.
+    // 3) Optional external ast-grep for exotic `$` shapes only.
+    //
+    // Fail-closed policy: exotic patterns that need layer 3 never silently
+    // return empty when the external binary is absent. Classifiable native
+    // shapes treat empty native hits as authoritative match-none (no subprocess
+    // reintroduction for native gaps).
     if store.pattern_node_count()? > 0 {
         if let Some(signatures) = cached_pattern_signatures(pattern) {
             let indexed = search_pattern_cached(pattern, &signatures, store, lang_filter)?;
@@ -26,20 +34,29 @@ pub fn search_pattern(
             }
         }
     }
-    // 2) In-process tree-sitter match (literal + native metavariable shapes).
     let native = search_pattern_native(pattern, root, lang_filter)?;
-    if !native.is_empty() || !needs_ast_grep_fallback(pattern) {
-        // Prefer native results; only spawn external ast-grep when we truly cannot
-        // represent the pattern and have zero native hits.
-        if !native.is_empty() || find_ast_grep_binary().is_none() {
-            return Ok(native);
-        }
+    if !native.is_empty() {
+        return Ok(native);
     }
-    // 3) Full ast-grep for exotic structural rules (if installed).
     if needs_ast_grep_fallback(pattern) {
+        // Fail-closed: exotic shapes never return silent empty when layer-3 is
+        // unavailable (missing binary) or explicitly disabled (no subprocess).
+        if !external_ast_grep_allowed() || find_ast_grep_binary().is_none() {
+            return Err(crate::StoreError::Other(format!(
+                "pattern requires structural fallback but ast-grep is unavailable (fail-closed): {pattern}"
+            )));
+        }
         return search_pattern_ast_grep(pattern, root, lang_filter);
     }
     Ok(native)
+}
+
+/// When set, skip external ast-grep entirely (iva9.7 fail-closed / no-subprocess mode).
+fn external_ast_grep_allowed() -> bool {
+    !matches!(
+        std::env::var("ASGREP_DISABLE_AST_GREP").as_deref(),
+        Ok("1") | Ok("true") | Ok("TRUE")
+    )
 }
 fn cached_pattern_signatures(pattern: &str) -> Option<Vec<String>> {
     let pattern = pattern.trim();

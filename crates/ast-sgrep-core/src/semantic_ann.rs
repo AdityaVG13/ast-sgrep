@@ -455,8 +455,12 @@ pub fn rank_chunk_indices_flat(
         return Ok(vec![]);
     }
     let dim = chunks[0].5.len();
+    // iva9.6: prefer ANN, but fall through to brute-force when empty/under-filled.
     if let Some(ivf) = cached_semantic_ivf(store, chunks, override_threshold)? {
-        return Ok(ivf.search(query_vec, limit));
+        let ranked = ivf.search(query_vec, limit);
+        if ann_result_is_sufficient(ranked.len(), chunks.len(), limit) {
+            return Ok(ranked);
+        }
     }
     Ok(match flat {
         Some(f) => brute_force_flat(f, dim, query_vec, limit),
@@ -467,6 +471,12 @@ pub fn rank_chunk_indices_flat(
             limit,
         ),
     })
+}
+
+/// iva9.6: ANN output is usable only when it fills the requested top-k (or all chunks).
+pub fn ann_result_is_sufficient(n_hits: usize, n_chunks: usize, limit: usize) -> bool {
+    let target = limit.min(n_chunks);
+    n_hits > 0 && n_hits >= target
 }
 pub fn rebuild_semantic_ivf_sidecar(
     store: &IndexStore,
