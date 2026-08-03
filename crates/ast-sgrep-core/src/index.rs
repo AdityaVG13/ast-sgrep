@@ -11,6 +11,20 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 use walkdir::WalkDir;
+
+/// Policy for paths stored as SQLite `files.path` keys (ast-sgrep-kqhp).
+///
+/// Indexed relative paths must be valid UTF-8. Lossy conversion is forbidden:
+/// two distinct non-UTF8 `OsStr` paths must not collide into one DB key.
+pub fn indexed_rel_path(rel: &Path) -> Result<String> {
+    let raw = rel.to_str().ok_or_else(|| {
+        crate::StoreError::Other(format!(
+            "non-UTF8 path rejected (asgrep-kqhp): {}",
+            rel.display()
+        ))
+    })?;
+    Ok(raw.replace('\\', "/"))
+}
 #[derive(Debug, Clone)]
 pub struct SplitLines {
     pub lines: Vec<(u32, String)>,
@@ -211,7 +225,15 @@ impl Indexer {
                     let Ok(rel) = path.strip_prefix(&self.options.root) else {
                         continue;
                     };
-                    let rel_str = rel.to_string_lossy().replace('\\', "/");
+                    let rel_str = match indexed_rel_path(rel) {
+                        Ok(s) => s,
+                        Err(e) => {
+                            eprintln!("[asgrep] {e}");
+                            stats.files_failed += 1;
+                            stats.walk_errors = true;
+                            continue;
+                        }
+                    };
                     if (self.options.respect_gitignore && self.ignore.is_ignored(rel))
                         || should_skip_file(&path)
                     {
@@ -395,7 +417,14 @@ impl Indexer {
             if rel.as_os_str().is_empty() || abs.is_dir() {
                 continue;
             }
-            let rel_str = rel.to_string_lossy().replace('\\', "/");
+            let rel_str = match indexed_rel_path(rel) {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("[asgrep] {e}");
+                    stats.files_failed += 1;
+                    continue;
+                }
+            };
             if rel
                 .components()
                 .any(|c| should_skip_dir(Path::new(c.as_os_str())))
@@ -576,12 +605,12 @@ impl Indexer {
             if self.store.needs_semantic_v1_rewrite()? {
                 return Ok(false);
             }
+            // Exact backend identity only (ast-sgrep-28vo): Auto is not a
+            // wildcard for concrete stored backends, and stored "auto" does not
+            // match a concrete active preference.
             let stored = self.store.get_meta("embed_backend")?;
             let active = self.options.embed_backend.to_preference_str();
-            if stored.as_deref() != Some(active)
-                && stored.as_deref() != Some("auto")
-                && active != "auto"
-            {
+            if stored.as_deref() != Some(active) {
                 return Ok(false);
             }
         }

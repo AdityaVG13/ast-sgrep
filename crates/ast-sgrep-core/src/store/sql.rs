@@ -314,13 +314,18 @@ pub fn delete_file_children(conn: &Connection, file_id: i64) -> Result<()> {
     }
     Ok(())
 }
+/// Meta keys preserved across `clear_all_data` / reindex (schema identity only).
+/// Everything else — including `body:`/`struct:`/`eol:` fingerprints and `embed_*`
+/// backend/dim/cache stats — is wiped so a reindex cannot inherit stale identity.
+pub const CLEAR_ALL_META_WHITELIST: &[&str] = &["root"];
 /// Full wipe of index content tables (schema left intact). Order keeps FTS/content-sync safe.
+/// Meta is cleared except the schema whitelist (bead ast-sgrep-28vo).
 pub const CLEAR_ALL_SQL: &str = "\
 DELETE FROM lines_trigram; DELETE FROM lines_fts; DELETE FROM semantic_chunks; \
 DELETE FROM pattern_nodes; DELETE FROM embeddings; DELETE FROM imports; \
 DELETE FROM callers; DELETE FROM symbols; DELETE FROM lines; DELETE FROM files; \
 DELETE FROM embed_cache; \
-DELETE FROM meta WHERE key LIKE 'struct:%' OR key LIKE 'body:%' OR key LIKE 'eol:%';";
+DELETE FROM meta WHERE key NOT IN ('root');";
 fn emb_vec(r: &rusqlite::Row<'_>, idx: usize) -> rusqlite::Result<Vec<f32>> {
     let v: Vec<u8> = r.get(idx)?;
     // Fail closed on corrupt blobs (bead ast-sgrep-j97d.5qpa) — never default to zeros.

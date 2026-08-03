@@ -37,7 +37,9 @@ pub mod text {
 pub mod output {
     pub use crate::search::format_hit_line;
 }
-pub use index::{EmbedBackend, FileIndexStats, IndexOptions, IndexStats, Indexer};
+pub use index::{
+    indexed_rel_path, EmbedBackend, FileIndexStats, IndexOptions, IndexStats, Indexer,
+};
 pub use output::format_hit_line;
 pub use pattern::search_pattern;
 pub use query::{ParsedQuery, QueryMode};

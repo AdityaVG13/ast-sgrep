@@ -17,6 +17,10 @@ use rusqlite::{params, Connection, ToSql};
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+#[cfg(test)]
+thread_local! {
+    static FAIL_ROLLBACK: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
 const SCHEMA_VERSION: i64 = 6;
 const IMPORT_SELECT: &str =
     "SELECT f.path, f.language, i.module_path, i.line_no FROM imports i JOIN files f ON f.id = i.file_id";
@@ -257,6 +261,16 @@ impl IndexStore {
     pub fn rollback_file_tx(&self) -> Result<()> {
         self.end_file_tx(false)
     }
+    /// Test-only: nesting depth of an open file_tx (0 = inactive).
+    #[cfg(test)]
+    pub fn file_tx_depth_for_test(&self) -> u32 {
+        self.file_tx_depth.get()
+    }
+    /// Test-only: force the next ROLLBACK to fail (ast-sgrep-naiv).
+    #[cfg(test)]
+    pub fn inject_rollback_failure_for_test(fail: bool) {
+        FAIL_ROLLBACK.with(|f| f.set(fail));
+    }
     fn restore_synchronous(&self) -> Result<()> {
         self.conn
             .execute_batch("PRAGMA synchronous = NORMAL; PRAGMA cache_size = -16384")?;
@@ -275,23 +289,39 @@ impl IndexStore {
             self.file_tx_depth.set(depth - 1);
             return Ok(());
         }
-        self.file_tx_depth.set(0);
-        let owns = self.file_tx_owns.replace(false);
-        let poisoned = self.file_tx_poisoned.replace(false);
+        // Do not clear file_tx_active (depth/owns) until COMMIT/ROLLBACK succeeds
+        // (bead ast-sgrep-naiv). A failed end leaves depth set so callers see the
+        // still-open transaction instead of a silently half-ended one.
+        let owns = self.file_tx_owns.get();
+        let poisoned = self.file_tx_poisoned.get();
         if owns {
             if commit && !poisoned {
                 self.conn.execute_batch("COMMIT")?;
             } else {
-                let _ = self.conn.execute_batch("ROLLBACK");
+                self.execute_rollback()?;
             }
             // Always restore NORMAL after file_tx ends (bead ast-sgrep-j97d.5kj8).
             let _ = self.restore_synchronous();
         }
+        self.file_tx_depth.set(0);
+        self.file_tx_owns.set(false);
+        self.file_tx_poisoned.set(false);
         if poisoned && commit {
             return Err(crate::StoreError::Other(
                 "file_tx commit refused: nested file_tx rolled back".into(),
             ));
         }
+        Ok(())
+    }
+    /// Run ROLLBACK and propagate failures (ast-sgrep-naiv). Test hook can inject errors.
+    fn execute_rollback(&self) -> Result<()> {
+        #[cfg(test)]
+        if FAIL_ROLLBACK.with(|f| f.get()) {
+            return Err(crate::StoreError::Other(
+                "injected ROLLBACK failure".into(),
+            ));
+        }
+        self.conn.execute_batch("ROLLBACK")?;
         Ok(())
     }
     fn with_file_tx<T>(&self, f: impl FnOnce() -> Result<T>) -> Result<T> {
@@ -346,16 +376,17 @@ impl IndexStore {
         if self.conn.is_autocommit() {
             return Ok(());
         }
-        self.file_tx_depth.set(0);
-        self.file_tx_owns.set(false);
-        self.file_tx_poisoned.set(false);
+        // Clear nesting flags only after a successful COMMIT/ROLLBACK (naiv).
         if commit {
             self.conn.execute_batch("COMMIT")?;
         } else {
-            let _ = self.conn.execute_batch("ROLLBACK");
+            self.execute_rollback()?;
         }
         // Restore NORMAL after both commit and rollback (bead ast-sgrep-j97d.5kj8).
         let _ = self.restore_synchronous();
+        self.file_tx_depth.set(0);
+        self.file_tx_owns.set(false);
+        self.file_tx_poisoned.set(false);
         Ok(())
     }
     pub fn clear_all_data(&self) -> Result<()> {
@@ -975,7 +1006,9 @@ impl IndexStore {
         };
         let mut cands = BTreeSet::new();
         for base in bases {
-            let n = normalize_rel(&base);
+            let Ok(n) = normalize_rel(&base) else {
+                continue;
+            };
             cands.insert(n.clone());
             if base.extension().is_none() {
                 for e in exts {
@@ -1227,4 +1260,46 @@ fn resolve_bases_go(from_file: &str, parent: &Path, module: &str) -> Vec<PathBuf
         }
     }
     bases
+}
+
+#[cfg(test)]
+mod rollback_tests {
+    use super::IndexStore;
+    use tempfile::TempDir;
+
+    #[test]
+    fn rollback_failure_propagates_and_keeps_file_tx_active() {
+        let temp = TempDir::new().unwrap();
+        let store = IndexStore::open(temp.path(), None).unwrap();
+        store.begin_file_tx().unwrap();
+        assert_eq!(store.file_tx_depth_for_test(), 1);
+        IndexStore::inject_rollback_failure_for_test(true);
+        let err = store.rollback_file_tx().expect_err("ROLLBACK must Err");
+        IndexStore::inject_rollback_failure_for_test(false);
+        assert!(
+            err.to_string().contains("ROLLBACK"),
+            "error should mention ROLLBACK: {err}"
+        );
+        assert_eq!(
+            store.file_tx_depth_for_test(),
+            1,
+            "file_tx_active must remain set until successful end"
+        );
+        // Successful rollback clears depth.
+        store.rollback_file_tx().unwrap();
+        assert_eq!(store.file_tx_depth_for_test(), 0);
+    }
+
+    #[test]
+    fn bulk_rollback_failure_propagates() {
+        let temp = TempDir::new().unwrap();
+        let store = IndexStore::open(temp.path(), None).unwrap();
+        store.begin_bulk_tx().unwrap();
+        IndexStore::inject_rollback_failure_for_test(true);
+        let err = store.rollback_bulk_tx().expect_err("bulk ROLLBACK must Err");
+        IndexStore::inject_rollback_failure_for_test(false);
+        assert!(err.to_string().contains("ROLLBACK"));
+        // Connection still in a transaction; a real rollback should succeed now.
+        store.rollback_bulk_tx().unwrap();
+    }
 }

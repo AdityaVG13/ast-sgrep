@@ -103,6 +103,8 @@ fn clear_all_data_is_transactional_and_complete() {
     store.upsert_file(input).unwrap();
     store.set_meta("struct:a.py", "fp").unwrap();
     store.set_meta("body:a.py", "bh").unwrap();
+    store.set_meta("embed_backend", "semantic-v2").unwrap();
+    store.set_meta("embed_cache_hits", "1").unwrap();
     let v_before = store.semantic_data_version().unwrap();
     let i_before = store.index_data_version().unwrap();
     store.clear_all_data().unwrap();
@@ -116,6 +118,11 @@ fn clear_all_data_is_transactional_and_complete() {
     assert!(store.get_meta("struct:a.py").unwrap().is_none());
     assert!(store.get_meta("body:a.py").unwrap().is_none());
     assert!(store.get_meta("eol:a.py").unwrap().is_none());
+    assert!(
+        store.get_meta("embed_backend").unwrap().is_none(),
+        "28vo: embed_* fingerprints must be wiped"
+    );
+    assert!(store.get_meta("embed_cache_hits").unwrap().is_none());
     assert!(store.semantic_data_version().unwrap() > v_before);
     assert!(store.index_data_version().unwrap() > i_before);
 }

@@ -49,6 +49,29 @@ pub struct Searcher {
     semantic_cache: Arc<Mutex<Option<SemanticCache>>>,
     response_cache: Mutex<ResponseCache>,
 }
+/// Decide whether a ResponseCache insert is gen-safe after unlock-compute (hdwh).
+/// `post_gen=None` means PRAGMA/meta read failed (disable cache insert).
+pub(crate) fn response_cache_may_insert(
+    pre: IndexGeneration,
+    post: Option<IndexGeneration>,
+    guard_gen: IndexGeneration,
+    guard_map_empty: bool,
+) -> bool {
+    let Some(post) = post else {
+        return false;
+    };
+    if post != pre {
+        return false;
+    }
+    if guard_gen != pre {
+        let ours_newer = pre.external > guard_gen.external
+            || (pre.external == guard_gen.external && pre.local > guard_gen.local);
+        if !(ours_newer || guard_map_empty) {
+            return false;
+        }
+    }
+    true
+}
 impl Searcher {
     pub fn new(options: SearchOptions) -> Result<Self> {
         Ok(Self::with_store(
@@ -106,10 +129,17 @@ impl Searcher {
             }
         }
         let response = compute()?;
+        // Gen-safe insert (ast-sgrep-hdwh): re-read generation after unlock-compute.
+        // Concurrent reindex must not cache pre-reindex results under a newer gen,
+        // and PRAGMA/meta failures disable insert (fail closed for caching).
+        let gen_after = self.index_gen().ok();
         let mut guard = self
             .response_cache
             .lock()
             .unwrap_or_else(|e| e.into_inner());
+        if !response_cache_may_insert(gen, gen_after, guard.gen, guard.map.is_empty()) {
+            return Ok(response);
+        }
         if guard.gen != gen {
             guard.map.clear();
             guard.gen = gen;
@@ -798,5 +828,28 @@ mod tests {
                 ("b.rs", 1, 0.5)
             ]
         );
+    }
+    #[test]
+    fn response_cache_may_insert_rejects_gen_skew_and_pragma_fail() {
+        let g1 = IndexGeneration {
+            external: 1,
+            local: 2,
+        };
+        let g2 = IndexGeneration {
+            external: 2,
+            local: 2,
+        };
+        // Happy path: gen stable, guard matches.
+        assert!(response_cache_may_insert(g1, Some(g1), g1, false));
+        // Mid-compute reindex: post gen moved — do not cache.
+        assert!(!response_cache_may_insert(g1, Some(g2), g1, false));
+        // PRAGMA/meta failure disables insert.
+        assert!(!response_cache_may_insert(g1, None, g1, true));
+        // Do not downgrade a newer populated cache.
+        assert!(!response_cache_may_insert(g1, Some(g1), g2, false));
+        // Empty cache may adopt our gen.
+        assert!(response_cache_may_insert(g2, Some(g2), g1, true));
+        // Newer gen may replace older populated cache.
+        assert!(response_cache_may_insert(g2, Some(g2), g1, false));
     }
 }

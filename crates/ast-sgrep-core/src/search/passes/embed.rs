@@ -8,6 +8,26 @@ use ast_sgrep_embed::{embed_query, SemanticChunkRow};
 use std::collections::HashMap;
 use std::sync::Arc;
 const EMBED_HIT_LIMIT: usize = 50;
+/// Fail closed on IVF/index identity skew (ast-sgrep-21pn).
+pub(crate) fn check_ivf_embed_integrity(
+    ivf_count: usize,
+    ivf_dim: usize,
+    stats_count: usize,
+    stats_dim: usize,
+    ids_len: usize,
+) -> Result<()> {
+    if ivf_count != stats_count || ivf_dim != stats_dim {
+        return Err(crate::StoreError::Other(format!(
+            "semantic IVF integrity mismatch: sidecar count={ivf_count} dim={ivf_dim} vs index count={stats_count} dim={stats_dim}"
+        )));
+    }
+    if ids_len != stats_count {
+        return Err(crate::StoreError::Other(format!(
+            "semantic IVF integrity mismatch: id list len={ids_len} vs stats count={stats_count}"
+        )));
+    }
+    Ok(())
+}
 pub struct EmbedContext {
     pub chunks: Arc<Vec<SemanticChunkRow>>,
     pub flat_vectors: Arc<Vec<f32>>,
@@ -39,9 +59,16 @@ pub fn embed_pass_lazy_ivf(
     let Some(ivf) = crate::semantic_ivf::load_semantic_ivf_index(&path, fingerprint)? else {
         return Ok(None);
     };
-    if ivf.chunk_count() != stats.count || ivf.dim != stats.dim {
-        return Ok(None);
-    }
+    // Integrity mismatch after a fingerprint hit must not silently Ok(None) and
+    // collapse the embed channel (ast-sgrep-21pn). Missing/stale sidecars still
+    // return Ok(None) above so callers can fall back to flat cosine.
+    check_ivf_embed_integrity(
+        ivf.chunk_count(),
+        ivf.dim,
+        stats.count,
+        stats.dim,
+        stats.count,
+    )?;
     let query = parsed.terms.join(" ");
     let query_vec = embed_query_vector(store, options, &query, Some(stats.dim))?;
     let candidate_indices = ivf.candidate_indices(&query_vec, options.ann_probes);
@@ -49,15 +76,21 @@ pub fn embed_pass_lazy_ivf(
         return Ok(None);
     }
     let ids = store.semantic_chunk_ids(options.lang_filter.as_deref())?;
-    if ids.len() != stats.count {
-        return Ok(None);
-    }
+    check_ivf_embed_integrity(
+        ivf.chunk_count(),
+        ivf.dim,
+        stats.count,
+        stats.dim,
+        ids.len(),
+    )?;
     let candidate_ids: Vec<i64> = candidate_indices
         .iter()
         .filter_map(|&idx| ids.get(idx).copied())
         .collect();
     if candidate_ids.len() != candidate_indices.len() {
-        return Ok(None);
+        return Err(crate::StoreError::Other(
+            "semantic IVF integrity mismatch: candidate index out of id-list range".into(),
+        ));
     }
     let mut rows: HashMap<i64, SemanticChunkRow> = store
         .semantic_chunks_by_ids(&candidate_ids)?
@@ -66,7 +99,9 @@ pub fn embed_pass_lazy_ivf(
     let mut chunks = Vec::with_capacity(candidate_ids.len());
     for id in candidate_ids {
         let Some(row) = rows.remove(&id) else {
-            return Ok(None);
+            return Err(crate::StoreError::Other(format!(
+                "semantic IVF integrity mismatch: missing semantic_chunks row id={id}"
+            )));
         };
         chunks.push(row);
     }
@@ -199,4 +234,24 @@ fn embed_legacy_hits(
         &chunks,
         ast_sgrep_embed::rank_chunk_indices_by_vector(&query_vec, &chunks, EMBED_HIT_LIMIT),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::check_ivf_embed_integrity;
+
+    #[test]
+    fn ivf_integrity_mismatch_errors_not_ok() {
+        let err = check_ivf_embed_integrity(10, 256, 9, 256, 9).unwrap_err();
+        assert!(
+            err.to_string().contains("integrity mismatch"),
+            "{}",
+            err
+        );
+        let err = check_ivf_embed_integrity(10, 256, 10, 128, 10).unwrap_err();
+        assert!(err.to_string().contains("dim="));
+        let err = check_ivf_embed_integrity(10, 256, 10, 256, 8).unwrap_err();
+        assert!(err.to_string().contains("id list len"));
+        assert!(check_ivf_embed_integrity(10, 256, 10, 256, 10).is_ok());
+    }
 }

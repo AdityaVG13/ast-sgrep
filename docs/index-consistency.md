@@ -51,3 +51,7 @@ Under concurrent reindex, a hybrid query may fuse passes from adjacent **committ
 ## Language-filtered index
 
 `Indexer` with `--lang` / `lang_filter` updates only matching languages. Filtered paths are skipped; prune-missing only removes absent files for the filtered language. Other languages remain searchable.
+
+## Non-UTF8 indexed paths (ast-sgrep-kqhp)
+
+Relative paths stored in `files.path` (and therefore all graph/meta keys derived from them) must be valid UTF-8. Index walks and watch updates call `indexed_rel_path`, which **rejects** non-UTF8 `OsStr` components with a machine-readable error (`non-UTF8 path rejected (asgrep-kqhp)`). Lossy `to_string_lossy` conversion is not used for indexed keys, so two distinct non-UTF8 paths cannot collide into one DB row.
