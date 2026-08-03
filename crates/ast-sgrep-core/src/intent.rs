@@ -56,13 +56,8 @@ fn title_case(token: &str) -> bool {
         && token.chars().all(|c| c.is_alphanumeric())
 }
 fn looks_structural(raw: &str) -> bool {
-    raw.contains('{')
-        || raw.contains(';')
-        || raw.contains("=>")
-        || raw.contains("->")
-        || raw.contains("($")
-        || raw.contains("$_")
-        || raw.contains("$$")
+    const MARKERS: &[&str] = &["{", ";", "=>", "->", "($", "$_", "$$"];
+    MARKERS.iter().any(|m| raw.contains(m))
 }
 fn ident_like(token: &str) -> bool {
     if token.contains("::") || token.contains('_') || token.ends_with("()") {

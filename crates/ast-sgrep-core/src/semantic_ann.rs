@@ -595,34 +595,49 @@ pub fn rebuild_semantic_ivf_sidecar(
         let _ = invalidate_semantic_ivf(store.db_path());
         return Ok(());
     }
-    if chunks.first().is_none_or(|c| c.5.is_empty()) {
+    let Some(first) = chunks.first().filter(|c| !c.5.is_empty()) else {
         return Ok(());
-    }
-    let dim = chunks[0].5.len();
-    if store.get_meta("semantic_ivf_stale")?.as_deref() == Some("1") {
-        if let Some(ivf) = load_semantic_ivf_unchecked(&semantic_ivf_path(store.db_path()))? {
-            if ivf.chunk_count() == chunks.len() && ivf.dim == dim {
-                let vectors = flatten_vectors_for_search(chunks, dim)?;
-                let mut index = ivf.index.clone();
-                drop(ivf);
-                index.reassign_all(&vectors, dim);
-                let (fingerprint, db_key) = ann_session_key(store, chunks)?;
-                let published = save_semantic_ivf(
-                    &semantic_ivf_path(store.db_path()),
-                    fingerprint,
-                    dim,
-                    &vectors,
-                    &index,
-                )?;
-                let rebuilt = PersistedSemanticIvf::from_owned(fingerprint, dim, vectors, index);
-                cache_session(&db_key, fingerprint, Arc::new(rebuilt));
-                let _ = store.set_meta("semantic_ivf_stale", if published { "0" } else { "1" });
-                return Ok(());
-            }
-        }
+    };
+    let dim = first.5.len();
+    if reassign_stale_ivf_partition(store, chunks, dim)? {
+        return Ok(());
     }
     let _ = load_or_build_semantic_ivf(store, chunks, override_threshold)?;
     Ok(())
+}
+
+/// When the IVF sidecar is marked stale but topology still matches, reassign members
+/// in place instead of a full rebuild.
+fn reassign_stale_ivf_partition(
+    store: &IndexStore,
+    chunks: &[SemanticChunkRow],
+    dim: usize,
+) -> Result<bool> {
+    if store.get_meta("semantic_ivf_stale")?.as_deref() != Some("1") {
+        return Ok(false);
+    }
+    let Some(ivf) = load_semantic_ivf_unchecked(&semantic_ivf_path(store.db_path()))? else {
+        return Ok(false);
+    };
+    if ivf.chunk_count() != chunks.len() || ivf.dim != dim {
+        return Ok(false);
+    }
+    let vectors = flatten_vectors_for_search(chunks, dim)?;
+    let mut index = ivf.index.clone();
+    drop(ivf);
+    index.reassign_all(&vectors, dim);
+    let (fingerprint, db_key) = ann_session_key(store, chunks)?;
+    let published = save_semantic_ivf(
+        &semantic_ivf_path(store.db_path()),
+        fingerprint,
+        dim,
+        &vectors,
+        &index,
+    )?;
+    let rebuilt = PersistedSemanticIvf::from_owned(fingerprint, dim, vectors, index);
+    cache_session(&db_key, fingerprint, Arc::new(rebuilt));
+    let _ = store.set_meta("semantic_ivf_stale", if published { "0" } else { "1" });
+    Ok(true)
 }
 
 #[cfg(test)]
