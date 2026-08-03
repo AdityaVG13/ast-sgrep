@@ -52,6 +52,64 @@ impl Language {
             Language::Php,
         ]
     }
+    /// Parse a language id into a `Language`, accepting `Language::as_str` forms
+    /// and common aliases (including Title Case labels from external tools).
+    pub fn parse(raw: &str) -> Option<Language> {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+        let lower = trimmed.to_ascii_lowercase();
+        match lower.as_str() {
+            "rust" | "rs" => Some(Language::Rust),
+            "typescript" | "ts" | "tsx" => Some(Language::TypeScript),
+            "javascript" | "js" | "jsx" | "mjs" | "cjs" => Some(Language::JavaScript),
+            "python" | "py" | "pyi" => Some(Language::Python),
+            "go" | "golang" => Some(Language::Go),
+            "java" => Some(Language::Java),
+            "csharp" | "c#" | "cs" | "c-sharp" => Some(Language::CSharp),
+            "ruby" | "rb" => Some(Language::Ruby),
+            "swift" => Some(Language::Swift),
+            "c" => Some(Language::C),
+            "cpp" | "c++" | "cc" | "cxx" => Some(Language::Cpp),
+            "kotlin" | "kt" | "kts" => Some(Language::Kotlin),
+            "php" => Some(Language::Php),
+            _ => None,
+        }
+    }
+    /// Normalize an external language label to `Language::as_str` casing.
+    /// Unknown labels are lowercased so case-sensitive filters stay consistent.
+    pub fn normalize_id(raw: &str) -> String {
+        Self::parse(raw)
+            .map(|lang| lang.as_str().to_string())
+            .unwrap_or_else(|| raw.trim().to_ascii_lowercase())
+    }
+}
+
+#[cfg(test)]
+mod language_id_tests {
+    use super::Language;
+
+    #[test]
+    fn all_languages_round_trip_as_str_parse() {
+        for &lang in Language::all() {
+            assert_eq!(Language::parse(lang.as_str()), Some(lang));
+            assert_eq!(Language::normalize_id(lang.as_str()), lang.as_str());
+        }
+        assert_eq!(Language::all().len(), 13);
+    }
+
+    #[test]
+    fn title_case_and_aliases_normalize_to_as_str() {
+        assert_eq!(Language::normalize_id("Rust"), "rust");
+        assert_eq!(Language::normalize_id("TypeScript"), "typescript");
+        assert_eq!(Language::normalize_id("C#"), "csharp");
+        assert_eq!(Language::normalize_id("CSharp"), "csharp");
+        assert_eq!(Language::normalize_id("C++"), "cpp");
+        assert_eq!(Language::normalize_id("Kotlin"), "kotlin");
+        assert_eq!(Language::normalize_id("PHP"), "php");
+        assert_eq!(Language::normalize_id("Swift"), "swift");
+    }
 }
 impl std::fmt::Display for Language {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

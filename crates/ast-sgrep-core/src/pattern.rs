@@ -2,7 +2,7 @@ use crate::gitignore::{should_skip_dir, should_skip_file};
 use crate::rank::SCORE_PATTERN;
 use crate::search::{HitKind, SearchHit, SpanHitInput};
 use crate::Result;
-use ast_sgrep_lang::{detect_language, match_pattern, needs_ast_grep_fallback};
+use ast_sgrep_lang::{detect_language, match_pattern, needs_ast_grep_fallback, Language};
 use std::fs;
 use std::io::Read;
 use std::path::Path;
@@ -310,10 +310,13 @@ fn parse_ast_grep_json(stdout: &[u8], pattern: &str, root: &Path) -> Result<Vec<
                 .unwrap_or(pattern)
                 .to_string(),
             symbol: Some(pattern.to_string()),
+            // ast-grep historically emits Title Case ("Rust"); native hits use
+            // Language::as_str ("rust"). Normalize so matches_lang / --lang filters
+            // and cross-engine dedup stay equivalent (amm8).
             language: value
                 .get("language")
                 .and_then(|v| v.as_str())
-                .map(str::to_string),
+                .map(Language::normalize_id),
         }));
     }
     Ok(hits)
@@ -346,3 +349,49 @@ pub fn ast_grep_pattern_for_query(query: &str) -> Option<String> {
         .trim();
     (!q.is_empty() && !q.contains(' ')).then(|| q.to_string())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    #[test]
+    fn ast_grep_language_field_normalizes_to_as_str() {
+        let root = PathBuf::from("/tmp/proj");
+        let stdout = concat!(
+            r#"{"file":"/tmp/proj/src/lib.rs","language":"Rust","range":{"start":{"line":1},"end":{"line":1}},"text":"fn foo() {}"}"#,
+            "\n",
+            r#"{"file":"/tmp/proj/Main.cs","language":"C#","range":{"start":{"line":2},"end":{"line":2}},"text":"class A {}"}"#,
+            "\n",
+            r#"{"file":"/tmp/proj/a.cpp","language":"C++","range":{"start":{"line":3},"end":{"line":3}},"text":"int x;"}"#,
+            "\n",
+        );
+        let hits = parse_ast_grep_json(stdout.as_bytes(), "fn $NAME", &root).unwrap();
+        assert_eq!(hits.len(), 3);
+        assert_eq!(hits[0].language.as_deref(), Some("rust"));
+        assert_eq!(hits[1].language.as_deref(), Some("csharp"));
+        assert_eq!(hits[2].language.as_deref(), Some("cpp"));
+        assert!(crate::search::matches_lang(hits[0].language.as_deref(), Some("rust")));
+        assert!(crate::search::matches_lang(Some("Rust"), Some("rust")));
+        assert!(crate::search::matches_lang(Some("C#"), Some("csharp")));
+    }
+
+    #[test]
+    fn native_and_normalized_ast_grep_share_as_str_casing() {
+        for lang in Language::all() {
+            let title = {
+                let s = lang.as_str();
+                let mut c = s.chars();
+                match c.next() {
+                    None => String::new(),
+                    Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+                }
+            };
+            assert_eq!(Language::normalize_id(&title), lang.as_str());
+            assert_eq!(Language::normalize_id(lang.as_str()), lang.as_str());
+        }
+        assert_eq!(Language::normalize_id("C#"), "csharp");
+        assert_eq!(Language::normalize_id("C++"), "cpp");
+    }
+}
+

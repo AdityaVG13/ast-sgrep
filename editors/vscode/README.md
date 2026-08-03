@@ -1,6 +1,6 @@
 # ast-sgrep for VS Code
 
-This extension connects VS Code to the `asgrep-lsp` language server for indexed structural search and code navigation in Rust, Python, TypeScript, TSX, and Go workspaces.
+This extension connects VS Code to the `asgrep-lsp` language server for indexed structural search and code navigation across the full `Language::all()` surface: Rust, TypeScript, JavaScript, Python, Go, Java, C#, Ruby, Swift, C, C++, Kotlin, and PHP (13 languages).
 
 ## Prerequisites
 
@@ -28,7 +28,7 @@ npm run package
 
 ## Use
 
-Opening a Rust, Python, TypeScript, TSX, or Go file starts `asgrep-lsp --stdio`. Standard **Go to Definition**, **Find All References**, workspace symbol, document symbol, and call hierarchy features are provided by the server.
+Opening a supported source file (Rust, TypeScript/TSX, JavaScript/JSX, Python, Go, Java, C#, Ruby, Swift, C, C++, Kotlin, or PHP) starts `asgrep-lsp --stdio`. Standard **Go to Definition**, **Find All References**, workspace symbol, document symbol, and call hierarchy features are provided by the server.
 
 Run **ast-sgrep: Search Workspace** from the Command Palette for native `asgrep/search` results. Enter ordinary search text or a query such as `callers:process_request`, `defs:Router`, or `pattern:unwrap()`; choose a result to open it at the matching line.
 

@@ -18,7 +18,9 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 use types::dedup_hits;
-pub use types::{format_hit_line, HitKind, SearchHit, SearchOptions, SearchResponse, SpanHitInput};
+pub use types::{
+    format_hit_line, matches_lang, HitKind, SearchHit, SearchOptions, SearchResponse, SpanHitInput,
+};
 const PARALLEL_PASS_FILE_THRESHOLD: usize = 128;
 const MAX_HITS_PER_FILE: usize = 3;
 struct SemanticCache {
