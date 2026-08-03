@@ -1,4 +1,4 @@
-use ast_sgrep_lang::{match_literal_pattern, Language};
+use ast_sgrep_lang::{match_literal_pattern, needs_ast_grep_fallback, Language};
 use ast_sgrep_testkit::sample_file;
 #[test]
 fn literal_pattern_matches_rust_symbol() {
@@ -25,6 +25,15 @@ fn literal_pattern_case_mismatch_has_no_match() {
     assert!(match_literal_pattern(Language::Rust, source, "Foo")
         .unwrap()
         .is_empty());
+}
+#[test]
+fn common_metavariable_patterns_are_native() {
+    // Common shapes run in-process; only exotic rules need external ast-grep.
+    assert!(!needs_ast_grep_fallback("fn $NAME($$$)"));
+    assert!(!needs_ast_grep_fallback("def $NAME"));
+    assert!(!needs_ast_grep_fallback("$OBJ.$METHOD($$$)"));
+    assert!(!needs_ast_grep_fallback("process_request"));
+    assert!(needs_ast_grep_fallback("if ($COND) { $BODY }"));
 }
 
 #[test]

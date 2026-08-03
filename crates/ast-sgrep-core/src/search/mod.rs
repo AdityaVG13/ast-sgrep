@@ -82,10 +82,7 @@ impl Searcher {
         let gen = self.index_gen();
         let key = format!("{kind}\0{query}");
         {
-            let guard = self
-                .response_cache
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
+            let guard = lock_response_cache(&self.response_cache);
             if guard.gen == gen {
                 if let Some(hit) = guard.map.get(&key) {
                     return Ok(hit.clone());
@@ -93,10 +90,7 @@ impl Searcher {
             }
         }
         let response = compute()?;
-        let mut guard = self
-            .response_cache
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let mut guard = lock_response_cache(&self.response_cache);
         if guard.gen != gen {
             guard.map.clear();
             guard.gen = gen;
@@ -165,28 +159,6 @@ impl Searcher {
     pub fn search_literal(&self, query: &str) -> Result<SearchResponse> {
         self.cached("lit", query, || {
             let parsed = ParsedQuery::literal(query);
-            Ok(finish_response(
-                &parsed,
-                &self.options,
-                literal_pass(&self.store, &self.options, &parsed)?,
-                true,
-            ))
-        })
-    }
-    pub fn search_regex(&self, query: &str) -> Result<SearchResponse> {
-        self.cached("re", query, || {
-            let parsed = ParsedQuery::regex(query);
-            Ok(finish_response(
-                &parsed,
-                &self.options,
-                regex_pass(&self.store, &self.options, &parsed)?,
-                true,
-            ))
-        })
-    }
-    pub fn search_word(&self, query: &str) -> Result<SearchResponse> {
-        self.cached("word", query, || {
-            let parsed = ParsedQuery::word(query);
             Ok(finish_response(
                 &parsed,
                 &self.options,
@@ -283,7 +255,7 @@ fn load_semantic_context(
         .unwrap_or_else(|| "semantic".into());
     let data_version = store.semantic_data_version()?;
     {
-        let guard = cache.lock().unwrap_or_else(|e| e.into_inner());
+        let guard = lock_poison_ok(cache);
         if let Some(c) = guard.as_ref() {
             if c.lang_filter == lang_filter
                 && c.max_id == max_id
@@ -314,7 +286,7 @@ fn load_semantic_context(
         chunks: Arc::clone(&entry.chunks),
         flat_vectors: Arc::clone(&entry.flat_vectors),
     };
-    *cache.lock().unwrap_or_else(|e| e.into_inner()) = Some(entry);
+    *lock_poison_ok(cache) = Some(entry);
     Ok(Some(ctx))
 }
 fn run_serial_passes(
@@ -346,15 +318,7 @@ fn structural_index_pass(
         if term.len() < 3 || !term.chars().all(|c| c == '_' || c.is_alphanumeric()) {
             continue;
         }
-        let signatures = [
-            format!("call-name:{term}"),
-            format!("call:{term}"),
-            format!("decl:fn:{term}"),
-            format!("decl:def:{term}"),
-            format!("decl:function:{term}"),
-            term.clone(),
-        ];
-        for sig in &signatures {
+        for sig in &ast_sgrep_lang::structural_term_signatures(term) {
             for row in store.pattern_nodes_matching(sig, lang)? {
                 if !seen.insert((row.path.clone(), row.line_start, row.line_end)) {
                     continue;
@@ -435,6 +399,23 @@ pub fn validate_search_feature_flags(options: &SearchOptions) -> Result<()> {
     }
     Ok(())
 }
+
+fn cmp_ranked_hits(a: &(u32, SearchHit), b: &(u32, SearchHit)) -> std::cmp::Ordering {
+    let (ca, a) = a;
+    let (cb, b) = b;
+    b.score
+        .partial_cmp(&a.score)
+        .unwrap_or(std::cmp::Ordering::Equal)
+        .then_with(|| cb.cmp(ca))
+        .then_with(|| a.file.cmp(&b.file))
+        .then_with(|| a.line_start.cmp(&b.line_start))
+}
+fn lock_response_cache(cache: &Mutex<ResponseCache>) -> std::sync::MutexGuard<'_, ResponseCache> {
+    cache.lock().unwrap_or_else(|e| e.into_inner())
+}
+fn lock_poison_ok<T>(cache: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    cache.lock().unwrap_or_else(|e| e.into_inner())
+}
 pub fn finish_response(
     parsed: &ParsedQuery,
     options: &SearchOptions,
@@ -488,19 +469,11 @@ pub fn finish_response(
         .into_iter()
         .map(|h| (excerpt_term_coverage(&parsed.terms, &h), h))
         .collect();
-    let mut compare = |(ca, a): &(u32, SearchHit), (cb, b): &(u32, SearchHit)| {
-        b.score
-            .partial_cmp(&a.score)
-            .unwrap_or(std::cmp::Ordering::Equal)
-            .then_with(|| cb.cmp(ca))
-            .then_with(|| a.file.cmp(&b.file))
-            .then_with(|| a.line_start.cmp(&b.line_start))
-    };
     if keyed.len() > keep {
-        keyed.select_nth_unstable_by(keep, &mut compare);
+        keyed.select_nth_unstable_by(keep, |a, b| cmp_ranked_hits(a, b));
         keyed.truncate(keep);
     }
-    keyed.sort_unstable_by(compare);
+    keyed.sort_unstable_by(cmp_ranked_hits);
     let mut hits: Vec<_> = keyed.into_iter().map(|(_, h)| h).collect();
     hits = enforce_result_gates(hits, parsed.mode == QueryMode::Hybrid, gate_limit);
     if options.use_rerank {
@@ -607,7 +580,7 @@ fn estimate_prevented_reads(root: &Path, hits: &[SearchHit]) -> (u64, u64, u64) 
     let mut files = HashSet::new();
     let mut read_bytes_estimate = 0u64;
     {
-        let mut guard = cache.lock().unwrap_or_else(|e| e.into_inner());
+        let mut guard = lock_poison_ok(cache);
         for h in hits {
             if !files.insert(h.file.as_str()) {
                 continue;

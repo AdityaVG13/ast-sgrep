@@ -177,11 +177,7 @@ fn scan_regex_chunk(
 ) -> Vec<SearchHit> {
     let mut hits = Vec::new();
     for (rank, (path, line_no, content, language)) in chunk.iter().enumerate() {
-        if rank % 16 == 0 && Instant::now() >= deadline {
-            timed_out.store(true, Ordering::Relaxed);
-            break;
-        }
-        if timed_out.load(Ordering::Relaxed) {
+        if budget_exhausted(rank, deadline, timed_out) {
             break;
         }
         if !matches_lang(language.as_deref(), lang_filter.as_deref()) || !re.is_match(content) {
@@ -196,6 +192,16 @@ fn scan_regex_chunk(
         ));
     }
     hits
+}
+fn budget_exhausted(rank: usize, deadline: Instant, timed_out: &AtomicBool) -> bool {
+    if timed_out.load(Ordering::Relaxed) {
+        return true;
+    }
+    if rank % 16 != 0 || Instant::now() < deadline {
+        return false;
+    }
+    timed_out.store(true, Ordering::Relaxed);
+    true
 }
 #[cfg(test)]
 mod tests {

@@ -28,7 +28,33 @@ const load = async () => {
   const platforms = await Promise.all(matrix.targets.map((target) => readJson(path.join(root, 'packages/pi/platforms', target.id, 'package.json'))));
   return { contract, matrix, launcher, extension, platforms, version: contract.canonicalVersion.version };
 };
+const packageSpec = (name, version) => `${name}@${version}`;
 const packageOrder = (state) => [...state.matrix.targets.map((target) => target.package), state.launcher.name, state.extension.name];
+const packageSpecs = (state, version = state.version) => Object.fromEntries(packageOrder(state).map((name) => [packageSpec(name, version), null]));
+const requiredFilesFor = (state, artifact) => {
+  if (artifact.layer === 'native') {
+    return ['LICENSE', 'checksum.sha256', state.matrix.targets.find((target) => target.package === artifact.name).executable, 'package.json'];
+  }
+  if (artifact.layer === 'launcher') {
+    return ['LICENSE', 'README.md', 'bin/asgrep.js', 'package.json', 'src/index.d.ts', 'src/index.js'];
+  }
+  return ['LICENSE', 'README.md', 'assets/preview.png', 'dist/index.d.ts', 'dist/index.js', 'dist/runtime.d.ts', 'dist/runtime.js', 'package.json', 'skills/ast-sgrep/SKILL.md', 'skills/ast-sgrep/references/query-guide.md'];
+};
+const isForbiddenPackEntry = (entry) => /(^|\/)(test|node_modules)(\/|$)/u.test(entry) || /\.(rs|toml)$/u.test(entry);
+const expectReject = (label, callback, rejected) => {
+  try {
+    callback();
+  } catch (error) {
+    rejected.push(`${label}=${error.message.split(':')[0]}`);
+    return;
+  }
+  fail('ASGREP_RELEASE_SELF_TEST', `${label} was accepted`);
+};
+const priorPublishedForLayer = (manifest, layer) => {
+  if (layer === 'native') return [];
+  if (layer === 'launcher') return manifest.artifacts.filter((item) => item.layer === 'native').map((item) => item.name);
+  return manifest.artifacts.filter((item) => item.layer !== 'extension').map((item) => item.name);
+};
 const validateAlignment = (state) => {
   const { contract, matrix, launcher, extension, platforms, version } = state;
   if (matrix.targets.length !== 5) fail('ASGREP_RELEASE_TARGETS', 'exactly five native targets are required');
@@ -48,13 +74,9 @@ const validateAlignment = (state) => {
 const classify = (state, name) => state.matrix.targets.some((target) => target.package === name) ? 'native' : name === state.launcher.name ? 'launcher' : name === state.extension.name ? 'extension' : fail('ASGREP_RELEASE_UNKNOWN_PACKAGE', name);
 const validateFiles = (state, artifact) => {
   const files = artifact.files.map((file) => file.path).sort();
-  const required = artifact.layer === 'native'
-    ? ['LICENSE', 'checksum.sha256', state.matrix.targets.find((target) => target.package === artifact.name).executable, 'package.json']
-    : artifact.layer === 'launcher'
-      ? ['LICENSE', 'README.md', 'bin/asgrep.js', 'package.json', 'src/index.d.ts', 'src/index.js']
-      : ['LICENSE', 'README.md', 'assets/preview.png', 'dist/index.d.ts', 'dist/index.js', 'dist/runtime.d.ts', 'dist/runtime.js', 'package.json', 'skills/ast-sgrep/SKILL.md', 'skills/ast-sgrep/references/query-guide.md'];
+  const required = requiredFilesFor(state, artifact);
   for (const entry of required) if (!files.includes(entry)) fail('ASGREP_RELEASE_CONTENT_MISSING', `${artifact.name} is missing ${entry}`);
-  for (const entry of files) if (/(^|\/)(test|node_modules)(\/|$)/u.test(entry) || /\.(rs|toml)$/u.test(entry)) fail('ASGREP_RELEASE_CONTENT_FORBIDDEN', `${artifact.name} unexpectedly contains ${entry}`);
+  for (const entry of files) if (isForbiddenPackEntry(entry)) fail('ASGREP_RELEASE_CONTENT_FORBIDDEN', `${artifact.name} unexpectedly contains ${entry}`);
 };
 const inspectPackResult = (state, result) => {
   if (!Array.isArray(result) || result.length !== 1) fail('ASGREP_RELEASE_PACK_RESULT', 'npm pack must produce exactly one artifact');
@@ -155,7 +177,7 @@ const registryVersions = async (state, snapshotPath) => {
   if (snapshotPath) return await readJson(path.resolve(snapshotPath));
   const observed = {};
   for (const name of packageOrder(state)) {
-    const spec = `${name}@${state.version}`;
+    const spec = packageSpec(name, state.version);
     const result = spawnSync('npm', ['view', spec, 'version', '--json'], { cwd: root, encoding: 'utf8', windowsHide: true });
     if (result.status === 0) observed[spec] = JSON.parse(result.stdout || 'null');
     else if (/E404|404 Not Found|is not in this registry/u.test(result.stderr + result.stdout)) observed[spec] = null;
@@ -168,7 +190,7 @@ const gateState = (state, input, observed) => {
   if (input.refType !== 'tag' || input.tag !== state.contract.canonicalVersion.tag) fail('ASGREP_RELEASE_TAG_VERSION', `expected official tag ${state.contract.canonicalVersion.tag}`);
   if (!/^[a-f0-9]{40}$/u.test(input.commit) || input.tagCommit !== input.commit) fail('ASGREP_RELEASE_TAG_COMMIT', 'tag, checkout, and workflow commit must be identical');
   const names = packageOrder(state);
-  const live = names.filter((name) => observed[`${name}@${state.version}`] !== null);
+  const live = names.filter((name) => observed[packageSpec(name, state.version)] !== null);
   const pending = names.filter((name) => !live.includes(name));
   if (live.length === names.length) fail('ASGREP_RELEASE_DUPLICATE_VERSION', `all ${names.length} packages already exist at ${state.version}; bump the canonical version for a new release`);
   return { live, pending };
@@ -201,14 +223,14 @@ const publish = async () => {
   if (!['native', 'launcher', 'extension'].includes(layer)) fail('ASGREP_RELEASE_LAYER', 'layer must be native, launcher, or extension');
   const receiptPath = path.join(directory, 'publish-receipt.json');
   const receipt = await readJson(receiptPath).catch(() => ({ schemaVersion: 1, version: manifest.version, published: [] }));
-  const expectedPrior = layer === 'native' ? [] : layer === 'launcher' ? manifest.artifacts.filter((item) => item.layer === 'native').map((item) => item.name) : manifest.artifacts.filter((item) => item.layer !== 'extension').map((item) => item.name);
+  const expectedPrior = priorPublishedForLayer(manifest, layer);
   if (JSON.stringify(receipt.published) !== JSON.stringify(expectedPrior)) fail('ASGREP_RELEASE_PUBLISH_ORDER', `${layer} cannot publish after [${receipt.published.join(', ')}]`);
   const selected = manifest.artifacts.filter((artifact) => artifact.layer === layer);
   const observed = await registryVersions(state);
   const publishDelayMs = Math.max(0, Number(process.env.ASGREP_PUBLISH_DELAY_MS ?? '0'));
   const published = [];
   for (const artifact of selected) {
-    if (observed[`${artifact.name}@${manifest.version}`] !== null) {
+    if (observed[packageSpec(artifact.name, manifest.version)] !== null) {
       console.log(`[pi-release] skip ${artifact.name}@${manifest.version}: already live (idempotent re-run)`);
     } else {
       if (publishDelayMs > 0) await delay(publishDelayMs);
@@ -241,33 +263,36 @@ const selfTest = async () => {
   const state = await load();
   validateAlignment(state);
   const commit = 'a'.repeat(40);
-  const empty = Object.fromEntries(packageOrder(state).map((name) => [`${name}@${state.version}`, null]));
+  const empty = packageSpecs(state);
   const canonicalInput = { clean: true, refType: 'tag', tag: state.contract.canonicalVersion.tag, commit, tagCommit: commit };
   const fresh = gateState(state, canonicalInput, empty);
   if (fresh.pending.length !== 7 || fresh.live.length !== 0) fail('ASGREP_RELEASE_SELF_TEST', 'a fresh version must plan to publish all seven packages');
-  const partialObserved = { ...empty, [`${state.launcher.name}@${state.version}`]: state.version, [`${state.matrix.targets[0].package}@${state.version}`]: state.version };
+  const partialObserved = { ...empty, [packageSpec(state.launcher.name, state.version)]: state.version, [packageSpec(state.matrix.targets[0].package, state.version)]: state.version };
   const partial = gateState(state, canonicalInput, partialObserved);
   if (partial.live.length !== 2 || partial.pending.length !== 5 || partial.pending.includes(state.launcher.name)) fail('ASGREP_RELEASE_SELF_TEST', 'a partial version must skip live packages and re-publish only the remainder');
   const rejected = [];
-  const expect = (label, callback) => { try { callback(); } catch (error) { rejected.push(`${label}=${error.message.split(':')[0]}`); return; } fail('ASGREP_RELEASE_SELF_TEST', `${label} was accepted`); };
-  expect('dirty', () => gateState(state, { ...canonicalInput, clean: false }, empty));
-  expect('wrong-tag', () => gateState(state, { ...canonicalInput, tag: 'v0.0.0' }, empty));
-  expect('wrong-commit', () => gateState(state, { ...canonicalInput, tagCommit: 'b'.repeat(40) }, empty));
-  expect('fully-published', () => gateState(state, canonicalInput, Object.fromEntries(packageOrder(state).map((name) => [`${name}@${state.version}`, state.version]))));
-  expect('version-skew', () => validateAlignment({ ...state, launcher: { ...state.launcher, version: '0.0.0' } }));
-  expect('missing-checksum', () => validateChecksumRecord(state.matrix.targets[0], null, '0'.repeat(64)));
-  expect('checksum-mismatch', () => validateChecksumRecord(state.matrix.targets[0], `${'1'.repeat(64)}  asgrep`, '0'.repeat(64)));
-  expect('local-publish', () => validatePublishContext(state, { commit }, {}));
+  expectReject('dirty', () => gateState(state, { ...canonicalInput, clean: false }, empty), rejected);
+  expectReject('wrong-tag', () => gateState(state, { ...canonicalInput, tag: 'v0.0.0' }, empty), rejected);
+  expectReject('wrong-commit', () => gateState(state, { ...canonicalInput, tagCommit: 'b'.repeat(40) }, empty), rejected);
+  expectReject('fully-published', () => gateState(state, canonicalInput, Object.fromEntries(packageOrder(state).map((name) => [packageSpec(name, state.version), state.version]))), rejected);
+  expectReject('version-skew', () => validateAlignment({ ...state, launcher: { ...state.launcher, version: '0.0.0' } }), rejected);
+  expectReject('missing-checksum', () => validateChecksumRecord(state.matrix.targets[0], null, '0'.repeat(64)), rejected);
+  expectReject('checksum-mismatch', () => validateChecksumRecord(state.matrix.targets[0], `${'1'.repeat(64)}  asgrep`, '0'.repeat(64)), rejected);
+  expectReject('local-publish', () => validatePublishContext(state, { commit }, {}), rejected);
   console.log(`[pi-release] gate self-test accepted canonical input and rejected ${rejected.join(', ')}`);
   console.log(`[pi-release] publish order: ${packageOrder(state).join(' -> ')}`);
   console.log('[pi-release] publication: disabled (self-test only)');
 };
 
+const COMMANDS = {
+  pack,
+  verify,
+  gate,
+  publish,
+  'fixture-native': fixtureNative,
+  'self-test': selfTest,
+};
 const command = process.argv[2];
-if (command === 'pack') await pack();
-else if (command === 'verify') await verify();
-else if (command === 'gate') await gate();
-else if (command === 'publish') await publish();
-else if (command === 'fixture-native') await fixtureNative();
-else if (command === 'self-test') await selfTest();
-else fail('ASGREP_RELEASE_USAGE', 'pack | verify | gate | publish | fixture-native | self-test');
+const handler = COMMANDS[command];
+if (!handler) fail('ASGREP_RELEASE_USAGE', 'pack | verify | gate | publish | fixture-native | self-test');
+await handler();

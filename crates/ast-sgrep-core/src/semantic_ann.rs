@@ -347,7 +347,7 @@ struct SessionCache {
     ivf: Arc<PersistedSemanticIvf>,
 }
 static SESSION_CACHE: Mutex<Vec<(String, SessionCache)>> = Mutex::new(Vec::new());
-pub fn clear_semantic_ivf_session_cache() {
+fn clear_semantic_ivf_session_cache() {
     SESSION_CACHE
         .lock()
         .unwrap_or_else(|e| e.into_inner())
