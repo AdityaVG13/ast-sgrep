@@ -18,11 +18,10 @@ pub fn lexical_pass(
         return Ok(Vec::new());
     }
     if options.use_tantivy {
-        let sidecar = crate::tantivy_index::TantivySidecar::open_for_index(
+        if let Some(sidecar) = crate::tantivy_index::TantivySidecar::open_existing_for_search(
             &options.root,
             options.index_path.as_deref(),
-        )?;
-        if sidecar.exists() {
+        )? {
             return lexical_from_sidecar(options, parsed, &sidecar);
         }
     }

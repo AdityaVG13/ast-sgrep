@@ -353,18 +353,11 @@ pub fn clear_semantic_ivf_session_cache() {
         .unwrap_or_else(|e| e.into_inner())
         .clear();
 }
-pub fn mark_semantic_ivf_stale(store: &IndexStore) {
-    if store
-        .get_meta("semantic_ivf_stale")
-        .ok()
-        .flatten()
-        .as_deref()
-        != Some("1")
-    {
-        let _ = store.set_meta("semantic_ivf_stale", "1");
-    }
-    let _ = invalidate_semantic_ivf(store.db_path());
+pub fn mark_semantic_ivf_stale(store: &IndexStore) -> crate::Result<()> {
+    store.set_meta("semantic_ivf_stale", "1")?;
+    invalidate_semantic_ivf(store.db_path())?;
     clear_semantic_ivf_session_cache();
+    Ok(())
 }
 fn ann_session_key(store: &IndexStore, chunks: &[SemanticChunkRow]) -> Result<([u8; 32], String)> {
     let dim = chunks.first().map(|c| c.5.len()).unwrap_or(0);
@@ -372,6 +365,8 @@ fn ann_session_key(store: &IndexStore, chunks: &[SemanticChunkRow]) -> Result<([
     let backend = store
         .get_meta("embed_backend")?
         .unwrap_or_else(|| "semantic".into());
+    // data_version is the content-generation counter: bumped on every semantic
+    // mutation so IVF identity tracks vector/content changes (jiyy.2 / ht1h.2).
     let data_version = store.semantic_data_version()?;
     Ok((
         compute_ann_fingerprint(chunks.len(), max_id, dim, Some(&backend), data_version),
@@ -496,12 +491,12 @@ pub fn rebuild_semantic_ivf_sidecar(
                     &ivf.index,
                 )?;
                 cache_session(&db_key, fingerprint, &ivf);
-                let _ = store.set_meta("semantic_ivf_stale", "0");
+                store.set_meta("semantic_ivf_stale", "0")?;
                 return Ok(());
             }
         }
     }
     let _ = load_or_build_semantic_ivf(store, chunks, override_threshold)?;
-    let _ = store.set_meta("semantic_ivf_stale", "0");
+    store.set_meta("semantic_ivf_stale", "0")?;
     Ok(())
 }

@@ -28,15 +28,46 @@ pub fn compute_ann_fingerprint(
     data_version: i64,
 ) -> [u8; 32] {
     let mut h = Hasher::new();
-    h.update(b"asgrep-semantic-ivf-v1");
+    // v2: content generation counter (data_version) binds IVF identity to vector
+    // mutations, not just max_id/count (beads jiyy.2 / ht1h.2 / 44a4).
+    h.update(b"asgrep-semantic-ivf-v2");
     h.update(&(chunk_count as u64).to_le_bytes());
     h.update(&max_chunk_id.to_le_bytes());
     h.update(&(dim as u32).to_le_bytes());
     h.update(embed_backend.unwrap_or("semantic").as_bytes());
-    // data_version disambiguates delete+re-add where max_chunk_id is reused but
-    // chunk content/vectors differ (bead ast-sgrep-44a4). Monotonic, bumped on
-    // every semantic_chunks mutation in IndexStore.
+    h.update(b"gen");
     h.update(&data_version.to_le_bytes());
+    *h.finalize().as_bytes()
+}
+/// Content-identity digest over flat vectors (additional IVF binding when vectors
+/// are already loaded). Combined with data_version at build/load sites.
+pub fn vectors_content_digest(vectors: &[f32]) -> [u8; 32] {
+    let mut h = Hasher::new();
+    h.update(b"asgrep-ivf-vectors-v1");
+    h.update(&(vectors.len() as u64).to_le_bytes());
+    for v in vectors {
+        h.update(&v.to_le_bytes());
+    }
+    *h.finalize().as_bytes()
+}
+pub fn compute_ann_fingerprint_with_content(
+    chunk_count: usize,
+    max_chunk_id: i64,
+    dim: usize,
+    embed_backend: Option<&str>,
+    data_version: i64,
+    content_digest: &[u8; 32],
+) -> [u8; 32] {
+    let mut h = Hasher::new();
+    h.update(b"asgrep-semantic-ivf-v2");
+    h.update(&(chunk_count as u64).to_le_bytes());
+    h.update(&max_chunk_id.to_le_bytes());
+    h.update(&(dim as u32).to_le_bytes());
+    h.update(embed_backend.unwrap_or("semantic").as_bytes());
+    h.update(b"gen");
+    h.update(&data_version.to_le_bytes());
+    h.update(b"content");
+    h.update(content_digest);
     *h.finalize().as_bytes()
 }
 #[derive(Debug, Clone)]
@@ -66,15 +97,27 @@ pub fn save_semantic_ivf(
         fs::create_dir_all(parent)?;
     }
     let chunk_count = vectors.len().checked_div(dim).unwrap_or(0);
-    let mut file = File::create(path)?;
-    file.write_all(MAGIC)?;
-    file.write_all(&VERSION.to_le_bytes())?;
-    file.write_all(&(chunk_count as u64).to_le_bytes())?;
-    file.write_all(&(dim as u32).to_le_bytes())?;
-    file.write_all(&fingerprint)?;
-    index.write_to(&mut file, dim)?;
-    for &v in vectors {
-        file.write_all(&v.to_le_bytes())?;
+    // Atomic publish: write temp → fsync → rename (bead y1oy.3).
+    let tmp = path.with_extension("ivf.tmp");
+    {
+        let mut file = File::create(&tmp)?;
+        file.write_all(MAGIC)?;
+        file.write_all(&VERSION.to_le_bytes())?;
+        file.write_all(&(chunk_count as u64).to_le_bytes())?;
+        file.write_all(&(dim as u32).to_le_bytes())?;
+        file.write_all(&fingerprint)?;
+        index.write_to(&mut file, dim)?;
+        for &v in vectors {
+            file.write_all(&v.to_le_bytes())?;
+        }
+        file.sync_all()?;
+    }
+    fs::rename(&tmp, path)?;
+    // Best-effort fsync of the parent directory so the rename itself is durable.
+    if let Some(parent) = path.parent() {
+        if let Ok(dir) = File::open(parent) {
+            let _ = dir.sync_all();
+        }
     }
     Ok(())
 }

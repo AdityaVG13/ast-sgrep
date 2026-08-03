@@ -239,9 +239,9 @@ impl Indexer {
             for (rel_str, outcome) in candidates.iter().map(|(_, r)| r).zip(prepared) {
                 match outcome {
                     PrepareOutcome::Filtered => {
-                        if self.store.file_hash(rel_str)?.is_some() {
-                            self.store.remove_file(rel_str)?;
-                        }
+                        // --lang must not destructively wipe other languages (y1oy.8).
+                        // Filtered paths are skipped; prune_missing_files also
+                        // respects lang_filter when removing absent files.
                     }
                     PrepareOutcome::Failed(msg) => {
                         eprintln!("[asgrep] failed to index {rel_str}: {msg}");
@@ -269,9 +269,8 @@ impl Indexer {
                             embed_semantic: self.options.embed_semantic,
                             embed_backend: self.options.embed_backend.to_preference(),
                         })?;
-                        let _ = self
-                            .store
-                            .set_meta(&format!("body:{rel_str}"), &prep.body_hash);
+                        self.store
+                            .set_meta(&format!("body:{rel_str}"), &prep.body_hash)?;
                         stats.files_indexed += 1;
                         stats.symbols_extracted += prep.symbols.len();
                         stats.callers_extracted += prep.callers.len();
@@ -315,6 +314,15 @@ impl Indexer {
         for path in self.store.all_file_paths()? {
             if seen_paths.contains(&path) {
                 continue;
+            }
+            // With --lang, only prune missing files for that language so other
+            // languages remain searchable (y1oy.8).
+            if let Some(filter) = self.options.lang_filter.as_ref() {
+                match self.store.file_language(&path)? {
+                    Some(lang) if lang == *filter => {}
+                    Some(_) => continue,
+                    None => {}
+                }
             }
             self.store.remove_file(&path)?;
             stats.files_removed += 1;
@@ -544,7 +552,8 @@ impl Indexer {
             embed_semantic: self.options.embed_semantic,
             embed_backend: self.options.embed_backend.to_preference(),
         })?;
-        let _ = self.store.set_meta(&body_key, &body_hash);
+        // Propagate body-hash meta failures (bead ast-sgrep-j97d.3ddd).
+        self.store.set_meta(&body_key, &body_hash)?;
         Ok(FileIndexStats {
             symbols: symbols.len(),
             callers: callers.len(),
@@ -585,9 +594,8 @@ impl Indexer {
         if language.is_some_and(|lang| lang.as_str() == lang_filter.as_str()) {
             return Ok(true);
         }
-        if self.store.file_hash(rel_path)?.is_some() {
-            self.store.remove_file(rel_path)?;
-        }
+        // Do not delete other-language rows when --lang filters this path (y1oy.8).
+        let _ = rel_path;
         Ok(false)
     }
     fn extract_rows(

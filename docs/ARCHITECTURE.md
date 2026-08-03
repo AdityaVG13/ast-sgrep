@@ -41,7 +41,7 @@ The default index is `<root>/.asgrep/index.db`. File updates are incremental and
 | `semantic_chunks` and embeddings | Symbol-level semantic documents and their vectors |
 | `embed_cache` | Reusable embedding results, avoiding recomputation for unchanged content |
 
-Large semantic indexes may also persist `.asgrep/semantic.ivf`, an IVF approximate-nearest-neighbor sidecar. The IVF file accelerates vector candidate selection; SQLite remains the source of indexed symbol/chunk metadata. A Tantivy lexical sidecar is optional for larger repositories. Sidecars are derived data and are tied to the index configuration, not independent sources of truth.
+Large semantic indexes may also persist `.asgrep/semantic.ivf`, an IVF approximate-nearest-neighbor sidecar. The IVF file accelerates vector candidate selection; SQLite remains the source of indexed symbol/chunk metadata. A Tantivy lexical sidecar is optional for larger repositories. Sidecars are derived data and are tied to the index configuration, not independent sources of truth. See [index-consistency.md](index-consistency.md) for the snapshot/generation model, hybrid cache keys under concurrent reindex, and multi-connection durability guarantees.
 
 ### Indexing flow
 

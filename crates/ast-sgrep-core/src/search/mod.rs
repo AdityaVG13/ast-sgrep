@@ -30,7 +30,10 @@ struct SemanticCache {
     flat_vectors: Arc<Vec<f32>>,
 }
 /// Hybrid search may combine adjacent committed snapshots under concurrent reindex.
-/// Semantic cache drops on chunk max-id change; IVF fingerprint-validated with flat fallback.
+/// ResponseCache keys on (PRAGMA data_version, index_data_version) and fails closed
+/// if either cannot be read. SemanticCache drops on lang/max_id/backend/data_version
+/// change. IVF is fingerprint-validated (count+max_id+dim+backend+generation) with
+/// flat cosine fallback when the sidecar is stale or absent.
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct IndexGeneration {
     external: i64,
@@ -73,17 +76,15 @@ impl Searcher {
     pub fn options(&self) -> &SearchOptions {
         &self.options
     }
-    fn index_gen(&self) -> IndexGeneration {
-        IndexGeneration {
-            // SQLite changes this only for commits made by other connections.
-            external: self
-                .store
-                .connection()
-                .query_row("PRAGMA data_version", [], |r| r.get::<_, i64>(0))
-                .unwrap_or(0),
-            // The store bumps this for writes on every connection, including ours.
-            local: self.store.index_data_version().unwrap_or(0),
-        }
+    fn index_gen(&self) -> Result<IndexGeneration> {
+        // Fail closed when generation cannot be read (jiyy.4) — never treat
+        // unreadable data_version as a cacheable generation 0.
+        let external = self
+            .store
+            .connection()
+            .query_row("PRAGMA data_version", [], |r| r.get::<_, i64>(0))?;
+        let local = self.store.index_data_version()?;
+        Ok(IndexGeneration { external, local })
     }
     fn cached(
         &self,
@@ -91,7 +92,7 @@ impl Searcher {
         query: &str,
         compute: impl FnOnce() -> Result<SearchResponse>,
     ) -> Result<SearchResponse> {
-        let gen = self.index_gen();
+        let gen = self.index_gen()?;
         let key = format!("{kind}\0{query}");
         {
             let guard = self

@@ -17,6 +17,7 @@ Canonical entry points for humans and agents. Prefer this list over scavenging t
 |-----|----------|
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Crates, index schema, search pipeline, fusion, agent surfaces |
 | [how-it-works.md](how-it-works.md) | Pipeline narrative and incremental indexing |
+| [index-consistency.md](index-consistency.md) | Snapshot consistency, IVF fingerprint, hybrid multi-connection guarantees |
 | [QUERY_GRAMMAR.md](QUERY_GRAMMAR.md) | Prefixes, composition, routing contract |
 | [semantic-search.md](semantic-search.md) | Symbol chunks, provider chain, IVF-ANN, tuning |
 | [mcp.md](mcp.md) | `asgrep-mcp` setup for agents |

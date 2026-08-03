@@ -97,7 +97,12 @@ pub struct IndexStore {
     conn: Connection,
     root: std::path::PathBuf,
     db_path: std::path::PathBuf,
-    file_tx_active: std::cell::Cell<bool>,
+    /// Nesting depth for begin/commit/rollback_file_tx and with_file_tx.
+    file_tx_depth: std::cell::Cell<u32>,
+    /// True when this connection's outermost file_tx owns the BEGIN (not bulk).
+    file_tx_owns: std::cell::Cell<bool>,
+    /// Set when any nested file_tx rolls back so the outer must not commit.
+    file_tx_poisoned: std::cell::Cell<bool>,
     cache_seq: std::cell::Cell<i64>,
 }
 impl IndexStore {
@@ -106,13 +111,37 @@ impl IndexStore {
         if let Some(p) = db_path.parent() {
             std::fs::create_dir_all(p)?;
         }
-        let conn = Connection::open(&db_path)?;
+        let existed = db_path.exists();
+        let conn = match Connection::open(&db_path) {
+            Ok(c) => c,
+            Err(e) if existed => {
+                return Err(crate::StoreError::Other(format!(
+                    "index open failed on existing DB ({e}); integrity/reindex required"
+                )));
+            }
+            Err(e) => return Err(e.into()),
+        };
         configure_connection(&conn)?;
+        if existed {
+            let integrity = super::sql::integrity_check(&conn)?;
+            if !integrity.eq_ignore_ascii_case("ok") {
+                // Fail closed: quarantine corrupt DB so a fresh open can rebuild.
+                let quarantine = db_path.with_extension("db.corrupt");
+                drop(conn);
+                let _ = std::fs::rename(&db_path, &quarantine);
+                return Err(crate::StoreError::Other(format!(
+                    "index integrity_check failed ({integrity}); quarantined to {}; reindex required",
+                    quarantine.display()
+                )));
+            }
+        }
         let store = Self {
             conn,
             root: root.to_path_buf(),
             db_path,
-            file_tx_active: std::cell::Cell::new(false),
+            file_tx_depth: std::cell::Cell::new(0),
+            file_tx_owns: std::cell::Cell::new(false),
+            file_tx_poisoned: std::cell::Cell::new(false),
             cache_seq: std::cell::Cell::new(0),
         };
         store.init_schema()?;
@@ -204,13 +233,22 @@ impl IndexStore {
         )
     }
     /// File-tx stays OFF until bulk commit (no re-NORMAL after each file).
+    /// Nested begins only increment depth; only the owning outermost end commits
+    /// or rolls back (bead ast-sgrep-j97d.37er).
     pub fn begin_file_tx(&self) -> Result<()> {
-        if !self.conn.is_autocommit() {
-            return Ok(());
+        let depth = self.file_tx_depth.get();
+        if depth == 0 {
+            self.file_tx_poisoned.set(false);
+            if self.conn.is_autocommit() {
+                self.conn
+                    .execute_batch("PRAGMA synchronous = OFF; BEGIN IMMEDIATE")?;
+                self.file_tx_owns.set(true);
+            } else {
+                // Bulk (or other) transaction owns the write set.
+                self.file_tx_owns.set(false);
+            }
         }
-        self.conn
-            .execute_batch("PRAGMA synchronous = OFF; BEGIN IMMEDIATE")?;
-        self.file_tx_active.set(true);
+        self.file_tx_depth.set(depth + 1);
         Ok(())
     }
     pub fn commit_file_tx(&self) -> Result<()> {
@@ -219,14 +257,40 @@ impl IndexStore {
     pub fn rollback_file_tx(&self) -> Result<()> {
         self.end_file_tx(false)
     }
+    fn restore_synchronous(&self) -> Result<()> {
+        self.conn
+            .execute_batch("PRAGMA synchronous = NORMAL; PRAGMA cache_size = -16384")?;
+        Ok(())
+    }
     fn end_file_tx(&self, commit: bool) -> Result<()> {
-        if !self.file_tx_active.replace(false) {
+        let depth = self.file_tx_depth.get();
+        if depth == 0 {
             return Ok(());
         }
-        if commit {
-            self.conn.execute_batch("COMMIT")?;
-        } else {
-            let _ = self.conn.execute_batch("ROLLBACK");
+        if !commit {
+            self.file_tx_poisoned.set(true);
+        }
+        if depth > 1 {
+            // Nested end: never COMMIT/ROLLBACK the outer transaction here.
+            self.file_tx_depth.set(depth - 1);
+            return Ok(());
+        }
+        self.file_tx_depth.set(0);
+        let owns = self.file_tx_owns.replace(false);
+        let poisoned = self.file_tx_poisoned.replace(false);
+        if owns {
+            if commit && !poisoned {
+                self.conn.execute_batch("COMMIT")?;
+            } else {
+                let _ = self.conn.execute_batch("ROLLBACK");
+            }
+            // Always restore NORMAL after file_tx ends (bead ast-sgrep-j97d.5kj8).
+            let _ = self.restore_synchronous();
+        }
+        if poisoned && commit {
+            return Err(crate::StoreError::Other(
+                "file_tx commit refused: nested file_tx rolled back".into(),
+            ));
         }
         Ok(())
     }
@@ -234,6 +298,12 @@ impl IndexStore {
         self.begin_file_tx()?;
         match f() {
             Ok(v) => {
+                if self.file_tx_poisoned.get() {
+                    self.rollback_file_tx()?;
+                    return Err(crate::StoreError::Other(
+                        "file_tx aborted: nested file_tx failed".into(),
+                    ));
+                }
                 self.commit_file_tx()?;
                 Ok(v)
             }
@@ -276,20 +346,26 @@ impl IndexStore {
         if self.conn.is_autocommit() {
             return Ok(());
         }
-        self.file_tx_active.set(false);
+        self.file_tx_depth.set(0);
+        self.file_tx_owns.set(false);
+        self.file_tx_poisoned.set(false);
         if commit {
             self.conn.execute_batch("COMMIT")?;
-            let _ = self
-                .conn
-                .execute_batch("PRAGMA synchronous = NORMAL; PRAGMA cache_size = -16384");
         } else {
             let _ = self.conn.execute_batch("ROLLBACK");
         }
+        // Restore NORMAL after both commit and rollback (bead ast-sgrep-j97d.5kj8).
+        let _ = self.restore_synchronous();
         Ok(())
     }
     pub fn clear_all_data(&self) -> Result<()> {
-        self.conn.execute_batch(CLEAR_ALL_SQL)?;
+        // Transactional wipe of content + per-file meta; VACUUM outside the tx.
+        self.with_file_tx(|| {
+            self.conn.execute_batch(CLEAR_ALL_SQL)?;
+            Ok(())
+        })?;
         let _ = self.conn.execute_batch("VACUUM");
+        crate::semantic_ann::mark_semantic_ivf_stale(self)?;
         self.bump_semantic_data_version()?;
         self.bump_index_data_version()?;
         Ok(())
@@ -443,7 +519,7 @@ impl IndexStore {
         self.insert_imports(file_id, input.imports)?;
         self.insert_pattern_nodes(file_id, input.pattern_nodes)?;
         self.set_meta(struct_key, struct_fp)?;
-        crate::semantic_ann::mark_semantic_ivf_stale(self);
+        crate::semantic_ann::mark_semantic_ivf_stale(self)?;
         self.bump_index_data_version()?;
         Ok(file_id)
     }
@@ -621,16 +697,29 @@ impl IndexStore {
         Ok(())
     }
     pub fn remove_file(&self, rel_path: &str) -> Result<()> {
-        if let Some(id) = self.file_id(rel_path)? {
+        self.with_file_tx(|| {
+            let Some(id) = self.file_id(rel_path)? else {
+                return Ok(());
+            };
             delete_file_children(&self.conn, id)?;
             self.conn
                 .execute("DELETE FROM files WHERE id = ?1", params![id])?;
             self.delete_meta(&format!("eol:{rel_path}"))?;
-            crate::semantic_ann::mark_semantic_ivf_stale(self);
+            self.delete_meta(&format!("struct:{rel_path}"))?;
+            self.delete_meta(&format!("body:{rel_path}"))?;
+            crate::semantic_ann::mark_semantic_ivf_stale(self)?;
             self.bump_semantic_data_version()?;
             self.bump_index_data_version()?;
-        }
-        Ok(())
+            Ok(())
+        })
+    }
+    pub fn file_language(&self, rel_path: &str) -> Result<Option<String>> {
+        optional_row(
+            &self.conn,
+            "SELECT language FROM files WHERE path = ?1",
+            &[&rel_path],
+            |r| r.get(0),
+        )
     }
     pub fn file_hash(&self, rel_path: &str) -> Result<Option<String>> {
         optional_row(
@@ -767,7 +856,16 @@ impl IndexStore {
                     r.get(5)?,
                     {
                         let v: Vec<u8> = r.get(6)?;
-                        ast_sgrep_embed::embed_from_bytes(&v).unwrap_or_default()
+                        ast_sgrep_embed::embed_from_bytes(&v).map_err(|msg| {
+                            rusqlite::Error::FromSqlConversionFailure(
+                                6,
+                                Type::Blob,
+                                Box::new(std::io::Error::new(
+                                    std::io::ErrorKind::InvalidData,
+                                    msg,
+                                )),
+                            )
+                        })?
                     },
                 );
                 Ok((id, row))
@@ -915,14 +1013,6 @@ impl IndexStore {
         Ok(out)
     }
 
-    fn file_language(&self, path: &str) -> Result<Option<String>> {
-        optional_row(
-            &self.conn,
-            "SELECT language FROM files WHERE path=?1",
-            &[&path],
-            |r| r.get(0),
-        )
-    }
     pub fn pattern_node_count(&self) -> Result<usize> {
         count_star(&self.conn, "pattern_nodes")
     }

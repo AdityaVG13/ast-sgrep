@@ -155,8 +155,11 @@ pub fn top_by_similarity(
     if limit == 0 {
         return vec![];
     }
+    // Unified threshold path with top_k_similarity (jiyy.5): finite + ULP gate.
     if let Some(min) = min_similarity {
-        scored.retain(|(_, sim)| *sim > min);
+        scored.retain(|(_, sim)| sim.is_finite() && exceeds_threshold(*sim, min));
+    } else {
+        scored.retain(|(_, sim)| sim.is_finite());
     }
     scored.sort_by(cmp_hits_desc);
     scored.truncate(limit);
