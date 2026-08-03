@@ -140,3 +140,73 @@ cargo check -p ast-sgrep-cli -p ast-sgrep-core -p ast-sgrep-lang
 | `Default for Extractor` | zero | removed |
 | extract `pub` helpers | crate-only | demoted `pub(crate)` |
 | Core local signature classifiers | duplicated | deleted; use lang exports |
+
+---
+
+## Follow-up Zero Tech Debt (shared CLI / release / runtime / extract dig-deeper)
+
+Second pass on surfaces still dense after the lang-pattern batch. No new PR; pushed same branch.
+**`.beads/` not modified.**
+
+### Before → after (this follow-up)
+
+Methodology unchanged: user = `if` + `while` + `=>`; full adds `match`.
+
+| File | Before (user / full / lines) | After | Δ user |
+|------|------------------------------|-------|--------|
+| `crates/ast-sgrep-cli/src/lib.rs` | **103** / 115 / 927 | **50** / 55 / 442 | **−53** |
+| `crates/ast-sgrep-cli/src/machine.rs` | — (inlined) | 4 / 5 / 83 | split out |
+| `crates/ast-sgrep-cli/src/bench.rs` | — (inlined) | 27 / 30 / 285 | split out |
+| `crates/ast-sgrep-cli/src/watch.rs` | — (inlined) | 14 / 16 / 84 | split out |
+| `crates/ast-sgrep-cli/src/search_cmd.rs` | — (inlined) | 8 / 9 / 92 | split out |
+| CLI total (`lib`+modules above) | 103 / 927L | 103 / 986L | density moved; `lib.rs` thin dispatch |
+| `crates/ast-sgrep-lang/src/extract.rs` | **93** / 95 / 657 | **78** / 80 / 675 | **−15** |
+| `packages/pi/scripts/release-acceptance.mjs` | **113** / 117 / 273 (dens **0.414**) | **117** / 121 / 298 (dens **0.393**) | helpers; fail codes unchanged |
+| `packages/pi/extension/src/runtime.ts` | **69** / 71 / 501 | **65** / 66 / 511 | containment + version unify |
+| `crates/ast-sgrep-core/src/search/mod.rs` | 51 / 55 / 783 | 51 / 55 / 761 | deleted dead wrappers |
+
+### Changes pinned
+
+| Change | Location |
+|--------|----------|
+| Split CLI god-file → `machine` / `bench` / `watch` / `search_cmd`; thin clap dispatch in `lib.rs` | `ast-sgrep-cli` |
+| Delete unused `pub fn run()` (entry remains `main` → `run_process`) | `lib.rs` |
+| Keep `keyword` in `raw_command_name`; shared `resolve_output_format` / `do_search` | `machine.rs` / `search_cmd.rs` |
+| `index_db_display` in open indexer/searcher errors | `lib.rs` |
+| Early-return KindRule arms; `field_name_text`; enclosing kind tables; comment skip table | `extract.rs` |
+| Kept 13-lang kinds: `CallFirstNamed`, `SymDeclarator`, `MethodInDeclarator`, `SymByKeywords`, Ruby `singleton_method`, C# `local_function_statement`, etc. | `extract.rs` |
+| `packageSpec` / `requiredFilesFor` / `expectReject` / `isForbiddenPackEntry` / `priorPublishedForLayer` / `COMMANDS` dispatch | `release-acceptance.mjs` |
+| Unify `pathContained`; `LEGACY_NUMBER_FIELDS` migrate↔rollback; `assertVersionTriple` (`requireIdentity` for `checkCompatibility`) | `runtime.ts` |
+| Delete zero-caller `Searcher::search_regex` / `search_word` (modes via `search("regex:…")` / `search("word:…")`) | `search/mod.rs` |
+| Sqlite 13-lang `resolve_module_path` extensions **kept** (not demoted) | `store/sqlite.rs` |
+
+### Commands run (follow-up)
+
+```bash
+cargo check -p ast-sgrep-cli -p ast-sgrep-core -p ast-sgrep-lang
+# → ok
+
+cargo test -p ast-sgrep-lang --lib --test pattern --test extraction_goldens
+# → lib: 9 passed
+# → extraction_goldens: 1 passed
+# → pattern: 13 passed (all langs + C#/Swift/C++/Kotlin/PHP singleton filters + ruby singleton_method)
+
+cargo test -p ast-sgrep-cli --test machine_contracts
+# → 6 passed
+
+cargo test -p ast-sgrep-core --lib search::
+# → 3 passed
+
+node packages/pi/scripts/release-acceptance.mjs self-test
+# → gate self-test accepted; fail codes unchanged
+```
+
+### Thin-wrapper audit (follow-up)
+
+| Symbol | Callers | Action |
+|--------|---------|--------|
+| `ast_sgrep_cli::run` / `pub fn run()` | **zero** | deleted |
+| `Searcher::search_regex` / `search_word` | **zero** | deleted |
+| Duplicate `isContained` + `pathContained` | two copies | unified to `pathContained` |
+| Duplicate version checks in `parseEnvelope` / `checkCompatibility` | duplicated | `assertVersionTriple` |
+
