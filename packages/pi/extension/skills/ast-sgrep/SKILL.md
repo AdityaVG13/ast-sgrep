@@ -10,6 +10,8 @@ Use `asgrep_search` when the question is about code meaning, syntax, definitions
 ## Choose a mode
 
 - `keyword`: find indexed lexical terms without cross-channel fusion. `natural` is a compatibility alias for this mode.
+- `word` / `literal` / `regex`: exact word, phrase, or regex retrieval (no fusion).
+- `imports`: find import edges for a module path.
 - `pattern`: match a structural code pattern. Supply the pattern itself, not shell syntax.
 - `defs`: find where a known symbol is defined.
 - `callers`: find code that calls a known symbol.

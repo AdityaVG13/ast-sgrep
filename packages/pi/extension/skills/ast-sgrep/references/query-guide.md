@@ -4,6 +4,10 @@
 | --- | --- | --- |
 | Find a literal string | exact-text search | `ASGREP_TIMEOUT_MS` |
 | Find indexed terms | `asgrep_search` with `mode: "keyword"` | `refresh index edits` |
+| Find a whole word | `asgrep_search` with `mode: "word"` | `word: auth` |
+| Find an exact phrase | `asgrep_search` with `mode: "literal"` | `literal: refresh token` |
+| Find by regex | `asgrep_search` with `mode: "regex"` | `regex: auth_.*` |
+| Find imports of a module | `asgrep_search` with `mode: "imports"` | `imports: express` |
 | Find code by purpose | `asgrep_search` with `mode: "semantic"` | `refresh the index after edits` |
 | Find a syntax shape | `asgrep_search` with `mode: "pattern"` | `await $CLIENT.fetch($URL)` |
 | Locate a symbol definition | `asgrep_search` with `mode: "defs"` | `FreshnessCoordinator` |

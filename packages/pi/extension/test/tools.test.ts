@@ -77,6 +77,10 @@ test("maps every query mode and bounded output option to argv arrays", async () 
     ["callers", ["--json", "--format", "agent-capsule", "--limit", "25", "--excerpt-lines", "3", "--", "callers: needle", "."]],
     ["chain", ["--json", "--format", "agent-capsule", "--limit", "25", "--excerpt-lines", "3", "chain", "--", "needle", "."]],
     ["semantic", ["--json", "--format", "agent-capsule", "--limit", "25", "--excerpt-lines", "3", "semantic", "--", "needle", "."]],
+    ["word", ["--json", "--format", "agent-capsule", "--limit", "25", "--excerpt-lines", "3", "--", "word: needle", "."]],
+    ["literal", ["--json", "--format", "agent-capsule", "--limit", "25", "--excerpt-lines", "3", "--", "literal: needle", "."]],
+    ["regex", ["--json", "--format", "agent-capsule", "--limit", "25", "--excerpt-lines", "3", "--", "regex: needle", "."]],
+    ["imports", ["--json", "--format", "agent-capsule", "--limit", "25", "--excerpt-lines", "3", "--", "imports: needle", "."]],
   ];
   for (const [mode, expected] of cases) {
     const f = fixture();

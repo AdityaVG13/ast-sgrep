@@ -1,4 +1,5 @@
 name: Pi native artifacts
+# macOS: both darwin-arm64 and darwin-x64 use macos-14 (snkc) to cut CI cost.
 on:
   workflow_dispatch:
 permissions:

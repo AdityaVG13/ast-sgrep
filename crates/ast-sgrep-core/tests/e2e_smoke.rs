@@ -1,4 +1,4 @@
-//! Thin end-to-end parity: one sample index, real search/chain entry points.
+//! End-to-end smoke (renamed from parity.rs — e9qc). External oracle compare lives elsewhere.
 use ast_sgrep_core::chain::{expand_chain, ChainConfig};
 use ast_sgrep_core::search::HitKind;
 use ast_sgrep_core::store::IndexStore;
