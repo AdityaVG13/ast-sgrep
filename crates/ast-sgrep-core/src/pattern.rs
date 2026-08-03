@@ -2,13 +2,15 @@ use crate::gitignore::{should_skip_dir, should_skip_file};
 use crate::rank::SCORE_PATTERN;
 use crate::search::{HitKind, SearchHit, SpanHitInput};
 use crate::Result;
-use ast_sgrep_lang::{detect_language, match_pattern};
+use ast_sgrep_lang::{
+    cached_pattern_signatures, detect_language, match_pattern, required_pattern_literal,
+};
 use rayon::prelude::*;
 use serde::Serialize;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
-use std::time::Instant;
+use std::process::{Child, Command, Stdio};
+use std::time::{Duration, Instant};
 use walkdir::WalkDir;
 #[derive(Debug, Clone, Serialize)]
 pub struct PatternSearchProfile {
@@ -81,79 +83,6 @@ pub fn search_pattern(
         Err(_) => {}
     }
     Ok(hits)
-}
-fn cached_pattern_signatures(pattern: &str) -> Option<Vec<String>> {
-    let pattern = pattern.trim();
-    if pattern.is_empty() {
-        return Some(vec![]);
-    }
-    if !pattern.contains('$') {
-        return Some(vec![pattern.to_string()]);
-    }
-    for (prefix, kinds) in [
-        ("fn ", &["function_item"][..]),
-        ("def ", &["function_definition"][..]),
-        (
-            "function ",
-            &[
-                "function_declaration",
-                "method_definition",
-                "method_declaration",
-                "method",
-            ][..],
-        ),
-        ("func ", &["function_declaration"][..]),
-        (
-            "class ",
-            &["class_definition", "class_declaration", "class"][..],
-        ),
-        ("struct ", &["struct_item"][..]),
-        ("interface ", &["trait_item", "interface_declaration"][..]),
-    ] {
-        if let Some(rest) = pattern.strip_prefix(prefix) {
-            let name = rest
-                .split(|ch: char| ch == '(' || ch == '{' || ch.is_whitespace())
-                .next()
-                .unwrap_or_default();
-            if name.starts_with('$') {
-                return Some(kinds.iter().map(|kind| format!("kind:{kind}")).collect());
-            }
-            if is_pattern_identifier(name) {
-                return Some(vec![format!("decl:{}:{name}", prefix.trim())]);
-            }
-            return None;
-        }
-    }
-    let open = pattern.find('(')?;
-    let close = pattern.rfind(')')?;
-    if close + 1 != pattern.len() || !pattern[open + 1..close].contains("$$$") {
-        return None;
-    }
-    let callee = pattern[..open].trim();
-    if callee.starts_with('$') && !callee.contains('.') {
-        return Some(vec!["kind:call_expression".into(), "kind:call".into()]);
-    }
-    if let Some(name) = callee.rsplit('.').next() {
-        if callee.contains('$') && is_pattern_identifier(name) {
-            return Some(vec![format!("call-name:{name}")]);
-        }
-    }
-    is_pattern_path(callee).then(|| vec![format!("call:{callee}")])
-}
-fn is_pattern_identifier(value: &str) -> bool {
-    let mut chars = value.chars();
-    chars
-        .next()
-        .is_some_and(|ch| ch == '_' || ch.is_alphabetic())
-        && chars.all(|ch| ch == '_' || ch.is_alphanumeric())
-}
-fn is_pattern_path(value: &str) -> bool {
-    !value.is_empty()
-        && !value.contains('$')
-        && value
-            .split(['.', ':'])
-            .filter(|p| !p.is_empty())
-            .all(is_pattern_identifier)
 }
 fn search_pattern_cached(
     pattern: &str,
@@ -410,38 +339,36 @@ fn search_pattern_native_profiled(
     })
 }
 
-fn required_pattern_literal(pattern: &str) -> Option<String> {
-    let pattern = pattern.trim();
-    if pattern.is_empty() {
-        return None;
-    }
-    if !pattern.contains('$') {
-        return Some(pattern.to_string());
-    }
-    for prefix in [
-        "fn ",
-        "def ",
-        "function ",
-        "func ",
-        "class ",
-        "struct ",
-        "interface ",
-        "type ",
-    ] {
-        if let Some(rest) = pattern.strip_prefix(prefix) {
-            let name = rest
-                .split(|ch: char| ch == '(' || ch == '{' || ch == '<' || ch.is_whitespace())
-                .next()
-                .unwrap_or_default();
-            return (!name.is_empty() && !name.starts_with('$')).then(|| name.to_string());
+/// Timed `try_wait` loop shared by the optional ast-grep version probe and bench runner.
+/// Returns `Some(())` when the child exits (and succeeds if `require_success`), else kills and returns `None`.
+fn wait_child_deadline(
+    child: &mut Child,
+    deadline: Instant,
+    require_success: bool,
+) -> Option<()> {
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                if require_success && !status.success() {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return None;
+                }
+                return Some(());
+            }
+            Ok(None) if Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+            Ok(None) => std::thread::sleep(Duration::from_millis(20)),
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
         }
     }
-    let callee = pattern.split_once('(')?.0.trim();
-    callee
-        .split(['.', ':'])
-        .filter(|segment| !segment.is_empty() && !segment.starts_with('$'))
-        .max_by_key(|segment| segment.len())
-        .map(str::to_string)
 }
 /// Optional external `ast-grep` for **bench comparison only**.
 /// Disabled by default: never searches PATH or executes untrusted binaries
@@ -463,28 +390,11 @@ fn find_ast_grep_binary() -> Option<String> {
         .stderr(Stdio::null())
         .spawn()
         .ok()?;
-    let start = Instant::now();
-    loop {
-        match child.try_wait() {
-            Ok(Some(status)) if status.success() => break,
-            Ok(Some(_)) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return None;
-            }
-            Ok(None) if start.elapsed().as_millis() > 1_500 => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return None;
-            }
-            Ok(None) => std::thread::sleep(std::time::Duration::from_millis(20)),
-            Err(_) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return None;
-            }
-        }
-    }
+    wait_child_deadline(
+        &mut child,
+        Instant::now() + Duration::from_millis(1_500),
+        true,
+    )?;
     let output = child.wait_with_output().ok()?;
     String::from_utf8_lossy(&output.stdout)
         .contains("ast-grep")
@@ -506,23 +416,7 @@ pub fn bench_ast_grep(pattern: &str, root: &Path, iterations: u32) -> Option<f64
             .stderr(Stdio::null())
             .spawn()
             .ok()?;
-        let deadline = Instant::now() + std::time::Duration::from_secs(30);
-        loop {
-            match child.try_wait() {
-                Ok(Some(_)) => break,
-                Ok(None) if Instant::now() >= deadline => {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    return None;
-                }
-                Ok(None) => std::thread::sleep(std::time::Duration::from_millis(20)),
-                Err(_) => {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    return None;
-                }
-            }
-        }
+        wait_child_deadline(&mut child, Instant::now() + Duration::from_secs(30), false)?;
         total += start.elapsed().as_secs_f64() * 1000.0;
     }
     Some(total / f64::from(iterations))
@@ -539,7 +433,7 @@ pub fn ast_grep_pattern_for_query(query: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::cached_pattern_signatures;
+    use ast_sgrep_lang::cached_pattern_signatures;
 
     #[test]
     fn fixed_bakeoff_suite_is_index_or_native_resolvable() {

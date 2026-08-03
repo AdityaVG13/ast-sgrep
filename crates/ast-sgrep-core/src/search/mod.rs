@@ -44,6 +44,18 @@ fn lock_clear_on_poison<T>(
         }
     }
 }
+fn invalidate_response_cache(cache: &mut ResponseCache) {
+    cache.map.clear();
+    cache.order.clear();
+    cache.enabled = false;
+    cache.gen = IndexGeneration {
+        external: -1,
+        local: -1,
+    };
+}
+fn lock_response_cache(cache: &Mutex<ResponseCache>) -> MutexGuard<'_, ResponseCache> {
+    lock_clear_on_poison(cache, invalidate_response_cache)
+}
 struct SemanticCache {
     lang_filter: Option<String>,
     max_id: i64,
@@ -142,15 +154,7 @@ impl Searcher {
         };
         let key = self.cache_key(kind, query);
         {
-            let guard = lock_clear_on_poison(&self.response_cache, |cache| {
-                cache.map.clear();
-                cache.order.clear();
-                cache.enabled = false;
-                cache.gen = IndexGeneration {
-                    external: -1,
-                    local: -1,
-                };
-            });
+            let guard = lock_response_cache(&self.response_cache);
             if guard.enabled && guard.gen == gen {
                 if let Some(hit) = guard.map.get(&key) {
                     return Ok(hit.clone());
@@ -165,15 +169,7 @@ impl Searcher {
         if gen_after != gen {
             return Ok(response);
         }
-        let mut guard = lock_clear_on_poison(&self.response_cache, |cache| {
-            cache.map.clear();
-            cache.order.clear();
-            cache.enabled = false;
-            cache.gen = IndexGeneration {
-                external: -1,
-                local: -1,
-            };
-        });
+        let mut guard = lock_response_cache(&self.response_cache);
         if !guard.enabled {
             return Ok(response);
         }
@@ -269,28 +265,6 @@ impl Searcher {
     pub fn search_literal(&self, query: &str) -> Result<SearchResponse> {
         self.cached("lit", query, || {
             let parsed = ParsedQuery::literal(query);
-            Ok(finish_response(
-                &parsed,
-                &self.options,
-                literal_pass(&self.store, &self.options, &parsed)?,
-                true,
-            ))
-        })
-    }
-    pub fn search_regex(&self, query: &str) -> Result<SearchResponse> {
-        self.cached("re", query, || {
-            let parsed = ParsedQuery::regex(query);
-            Ok(finish_response(
-                &parsed,
-                &self.options,
-                regex_pass(&self.store, &self.options, &parsed)?,
-                true,
-            ))
-        })
-    }
-    pub fn search_word(&self, query: &str) -> Result<SearchResponse> {
-        self.cached("word", query, || {
-            let parsed = ParsedQuery::word(query);
             Ok(finish_response(
                 &parsed,
                 &self.options,
@@ -466,14 +440,7 @@ fn structural_index_pass(
         if term.len() < 3 || !term.chars().all(|c| c == '_' || c.is_alphanumeric()) {
             continue;
         }
-        let signatures = [
-            format!("call-name:{term}"),
-            format!("call:{term}"),
-            format!("decl:fn:{term}"),
-            format!("decl:def:{term}"),
-            format!("decl:function:{term}"),
-            term.clone(),
-        ];
+        let signatures = ast_sgrep_lang::structural_term_signatures(term);
         for sig in &signatures {
             for row in store.pattern_nodes_matching(sig, lang)? {
                 if !allowed_files.contains(&row.path)
@@ -545,6 +512,30 @@ fn definition_query_affinity(parsed: &ParsedQuery, hit: &SearchHit) -> u8 {
     }
 }
 
+/// Shared ranking key for pre-truncate prune and final sort in `finish_response`.
+/// Multi-term queries prefer coverage so high-coverage lower-score evidence is retained (8mb8).
+fn cmp_ranked_hits(
+    a: &SearchHit,
+    coverage_a: u32,
+    b: &SearchHit,
+    coverage_b: u32,
+    multi_term: bool,
+) -> std::cmp::Ordering {
+    let score_ord = b
+        .score
+        .partial_cmp(&a.score)
+        .unwrap_or(std::cmp::Ordering::Equal);
+    let coverage_ord = coverage_b.cmp(&coverage_a);
+    let primary = if multi_term {
+        coverage_ord.then(score_ord)
+    } else {
+        score_ord.then(coverage_ord)
+    };
+    primary
+        .then_with(|| a.file.cmp(&b.file))
+        .then_with(|| a.line_start.cmp(&b.line_start))
+}
+
 pub fn finish_response(
     parsed: &ParsedQuery,
     options: &SearchOptions,
@@ -604,26 +595,18 @@ pub fn finish_response(
         gate_limit
     };
     let prune_keep = keep.saturating_mul(4).max(keep.saturating_add(32));
+    let multi_term = parsed.terms.len() > 1;
     if hits.len() > prune_keep {
         // Keep coverage in the pre-truncate sort key so high-coverage lower-score
         // hits survive the keep*4 prune (8mb8).
         hits.select_nth_unstable_by(prune_keep, |a, b| {
-            let ca = excerpt_term_coverage(&parsed.terms, a);
-            let cb = excerpt_term_coverage(&parsed.terms, b);
-            // Coverage-first prune for multi-term; score-first otherwise.
-            let score_ord = b
-                .score
-                .partial_cmp(&a.score)
-                .unwrap_or(std::cmp::Ordering::Equal);
-            let coverage_ord = cb.cmp(&ca);
-            let primary = if parsed.terms.len() > 1 {
-                coverage_ord.then(score_ord)
-            } else {
-                score_ord.then(coverage_ord)
-            };
-            primary
-                .then_with(|| a.file.cmp(&b.file))
-                .then_with(|| a.line_start.cmp(&b.line_start))
+            cmp_ranked_hits(
+                a,
+                excerpt_term_coverage(&parsed.terms, a),
+                b,
+                excerpt_term_coverage(&parsed.terms, b),
+                multi_term,
+            )
         });
         hits.truncate(prune_keep);
     }
@@ -631,23 +614,8 @@ pub fn finish_response(
         .into_iter()
         .map(|h| (excerpt_term_coverage(&parsed.terms, &h), h))
         .collect();
-    let multi_term = parsed.terms.len() > 1;
     let mut compare = |(ca, a): &(u32, SearchHit), (cb, b): &(u32, SearchHit)| {
-        let score_ord = b
-            .score
-            .partial_cmp(&a.score)
-            .unwrap_or(std::cmp::Ordering::Equal);
-        let coverage_ord = cb.cmp(ca);
-        // Multi-term queries prefer coverage so high-coverage lower-score evidence
-        // is not discarded before final ranking (8mb8).
-        let primary = if multi_term {
-            coverage_ord.then(score_ord)
-        } else {
-            score_ord.then(coverage_ord)
-        };
-        primary
-            .then_with(|| a.file.cmp(&b.file))
-            .then_with(|| a.line_start.cmp(&b.line_start))
+        cmp_ranked_hits(a, *ca, b, *cb, multi_term)
     };
     if keyed.len() > keep {
         keyed.select_nth_unstable_by(keep, &mut compare);
