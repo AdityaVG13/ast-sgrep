@@ -260,3 +260,74 @@ cargo test -p ast-sgrep-cli --test machine_contracts
 
 - `execute_command` `asgrep.defs` / `asgrep.callers` still call `search` directly (return JSON hits, not LSP locations — different from `prefixed_hits`).
 - No change to ranking semantics, search scores, or LSP fail-closed contracts.
+
+---
+
+## Follow-up — bench honesty + machine envelope (second-pass ZTD)
+
+Bench ast-grep speedup claims nested under `ast_grep_comparison`; vacuous hybrid/token
+comparisons skipped. Suite JSON uses single envelope via `print_machine_json_with_ok`.
+Ranking scores and LSP fail-closed contracts unchanged.
+
+### Caller verification (rg) before deletes
+
+| Symbol | Callers outside definition | Action |
+|--------|----------------------------|--------|
+| `ast_grep_pattern_for_query` | 0 (after bench port) | deleted (`pattern.rs`) |
+| `bench_searcher` / `timed_searches` / `add_index_json` / `print_index_skipped` | bench.rs only | demoted to private `fn` |
+| `finish_response` | same-crate (`mod.rs`, `pipeline_parts`) | demoted `pub(crate)` |
+
+### Bench honesty
+
+| Change | Detail |
+|--------|--------|
+| `ast_grep_comparison` | Nested object; `compared` / `skipped_reason` / optional `speedup_vs_ast_grep` |
+| Vacuous speedups | Only `pattern:` queries compare; hybrid/token queries skip with explicit reason |
+| Suite envelope | `print_machine_json_with_ok("bench", …, suite_ok)` — one JSON object, `exit(2)` on failure |
+| History / CV | `cv_pct`, `update_bench_history`, optional `ASGREP_BENCH_RATCHET` preserved |
+
+### Machine envelope
+
+| Helper | Location | Purpose |
+|--------|----------|---------|
+| `machine_value_with_ok` | `machine.rs` | `ok` flag; `exit_code` only when `!ok` |
+| `print_machine_json_with_ok` | `machine.rs` | suite bench failure envelope without dual JSON |
+
+### Search visibility
+
+| Symbol | Before | After |
+|--------|--------|-------|
+| `finish_response` | `pub fn` | `pub(crate) fn` |
+
+Skipped: `search/response.rs` split (helpers already private; move-only risk > benefit).
+
+### Behavior invariants (follow-up)
+
+1. Hybrid ranking gate order / score-only pre-truncate unchanged.
+2. LSP fail-closed multi-root binding unchanged.
+3. Bench hybrid/token queries no longer emit top-level `speedup_vs_ast_grep`.
+4. Machine success envelopes still omit `exit_code` when `ok: true`.
+
+### Commands run (follow-up)
+
+```bash
+export PATH="/usr/local/cargo/bin:$PATH"
+cd /workspace/.worktrees/pr14
+
+cargo test -p ast-sgrep-cli --test machine_contracts
+# → 6 passed
+
+cargo test -p ast-sgrep-lsp --lib
+# → 1 passed (limit_tests)
+
+cargo test -p ast-sgrep-core --lib search::
+# → 3 passed
+```
+
+### Observed results (follow-up)
+
+| Suite | Result |
+|-------|--------|
+| `machine_contracts` | **6 passed** |
+| `ast-sgrep-lsp --lib` | **1 passed** |
+| `ast-sgrep-core --lib search::` | **3 passed** |

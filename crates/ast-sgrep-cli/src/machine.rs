@@ -13,14 +13,18 @@ fn bounded_error_message(message: &str) -> String {
     }
 }
 
-fn machine_value(command: &str, value: impl serde::Serialize) -> anyhow::Result<serde_json::Value> {
+fn machine_value_with_ok(
+    command: &str,
+    value: impl serde::Serialize,
+    ok: bool,
+) -> anyhow::Result<serde_json::Value> {
     let mut value = serde_json::to_value(value)?;
     let object = match &mut value {
         serde_json::Value::Object(o) => o,
         _ => {
             return Ok(serde_json::json!({
                 "schema_version": MACHINE_SCHEMA_VERSION, "tool": "asgrep",
-                "command": command, "ok": true, "data": value
+                "command": command, "ok": ok, "data": value
             }));
         }
     };
@@ -33,7 +37,12 @@ fn machine_value(command: &str, value: impl serde::Serialize) -> anyhow::Result<
     object.insert("schema_version".into(), MACHINE_SCHEMA_VERSION.into());
     object.insert("tool".into(), "asgrep".into());
     object.insert("command".into(), command.into());
-    object.insert("ok".into(), true.into());
+    object.insert("ok".into(), ok.into());
+    if !ok {
+        object
+            .entry("exit_code".to_string())
+            .or_insert(serde_json::json!(2));
+    }
     Ok(value)
 }
 
@@ -41,9 +50,17 @@ pub(crate) fn print_machine_json(
     command: &str,
     value: impl serde::Serialize,
 ) -> anyhow::Result<()> {
+    print_machine_json_with_ok(command, value, true)
+}
+
+pub(crate) fn print_machine_json_with_ok(
+    command: &str,
+    value: impl serde::Serialize,
+    ok: bool,
+) -> anyhow::Result<()> {
     println!(
         "{}",
-        serde_json::to_string_pretty(&machine_value(command, value)?)?
+        serde_json::to_string_pretty(&machine_value_with_ok(command, value, ok)?)?
     );
     Ok(())
 }
