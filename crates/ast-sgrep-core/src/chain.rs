@@ -75,8 +75,8 @@ fn hit_symbol(store: &IndexStore, hit: &SearchHit) -> Option<(String, u32, u32)>
     if let Some(ref sym) = hit.symbol {
         return Some((sym.clone(), hit.line_start, hit.line_end));
     }
-    // iva9.8: Caller/Graph hits carry callee/caller — prefer those over a
-    // file-scanned first symbol that may ignore the edged relationship.
+    // iva9.8 / ql1u: Caller/Graph hits carry callee/caller — prefer those over a
+    // file-scanned first symbol that may invent the wrong seed.
     if let Some(ref callee) = hit.callee {
         if !callee.is_empty() {
             return Some((callee.clone(), hit.line_start, hit.line_end));
@@ -90,11 +90,9 @@ fn hit_symbol(store: &IndexStore, hit: &SearchHit) -> Option<(String, u32, u32)>
     if let Ok(Some(row)) = store.symbol_at_line(&hit.file, hit.line_start) {
         return Some((row.name, row.line_start, row.line_end));
     }
-    store
-        .first_symbol_in_file(&hit.file)
-        .ok()
-        .flatten()
-        .map(|r| (r.name, r.line_start, r.line_end))
+    // ql1u: never invent a seed via first_symbol_in_file — that picks an unrelated
+    // top-of-file symbol and poisons chain expansion.
+    None
 }
 fn build_seeds(store: &IndexStore, hits: &[SearchHit], top_n: usize) -> Vec<ChainEntry> {
     let mut best_per_file: HashMap<&str, (&SearchHit, usize)> = HashMap::new();

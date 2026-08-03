@@ -19,7 +19,8 @@ use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 use types::dedup_hits;
 pub use types::{format_hit_line, HitKind, SearchHit, SearchOptions, SearchResponse, SpanHitInput};
-const PARALLEL_PASS_FILE_THRESHOLD: usize = 128;
+/// File-count gate for parallel hybrid pass fan-out (6dx9).
+pub const PARALLEL_PASS_FILE_THRESHOLD: usize = 128;
 const MAX_HITS_PER_FILE: usize = 3;
 struct SemanticCache {
     lang_filter: Option<String>,
@@ -325,12 +326,42 @@ fn run_serial_passes(
     hits.extend(lexical_pass(store, options, parsed)?);
     hits.extend(symbol_pass(store, options, parsed)?);
     hits.extend(anchor_pass(store, options, parsed)?);
+    // 50hx: quoted hybrid → Literal intent must also run literal_pass.
+    if let Some(lit) = hybrid_literal_parsed(parsed) {
+        hits.extend(literal_pass(store, options, &lit)?);
+    }
     // Indexed structural signatures (AST-derived) — cheap, no re-parse.
     hits.extend(structural_index_pass(store, options, parsed)?);
     Ok(hits)
 }
 
+/// 50hx: when hybrid classifies as Literal (balanced quotes), build a Literal
+/// ParsedQuery whose target is the inner needle (quotes stripped).
+fn hybrid_literal_parsed(parsed: &ParsedQuery) -> Option<ParsedQuery> {
+    if parsed.mode != QueryMode::Hybrid {
+        return None;
+    }
+    if crate::intent::classify(parsed) != crate::intent::QueryIntent::Literal {
+        return None;
+    }
+    let t = parsed.raw.trim();
+    if t.len() < 2 || !(t.starts_with('"') && t.ends_with('"')) {
+        return None;
+    }
+    let inner = &t[1..t.len() - 1];
+    if inner.is_empty() {
+        return None;
+    }
+    Some(ParsedQuery::literal(inner))
+}
+
 /// Boost hybrid recall with pre-indexed pattern_nodes (decls/calls extracted at index time).
+///
+/// Score units (noik): raw score is `SCORE_STRUCTURAL_INDEX` (= `SCORE_PATTERN *
+/// STRUCTURAL_INDEX_FRACTION`). After `route_hits`, the fused contribution is at most
+/// `STRUCTURAL_INDEX_FRACTION * pattern_weight` — intentionally below a true Pattern match
+/// so indexed signatures cannot inflate past the calibrated Pattern channel.
+const STRUCTURAL_INDEX_FRACTION: f64 = 0.35;
 fn structural_index_pass(
     store: &IndexStore,
     options: &SearchOptions,
@@ -341,6 +372,7 @@ fn structural_index_pass(
     let lang = options.lang_filter.as_deref();
     let mut hits = Vec::new();
     let mut seen = std::collections::HashSet::new();
+    let raw_score = SCORE_PATTERN * STRUCTURAL_INDEX_FRACTION;
     for term in &parsed.terms {
         if term.len() < 3 || !term.chars().all(|c| c == '_' || c.is_alphanumeric()) {
             continue;
@@ -363,7 +395,7 @@ fn structural_index_pass(
                     file: row.path,
                     line_start: row.line_start,
                     line_end: row.line_end,
-                    score: SCORE_PATTERN * 0.85,
+                    score: raw_score,
                     excerpt: row.excerpt,
                     symbol: Some(term.clone()),
                     language: row.language,
@@ -402,10 +434,18 @@ fn run_parallel_passes(
             let store = IndexStore::open(&root, index_path.as_deref())?;
             structural_index_pass(&store, &options, &parsed)
         });
+        let literal = scope.spawn(|| {
+            let store = IndexStore::open(&root, index_path.as_deref())?;
+            let Some(lit) = hybrid_literal_parsed(&parsed) else {
+                return Ok(Vec::new());
+            };
+            literal_pass(&store, &options, &lit)
+        });
         let mut hits = join_worker(lex.join())?;
         hits.extend(join_worker(sym.join())?);
         hits.extend(join_worker(anchor.join())?);
         hits.extend(join_worker(structural.join())?);
+        hits.extend(join_worker(literal.join())?);
         Ok(hits)
     })
 }
@@ -455,20 +495,19 @@ pub fn finish_response(
     } else {
         gate_limit
     };
-    if hits.len() > keep.saturating_mul(4).max(keep + 32) {
-        hits.select_nth_unstable_by(keep, |a, b| {
-            b.score
-                .partial_cmp(&a.score)
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then_with(|| a.file.cmp(&b.file))
-                .then_with(|| a.line_start.cmp(&b.line_start))
-        });
-        hits.truncate(keep);
+    // 8mb8: pre-truncate must keep coverage in the sort key and retain a keep*4
+    // pool so high-coverage lower-score hits survive into coverage ranking.
+    let pre_keep = keep.saturating_mul(4).max(keep + 32);
+    if hits.len() > pre_keep {
+        hits.select_nth_unstable_by(pre_keep, |a, b| hit_rank_cmp(parsed, a, b));
+        hits.truncate(pre_keep);
     }
     let mut keyed: Vec<(u32, SearchHit)> = hits
         .into_iter()
         .map(|h| (excerpt_term_coverage(&parsed.terms, &h), h))
         .collect();
+    // Score primary; coverage secondary (8mb8: coverage must be in the key so
+    // equal-score high-coverage hits are not discarded by score-only prune).
     let mut compare = |(ca, a): &(u32, SearchHit), (cb, b): &(u32, SearchHit)| {
         b.score
             .partial_cmp(&a.score)
@@ -659,7 +698,10 @@ fn compile_glob(pattern: &str) -> std::result::Result<regex::Regex, String> {
     if pattern.is_empty() {
         return Err("file_filter must be non-empty".into());
     }
-    if pattern.chars().any(|c| c == '\0' || (c.is_control() && c != '\t')) {
+    if pattern
+        .chars()
+        .any(|c| c == '\0' || (c.is_control() && c != '\t'))
+    {
         return Err("file_filter contains invalid control characters".into());
     }
     let mut result = String::from("^");
@@ -696,11 +738,26 @@ fn contains_term_token(text: &str, term: &str) -> bool {
                 && after.is_none_or(|ch| !ch.is_alphanumeric() && ch != '_')
         })
 }
+fn hit_rank_cmp(parsed: &ParsedQuery, a: &SearchHit, b: &SearchHit) -> std::cmp::Ordering {
+    let ca = excerpt_term_coverage(&parsed.terms, a);
+    let cb = excerpt_term_coverage(&parsed.terms, b);
+    b.score
+        .partial_cmp(&a.score)
+        .unwrap_or(std::cmp::Ordering::Equal)
+        .then_with(|| cb.cmp(&ca))
+        .then_with(|| a.file.cmp(&b.file))
+        .then_with(|| a.line_start.cmp(&b.line_start))
+}
 fn excerpt_term_coverage(terms: &[String], hit: &SearchHit) -> u32 {
+    // hhca: lowercase BOTH sides. Excerpt was lowercased but mixed-case terms
+    // (literal/regex after eh5a) would otherwise miss case-insensitive coverage.
     let text = hit.excerpt.to_lowercase();
     terms
         .iter()
-        .filter(|term| contains_term_token(&text, term))
+        .filter(|term| {
+            let lower = term.to_lowercase();
+            contains_term_token(&text, &lower)
+        })
         .count() as u32
 }
 #[cfg(test)]
@@ -846,5 +903,115 @@ mod tests {
             msg.contains("invalid file_filter"),
             "expected invalid file_filter error, got {msg}"
         );
+    }
+
+    /// 8mb8: pre-truncate keeps coverage in the sort key and retains a keep*4
+    /// pool so a high-coverage hit among equal-score peers is not discarded.
+    #[test]
+    fn pre_truncate_keeps_high_coverage_lower_score_hit() {
+        let parsed = ParsedQuery {
+            raw: "alpha beta gamma".into(),
+            mode: QueryMode::Hybrid,
+            target: None,
+            terms: vec!["alpha".into(), "beta".into(), "gamma".into()],
+        };
+        // limit=2 → hybrid keep=6 → pre_keep=24.
+        let options = SearchOptions {
+            limit: 2,
+            use_rerank: false,
+            ..SearchOptions::default()
+        };
+        let mut hits = Vec::new();
+        // Equal-score low-coverage peers — without coverage in the prune key,
+        // select_nth_unstable may drop the high-coverage hit before ranking.
+        for i in 0..30 {
+            hits.push(SearchHit {
+                kind: HitKind::Asgrep,
+                file: format!("noise-{i}.rs"),
+                line_start: 1,
+                line_end: 1,
+                symbol: None,
+                caller: None,
+                callee: None,
+                language: None,
+                score: 1.0,
+                excerpt: "alpha only here".into(),
+            });
+        }
+        hits.push(SearchHit {
+            kind: HitKind::Asgrep,
+            file: "full_coverage.rs".into(),
+            line_start: 1,
+            line_end: 1,
+            symbol: None,
+            caller: None,
+            callee: None,
+            language: None,
+            // Same score band as noise; coverage is the discriminating key.
+            // "Lower-score" relative to a pure score-only unstable partition that
+            // could discard it; with coverage in the key it ranks above peers.
+            score: 1.0,
+            excerpt: "alpha beta gamma together".into(),
+        });
+        let resp = finish_response(&parsed, &options, hits, false).unwrap();
+        assert!(
+            resp.hits.iter().any(|h| h.file == "full_coverage.rs"),
+            "high-coverage hit must survive keep*4 prune; got {:?}",
+            resp.hits
+                .iter()
+                .map(|h| (&h.file, h.score))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    /// hhca: mixed-case terms still contribute to excerpt coverage.
+    #[test]
+    fn excerpt_coverage_lowercases_terms_and_excerpt() {
+        let hit = SearchHit {
+            kind: HitKind::Asgrep,
+            file: "a.rs".into(),
+            line_start: 1,
+            line_end: 1,
+            symbol: None,
+            caller: None,
+            callee: None,
+            language: None,
+            score: 1.0,
+            excerpt: "FooBar and Baz".into(),
+        };
+        let terms = vec!["foobar".into(), "BAZ".into()];
+        assert_eq!(excerpt_term_coverage(&terms, &hit), 2);
+        let mixed = vec!["FooBar".into()];
+        assert_eq!(excerpt_term_coverage(&mixed, &hit), 1);
+    }
+
+    /// noik: structural index fused score stays within calibrated fraction.
+    #[test]
+    fn structural_index_score_bounded_after_fusion() {
+        use crate::intent::route_hits;
+        use crate::rank::SCORE_PATTERN;
+        let parsed = ParsedQuery::parse("process_request");
+        let mut hits = vec![SearchHit {
+            kind: HitKind::Pattern,
+            file: "a.rs".into(),
+            line_start: 1,
+            line_end: 1,
+            symbol: Some("process_request".into()),
+            caller: None,
+            callee: None,
+            language: None,
+            score: SCORE_PATTERN * STRUCTURAL_INDEX_FRACTION,
+            excerpt: "fn process_request() {}".into(),
+        }];
+        route_hits(&parsed, &mut hits);
+        let w = crate::intent::weights_for(crate::intent::classify(&parsed)).pattern;
+        let ceiling = STRUCTURAL_INDEX_FRACTION * w + 1e-9;
+        assert!(
+            hits[0].score <= ceiling,
+            "structural fused score {} exceeds calibrated {} * weight",
+            hits[0].score,
+            STRUCTURAL_INDEX_FRACTION
+        );
+        assert!(hits[0].score > 0.0);
     }
 }

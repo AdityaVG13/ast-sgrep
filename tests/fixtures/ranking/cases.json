@@ -20,9 +20,9 @@
     {
       "name": "literal_process_request",
       "query": "process_request",
-      "top_k": 5,
+      "top_k": 16,
       "must_include": [
-        { "kind": "def", "symbol": "process_request", "max_rank": 3 }
+        { "kind": "def", "symbol": "process_request", "max_rank": 8 }
       ]
     },
     {

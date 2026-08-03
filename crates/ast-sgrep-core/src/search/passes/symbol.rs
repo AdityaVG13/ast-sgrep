@@ -1,5 +1,8 @@
 use crate::query::ParsedQuery;
-use crate::rank::{best_symbol_score, score_caller, score_def, SCORE_ANCHOR, SCORE_GRAPH};
+use crate::rank::{
+    best_symbol_score_normalized, normalize_query_terms, score_caller_normalized, score_def,
+    SCORE_ANCHOR, SCORE_GRAPH,
+};
 use crate::search::types::matches_lang;
 use crate::search::types::{HitKind, SearchHit, SearchOptions, SpanHitInput};
 use crate::store::sql::{caller_terms_filter, like_terms_filter, query_limit_map};
@@ -52,15 +55,17 @@ fn caller_rows_to_hits(
     mode: CallerMatchMode,
 ) -> Result<Vec<SearchHit>> {
     let primary_lower = parsed.primary_symbol().map(|s| s.to_lowercase());
+    // am6l: normalize query terms once per query, not once per scored row.
+    let norm_terms = normalize_query_terms(&parsed.terms);
     let mut hits = Vec::new();
     for (path, language, caller, callee, line_no, text) in rows {
         if !matches_lang(language.as_deref(), options.lang_filter.as_deref()) {
             continue;
         }
-        let callee_score = best_symbol_score(&parsed.terms, &callee);
+        let callee_score = best_symbol_score_normalized(&norm_terms, &callee);
         let matched = match mode {
             CallerMatchMode::Hybrid => {
-                callee_score > 0.0 || best_symbol_score(&parsed.terms, &caller) > 0.0
+                callee_score > 0.0 || best_symbol_score_normalized(&norm_terms, &caller) > 0.0
             }
             CallerMatchMode::CalleeOnly => callee_score > 0.0,
         };
@@ -74,7 +79,7 @@ fn caller_rows_to_hits(
             callee.clone(),
             line_no,
             text,
-            score_caller(&parsed.terms, &callee),
+            score_caller_normalized(&norm_terms, &callee),
         ));
         let graph = match mode {
             CallerMatchMode::CalleeOnly => Some(SCORE_GRAPH),

@@ -3,7 +3,9 @@ use ast_sgrep_core::chain::{expand_chain, ChainConfig};
 use ast_sgrep_core::pattern::search_pattern;
 use ast_sgrep_core::query::{ParsedQuery, QueryMode};
 use ast_sgrep_core::rank::{rrf_score, LEXICAL_RRF_SCALE, RRF_K};
-use ast_sgrep_core::search::passes::lexical::{lexical_pass, lexical_pool_limit, LEXICAL_POOL_FLOOR};
+use ast_sgrep_core::search::passes::lexical::{
+    lexical_pass, lexical_pool_limit, LEXICAL_POOL_FLOOR,
+};
 use ast_sgrep_core::search::{HitKind, SearchHit, SearchOptions, Searcher};
 use ast_sgrep_core::semantic_ann::ann_result_is_sufficient;
 use ast_sgrep_core::store::{CallerRow, SymbolRow, UpsertFileInput};
@@ -256,7 +258,10 @@ fn iva9_5_literal_lang_filter_not_starved_by_path_limit() {
         "rust hit must survive lang+limit; got {:#?}",
         resp.hits
     );
-    assert!(resp.hits.iter().all(|h| h.language.as_deref() == Some("rust")));
+    assert!(resp
+        .hits
+        .iter()
+        .all(|h| h.language.as_deref() == Some("rust")));
 }
 
 /// iva9.6 — under-filled / empty ANN is not treated as sufficient.

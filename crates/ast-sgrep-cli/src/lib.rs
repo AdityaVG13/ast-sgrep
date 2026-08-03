@@ -413,10 +413,12 @@ fn open_searcher(root: &Path, cli: &Cli) -> anyhow::Result<Searcher> {
 fn run_chain(root: &Path, cli: &Cli, query: &str) -> anyhow::Result<()> {
     let (root, index_path) = resolve_root_index(cli, root);
     let store = IndexStore::open(&root, index_path.as_deref()).context("failed to open index")?;
+    // ql1u: do not hardcode top_n:1 — honor --limit for seed expansion width.
+    let defaults = ChainConfig::default();
     let config = ChainConfig {
-        limit: cli.limit.unwrap_or(ChainConfig::default().limit),
-        top_n: 1,
-        ..ChainConfig::default()
+        limit: cli.limit.unwrap_or(defaults.limit),
+        top_n: cli.limit.unwrap_or(defaults.top_n),
+        ..defaults
     };
     let r = expand_chain(&store, query, &config).context("chain search failed")?;
     if cli.json {

@@ -93,11 +93,7 @@ const DOC_LOOKBACK_LINES: usize = 8;
 fn comment_markers_for(language: Option<&str>) -> &'static [&'static str] {
     match language {
         Some("python") | Some("ruby") => &["#"],
-        Some("rust")
-        | Some("typescript")
-        | Some("javascript")
-        | Some("java")
-        | Some("go")
+        Some("rust") | Some("typescript") | Some("javascript") | Some("java") | Some("go")
         | Some("csharp") => &["///", "//!", "//", "/**", "/*", "*/", "*"],
         // Unknown: C-style only — never bare `#`.
         _ => &["///", "//!", "//", "/**", "/*", "*/", "*", "--"],
@@ -153,10 +149,7 @@ mod tests {
             byte_start: 20,
             byte_end: 40,
         }];
-        let lines = [
-            (1u32, "#[derive(Debug)]".into()),
-            (2, "fn foo() {}".into()),
-        ];
+        let lines = [(1u32, "#[derive(Debug)]".into()), (2, "fn foo() {}".into())];
         let chunks = build_semantic_chunks(&symbols, &[], &lines, Some("rust"));
         assert_eq!(chunks.len(), 1);
         assert!(
@@ -181,10 +174,7 @@ mod tests {
             byte_start: 20,
             byte_end: 40,
         }];
-        let lines = [
-            (1u32, "/// does a thing".into()),
-            (2, "fn foo() {}".into()),
-        ];
+        let lines = [(1u32, "/// does a thing".into()), (2, "fn foo() {}".into())];
         let chunks = build_semantic_chunks(&symbols, &[], &lines, Some("rust"));
         assert_eq!(chunks[0].doc, "does a thing");
     }
@@ -199,10 +189,7 @@ mod tests {
             byte_start: 20,
             byte_end: 40,
         }];
-        let lines = [
-            (1u32, "  #foo = 1;".into()),
-            (2, "  method() {}".into()),
-        ];
+        let lines = [(1u32, "  #foo = 1;".into()), (2, "  method() {}".into())];
         let chunks = build_semantic_chunks(&symbols, &[], &lines, Some("typescript"));
         assert_eq!(chunks.len(), 1);
         assert!(
@@ -222,10 +209,7 @@ mod tests {
             byte_start: 20,
             byte_end: 40,
         }];
-        let lines = [
-            (1u32, "# helper".into()),
-            (2, "def foo():".into()),
-        ];
+        let lines = [(1u32, "# helper".into()), (2, "def foo():".into())];
         let chunks = build_semantic_chunks(&symbols, &[], &lines, Some("python"));
         assert_eq!(chunks[0].doc, "helper");
     }

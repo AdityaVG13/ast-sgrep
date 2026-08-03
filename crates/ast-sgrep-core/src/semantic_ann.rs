@@ -215,6 +215,8 @@ fn score_members(
     if members.is_empty() {
         return vec![];
     }
+    // firi: use the same MIN_SIMILARITY predicate as flat (`exceeds_threshold` via
+    // top_k_similarity(..., Some(MIN_SIMILARITY))), not a raw `sim > MIN_SIMILARITY`.
     let score = |idx: &usize| -> Option<(usize, f32)> {
         if *idx >= n {
             return None;
@@ -222,16 +224,19 @@ fn score_members(
         let start = idx * dim;
         (start + dim <= flat.len())
             .then(|| cosine_similarity(query, &flat[start..start + dim]))
-            .filter(|&sim| sim > MIN_SIMILARITY)
             .map(|sim| (*idx, sim))
     };
     if members.len() < PARALLEL_CHUNK_THRESHOLD {
-        top_k_similarity(members.iter().filter_map(score), limit, None)
+        top_k_similarity(
+            members.iter().filter_map(score),
+            limit,
+            Some(MIN_SIMILARITY),
+        )
     } else {
         top_k_similarity(
             members.par_iter().filter_map(score).collect::<Vec<_>>(),
             limit,
-            None,
+            Some(MIN_SIMILARITY),
         )
     }
 }

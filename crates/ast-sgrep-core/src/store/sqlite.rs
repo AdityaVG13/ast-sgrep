@@ -863,7 +863,10 @@ impl IndexStore {
                     Some("go") => {
                         // package dir: any .go file under the package path is matched
                         // via file_exists on exact candidates; also try package.go.
-                        cands.insert(format!("{n}/{}.go", base.file_name().and_then(|s| s.to_str()).unwrap_or("pkg")));
+                        cands.insert(format!(
+                            "{n}/{}.go",
+                            base.file_name().and_then(|s| s.to_str()).unwrap_or("pkg")
+                        ));
                     }
                     _ => {
                         cands.insert(format!("{n}/mod.rs"));

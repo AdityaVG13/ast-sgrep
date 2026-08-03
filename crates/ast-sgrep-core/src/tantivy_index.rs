@@ -30,7 +30,10 @@ impl TantivySidecar {
     /// Open an existing lexical sidecar for search without creating an empty DB.
     ///
     /// Empty / schema-only auto-created sidecars are not treated as ready (hkdi / s7jw.2).
-    pub fn open_existing_for_search(root: &Path, index_path: Option<&Path>) -> Result<Option<Self>> {
+    pub fn open_existing_for_search(
+        root: &Path,
+        index_path: Option<&Path>,
+    ) -> Result<Option<Self>> {
         let dir = index_db_path(root, index_path)
             .parent()
             .map(|p| p.to_path_buf())
