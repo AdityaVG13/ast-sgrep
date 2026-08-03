@@ -85,7 +85,7 @@ pub fn match_pattern(
 ///
 /// This syntax-level policy intentionally differs from relevance ranking, where symbol
 /// comparisons are case-folded. A pattern for `Foo` does not match an identifier `foo`.
-pub fn match_literal_pattern(
+pub(crate) fn match_literal_pattern(
     lang: Language,
     source: &str,
     pattern: &str,
@@ -407,7 +407,7 @@ fn record_node_signatures(
 }
 
 /// Map a tree-sitter declaration kind to its indexed `decl:` / display prefix.
-pub fn declaration_prefix(kind: &str) -> Option<&'static str> {
+pub(crate) fn declaration_prefix(kind: &str) -> Option<&'static str> {
     DECL_KIND_PREFIXES
         .iter()
         .find_map(|&(node_kind, prefix)| (node_kind == kind).then_some(prefix))

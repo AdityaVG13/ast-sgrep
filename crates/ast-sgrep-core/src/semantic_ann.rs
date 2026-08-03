@@ -180,12 +180,6 @@ impl SemanticAnnIndex {
         seen.into_iter().all(|present| present)
     }
 
-    #[cfg(test)]
-    pub fn validate_member_indices(&self, chunk_count: usize) -> bool {
-        self.clusters
-            .iter()
-            .all(|cluster| cluster.iter().all(|&index| index < chunk_count))
-    }
     /// `probes`: None/0 = at most 90% of populated clusters; ≥ n_clusters = exact.
     pub fn candidate_indices(&self, query: &[f32], probes: Option<usize>) -> Vec<usize> {
         if self.centroids.is_empty() {

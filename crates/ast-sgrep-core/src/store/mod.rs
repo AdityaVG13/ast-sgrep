@@ -1,4 +1,5 @@
 mod embed_support;
+mod module_resolve;
 pub(crate) mod sql;
 mod sqlite;
 pub use sql::integrity_check;

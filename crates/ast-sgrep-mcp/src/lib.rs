@@ -81,15 +81,7 @@ impl McpServer {
                 .unwrap_or_else(|| {
                     ast_sgrep_core::clamp_agent_limit(None, SearchOptions::default_limit())
                 }),
-            use_embed: std::env::var("ASGREP_NO_EMBED")
-                .ok()
-                .filter(|v| {
-                    matches!(
-                        v.trim().to_ascii_lowercase().as_str(),
-                        "1" | "true" | "yes" | "on"
-                    )
-                })
-                .is_none(),
+            use_embed: !ast_sgrep_core::env_flag::env_flag("ASGREP_NO_EMBED"),
             searcher_cache: Mutex::new(None),
             index_lock: Mutex::new(()),
         })
@@ -281,37 +273,52 @@ impl McpServer {
         Ok(canonical)
     }
 
-    fn invalidate_searcher_cache(&self) {
-        // Poison fails closed: clear tainted cache rather than skipping invalidation (bix3).
-        let mut guard = match self.searcher_cache.lock() {
+    fn searcher_key(&self, root: PathBuf, limit: usize) -> SearcherKey {
+        SearcherKey {
+            root,
+            index_path: self.index_path.clone(),
+            limit,
+            use_embed: self.use_embed,
+        }
+    }
+
+    fn lock_or_recover<T>(
+        mutex: &Mutex<T>,
+        clear: impl FnOnce(&mut T),
+    ) -> std::sync::MutexGuard<'_, T> {
+        match mutex.lock() {
             Ok(guard) => guard,
             Err(poisoned) => {
-                self.searcher_cache.clear_poison();
+                mutex.clear_poison();
                 let mut guard = PoisonError::into_inner(poisoned);
-                *guard = None;
+                clear(&mut guard);
                 guard
             }
-        };
+        }
+    }
+
+    fn base_index_options(&self, root: PathBuf) -> IndexOptions {
+        IndexOptions {
+            root,
+            index_path: self.index_path.clone(),
+            ..IndexOptions::default()
+        }
+    }
+
+    fn invalidate_searcher_cache(&self) {
+        // Poison fails closed: clear tainted cache rather than skipping invalidation (bix3).
+        let mut guard = Self::lock_or_recover(&self.searcher_cache, |slot| {
+            *slot = None;
+        });
         *guard = None;
     }
 
     fn searcher_for(&self, root: PathBuf, limit: usize) -> anyhow::Result<Searcher> {
-        let key = SearcherKey {
-            root: root.clone(),
-            index_path: self.index_path.clone(),
-            limit,
-            use_embed: self.use_embed,
-        };
+        let key = self.searcher_key(root.clone(), limit);
         // Poison fails closed: clear and rebuild rather than reuse tainted state (bix3/sxjc).
-        let mut guard = match self.searcher_cache.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => {
-                self.searcher_cache.clear_poison();
-                let mut guard = PoisonError::into_inner(poisoned);
-                *guard = None;
-                guard
-            }
-        };
+        let mut guard = Self::lock_or_recover(&self.searcher_cache, |slot| {
+            *slot = None;
+        });
         let need_new = match guard.as_ref() {
             None => true,
             Some((k, _)) => k != &key,
@@ -335,21 +342,10 @@ impl McpServer {
     }
 
     fn restore_searcher(&self, root: PathBuf, limit: usize, searcher: Searcher) {
-        let key = SearcherKey {
-            root,
-            index_path: self.index_path.clone(),
-            limit,
-            use_embed: self.use_embed,
-        };
-        let mut guard = match self.searcher_cache.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => {
-                self.searcher_cache.clear_poison();
-                let mut guard = PoisonError::into_inner(poisoned);
-                *guard = None;
-                guard
-            }
-        };
+        let key = self.searcher_key(root, limit);
+        let mut guard = Self::lock_or_recover(&self.searcher_cache, |slot| {
+            *slot = None;
+        });
         // Only restore if nothing newer was inserted (single-flight index may have cleared).
         if guard.is_none() {
             *guard = Some((key, searcher));
@@ -417,11 +413,7 @@ impl McpServer {
 
     fn tool_index_status(&self, args: &Value) -> anyhow::Result<String> {
         Self::validate_fields(args, &["root"])?;
-        let indexer = Indexer::new(IndexOptions {
-            root: self.root_arg(args)?,
-            index_path: self.index_path.clone(),
-            ..IndexOptions::default()
-        })?;
+        let indexer = Indexer::new(self.base_index_options(self.root_arg(args)?))?;
         Ok(serde_json::to_string_pretty(&indexer.store().status()?)?)
     }
 
@@ -432,24 +424,16 @@ impl McpServer {
             Some(value) => value.as_bool().context("force must be a boolean")?,
         };
         let root = self.root_arg(args)?;
-        let _flight = match self.index_lock.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => {
-                self.index_lock.clear_poison();
-                PoisonError::into_inner(poisoned)
-            }
-        };
+        let _flight = Self::lock_or_recover(&self.index_lock, |_| {});
         let started = Instant::now();
         let mut indexer = Indexer::new(IndexOptions {
-            root,
-            index_path: self.index_path.clone(),
             embed_semantic: self.use_embed,
             embed_backend: if self.use_embed {
                 EmbedBackend::Auto
             } else {
                 EmbedBackend::Semantic
             },
-            ..IndexOptions::default()
+            ..self.base_index_options(root)
         })?;
         // Soft deadline: refuse to start when the prior wait already exhausted the budget.
         anyhow::ensure!(

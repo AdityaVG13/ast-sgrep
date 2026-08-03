@@ -352,3 +352,82 @@ cargo test -p ast-sgrep-core --test store_delete --test semantic_ivf_roundtrip -
 cd packages/pi/extension && npm run build && npm test
 # → tsc ok; 59 passed
 ```
+
+---
+
+## Batch F — zero-tech-debt follow-up (PR21)
+
+### Philosophy
+
+Finish remaining cleanup from Batches A–E: delete orphaned helpers, split CLI god-file, extract module resolve / embed pass boundaries, table-drive fusion channel accessors, MCP env-flag parity. **No ranking-gate order, machine envelope, or beads changes.**
+
+### Deletes / demotions
+
+| Symbol | Action |
+|--------|--------|
+| `validate_member_indices` | deleted (`semantic_ann.rs`; zero callers) |
+| `bases_python` / `bases_js` / `bases_go` / `bases_rust` thin wrappers | deleted; `module_resolve_rules` points at `resolve_bases_*` directly |
+| `declaration_prefix` / `match_literal_pattern` | `pub(crate)`; dropped from `ast-sgrep-lang` public exports; integration tests use `match_pattern` |
+
+### Extracts / splits
+
+| Surface | Location |
+|---------|----------|
+| `cli_args.rs` | clap structs (`Cli`, `Commands`, `SearchTuning`, parsers, `Cli::active_tuning`) |
+| `index_cmd.rs` | `open_indexer`, `index_options`, dry-run, status, `with_index`, `search_options` |
+| `lib.rs` | thin `main` / `run_cli` / `run_command` dispatch (~210 lines) |
+| `store/module_resolve.rs` | `collect_module_candidates` + language tables (split from `sqlite.rs`) |
+| `search/passes/embed.rs` | `SemanticCache`, `load_semantic_context`, `run_embed_pass` (boundary from `search/mod.rs`) |
+| MCP `searcher_key`, `lock_or_recover`, `base_index_options` | `ast-sgrep-mcp/src/lib.rs` |
+| MCP `ASGREP_NO_EMBED` | `!ast_sgrep_core::env_flag::env_flag("ASGREP_NO_EMBED")` |
+
+### Fusion table-drive
+
+| Accessor | Mechanism |
+|----------|-----------|
+| `channel_for_kind` | `HIT_KIND_CHANNEL_IDX` + `FusionChannel::ALL` |
+| `weight` / `set_weight` | `WEIGHT_GETTERS` / `WEIGHT_SETTERS` indexed by `channel.index()` |
+| `ChannelRanks::get` / `set_best` | `RANK_GETTERS` / `RANK_SETTERS` tables |
+| `canonical_priority` | `CANONICAL_PRIORITY` table keyed by `hit_kind_idx` |
+| `FusionChannel::index` | enum discriminant (`self as usize`) |
+
+`fuse_rrf` in `rank.rs` **kept** (fuzz target + `score_lexical_rrf`).
+
+### Behavior invariants
+
+- Hybrid ranking / `finish_response` gate order unchanged.
+- `resolve_module` candidate sets unchanged (5 regression tests green).
+- Fusion weighted RRF math unchanged (5 fusion unit tests green).
+- Machine envelopes unchanged (`machine_contracts`: 13 passed).
+
+### Skips (explicit)
+
+- `.beads/` untouched (per task).
+- `fuse_rrf` public API retained.
+- MCP `code_search` compat alias retained.
+- Dry-run extension set unchanged.
+
+### Commands run
+
+```bash
+cargo test -p ast-sgrep-cli --test machine_contracts
+# → 13 passed
+
+cargo test -p ast-sgrep-core --lib
+# → 50 passed
+
+cargo test -p ast-sgrep-mcp --lib
+# → 0 tests (lib crate; protocol tests separate)
+
+cargo test -p ast-sgrep-lang --lib
+# → 6 passed
+
+cargo test -p ast-sgrep-core --lib fusion::
+# → 5 passed
+
+cargo test -p ast-sgrep-core --test resolve_module
+# → 5 passed
+
+cargo test -p ast-sgrep-lang --test pattern
+# → 5 passed
+```

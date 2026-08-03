@@ -30,16 +30,7 @@ impl FusionChannel {
     ];
 
     fn index(self) -> usize {
-        match self {
-            Self::Lexical => 0,
-            Self::Definition => 1,
-            Self::Caller => 2,
-            Self::Graph => 3,
-            Self::Anchor => 4,
-            Self::Semantic => 5,
-            Self::Pattern => 6,
-            Self::Import => 7,
-        }
+        self as usize
     }
 }
 
@@ -55,33 +46,66 @@ pub struct ChannelRanks {
     pub import: Option<usize>,
 }
 
+const RANK_GETTERS: [fn(&ChannelRanks) -> Option<usize>; 8] = [
+    |r| r.lexical,
+    |r| r.definition,
+    |r| r.caller,
+    |r| r.graph,
+    |r| r.anchor,
+    |r| r.semantic,
+    |r| r.pattern,
+    |r| r.import,
+];
+
+const RANK_SETTERS: [fn(&mut ChannelRanks, Option<usize>); 8] = [
+    |r, v| r.lexical = v,
+    |r, v| r.definition = v,
+    |r, v| r.caller = v,
+    |r, v| r.graph = v,
+    |r, v| r.anchor = v,
+    |r, v| r.semantic = v,
+    |r, v| r.pattern = v,
+    |r, v| r.import = v,
+];
+
+const WEIGHT_GETTERS: [fn(&ChannelWeights) -> f64; 8] = [
+    |w| w.lexical,
+    |w| w.def,
+    |w| w.caller,
+    |w| w.graph,
+    |w| w.anchor,
+    |w| w.embed,
+    |w| w.pattern,
+    |w| w.import,
+];
+
+const WEIGHT_SETTERS: [fn(&mut ChannelWeights, f64); 8] = [
+    |w, v| w.lexical = v,
+    |w, v| w.def = v,
+    |w, v| w.caller = v,
+    |w, v| w.graph = v,
+    |w, v| w.anchor = v,
+    |w, v| w.embed = v,
+    |w, v| w.pattern = v,
+    |w, v| w.import = v,
+];
+
+/// HitKind discriminant order → FusionChannel::ALL index.
+const HIT_KIND_CHANNEL_IDX: [usize; 8] = [0, 1, 2, 3, 4, 7, 6, 5];
+
+/// HitKind discriminant order → canonical merge priority (lower wins).
+const CANONICAL_PRIORITY: [usize; 8] = [6, 0, 1, 2, 5, 4, 3, 7];
+
 impl ChannelRanks {
     pub fn get(&self, channel: FusionChannel) -> Option<usize> {
-        match channel {
-            FusionChannel::Lexical => self.lexical,
-            FusionChannel::Definition => self.definition,
-            FusionChannel::Caller => self.caller,
-            FusionChannel::Graph => self.graph,
-            FusionChannel::Anchor => self.anchor,
-            FusionChannel::Semantic => self.semantic,
-            FusionChannel::Pattern => self.pattern,
-            FusionChannel::Import => self.import,
-        }
+        RANK_GETTERS[channel.index()](self)
     }
 
     fn set_best(&mut self, channel: FusionChannel, rank: usize) {
-        let slot = match channel {
-            FusionChannel::Lexical => &mut self.lexical,
-            FusionChannel::Definition => &mut self.definition,
-            FusionChannel::Caller => &mut self.caller,
-            FusionChannel::Graph => &mut self.graph,
-            FusionChannel::Anchor => &mut self.anchor,
-            FusionChannel::Semantic => &mut self.semantic,
-            FusionChannel::Pattern => &mut self.pattern,
-            FusionChannel::Import => &mut self.import,
-        };
-        if slot.is_none_or(|current| rank < current) {
-            *slot = Some(rank);
+        let idx = channel.index();
+        let current = RANK_GETTERS[idx](self);
+        if current.is_none_or(|value| rank < value) {
+            RANK_SETTERS[idx](self, Some(rank));
         }
     }
 }
@@ -132,17 +156,21 @@ impl LearnedFusionModel {
     }
 }
 
-fn channel_for_kind(kind: HitKind) -> FusionChannel {
+fn hit_kind_idx(kind: HitKind) -> usize {
     match kind {
-        HitKind::Asgrep => FusionChannel::Lexical,
-        HitKind::Def => FusionChannel::Definition,
-        HitKind::Caller => FusionChannel::Caller,
-        HitKind::Graph => FusionChannel::Graph,
-        HitKind::Anchor => FusionChannel::Anchor,
-        HitKind::Embed => FusionChannel::Semantic,
-        HitKind::Pattern => FusionChannel::Pattern,
-        HitKind::Import => FusionChannel::Import,
+        HitKind::Asgrep => 0,
+        HitKind::Def => 1,
+        HitKind::Caller => 2,
+        HitKind::Graph => 3,
+        HitKind::Anchor => 4,
+        HitKind::Import => 5,
+        HitKind::Pattern => 6,
+        HitKind::Embed => 7,
     }
+}
+
+fn channel_for_kind(kind: HitKind) -> FusionChannel {
+    FusionChannel::ALL[HIT_KIND_CHANNEL_IDX[hit_kind_idx(kind)]]
 }
 
 fn clamp_channel_weight(value: f64) -> f64 {
@@ -154,30 +182,11 @@ fn clamp_channel_weight(value: f64) -> f64 {
 }
 
 fn weight(weights: &ChannelWeights, channel: FusionChannel) -> f64 {
-    clamp_channel_weight(match channel {
-        FusionChannel::Lexical => weights.lexical,
-        FusionChannel::Definition => weights.def,
-        FusionChannel::Caller => weights.caller,
-        FusionChannel::Graph => weights.graph,
-        FusionChannel::Anchor => weights.anchor,
-        FusionChannel::Semantic => weights.embed,
-        FusionChannel::Pattern => weights.pattern,
-        FusionChannel::Import => weights.import,
-    })
+    clamp_channel_weight(WEIGHT_GETTERS[channel.index()](weights))
 }
 
 fn set_weight(weights: &mut ChannelWeights, channel: FusionChannel, value: f64) {
-    let slot = match channel {
-        FusionChannel::Lexical => &mut weights.lexical,
-        FusionChannel::Definition => &mut weights.def,
-        FusionChannel::Caller => &mut weights.caller,
-        FusionChannel::Graph => &mut weights.graph,
-        FusionChannel::Anchor => &mut weights.anchor,
-        FusionChannel::Semantic => &mut weights.embed,
-        FusionChannel::Pattern => &mut weights.pattern,
-        FusionChannel::Import => &mut weights.import,
-    };
-    *slot = clamp_channel_weight(value);
+    WEIGHT_SETTERS[channel.index()](weights, clamp_channel_weight(value));
 }
 
 pub fn weighted_rrf_score(ranks: &ChannelRanks, weights: &ChannelWeights) -> f64 {
@@ -192,16 +201,7 @@ pub fn weighted_rrf_score(ranks: &ChannelRanks, weights: &ChannelWeights) -> f64
 }
 
 fn canonical_priority(kind: HitKind) -> usize {
-    match kind {
-        HitKind::Def => 0,
-        HitKind::Caller => 1,
-        HitKind::Graph => 2,
-        HitKind::Pattern => 3,
-        HitKind::Import => 4,
-        HitKind::Anchor => 5,
-        HitKind::Asgrep => 6,
-        HitKind::Embed => 7,
-    }
+    CANONICAL_PRIORITY[hit_kind_idx(kind)]
 }
 
 pub fn apply_weighted_rrf(hits: &mut Vec<SearchHit>, weights: &ChannelWeights) {

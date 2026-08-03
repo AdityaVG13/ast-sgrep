@@ -1,17 +1,115 @@
 use crate::query::ParsedQuery;
 use crate::rank::SCORE_EMBED;
 use crate::search::types::{HitKind, SearchHit, SearchOptions, SpanHitInput};
-use crate::semantic_ann::rank_chunk_indices_flat;
+use crate::semantic_ann::{flatten_vectors_for_search, rank_chunk_indices_flat};
 use crate::store::IndexStore;
 use crate::Result;
 use ast_sgrep_embed::{embed_query, SemanticChunkRow};
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 const EMBED_HIT_LIMIT: usize = 50;
 pub struct EmbedContext {
     pub chunks: Arc<Vec<SemanticChunkRow>>,
     pub flat_vectors: Arc<Vec<f32>>,
 }
+
+pub(crate) struct SemanticCache {
+    lang_filter: Option<String>,
+    max_id: i64,
+    index_data_version: i64,
+    semantic_data_version: i64,
+    embed_backend: String,
+    chunks: Arc<Vec<SemanticChunkRow>>,
+    flat_vectors: Arc<Vec<f32>>,
+}
+
+fn lock_clear_on_poison<T>(
+    mutex: &Mutex<T>,
+    clear: impl FnOnce(&mut T),
+) -> MutexGuard<'_, T> {
+    match mutex.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            mutex.clear_poison();
+            let mut guard = PoisonError::into_inner(poisoned);
+            clear(&mut guard);
+            guard
+        }
+    }
+}
+
+pub(crate) fn load_semantic_context(
+    store: &IndexStore,
+    options: &SearchOptions,
+    cache: &Mutex<Option<SemanticCache>>,
+) -> Result<Option<EmbedContext>> {
+    if !options.use_embed {
+        return Ok(None);
+    }
+    let lang_filter = options.lang_filter.clone();
+    let max_id = store.semantic_chunk_max_id()?.unwrap_or(0);
+    let index_data_version = store.index_data_version()?;
+    let semantic_data_version = store.semantic_data_version()?;
+    let embed_backend = store
+        .get_meta("embed_backend")?
+        .unwrap_or_else(|| "semantic".into());
+    {
+        let guard = lock_clear_on_poison(cache, |slot| {
+            *slot = None;
+        });
+        if let Some(c) = guard.as_ref() {
+            if c.lang_filter == lang_filter
+                && c.max_id == max_id
+                && c.index_data_version == index_data_version
+                && c.semantic_data_version == semantic_data_version
+                && c.embed_backend == embed_backend
+            {
+                return Ok(Some(EmbedContext {
+                    chunks: Arc::clone(&c.chunks),
+                    flat_vectors: Arc::clone(&c.flat_vectors),
+                }));
+            }
+        }
+    }
+    let chunks = store.all_semantic_chunks(lang_filter.as_deref())?;
+    if chunks.is_empty() {
+        return Ok(None);
+    }
+    let flat_vectors = flatten_vectors_for_search(&chunks, chunks[0].5.len())?;
+    let entry = SemanticCache {
+        lang_filter,
+        max_id,
+        index_data_version,
+        semantic_data_version,
+        embed_backend,
+        chunks: Arc::new(chunks),
+        flat_vectors: Arc::new(flat_vectors),
+    };
+    let ctx = EmbedContext {
+        chunks: Arc::clone(&entry.chunks),
+        flat_vectors: Arc::clone(&entry.flat_vectors),
+    };
+    *lock_clear_on_poison(cache, |slot| {
+        *slot = None;
+    }) = Some(entry);
+    Ok(Some(ctx))
+}
+
+pub(crate) fn run_embed_pass(
+    store: &IndexStore,
+    options: &SearchOptions,
+    parsed: &ParsedQuery,
+    cache: &Mutex<Option<SemanticCache>>,
+) -> Result<Vec<SearchHit>> {
+    if let Some(hits) = embed_pass_lazy_ivf(store, options, parsed)? {
+        return Ok(hits);
+    }
+    match load_semantic_context(store, options, cache)? {
+        Some(ctx) => embed_pass_with_context(store, options, parsed, Some(ctx)),
+        None => Ok(vec![]),
+    }
+}
+
 pub fn embed_pass_lazy_ivf(
     store: &IndexStore,
     options: &SearchOptions,

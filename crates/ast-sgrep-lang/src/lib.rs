@@ -159,8 +159,8 @@ use langs::{
     TypeScriptParser,
 };
 pub use pattern::{
-    classify_native, declaration_prefix, match_literal_pattern, match_pattern,
-    needs_ast_grep_fallback, DECL_KIND_PREFIXES, DECL_PATTERN_PREFIXES, NativeKind, PatternMatch,
+    classify_native, match_pattern, needs_ast_grep_fallback, DECL_KIND_PREFIXES,
+    DECL_PATTERN_PREFIXES, NativeKind, PatternMatch,
 };
 pub use signature::{
     cached_pattern_signatures, required_pattern_literal, structural_term_signatures, DECL_PREFIXES,
