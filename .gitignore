@@ -110,5 +110,9 @@ editors/**/*.vsix
 # Tests
 tests/artifacts/perf/
 
+# Local bench history ratchet (written by `asgrep bench`)
+.bench-history.json
+**/.bench-history.json
+
 # Agent skill specs (local-only)
 .agents/

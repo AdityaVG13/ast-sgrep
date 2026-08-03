@@ -164,6 +164,15 @@ pub struct WatchUpdateStats {
 }
 impl Indexer {
     pub fn new(mut options: IndexOptions) -> Result<Self> {
+        if matches!(options.embed_backend, EmbedBackend::Neural) {
+            #[cfg(not(feature = "neural-embed"))]
+            {
+                return Err(crate::StoreError::Other(
+                    "--neural-embed requested but this binary was built without the `neural-embed` feature; rebuild with --features neural-embed"
+                        .into(),
+                ));
+            }
+        }
         options.root = options.root.canonicalize().unwrap_or(options.root.clone());
         let store = IndexStore::open(&options.root, options.index_path.as_deref())?;
         store.set_meta("root", &options.root.display().to_string())?;

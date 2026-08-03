@@ -74,7 +74,7 @@ Most code search is either **fast text** (ripgrep) or **pattern matching** (ast-
 | How does auth refresh work? | NL → symbols + anchors + semantic similarity |
 | "credential renewal" (no token overlap) | Semantic hit on `auth_refresh` |
 | Structured JSON for an agent | `--json --format agent` |
-| Structural rewrite / codemod | `pattern:` (ast-grep when available) |
+| Structural rewrite / codemod | `pattern:` (native tree-sitter; optional ast-grep fallback) |
 
 [Full comparison →](docs/comparison.md)
 

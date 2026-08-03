@@ -13,7 +13,7 @@ Three tools, three jobs. ast-sgrep is the **navigation and intent layer** you ad
 | **Symbol definitions** | Yes (`defs:`) | Via pattern only | No |
 | **Caller / callee graph** | Yes (`callers:`) | No | No |
 | **Import tracking** | Yes (`imports:`) | No | No |
-| **Structural patterns** | Yes (`pattern:` → ast-grep) | Native | No |
+| **Structural patterns** | Yes (`pattern:` native tree-sitter) | Native | No |
 | **Polyglot AST** | 8 languages, unified index | Yes | Text only |
 | **CI / platform JSON** | GitHub & GitLab shapes | No | `--json` (ripgrep format) |
 | **LSP** | `asgrep-lsp` | Separate ecosystem | No |
@@ -32,7 +32,7 @@ Three tools, three jobs. ast-sgrep is the **navigation and intent layer** you ad
 | Feed ranked, structured hits to an AI agent | **ast-sgrep** (`--json --format agent`) |
 | Jump to defs/refs/call hierarchy in an editor | **ast-sgrep** (`asgrep-lsp`) |
 | Rewrite code with AST-aware rules | **ast-grep** |
-| Match a syntactic shape (`class $C { $$$ }`) | **ast-grep** or `asgrep "pattern:…"` |
+| Match a syntactic shape (`class $C { $$$ }`) | `asgrep "pattern:…"` (native; optional ast-grep fallback) or **ast-grep** |
 | Grep logs, configs, or any file type fast | **ripgrep** |
 | One-off regex across unindexed or generated files | **ripgrep** |
 | Search inside a single huge file without indexing | **ripgrep** |
@@ -49,7 +49,7 @@ Three tools, three jobs. ast-sgrep is the **navigation and intent layer** you ad
 └─────────────────────────────────────────────────────────┘
 ```
 
-**ast-sgrep complements the others.** It delegates structural queries to ast-grep via `pattern:` and does not compete with ripgrep on raw scan speed over arbitrary unindexed files.
+**ast-sgrep complements the others.** Structural `pattern:` queries use native tree-sitter first (optional ast-grep fallback for exotic shapes) and does not compete with ripgrep on raw scan speed over arbitrary unindexed files.
 
 ## Feature deep dive
 

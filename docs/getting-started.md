@@ -86,7 +86,7 @@ Combines lexical FTS, symbol name match, caller/callee graph, anchor excerpts ar
 | `callers:` | `asgrep "callers:main"` | Who calls `main` |
 | `defs:` | `asgrep "defs:auth_refresh"` | Where `auth_refresh` is defined |
 | `imports:` | `asgrep "imports:serde"` | Import statements mentioning `serde` |
-| `pattern:` | `asgrep "pattern:fn $NAME($$$)"` | Structural match via ast-grep |
+| `pattern:` | `asgrep "pattern:fn $NAME($$$)"` | Structural match via native tree-sitter (ast-grep fallback only for exotic shapes) |
 
 ### Semantic / synonym queries
 
@@ -141,7 +141,7 @@ Details and examples: [use-cases.md](use-cases.md).
 | `--json` |, | JSON output |
 | `--format` |, | `native`, `agent`, `github`, `gitlab` |
 | `--no-embed` | `ASGREP_NO_EMBED=1` | Disable semantic indexing + search |
-| `--tantivy` | `ASGREP_TANTIVY=1` | Lexical FTS sidecar |
+| `--tantivy` | `ASGREP_TANTIVY=1` | Force secondary FTS5 lexical DB (`.asgrep/lexical.db`; flag name is historical) |
 | `--cloud-embed` | `ASGREP_CLOUD_EMBED=1` | Prefer cloud neural embeddings |
 | `--ollama-embed` | `ASGREP_OLLAMA_EMBED=1` | Prefer Ollama embeddings |
 | `--semantic-only` | `ASGREP_SEMANTIC_ONLY=1` | Force offline semantic only |
@@ -198,7 +198,7 @@ Query vectors should match the backend used at index time for best results. `asg
 
 | Threshold | Behavior |
 |-----------|----------|
-| 1000+ files | Lexical FTS sidecar auto-enabled (`--tantivy` to force) |
+| 1000+ files | Secondary FTS5 lexical DB auto-enabled (`--tantivy` to force) |
 | 2000+ symbols | IVF-ANN with persisted `.asgrep/semantic.ivf` |
 
 Tune ANN: `--ann-threshold N` or `ASGREP_ANN_THRESHOLD`.
@@ -218,7 +218,7 @@ asgrep bench . --iterations 100
 |---------|-------|
 | No semantic hits | `asgrep status`, embed backend, chunk count; try without `--no-embed` |
 | Stale results after edit | `asgrep reindex .` or re-run `index` (incremental should catch changes) |
-| `pattern:` returns nothing | Install [ast-grep](https://github.com/ast-grep/ast-grep) CLI |
+| `pattern:` returns nothing | Prefer simpler native shapes; optional [ast-grep](https://github.com/ast-grep/ast-grep) CLI only for exotic fallbacks |
 | Slow first search after clone | Index not built, run `asgrep index .` |
 | IVF not loading | Fingerprint mismatch after reindex, sidecar rebuilds automatically |
 

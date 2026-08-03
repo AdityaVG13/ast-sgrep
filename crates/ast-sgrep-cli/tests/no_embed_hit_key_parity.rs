@@ -3,8 +3,11 @@ use std::path::PathBuf;
 fn asgrep_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_asgrep"))
 }
+/// Hit-key order parity for `--no-embed` only (CLI JSON ↔ core ↔ LSP).
+/// This is intentionally not full surface parity: scores, embed backends,
+/// limit-policy diversity gates, and soft-root negatives are out of scope.
 #[test]
-fn cli_core_and_lsp_return_the_same_ordered_hit_keys() {
+fn no_embed_hit_key_order_parity_across_cli_core_lsp() {
     const LIMIT: usize = 10;
     let session = CliSession::sample(asgrep_bin());
     let query = "process_request";
@@ -14,10 +17,10 @@ fn cli_core_and_lsp_return_the_same_ordered_hit_keys() {
     assert!(!core.is_empty(), "fixture query must produce hits");
     assert_eq!(
         cli, core,
-        "CLI JSON diverged from core SearchOptions mirror"
+        "CLI JSON diverged from core SearchOptions mirror under --no-embed hit keys"
     );
     assert_eq!(
         lsp, core,
-        "LSP search diverged from core SearchOptions mirror"
+        "LSP search diverged from core SearchOptions mirror under --no-embed hit keys"
     );
 }

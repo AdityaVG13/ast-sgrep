@@ -7,8 +7,19 @@ use crate::search::types::{SearchHit, SearchOptions};
 use crate::store::IndexStore;
 use crate::{Result, StoreError};
 use regex::Regex;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
+use std::time::{Duration, Instant};
+/// Default wall-clock budget for `regex:` scans (ReDoS / large-corpus hang guard).
+pub const DEFAULT_REGEX_BUDGET_MS: u64 = 2_000;
+fn regex_budget() -> Duration {
+    std::env::var("ASGREP_REGEX_BUDGET_MS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .map(Duration::from_millis)
+        .unwrap_or(Duration::from_millis(DEFAULT_REGEX_BUDGET_MS))
+}
 pub fn regex_pass(
     store: &IndexStore,
     options: &SearchOptions,
@@ -32,6 +43,9 @@ pub fn regex_pass(
     if lines.is_empty() {
         return Ok(Vec::new());
     }
+    let budget = regex_budget();
+    let deadline = Instant::now() + budget;
+    let timed_out = Arc::new(AtomicBool::new(false));
     let num_threads = std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(1)
@@ -45,22 +59,38 @@ pub fn regex_pass(
     let lang_filter = options.lang_filter.clone();
     let options = options.clone();
     let re = Arc::new(re);
-    thread::scope(|scope| {
+    let hits = thread::scope(|scope| {
         let mut handles = Vec::new();
         for chunk in lines.chunks(chunk_size) {
             let re = Arc::clone(&re);
             let file_map = file_map.clone();
             let lang_filter = lang_filter.clone();
             let options = options.clone();
+            let timed_out = Arc::clone(&timed_out);
             handles.push(scope.spawn(move || {
-                scan_regex_chunk(chunk, &re, &lang_filter, &options, file_map.as_deref())
+                scan_regex_chunk(
+                    chunk,
+                    &re,
+                    &lang_filter,
+                    &options,
+                    file_map.as_deref(),
+                    deadline,
+                    &timed_out,
+                )
             }));
         }
-        Ok(handles
+        handles
             .into_iter()
             .flat_map(|h| h.join().unwrap_or_default())
-            .collect())
-    })
+            .collect::<Vec<_>>()
+    });
+    if timed_out.load(Ordering::Relaxed) {
+        return Err(StoreError::Other(format!(
+            "regex search exceeded wall-clock budget of {}ms (ASGREP_REGEX_BUDGET_MS); partial results discarded",
+            budget.as_millis()
+        )));
+    }
+    Ok(hits)
 }
 fn required_literal(pattern: &str) -> Option<String> {
     if pattern.contains("(?") {
@@ -142,9 +172,18 @@ fn scan_regex_chunk(
     lang_filter: &Option<String>,
     options: &SearchOptions,
     file_map: Option<&FileLinesMap>,
+    deadline: Instant,
+    timed_out: &AtomicBool,
 ) -> Vec<SearchHit> {
     let mut hits = Vec::new();
     for (rank, (path, line_no, content, language)) in chunk.iter().enumerate() {
+        if rank % 16 == 0 && Instant::now() >= deadline {
+            timed_out.store(true, Ordering::Relaxed);
+            break;
+        }
+        if timed_out.load(Ordering::Relaxed) {
+            break;
+        }
         if !matches_lang(language.as_deref(), lang_filter.as_deref()) || !re.is_match(content) {
             continue;
         }
@@ -157,4 +196,14 @@ fn scan_regex_chunk(
         ));
     }
     hits
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn regex_budget_defaults_to_two_seconds() {
+        // Ensure the constant stays documented and wired.
+        assert_eq!(DEFAULT_REGEX_BUDGET_MS, 2_000);
+        let _ = regex_budget();
+    }
 }

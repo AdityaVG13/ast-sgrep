@@ -280,4 +280,10 @@ The corpus restoration script reads `corpora.toml` and checks out its pins; comp
 
 ```bash
 cargo build --profile release-perf -p ast-sgrep-cli --features neural-embed,rerank
-ASGREP_NEURAL_EMBED=true ASGREP_RERANK=true ASGREP_RERANK_WEIGHT=20 ASGREP_RERANK_BATCH_SIZE=1 RAYON_NUM_THREADS=1 ASGREP_NEURAL_INTRA_THREADS=1 ASGREP_RERANK_INTRA_THREADS=1 ```
+# Real knobs only (no ASGREP_RERANK_WEIGHT — that env var does not exist).
+# Boolish env values accepted by clap: true/false/1/0. SearchOptions defaults also honor =1.
+ASGREP_NEURAL_EMBED=1 ASGREP_RERANK=1 ASGREP_RERANK_TOP_K=20 \
+ASGREP_RERANK_BATCH_SIZE=1 RAYON_NUM_THREADS=1 \
+ASGREP_NEURAL_INTRA_THREADS=1 ASGREP_RERANK_INTRA_THREADS=1 \
+  target/release-perf/asgrep …
+```

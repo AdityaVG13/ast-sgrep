@@ -66,8 +66,13 @@ pub(crate) fn capabilities_json(_cli: &Cli) -> anyhow::Result<Value> {
             {"name": "version", "usage": "asgrep version --json"}, {"name": "robot-docs", "usage": "asgrep robot-docs guide"},
             {"name": "doctor", "usage": "asgrep doctor [ROOT] --json | --robot-triage"},
         ],
-        "global_flags": ["--json", "--root", "--limit", "--index-path", "--lang", "--format", "--no-embed", "--tantivy", "--ann-threshold"],
-        "environment": ["ASGREP_LIMIT", "ASGREP_INDEX_PATH", "ASGREP_NO_EMBED", "ASGREP_CLOUD_EMBED", "ASGREP_OLLAMA_EMBED", "ASGREP_SEMANTIC_ONLY", "ASGREP_TANTIVY", "ASGREP_ANN_THRESHOLD", "NO_COLOR", "CI"],
+        "global_flags": ["--json", "--root", "--limit", "--index-path", "--lang", "--format", "--no-embed", "--tantivy", "--ann-threshold", "--neural-embed", "--rerank"],
+        "feature_gated_flags": {
+            "--neural-embed": "requires binary built with --features neural-embed (fail-closed otherwise)",
+            "--rerank": "requires binary built with --features rerank (fail-closed otherwise)",
+            "--tantivy": "forces secondary SQLite FTS5 lexical.db (flag name is historical; not the Tantivy crate)"
+        },
+        "environment": ["ASGREP_LIMIT", "ASGREP_INDEX_PATH", "ASGREP_NO_EMBED", "ASGREP_CLOUD_EMBED", "ASGREP_OLLAMA_EMBED", "ASGREP_SEMANTIC_ONLY", "ASGREP_TANTIVY", "ASGREP_ANN_THRESHOLD", "ASGREP_NEURAL_EMBED", "ASGREP_RERANK", "ASGREP_RERANK_TOP_K", "ASGREP_REGEX_BUDGET_MS", "ASGREP_BENCH_HISTORY", "ASGREP_BENCH_RATCHET", "NO_COLOR", "CI"],
         "output_limits": {"max_results": 1000, "max_excerpt_lines": 100, "max_error_message_chars": 4096},
         "search_formats": ["native", "agent", "agent-capsule", "github", "gitlab"],
         "exit_codes": [{"code": 0, "meaning": "success"}, {"code": 1, "meaning": "user input / usage error"}, {"code": 2, "meaning": "index or search operation failed"}],

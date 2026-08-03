@@ -43,6 +43,7 @@ pub struct Searcher {
 }
 impl Searcher {
     pub fn new(options: SearchOptions) -> Result<Self> {
+        validate_search_feature_flags(&options)?;
         Ok(Self::with_store(
             IndexStore::open(&options.root, options.index_path.as_deref())?,
             options,
@@ -412,6 +413,28 @@ fn run_parallel_passes(
 fn join_worker<T>(join: thread::Result<Result<T>>) -> Result<T> {
     join.map_err(|e| crate::StoreError::Other(format!("search worker panicked: {e:?}")))?
 }
+/// Fail closed when callers request optional neural/rerank paths that were not compiled in.
+pub fn validate_search_feature_flags(options: &SearchOptions) -> Result<()> {
+    if options.use_neural_embed {
+        #[cfg(not(feature = "neural-embed"))]
+        {
+            return Err(crate::StoreError::Other(
+                "--neural-embed / use_neural_embed requested but this binary was built without the `neural-embed` feature; rebuild with --features neural-embed"
+                    .into(),
+            ));
+        }
+    }
+    if options.use_rerank {
+        #[cfg(not(feature = "rerank"))]
+        {
+            return Err(crate::StoreError::Other(
+                "--rerank / use_rerank requested but this binary was built without the `rerank` feature; rebuild with --features rerank"
+                    .into(),
+            ));
+        }
+    }
+    Ok(())
+}
 pub fn finish_response(
     parsed: &ParsedQuery,
     options: &SearchOptions,
@@ -534,6 +557,7 @@ fn maybe_rerank(query: &str, hits: Vec<SearchHit>, top_k: usize) -> Vec<SearchHi
     #[cfg(not(feature = "rerank"))]
     {
         let _ = (query, &docs);
+        // Unreachable when Searcher::new validates feature flags; keep identity fallback.
     }
     hits
 }

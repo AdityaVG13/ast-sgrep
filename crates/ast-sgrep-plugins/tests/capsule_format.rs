@@ -70,6 +70,28 @@ fn github_page_at_limit_is_marked_incomplete() {
     assert_eq!(github["incomplete_results"], true);
 }
 #[test]
+fn agent_suggested_next_is_executable_asgrep_only() {
+    let response = sample();
+    let agent = format_response_with(&response, OutputFormat::Agent, 0);
+    let suggested = agent["suggested_next"]
+        .as_array()
+        .expect("suggested_next")
+        .iter()
+        .map(|v| v.as_str().expect("string").to_owned())
+        .collect::<Vec<_>>();
+    assert!(!suggested.is_empty());
+    for cmd in &suggested {
+        assert!(
+            cmd.starts_with("asgrep "),
+            "suggested_next must be executable asgrep commands, got: {cmd}"
+        );
+        assert!(
+            !cmd.contains("ast-grep") && !cmd.starts_with("rg ") && !cmd.starts_with("pattern:"),
+            "suggested_next must not recommend non-asgrep myths, got: {cmd}"
+        );
+    }
+}
+#[test]
 fn gitlab_projection_documents_absent_repository_context() {
     let hits = to_gitlab_json(&sample())["data"]
         .as_array()

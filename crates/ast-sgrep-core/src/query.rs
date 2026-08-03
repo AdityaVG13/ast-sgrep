@@ -177,4 +177,34 @@ mod tests {
         assert!(p.terms.iter().any(|t| t == "user"));
         assert!(p.terms.iter().any(|t| t == "id"));
     }
+    /// Documents the real prefix surface of `ParsedQuery::parse` (see docs/QUERY_GRAMMAR.md).
+    /// There is no composable AND / path: / lang: / sem: grammar.
+    #[test]
+    fn parse_prefix_surface_matches_query_grammar_doc() {
+        let cases = [
+            ("process_request", QueryMode::Hybrid),
+            ("callers:RefreshToken", QueryMode::Callers),
+            ("defs:auth_refresh", QueryMode::Defs),
+            ("imports:./Utils", QueryMode::Imports),
+            ("pattern:function $NAME($$$)", QueryMode::Pattern),
+            ("literal:foo_bar", QueryMode::Literal),
+            ("regex:foo.*bar", QueryMode::Regex),
+            ("word:token", QueryMode::Word),
+        ];
+        for (input, mode) in cases {
+            assert_eq!(ParsedQuery::parse(input).mode, mode, "input={input}");
+        }
+        // Fiction prefixes are not operators — they fall through to hybrid.
+        for fiction in ["AND foo", "path:src/", "lang:rust", "sem:auth", "foo AND bar"] {
+            assert_eq!(
+                ParsedQuery::parse(fiction).mode,
+                QueryMode::Hybrid,
+                "fiction prefix must not select a dedicated mode: {fiction}"
+            );
+        }
+        // Only the first leading mode prefix is recognized; the rest is the target.
+        let nested = ParsedQuery::parse("defs:callers:x");
+        assert_eq!(nested.mode, QueryMode::Defs);
+        assert_eq!(nested.target.as_deref(), Some("callers:x"));
+    }
 }

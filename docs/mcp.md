@@ -67,7 +67,7 @@ Build or incrementally update the index. Pass `force: true` for full reindex.
 1. `index_repo` on first open (or rely on prior `asgrep index .`)
 2. `code_search` with a natural-language or graph query
 3. Follow `follow_up_queries` in hits (`defs:…`, `callers:…`)
-4. Use `pattern:…` in the CLI for structural shapes; ast-grep metavariables still delegate to the ast-grep CLI when installed
+4. Use `pattern:…` in the CLI for structural shapes (native tree-sitter; exotic metavariables may optionally fall back to an installed ast-grep CLI)
 
 ## LSP vs MCP
 

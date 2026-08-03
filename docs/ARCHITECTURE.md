@@ -41,7 +41,7 @@ The default index is `<root>/.asgrep/index.db`. File updates are incremental and
 | `semantic_chunks` and embeddings | Symbol-level semantic documents and their vectors |
 | `embed_cache` | Reusable embedding results, avoiding recomputation for unchanged content |
 
-Large semantic indexes may also persist `.asgrep/semantic.ivf`, an IVF approximate-nearest-neighbor sidecar. The IVF file accelerates vector candidate selection; SQLite remains the source of indexed symbol/chunk metadata. A Tantivy lexical sidecar is optional for larger repositories. Sidecars are derived data and are tied to the index configuration, not independent sources of truth.
+Large semantic indexes may also persist `.asgrep/semantic.ivf`, an IVF approximate-nearest-neighbor sidecar. The IVF file accelerates vector candidate selection; SQLite remains the source of indexed symbol/chunk metadata. An optional **secondary SQLite FTS5** lexical database (`.asgrep/lexical.db`, historically flagged `--tantivy` / `ASGREP_TANTIVY`) can be enabled for larger repositories — there is no Tantivy crate dependency. Sidecars are derived data and are tied to the index configuration, not independent sources of truth.
 
 ### Indexing flow
 
@@ -50,7 +50,7 @@ Large semantic indexes may also persist `.asgrep/semantic.ivf`, an IVF approxima
 3. Use `ast-sgrep-lang` to extract symbols, caller/callee edges, imports, and pattern nodes.
 4. Upsert source and derived facts into SQLite.
 5. Build enriched symbol chunks, consult `embed_cache`, and write semantic vectors when embeddings are enabled.
-6. Build or refresh IVF/Tantivy sidecars when their configured thresholds require them.
+6. Build or refresh IVF / secondary FTS5 (`lexical.db`) sidecars when their configured thresholds require them.
 
 ## Query and search pipeline
 
@@ -70,7 +70,7 @@ Reranking applies query intent and code-aware evidence such as symbol identity, 
 
 ### Supervisor boundary
 
-The CLI supervisor sits above retrieval. It consumes command outcomes and diagnostics to support bounded agent-oriented execution and triage; it does not maintain a second index or a separate ranking implementation. Retrieval stays in `ast-sgrep-core`, while the supervisor and command layer decide how operations are exposed and reported.
+On Unix the CLI supervisor wraps the worker process and can enforce a wall-time duty cycle via `ASGREP_CPU_LIMIT_PERCENT` (SIGSTOP/CONT in a 10 ms window). It does not maintain a second index or a separate ranking implementation. Retrieval stays in `ast-sgrep-core`; the supervisor only bounds runnable time and process lifecycle.
 
 ## Agent surfaces
 

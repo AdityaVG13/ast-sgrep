@@ -18,8 +18,9 @@ The default local neural plus cross-encoder pipeline reaches **0.605 MRR**, abov
 ```bash
 cargo build --profile release-perf -p ast-sgrep-cli \
   --features neural-embed,rerank
-ASGREP_NEURAL_EMBED=true ASGREP_RERANK=true \
-ASGREP_RERANK_WEIGHT=20 ASGREP_RERANK_BATCH_SIZE=1 \
+# ASGREP_RERANK_WEIGHT does not exist; use ASGREP_RERANK_TOP_K.
+ASGREP_NEURAL_EMBED=1 ASGREP_RERANK=1 \
+ASGREP_RERANK_TOP_K=20 ASGREP_RERANK_BATCH_SIZE=1 \
 RAYON_NUM_THREADS=1 ASGREP_NEURAL_INTRA_THREADS=1 \
 ASGREP_RERANK_INTRA_THREADS=1 \
     --bin target/release-perf/asgrep

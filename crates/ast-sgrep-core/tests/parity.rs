@@ -18,12 +18,30 @@ fn parity_search_option_wiring() {
         ..SearchOptions::default()
     };
     assert_eq!(opts.embed_preference(), EmbedPreference::Neural);
+    #[cfg(not(all(feature = "neural-embed", feature = "rerank")))]
+    {
+        let err = ast_sgrep_core::Searcher::new(SearchOptions {
+            root: std::path::PathBuf::from("."),
+            ..opts.clone()
+        });
+        assert!(
+            err.is_err(),
+            "neural/rerank flags must fail closed when features are off"
+        );
+    }
     let indexed = index_sample(IndexOptions {
         force_reindex: true,
         embed_backend: EmbedBackend::Semantic,
         ..IndexOptions::default()
     });
-    let searcher = searcher_from(&indexed, opts);
+    let searcher = searcher_from(
+        &indexed,
+        SearchOptions {
+            ann_probes: Some(4),
+            rerank_top_k: 5,
+            ..SearchOptions::default()
+        },
+    );
     let resp = searcher.search("defs:auth_refresh").unwrap();
     assert!(
         resp.hits

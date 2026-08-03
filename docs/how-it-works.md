@@ -74,7 +74,7 @@ flowchart LR
     P -->|callers:| C["Caller graph SQL"]
     P -->|defs:| D["Symbol lookup SQL"]
     P -->|imports:| I["Import lookup SQL"]
-    P -->|pattern:| AG["ast-grep delegate"]
+    P -->|pattern:| AG["native tree-sitter (+ optional ast-grep)"]
     P -->|hybrid| H["Multi-pass fusion"]
     H --> L["Lexical FTS5"]
     H --> S["Symbol match"]
@@ -94,12 +94,12 @@ flowchart LR
 
 ### Query routing
 
-1. **Prefixed queries** bypass hybrid fusion and hit dedicated SQL or external tools:
+1. **Prefixed queries** bypass hybrid fusion and hit dedicated SQL or structural paths:
    - `callers:`, `defs:`, `imports:` → graph/symbol tables
-   - `pattern:` → ast-grep subprocess (when installed)
+   - `pattern:` → native tree-sitter patterns (optional ast-grep subprocess only for exotic shapes)
 
 2. **Hybrid queries** (no prefix) run multiple passes in parallel conceptually, then fuse:
-   - **Lexical**, FTS5 BM25 on `lines_fts` (and optional Tantivy sidecar at scale)
+   - **Lexical**, FTS5 BM25 on `lines_fts` (and optional secondary FTS5 `lexical.db` at scale; `--tantivy` flag name is historical)
    - **Symbol**, name/kind match on `symbols`
    - **Graph**, caller/callee neighborhood for matched symbols
    - **Anchor**, line-bounded excerpts around symbol definitions
@@ -128,7 +128,7 @@ Metadata (SQLite `meta` table) stores embed backend, dimension, and index finger
 
 | File | When | Purpose |
 |------|------|---------|
-| `.asgrep/lexical.db` | 1000+ files or `--tantivy` | Dedicated FTS5 / Tantivy lexical index |
+| `.asgrep/lexical.db` | 1000+ files or `--tantivy` | Secondary SQLite FTS5 lexical index (not Tantivy) |
 | `.asgrep/semantic.ivf` | ≥ `ann_threshold` symbols | Persisted IVF clusters + vectors; fingerprint-invalidated on reindex |
 
 Below the ANN threshold, semantic search uses brute-force cosine over all symbol vectors (sub-millisecond for typical repos).
@@ -137,7 +137,7 @@ Below the ANN threshold, semantic search uses brute-force cosine over all symbol
 
 1. **Walk** project tree (respect `.gitignore`, `.asgrepignore`)
 2. **Detect language** from extension / shebang
-3. **Parse** with tree-sitter (C# uses regex fallback)
+3. **Parse** with tree-sitter (including C#)
 4. **Extract** symbols, caller edges, imports
 5. **Build semantic chunks** per symbol (name, kind, callers, callees, excerpt) → embed → `semantic_chunks`
 6. **Upsert** file row, lines, symbols, graph edges; remove stale rows for changed files

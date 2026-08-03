@@ -33,9 +33,9 @@ pub fn searcher_from(indexed: &IndexedFixture, mut opts: SearchOptions) -> Searc
     opts.index_path = Some(indexed.indexer.store().db_path().to_path_buf());
     Searcher::new(opts).expect("searcher")
 }
-/// Stable identity shared by surface-equivalence tests. Scores, excerpts, and
-/// response wrappers intentionally do not participate. Callers must align
-/// surface-specific limit and embedding defaults before comparing these keys.
+/// Stable identity shared by no-embed hit-key order parity tests.
+/// Scores, excerpts, embed backends, and response wrappers intentionally do not
+/// participate — callers must align `--no-embed` / `use_embed: false` and limits.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HitKey {
     pub file: String,
