@@ -247,7 +247,7 @@ fn ivf_search_matches_brute_force_top_k_indices_ce003() {
     let limit = 24usize;
     let flat = normalized_flat_vectors(vector_count, dim, 0xCE_003_u64);
     let index = SemanticAnnIndex::build_from_flat(&flat, dim);
-    assert!(index.validate_member_indices(vector_count));
+    assert!(index.validate_partition(vector_count));
     for &qi in &[0usize, 17, 137, 299, 400, 511] {
         let query = &flat[qi * dim..(qi + 1) * dim];
         let brute = brute_force_top_k_indices(&flat, dim, query, limit);

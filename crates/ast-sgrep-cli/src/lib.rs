@@ -293,9 +293,6 @@ fn run_process() -> ! {
         }
     }
 }
-pub fn run() -> anyhow::Result<()> {
-    run_cli(&Cli::parse())
-}
 impl Cli {
     fn search_machine_output(&self) -> bool {
         self.json || self.tuning.format.is_some()
@@ -688,11 +685,37 @@ fn run_index_dry_run(command: &str, root: &Path, cli: &Cli) -> anyhow::Result<()
         Ok(())
     }
 }
+fn index_db_display(root: &Path, index_path: Option<&Path>) -> PathBuf {
+    index_db_path(root, index_path).unwrap_or_else(|_| root.join(".asgrep/index.db"))
+}
+fn ensure_nonempty_index(root: &Path, file_count: usize) -> anyhow::Result<()> {
+    if file_count == 0 {
+        anyhow::bail!(
+            "index is empty for {}; run: asgrep index {} --json",
+            root.display(),
+            root.display()
+        );
+    }
+    Ok(())
+}
+fn resolve_output_format(
+    raw: Option<&str>,
+    default: ast_sgrep_plugins::OutputFormat,
+) -> anyhow::Result<ast_sgrep_plugins::OutputFormat> {
+    match raw {
+        Some(raw) => ast_sgrep_plugins::OutputFormat::parse(raw).ok_or_else(|| {
+            usage_error(format!(
+                "unknown output format {raw:?}; expected native, agent, agent-capsule, compact, github, or gitlab"
+            ))
+        }),
+        None => Ok(default),
+    }
+}
 fn open_indexer(root: &Path, cli: &Cli) -> anyhow::Result<Indexer> {
     ensure_existing_root(root, cli)?;
     {
         let opts = index_options(root, cli);
-        let db = index_db_path(&opts.root, opts.index_path.as_deref()).unwrap_or_else(|_| opts.root.join(".asgrep/index.db"));
+        let db = index_db_display(&opts.root, opts.index_path.as_deref());
         Indexer::new(opts).with_context(|| {
             format!(
                 "failed to open index at {} (root {})",
@@ -705,8 +728,7 @@ fn open_indexer(root: &Path, cli: &Cli) -> anyhow::Result<Indexer> {
 fn open_searcher(root: &Path, cli: &Cli) -> anyhow::Result<Searcher> {
     let root = ensure_existing_root(root, cli)?;
     let opts = search_options(&root, cli);
-    let db = index_db_path(&opts.root, opts.index_path.as_deref())
-        .unwrap_or_else(|_| opts.root.join(".asgrep/index.db"));
+    let db = index_db_display(&opts.root, opts.index_path.as_deref());
     let searcher = Searcher::new(opts).with_context(|| {
         format!(
             "failed to open index at {} (root {})",
@@ -714,26 +736,14 @@ fn open_searcher(root: &Path, cli: &Cli) -> anyhow::Result<Searcher> {
             root.display()
         )
     })?;
-    if searcher.store().status()?.file_count == 0 {
-        anyhow::bail!(
-            "index is empty for {}; run: asgrep index {} --json",
-            root.display(),
-            root.display()
-        );
-    }
+    ensure_nonempty_index(&root, searcher.store().status()?.file_count)?;
     Ok(searcher)
 }
 fn run_chain(root: &Path, cli: &Cli, query: &str) -> anyhow::Result<()> {
     let root = ensure_existing_root(root, cli)?;
     let (_, index_path) = resolve_root_index(cli, &root);
     let store = IndexStore::open(&root, index_path.as_deref()).context("failed to open index")?;
-    if store.status()?.file_count == 0 {
-        anyhow::bail!(
-            "index is empty for {}; run: asgrep index {} --json",
-            root.display(),
-            root.display()
-        );
-    }
+    ensure_nonempty_index(&root, store.status()?.file_count)?;
     let config = ChainConfig {
         limit: cli.limit.unwrap_or(ChainConfig::default().limit),
         top_n: 1,
@@ -776,14 +786,10 @@ fn run_keyword_search(root: &Path, cli: &Cli, query: &str) -> anyhow::Result<()>
         }
         return Ok(());
     }
-    let format = match cli.active_tuning().format.as_deref() {
-        Some(raw) => ast_sgrep_plugins::OutputFormat::parse(raw).ok_or_else(|| {
-            usage_error(format!(
-                "unknown output format {raw:?}; expected native, agent, agent-capsule, compact, github, or gitlab"
-            ))
-        })?,
-        None => ast_sgrep_plugins::OutputFormat::Native,
-    };
+    let format = resolve_output_format(
+        cli.active_tuning().format.as_deref(),
+        ast_sgrep_plugins::OutputFormat::Native,
+    )?;
     print_search_response("keyword", &response, format, cli)
 }
 
@@ -807,14 +813,7 @@ fn run_search(root: &Path, cli: &Cli, query: &str, semantic: bool) -> anyhow::Re
     } else {
         ast_sgrep_plugins::OutputFormat::Native
     };
-    let format = match tuning.format.as_deref() {
-        Some(raw) => ast_sgrep_plugins::OutputFormat::parse(raw).ok_or_else(|| {
-            usage_error(format!(
-                "unknown output format {raw:?}; expected native, agent, agent-capsule, compact, github, or gitlab"
-            ))
-        })?,
-        None => default,
-    };
+    let format = resolve_output_format(tuning.format.as_deref(), default)?;
     print_search_response(
         if semantic || tuning.semantic_only {
             "semantic"

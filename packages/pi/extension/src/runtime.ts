@@ -140,7 +140,7 @@ export function resolveConfig(sources: ConfigSources = {}): Required<Pick<Runtim
   return merged as Required<Pick<RuntimeConfig, "timeoutMs" | "maxOutputBytes">> & RuntimeConfig;
 }
 
-function isContained(parent: string, child: string): boolean {
+function pathContained(parent: string, child: string): boolean {
   const rel = relative(parent, child);
   return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
 }
@@ -154,7 +154,7 @@ export async function resolveRuntimeRoot(projectCwd: string, requestedRoot?: str
   } catch (cause) {
     throw new RuntimeError("INVALID_ROOT", "Project or requested root does not exist", { projectCwd, requestedRoot, cause: cause instanceof Error ? cause.message : String(cause) });
   }
-  if (!allowOutsideProject && !isContained(project, candidate)) {
+  if (!allowOutsideProject && !pathContained(project, candidate)) {
     throw new RuntimeError("ROOT_OUTSIDE_PROJECT", "Requested root resolves outside the project", { project, requestedRoot, resolvedRoot: candidate });
   }
   return candidate;
@@ -205,11 +205,6 @@ function incompatibleStatusFailure(cause: unknown): boolean {
   if (!(cause instanceof RuntimeError) || (cause.code !== "OPERATIONAL_ERROR" && cause.code !== "PROCESS_FAILED")) return false;
   const text = `${cause.message} ${JSON.stringify(cause.details)}`;
   return /incompatib|unsupported.{0,24}schema|schema.{0,24}(version|mismatch)/i.test(text);
-}
-
-function pathContained(root: string, path: string): boolean {
-  const rel = relative(root, path);
-  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
 }
 
 function canonicalizeAffectedPath(path: string): string {
@@ -336,6 +331,34 @@ function getBinary(config: RuntimeConfig, env: NodeJS.ProcessEnv, resolver: Bina
 
 function byteLength(value: string): number { return Buffer.byteLength(value, "utf8"); }
 
+/** Version-triple conjunction (ls6.2): when either identity field is present, both must be present and match.
+ *  Pass `requireIdentity` for surfaces (version --json) that must always report both fields. */
+function assertVersionTriple(envelope: Partial<MachineEnvelope>, requireIdentity = false): void {
+  const hasVersion = envelope.version !== undefined;
+  const hasMachineSchema = envelope.machine_schema_version !== undefined;
+  if (requireIdentity) {
+    if (envelope.version !== RUNTIME_VERSION) {
+      throw new RuntimeError("VERSION_MISMATCH", "ast-sgrep binary version does not match the extension", { expected: RUNTIME_VERSION, actual: envelope.version });
+    }
+    if (envelope.machine_schema_version !== MACHINE_SCHEMA_VERSION) {
+      throw new RuntimeError("PROTOCOL_MISMATCH", "ast-sgrep binary reports an incompatible machine protocol", { expected: MACHINE_SCHEMA_VERSION, actual: envelope.machine_schema_version });
+    }
+    return;
+  }
+  if (hasVersion !== hasMachineSchema) {
+    throw new RuntimeError("PROTOCOL_MISMATCH", "Incomplete version triple: version and machine_schema_version must appear together", {
+      hasVersion,
+      hasMachineSchema,
+    });
+  }
+  if (hasVersion && envelope.version !== RUNTIME_VERSION) {
+    throw new RuntimeError("VERSION_MISMATCH", "ast-sgrep binary version does not match the extension", { expected: RUNTIME_VERSION, actual: envelope.version });
+  }
+  if (hasMachineSchema && envelope.machine_schema_version !== MACHINE_SCHEMA_VERSION) {
+    throw new RuntimeError("PROTOCOL_MISMATCH", "ast-sgrep binary reports an incompatible machine protocol", { expected: MACHINE_SCHEMA_VERSION, actual: envelope.machine_schema_version });
+  }
+}
+
 function parseEnvelope(result: ExecResult, limit: number): MachineEnvelope {
   const stdoutBytes = byteLength(result.stdout);
   const stderrBytes = byteLength(result.stderr);
@@ -369,17 +392,7 @@ function parseEnvelope(result: ExecResult, limit: number): MachineEnvelope {
     const message = typeof failure?.message === "string" ? failure.message : "ast-sgrep reported an operational failure";
     throw new RuntimeError("OPERATIONAL_ERROR", message, { command: envelope.command, error: failure });
   }
-  // Version-triple conjunction (ls6.2): when either identity field is present, both must be present and match.
-  const hasVersion = envelope.version !== undefined;
-  const hasMachineSchema = envelope.machine_schema_version !== undefined;
-  if (hasVersion !== hasMachineSchema) {
-    throw new RuntimeError("PROTOCOL_MISMATCH", "Incomplete version triple: version and machine_schema_version must appear together", {
-      hasVersion,
-      hasMachineSchema,
-    });
-  }
-  if (hasVersion && envelope.version !== RUNTIME_VERSION) throw new RuntimeError("VERSION_MISMATCH", "ast-sgrep binary version does not match the extension", { expected: RUNTIME_VERSION, actual: envelope.version });
-  if (hasMachineSchema && envelope.machine_schema_version !== MACHINE_SCHEMA_VERSION) throw new RuntimeError("PROTOCOL_MISMATCH", "ast-sgrep binary reports an incompatible machine protocol", { expected: MACHINE_SCHEMA_VERSION, actual: envelope.machine_schema_version });
+  assertVersionTriple(envelope);
   return envelope as MachineEnvelope;
 }
 function indexPathFor(root: string, env: NodeJS.ProcessEnv): string {
@@ -503,8 +516,7 @@ export class AstSgrepRuntime {
 
   async checkCompatibility(context: RuntimeContext, options: RunOptions = {}): Promise<MachineEnvelope> {
     const value = await this.run(["version", "--json"], context, options);
-    if (value.version !== RUNTIME_VERSION) throw new RuntimeError("VERSION_MISMATCH", "ast-sgrep binary version does not match the extension", { expected: RUNTIME_VERSION, actual: value.version });
-    if (value.machine_schema_version !== MACHINE_SCHEMA_VERSION) throw new RuntimeError("PROTOCOL_MISMATCH", "ast-sgrep binary reports an incompatible machine protocol", { expected: MACHINE_SCHEMA_VERSION, actual: value.machine_schema_version });
+    assertVersionTriple(value, true);
     return value;
   }
 }

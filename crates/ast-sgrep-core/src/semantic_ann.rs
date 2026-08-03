@@ -166,12 +166,6 @@ impl SemanticAnnIndex {
             )
     }
 
-    pub fn validate_member_indices(&self, chunk_count: usize) -> bool {
-        self.clusters
-            .iter()
-            .all(|cluster| cluster.iter().all(|&index| index < chunk_count))
-    }
-
     pub fn validate_partition(&self, chunk_count: usize) -> bool {
         let mut seen = vec![false; chunk_count];
         for &index in self.clusters.iter().flatten() {
@@ -184,6 +178,13 @@ impl SemanticAnnIndex {
             *slot = true;
         }
         seen.into_iter().all(|present| present)
+    }
+
+    #[cfg(test)]
+    pub fn validate_member_indices(&self, chunk_count: usize) -> bool {
+        self.clusters
+            .iter()
+            .all(|cluster| cluster.iter().all(|&index| index < chunk_count))
     }
     /// `probes`: None/0 = at most 90% of populated clusters; ≥ n_clusters = exact.
     pub fn candidate_indices(&self, query: &[f32], probes: Option<usize>) -> Vec<usize> {
@@ -461,7 +462,7 @@ fn lock_session_cache() -> std::sync::MutexGuard<'static, Vec<(String, SessionCa
     }
 }
 
-pub fn clear_semantic_ivf_session_cache() {
+fn clear_semantic_ivf_session_cache() {
     lock_session_cache().clear();
 }
 pub fn mark_semantic_ivf_stale(store: &IndexStore) {

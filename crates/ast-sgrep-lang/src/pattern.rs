@@ -7,7 +7,8 @@
 //!   indexed signatures natively. Unsupported exotic rule syntax returns no hits.
 
 use crate::extract::{
-    byte_to_line, is_ident_kind, is_in_comment_or_string, is_member_expr_kind, node_lines, node_text,
+    byte_to_line, is_ident_kind, is_in_comment_or_string, is_member_expr_kind,
+    last_identifier_in_chain, node_lines, node_text,
 };
 use crate::{Language, PatternNode};
 use tree_sitter::{Node, Parser, Query, QueryCursor, StreamingIterator};
@@ -409,11 +410,7 @@ fn path_from_node(node: &Node, source: &str) -> Option<Vec<String>> {
         }
         return if segs.is_empty() { None } else { Some(segs) };
     }
-    last_identifier_chain(node, source).map(|s| vec![s])
-}
-
-fn last_identifier_chain(node: &Node, source: &str) -> Option<String> {
-    crate::extract::last_identifier_in_chain(node, source)
+    last_identifier_in_chain(node, source).map(|s| vec![s])
 }
 
 fn path_matches(actual: &[String], pattern: &[Option<String>]) -> bool {
