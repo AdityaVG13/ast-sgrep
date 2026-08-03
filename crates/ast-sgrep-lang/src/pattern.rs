@@ -52,15 +52,14 @@ pub fn needs_ast_grep_fallback(pattern: &str) -> bool {
 }
 
 pub fn tree_sitter_language(lang: Language) -> tree_sitter::Language {
-    // Re-exports each grammar's LANGUAGE constant via `.into()`. CSharp currently
-    // shares the Java grammar as a stand-in (documented limitation; see l115).
     match lang {
         Language::Rust => tree_sitter_rust::LANGUAGE.into(),
         Language::TypeScript => tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
         Language::JavaScript => tree_sitter_typescript::LANGUAGE_TSX.into(),
         Language::Python => tree_sitter_python::LANGUAGE.into(),
         Language::Go => tree_sitter_go::LANGUAGE.into(),
-        Language::Java | Language::CSharp => tree_sitter_java::LANGUAGE.into(),
+        Language::Java => tree_sitter_java::LANGUAGE.into(),
+        Language::CSharp => tree_sitter_c_sharp::LANGUAGE.into(),
         Language::Ruby => tree_sitter_ruby::LANGUAGE.into(),
     }
 }
@@ -522,5 +521,21 @@ mod tests {
         let hits = match_pattern(Language::Rust, src, "process_request($$$)").unwrap();
         assert_eq!(hits.len(), 1);
         assert!(hits[0].excerpt.contains("process_request"));
+    }
+
+    #[test]
+    fn csharp_pattern_channel_uses_csharp_grammar() {
+        let src = r#"
+namespace Fixtures {
+    public class Widget {
+        public void DoWork() {}
+    }
+}
+"#;
+        let hits = match_literal_pattern(Language::CSharp, src, "DoWork").unwrap();
+        assert!(
+            !hits.is_empty(),
+            "C# grammar must parse namespace/class and find DoWork"
+        );
     }
 }

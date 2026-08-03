@@ -185,10 +185,10 @@ impl Indexer {
         let mut seen_paths = HashSet::new();
         let mut semantic_ivf_dirty = false;
         let root = self.options.root.clone();
-        let ignore = crate::gitignore::IgnoreMatcher::new(&root);
         let respect_gitignore = self.options.respect_gitignore;
+        let ignore = &self.ignore;
         let mut candidates: Vec<(PathBuf, String)> = Vec::new();
-        for entry in WalkDir::new(&self.options.root)
+        for entry in WalkDir::new(&root)
             .follow_links(false)
             .into_iter()
             .filter_entry(|e| {
@@ -208,13 +208,11 @@ impl Indexer {
             match entry {
                 Ok(entry) if entry.file_type().is_file() => {
                     let path = entry.path().to_path_buf();
-                    let Ok(rel) = path.strip_prefix(&self.options.root) else {
+                    let Ok(rel) = path.strip_prefix(&root) else {
                         continue;
                     };
                     let rel_str = rel.to_string_lossy().replace('\\', "/");
-                    if (self.options.respect_gitignore && self.ignore.is_ignored(rel))
-                        || should_skip_file(&path)
-                    {
+                    if (respect_gitignore && ignore.is_ignored(rel)) || should_skip_file(&path) {
                         stats.files_skipped += 1;
                         continue;
                     }

@@ -26,19 +26,8 @@ pub mod fts {
             .join(" OR ")
     }
 }
-pub mod skip {
-    pub use crate::gitignore::{
-        should_skip_dir, should_skip_file, DEFAULT_SKIP_DIR_NAMES, INDEXABLE_EXTENSIONS,
-    };
-}
-pub mod text {
-    pub use crate::index::{split_content_lines, SplitLines};
-}
-pub mod output {
-    pub use crate::search::format_hit_line;
-}
 pub use index::{EmbedBackend, FileIndexStats, IndexOptions, IndexStats, Indexer};
-pub use output::format_hit_line;
+pub use search::format_hit_line;
 pub use pattern::search_pattern;
 pub use query::{ParsedQuery, QueryMode};
 pub use search::{SearchHit, SearchOptions, SearchResponse, Searcher};

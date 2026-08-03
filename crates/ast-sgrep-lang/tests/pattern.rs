@@ -37,6 +37,14 @@ fn common_metavariable_patterns_are_native() {
 }
 
 #[test]
+fn csharp_literal_pattern_uses_csharp_fixture() {
+    let source = include_str!("fixtures/extract/csharp.cs");
+    let hits = match_literal_pattern(Language::CSharp, source, "Render").unwrap();
+    assert!(!hits.is_empty());
+    assert!(hits.iter().any(|hit| hit.excerpt.contains("Render")));
+}
+
+#[test]
 fn structural_fn_pattern_matches_rust_source() {
     use ast_sgrep_lang::match_pattern;
     let source = sample_file("src/main.rs");

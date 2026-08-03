@@ -199,3 +199,54 @@ node packages/pi/scripts/release-acceptance.mjs self-test
 - Machine success envelopes do **not** invent `exit_code` (this tip’s contract differs from other branches).
 - `.beads/` untouched.
 - `downstream_correctness` oracles not weakened (no test rewrites).
+
+---
+
+## Batch E — C# grammar alignment + bench honesty + dead-code cleanup (this session)
+
+### Bugfix: C# pattern channel grammar
+
+| Before | After |
+|--------|-------|
+| `tree_sitter_language(CSharp)` → `tree_sitter_java::LANGUAGE` | `tree_sitter_c_sharp::LANGUAGE` (matches `langs.rs` extraction) |
+
+Regression: `csharp_pattern_channel_uses_csharp_grammar` (unit) + `csharp_literal_pattern_uses_csharp_fixture` (integration).
+
+### Deleted / demoted surfaces
+
+| Symbol | Action |
+|--------|--------|
+| `ranking_stability` / `RankingStability` | deleted (only self-reference in `bench_suite.rs`) |
+| `gitignore::is_ignored` free fn | deleted (unused; `IgnoreMatcher` used directly) |
+| `skip` / `text` / `output` lib facades | deleted from `ast-sgrep-core` `lib.rs` |
+| `finish_response` | `pub` → `pub(crate)` |
+| `search_callers` / `search_defs` / `search_imports` | `pub` → `pub(crate)` |
+| `matches_lang` / `dedup_hits` | `pub` → `pub(crate)` |
+
+### Bench honesty (`bench.rs`)
+
+- `speedup_vs_ast_grep` nested under `ast_grep_comparison`; only emitted for `pattern:` queries with ast-grep binary.
+- Hybrid/token queries emit `compared: false` + `skipped_reason` (no vacuous speedup).
+
+### CLI index errors
+
+- `index_db_display` helper; `open_indexer` / `open_searcher` include DB path + root in context.
+
+### Indexer
+
+- `index_all` reuses `self.ignore` after `clear()` instead of constructing a second `IgnoreMatcher`.
+
+### Release acceptance dens helpers
+
+- `packageSpecs` / `priorPublishedForLayer` ported from pr25; fail codes unchanged.
+
+### Commands run (this session)
+
+```bash
+export PATH="/usr/local/cargo/bin:$PATH"
+cd /workspace/.worktrees/pr22
+cargo test -p ast-sgrep-lang --test pattern
+cargo test -p ast-sgrep-core --test downstream_correctness
+cargo test -p ast-sgrep-cli --test machine_contracts
+node packages/pi/scripts/release-acceptance.mjs self-test
+```

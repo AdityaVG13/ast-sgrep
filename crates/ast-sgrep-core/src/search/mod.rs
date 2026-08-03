@@ -416,7 +416,7 @@ fn run_parallel_passes(
 fn join_worker<T>(join: thread::Result<Result<T>>) -> Result<T> {
     join.map_err(|e| crate::StoreError::Other(format!("search worker panicked: {e:?}")))?
 }
-pub fn finish_response(
+pub(crate) fn finish_response(
     parsed: &ParsedQuery,
     options: &SearchOptions,
     mut hits: Vec<SearchHit>,

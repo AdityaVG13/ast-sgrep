@@ -7,7 +7,7 @@ pub mod supervisor;
 mod watch;
 
 use anyhow::Context;
-use ast_sgrep_core::{EmbedBackend, IndexOptions, IndexStats, Indexer, SearchOptions, Searcher};
+use ast_sgrep_core::{EmbedBackend, IndexOptions, IndexStats, Indexer, SearchOptions, Searcher, index_db_path};
 use clap::{Args, Parser, Subcommand};
 use machine::{
     print_machine_failure, raw_command_name, raw_machine_output_requested, MACHINE_SCHEMA_VERSION,
@@ -327,11 +327,30 @@ pub(crate) fn effective_root(cli: &Cli, fallback: &Path) -> PathBuf {
 pub(crate) fn resolve_root_index(cli: &Cli, root: &Path) -> (PathBuf, Option<PathBuf>) {
     (effective_root(cli, root), cli.index_path.clone())
 }
+fn index_db_display(root: &Path, index_path: Option<&Path>) -> PathBuf {
+    index_db_path(root, index_path)
+}
 pub(crate) fn open_indexer(root: &Path, cli: &Cli) -> anyhow::Result<Indexer> {
-    Indexer::new(index_options(root, cli)).context("failed to open index")
+    let opts = index_options(root, cli);
+    let db = index_db_display(&opts.root, opts.index_path.as_deref());
+    Indexer::new(opts).with_context(|| {
+        format!(
+            "failed to open index at {} (root {})",
+            db.display(),
+            root.display()
+        )
+    })
 }
 pub(crate) fn open_searcher(root: &Path, cli: &Cli) -> anyhow::Result<Searcher> {
-    Searcher::new(search_options(root, cli)).context("failed to open index")
+    let opts = search_options(root, cli);
+    let db = index_db_display(&opts.root, opts.index_path.as_deref());
+    Searcher::new(opts).with_context(|| {
+        format!(
+            "failed to open index at {} (root {})",
+            db.display(),
+            root.display()
+        )
+    })
 }
 fn print_json_or<T: serde::Serialize>(
     json: bool,

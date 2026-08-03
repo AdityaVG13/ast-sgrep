@@ -46,6 +46,12 @@ const load = async () => {
   return { contract, matrix, launcher, extension, platforms, version: contract.canonicalVersion.version };
 };
 const packageOrder = (state) => [...state.matrix.targets.map((target) => target.package), state.launcher.name, state.extension.name];
+const packageSpecs = (state, version = state.version) => Object.fromEntries(packageOrder(state).map((name) => [packageSpec(name, version), null]));
+const priorPublishedForLayer = (manifest, layer) => {
+  if (layer === 'native') return [];
+  if (layer === 'launcher') return manifest.artifacts.filter((item) => item.layer === 'native').map((item) => item.name);
+  return manifest.artifacts.filter((item) => item.layer !== 'extension').map((item) => item.name);
+};
 const validateAlignment = (state) => {
   const { contract, matrix, launcher, extension, platforms, version } = state;
   if (matrix.targets.length !== 5) fail('ASGREP_RELEASE_TARGETS', 'exactly five native targets are required');
@@ -213,7 +219,7 @@ const publish = async () => {
   if (!['native', 'launcher', 'extension'].includes(layer)) fail('ASGREP_RELEASE_LAYER', 'layer must be native, launcher, or extension');
   const receiptPath = path.join(directory, 'publish-receipt.json');
   const receipt = await readJson(receiptPath).catch(() => ({ schemaVersion: 1, version: manifest.version, published: [] }));
-  const expectedPrior = layer === 'native' ? [] : layer === 'launcher' ? manifest.artifacts.filter((item) => item.layer === 'native').map((item) => item.name) : manifest.artifacts.filter((item) => item.layer !== 'extension').map((item) => item.name);
+  const expectedPrior = priorPublishedForLayer(manifest, layer);
   if (JSON.stringify(receipt.published) !== JSON.stringify(expectedPrior)) fail('ASGREP_RELEASE_PUBLISH_ORDER', `${layer} cannot publish after [${receipt.published.join(', ')}]`);
   const selected = manifest.artifacts.filter((artifact) => artifact.layer === layer);
   const observed = await registryVersions(state);
@@ -253,7 +259,7 @@ const selfTest = async () => {
   const state = await load();
   validateAlignment(state);
   const commit = 'a'.repeat(40);
-  const empty = Object.fromEntries(packageOrder(state).map((name) => [packageSpec(name, state.version), null]));
+  const empty = packageSpecs(state);
   const canonicalInput = { clean: true, refType: 'tag', tag: state.contract.canonicalVersion.tag, commit, tagCommit: commit };
   const fresh = gateState(state, canonicalInput, empty);
   if (fresh.pending.length !== 7 || fresh.live.length !== 0) fail('ASGREP_RELEASE_SELF_TEST', 'a fresh version must plan to publish all seven packages');
