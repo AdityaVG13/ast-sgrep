@@ -42,6 +42,27 @@ fn assert_success(output: &Output, command: &str) -> Value {
     assert_eq!(value["exit_code"], 0);
     value
 }
+fn assert_doctor_unhealthy(output: &Output) -> Value {
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        output.stderr.is_empty(),
+        "unexpected diagnostic: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let value = parse_stdout(output);
+    assert_eq!(value["schema_version"], "1.0.0");
+    assert_eq!(value["tool"], "asgrep");
+    assert_eq!(value["command"], "doctor");
+    assert_eq!(value["ok"], false);
+    assert_eq!(value["exit_code"], 2);
+    assert_eq!(value["healthy"], false);
+    value
+}
 fn fixture(name: &str) -> Value {
     let raw = match name {
         "capabilities" => include_str!("fixtures/capabilities.json"),
@@ -116,13 +137,10 @@ fn index_reindex_status_and_doctor_have_stable_shapes() {
     let blocked_index = blocked.path().join("blocked.db");
     std::fs::create_dir(&blocked_index).expect("blocking directory");
     let blocked_index = blocked_index.to_str().expect("blocked path utf8");
-    let doctor = assert_success(
-        &run(
-            &session.bin,
-            &["--json", "--index-path", blocked_index, "doctor", root],
-        ),
-        "doctor",
-    );
+    let doctor = assert_doctor_unhealthy(&run(
+        &session.bin,
+        &["--json", "--index-path", blocked_index, "doctor", root],
+    ));
     assert_shape(&doctor, &shapes["doctor"]);
     assert_eq!(doctor["healthy"], false);
     assert_eq!(doctor["status"], Value::Null);
@@ -316,6 +334,12 @@ fn agent_discovery_defaults_and_boolish_envs_are_round_trip_free() {
         let output = Command::new(&bin)
             .arg("capabilities")
             .env("ASGREP_NO_EMBED", value)
+            .env("ASGREP_CLOUD_EMBED", value)
+            .env("ASGREP_OLLAMA_EMBED", value)
+            .env("ASGREP_NEURAL_EMBED", value)
+            .env("ASGREP_SEMANTIC_ONLY", value)
+            .env("ASGREP_TANTIVY", value)
+            .env("ASGREP_RERANK", value)
             .env("NO_COLOR", "1")
             .output()
             .expect("run capabilities");
@@ -325,11 +349,10 @@ fn agent_discovery_defaults_and_boolish_envs_are_round_trip_free() {
     assert_eq!(output.status.code(), Some(0));
     assert!(String::from_utf8_lossy(&output.stdout).contains("agent handbook"));
     let missing = TempDir::new().expect("tempdir").path().join("missing");
-    let doctor = assert_success(
-        &run(&bin, &["doctor", missing.to_str().expect("utf8")]),
-        "doctor",
-    );
-    assert_eq!(doctor["healthy"], false);
+    let doctor = assert_doctor_unhealthy(&run(
+        &bin,
+        &["doctor", missing.to_str().expect("utf8")],
+    ));
     assert_eq!(doctor["issues"][0]["kind"], "missing_root");
 }
 

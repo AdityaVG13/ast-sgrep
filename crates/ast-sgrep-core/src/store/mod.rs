@@ -27,7 +27,11 @@ pub fn index_db_path(root: &Path, index_path: Option<&Path>) -> PathBuf {
     if local.exists() {
         return local;
     }
-    if std::env::var("ASGREP_USE_CACHE").ok().as_deref() == Some("1") {
+    if std::env::var("ASGREP_USE_CACHE")
+        .ok()
+        .as_deref()
+        .is_some_and(crate::env_flag::is_boolish_true)
+    {
         return cache_index_path(root);
     }
     local

@@ -356,14 +356,29 @@ pub(crate) fn print_machine_json(
     command: &str,
     value: impl serde::Serialize,
 ) -> anyhow::Result<()> {
-    print_machine_json_with_style(command, value, false)
+    print_machine_json_with_style(command, value, false, true, 0)
+}
+/// Machine envelope with explicit ok/exit_code (doctor unhealthy path).
+pub(crate) fn print_machine_json_status(
+    command: &str,
+    value: impl serde::Serialize,
+    ok: bool,
+    exit_code: i32,
+) -> anyhow::Result<()> {
+    print_machine_json_with_style(command, value, false, ok, exit_code)
 }
 fn print_machine_json_with_style(
     command: &str,
     value: impl serde::Serialize,
     compact: bool,
+    ok: bool,
+    exit_code: i32,
 ) -> anyhow::Result<()> {
-    let value = machine_value(command, value)?;
+    let mut value = machine_value(command, value)?;
+    if let Some(object) = value.as_object_mut() {
+        object.insert("ok".into(), ok.into());
+        object.insert("exit_code".into(), exit_code.into());
+    }
     if compact {
         println!("{}", serde_json::to_string(&value)?);
     } else {
@@ -641,6 +656,8 @@ fn print_search_response(
         command,
         value,
         format == ast_sgrep_plugins::OutputFormat::Compact,
+        true,
+        0,
     )
 }
 fn print_json_or<T: serde::Serialize>(

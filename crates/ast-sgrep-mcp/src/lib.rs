@@ -70,7 +70,15 @@ impl McpServer {
                 .and_then(|v| v.parse().ok())
                 .unwrap_or_else(SearchOptions::default_limit)
                 .clamp(1, MAX_AGENT_LIMIT),
-            use_embed: std::env::var("ASGREP_NO_EMBED").ok().as_deref() != Some("1"),
+            use_embed: std::env::var("ASGREP_NO_EMBED")
+                .ok()
+                .filter(|v| {
+                    matches!(
+                        v.trim().to_ascii_lowercase().as_str(),
+                        "1" | "true" | "yes" | "on"
+                    )
+                })
+                .is_none(),
             searcher_cache: Mutex::new(None),
         })
     }

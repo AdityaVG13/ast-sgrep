@@ -255,25 +255,25 @@ pub struct SearchOptions {
 }
 impl Default for SearchOptions {
     fn default() -> Self {
-        let env1 = |k: &str| std::env::var(k).ok().as_deref() == Some("1");
+        use crate::env_flag::env_flag;
         Self {
             root: PathBuf::from("."),
             index_path: None,
             limit: Self::default_limit(),
             lang_filter: None,
-            use_embed: !env1("ASGREP_NO_EMBED"),
-            use_tantivy: env1("ASGREP_TANTIVY"),
-            use_cloud_embed: env1("ASGREP_CLOUD_EMBED"),
-            use_ollama_embed: env1("ASGREP_OLLAMA_EMBED"),
-            use_neural_embed: env1("ASGREP_NEURAL_EMBED"),
-            use_semantic_only: env1("ASGREP_SEMANTIC_ONLY"),
+            use_embed: !env_flag("ASGREP_NO_EMBED"),
+            use_tantivy: env_flag("ASGREP_TANTIVY"),
+            use_cloud_embed: env_flag("ASGREP_CLOUD_EMBED"),
+            use_ollama_embed: env_flag("ASGREP_OLLAMA_EMBED"),
+            use_neural_embed: env_flag("ASGREP_NEURAL_EMBED"),
+            use_semantic_only: env_flag("ASGREP_SEMANTIC_ONLY"),
             ann_threshold: std::env::var("ASGREP_ANN_THRESHOLD")
                 .ok()
                 .and_then(|v| v.parse().ok()),
             ann_probes: std::env::var("ASGREP_ANN_PROBES")
                 .ok()
                 .and_then(|v| v.parse().ok()),
-            use_rerank: env1("ASGREP_RERANK"),
+            use_rerank: env_flag("ASGREP_RERANK"),
             rerank_top_k: std::env::var("ASGREP_RERANK_TOP_K")
                 .ok()
                 .and_then(|v| v.parse().ok())

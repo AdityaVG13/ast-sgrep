@@ -76,7 +76,7 @@ fn cache_model_id_for_pref(p: ast_sgrep_embed::EmbedPreference) -> Option<String
             let skip = std::env::var_os("ASGREP_EMBED_API_KEY").is_some()
                 || std::env::var_os("ASGREP_OLLAMA_EMBED").is_some()
                 || std::env::var_os("ASGREP_OLLAMA_URL").is_some()
-                || std::env::var("ASGREP_NEURAL_EMBED").is_ok_and(|v| v == "1");
+                || crate::env_flag::env_flag("ASGREP_NEURAL_EMBED");
             (!skip).then(semantic_mid)
         }
     }
@@ -101,9 +101,7 @@ pub(super) fn requested_model_identity(preference: ast_sgrep_embed::EmbedPrefere
         EmbedPreference::Auto => configured(EmbedBackendKind::Cloud)
             .or_else(|| configured(EmbedBackendKind::Ollama))
             .or_else(|| {
-                std::env::var("ASGREP_NEURAL_EMBED")
-                    .is_ok_and(|value| value == "1")
-                    .then(neural_mid)
+                crate::env_flag::env_flag("ASGREP_NEURAL_EMBED").then(neural_mid)
             })
             .unwrap_or_else(semantic_mid),
     }

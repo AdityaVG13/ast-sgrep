@@ -3,6 +3,7 @@
 use thiserror::Error;
 pub mod bench_suite;
 pub mod chain;
+pub mod env_flag;
 pub mod fusion;
 pub mod gitignore;
 pub mod index;

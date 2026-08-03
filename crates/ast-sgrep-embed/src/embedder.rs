@@ -1,6 +1,21 @@
 use anyhow::{anyhow, Result};
 #[cfg(feature = "cloud")]
 use serde::{Deserialize, Serialize};
+
+fn is_boolish_true(value: &str) -> bool {
+    matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "1" | "true" | "yes" | "on"
+    )
+}
+
+fn env_flag(name: &str) -> bool {
+    std::env::var(name)
+        .ok()
+        .as_deref()
+        .is_some_and(is_boolish_true)
+}
+
 // ---- remote cloud/ollama ----
 #[derive(Debug, Clone)]
 pub struct CloudEmbeddingConfig {
@@ -69,10 +84,10 @@ pub struct OllamaEmbeddingConfig {
 }
 impl OllamaEmbeddingConfig {
     pub fn from_env() -> Option<Self> {
-        if std::env::var("ASGREP_NO_OLLAMA").ok().as_deref() == Some("1") {
+        if env_flag("ASGREP_NO_OLLAMA") {
             return None;
         }
-        let explicit = std::env::var("ASGREP_OLLAMA_EMBED").ok().as_deref() == Some("1");
+        let explicit = env_flag("ASGREP_OLLAMA_EMBED");
         let url_set = std::env::var("ASGREP_OLLAMA_URL").is_ok();
         if !explicit && !url_set {
             return None;
