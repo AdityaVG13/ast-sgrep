@@ -72,6 +72,13 @@ function sameSetting(current: unknown, legacy: unknown, currentName: string, leg
   return current ?? legacy;
 }
 
+/** Legacy schema-0 numeric fields ↔ current names (migrate/rollback share one table). */
+const LEGACY_NUMBER_FIELDS = [
+  ["timeoutMs", "timeout"],
+  ["maxOutputBytes", "maxOutput"],
+  ["refreshIntervalMs", "refreshInterval"],
+] as const;
+
 /** Convert schema 0/unversioned settings without mutating the rollback source. */
 export function migrateConfig(input: RuntimeConfigInput = {}): RuntimeConfig {
   const value = { ...input } as RuntimeConfigInput & Record<string, unknown>;
@@ -82,15 +89,12 @@ export function migrateConfig(input: RuntimeConfigInput = {}): RuntimeConfig {
   if (schema === CONFIG_SCHEMA_VERSION) return value as RuntimeConfig;
   const legacy = value as LegacyRuntimeConfig & Record<string, unknown>;
   const migrated: RuntimeConfig = { ...legacy, schemaVersion: CONFIG_SCHEMA_VERSION };
-  const timeoutMs = sameSetting(value.timeoutMs, legacy.timeout, "timeoutMs", "timeout");
-  const maxOutputBytes = sameSetting(value.maxOutputBytes, legacy.maxOutput, "maxOutputBytes", "maxOutput");
-  const refreshIntervalMs = sameSetting(value.refreshIntervalMs, legacy.refreshInterval, "refreshIntervalMs", "refreshInterval");
-  if (timeoutMs !== undefined) migrated.timeoutMs = timeoutMs as number;
-  if (maxOutputBytes !== undefined) migrated.maxOutputBytes = maxOutputBytes as number;
-  if (refreshIntervalMs !== undefined) migrated.refreshIntervalMs = refreshIntervalMs as number;
-  delete (migrated as Record<string, unknown>).timeout;
-  delete (migrated as Record<string, unknown>).maxOutput;
-  delete (migrated as Record<string, unknown>).refreshInterval;
+  const mutable = migrated as Record<string, unknown>;
+  for (const [currentName, legacyName] of LEGACY_NUMBER_FIELDS) {
+    const next = sameSetting(value[currentName], legacy[legacyName], currentName, legacyName);
+    if (next !== undefined) mutable[currentName] = next as number;
+    delete mutable[legacyName];
+  }
   return migrated;
 }
 
@@ -98,12 +102,13 @@ export function migrateConfig(input: RuntimeConfigInput = {}): RuntimeConfig {
 export function rollbackConfig(input: RuntimeConfig): LegacyRuntimeConfig {
   const current = migrateConfig(input);
   const legacy: LegacyRuntimeConfig = { ...current, schemaVersion: 0 };
-  if (current.timeoutMs !== undefined) legacy.timeout = current.timeoutMs;
-  if (current.maxOutputBytes !== undefined) legacy.maxOutput = current.maxOutputBytes;
-  if (current.refreshIntervalMs !== undefined) legacy.refreshInterval = current.refreshIntervalMs;
-  delete (legacy as Record<string, unknown>).timeoutMs;
-  delete (legacy as Record<string, unknown>).maxOutputBytes;
-  delete (legacy as Record<string, unknown>).refreshIntervalMs;
+  const mutable = legacy as Record<string, unknown>;
+  for (const [currentName, legacyName] of LEGACY_NUMBER_FIELDS) {
+    if (current[currentName as keyof RuntimeConfig] !== undefined) {
+      mutable[legacyName] = current[currentName as keyof RuntimeConfig] as number;
+    }
+    delete mutable[currentName];
+  }
   return legacy;
 }
 
@@ -140,7 +145,7 @@ export function resolveConfig(sources: ConfigSources = {}): Required<Pick<Runtim
   return merged as Required<Pick<RuntimeConfig, "timeoutMs" | "maxOutputBytes">> & RuntimeConfig;
 }
 
-function isContained(parent: string, child: string): boolean {
+function pathContained(parent: string, child: string): boolean {
   const rel = relative(parent, child);
   return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
 }
@@ -154,7 +159,7 @@ export async function resolveRuntimeRoot(projectCwd: string, requestedRoot?: str
   } catch (cause) {
     throw new RuntimeError("INVALID_ROOT", "Project or requested root does not exist", { projectCwd, requestedRoot, cause: cause instanceof Error ? cause.message : String(cause) });
   }
-  if (!allowOutsideProject && !isContained(project, candidate)) {
+  if (!allowOutsideProject && !pathContained(project, candidate)) {
     throw new RuntimeError("ROOT_OUTSIDE_PROJECT", "Requested root resolves outside the project", { project, requestedRoot, resolvedRoot: candidate });
   }
   return candidate;
@@ -205,11 +210,6 @@ function incompatibleStatusFailure(cause: unknown): boolean {
   if (!(cause instanceof RuntimeError) || (cause.code !== "OPERATIONAL_ERROR" && cause.code !== "PROCESS_FAILED")) return false;
   const text = `${cause.message} ${JSON.stringify(cause.details)}`;
   return /incompatib|unsupported.{0,24}schema|schema.{0,24}(version|mismatch)/i.test(text);
-}
-
-function pathContained(root: string, path: string): boolean {
-  const rel = relative(root, path);
-  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
 }
 
 function canonicalizeAffectedPath(path: string): string {
@@ -336,6 +336,18 @@ function getBinary(config: RuntimeConfig, env: NodeJS.ProcessEnv, resolver: Bina
 
 function byteLength(value: string): number { return Buffer.byteLength(value, "utf8"); }
 
+function assertVersionTriple(envelope: Partial<MachineEnvelope>, requireIdentity = false): void {
+  if (envelope.tool !== "asgrep") throw new RuntimeError("TOOL_MISMATCH", "Response is not from ast-sgrep", { actual: envelope.tool });
+  if (envelope.schema_version !== MACHINE_SCHEMA_VERSION) throw new RuntimeError("PROTOCOL_MISMATCH", "Unsupported ast-sgrep machine protocol", { expected: MACHINE_SCHEMA_VERSION, actual: envelope.schema_version });
+  if (typeof envelope.ok !== "boolean") throw new RuntimeError("MALFORMED_OUTPUT", "ast-sgrep response is missing boolean ok");
+  if (requireIdentity || envelope.version !== undefined) {
+    if (envelope.version !== RUNTIME_VERSION) throw new RuntimeError("VERSION_MISMATCH", "ast-sgrep binary version does not match the extension", { expected: RUNTIME_VERSION, actual: envelope.version });
+  }
+  if (requireIdentity || envelope.machine_schema_version !== undefined) {
+    if (envelope.machine_schema_version !== MACHINE_SCHEMA_VERSION) throw new RuntimeError("PROTOCOL_MISMATCH", "ast-sgrep binary reports an incompatible machine protocol", { expected: MACHINE_SCHEMA_VERSION, actual: envelope.machine_schema_version });
+  }
+}
+
 function parseEnvelope(result: ExecResult, limit: number): MachineEnvelope {
   const stdoutBytes = byteLength(result.stdout);
   const stderrBytes = byteLength(result.stderr);
@@ -361,16 +373,12 @@ function parseEnvelope(result: ExecResult, limit: number): MachineEnvelope {
   catch (cause) { throw new RuntimeError("MALFORMED_OUTPUT", "ast-sgrep returned malformed JSON", { cause: cause instanceof Error ? cause.message : String(cause) }); }
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new RuntimeError("MALFORMED_OUTPUT", "ast-sgrep returned a non-object JSON payload");
   const envelope = value as Partial<MachineEnvelope>;
-  if (envelope.tool !== "asgrep") throw new RuntimeError("TOOL_MISMATCH", "Response is not from ast-sgrep", { actual: envelope.tool });
-  if (envelope.schema_version !== MACHINE_SCHEMA_VERSION) throw new RuntimeError("PROTOCOL_MISMATCH", "Unsupported ast-sgrep machine protocol", { expected: MACHINE_SCHEMA_VERSION, actual: envelope.schema_version });
-  if (typeof envelope.ok !== "boolean") throw new RuntimeError("MALFORMED_OUTPUT", "ast-sgrep response is missing boolean ok");
+  assertVersionTriple(envelope);
   if (!envelope.ok) {
     const failure = envelope.error && typeof envelope.error === "object" ? envelope.error as Record<string, unknown> : undefined;
     const message = typeof failure?.message === "string" ? failure.message : "ast-sgrep reported an operational failure";
     throw new RuntimeError("OPERATIONAL_ERROR", message, { command: envelope.command, error: failure });
   }
-  if (envelope.version !== undefined && envelope.version !== RUNTIME_VERSION) throw new RuntimeError("VERSION_MISMATCH", "ast-sgrep binary version does not match the extension", { expected: RUNTIME_VERSION, actual: envelope.version });
-  if (envelope.machine_schema_version !== undefined && envelope.machine_schema_version !== MACHINE_SCHEMA_VERSION) throw new RuntimeError("PROTOCOL_MISMATCH", "ast-sgrep binary reports an incompatible machine protocol", { expected: MACHINE_SCHEMA_VERSION, actual: envelope.machine_schema_version });
   return envelope as MachineEnvelope;
 }
 function indexPathFor(root: string, env: NodeJS.ProcessEnv): string {
@@ -494,8 +502,7 @@ export class AstSgrepRuntime {
 
   async checkCompatibility(context: RuntimeContext, options: RunOptions = {}): Promise<MachineEnvelope> {
     const value = await this.run(["version", "--json"], context, options);
-    if (value.version !== RUNTIME_VERSION) throw new RuntimeError("VERSION_MISMATCH", "ast-sgrep binary version does not match the extension", { expected: RUNTIME_VERSION, actual: value.version });
-    if (value.machine_schema_version !== MACHINE_SCHEMA_VERSION) throw new RuntimeError("PROTOCOL_MISMATCH", "ast-sgrep binary reports an incompatible machine protocol", { expected: MACHINE_SCHEMA_VERSION, actual: value.machine_schema_version });
+    assertVersionTriple(value, true);
     return value;
   }
 }

@@ -153,21 +153,13 @@ fn measure_query_parse_intent(searcher: &Searcher, cfg: &Config) -> Result<PartT
 }
 fn measure_literal(searcher: &Searcher, cfg: &Config) -> PartTiming {
     let (samples, work) = time_loop(cfg, || {
-        searcher
-            .search_literal("process_request")
-            .expect("literal")
-            .hits
-            .len() as u64
+        measure_hit_len(|| searcher.search_literal("process_request"))
     });
     summarize("literal_retrieval", cfg, samples, work)
 }
 fn measure_lexical(searcher: &Searcher, cfg: &Config) -> PartTiming {
     let (samples, work) = time_loop(cfg, || {
-        searcher
-            .search_lexical("auth refresh")
-            .expect("lexical")
-            .hits
-            .len() as u64
+        measure_hit_len(|| searcher.search_lexical("auth refresh"))
     });
     summarize("lexical_fts", cfg, samples, work)
 }
@@ -197,22 +189,18 @@ fn measure_hybrid_fusion(searcher: &Searcher, cfg: &Config) -> Result<PartTiming
     let (samples, work) = time_loop(cfg, || {
         let mut hits = candidates.clone();
         intent::route_hits(&parsed, &mut hits);
-        crate::search::finish_response(&parsed, &opts, hits, true)
-            .expect("finish_response")
-            .hits
-            .len() as u64
+        measure_hit_len(|| crate::search::finish_response(&parsed, &opts, hits, true))
     });
     Ok(summarize("hybrid_fusion_rank", cfg, samples, work))
 }
 fn measure_semantic(searcher: &Searcher, cfg: &Config) -> PartTiming {
     let (samples, work) = time_loop(cfg, || {
-        searcher
-            .search_semantic("how does auth refresh work")
-            .expect("semantic")
-            .hits
-            .len() as u64
+        measure_hit_len(|| searcher.search_semantic("how does auth refresh work"))
     });
     summarize("semantic_embed", cfg, samples, work)
+}
+fn measure_hit_len(op: impl FnOnce() -> Result<crate::search::SearchResponse>) -> u64 {
+    op().expect("pipeline measure").hits.len() as u64
 }
 fn measure_format(searcher: &Searcher, cfg: &Config) -> Result<PartTiming> {
     let hits = searcher.search("process_request")?.hits;

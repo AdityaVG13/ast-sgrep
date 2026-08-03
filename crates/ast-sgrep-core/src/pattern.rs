@@ -2,11 +2,13 @@ use crate::gitignore::{should_skip_dir, should_skip_file};
 use crate::rank::SCORE_PATTERN;
 use crate::search::{HitKind, SearchHit, SpanHitInput};
 use crate::Result;
-use ast_sgrep_lang::{detect_language, match_pattern, needs_ast_grep_fallback};
+use ast_sgrep_lang::{
+    cached_pattern_signatures, detect_language, match_pattern, needs_ast_grep_fallback,
+};
 use std::fs;
 use std::io::Read;
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 use walkdir::WalkDir;
@@ -57,60 +59,6 @@ fn external_ast_grep_allowed() -> bool {
         std::env::var("ASGREP_DISABLE_AST_GREP").as_deref(),
         Ok("1") | Ok("true") | Ok("TRUE")
     )
-}
-fn cached_pattern_signatures(pattern: &str) -> Option<Vec<String>> {
-    let pattern = pattern.trim();
-    if pattern.is_empty() {
-        return Some(vec![]);
-    }
-    if !pattern.contains('$') {
-        return Some(vec![pattern.to_string()]);
-    }
-    for (prefix, kind) in [("fn ", "function_item"), ("def ", "function_definition")] {
-        if let Some(rest) = pattern.strip_prefix(prefix) {
-            let name = rest
-                .split(|ch: char| ch == '(' || ch.is_whitespace())
-                .next()
-                .unwrap_or_default();
-            if name.starts_with('$') {
-                return Some(vec![format!("kind:{kind}")]);
-            }
-            if is_pattern_identifier(name) {
-                return Some(vec![format!("decl:{}:{name}", prefix.trim())]);
-            }
-            return None;
-        }
-    }
-    let open = pattern.find('(')?;
-    let close = pattern.rfind(')')?;
-    if close + 1 != pattern.len() || !pattern[open + 1..close].contains("$$$") {
-        return None;
-    }
-    let callee = pattern[..open].trim();
-    if callee.starts_with('$') && !callee.contains('.') {
-        return Some(vec!["kind:call_expression".into(), "kind:call".into()]);
-    }
-    if let Some(name) = callee.rsplit('.').next() {
-        if callee.contains('$') && is_pattern_identifier(name) {
-            return Some(vec![format!("call-name:{name}")]);
-        }
-    }
-    is_pattern_path(callee).then(|| vec![format!("call:{callee}")])
-}
-fn is_pattern_identifier(value: &str) -> bool {
-    let mut chars = value.chars();
-    chars
-        .next()
-        .is_some_and(|ch| ch == '_' || ch.is_alphabetic())
-        && chars.all(|ch| ch == '_' || ch.is_alphanumeric())
-}
-fn is_pattern_path(value: &str) -> bool {
-    !value.is_empty()
-        && !value.contains('$')
-        && value
-            .split(['.', ':'])
-            .filter(|p| !p.is_empty())
-            .all(is_pattern_identifier)
 }
 fn search_pattern_cached(
     pattern: &str,
@@ -217,25 +165,11 @@ fn search_pattern_ast_grep(
     let mut child = cmd
         .spawn()
         .map_err(|e| crate::StoreError::Other(format!("failed to run {ast_grep}: {e}")))?;
-    let deadline = Instant::now() + Duration::from_secs(PATTERN_TIMEOUT_SECS);
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break status,
-            Ok(None) if Instant::now() >= deadline => {
-                child.kill().ok();
-                return Err(crate::StoreError::Other(format!(
-                    "ast-grep timed out after {PATTERN_TIMEOUT_SECS}s"
-                )));
-            }
-            Ok(None) => thread::sleep(Duration::from_millis(50)),
-            Err(e) => {
-                child.kill().ok();
-                return Err(crate::StoreError::Other(format!(
-                    "ast-grep wait failed: {e}"
-                )));
-            }
-        }
-    };
+    let status = wait_child_deadline(
+        &mut child,
+        Duration::from_secs(PATTERN_TIMEOUT_SECS),
+        "ast-grep",
+    )?;
     let mut stdout = Vec::new();
     let mut stderr = Vec::new();
     if let Some(mut out) = child.stdout.take() {
@@ -253,6 +187,33 @@ fn search_pattern_ast_grep(
         )));
     }
     parse_ast_grep_json(&stdout, pattern, &root)
+}
+/// Shared timed `try_wait` loop for external ast-grep probe / search children.
+fn wait_child_deadline(
+    child: &mut Child,
+    timeout: Duration,
+    label: &str,
+) -> Result<std::process::ExitStatus> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return Ok(status),
+            Ok(None) if Instant::now() >= deadline => {
+                child.kill().ok();
+                return Err(crate::StoreError::Other(format!(
+                    "{label} timed out after {}s",
+                    timeout.as_secs()
+                )));
+            }
+            Ok(None) => thread::sleep(Duration::from_millis(50)),
+            Err(e) => {
+                child.kill().ok();
+                return Err(crate::StoreError::Other(format!(
+                    "{label} wait failed: {e}"
+                )));
+            }
+        }
+    }
 }
 fn find_ast_grep_binary() -> Option<String> {
     for name in ["ast-grep", "sg"] {

@@ -120,6 +120,9 @@ pub fn weights_for(intent: QueryIntent) -> ChannelWeights {
     }
     w
 }
+fn clamp_channel_weight(v: f64) -> f64 {
+    v.clamp(0.25, 2.0)
+}
 fn apply_spec(weights: &mut ChannelWeights, intent: QueryIntent, spec: &str) {
     for class_spec in spec.split(';') {
         let Some((class, pairs)) = class_spec.split_once(':') else {
@@ -138,7 +141,7 @@ fn apply_spec(weights: &mut ChannelWeights, intent: QueryIntent, spec: &str) {
             if !v.is_finite() {
                 continue;
             }
-            let v = v.clamp(0.25, 2.0);
+            let v = clamp_channel_weight(v);
             match ch.trim() {
                 "lexical" => weights.lexical = v,
                 "def" => weights.def = v,

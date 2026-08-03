@@ -82,10 +82,7 @@ impl Searcher {
         let gen = self.index_gen();
         let key = format!("{kind}\0{query}");
         {
-            let guard = self
-                .response_cache
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
+            let guard = lock_response_cache(&self.response_cache);
             if guard.gen == gen {
                 if let Some(hit) = guard.map.get(&key) {
                     return Ok(hit.clone());
@@ -93,10 +90,7 @@ impl Searcher {
             }
         }
         let response = compute()?;
-        let mut guard = self
-            .response_cache
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let mut guard = lock_response_cache(&self.response_cache);
         if guard.gen != gen {
             guard.map.clear();
             guard.gen = gen;
@@ -165,28 +159,6 @@ impl Searcher {
     pub fn search_literal(&self, query: &str) -> Result<SearchResponse> {
         self.cached("lit", query, || {
             let parsed = ParsedQuery::literal(query);
-            finish_response(
-                &parsed,
-                &self.options,
-                literal_pass(&self.store, &self.options, &parsed)?,
-                true,
-            )
-        })
-    }
-    pub fn search_regex(&self, query: &str) -> Result<SearchResponse> {
-        self.cached("re", query, || {
-            let parsed = ParsedQuery::regex(query);
-            finish_response(
-                &parsed,
-                &self.options,
-                regex_pass(&self.store, &self.options, &parsed)?,
-                true,
-            )
-        })
-    }
-    pub fn search_word(&self, query: &str) -> Result<SearchResponse> {
-        self.cached("word", query, || {
-            let parsed = ParsedQuery::word(query);
             finish_response(
                 &parsed,
                 &self.options,
@@ -377,15 +349,7 @@ fn structural_index_pass(
         if term.len() < 3 || !term.chars().all(|c| c == '_' || c.is_alphanumeric()) {
             continue;
         }
-        let signatures = [
-            format!("call-name:{term}"),
-            format!("call:{term}"),
-            format!("decl:fn:{term}"),
-            format!("decl:def:{term}"),
-            format!("decl:function:{term}"),
-            term.clone(),
-        ];
-        for sig in &signatures {
+        for sig in &ast_sgrep_lang::structural_term_signatures(term) {
             for row in store.pattern_nodes_matching(sig, lang)? {
                 if !seen.insert((row.path.clone(), row.line_start, row.line_end)) {
                     continue;
@@ -477,17 +441,7 @@ pub fn finish_response(
         }
         let mut counts: Vec<_> = counts.into_iter().collect();
         counts.sort_by(|a, b| a.0.cmp(&b.0));
-        let response = SearchResponse {
-            query: parsed.raw.clone(),
-            limit: options.limit,
-            hits: vec![],
-            counts,
-            read_bytes_estimate: 0,
-            returned_excerpt_bytes: 0,
-            prevented_read_bytes: 0,
-        };
-        record_ledger_from_env(&response);
-        return Ok(response);
+        return Ok(emit_response(parsed, options, vec![], counts, (0, 0, 0)));
     }
     let gate_limit = rerank_candidate_limit(options);
     let keep = if parsed.mode == QueryMode::Hybrid {
@@ -499,7 +453,7 @@ pub fn finish_response(
     // pool so high-coverage lower-score hits survive into coverage ranking.
     let pre_keep = keep.saturating_mul(4).max(keep + 32);
     if hits.len() > pre_keep {
-        hits.select_nth_unstable_by(pre_keep, |a, b| hit_rank_cmp(parsed, a, b));
+        hits.select_nth_unstable_by(pre_keep, |a, b| cmp_ranked_hits(&parsed.terms, a, b));
         hits.truncate(pre_keep);
     }
     let mut keyed: Vec<(u32, SearchHit)> = hits
@@ -508,14 +462,8 @@ pub fn finish_response(
         .collect();
     // Score primary; coverage secondary (8mb8: coverage must be in the key so
     // equal-score high-coverage hits are not discarded by score-only prune).
-    let mut compare = |(ca, a): &(u32, SearchHit), (cb, b): &(u32, SearchHit)| {
-        b.score
-            .partial_cmp(&a.score)
-            .unwrap_or(std::cmp::Ordering::Equal)
-            .then_with(|| cb.cmp(ca))
-            .then_with(|| a.file.cmp(&b.file))
-            .then_with(|| a.line_start.cmp(&b.line_start))
-    };
+    let mut compare =
+        |a: &(u32, SearchHit), b: &(u32, SearchHit)| cmp_coverage_score(a.0, &a.1, b.0, &b.1);
     if keyed.len() > keep {
         keyed.select_nth_unstable_by(keep, &mut compare);
         keyed.truncate(keep);
@@ -527,19 +475,27 @@ pub fn finish_response(
         hits = maybe_rerank(&parsed.raw, hits, options.rerank_top_k);
         hits = enforce_result_gates(hits, parsed.mode == QueryMode::Hybrid, options.limit);
     }
-    let (read_bytes_estimate, returned_excerpt_bytes, prevented_read_bytes) =
-        estimate_prevented_reads(&options.root, &hits);
+    let bytes = estimate_prevented_reads(&options.root, &hits);
+    Ok(emit_response(parsed, options, hits, vec![], bytes))
+}
+fn emit_response(
+    parsed: &ParsedQuery,
+    options: &SearchOptions,
+    hits: Vec<SearchHit>,
+    counts: Vec<(String, u32)>,
+    (read_bytes_estimate, returned_excerpt_bytes, prevented_read_bytes): (u64, u64, u64),
+) -> SearchResponse {
     let response = SearchResponse {
         query: parsed.raw.clone(),
         limit: options.limit,
         hits,
-        counts: vec![],
+        counts,
         read_bytes_estimate,
         returned_excerpt_bytes,
         prevented_read_bytes,
     };
     record_ledger_from_env(&response);
-    Ok(response)
+    response
 }
 fn rerank_candidate_limit(options: &SearchOptions) -> usize {
     if options.use_rerank {
@@ -729,6 +685,26 @@ fn compile_glob(pattern: &str) -> std::result::Result<regex::Regex, String> {
     result.push('$');
     regex::Regex::new(&result).map_err(|e| e.to_string())
 }
+fn lock_response_cache(cache: &Mutex<ResponseCache>) -> std::sync::MutexGuard<'_, ResponseCache> {
+    cache.lock().unwrap_or_else(|e| e.into_inner())
+}
+/// Shared ranking key: score ↓, excerpt term coverage ↓, file, line.
+fn cmp_coverage_score(ca: u32, a: &SearchHit, cb: u32, b: &SearchHit) -> std::cmp::Ordering {
+    b.score
+        .partial_cmp(&a.score)
+        .unwrap_or(std::cmp::Ordering::Equal)
+        .then_with(|| cb.cmp(&ca))
+        .then_with(|| a.file.cmp(&b.file))
+        .then_with(|| a.line_start.cmp(&b.line_start))
+}
+fn cmp_ranked_hits(terms: &[String], a: &SearchHit, b: &SearchHit) -> std::cmp::Ordering {
+    cmp_coverage_score(
+        excerpt_term_coverage(terms, a),
+        a,
+        excerpt_term_coverage(terms, b),
+        b,
+    )
+}
 fn contains_term_token(text: &str, term: &str) -> bool {
     !term.is_empty()
         && text.match_indices(term).any(|(start, matched)| {
@@ -737,16 +713,6 @@ fn contains_term_token(text: &str, term: &str) -> bool {
             before.is_none_or(|ch| !ch.is_alphanumeric() && ch != '_')
                 && after.is_none_or(|ch| !ch.is_alphanumeric() && ch != '_')
         })
-}
-fn hit_rank_cmp(parsed: &ParsedQuery, a: &SearchHit, b: &SearchHit) -> std::cmp::Ordering {
-    let ca = excerpt_term_coverage(&parsed.terms, a);
-    let cb = excerpt_term_coverage(&parsed.terms, b);
-    b.score
-        .partial_cmp(&a.score)
-        .unwrap_or(std::cmp::Ordering::Equal)
-        .then_with(|| cb.cmp(&ca))
-        .then_with(|| a.file.cmp(&b.file))
-        .then_with(|| a.line_start.cmp(&b.line_start))
 }
 fn excerpt_term_coverage(terms: &[String], hit: &SearchHit) -> u32 {
     // hhca: lowercase BOTH sides. Excerpt was lowercased but mixed-case terms

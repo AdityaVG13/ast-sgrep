@@ -11,7 +11,7 @@ use ast_sgrep_embed::{
 use rayon::prelude::*;
 use std::io::{Read, Write};
 use std::sync::{Arc, Mutex};
-pub const DEFAULT_ANN_THRESHOLD: usize = 2_000;
+pub(crate) const DEFAULT_ANN_THRESHOLD: usize = 2_000;
 #[derive(Debug, Clone)]
 pub struct SemanticAnnIndex {
     centroids: Vec<Vec<f32>>,
@@ -352,7 +352,7 @@ struct SessionCache {
     ivf: Arc<PersistedSemanticIvf>,
 }
 static SESSION_CACHE: Mutex<Vec<(String, SessionCache)>> = Mutex::new(Vec::new());
-pub fn clear_semantic_ivf_session_cache() {
+fn clear_semantic_ivf_session_cache() {
     SESSION_CACHE
         .lock()
         .unwrap_or_else(|e| e.into_inner())
@@ -399,7 +399,7 @@ fn cache_session(db_key: &str, fingerprint: [u8; 32], ivf: &PersistedSemanticIvf
         },
     ));
 }
-pub fn load_or_build_semantic_ivf(
+fn load_or_build_semantic_ivf(
     store: &IndexStore,
     chunks: &[SemanticChunkRow],
     override_threshold: Option<usize>,
@@ -426,7 +426,7 @@ pub fn load_or_build_semantic_ivf(
     cache_session(&db_key, fingerprint, &ivf);
     Ok(Some(Arc::new(ivf)))
 }
-pub fn cached_semantic_ivf(
+fn cached_semantic_ivf(
     store: &IndexStore,
     chunks: &[SemanticChunkRow],
     override_threshold: Option<usize>,
@@ -497,26 +497,37 @@ pub fn rebuild_semantic_ivf_sidecar(
     }
     let dim = chunks[0].5.len();
     if store.get_meta("semantic_ivf_stale")?.as_deref() == Some("1") {
-        if let Some(mut ivf) = load_semantic_ivf_unchecked(&semantic_ivf_path(store.db_path()))? {
-            if ivf.chunk_count() == chunks.len() && ivf.dim == dim {
-                ivf.vectors = flatten_vectors_for_search(chunks, dim)?;
-                ivf.index.reassign_all(&ivf.vectors, dim);
-                let (fingerprint, db_key) = ann_session_key(store, chunks)?;
-                ivf.fingerprint = fingerprint;
-                save_semantic_ivf(
-                    &semantic_ivf_path(store.db_path()),
-                    fingerprint,
-                    dim,
-                    &ivf.vectors,
-                    &ivf.index,
-                )?;
-                cache_session(&db_key, fingerprint, &ivf);
-                let _ = store.set_meta("semantic_ivf_stale", "0");
-                return Ok(());
-            }
+        if reassign_stale_ivf_partition(store, chunks, dim)? {
+            return Ok(());
         }
     }
     let _ = load_or_build_semantic_ivf(store, chunks, override_threshold)?;
     let _ = store.set_meta("semantic_ivf_stale", "0");
     Ok(())
+}
+fn reassign_stale_ivf_partition(
+    store: &IndexStore,
+    chunks: &[SemanticChunkRow],
+    dim: usize,
+) -> Result<bool> {
+    let Some(mut ivf) = load_semantic_ivf_unchecked(&semantic_ivf_path(store.db_path()))? else {
+        return Ok(false);
+    };
+    if ivf.chunk_count() != chunks.len() || ivf.dim != dim {
+        return Ok(false);
+    }
+    ivf.vectors = flatten_vectors_for_search(chunks, dim)?;
+    ivf.index.reassign_all(&ivf.vectors, dim);
+    let (fingerprint, db_key) = ann_session_key(store, chunks)?;
+    ivf.fingerprint = fingerprint;
+    save_semantic_ivf(
+        &semantic_ivf_path(store.db_path()),
+        fingerprint,
+        dim,
+        &ivf.vectors,
+        &ivf.index,
+    )?;
+    cache_session(&db_key, fingerprint, &ivf);
+    let _ = store.set_meta("semantic_ivf_stale", "0");
+    Ok(true)
 }
