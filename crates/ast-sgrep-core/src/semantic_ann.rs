@@ -496,10 +496,10 @@ pub fn rebuild_semantic_ivf_sidecar(
         return Ok(());
     }
     let dim = chunks[0].5.len();
-    if store.get_meta("semantic_ivf_stale")?.as_deref() == Some("1") {
-        if reassign_stale_ivf_partition(store, chunks, dim)? {
-            return Ok(());
-        }
+    if store.get_meta("semantic_ivf_stale")?.as_deref() == Some("1")
+        && reassign_stale_ivf_partition(store, chunks, dim)?
+    {
+        return Ok(());
     }
     let _ = load_or_build_semantic_ivf(store, chunks, override_threshold)?;
     let _ = store.set_meta("semantic_ivf_stale", "0");

@@ -93,12 +93,12 @@ pub(crate) const MEMBER_EXPR_KINDS: &[&str] = &[
 
 #[inline]
 pub(crate) fn is_ident_kind(kind: &str) -> bool {
-    IDENT_KINDS.iter().any(|&k| k == kind)
+    IDENT_KINDS.contains(&kind)
 }
 
 #[inline]
 pub(crate) fn is_member_expr_kind(kind: &str) -> bool {
-    MEMBER_EXPR_KINDS.iter().any(|&k| k == kind)
+    MEMBER_EXPR_KINDS.contains(&kind)
 }
 
 pub(crate) fn last_identifier_in_chain(node: &Node, source: &str) -> Option<String> {
