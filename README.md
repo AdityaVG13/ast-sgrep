@@ -52,10 +52,14 @@ handling are supported, but the duty cycle is not enforced.
 Paste into your agent:
 
 ```text
-Clone https://github.com/AdityaVG13/ast-sgrep, cd into it, run `cargo build --release -p ast-sgrep-cli`.
-Register target/release/asgrep-mcp as a stdio MCP server named "ast-sgrep" (build with: cargo build --release -p ast-sgrep-mcp).
-Verify: run ./target/release/asgrep index . then search for defs: of a symbol in this repo.
+1) Discover the contract: `asgrep capabilities --json`
+2) Read the handbook: `asgrep robot-docs guide`
+3) Triage health: `asgrep doctor --robot-triage`
+Then: `asgrep index . --json` and search with `asgrep --json --format compact "your intent" .`
+Bin aliases: `asgrep` and `ast-sgrep`. Sibling binaries: `asgrep-mcp` (MCP stdio), `asgrep-lsp` (LSP).
 ```
+
+Build from source if needed: `cargo build --release -p ast-sgrep-cli` (and `-p ast-sgrep-mcp` / `-p ast-sgrep-lsp` for siblings).
 
 ---
 

@@ -456,3 +456,125 @@ fn format_aliases_typos_and_root_failures_are_unambiguous() {
         .expect("message")
         .contains("index is empty"));
 }
+
+#[test]
+fn doctor_suggested_commands_echo_effective_root() {
+    let tmp = TempDir::new().expect("tempdir");
+    let root = tmp.path().join("proj");
+    std::fs::create_dir_all(&root).unwrap();
+    let bin = asgrep_bin();
+    let doctor = assert_doctor_unhealthy(&run(
+        &bin,
+        &[
+            "doctor",
+            "--robot-triage",
+            root.to_str().expect("utf8"),
+        ],
+    ));
+    let root_s = root.to_str().expect("utf8");
+    assert_eq!(doctor["root"], root_s);
+    let suggested = doctor["suggested_commands"].as_array().expect("cmds");
+    assert!(
+        suggested
+            .iter()
+            .any(|c| c.as_str().is_some_and(|s| s.contains(root_s) && s.contains("index"))),
+        "suggested_commands must echo effective root, got {suggested:?}"
+    );
+}
+
+#[test]
+fn format_alone_implies_json_machine_output() {
+    let session = CliSession::sample(asgrep_bin());
+    let index = session.index_path.to_str().expect("index utf8");
+    let root = session.root.to_str().expect("root utf8");
+    let output = run(
+        &session.bin,
+        &[
+            "--no-embed",
+            "--index-path",
+            index,
+            "--format",
+            "agent",
+            "process_request",
+            root,
+        ],
+    );
+    let value = assert_success(&output, "search");
+    assert!(value.get("hits").is_some() || value.get("hit_count").is_some() || value.get("q").is_some() || value.get("query").is_some());
+}
+
+#[test]
+fn capabilities_lists_all_clap_subcommands_and_siblings() {
+    let bin = asgrep_bin();
+    let caps = assert_success(&run(&bin, &["capabilities", "--json"]), "capabilities");
+    let names: Vec<_> = caps["commands"]
+        .as_array()
+        .expect("commands")
+        .iter()
+        .map(|c| c["name"].as_str().expect("name"))
+        .collect();
+    for required in [
+        "index", "status", "reindex", "search", "bench", "watch", "keyword", "semantic",
+        "chain", "capabilities", "version", "robot-docs", "doctor", "eval",
+    ] {
+        assert!(names.contains(&required), "missing command {required} in {names:?}");
+    }
+    assert!(caps["sibling_binaries"].as_array().unwrap().len() >= 2);
+    assert!(caps["integrations"]["mcp"]["binary"] == "asgrep-mcp");
+    assert!(caps["root_specification"]["canonical"]
+        .as_str()
+        .unwrap()
+        .contains("positional"));
+    let help = run(&bin, &["capabilities", "--help"]);
+    let help_text = String::from_utf8_lossy(&help.stdout);
+    assert!(
+        !help_text.contains("--ann-probes") && !help_text.contains("--rerank"),
+        "capabilities --help must not list search-tuning flags"
+    );
+    let root_help = run(&bin, &["--help"]);
+    let root_text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&root_help.stdout),
+        String::from_utf8_lossy(&root_help.stderr)
+    );
+    assert!(
+        root_text.contains("asgrep-mcp") && root_text.contains("asgrep-lsp"),
+        "root --help must surface sibling binaries"
+    );
+}
+
+#[test]
+fn edit_distance_two_typos_are_rejected_before_search() {
+    let bin = asgrep_bin();
+    // distance 2 from `index`
+    let output = run(&bin, &["--json", "indxx"]);
+    assert_eq!(output.status.code(), Some(1));
+    let value = parse_stdout(&output);
+    let msg = value["error"]["message"].as_str().expect("message");
+    assert!(
+        msg.contains("did you mean") && msg.contains("index"),
+        "expected edit-distance≤2 suggestion, got {msg}"
+    );
+}
+
+#[test]
+fn index_dry_run_does_not_mutate() {
+    let tmp = TempDir::new().expect("tempdir");
+    let root = tmp.path().join("proj");
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    std::fs::write(root.join("src/a.rs"), "fn hello() {}\n").unwrap();
+    let bin = asgrep_bin();
+    let out = run(
+        &bin,
+        &[
+            "--json",
+            "index",
+            "--dry-run",
+            root.to_str().expect("utf8"),
+        ],
+    );
+    let value = assert_success(&out, "index");
+    assert_eq!(value["dry_run"], true);
+    assert_eq!(value["mutates_index"], false);
+    assert!(!root.join(".asgrep").exists() || !root.join(".asgrep/index.db").exists());
+}

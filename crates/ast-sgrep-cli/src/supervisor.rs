@@ -90,9 +90,9 @@ pub fn worker_authenticate() -> bool {
 #[cfg(unix)]
 pub fn worker_start() {
     use nix::sys::signal;
-    use nix::unistd::{self, Pid};
     clear_internal_envs();
-    let _ = unistd::setpgid(Pid::this(), Pid::this());
+    // Parent owns process-group setup via CommandExt::process_group (rzzp).
+    // Worker only stops for the duty-cycle handshake.
     let _ = signal::raise(signal::Signal::SIGSTOP);
 }
 #[cfg(unix)]
@@ -190,12 +190,16 @@ mod unix_impl {
         cmd.stdin(std::process::Stdio::inherit());
         cmd.stdout(std::process::Stdio::inherit());
         cmd.stderr(std::process::Stdio::inherit());
+        // Single owner for process-group setup: child becomes its own PG leader at spawn (rzzp).
+        {
+            use std::os::unix::process::CommandExt;
+            cmd.process_group(0);
+        }
         let mut child = cmd.spawn().context("failed to spawn worker")?;
         // Pid::from_raw bridges std Child::id() into nix. Child ids are OS PIDs;
         // casting to i32 matches nix's Pid representation on supported unix targets (l115/732x).
         let child_pid = Pid::from_raw(child.id() as i32);
         let mut guard = ChildGuard::new(child_pid);
-        let _ = nix::unistd::setpgid(child_pid, child_pid);
         wait_for_child_stop(child_pid)?;
         let pgid_neg = Pid::from_raw(-child_pid.as_raw());
         loop {

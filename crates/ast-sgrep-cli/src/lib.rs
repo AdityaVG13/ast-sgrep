@@ -13,93 +13,120 @@ use clap::{Args, Parser, Subcommand};
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
-#[derive(Args)]
+#[derive(Args, Clone, Debug)]
 struct RootArg {
-    #[arg(default_value = ".")]
+    /// Project root (canonical form). Prefer this over --root when both would conflict.
+    #[arg(default_value = ".", help = "Project root directory")]
     root: PathBuf,
 }
-#[derive(Args)]
+#[derive(Args, Clone, Debug)]
 struct QueryRootArg {
+    /// Search query
+    #[arg(help = "Search query string")]
     query: String,
-    #[arg(default_value = ".")]
+    #[arg(default_value = ".", help = "Project root directory")]
     root: PathBuf,
+}
+/// Search/index tuning flags — scoped to search/index/bench, not global (vdqo).
+#[derive(Args, Clone, Debug, Default)]
+pub(crate) struct SearchTuning {
+    #[arg(long, env = "ASGREP_NO_EMBED", action = clap::ArgAction::SetTrue, value_parser = clap::builder::BoolishValueParser::new(), help = "Disable semantic embeddings")]
+    pub(crate) no_embed: bool,
+    #[arg(long, env = "ASGREP_CLOUD_EMBED", action = clap::ArgAction::SetTrue, value_parser = clap::builder::BoolishValueParser::new(), help = "Prefer cloud embeddings")]
+    pub(crate) cloud_embed: bool,
+    #[arg(long, env = "ASGREP_OLLAMA_EMBED", action = clap::ArgAction::SetTrue, value_parser = clap::builder::BoolishValueParser::new(), help = "Prefer Ollama embeddings")]
+    pub(crate) ollama_embed: bool,
+    #[arg(long, env = "ASGREP_NEURAL_EMBED", action = clap::ArgAction::SetTrue, value_parser = clap::builder::BoolishValueParser::new(), help = "Prefer local neural embeddings (needs neural-embed feature)")]
+    pub(crate) neural_embed: bool,
+    #[arg(long, env = "ASGREP_SEMANTIC_ONLY", action = clap::ArgAction::SetTrue, value_parser = clap::builder::BoolishValueParser::new(), help = "Force semantic-only search channel")]
+    pub(crate) semantic_only: bool,
+    #[arg(long, env = "ASGREP_TANTIVY", action = clap::ArgAction::SetTrue, value_parser = clap::builder::BoolishValueParser::new(), help = "Enable Tantivy lexical sidecar")]
+    pub(crate) tantivy: bool,
+    #[arg(long, env = "ASGREP_ANN_THRESHOLD", help = "Build IVF ANN when chunk count exceeds this")]
+    pub(crate) ann_threshold: Option<usize>,
+    #[arg(long, env = "ASGREP_ANN_PROBES", help = "IVF clusters to probe (0 = adaptive)")]
+    pub(crate) ann_probes: Option<usize>,
+    #[arg(long, env = "ASGREP_RERANK", action = clap::ArgAction::SetTrue, value_parser = clap::builder::BoolishValueParser::new(), help = "Rerank top candidates with local cross-encoder")]
+    pub(crate) rerank: bool,
+    #[arg(long, env = "ASGREP_RERANK_TOP_K", default_value_t = 20, help = "Candidates considered by --rerank")]
+    pub(crate) rerank_top_k: usize,
+    #[arg(long, value_name = "FORMAT", value_parser = parse_output_format, help = "Output format (implies --json): native|agent|agent-capsule|compact|github|gitlab")]
+    pub(crate) format: Option<String>,
+    #[arg(long, default_value = "0", value_name = "N", value_parser = parse_excerpt_lines, help = "Excerpt context lines around each hit")]
+    pub(crate) excerpt_lines: usize,
+    #[arg(long, default_value_t = DEFAULT_SNIPPET_TOKENS, value_parser = parse_snippet_tokens, help = "Per-result compact snippet token budget")]
+    pub(crate) snippet_tokens: usize,
+    #[arg(long, default_value_t = DEFAULT_RESPONSE_SNIPPET_TOKENS, value_parser = parse_response_snippet_tokens, help = "Response-wide compact snippet token budget")]
+    pub(crate) response_snippet_tokens: usize,
+}
+#[derive(Args, Clone, Debug)]
+struct IndexCmd {
+    #[command(flatten)]
+    root: RootArg,
+    #[command(flatten)]
+    tuning: SearchTuning,
+    #[arg(long, help = "Report planned index work without writing")]
+    dry_run: bool,
+}
+#[derive(Args, Clone, Debug)]
+struct QueryCmd {
+    #[command(flatten)]
+    query: QueryRootArg,
+    #[command(flatten)]
+    tuning: SearchTuning,
 }
 #[derive(Parser)]
 #[command(
     name = "asgrep",
     version,
     about = "Polyglot hybrid code search",
-    after_help = "Agent: asgrep capabilities --json | robot-docs guide | doctor --robot-triage\nExit: 0=ok 1=usage 2=fail"
+    after_help = "Agent triad: asgrep capabilities --json | robot-docs guide | doctor --robot-triage\nSibling binaries: asgrep-mcp (MCP stdio), asgrep-lsp (LSP)\nAlias: ast-sgrep\nExit: 0=ok 1=usage 2=fail\nRoot: positional ROOT is canonical; --root is an alias (conflict = usage error)"
 )]
 pub(crate) struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
-    #[arg(value_name = "QUERY")]
+    #[arg(value_name = "QUERY", help = "Bare hybrid search query (omit subcommand)")]
     query: Option<String>,
-    #[arg(id = "global-root", long = "root", global = true)]
+    #[arg(id = "global-root", long = "root", global = true, help = "Project root alias (conflicts with positional ROOT)")]
     root: Option<PathBuf>,
-    #[arg(long, global = true, env = "ASGREP_LIMIT", value_parser = parse_output_limit)]
+    #[arg(long, global = true, env = "ASGREP_LIMIT", value_parser = parse_output_limit, help = "Max results (1..=1000; 0 remapped to default)")]
     limit: Option<usize>,
-    #[arg(long, global = true)]
+    #[arg(long, global = true, help = "Emit machine JSON envelope on stdout")]
     json: bool,
     /// Print the agent handbook and exit
-    #[arg(long, global = true)]
+    #[arg(long, global = true, help = "Print robot-docs guide and exit")]
     robot_help: bool,
-    #[arg(long, global = true, env = "ASGREP_INDEX_PATH")]
+    #[arg(long, global = true, env = "ASGREP_INDEX_PATH", help = "Override index database path")]
     index_path: Option<PathBuf>,
-    #[arg(long, global = true)]
+    #[arg(long, global = true, help = "Language filter")]
     lang: Option<String>,
-    #[arg(long, global = true, env = "ASGREP_NO_EMBED", action = clap::ArgAction::SetTrue, value_parser = clap::builder::BoolishValueParser::new())]
-    no_embed: bool,
-    #[arg(long, global = true, env = "ASGREP_CLOUD_EMBED", action = clap::ArgAction::SetTrue, value_parser = clap::builder::BoolishValueParser::new())]
-    cloud_embed: bool,
-    #[arg(long, global = true, env = "ASGREP_OLLAMA_EMBED", action = clap::ArgAction::SetTrue, value_parser = clap::builder::BoolishValueParser::new())]
-    ollama_embed: bool,
-    /// Use local neural embeddings (fastembed/ONNX; needs `neural-embed` feature)
-    #[arg(long, global = true, env = "ASGREP_NEURAL_EMBED", action = clap::ArgAction::SetTrue, value_parser = clap::builder::BoolishValueParser::new())]
-    neural_embed: bool,
-    #[arg(long, global = true, env = "ASGREP_SEMANTIC_ONLY", action = clap::ArgAction::SetTrue, value_parser = clap::builder::BoolishValueParser::new())]
-    semantic_only: bool,
-    #[arg(long, global = true, env = "ASGREP_TANTIVY", action = clap::ArgAction::SetTrue, value_parser = clap::builder::BoolishValueParser::new())]
-    tantivy: bool,
-    #[arg(long, global = true, env = "ASGREP_ANN_THRESHOLD")]
-    ann_threshold: Option<usize>,
-    /// IVF clusters to probe (0 = adaptive, at most 90% populated; ≥ n_clusters = exact)
-    #[arg(long, global = true, env = "ASGREP_ANN_PROBES")]
-    ann_probes: Option<usize>,
-    /// Rerank fused top candidates with local ONNX cross-encoder (`rerank` feature)
-    #[arg(long, global = true, env = "ASGREP_RERANK", action = clap::ArgAction::SetTrue, value_parser = clap::builder::BoolishValueParser::new())]
-    rerank: bool,
-    #[arg(long, global = true, env = "ASGREP_RERANK_TOP_K", default_value_t = 20)]
-    rerank_top_k: usize,
-    #[arg(long, global = true, value_name = "FORMAT", value_parser = parse_output_format)]
-    format: Option<String>,
-    #[arg(long, global = true, default_value = "0", value_name = "N", value_parser = parse_excerpt_lines)]
-    excerpt_lines: usize,
-    /// Conservative UTF-8 token-unit ceiling per compact result
-    #[arg(long, global = true, default_value_t = DEFAULT_SNIPPET_TOKENS, value_parser = parse_snippet_tokens)]
-    snippet_tokens: usize,
-    /// Conservative UTF-8 token-unit ceiling across compact snippets
-    #[arg(long, global = true, default_value_t = DEFAULT_RESPONSE_SNIPPET_TOKENS, value_parser = parse_response_snippet_tokens)]
-    response_snippet_tokens: usize,
-    #[arg(value_name = "ROOT", default_value = ".")]
+    /// Search-tuning for bare (no-subcommand) search only — not inherited by capabilities/doctor (vdqo).
+    #[command(flatten)]
+    tuning: SearchTuning,
+    #[arg(value_name = "ROOT", default_value = ".", help = "Bare-search project root")]
     search_root: PathBuf,
 }
 #[derive(Subcommand)]
 enum Commands {
     /// Build or incrementally refresh an index
-    Index(RootArg),
+    #[command(about = "Build or incrementally refresh an index")]
+    Index(IndexCmd),
     /// Show index and embedding status
+    #[command(about = "Show index and embedding status")]
     Status(RootArg),
     /// Clear and rebuild an index
-    Reindex(RootArg),
+    #[command(about = "Clear and rebuild an index")]
+    Reindex(IndexCmd),
     /// Search explicitly; aliases: find, query
-    #[command(alias = "find", alias = "query")]
-    Search(QueryRootArg),
+    #[command(about = "Hybrid search (aliases: find, query)", alias = "find", alias = "query")]
+    Search(QueryCmd),
     /// Run fixed performance and identity suites
+    #[command(about = "Run fixed performance and identity suites")]
     Bench {
         #[command(flatten)]
         root: RootArg,
+        #[command(flatten)]
+        tuning: SearchTuning,
         #[arg(long, default_value = "process_request")]
         query: String,
         #[arg(long, default_value = "100")]
@@ -114,25 +141,33 @@ enum Commands {
         skip_index: bool,
     },
     /// Watch files and update the index incrementally
+    #[command(about = "Watch files and update the index incrementally")]
     Watch {
         #[command(flatten)]
         root: RootArg,
-        #[arg(long, default_value = "300")]
+        #[arg(long, default_value = "300", help = "Debounce window in milliseconds")]
         debounce_ms: u64,
     },
     /// Run lexical-only search
-    Keyword(QueryRootArg),
+    #[command(about = "Lexical-only (FTS/trigram) search")]
+    Keyword(QueryCmd),
     /// Run embedding-only search
-    Semantic(QueryRootArg),
+    #[command(about = "Embedding-only semantic search")]
+    Semantic(QueryCmd),
     /// Expand a bounded symbol/caller/import graph
+    #[command(about = "Expand a bounded symbol/caller/import graph")]
     Chain(QueryRootArg),
     /// Print the machine-readable CLI contract
+    #[command(about = "Print the machine-readable CLI contract (JSON)")]
     Capabilities(agent::CapabilitiesArgs),
     /// Print package and machine schema versions
+    #[command(about = "Print package and machine schema versions")]
     Version(VersionArgs),
     /// Print the agent handbook
+    #[command(about = "Print the agent handbook (robot-docs guide)")]
     RobotDocs(agent::RobotDocsArgs),
     /// Diagnose index health and return recovery commands
+    #[command(about = "Diagnose index health and return recovery commands")]
     Doctor {
         #[command(flatten)]
         root: RootArg,
@@ -140,6 +175,7 @@ enum Commands {
         args: agent::DoctorArgs,
     },
     /// Evaluate retrieval against a gold fixture
+    #[command(about = "Evaluate retrieval against a gold fixture")]
     Eval(eval::EvalArgs),
 }
 #[derive(Parser)]
@@ -262,7 +298,52 @@ pub fn run() -> anyhow::Result<()> {
 }
 impl Cli {
     fn search_machine_output(&self) -> bool {
-        self.json || self.format.is_some()
+        self.json || self.tuning.format.is_some()
+    }
+    /// Merge parent (pre-subcommand) tuning with subcommand-scoped tuning (vdqo).
+    /// Parent flags like `asgrep --format compact search ...` remain effective.
+    pub(crate) fn active_tuning(&self) -> SearchTuning {
+        let mut t = self.tuning.clone();
+        let overlay = match self.command.as_ref() {
+            Some(Commands::Index(c) | Commands::Reindex(c)) => Some(&c.tuning),
+            Some(Commands::Search(c) | Commands::Keyword(c) | Commands::Semantic(c)) => {
+                Some(&c.tuning)
+            }
+            Some(Commands::Bench { tuning, .. }) => Some(tuning),
+            _ => None,
+        };
+        if let Some(o) = overlay {
+            t.no_embed |= o.no_embed;
+            t.cloud_embed |= o.cloud_embed;
+            t.ollama_embed |= o.ollama_embed;
+            t.neural_embed |= o.neural_embed;
+            t.semantic_only |= o.semantic_only;
+            t.tantivy |= o.tantivy;
+            t.rerank |= o.rerank;
+            if o.ann_threshold.is_some() {
+                t.ann_threshold = o.ann_threshold;
+            }
+            if o.ann_probes.is_some() {
+                t.ann_probes = o.ann_probes;
+            }
+            if o.format.is_some() {
+                t.format = o.format.clone();
+            }
+            // Prefer explicitly scoped non-default numeric budgets; keep parent pre-subcommand values otherwise.
+            if o.rerank_top_k != 20 {
+                t.rerank_top_k = o.rerank_top_k;
+            }
+            if o.excerpt_lines != 0 {
+                t.excerpt_lines = o.excerpt_lines;
+            }
+            if o.snippet_tokens != DEFAULT_SNIPPET_TOKENS {
+                t.snippet_tokens = o.snippet_tokens;
+            }
+            if o.response_snippet_tokens != DEFAULT_RESPONSE_SNIPPET_TOKENS {
+                t.response_snippet_tokens = o.response_snippet_tokens;
+            }
+        }
+        t
     }
     fn machine_output_requested(&self) -> bool {
         self.search_machine_output()
@@ -402,10 +483,18 @@ fn run_cli(cli: &Cli) -> anyhow::Result<()> {
         agent::print_robot_guide();
         return Ok(());
     }
-    if cli.format.is_some()
+    if cli.active_tuning().format.is_some()
         && !matches!(
             cli.command.as_ref(),
-            None | Some(Commands::Search(_) | Commands::Keyword(_) | Commands::Semantic(_))
+            None
+                | Some(
+                    Commands::Search(_)
+                        | Commands::Keyword(_)
+                        | Commands::Semantic(_)
+                        | Commands::Index(_)
+                        | Commands::Reindex(_)
+                        | Commands::Bench { .. }
+                )
         )
     {
         return Err(usage_error(
@@ -419,13 +508,23 @@ fn run_cli(cli: &Cli) -> anyhow::Result<()> {
 }
 fn run_command(cli: &Cli, command: &Commands) -> anyhow::Result<()> {
     match command {
-        Commands::Index(r) => with_index(
-            "index",
-            &r.root,
-            cli,
-            |i| i.index_all().context("indexing failed"),
-            print_index_stats,
-        ),
+        Commands::Index(c) => {
+            if c.dry_run {
+                return run_index_dry_run("index", &c.root.root, cli);
+            }
+            with_index(
+                "index",
+                &c.root.root,
+                cli,
+                |i| {
+                    if !cli.json {
+                        eprintln!("asgrep: indexing {} ...", c.root.root.display());
+                    }
+                    i.index_all().context("indexing failed")
+                },
+                print_index_stats,
+            )
+        }
         Commands::Status(r) => {
             let st = open_indexer(&r.root, cli)?
                 .store()
@@ -433,14 +532,24 @@ fn run_command(cli: &Cli, command: &Commands) -> anyhow::Result<()> {
                 .context("failed to read status")?;
             print_json_or(cli.json, "status", &st, || print_status(&st))
         }
-        Commands::Reindex(r) => with_index(
-            "reindex",
-            &r.root,
-            cli,
-            |i| i.reindex_all().context("reindex failed"),
-            print_index_stats,
-        ),
-        Commands::Search(q) => run_search(&q.root, cli, &q.query, false),
+        Commands::Reindex(c) => {
+            if c.dry_run {
+                return run_index_dry_run("reindex", &c.root.root, cli);
+            }
+            with_index(
+                "reindex",
+                &c.root.root,
+                cli,
+                |i| {
+                    if !cli.json {
+                        eprintln!("asgrep: reindexing {} ...", c.root.root.display());
+                    }
+                    i.reindex_all().context("reindex failed")
+                },
+                print_index_stats,
+            )
+        }
+        Commands::Search(q) => run_search(&q.query.root, cli, &q.query.query, false),
         Commands::Bench {
             root,
             query,
@@ -449,6 +558,7 @@ fn run_command(cli: &Cli, command: &Commands) -> anyhow::Result<()> {
             fixture,
             queries_file,
             skip_index,
+            ..
         } => run_bench_command(
             &root.root,
             cli,
@@ -460,8 +570,8 @@ fn run_command(cli: &Cli, command: &Commands) -> anyhow::Result<()> {
             *skip_index,
         ),
         Commands::Watch { root, debounce_ms } => run_watch(&root.root, cli, *debounce_ms),
-        Commands::Keyword(q) => run_keyword_search(&q.root, cli, &q.query),
-        Commands::Semantic(q) => run_search(&q.root, cli, &q.query, true),
+        Commands::Keyword(q) => run_keyword_search(&q.query.root, cli, &q.query.query),
+        Commands::Semantic(q) => run_search(&q.query.root, cli, &q.query.query, true),
         Commands::Chain(q) => run_chain(&q.root, cli, &q.query),
         Commands::Capabilities(args) => agent::run_capabilities(cli, args),
         Commands::Version(args) => run_version(cli, args),
@@ -524,13 +634,86 @@ fn ensure_existing_root(root: &Path, cli: &Cli) -> anyhow::Result<PathBuf> {
     }
     Ok(root)
 }
+fn run_index_dry_run(command: &str, root: &Path, cli: &Cli) -> anyhow::Result<()> {
+    let root = ensure_existing_root(root, cli)?;
+    let mut files = 0usize;
+    let mut skipped = 0usize;
+    fn walk(dir: &Path, files: &mut usize, skipped: &mut usize) {
+        let Ok(rd) = std::fs::read_dir(dir) else { return };
+        for entry in rd.flatten() {
+            let path = entry.path();
+            let Ok(ft) = entry.file_type() else { continue };
+            if ft.is_dir() {
+                let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
+                if matches!(name, ".git" | "node_modules" | "target" | ".asgrep") {
+                    continue;
+                }
+                walk(&path, files, skipped);
+            } else if ft.is_file() {
+                let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("");
+                if matches!(
+                    ext,
+                    "rs" | "py" | "js" | "ts" | "tsx" | "jsx" | "go" | "java" | "kt" | "kts"
+                        | "c" | "h" | "cc" | "cpp" | "hpp" | "cs" | "rb" | "php"
+                ) {
+                    *files += 1;
+                } else {
+                    *skipped += 1;
+                }
+            }
+        }
+    }
+    walk(&root, &mut files, &mut skipped);
+    if !cli.json {
+        eprintln!(
+            "asgrep: dry-run scanned {files} candidate files under {}",
+            root.display()
+        );
+    }
+    let payload = serde_json::json!({
+        "dry_run": true,
+        "root": root,
+        "files_would_index": files,
+        "files_skipped": skipped,
+        "mutates_index": false,
+        "cancel_semantics": "SIGINT during a real index leaves the previous index if build-then-swap succeeds; dry-run never writes"
+    });
+    if cli.json {
+        print_machine_json(command, payload)
+    } else {
+        println!(
+            "dry-run {command}: would consider {files} files ({skipped} skipped) under {}",
+            root.display()
+        );
+        Ok(())
+    }
+}
 fn open_indexer(root: &Path, cli: &Cli) -> anyhow::Result<Indexer> {
     ensure_existing_root(root, cli)?;
-    Indexer::new(index_options(root, cli)).context("failed to open index")
+    {
+        let opts = index_options(root, cli);
+        let db = index_db_path(&opts.root, opts.index_path.as_deref()).unwrap_or_else(|_| opts.root.join(".asgrep/index.db"));
+        Indexer::new(opts).with_context(|| {
+            format!(
+                "failed to open index at {} (root {})",
+                db.display(),
+                root.display()
+            )
+        })
+    }
 }
 fn open_searcher(root: &Path, cli: &Cli) -> anyhow::Result<Searcher> {
     let root = ensure_existing_root(root, cli)?;
-    let searcher = Searcher::new(search_options(&root, cli)).context("failed to open index")?;
+    let opts = search_options(&root, cli);
+    let db = index_db_path(&opts.root, opts.index_path.as_deref())
+        .unwrap_or_else(|_| opts.root.join(".asgrep/index.db"));
+    let searcher = Searcher::new(opts).with_context(|| {
+        format!(
+            "failed to open index at {} (root {})",
+            db.display(),
+            root.display()
+        )
+    })?;
     if searcher.store().status()?.file_count == 0 {
         anyhow::bail!(
             "index is empty for {}; run: asgrep index {} --json",
@@ -593,7 +776,7 @@ fn run_keyword_search(root: &Path, cli: &Cli, query: &str) -> anyhow::Result<()>
         }
         return Ok(());
     }
-    let format = match cli.format.as_deref() {
+    let format = match cli.active_tuning().format.as_deref() {
         Some(raw) => ast_sgrep_plugins::OutputFormat::parse(raw).ok_or_else(|| {
             usage_error(format!(
                 "unknown output format {raw:?}; expected native, agent, agent-capsule, compact, github, or gitlab"
@@ -605,7 +788,7 @@ fn run_keyword_search(root: &Path, cli: &Cli, query: &str) -> anyhow::Result<()>
 }
 
 fn run_search(root: &Path, cli: &Cli, query: &str, semantic: bool) -> anyhow::Result<()> {
-    let ctx = if semantic || cli.semantic_only {
+    let ctx = if semantic || cli.active_tuning().semantic_only {
         "semantic search failed"
     } else {
         "search failed"
@@ -618,12 +801,13 @@ fn run_search(root: &Path, cli: &Cli, query: &str, semantic: bool) -> anyhow::Re
         }
         return Ok(());
     }
-    let default = if semantic || cli.semantic_only {
+    let tuning = cli.active_tuning();
+    let default = if semantic || tuning.semantic_only {
         ast_sgrep_plugins::OutputFormat::Agent
     } else {
         ast_sgrep_plugins::OutputFormat::Native
     };
-    let format = match cli.format.as_deref() {
+    let format = match tuning.format.as_deref() {
         Some(raw) => ast_sgrep_plugins::OutputFormat::parse(raw).ok_or_else(|| {
             usage_error(format!(
                 "unknown output format {raw:?}; expected native, agent, agent-capsule, compact, github, or gitlab"
@@ -632,7 +816,7 @@ fn run_search(root: &Path, cli: &Cli, query: &str, semantic: bool) -> anyhow::Re
         None => default,
     };
     print_search_response(
-        if semantic || cli.semantic_only {
+        if semantic || tuning.semantic_only {
             "semantic"
         } else {
             "search"
@@ -651,10 +835,10 @@ fn print_search_response(
     let value = ast_sgrep_plugins::format_response_with_budget(
         response,
         format,
-        cli.excerpt_lines,
+        cli.active_tuning().excerpt_lines,
         ast_sgrep_plugins::CompactBudget {
-            per_result_tokens: cli.snippet_tokens,
-            response_tokens: cli.response_snippet_tokens,
+            per_result_tokens: cli.active_tuning().snippet_tokens,
+            response_tokens: cli.active_tuning().response_snippet_tokens,
         },
     );
     print_machine_json_with_style(
@@ -680,40 +864,42 @@ fn print_json_or<T: serde::Serialize>(
 }
 pub(crate) fn index_options(root: &Path, cli: &Cli) -> IndexOptions {
     let (root, index_path) = resolve_root_index(cli, root);
+    let t = cli.active_tuning();
     IndexOptions {
         root,
         index_path,
         lang_filter: cli.lang.clone(),
         respect_gitignore: true,
-        use_tantivy: cli.tantivy,
-        embed_semantic: !cli.no_embed,
+        use_tantivy: t.tantivy,
+        embed_semantic: !t.no_embed,
         embed_backend: EmbedBackend::from_flags(
-            cli.cloud_embed,
-            cli.ollama_embed,
-            cli.neural_embed,
-            cli.semantic_only,
+            t.cloud_embed,
+            t.ollama_embed,
+            t.neural_embed,
+            t.semantic_only,
         ),
         force_reindex: false,
-        ann_threshold: cli.ann_threshold,
+        ann_threshold: t.ann_threshold,
     }
 }
 pub(crate) fn search_options(root: &Path, cli: &Cli) -> SearchOptions {
     let (root, index_path) = resolve_root_index(cli, root);
+    let t = cli.active_tuning();
     SearchOptions {
         root,
         index_path,
         limit: cli.limit.unwrap_or_else(SearchOptions::default_limit),
         lang_filter: cli.lang.clone(),
-        use_embed: !cli.no_embed,
-        use_tantivy: cli.tantivy,
-        use_cloud_embed: cli.cloud_embed,
-        use_ollama_embed: cli.ollama_embed,
-        use_neural_embed: cli.neural_embed,
-        use_semantic_only: cli.semantic_only,
-        ann_threshold: cli.ann_threshold,
-        ann_probes: cli.ann_probes,
-        use_rerank: cli.rerank,
-        rerank_top_k: cli.rerank_top_k,
+        use_embed: !t.no_embed,
+        use_tantivy: t.tantivy,
+        use_cloud_embed: t.cloud_embed,
+        use_ollama_embed: t.ollama_embed,
+        use_neural_embed: t.neural_embed,
+        use_semantic_only: t.semantic_only,
+        ann_threshold: t.ann_threshold,
+        ann_probes: t.ann_probes,
+        use_rerank: t.rerank,
+        rerank_top_k: t.rerank_top_k,
         ..SearchOptions::default()
     }
 }
@@ -749,7 +935,7 @@ fn maybe_index(root: &Path, cli: &Cli, skip: bool) -> anyhow::Result<(Option<Ind
 }
 fn bench_searcher(root: &Path, cli: &Cli, skip_index: bool) -> anyhow::Result<Searcher> {
     let (resolved, index_path) = resolve_root_index(cli, root);
-    let db = index_db_path(&resolved, index_path.as_deref());
+    let db = index_db_path(&resolved, index_path.as_deref())?;
     if skip_index && !db.exists() {
         anyhow::bail!(
             "failed to open existing index at {} (run `asgrep index` first)",
@@ -772,7 +958,7 @@ fn do_search_with_cli(
     cli: &Cli,
 ) -> anyhow::Result<SearchResponse> {
     // `--semantic-only` / ASGREP_SEMANTIC_ONLY forces the semantic channel (ziij).
-    do_search(s, q, semantic || cli.semantic_only)
+    do_search(s, q, semantic || cli.active_tuning().semantic_only)
 }
 fn timed_searches(
     s: &Searcher,
@@ -986,7 +1172,7 @@ fn run_bench(
 ) -> anyhow::Result<()> {
     let (stats_opt, index_ms) = maybe_index(root, cli, skip_index)?;
     let searcher = bench_searcher(root, cli, skip_index)?;
-    let (times, last) = timed_searches(&searcher, query, cli.semantic_only, iterations)?;
+    let (times, last) = timed_searches(&searcher, query, cli.active_tuning().semantic_only, iterations)?;
     let hits = last.as_ref().map_or(0, |r| r.hits.len());
     let avg = times.iter().sum::<f64>() / f64::from(iterations.max(1));
     let first = times.first().copied().unwrap_or_default();
@@ -1047,7 +1233,7 @@ fn run_bench_batch(
     let searcher = bench_searcher(root, cli, skip_index)?;
     let mut results = Vec::with_capacity(queries.len());
     for query in &queries {
-        let (mut samples, last) = timed_searches(&searcher, query, cli.semantic_only, iterations)?;
+        let (mut samples, last) = timed_searches(&searcher, query, cli.active_tuning().semantic_only, iterations)?;
         samples.sort_by(f64::total_cmp);
         let avg = samples.iter().sum::<f64>() / f64::from(iterations.max(1));
         let p50 = if samples.is_empty() {
