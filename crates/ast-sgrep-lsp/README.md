@@ -8,7 +8,9 @@
 asgrep-lsp --stdio
 ```
 
-The client should set the workspace root with `workspaceFolders` or `rootUri`. Indexing starts after `initialize`. `workspace/symbol` returns an empty list until the initial pass is ready. Other index-backed read requests never wait behind indexing: while the serialized index lock is busy, they return a retryable `index is currently being updated; retry the request` error. Clients should retry after progress or the next edit; partial index results are not returned. The backend retains the latest 64 index-write lock-hold samples and exposes their p99 through `index_hold_p99` for load diagnostics.
+The client should set the workspace root with `workspaceFolders` or `rootUri`. Indexing starts after `initialize` on a background thread. `index_ready` becomes true only after a successful full `index_all` (that background pass or an `asgrep.reindex` / `ensure_index` call). Single-file open/change/save indexing does not flip readiness.
+
+Index reads and writes share one **blocking** `Mutex`. While a full reindex or document sync holds the lock, other index-backed requests wait on that mutex; the server does **not** implement `try_lock`, retryable "index is currently being updated" busy errors, or an `index_hold_p99` metric. Unsaved editor buffers are retained in memory and re-applied after every full disk `index_all` so background reindex cannot clobber dirty content. Document sync failures (`didOpen` / `didChange` / `didSave`) are reported to the client with `window/showMessage` (error) rather than swallowed.
 
 ## Standard LSP capabilities
 
@@ -60,4 +62,4 @@ Options may be passed directly or nested under `asgrep`:
 
 Supported keys are `noEmbed`, `cloudEmbed`, `ollamaEmbed`, `semanticOnly`, `embedBackend`, `annThreshold`, and `indexPath`. File URIs and LSP positions use standard percent-encoding and UTF-16 character offsets.
 
-The integration test in `tests/lsp.rs` is an executable client transcript: it launches the binary, frames JSON-RPC over stdio, initializes a fixture workspace, and verifies native search, workspace symbols, definition, references, and shutdown.
+Focused regression coverage lives in `tests/lsp.rs` (backend unit tests for readiness, dirty-buffer reapply, text-edit errors, and navigation).

@@ -1,7 +1,7 @@
 use crate::backend::LspBackend;
 use crate::support::{
     canonicalize_workspace_root, file_uri_to_path, read_message, send_error, send_response,
-    AsgrepSettings,
+    write_message, AsgrepSettings,
 };
 use crate::types::{
     CallHierarchyItemParams, CallHierarchyPrepareParams, DocumentSymbolParams,
@@ -53,7 +53,7 @@ impl LspServer {
                     break;
                 }
             } else if let Ok(notif) = serde_json::from_str::<NotificationMessage>(&body) {
-                self.handle_notification(notif)?;
+                self.handle_notification(&mut stdout, notif)?;
             }
         }
         Ok(())
@@ -72,7 +72,11 @@ impl LspServer {
         }
         Ok(())
     }
-    fn handle_notification(&mut self, notif: NotificationMessage) -> io::Result<()> {
+    fn handle_notification(
+        &mut self,
+        stdout: &mut impl Write,
+        notif: NotificationMessage,
+    ) -> io::Result<()> {
         match notif.method.as_str() {
             "initialized" => {}
             "textDocument/didOpen" => {
@@ -80,9 +84,13 @@ impl LspServer {
                     &self.backend,
                     serde_json::from_value::<crate::types::DidOpenTextDocumentParams>(notif.params),
                 ) {
-                    if let Ok(rel) = crate::support::uri_to_rel_path(&p.text_document.uri, b.root())
-                    {
-                        let _ = b.index_content(&rel, &p.text_document.text);
+                    match crate::support::uri_to_rel_path(&p.text_document.uri, b.root()) {
+                        Ok(rel) => {
+                            if let Err(e) = b.index_content(&rel, &p.text_document.text) {
+                                show_index_error(stdout, "didOpen", &e)?;
+                            }
+                        }
+                        Err(e) => show_index_error(stdout, "didOpen", &e)?,
                     }
                 }
             }
@@ -91,9 +99,13 @@ impl LspServer {
                     &self.backend,
                     serde_json::from_value::<crate::types::DidSaveTextDocumentParams>(notif.params),
                 ) {
-                    if let Ok(rel) = crate::support::uri_to_rel_path(&p.text_document.uri, b.root())
-                    {
-                        let _ = b.reindex_file(&rel);
+                    match crate::support::uri_to_rel_path(&p.text_document.uri, b.root()) {
+                        Ok(rel) => {
+                            if let Err(e) = b.reindex_file(&rel) {
+                                show_index_error(stdout, "didSave", &e)?;
+                            }
+                        }
+                        Err(e) => show_index_error(stdout, "didSave", &e)?,
                     }
                 }
             }
@@ -104,7 +116,10 @@ impl LspServer {
                         notif.params,
                     ),
                 ) {
-                    let _ = b.apply_document_changes(&p.text_document.uri, &p.content_changes);
+                    if let Err(e) = b.apply_document_changes(&p.text_document.uri, &p.content_changes)
+                    {
+                        show_index_error(stdout, "didChange", &e)?;
+                    }
                 }
             }
             "exit" => self.shutdown = true,
@@ -199,6 +214,21 @@ fn resolve_root(params: &InitializeParams) -> PathBuf {
         })
         .or_else(|| params.root_path.as_ref().map(PathBuf::from))
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
+}
+fn show_index_error(stdout: &mut impl Write, surface: &str, err: &anyhow::Error) -> io::Result<()> {
+    let message = format!("asgrep index ({surface}): {err}");
+    log(&message);
+    // Notifications have no JSON-RPC response; surface via window/showMessage
+    // so clients see index failures instead of silent Ok (ast-sgrep-x46g).
+    write_message(
+        stdout,
+        &serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "window/showMessage",
+            "params": { "type": 1, "message": message }
+        })
+        .to_string(),
+    )
 }
 pub fn log(msg: &str) {
     let _ = writeln!(io::stderr(), "[asgrep-lsp] {msg}");

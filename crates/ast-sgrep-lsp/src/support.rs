@@ -237,9 +237,12 @@ pub fn utf16_char_to_byte(line: &str, utf16_offset: u32) -> usize {
     }
     line.len()
 }
-pub fn apply_text_edit(content: &str, change: &TextDocumentContentChangeEvent) -> String {
+pub fn apply_text_edit(
+    content: &str,
+    change: &TextDocumentContentChangeEvent,
+) -> anyhow::Result<String> {
     let Some(range) = &change.range else {
-        return change.text.clone();
+        return Ok(change.text.clone());
     };
     let start = pos_to_byte(content, &range.start);
     let end = change.range_length.map_or_else(
@@ -247,13 +250,16 @@ pub fn apply_text_edit(content: &str, change: &TextDocumentContentChangeEvent) -
         |len| utf16_span_end(content, &range.start, len),
     );
     if start > end || end > content.len() {
-        return content.to_string();
+        anyhow::bail!(
+            "invalid text edit range: start={start} end={end} len={}",
+            content.len()
+        );
     }
     let mut out = String::with_capacity(content.len().saturating_add(change.text.len()));
     out.push_str(&content[..start]);
     out.push_str(&change.text);
     out.push_str(&content[end..]);
-    out
+    Ok(out)
 }
 fn utf16_span_end(content: &str, start: &Position, utf16_len: u32) -> usize {
     // Check length before consuming a char (same shape as utf16_char_to_byte).
@@ -288,10 +294,14 @@ pub fn extract_identifier_at(line: &str, byte_offset: usize) -> Option<String> {
     (!ident.is_empty()).then(|| ident.to_string())
 }
 fn ident_idx(chars: &[(usize, char)], byte_offset: usize) -> Option<usize> {
+    // Empty line → chars=[] must not index (ast-sgrep-lsp-state-zblv.1 / epic acceptance).
+    if chars.is_empty() {
+        return None;
+    }
     let mut idx = chars
         .iter()
         .position(|(o, _)| *o >= byte_offset)
-        .unwrap_or_else(|| chars.len().saturating_sub(1));
+        .unwrap_or(chars.len() - 1);
     if !is_ident(chars[idx].1) && idx > 0 {
         idx -= 1;
     }

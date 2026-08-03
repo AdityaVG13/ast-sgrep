@@ -10,6 +10,7 @@ use crate::types::{
 };
 use ast_sgrep_core::{IndexOptions, Indexer, SearchOptions, Searcher};
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -20,6 +21,10 @@ pub struct LspBackend {
     index_ready: Arc<AtomicBool>,
     background_index_started: bool,
     index_lock: Arc<Mutex<()>>,
+    /// Unsaved (or open) document text keyed by workspace-relative path.
+    /// Re-applied after every full disk `index_all` so background reindex
+    /// cannot clobber editor buffers (ast-sgrep-lsp-state-zblv.3).
+    dirty_buffers: Arc<Mutex<HashMap<String, String>>>,
 }
 fn first_cmd_arg(p: &ExecuteCommandParams) -> &str {
     p.arguments.first().and_then(|v| v.as_str()).unwrap_or("")
@@ -33,6 +38,7 @@ impl LspBackend {
             index_ready: Arc::new(AtomicBool::new(false)),
             background_index_started: false,
             index_lock: Arc::new(Mutex::new(())),
+            dirty_buffers: Arc::new(Mutex::new(HashMap::new())),
         }
     }
     pub fn apply_settings(&mut self, settings: AsgrepSettings) {
@@ -69,10 +75,6 @@ impl LspBackend {
         self.settings.apply_to_search_options(&mut opts);
         opts
     }
-    fn record_index_result<T>(&self, result: anyhow::Result<T>) -> anyhow::Result<T> {
-        self.index_ready.store(result.is_ok(), Ordering::SeqCst);
-        result
-    }
     fn with_index_lock<T>(&self, f: impl FnOnce() -> anyhow::Result<T>) -> anyhow::Result<T> {
         let _g = self
             .index_lock
@@ -84,10 +86,12 @@ impl LspBackend {
     where
         F: FnOnce(&mut Indexer) -> anyhow::Result<T>,
     {
-        self.record_index_result(self.with_index_lock(|| {
+        // Intentionally does NOT touch `index_ready`. Ready means a successful
+        // full `index_all` only (ast-sgrep-lsp-state-zblv.2).
+        self.with_index_lock(|| {
             let mut indexer = Indexer::new(self.index_options())?;
             f(&mut indexer)
-        }))
+        })
     }
     fn with_store<F, T>(&self, f: F) -> anyhow::Result<T>
     where
@@ -108,6 +112,37 @@ impl LspBackend {
             .map(|h| location_value(&self.root, &h.file, h.line_start, h.line_end))
             .collect())
     }
+    fn remember_dirty(&self, rel: &str, content: &str) -> anyhow::Result<()> {
+        self.dirty_buffers
+            .lock()
+            .map_err(|e| anyhow::anyhow!("dirty buffer lock poisoned: {e}"))?
+            .insert(rel.to_string(), content.to_string());
+        Ok(())
+    }
+    fn forget_dirty(&self, rel: &str) -> anyhow::Result<()> {
+        self.dirty_buffers
+            .lock()
+            .map_err(|e| anyhow::anyhow!("dirty buffer lock poisoned: {e}"))?
+            .remove(rel);
+        Ok(())
+    }
+    fn run_full_index(
+        opts: IndexOptions,
+        dirty: &Mutex<HashMap<String, String>>,
+    ) -> anyhow::Result<()> {
+        let mut indexer = Indexer::new(opts)?;
+        indexer.index_all()?;
+        let snapshot: Vec<(String, String)> = dirty
+            .lock()
+            .map_err(|e| anyhow::anyhow!("dirty buffer lock poisoned: {e}"))?
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        for (rel, content) in snapshot {
+            indexer.index_content(&rel, &content)?;
+        }
+        Ok(())
+    }
     pub fn start_background_index(&mut self) {
         if self.background_index_started {
             return;
@@ -117,13 +152,12 @@ impl LspBackend {
         let opts = self.index_options();
         let ready = Arc::clone(&self.index_ready);
         let lock = Arc::clone(&self.index_lock);
+        let dirty = Arc::clone(&self.dirty_buffers);
         std::thread::spawn(move || {
             let Ok(_g) = lock.lock() else {
                 return;
             };
-            let ok = Indexer::new(opts)
-                .and_then(|mut i| i.index_all().map(|_| ()))
-                .is_ok();
+            let ok = Self::run_full_index(opts, dirty.as_ref()).is_ok();
             ready.store(ok, Ordering::SeqCst);
             if !ok {
                 crate::server::log("background index failed");
@@ -131,25 +165,28 @@ impl LspBackend {
         });
     }
     pub fn ensure_index(&self) -> anyhow::Result<()> {
-        self.with_locked_indexer(|i| {
-            i.index_all()?;
-            Ok(())
-        })?;
-        self.index_ready.store(true, Ordering::SeqCst);
-        Ok(())
+        let result = self.with_index_lock(|| {
+            Self::run_full_index(self.index_options(), self.dirty_buffers.as_ref())
+        });
+        // Full index only: success → ready; failure → not ready.
+        self.index_ready.store(result.is_ok(), Ordering::SeqCst);
+        result
     }
     pub fn reindex_file(&self, rel: &str) -> anyhow::Result<()> {
         self.with_locked_indexer(|i| {
             let abs = self.root.join(rel);
-            if abs.is_file() {
-                i.index_file(&abs, rel)?;
+            if !abs.is_file() {
+                anyhow::bail!("file not found for reindex: {rel}");
             }
+            i.index_file(&abs, rel)?;
+            self.forget_dirty(rel)?;
             Ok(())
         })
     }
     pub fn index_content(&self, rel: &str, content: &str) -> anyhow::Result<()> {
         self.with_locked_indexer(|i| {
             i.index_content(rel, content)?;
+            self.remember_dirty(rel, content)?;
             Ok(())
         })
     }
@@ -167,12 +204,13 @@ impl LspBackend {
                 .unwrap_or_default();
             for c in changes {
                 content = if c.range.is_some() {
-                    apply_text_edit(&content, c)
+                    apply_text_edit(&content, c)?
                 } else {
                     c.text.clone()
                 };
             }
             indexer.index_content(&rel, &content)?;
+            self.remember_dirty(&rel, &content)?;
             Ok(())
         })
     }

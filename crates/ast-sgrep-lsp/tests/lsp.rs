@@ -1,10 +1,11 @@
-use ast_sgrep_lsp::backend::path_to_uri;
-use ast_sgrep_lsp::support::apply_text_edit;
+use ast_sgrep_lsp::backend::{path_to_uri, LspBackend};
+use ast_sgrep_lsp::support::{apply_text_edit, extract_identifier_at};
 use ast_sgrep_lsp::types::{
     ExecuteCommandParams, Position, Range, ReferenceContext, ReferenceParams,
     TextDocumentContentChangeEvent, TextDocumentIdentifier, TextDocumentPositionParams,
 };
 use ast_sgrep_testkit::sample_backend;
+use std::fs;
 #[test]
 fn lsp_smoke() {
     let (_indexed, backend) = sample_backend();
@@ -70,6 +71,7 @@ fn pure_insertion_preserves_following_char() {
                 text: text.to_string(),
             },
         )
+        .unwrap()
     };
     // ASCII insertion at start: must not eat 'h'.
     assert_eq!(insert_at(0, 0, "hello", "X"), "Xhello");
@@ -100,7 +102,8 @@ fn nonzero_range_length_replaces_correct_span() {
             range_length: Some(2),
             text: "XY".to_string(),
         },
-    );
+    )
+    .unwrap();
     assert_eq!(out, "hXYlo");
 }
 
@@ -188,4 +191,136 @@ fn uppercase_symbol_resolves_through_definition_and_reference_endpoints() {
     assert!(with_declaration
         .iter()
         .any(|location| location["range"]["start"]["line"] == 1));
+}
+
+// ast-sgrep-lsp-state-zblv.2: single-file index success must not set index_ready.
+#[test]
+fn single_file_index_does_not_mark_index_ready() {
+    let (indexed, _) = sample_backend();
+    let root = indexed.indexer.store().root().to_path_buf();
+    let index_path = indexed.indexer.store().db_path().to_path_buf();
+    let mut backend = LspBackend::new(root);
+    backend.set_index_path(index_path);
+    assert!(!backend.is_index_ready());
+    backend
+        .index_content("src/main.rs", "fn only_single_file() {}\n")
+        .unwrap();
+    assert!(
+        !backend.is_index_ready(),
+        "single-file index_content must not flip index_ready"
+    );
+}
+
+// ast-sgrep-lsp-state-zblv.2 + x46g: missing reindex_file errors and must not clear ready.
+#[test]
+fn missing_reindex_file_errors_without_clearing_ready() {
+    let (_indexed, backend) = sample_backend();
+    assert!(backend.is_index_ready());
+    let err = backend
+        .reindex_file("no/such/file.rs")
+        .expect_err("missing file must not Ok");
+    assert!(
+        err.to_string().contains("file not found"),
+        "unexpected error: {err}"
+    );
+    assert!(backend.is_index_ready());
+}
+
+// ast-sgrep-lsp-state-zblv.3: dirty buffer survives full disk index_all.
+#[test]
+fn dirty_buffer_survives_full_disk_reindex() {
+    let (_indexed, backend) = sample_backend();
+    let rel = "src/main.rs";
+    let path = backend.root().join(rel);
+    let original = fs::read_to_string(&path).expect("read fixture");
+    let uri = path_to_uri(&path);
+    let marker = "dirty_buffer_unique_marker_zblv3";
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        backend
+            .apply_document_changes(
+                &uri,
+                &[TextDocumentContentChangeEvent {
+                    range: None,
+                    range_length: None,
+                    text: format!("fn {marker}() {{}}\nfn main() {{ {marker}(); }}\n"),
+                }],
+            )
+            .unwrap();
+        // Disk still has the old on-disk sample; full reindex must re-apply dirty text.
+        fs::write(&path, "fn main() {}\n").unwrap();
+        backend.ensure_index().unwrap();
+        assert!(backend.is_index_ready());
+        let hits = backend.search(marker, false, 16).unwrap();
+        let hits = hits["hits"].as_array().unwrap();
+        assert!(
+            hits.iter()
+                .any(|h| h["excerpt"].as_str().unwrap_or("").contains(marker)),
+            "dirty buffer content lost after disk index_all: {hits:?}"
+        );
+    }));
+    fs::write(&path, original).expect("restore fixture");
+    if let Err(payload) = result {
+        std::panic::resume_unwind(payload);
+    }
+}
+
+// ast-sgrep-x46g: invalid edit range must Err, not silently return original content.
+#[test]
+fn invalid_text_edit_range_returns_error() {
+    let err = apply_text_edit(
+        "hello",
+        &TextDocumentContentChangeEvent {
+            range: Some(Range {
+                start: Position {
+                    line: 0,
+                    character: 4,
+                },
+                end: Position {
+                    line: 0,
+                    character: 1,
+                },
+            }),
+            range_length: None,
+            text: "X".into(),
+        },
+    )
+    .expect_err("inverted range must error");
+    assert!(
+        err.to_string().contains("invalid text edit range"),
+        "unexpected error: {err}"
+    );
+}
+
+// Epic acceptance / zblv.1: blank-line navigation must not panic.
+#[test]
+fn blank_line_navigation_does_not_panic() {
+    assert_eq!(extract_identifier_at("", 0), None);
+    assert_eq!(extract_identifier_at("", 3), None);
+    assert_eq!(extract_identifier_at("   ", 1), None);
+
+    let (_indexed, backend) = sample_backend();
+    let uri = path_to_uri(&backend.root().join("src/main.rs"));
+    backend
+        .apply_document_changes(
+            &uri,
+            &[TextDocumentContentChangeEvent {
+                range: None,
+                range_length: None,
+                text: "fn keep() {}\n\nfn other() {}\n".into(),
+            }],
+        )
+        .unwrap();
+    let err = backend
+        .goto_definition(&TextDocumentPositionParams {
+            text_document: TextDocumentIdentifier { uri },
+            position: Position {
+                line: 1,
+                character: 0,
+            },
+        })
+        .expect_err("blank line has no symbol");
+    assert!(
+        err.to_string().contains("no symbol"),
+        "unexpected error: {err}"
+    );
 }
