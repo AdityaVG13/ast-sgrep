@@ -111,3 +111,66 @@ cargo test -p ast-sgrep-lang --test pattern
 - Lang unit tests in `signature::tests::*` pin `decl:` / `call-name:` / `kind:` formats and structural term keys.
 - Core bakeoff suite `pattern::tests::fixed_bakeoff_suite_is_index_or_native_resolvable` still resolves all 29 fixed patterns via shared `cached_pattern_signatures`.
 - Prefilter semantics unchanged: declaration keywords alone are not cross-language required literals (`pattern_prefilter::declaration_keyword_is_not_a_cross_language_required_literal`).
+
+---
+
+## Batch C — index pipeline / module resolve / CLI god-file split
+
+### End state
+
+| Surface | Location / change |
+|---------|-------------------|
+| One prepare→upsert materialization | `hash_content` + `materialize_upsert` shared by `prepare_file` and `index_content_at` |
+| One IgnoreMatcher ownership | `collect_index_candidates` uses `self.ignore` for dir prune + file skip (no second matcher) |
+| Watch path normalize | `normalize_watch_path` extracted from `update_paths` |
+| Trivia table | `is_trailing_trivia_line` prefix tables (`HASH_PREFIXES` / `C_FAMILY_PREFIXES`) |
+| Module resolve table | `module_resolve_rules(lang) → {exts, bases, add_extras}`; BTreeSet candidates unchanged |
+| CLI modules | `machine.rs`, `bench.rs`, `watch.rs`, `search_cmd.rs`; `lib.rs` thin clap dispatch (~722 lines) |
+| `raw_command_name` | added missing `keyword` (envelope command correctness) |
+| Dead delete | `gitignore::is_ignored` free function (zero callers; matcher API remains) |
+
+### Lean wins (low-risk)
+
+| Change | File |
+|--------|------|
+| Structural markers table for `looks_structural` | `intent.rs` |
+| Extract `reassign_stale_ivf_partition`; early-return flatten `rebuild_semantic_ivf_sidecar` | `semantic_ann.rs` |
+| MCP `code_search` deprecated alias | **kept** (clients may still call it) |
+| Dry-run extension set | **unchanged** — intentional source-like counts; documented vs `INDEXABLE_EXTENSIONS` |
+
+### Commands run
+
+```bash
+cargo check -p ast-sgrep-core -p ast-sgrep-cli
+# → ok
+
+cargo test -p ast-sgrep-core --lib
+# → 50 passed
+
+cargo test -p ast-sgrep-lang --lib
+# → 6 passed
+
+cargo test -p ast-sgrep-cli --lib
+# → 3 passed
+
+cargo test -p ast-sgrep-cli --test machine_contracts
+# → 13 passed
+
+cargo test -p ast-sgrep-core --test resolve_module
+# → 5 passed
+
+cargo test -p ast-sgrep-core --lib index::
+# → 2 passed (walk prune + body_hash trivia)
+
+cargo test -p ast-sgrep-core --test e2e_smoke --test store_delete --test semantic_ivf_roundtrip
+# → e2e_smoke: 5 passed, 1 ignored
+# → store_delete: 8 passed
+# → semantic_ivf_roundtrip: 8 passed, 1 ignored
+```
+
+### Behavior invariants
+
+- Clap surface / machine envelopes unchanged (keyword now correct in pre-parse failure `command`).
+- `resolve_module` candidate sets preserved (BTreeSet key order; regression suite green).
+- Index prepare/upsert semantics unchanged: same hash, body-hash trivia, semantic chunk gating.
+- Dry-run still uses its own source-oriented extension list (not silently merged with `INDEXABLE_EXTENSIONS`).
