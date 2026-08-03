@@ -164,6 +164,27 @@ cargo test -p ast-sgrep-lang --lib --test pattern --test extraction_goldens
 # → extraction_goldens: 1 passed
 
 cargo test -p ast-sgrep-lsp
+# → lib: 1 passed (limit_tests)
+# → integration tests/lsp.rs: 11 passed
+
 cargo test -p ast-sgrep-cli --test machine_contracts
+# → 6 passed
+
 node packages/pi/scripts/release-acceptance.mjs self-test
+# → gate self-test accepted; rejected dirty=ASGREP_RELEASE_DIRTY,
+#   wrong-tag=ASGREP_RELEASE_TAG_VERSION, wrong-commit=ASGREP_RELEASE_TAG_COMMIT,
+#   fully-published=ASGREP_RELEASE_DUPLICATE_VERSION, version-skew=ASGREP_RELEASE_VERSION_SKEW,
+#   missing-checksum=ASGREP_RELEASE_CHECKSUM_MISSING, checksum-mismatch=ASGREP_RELEASE_CHECKSUM_MISMATCH,
+#   local-publish=ASGREP_RELEASE_OIDC_REQUIRED
 ```
+
+### Observed results (follow-up)
+
+| Suite | Result |
+|-------|--------|
+| `ast-sgrep-lang --lib` | **6 passed** |
+| `ast-sgrep-lang --test pattern` | **5 passed** |
+| `extraction_goldens` | **1 passed** |
+| `ast-sgrep-lsp` | **12 passed** (1 lib + 11 integration) |
+| `machine_contracts` | **6 passed** |
+| pi release-acceptance self-test | **accepted** (fail codes unchanged) |
