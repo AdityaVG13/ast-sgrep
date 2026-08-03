@@ -35,7 +35,7 @@ struct SemanticCache {
 /// change. IVF is fingerprint-validated (count+max_id+dim+backend+generation) with
 /// flat cosine fallback when the sidecar is stale or absent.
 #[derive(Clone, Copy, PartialEq, Eq)]
-struct IndexGeneration {
+pub(crate) struct IndexGeneration {
     external: i64,
     local: i64,
 }

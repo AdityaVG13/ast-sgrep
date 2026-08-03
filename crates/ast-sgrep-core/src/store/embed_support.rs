@@ -312,7 +312,7 @@ pub(super) fn read_sym_loc(r: &rusqlite::Row<'_>) -> rusqlite::Result<SymbolLoca
         line_end: r.get(4)?,
     })
 }
-pub(super) fn normalize_rel(path: &Path) -> Result<String, crate::StoreError> {
+pub(super) fn normalize_rel(path: &Path) -> crate::Result<String> {
     let mut parts = Vec::new();
     for c in path.components() {
         match c {

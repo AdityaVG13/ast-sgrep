@@ -66,6 +66,8 @@ fn clear_all_data_wipes_embed_meta_keeps_root_whitelist() {
         store.get_meta("root").unwrap().is_some(),
         "schema whitelist must preserve root"
     );
+    // Generations are whitelisted then bumped — still monotonic across clear.
+    assert!(store.semantic_data_version().unwrap() >= 1);
 }
 
 /// ast-sgrep-28vo — Auto is not a wildcard for concrete stored backends.
