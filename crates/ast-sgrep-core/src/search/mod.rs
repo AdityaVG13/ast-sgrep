@@ -470,7 +470,7 @@ pub fn finish_response(
         .map(|h| (excerpt_term_coverage(&parsed.terms, &h), h))
         .collect();
     if keyed.len() > keep {
-        keyed.select_nth_unstable_by(keep, |a, b| cmp_ranked_hits(a, b));
+        keyed.select_nth_unstable_by(keep, cmp_ranked_hits);
         keyed.truncate(keep);
     }
     keyed.sort_unstable_by(cmp_ranked_hits);

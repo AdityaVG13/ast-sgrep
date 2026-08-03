@@ -197,7 +197,7 @@ fn budget_exhausted(rank: usize, deadline: Instant, timed_out: &AtomicBool) -> b
     if timed_out.load(Ordering::Relaxed) {
         return true;
     }
-    if rank % 16 != 0 || Instant::now() < deadline {
+    if !rank.is_multiple_of(16) || Instant::now() < deadline {
         return false;
     }
     timed_out.store(true, Ordering::Relaxed);

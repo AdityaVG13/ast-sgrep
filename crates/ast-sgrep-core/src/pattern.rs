@@ -149,7 +149,7 @@ fn search_pattern_ast_grep(
         .spawn()
         .map_err(|e| crate::StoreError::Other(format!("failed to run {ast_grep}: {e}")))?;
     let status = wait_child_deadline(&mut child, Duration::from_secs(PATTERN_TIMEOUT_SECS))
-        .map_err(|e| crate::StoreError::Other(e))?;
+        .map_err(crate::StoreError::Other)?;
     let mut stdout = Vec::new();
     let mut stderr = Vec::new();
     if let Some(mut out) = child.stdout.take() {
