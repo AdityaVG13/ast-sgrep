@@ -78,8 +78,44 @@ Store/index/durability path is table-driven and single-pipeline where safe: one 
 ## Commands run
 
 ```bash
-# (filled after test pass)
+cargo test -p ast-sgrep-core --test durability_epics --test store_delete \
+  --test store_pragmas --test resolve_module --test semantic_ivf_roundtrip \
+  --test semantic_cache_version
+# → durability_epics: 16 passed
+# → resolve_module: 5 passed
+# → semantic_cache_version: 4 passed
+# → semantic_ivf_roundtrip: 3 passed
+# → store_delete: 8 passed
+# → store_pragmas: 1 passed
+
+cargo test -p ast-sgrep-core --lib
+# → 24 passed
+
+cargo test -p ast-sgrep-lang --lib
+# → 3 passed
+
+cargo test -p ast-sgrep-cli --lib --test machine_contracts
+# → lib (watch): 5 passed; machine_contracts: 6 passed
+
+cargo test -p ast-sgrep-core --test p1_correctness_batch \
+  --test response_cache_version --test semantic_v1_rewrite
+# → p1_correctness_batch: 4 passed
+# → response_cache_version: 2 passed
+# → semantic_v1_rewrite: 2 passed
+
+node packages/pi/scripts/release-acceptance.mjs self-test
+# → gate self-test accepted; rejection codes unchanged
+
+cd packages/pi/extension && npm test
+# → 53 passed (runtime + extension suites)
 ```
+
+### Decision density (if+else+&&+||+ternary)
+
+| File | Before | After | Δ dens |
+|------|--------|-------|--------|
+| `packages/pi/extension/src/runtime.ts` | 190 / 502 (0.378) | 184 / 512 (0.359) | −0.019 |
+| `packages/pi/scripts/release-acceptance.mjs` | 121 / 274 (0.442) | 110 / 299 (0.368) | −0.074 |
 
 ---
 
