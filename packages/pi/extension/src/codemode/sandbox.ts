@@ -1,5 +1,6 @@
 import vm from "node:vm";
 import type { AsgrepConnector } from "./connector.js";
+import type { DispatchStats } from "./dispatch.js";
 
 export type CodemodeRunResult = {
   ok: boolean;
@@ -7,6 +8,8 @@ export type CodemodeRunResult = {
   logs: string[];
   error?: string;
   code: string;
+  stats?: DispatchStats;
+  wallMs: number;
 };
 
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -18,34 +21,31 @@ export function normalizeCode(raw: string): string {
   if (code.startsWith("```")) {
     code = code.replace(/^```(?:javascript|js|typescript|ts)?\s*/i, "").replace(/\s*```$/, "").trim();
   }
-  // Already an async arrow / function expression the model wrote as the tool body.
   if (/^async\s*\(/.test(code) || /^async\s+function\b/.test(code)) {
     return `(${code.endsWith(";") ? code.slice(0, -1) : code})()`;
   }
-  // Bare statements / expression body — wrap and return last expression when possible.
   return `(async () => {\n${code}\n})()`;
 }
 
 /**
  * Run model-generated JavaScript with only `asgrep` + safe builtins.
  *
- * This is a capability sandbox (no require/process/fetch), not an OS security
- * boundary — same trust model as the Pi package itself.
+ * Uses the shared microtask queue so host Promises from `asgrep.*` resolve under
+ * `Promise.all`. Do not enable `microtaskMode: 'afterEvaluate'` — that isolates
+ * queues and breaks cross-context await.
  */
 export async function runCodemode(
   rawCode: string,
   asgrep: AsgrepConnector,
-  options: { timeoutMs?: number } = {},
+  options: {
+    timeoutMs?: number;
+    stats?: () => DispatchStats;
+  } = {},
 ): Promise<CodemodeRunResult> {
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const wall0 = Date.now();
   if (rawCode.length > MAX_CODE_CHARS) {
-    return {
-      ok: false,
-      result: null,
-      logs: [],
-      error: `code exceeds ${MAX_CODE_CHARS} characters`,
-      code: rawCode.slice(0, 200),
-    };
+    return resultErr(`code exceeds ${MAX_CODE_CHARS} characters`, [], rawCode.slice(0, 200), wall0, options.stats);
   }
 
   const logs: string[] = [];
@@ -53,15 +53,20 @@ export async function runCodemode(
     logs.push(args.map((a) => (typeof a === "string" ? a : safeJson(a))).join(" "));
   };
 
+  const api = Object.freeze({
+    search: asgrep.search,
+    semantic: asgrep.semantic,
+    chain: asgrep.chain,
+    defs: asgrep.defs,
+    callers: asgrep.callers,
+    imports: asgrep.imports,
+    indexStatus: asgrep.indexStatus,
+    indexRepo: asgrep.indexRepo,
+  });
+
   const context = vm.createContext({
-    asgrep,
-    console: {
-      log: pushLog,
-      info: pushLog,
-      warn: pushLog,
-      error: pushLog,
-      debug: pushLog,
-    },
+    asgrep: api,
+    console: { log: pushLog, info: pushLog, warn: pushLog, error: pushLog, debug: pushLog },
     Promise,
     JSON,
     Array,
@@ -89,34 +94,59 @@ export async function runCodemode(
   try {
     script = new vm.Script(code, { filename: "asgrep-codemode.js" });
   } catch (cause) {
-    return {
-      ok: false,
-      result: null,
+    return resultErr(
+      cause instanceof Error ? cause.message : String(cause),
       logs,
-      error: cause instanceof Error ? cause.message : String(cause),
       code,
-    };
+      wall0,
+      options.stats,
+    );
   }
 
   try {
-    const produced = script.runInContext(context, { timeout: timeoutMs, displayErrors: true });
-    const result = await Promise.race([
+    const produced = script.runInContext(context, { displayErrors: true });
+    const value = await Promise.race([
       Promise.resolve(produced),
       new Promise<never>((_, reject) => {
         setTimeout(() => reject(new Error(`codemode timeout after ${timeoutMs}ms`)), timeoutMs);
       }),
     ]);
-    // Structured-clone out of the vm context so host assertions see plain objects.
-    return { ok: true, result: cloneOut(result), logs, code };
+    return resultOk(cloneOut(value), logs, code, wall0, options.stats);
   } catch (cause) {
-    return {
-      ok: false,
-      result: null,
+    return resultErr(
+      cause instanceof Error ? cause.message : String(cause),
       logs,
-      error: cause instanceof Error ? cause.message : String(cause),
       code,
-    };
+      wall0,
+      options.stats,
+    );
   }
+}
+
+function resultOk(
+  result: unknown,
+  logs: string[],
+  code: string,
+  wall0: number,
+  statsFn?: () => DispatchStats,
+): CodemodeRunResult {
+  const out: CodemodeRunResult = { ok: true, result, logs, code, wallMs: Date.now() - wall0 };
+  const stats = statsFn?.();
+  if (stats) out.stats = stats;
+  return out;
+}
+
+function resultErr(
+  error: string,
+  logs: string[],
+  code: string,
+  wall0: number,
+  statsFn?: () => DispatchStats,
+): CodemodeRunResult {
+  const out: CodemodeRunResult = { ok: false, result: null, logs, error, code, wallMs: Date.now() - wall0 };
+  const stats = statsFn?.();
+  if (stats) out.stats = stats;
+  return out;
 }
 
 function safeJson(value: unknown): string {

@@ -113,6 +113,12 @@ enum Commands {
         args: agent::DoctorArgs,
     },
     Eval(eval::EvalArgs),
+    /// Run many Code Mode tool calls in one warm process (Pi parallel coalescing).
+    CodemodeBatch {
+        /// Path to a JSON BatchRequest file.
+        #[arg(long)]
+        requests: PathBuf,
+    },
 }
 #[derive(Parser)]
 struct VersionArgs {
@@ -233,6 +239,7 @@ impl Cli {
             Some(Commands::RobotDocs(_)) => "robot-docs",
             Some(Commands::Doctor { .. }) => "doctor",
             Some(Commands::Eval(_)) => "eval",
+            Some(Commands::CodemodeBatch { .. }) => "codemode-batch",
         }
     }
 }
@@ -367,7 +374,53 @@ fn run_command(cli: &Cli, command: &Commands) -> anyhow::Result<()> {
         Commands::RobotDocs(args) => agent::run_robot_docs(cli, args),
         Commands::Doctor { root, args } => agent::run_doctor(cli, &root.root, args),
         Commands::Eval(args) => eval::run_eval(cli, args),
+        Commands::CodemodeBatch { requests } => run_codemode_batch(cli, requests),
     }
+}
+
+fn run_codemode_batch(cli: &Cli, requests: &Path) -> anyhow::Result<()> {
+    let raw = std::fs::read_to_string(requests)
+        .with_context(|| format!("read batch requests {}", requests.display()))?;
+    let mut request: ast_sgrep_codemode::BatchRequest =
+        serde_json::from_str(&raw).context("parse batch requests JSON")?;
+    if request.root.is_none() {
+        request.root = Some(cli.root.clone().unwrap_or_else(|| PathBuf::from(".")));
+    }
+    if request.index_path.is_none() {
+        request.index_path = cli.index_path.clone();
+    }
+    if request.use_embed.is_none() {
+        request.use_embed = Some(!cli.no_embed);
+    }
+    if request.limit.is_none() {
+        request.limit = cli.limit;
+    }
+    let config = ast_sgrep_codemode::SessionConfig {
+        root: request
+            .root
+            .clone()
+            .unwrap_or_else(|| PathBuf::from(".")),
+        index_path: request.index_path.clone(),
+        limit: request.limit.unwrap_or_else(ast_sgrep_core::SearchOptions::default_limit),
+        use_embed: request.use_embed.unwrap_or(true),
+        ..ast_sgrep_codemode::SessionConfig::default()
+    };
+    let response = ast_sgrep_codemode::run_batch(config, &request)
+        .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+    let envelope = serde_json::json!({
+        "schema_version": MACHINE_SCHEMA_VERSION,
+        "tool": "asgrep",
+        "command": "codemode-batch",
+        "ok": response.ok,
+        "version": env!("CARGO_PKG_VERSION"),
+        "machine_schema_version": MACHINE_SCHEMA_VERSION,
+        "call_count": response.call_count,
+        "wall_ms": response.wall_ms,
+        "mode": response.mode,
+        "results": response.results,
+    });
+    println!("{}", serde_json::to_string_pretty(&envelope)?);
+    Ok(())
 }
 fn run_version(cli: &Cli, args: &VersionArgs) -> anyhow::Result<()> {
     if cli.json || args.json {

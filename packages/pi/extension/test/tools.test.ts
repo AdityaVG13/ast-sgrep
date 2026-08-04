@@ -79,6 +79,8 @@ test("asgrep_codemode runs JS against the connector and returns a shaped result"
   assert.equal(result.details.ok, true);
   assert.deepEqual(result.details.result, { symbol: "auth_refresh", n: 1 });
   assert.ok(f.calls.some((call) => call.args.includes("agent-capsule")));
+  assert.ok(result.details.stats);
+  assert.ok(typeof result.details.wallMs === "number");
 });
 
 test("search defaults to a small zero-excerpt agent capsule", async () => {

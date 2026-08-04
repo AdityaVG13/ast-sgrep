@@ -1,5 +1,6 @@
 import type { MachineEnvelope } from "../runtime.js";
 import type { ChainArgs, SearchArgs } from "./types.js";
+import { createCodemodeDispatcher, type BatchCapableHost, type DispatchStats } from "./dispatch.js";
 
 const DEFAULT_LIMIT = 8;
 
@@ -18,6 +19,12 @@ export type AsgrepConnector = {
   indexRepo(input?: { force?: boolean }): Promise<MachineEnvelope>;
 };
 
+export type ConnectorBundle = {
+  asgrep: AsgrepConnector;
+  stats: () => DispatchStats;
+  resetStats: () => void;
+};
+
 function capsuleArgs(limit: number, excerptLines: number): string[] {
   return ["--json", "--format", "agent-capsule", "--limit", String(limit), "--excerpt-lines", String(excerptLines)];
 }
@@ -33,54 +40,54 @@ function clampExcerpt(excerptLines: number | undefined): number {
 }
 
 /**
- * Host-side connector: typed methods the sandbox calls. Each method maps to one
- * native CLI invocation. Independent methods may run concurrently via Promise.all.
+ * Host-side connector: typed methods the sandbox calls.
+ *
+ * Same-tick calls (Promise.all) are coalesced by CodemodeDispatcher so N
+ * lookups share one warm `codemode-batch` process when available, otherwise
+ * overlapped CLI spawns.
  */
 export function createAsgrepConnector(
-  host: ConnectorHost,
+  host: BatchCapableHost,
   context: { cwd: string },
   options: { signal?: AbortSignal } = {},
-): AsgrepConnector {
-  const run = (args: readonly string[]) => host.run(args, context, options.signal ? { signal: options.signal } : {});
+): ConnectorBundle {
+  const dispatcher = createCodemodeDispatcher(host);
+  const run = (args: readonly string[]) =>
+    dispatcher.host.run(args, context, options.signal ? { signal: options.signal } : {});
 
   const searchLike = (query: string, limit?: number, excerptLines?: number) =>
     run([...capsuleArgs(clampLimit(limit), clampExcerpt(excerptLines)), query, "."]);
 
-  return {
-    search(input) {
-      return searchLike(input.query, input.limit, input.excerptLines);
-    },
-    semantic(input) {
-      return run([
+  // Bound function properties (not methods) so vm call sites cannot lose `this`.
+  const asgrep: AsgrepConnector = {
+    search: (input) => searchLike(input.query, input.limit, input.excerptLines),
+    semantic: (input) =>
+      run([
         "semantic",
         input.query,
         ".",
         ...capsuleArgs(clampLimit(input.limit), clampExcerpt(input.excerptLines)),
-      ]);
-    },
-    chain(input) {
-      return run([
+      ]),
+    chain: (input) =>
+      run([
         "chain",
         input.query,
         ".",
         ...capsuleArgs(clampLimit(input.limit), clampExcerpt(input.excerptLines)),
-      ]);
-    },
-    defs(input) {
-      return searchLike(`defs: ${input.symbol}`, input.limit, input.excerptLines);
-    },
-    callers(input) {
-      return searchLike(`callers: ${input.symbol}`, input.limit, input.excerptLines);
-    },
-    imports(input) {
-      return searchLike(`imports: ${input.module}`, input.limit, input.excerptLines);
-    },
-    indexStatus() {
-      return run(["status", ".", "--json"]);
-    },
-    indexRepo(input = {}) {
+      ]),
+    defs: (input) => searchLike(`defs: ${input.symbol}`, input.limit, input.excerptLines),
+    callers: (input) => searchLike(`callers: ${input.symbol}`, input.limit, input.excerptLines),
+    imports: (input) => searchLike(`imports: ${input.module}`, input.limit, input.excerptLines),
+    indexStatus: () => run(["status", ".", "--json"]),
+    indexRepo: (input = {}) => {
       const command = input.force === true ? "reindex" : "index";
       return run([command, ".", "--json"]);
     },
+  };
+
+  return {
+    asgrep,
+    stats: dispatcher.stats,
+    resetStats: dispatcher.resetStats,
   };
 }

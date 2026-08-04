@@ -116,6 +116,7 @@ name = "ast-sgrep-cli"
 version = "1.3.2"
 dependencies = [
  "anyhow",
+ "ast-sgrep-codemode",
  "ast-sgrep-core",
  "ast-sgrep-plugins",
  "ast-sgrep-testkit",
@@ -136,6 +137,7 @@ dependencies = [
  "ast-sgrep-core",
  "ast-sgrep-plugins",
  "ast-sgrep-testkit",
+ "rayon",
  "serde",
  "serde_json",
  "tempfile",

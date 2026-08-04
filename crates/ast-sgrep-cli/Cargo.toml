@@ -29,6 +29,7 @@ path = "src/lib.rs"
 [dependencies]
 anyhow.workspace = true
 ast-sgrep-core = { path = "../ast-sgrep-core", version = "1.3.2" }
+ast-sgrep-codemode = { path = "../ast-sgrep-codemode", version = "1.3.2" }
 ast-sgrep-plugins = { path = "../ast-sgrep-plugins", version = "1.3.2" }
 clap.workspace = true
 nix = { version = "0.29", features = ["signal", "process"] }

@@ -1,5 +1,5 @@
 import { Type } from "typebox";
-import { createAsgrepConnector, runCodemode, CODEMODE_TYPES_FOR_MODEL } from "./codemode/index.js";
+import { createAsgrepConnector, runCodemode, runNativeBatch, CODEMODE_TYPES_FOR_MODEL } from "./codemode/index.js";
 import { AstSgrepRuntime, FreshnessCoordinator, RuntimeError } from "./runtime.js";
 const DEFAULT_LIMIT = 8;
 const MAX_LIMIT = 100;
@@ -132,24 +132,38 @@ export function registerAstSgrepTools(pi, runtime = new AstSgrepRuntime(pi), fre
             try {
                 const options = signal ? { signal } : {};
                 await freshness.ensureFresh(runtime, { cwd: ctx.cwd }, options);
-                const connector = createAsgrepConnector(runtime, { cwd: ctx.cwd }, options);
-                const outcome = await runCodemode(params.code, connector);
+                const batchHost = {
+                    run: (args, context, runOptions) => runtime.run(args, context, runOptions ?? {}),
+                    runBatch: (calls, context, runOptions) => runNativeBatch((a, c, o) => runtime.run(a, c, o ?? {}), calls, context, runOptions),
+                };
+                const bundle = createAsgrepConnector(batchHost, { cwd: ctx.cwd }, options);
+                bundle.resetStats();
+                const outcome = await runCodemode(params.code, bundle.asgrep, { stats: bundle.stats });
                 report(onUpdate, "codemode", "completed");
                 if (!outcome.ok) {
                     return {
                         content: [{ type: "text", text: bounded(`codemode failed: ${outcome.error ?? "unknown error"}`) }],
-                        details: { ok: false, command: "codemode", error: { code: "CODEMODE_ERROR", message: outcome.error ?? "unknown error", details: { logs: outcome.logs } }, code: outcome.code },
+                        details: {
+                            ok: false,
+                            command: "codemode",
+                            error: { code: "CODEMODE_ERROR", message: outcome.error ?? "unknown error", details: { logs: outcome.logs, stats: outcome.stats } },
+                            code: outcome.code,
+                            stats: outcome.stats,
+                            wallMs: outcome.wallMs,
+                        },
                     };
                 }
                 const rendered = safeRender(outcome.result);
                 return {
-                    content: [{ type: "text", text: bounded(summarizeCodemode(outcome.result)) }],
+                    content: [{ type: "text", text: bounded(summarizeCodemode(outcome.result, outcome.stats, outcome.wallMs)) }],
                     details: {
                         ok: true,
                         command: "codemode",
                         result: outcome.result,
                         logs: outcome.logs,
                         rendered,
+                        stats: outcome.stats,
+                        wallMs: outcome.wallMs,
                     },
                 };
             }
@@ -200,17 +214,26 @@ function safeRender(value) {
         return String(value);
     }
 }
-function summarizeCodemode(value) {
+function summarizeCodemode(value, stats, wallMs) {
+    const parts = ["codemode completed"];
     if (value && typeof value === "object") {
         const record = value;
         if (Array.isArray(record.hits))
-            return `codemode completed: ${record.hits.length} hit${record.hits.length === 1 ? "" : "s"}`;
-        if (typeof record.hit_count === "number")
-            return `codemode completed: ${record.hit_count} hit${record.hit_count === 1 ? "" : "s"}`;
-        if (typeof record.node_count === "number")
-            return `codemode completed: ${record.node_count} node${record.node_count === 1 ? "" : "s"}`;
+            parts[0] = `codemode completed: ${record.hits.length} hit${record.hits.length === 1 ? "" : "s"}`;
+        else if (typeof record.hit_count === "number")
+            parts[0] = `codemode completed: ${record.hit_count} hit${record.hit_count === 1 ? "" : "s"}`;
+        else if (typeof record.node_count === "number")
+            parts[0] = `codemode completed: ${record.node_count} node${record.node_count === 1 ? "" : "s"}`;
     }
-    return "codemode completed";
+    if (stats && stats.calls > 0) {
+        const via = stats.batchedCalls > 0 ? `batched ${stats.batchedCalls}` : stats.parallelSpawnCalls > 0 ? `parallel-spawn ${stats.parallelSpawnCalls}` : `${stats.calls} call${stats.calls === 1 ? "" : "s"}`;
+        parts.push(via);
+        if (stats.waves > 1)
+            parts.push(`${stats.waves} waves`);
+    }
+    if (wallMs !== undefined)
+        parts.push(`${wallMs}ms`);
+    return parts.join(" · ");
 }
 const COMMANDS = [
     ["asgrep-doctor", "Check the ast-sgrep runtime, native binary, index, and project configuration", "doctor"],

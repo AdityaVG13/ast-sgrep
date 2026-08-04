@@ -55,15 +55,26 @@ Both share the same retrieval base. They are sibling front ends.
 Model ──► asgrep_codemode({ code }) ──► Node capability sandbox
                                               │
                                               │  asgrep.search / chain / defs / …
-                                              │  (native CLI via AstSgrepRuntime)
-                                              │  Promise.all for independent work
+                                              │  Promise.all → same-tick coalesce
+                                              │       │
+                                              │       ├─ N>1: one `codemode-batch`
+                                              │       │       (warm/parallel Searchers)
+                                              │       └─ fallback: overlapped CLI spawns
                                               ▼
-                                        shaped return only
+                                        shaped return + stats
 ```
 
-Direct tools (`asgrep_search`, `asgrep_index`, `asgrep_status`) remain for simple
-one-shot lookups. Prefer Code Mode whenever the task needs composition, parallel
-lookups, or filtering before the model sees data.
+### Amdahl note
+
+Wall time ≈ serial + parallel_work / N.
+
+| Serial cost (cut hard) | Parallel fraction |
+|------------------------|-------------------|
+| Process spawn, SQLite open, freshness once per Code Mode call | Independent searches inside `Promise.all` |
+
+Same-tick coalesce turns N serial spawn costs into **one** batch process. Inside the batch, Rust runs calls on a rayon pool (multiple readers) so search work overlaps.
+
+Direct tools (`asgrep_search`, `asgrep_index`, `asgrep_status`) remain for simple one-shot lookups. Prefer Code Mode whenever the task needs composition, parallel lookups, or filtering before the model sees data.
 
 Example the model writes:
 
