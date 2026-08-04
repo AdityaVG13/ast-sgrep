@@ -1,18 +1,22 @@
-//! Code Mode / programmatic tool-calling for ast-sgrep.
+//! Code Mode / programmatic tool-calling for ast-sgrep (Rust side).
 //!
-//! This crate is the **execution-oriented** agent surface: typed tools, a warm
-//! session, progressive catalog discovery, and a JSON plan runner that composes
-//! multiple search ops without a model round-trip between each call.
+//! # What this crate is
 //!
-//! It is intentionally separate from `ast-sgrep-mcp` (transport) and
-//! `ast-sgrep-cli` (human/agent CLI). Those can consume this façade later.
+//! Catalog + in-process session + plan runner + host adapters for the Code Mode
+//! pattern (model writes code that orchestrates search). Sibling to MCP — this
+//! crate must **never** depend on `ast-sgrep-mcp`, and MCP must never depend on
+//! this crate. Both sit on `ast-sgrep-core` only.
+//!
+//! Pi's primary agent surface is the **JS sandbox** in
+//! `packages/pi/extension/src/codemode/` (`asgrep_codemode` tool). This Rust
+//! crate serves Rust hosts and emits Anthropic/OpenAI/Cloudflare-shaped tool
+//! definitions for hosts that already provide a code-execution sandbox.
 //!
 //! # Pattern
 //!
 //! Matches Cloudflare Code Mode, Anthropic programmatic tool calling, and
-//! OpenAI programmatic tool calling: the model writes a compact plan (or code
-//! that would call these tools); intermediate results stay in-process; only the
-//! shaped return value needs to re-enter the model context.
+//! OpenAI programmatic tool calling: compose tools in executable code; keep
+//! intermediates out of the model; return a shaped result.
 //!
 //! # Quick start
 //!

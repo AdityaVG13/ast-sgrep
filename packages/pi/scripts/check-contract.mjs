@@ -92,7 +92,7 @@ for (let index = 0; index < expectedPlatforms.length; index += 1) {
   report(platform.optionalDependencyVersion === version, name + ' optional dependency is not pinned to the exact canonical version');
 }
 report(equal(contract.packages?.unsupportedTargets, ['linux-musl', 'win32-arm64']), 'unsupported target policy changed');
-report(equal(contract.surface?.tools, ['asgrep_search', 'asgrep_index', 'asgrep_status']), 'unsupported Pi tool names');
+report(equal(contract.surface?.tools, ['asgrep_codemode', 'asgrep_search', 'asgrep_index', 'asgrep_status']), 'unsupported Pi tool names');
 report(equal(contract.surface?.commands, ['/asgrep-doctor', '/asgrep-status', '/asgrep-index', '/asgrep-reindex']), 'unsupported Pi command names');
 report(equal(contract.surface?.cliCommands, ['asgrep', 'ast-sgrep']) && contract.surface?.defaultSearchFormat === 'agent-capsule', 'unsupported CLI surface or default search format');
 report(contract.compatibility?.node?.range === '>=22.19.0' && contract.compatibility.node.minimum === '22.19.0', 'Node compatibility floor changed');

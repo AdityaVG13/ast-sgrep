@@ -1,145 +1,115 @@
-# Code Mode (`ast-sgrep-codemode`)
+# Code Mode (`ast-sgrep-codemode` + Pi)
 
-> **Status:** scaffold for review. Core session + tools + plan runner work; host
-> wiring (MCP reuse, CLI subcommand, JS package) waits on approval of the phases
-> below.
+## What Code Mode is
 
-## Verdict
+Code Mode is a **tool-use pattern**, not a transport:
 
-ast-sgrep did **not** previously have a Code Mode / programmatic tool-calling
-crate. Agents reached search via MCP (one JSON-RPC call per tool), CLI JSON, Pi
-tool wrappers, or LSP. Those surfaces force a **model round-trip per operation**.
+> The model writes JavaScript that calls typed methods. That code runs in a
+> restricted executor, can fan out work in parallel, filter intermediates, and
+> return only the shaped value the model needs.
 
-`ast-sgrep-codemode` is the missing **execution** layer: typed tools, a warm
-session, progressive discovery, and a JSON plan runner so multi-step search
-logic runs in-process and returns only the shaped result.
+That is the same idea as:
 
-Aligned with:
+- [Cloudflare Code Mode](https://developers.cloudflare.com/agents/tools/codemode/) — one `codemode` tool, typed connector globals, sandbox executor
+- [Anthropic programmatic tool calling](https://platform.claude.com/docs/en/agents-and-tools/tool-use/programmatic-tool-calling) — tools callable from code execution via `allowed_callers`
+- [OpenAI programmatic tool calling](https://developers.openai.com/api/docs/guides/tools-programmatic-tool-calling) — JS in a V8 runtime coordinates tools
 
-- [Cloudflare Code Mode](https://developers.cloudflare.com/agents/tools/codemode/)
-- [Anthropic programmatic tool calling](https://platform.claude.com/docs/en/agents-and-tools/tool-use/programmatic-tool-calling)
-- [OpenAI programmatic tool calling](https://developers.openai.com/api/docs/guides/tools-programmatic-tool-calling)
+Traditional MCP/tool calling does **one model round-trip per operation**. Code Mode
+moves loops, branching, filtering, and parallel fan-out into executable code.
 
-## Why a separate crate
-
-| Surface | Role |
-|---------|------|
-| `ast-sgrep-core` | Index + retrieval |
-| `ast-sgrep-mcp` | MCP **transport** (stdio JSON-RPC) |
-| `ast-sgrep-cli` | Human/agent CLI |
-| **`ast-sgrep-codemode`** | **Execution model**: compose tools, filter intermediates, emit host tool defs |
-
-Dependency arrow stays toward core (same as MCP). MCP/CLI should eventually
-*call into* Code Mode rather than duplicating Searcher cache / format logic.
-
-## Architecture
+## MCP vs Code Mode (do not link them)
 
 ```text
-                    ┌─────────────────────────────┐
-  Anthropic PTC ───►│ adapters::{anthropic,openai, │
-  OpenAI PTC    ───►│   cloudflare}                │
-  CF Code Mode  ───►└──────────────┬──────────────┘
-                                   │ tool schemas
-                                   ▼
-  Model / host ──► catalog (progressive discovery)
-                                   │
-                    ┌──────────────▼──────────────┐
-                    │ CodeModeSession             │
-                    │  · warm Searcher cache      │
-                    │  · call budget              │
-                    │  · capsule-first defaults   │
-                    └──────────────┬──────────────┘
-                                   │
-              ┌────────────────────┼────────────────────┐
-              ▼                    ▼                    ▼
-         tools::*            plan::run_plan        transforms
-      search/chain/…      $step refs, return     filter/select
-              │                    │
-              └──────────┬─────────┘
-                         ▼
-                 ast-sgrep-core + plugins
+                 ast-sgrep-core / native asgrep binary
+                    /                         \
+                   /                           \
+          ast-sgrep-mcp                   Code Mode
+     (stdio JSON-RPC transport)     (JS sandbox execution)
+     one tool call ↔ one RPC         model writes JS once
+                                            │
+                                            ▼
+                                      asgrep.search()
+                                      asgrep.chain()
+                                      Promise.all([...])
+                                      filter / shape
+                                            │
+                                            ▼
+                                      final value → model
 ```
 
-### Tools (v0 catalog)
+| | **MCP** (`asgrep-mcp`) | **Code Mode** |
+|---|---|---|
+| Role | Protocol transport for hosts that speak MCP | Execution model: code orchestrates search |
+| Unit of work | One `tools/call` | One JS program (many calls inside) |
+| Parallelism | Host/model schedules calls | `Promise.all` / loops inside the sandbox |
+| Pi | Not used (`pi-mcp-adapter` forbidden) | **Primary Pi agent surface** |
+| Coupling | — | **Never imports MCP; MCP never imports Code Mode** |
 
-| Tool | Kind | Notes |
-|------|------|-------|
-| `search` | search | Hybrid + prefixes; default `format=capsule` |
-| `semantic` | search | Embed pass only |
-| `chain` | search | Call/import neighborhood (not on MCP today) |
-| `defs` / `callers` / `imports` | search | Shorthand wrappers |
-| `index_status` / `index_repo` | index | Lifecycle |
-| `filter_hits` / `select` | transform | Keep intermediates out of the model |
-| `catalog_search` / `catalog_describe` | catalog | Cloudflare-style progressive discovery |
+Both share the same retrieval base. They are sibling front ends.
 
-### Plan language (local / deterministic)
+## Pi: built on Code Mode
 
-Hosts without a JS sandbox run multi-step work as JSON:
+`pi-ast-sgrep` exposes **`asgrep_codemode`** as the primary tool:
 
-```json
-{
-  "steps": [
-    {"id": "seed", "tool": "search", "args": {"query": "auth refresh", "format": "capsule", "limit": 5}},
-    {"id": "narrow", "tool": "filter_hits", "args": {"hits": "$seed", "path_contains": "src/", "limit": 3}},
-    {"id": "graph", "tool": "chain", "args": {"query": "$narrow.hits.0.symbol", "max_depth": 2}},
-    {"id": "out", "tool": "select", "args": {"value": "$graph", "fields": ["nodes", "edges", "node_count"]}}
-  ],
-  "return": "$out"
+```text
+Model ──► asgrep_codemode({ code }) ──► Node capability sandbox
+                                              │
+                                              │  asgrep.search / chain / defs / …
+                                              │  (native CLI via AstSgrepRuntime)
+                                              │  Promise.all for independent work
+                                              ▼
+                                        shaped return only
+```
+
+Direct tools (`asgrep_search`, `asgrep_index`, `asgrep_status`) remain for simple
+one-shot lookups. Prefer Code Mode whenever the task needs composition, parallel
+lookups, or filtering before the model sees data.
+
+Example the model writes:
+
+```js
+async () => {
+  const [seed, status] = await Promise.all([
+    asgrep.search({ query: "auth refresh", limit: 5 }),
+    asgrep.indexStatus(),
+  ]);
+  const symbol = seed.hits?.[0]?.symbol;
+  if (!symbol) return { seed, status };
+  const graph = await asgrep.chain({ query: symbol, limit: 20 });
+  return { symbol, nodes: graph.nodes?.slice?.(0, 10) ?? graph, status };
 }
 ```
 
-Hosted PTC (Claude/OpenAI) can instead generate JavaScript that calls the same
-tools via `allowed_callers`; adapters emit those definitions.
+Sandbox capabilities: `asgrep.*`, `Promise`, `JSON`, arrays/objects/math. No
+`require`, `process`, `fetch`, or filesystem — same trust model as the Pi package
+(capability restriction, not an OS jail).
 
-## Approval gates
+## Rust crate `ast-sgrep-codemode`
 
-Please approve or adjust before the next phases land:
+Separate library for:
 
-| Phase | Scope | Approve? |
-|-------|--------|----------|
-| **0 (this PR)** | Crate scaffold, catalog, session, plan runner, provider adapters, docs + tests | *landed for review* |
-| **1** | Refactor `ast-sgrep-mcp` to dispatch through `CodeModeSession`; add `chain` + capsule to MCP | pending |
-| **2** | CLI: `asgrep codemode tools\|plan\|run` + `capabilities` discovery | pending |
-| **3** | Optional `packages/codemode` JS helpers for Claude/OpenAI request assembly | pending |
-| **4** | Snippets library (saved plans) + tighter Cloudflare Agents SDK connector | pending |
+- Typed tool **catalog** + JSON Schema
+- Warm **`CodeModeSession`** over `ast-sgrep-core` (fast in-process dispatch for Rust hosts)
+- Deterministic **JSON plan runner** (hosts without a JS sandbox)
+- **Adapters** that emit Anthropic / OpenAI / Cloudflare-shaped tool defs for hosts that already provide a code-execution sandbox
 
-### Non-goals (for now)
-
-- Embedding a full JS/V8 sandbox in Rust (hosts already provide that for PTC)
-- Replacing MCP or Pi; Code Mode composes with them
-- Write tools beyond `index_repo` (keep approval boundary clear)
-
-## Library usage
-
-```rust
-use ast_sgrep_codemode::{run_plan, parse_plan, CodeModeSession, SessionConfig};
-use ast_sgrep_codemode::adapters::{anthropic_tools, openai_tools, cloudflare_connector};
-use serde_json::json;
-
-let mut session = CodeModeSession::new(SessionConfig {
-    root: "/path/to/repo".into(),
-    ..SessionConfig::default()
-});
-
-// Single tool
-let hits = session.call("search", json!({
-    "query": "credential renewal",
-    "format": "capsule",
-    "limit": 5
-}))?;
-
-// Multi-step plan (no model between steps)
-let plan = parse_plan(&json!({ /* ... */ }))?;
-let result = run_plan(&mut session, &plan)?;
-
-// Emit host tool lists
-let _ = anthropic_tools();
-let _ = openai_tools();
-let _ = cloudflare_connector();
-```
-
-## Validation
+It does **not** depend on `ast-sgrep-mcp`, and MCP must not depend on it.
 
 ```bash
 cargo test -p ast-sgrep-codemode
 ```
+
+## Layout
+
+| Path | Role |
+|------|------|
+| `crates/ast-sgrep-codemode` | Rust catalog + session + plan + host adapters |
+| `packages/pi/extension/src/codemode/` | JS connector + sandbox executor |
+| `packages/pi/extension` tool `asgrep_codemode` | Pi primary Code Mode entry |
+| `crates/ast-sgrep-mcp` | Unrelated MCP transport |
+
+## Non-goals
+
+- Linking MCP ↔ Code Mode
+- Embedding Cloudflare Workers / V8 isolates in Rust (Pi uses Node `vm`; cloud hosts bring their own executor)
+- Replacing the native binary with a JS search reimplementation

@@ -14,11 +14,17 @@ Requires Node.js `>=22.19.0`, Pi `>=0.80.6 <1`, and a packaged host: macOS arm64
 
 The package registers:
 
-- `asgrep_search`, `asgrep_index`, and `asgrep_status` tools;
+- **`asgrep_codemode`** (primary Code Mode tool — write JS that calls `asgrep.*`), plus `asgrep_search`, `asgrep_index`, and `asgrep_status` for one-shot calls;
 - `/asgrep-doctor`, `/asgrep-status`, `/asgrep-index`, and `/asgrep-reindex` commands;
-- the `ast-sgrep` skill.
+- the `ast-sgrep` skill (prefers Code Mode for multi-step/parallel retrieval).
 
-Open Pi in a project and search. The first search lazily creates `.asgrep/`. Examples for `asgrep_search`:
+Open Pi in a project and search. The first search lazily creates `.asgrep/`. Prefer Code Mode:
+
+```json
+{"code":"async () => {\n  const seed = await asgrep.search({ query: 'auth refresh', limit: 5 });\n  return seed.hits?.slice(0, 3);\n}"}
+```
+
+Direct one-shot examples for `asgrep_search`:
 
 ```json
 {"query":"auth_refresh","mode":"defs"}

@@ -186,13 +186,14 @@ try {
   const runner = new pi.ExtensionRunner(loaded.extensions, runtime, project, {}, {});
   const toolNames = runner.getAllRegisteredTools().map(({ definition }) => definition.name).sort();
   const commandNames = runner.getRegisteredCommands().map(({ invocationName }) => invocationName).sort();
-  assert.deepEqual(toolNames, ['asgrep_index', 'asgrep_search', 'asgrep_status']);
+  assert.deepEqual(toolNames, ['asgrep_codemode', 'asgrep_index', 'asgrep_search', 'asgrep_status']);
   assert.deepEqual(commandNames, ['asgrep-doctor', 'asgrep-index', 'asgrep-reindex', 'asgrep-status']);
   const context = runner.createContext();
+  const codemodeTool = runner.getToolDefinition('asgrep_codemode');
   const searchTool = runner.getToolDefinition('asgrep_search');
   const indexTool = runner.getToolDefinition('asgrep_index');
   const statusTool = runner.getToolDefinition('asgrep_status');
-  assert.ok(searchTool && indexTool && statusTool);
+  assert.ok(codemodeTool && searchTool && indexTool && statusTool);
   const invokeSearch = (params, signal = undefined) => searchTool.execute('release-gate', params, signal, undefined, context);
   await stage('skill-discovery-workflow', async () => {
     const skills = pi.loadSkillsFromDir({ dir: path.join(extensionRoot, 'skills'), source: 'release-gate' });

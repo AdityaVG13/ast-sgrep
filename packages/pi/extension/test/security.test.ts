@@ -88,11 +88,15 @@ test("registered TypeBox boundaries reject malformed model inputs", () => {
   registerAstSgrepTools(pi, runtime);
   const schema = (name: string) => tools.find((tool) => tool.name === name)!.parameters;
   assert.equal(Check(schema("asgrep_search"), { query: "symbol", limit: 8, excerptLines: 0 }), true);
+  assert.equal(Check(schema("asgrep_codemode"), { code: "async () => asgrep.search({ query: 'x' })" }), true);
   for (const malformed of [
     {}, { query: "" }, { query: 42 }, { query: "x".repeat(4097) }, { query: "x", limit: 0 },
     { query: "x", limit: 101 }, { query: "x", limit: 1.5 }, { query: "x", excerptLines: -1 },
     { query: "x", mode: "shell" }, { query: "x", unexpected: true },
   ]) assert.equal(Check(schema("asgrep_search"), malformed), false, JSON.stringify(malformed));
+  for (const malformed of [{}, { code: "" }, { code: 1 }, { code: "x", unexpected: true }]) {
+    assert.equal(Check(schema("asgrep_codemode"), malformed), false, JSON.stringify(malformed));
+  }
   for (const malformed of [{ force: "true" }, { force: false, unexpected: true }]) {
     assert.equal(Check(schema("asgrep_index"), malformed), false, JSON.stringify(malformed));
   }

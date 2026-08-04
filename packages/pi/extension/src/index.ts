@@ -1,11 +1,13 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { createAsgrepConnector, runCodemode, CODEMODE_TYPES_FOR_MODEL } from "./codemode/index.js";
 import { AstSgrepRuntime, FreshnessCoordinator, RuntimeError, type FreshnessRuntime, type MachineEnvelope } from "./runtime.js";
 
 const DEFAULT_LIMIT = 8;
 const MAX_LIMIT = 100;
 const MAX_EXCERPT_LINES = 100;
 const MAX_CONTENT_CHARS = 1_200;
+const MAX_CODEMODE_RESULT_CHARS = 8_000;
 
 const searchParameters = Type.Object({
   query: Type.String({ minLength: 1, maxLength: 4_096, description: "Natural-language query, symbol, or structural pattern" }),
@@ -30,6 +32,14 @@ const indexParameters = Type.Object({
 }, { additionalProperties: false });
 
 const statusParameters = Type.Object({}, { additionalProperties: false });
+
+const codemodeParameters = Type.Object({
+  code: Type.String({
+    minLength: 1,
+    maxLength: 32_000,
+    description: "JavaScript async body that calls asgrep.* methods. Prefer Promise.all for independent lookups. Return only the shaped final value.",
+  }),
+}, { additionalProperties: false });
 
 type RuntimeLike = FreshnessRuntime;
 type FreshnessLike = Pick<FreshnessCoordinator, "ensureFresh" | "markAffectedPath">;
@@ -130,10 +140,68 @@ export function registerAstSgrepTools(
     if (typeof path === "string") freshness.markAffectedPath(path, ctx.cwd);
   });
 
+  // Primary surface: Code Mode (model writes JS; parallel asgrep.* calls; shaped return).
+  // Independent of MCP — both sit on the native binary only.
+  pi.registerTool({
+    name: "asgrep_codemode",
+    label: "ast-sgrep Code Mode",
+    description: [
+      "Prefer this tool for multi-step or parallel code search.",
+      "Write JavaScript that calls typed asgrep.* methods inside a restricted executor.",
+      "Compose lookups with await / Promise.all, filter results in code, and return only what you need.",
+      "Do not dump every intermediate hit list — shape the final value.",
+      "",
+      CODEMODE_TYPES_FOR_MODEL,
+      "",
+      "Example:",
+      "async () => {",
+      "  const [seed, status] = await Promise.all([",
+      "    asgrep.search({ query: 'auth refresh', limit: 5 }),",
+      "    asgrep.indexStatus(),",
+      "  ]);",
+      "  const symbol = seed.hits?.[0]?.symbol;",
+      "  if (!symbol) return { seed, status };",
+      "  const graph = await asgrep.chain({ query: symbol, limit: 20 });",
+      "  return { symbol, nodes: graph.nodes?.slice?.(0, 10) ?? graph, status };",
+      "}",
+    ].join("\n"),
+    parameters: codemodeParameters,
+    async execute(_toolCallId, params, signal, onUpdate, ctx) {
+      report(onUpdate, "codemode", "started");
+      try {
+        const options = signal ? { signal } : {};
+        await freshness.ensureFresh(runtime, { cwd: ctx.cwd }, options);
+        const connector = createAsgrepConnector(runtime, { cwd: ctx.cwd }, options);
+        const outcome = await runCodemode(params.code, connector);
+        report(onUpdate, "codemode", "completed");
+        if (!outcome.ok) {
+          return {
+            content: [{ type: "text" as const, text: bounded(`codemode failed: ${outcome.error ?? "unknown error"}`) }],
+            details: { ok: false, command: "codemode", error: { code: "CODEMODE_ERROR", message: outcome.error ?? "unknown error", details: { logs: outcome.logs } }, code: outcome.code },
+          };
+        }
+        const rendered = safeRender(outcome.result);
+        return {
+          content: [{ type: "text" as const, text: bounded(summarizeCodemode(outcome.result)) }],
+          details: {
+            ok: true,
+            command: "codemode",
+            result: outcome.result,
+            logs: outcome.logs,
+            rendered,
+          },
+        };
+      } catch (cause) {
+        return failure("codemode", cause);
+      }
+    },
+  });
+
+  // Direct one-shot tools remain available for simple lookups (not Code Mode).
   pi.registerTool({
     name: "asgrep_search",
     label: "ast-sgrep search",
-    description: "Search project code with natural language, structural patterns, symbol relationships, chains, or semantic retrieval.",
+    description: "Single hybrid search call. Prefer asgrep_codemode when you need multiple lookups, filtering, or parallel work.",
     parameters: searchParameters,
     async execute(_toolCallId, params, signal, onUpdate, ctx) {
       const options = signal ? { signal } : {};
@@ -145,7 +213,7 @@ export function registerAstSgrepTools(
   pi.registerTool({
     name: "asgrep_index",
     label: "ast-sgrep index",
-    description: "Build or rebuild the ast-sgrep project index.",
+    description: "Build or rebuild the ast-sgrep project index. Prefer asgrep_codemode (asgrep.indexRepo) inside multi-step programs.",
     parameters: indexParameters,
     async execute(_toolCallId, params, signal, onUpdate, ctx) {
       const command = params.force === true ? "reindex" : "index";
@@ -162,6 +230,26 @@ export function registerAstSgrepTools(
       return execute(runtime, "status", ["status", ".", "--json"], signal, onUpdate, ctx);
     },
   });
+}
+
+function safeRender(value: unknown): string {
+  try {
+    const text = JSON.stringify(value);
+    if (text === undefined) return String(value);
+    return text.length <= MAX_CODEMODE_RESULT_CHARS ? text : `${text.slice(0, MAX_CODEMODE_RESULT_CHARS - 1)}…`;
+  } catch {
+    return String(value);
+  }
+}
+
+function summarizeCodemode(value: unknown): string {
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    if (Array.isArray(record.hits)) return `codemode completed: ${record.hits.length} hit${record.hits.length === 1 ? "" : "s"}`;
+    if (typeof record.hit_count === "number") return `codemode completed: ${record.hit_count} hit${record.hit_count === 1 ? "" : "s"}`;
+    if (typeof record.node_count === "number") return `codemode completed: ${record.node_count} node${record.node_count === 1 ? "" : "s"}`;
+  }
+  return "codemode completed";
 }
 
 const COMMANDS = [
