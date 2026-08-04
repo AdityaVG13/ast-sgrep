@@ -16,3 +16,4 @@ export { CODEMODE_TYPES_FOR_MODEL, type SearchArgs, type ChainArgs } from "./typ
 export { createCodemodeDispatcher, runNativeBatch, argvFor, asEnvelope, type DispatchStats, type BatchCapableHost, type StickyWorker, type BatchResult, } from "./dispatch.js";
 export { startStickyWorker, runBatchViaStdin } from "./worker.js";
 export { NativeSessionPool, sharedNativePool } from "./session-pool.js";
+export { loadCodemodeNative, nativeAvailable, resetNativeCache, type CodemodeNativeBinding, type NativeSession, } from "./native.js";

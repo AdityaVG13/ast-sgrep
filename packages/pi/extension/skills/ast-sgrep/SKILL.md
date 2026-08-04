@@ -5,7 +5,7 @@ description: Find code by intent or structure, trace symbol relationships, and k
 
 # ast-sgrep
 
-Prefer **`asgrep_codemode`** for almost all retrieval work. Write JavaScript that calls typed `asgrep.*` methods, use `Promise.all` for independent lookups, filter in code, and return only the shaped final value. A warm native worker is kept for the whole Pi session (shared with status/index/search) so you are not paying a cold CLI spawn per lookup. That is Code Mode: one tool call orchestrates many searches without model round-trips between them — the same composition idea as Codex-style `exec` cells.
+Prefer **`asgrep_codemode`** for almost all retrieval work. Write JavaScript that calls typed `asgrep.*` methods, use `Promise.all` for independent lookups, filter in code, and return only the shaped final value. Lookups run **in-process** through the native Code Mode addon (same core as MCP — no CLI spawn). That is Code Mode: one tool call orchestrates many searches without model round-trips — the same composition idea as Codex-style `exec` cells.
 
 Use Pi's exact-text search for literal strings, log messages, filenames, or configuration keys; do not replace a precise text lookup with semantic search.
 

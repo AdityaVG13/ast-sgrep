@@ -31,3 +31,10 @@ export {
 } from "./dispatch.js";
 export { startStickyWorker, runBatchViaStdin } from "./worker.js";
 export { NativeSessionPool, sharedNativePool } from "./session-pool.js";
+export {
+  loadCodemodeNative,
+  nativeAvailable,
+  resetNativeCache,
+  type CodemodeNativeBinding,
+  type NativeSession,
+} from "./native.js";

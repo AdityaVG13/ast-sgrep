@@ -10,6 +10,7 @@ members = [
     "crates/ast-sgrep-testkit",
     "crates/ast-sgrep-mcp",
     "crates/ast-sgrep-codemode",
+    "crates/ast-sgrep-codemode-napi",
 ]
 default-members = ["crates/ast-sgrep-cli"]
 exclude = ["fuzz"]

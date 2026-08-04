@@ -1,22 +1,59 @@
 /**
- * Session-scoped sticky native workers — one warm `codemode-serve` per project root.
+ * Session-scoped native Code Mode sessions.
  *
- * Like pi-codex-conversion's SharedCodeModeRuntime / host session: pay spawn +
- * SQLite open once per root for the Pi session, then all Code Mode programs,
- * direct tools, and freshness checks reuse the same Searcher.
+ * Primary path: in-process NAPI (`CodeModeSession` inside Node) — same model as
+ * MCP linking core. Zero CLI spawn.
  *
- * Still a CLI child (packaging constraint — see docs/codemode.md). Eliminating
- * the process boundary entirely needs a NAPI addon; this is the pragmatic max
- * without changing the release contract.
+ * Fallback: sticky `codemode-serve` child only when the `.node` addon is missing
+ * (unsupported host / incomplete install). Doctor reports that as degraded.
  */
 import { asEnvelope } from "./dispatch.js";
+import { loadCodemodeNative } from "./native.js";
 import { startStickyWorker } from "./worker.js";
+function inProcessWorker(session, binding, root) {
+    return {
+        async call(tool, args) {
+            const value = session.call(tool, args);
+            return asEnvelope(value);
+        },
+        async batch(calls) {
+            // Prefer session.call in a loop — reuses the warm Searcher already open.
+            const results = [];
+            let allOk = true;
+            const t0 = Date.now();
+            for (const c of calls) {
+                try {
+                    const value = session.call(c.tool, c.args);
+                    results.push({ id: c.id, ok: true, value });
+                }
+                catch (cause) {
+                    allOk = false;
+                    results.push({
+                        id: c.id,
+                        ok: false,
+                        error: cause instanceof Error ? cause.message : String(cause),
+                    });
+                }
+            }
+            // For large waves, binding.batch can parallelize; serial warm is the default win.
+            if (calls.length >= 4 && allOk) {
+                void binding;
+                void root;
+            }
+            return { results, all_ok: allOk, wall_ms: Date.now() - t0, mode: "serial-napi" };
+        },
+        async end() {
+            // NAPI session is GC'd; nothing to kill.
+        },
+    };
+}
 export class NativeSessionPool {
     #entries = new Map();
     #starting = new Map();
     #options = null;
     #generation = 0;
     #startFn;
+    #backend = "none";
     constructor(startFn = startStickyWorker) {
         this.#startFn = startFn;
     }
@@ -24,16 +61,13 @@ export class NativeSessionPool {
         this.#options = options;
     }
     configured() {
-        return this.#options !== null;
+        return this.#options !== null || loadCodemodeNative() !== null;
     }
-    /**
-     * Acquire (or start) the sticky worker for a root. Does not take a call-level
-     * AbortSignal — killing the session worker on one cancelled tool would thrash
-     * every other concurrent call.
-     */
+    /** Active backend after first successful acquire. */
+    backend() {
+        return this.#backend;
+    }
     async acquire(root) {
-        if (!this.#options)
-            return null;
         const existing = this.#entries.get(root);
         if (existing)
             return existing.worker;
@@ -54,10 +88,9 @@ export class NativeSessionPool {
             throw new Error("native call aborted");
         const worker = await this.acquire(root);
         if (!worker)
-            throw new Error("native session pool not configured");
-        return asEnvelope(await worker.call(tool, args, options));
+            throw new Error("native Code Mode backend unavailable");
+        return worker.call(tool, args, options);
     }
-    /** Drop the worker for a root (e..g. after fatal protocol error). */
     async invalidate(root) {
         this.#generation += 1;
         const entry = this.#entries.get(root);
@@ -72,10 +105,34 @@ export class NativeSessionPool {
         await Promise.all(entries.map((e) => e.worker.end().catch(() => undefined)));
     }
     async #start(root) {
-        const opts = this.#options;
-        if (!opts)
-            return null;
         const gen = this.#generation;
+        const opts = this.#options ?? {};
+        // 1) In-process NAPI (preferred — zero spawn).
+        const binding = loadCodemodeNative();
+        if (binding) {
+            try {
+                const config = { root };
+                if (opts.indexPath)
+                    config.indexPath = opts.indexPath;
+                if (opts.limit !== undefined)
+                    config.limit = opts.limit;
+                if (opts.useEmbed !== undefined)
+                    config.useEmbed = opts.useEmbed;
+                const session = new binding.Session(config);
+                const worker = inProcessWorker(session, binding, root);
+                if (gen !== this.#generation)
+                    return null;
+                this.#entries.set(root, { root, worker, generation: gen, backend: "napi" });
+                this.#backend = "napi";
+                return worker;
+            }
+            catch {
+                // Fall through to CLI sticky.
+            }
+        }
+        // 2) CLI sticky fallback (degraded).
+        if (!opts.binary)
+            return null;
         try {
             const stickyOpts = {
                 binary: opts.binary,
@@ -90,7 +147,8 @@ export class NativeSessionPool {
                 await worker.end().catch(() => undefined);
                 return null;
             }
-            this.#entries.set(root, { root, worker, generation: gen });
+            this.#entries.set(root, { root, worker, generation: gen, backend: "cli" });
+            this.#backend = "cli";
             return worker;
         }
         catch {
@@ -98,5 +156,5 @@ export class NativeSessionPool {
         }
     }
 }
-/** Singleton used by the Pi extension for the process lifetime. */
+/** Singleton for advanced hosts; tools registration uses a local pool. */
 export const sharedNativePool = new NativeSessionPool();

@@ -18,6 +18,7 @@
   "homepage": "https://github.com/AdityaVG13/ast-sgrep#readme",
   "files": [
     "dist",
+    "native",
     "skills",
     "assets",
     "LICENSE"
@@ -40,7 +41,10 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test": "node --import tsx --test test/*.test.ts",
+    "build:native": "cargo build -p ast-sgrep-codemode-napi --release && node ./scripts/copy-native.mjs",
+    "test": "ASGREP_CODEMODE_BACKEND=cli node --import tsx --test test/codemode.test.ts test/commands.test.ts test/runtime.test.ts test/security.test.ts test/session-pool.test.ts test/skill-workflow.test.ts test/tools.test.ts",
+    "test:native": "node --import tsx --test test/native-inprocess.test.ts",
+    "test:all": "npm test && npm run test:native",
     "prepack": "npm run build"
   },
   "engines": {

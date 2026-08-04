@@ -1,21 +1,24 @@
 /**
- * Session-scoped sticky native workers — one warm `codemode-serve` per project root.
+ * Session-scoped native Code Mode sessions.
  *
- * Like pi-codex-conversion's SharedCodeModeRuntime / host session: pay spawn +
- * SQLite open once per root for the Pi session, then all Code Mode programs,
- * direct tools, and freshness checks reuse the same Searcher.
+ * Primary path: in-process NAPI (`CodeModeSession` inside Node) — same model as
+ * MCP linking core. Zero CLI spawn.
  *
- * Still a CLI child (packaging constraint — see docs/codemode.md). Eliminating
- * the process boundary entirely needs a NAPI addon; this is the pragmatic max
- * without changing the release contract.
+ * Fallback: sticky `codemode-serve` child only when the `.node` addon is missing
+ * (unsupported host / incomplete install). Doctor reports that as degraded.
  */
 import type { MachineEnvelope } from "../runtime.js";
 import { type StickyWorker } from "./dispatch.js";
 import { type StickyWorkerOptions } from "./worker.js";
 export type SessionPoolOptions = {
-    binary: string;
+    /** Required only for CLI sticky fallback. */
+    binary?: string;
     env?: NodeJS.ProcessEnv;
     timeoutMs?: number;
+    root?: string;
+    indexPath?: string;
+    useEmbed?: boolean;
+    limit?: number;
 };
 export type StickyStarter = (options: StickyWorkerOptions) => Promise<StickyWorker>;
 export declare class NativeSessionPool {
@@ -23,18 +26,14 @@ export declare class NativeSessionPool {
     constructor(startFn?: StickyStarter);
     configure(options: SessionPoolOptions): void;
     configured(): boolean;
-    /**
-     * Acquire (or start) the sticky worker for a root. Does not take a call-level
-     * AbortSignal — killing the session worker on one cancelled tool would thrash
-     * every other concurrent call.
-     */
+    /** Active backend after first successful acquire. */
+    backend(): "napi" | "cli" | "none";
     acquire(root: string): Promise<StickyWorker | null>;
     call(root: string, tool: string, args?: Record<string, unknown>, options?: {
         signal?: AbortSignal;
     }): Promise<MachineEnvelope>;
-    /** Drop the worker for a root (e..g. after fatal protocol error). */
     invalidate(root: string): Promise<void>;
     shutdown(): Promise<void>;
 }
-/** Singleton used by the Pi extension for the process lifetime. */
+/** Singleton for advanced hosts; tools registration uses a local pool. */
 export declare const sharedNativePool: NativeSessionPool;

@@ -98,20 +98,29 @@ export function registerAstSgrepTools(pi, runtime = new AstSgrepRuntime(pi), fre
     // Prefer a registration-local pool so tests / multi-agent hosts do not share
     // sticky state. sharedNativePool remains for advanced single-session reuse.
     const ensurePool = () => {
-        if (pool.configured())
-            return;
         try {
             const env = runtime.nativeEnv?.() ?? { NO_COLOR: "1" };
-            const binary = runtime.resolveBinaryPath?.({ env });
-            if (!binary)
-                return;
-            const opts = { binary, env };
+            let binary;
+            try {
+                binary = runtime.resolveBinaryPath?.({ env });
+            }
+            catch {
+                binary = undefined;
+            }
+            const opts = { env };
+            if (binary)
+                opts.binary = binary;
             if (runtime.config?.timeoutMs !== undefined)
                 opts.timeoutMs = runtime.config.timeoutMs;
+            if (typeof env.ASGREP_NO_EMBED === "string") {
+                opts.useEmbed = env.ASGREP_NO_EMBED !== "1" && env.ASGREP_NO_EMBED !== "true";
+            }
+            if (typeof env.ASGREP_INDEX_PATH === "string")
+                opts.indexPath = env.ASGREP_INDEX_PATH;
             pool.configure(opts);
         }
         catch {
-            // Fall back to cold CLI for this session.
+            pool.configure({});
         }
     };
     const resolveRoot = async (cwd) => runtime.resolveRoot ? await runtime.resolveRoot({ cwd }) : cwd;
@@ -122,10 +131,10 @@ export function registerAstSgrepTools(pi, runtime = new AstSgrepRuntime(pi), fre
         if (worker) {
             return asEnvelope(await worker.call(tool, args, options.signal ? { signal: options.signal } : {}));
         }
-        // No sticky worker (tests / missing binary) — cold CLI argv fallback.
+        // Last resort: cold CLI argv (tests without NAPI / missing addon).
         return runtime.run(argvFor(tool, args), context, options);
     };
-    // Freshness + tools share the same warm Searcher as Code Mode.
+    // Freshness + tools share the same warm in-process Searcher as Code Mode.
     const warmRuntime = {
         run: (args, context, options) => runtime.run(args, context, options),
         resolveRoot: (context) => resolveRoot(context.cwd),
@@ -144,15 +153,15 @@ export function registerAstSgrepTools(pi, runtime = new AstSgrepRuntime(pi), fre
         if (typeof path === "string")
             freshness.markAffectedPath(path, ctx.cwd);
     });
-    // Primary surface: Code Mode (compose many lookups in one JS cell — like Codex Conversion's exec).
-    // Sibling to MCP: MCP links core in-process; Pi uses a session-scoped sticky CLI worker.
+    // Primary surface: Code Mode — in-process NAPI (MCP-class), compose in JS.
+    // Sibling to MCP: pick one surface; both link core, never each other.
     pi.registerTool({
         name: "asgrep_codemode",
         label: "ast-sgrep Code Mode",
         description: [
             "Primary ast-sgrep tool. Write JavaScript that calls typed asgrep.* methods.",
             "Compose with await / Promise.all, filter in code, return only the shaped final value.",
-            "One warm native process is reused for the whole Pi session (and across tool calls).",
+            "Runs in-process (native addon) — no CLI spawn; warm Searcher for the Pi session.",
             "",
             CODEMODE_TYPES_FOR_MODEL,
             "",
@@ -184,27 +193,27 @@ export function registerAstSgrepTools(pi, runtime = new AstSgrepRuntime(pi), fre
                 catch {
                     binary = null;
                 }
-                // Session pool: do NOT end the worker after this tool — reuse across turns.
-                const sticky = binary ? await pool.acquire(root) : null;
+                // In-process NAPI first; CLI sticky only if addon missing.
+                const sticky = await pool.acquire(root);
                 const batchHost = {
                     run: (args, context, runOptions) => runtime.run(args, context, runOptions ?? {}),
-                    runBatch: binary
-                        ? (calls, context, runOptions) => runNativeBatch((a, c, o) => runtime.run(a, c, o ?? {}), calls, context, runOptions, (body, c, o) => {
-                            const stdinOpts = {
-                                binary: binary,
-                                cwd: c.cwd,
-                                body,
-                                env,
-                            };
-                            if (o?.signal)
-                                stdinOpts.signal = o.signal;
-                            if (runtime.config?.timeoutMs !== undefined)
-                                stdinOpts.timeoutMs = runtime.config.timeoutMs;
-                            return runBatchViaStdin(stdinOpts);
-                        })
-                        : (calls, context, runOptions) => runNativeBatch((a, c, o) => runtime.run(a, c, o ?? {}), calls, context, runOptions),
                     sticky,
                 };
+                if (binary) {
+                    batchHost.runBatch = (calls, context, runOptions) => runNativeBatch((a, c, o) => runtime.run(a, c, o ?? {}), calls, context, runOptions, (body, c, o) => {
+                        const stdinOpts = {
+                            binary: binary,
+                            cwd: c.cwd,
+                            body,
+                            env,
+                        };
+                        if (o?.signal)
+                            stdinOpts.signal = o.signal;
+                        if (runtime.config?.timeoutMs !== undefined)
+                            stdinOpts.timeoutMs = runtime.config.timeoutMs;
+                        return runBatchViaStdin(stdinOpts);
+                    });
+                }
                 const bundle = createAsgrepConnector(batchHost, { cwd: ctx.cwd }, options);
                 bundle.resetStats();
                 const outcome = await runCodemode(params.code, bundle.asgrep, { stats: bundle.stats });
@@ -219,12 +228,13 @@ export function registerAstSgrepTools(pi, runtime = new AstSgrepRuntime(pi), fre
                             code: outcome.code,
                             stats: outcome.stats,
                             wallMs: outcome.wallMs,
+                            backend: pool.backend(),
                         },
                     };
                 }
                 const rendered = safeRender(outcome.result);
                 return {
-                    content: [{ type: "text", text: bounded(summarizeCodemode(outcome.result, outcome.stats, outcome.wallMs)) }],
+                    content: [{ type: "text", text: bounded(summarizeCodemode(outcome.result, outcome.stats, outcome.wallMs, pool.backend())) }],
                     details: {
                         ok: true,
                         command: "codemode",
@@ -233,6 +243,7 @@ export function registerAstSgrepTools(pi, runtime = new AstSgrepRuntime(pi), fre
                         rendered,
                         stats: outcome.stats,
                         wallMs: outcome.wallMs,
+                        backend: pool.backend(),
                     },
                 };
             }
@@ -355,7 +366,7 @@ function safeRender(value) {
         return String(value);
     }
 }
-function summarizeCodemode(value, stats, wallMs) {
+function summarizeCodemode(value, stats, wallMs, backend) {
     const parts = ["codemode completed"];
     if (value && typeof value === "object") {
         const record = value;
@@ -366,9 +377,13 @@ function summarizeCodemode(value, stats, wallMs) {
         else if (typeof record.node_count === "number")
             parts[0] = `codemode completed: ${record.node_count} node${record.node_count === 1 ? "" : "s"}`;
     }
+    if (backend === "napi")
+        parts.push("in-process");
+    else if (backend === "cli")
+        parts.push("cli-sticky");
     if (stats && stats.calls > 0) {
         const via = (stats.stickyCalls ?? 0) > 0
-            ? `sticky ${stats.stickyCalls}`
+            ? `native ${stats.stickyCalls}`
             : stats.batchedCalls > 0
                 ? `batched ${stats.batchedCalls}`
                 : stats.parallelSpawnCalls > 0

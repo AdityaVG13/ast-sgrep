@@ -57,11 +57,9 @@ Model ──► asgrep_codemode({ code }) ──► Node capability sandbox
                                               │  asgrep.search / chain / defs / …
                                               │  Promise.all → same-tick coalesce
                                               │       │
-                                              │       ├─ session sticky: one `codemode-serve`
-                                              │       │         per project root (Pi lifetime)
-                                              │       ├─ else N>1: one `codemode-batch`
-                                              │       │       (serial warm / Auto parallel)
-                                              │       └─ fallback: overlapped CLI spawns
+                                              │       ├─ in-process NAPI Session
+                                              │       │     (CodeModeSession → core)
+                                              │       └─ degraded: CLI sticky serve
                                               ▼
                                         shaped return + stats
 ```
@@ -81,16 +79,24 @@ freshness checks (same idea as pi-codex-conversion's long-lived Code Mode host).
 Inside a one-shot batch, Rust defaults to **serial warm**; parallel opens only
 when Auto sees ≥4 read-only calls or Parallel is forced.
 
-### Why a CLI child at all?
+### Why no CLI spawn (Pi / Code Mode)
 
 | Surface | Process model |
 |---------|----------------|
-| **MCP** (`asgrep-mcp`) | Already **in-process** — links `ast-sgrep-core`, warm `Searcher` cache. Host spawns the MCP server once (transport), not per tool call. |
-| **Pi** (`pi-ast-sgrep`) | Ships a **prebuilt `asgrep` binary** via npm optionalDeps (no node-gyp / Node ABI matrix). Pi talks to that child over JSON/NDJSON. |
+| **MCP** (`asgrep-mcp`) | **In-process** — links `ast-sgrep-core`, warm `Searcher`. |
+| **Pi / Code Mode** | **In-process NAPI** — `ast-sgrep-codemode-napi` loads `CodeModeSession` inside Node. Same retrieval core as MCP; no `asgrep` child on the hot path. |
 
-Not spawning would be strictly faster. Session sticky is the pragmatic max under the current packaging contract. True zero-spawn for Pi needs a **NAPI / napi-rs** addon exposing `CodeModeSession` — tracked as future work; crash isolation and release-contract complexity are the tradeoffs.
+Install **either** MCP **or** the Pi package (Code Mode) — siblings, not a stack. Both should feel like a native grep: warm index, zero process spawn, microseconds-to-milliseconds per lookup after the first open.
 
-MCP must not be routed through the Pi CLI, and Code Mode must not import MCP.
+CLI `codemode-serve` remains only as a degraded fallback when the `.node` addon is missing (unsupported host). Prefer `npm run build:native` / release artifacts that ship the addon beside the extension.
+
+```bash
+# Dev: build the in-process addon for this host
+cargo build -p ast-sgrep-codemode-napi --release
+npm run build:native -w pi-ast-sgrep
+```
+
+Measured on the sample fixture (release NAPI, warm): **20 searches ≈ few ms** vs **~60 ms for 5 cold CLI spawns**.
 
 Direct tools (`asgrep_search`, `asgrep_index`, `asgrep_status`) remain for simple one-shot lookups. Prefer Code Mode whenever the task needs composition, parallel lookups, or filtering before the model sees data.
 
