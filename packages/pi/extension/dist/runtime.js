@@ -470,6 +470,15 @@ export class AstSgrepRuntime {
             throw new RuntimeError("EXEC_FAILED", "Unable to execute ast-sgrep", { cause: message });
         }
     }
+    /** Absolute path to the native binary (for sticky serve / stdin batch spawn). */
+    resolveBinaryPath(options = {}) {
+        const env = { ...this.#environment, ...this.config.env, ...options.env, NO_COLOR: "1" };
+        return getBinary(this.config, env, this.#resolver);
+    }
+    /** Merged process env for native Code Mode workers. */
+    nativeEnv(options = {}) {
+        return { ...this.#environment, ...this.config.env, ...options.env, NO_COLOR: "1" };
+    }
     async checkCompatibility(context, options = {}) {
         const value = await this.run(["version", "--json"], context, options);
         if (value.version !== RUNTIME_VERSION)

@@ -115,10 +115,12 @@ enum Commands {
     Eval(eval::EvalArgs),
     /// Run many Code Mode tool calls in one warm process (Pi parallel coalescing).
     CodemodeBatch {
-        /// Path to a JSON BatchRequest file.
+        /// Path to a JSON BatchRequest file, or `-` for stdin.
         #[arg(long)]
         requests: PathBuf,
     },
+    /// Sticky NDJSON Code Mode worker (one warm Searcher for a whole program).
+    CodemodeServe,
 }
 #[derive(Parser)]
 struct VersionArgs {
@@ -240,6 +242,7 @@ impl Cli {
             Some(Commands::Doctor { .. }) => "doctor",
             Some(Commands::Eval(_)) => "eval",
             Some(Commands::CodemodeBatch { .. }) => "codemode-batch",
+            Some(Commands::CodemodeServe) => "codemode-serve",
         }
     }
 }
@@ -260,6 +263,8 @@ fn raw_command_name(args: &[std::ffi::OsString]) -> &'static str {
         "robot-docs",
         "doctor",
         "eval",
+        "codemode-batch",
+        "codemode-serve",
     ];
     args.iter()
         .filter_map(|a| a.to_str())
@@ -375,12 +380,32 @@ fn run_command(cli: &Cli, command: &Commands) -> anyhow::Result<()> {
         Commands::Doctor { root, args } => agent::run_doctor(cli, &root.root, args),
         Commands::Eval(args) => eval::run_eval(cli, args),
         Commands::CodemodeBatch { requests } => run_codemode_batch(cli, requests),
+        Commands::CodemodeServe => run_codemode_serve(cli),
+    }
+}
+
+fn codemode_session_config(cli: &Cli, root: PathBuf) -> ast_sgrep_codemode::SessionConfig {
+    ast_sgrep_codemode::SessionConfig {
+        root,
+        index_path: cli.index_path.clone(),
+        limit: cli
+            .limit
+            .unwrap_or_else(ast_sgrep_core::SearchOptions::default_limit),
+        use_embed: !cli.no_embed,
+        ..ast_sgrep_codemode::SessionConfig::default()
     }
 }
 
 fn run_codemode_batch(cli: &Cli, requests: &Path) -> anyhow::Result<()> {
-    let raw = std::fs::read_to_string(requests)
-        .with_context(|| format!("read batch requests {}", requests.display()))?;
+    let raw = if requests.as_os_str() == "-" {
+        let mut buf = String::new();
+        std::io::Read::read_to_string(&mut std::io::stdin(), &mut buf)
+            .context("read batch requests from stdin")?;
+        buf
+    } else {
+        std::fs::read_to_string(requests)
+            .with_context(|| format!("read batch requests {}", requests.display()))?
+    };
     let mut request: ast_sgrep_codemode::BatchRequest =
         serde_json::from_str(&raw).context("parse batch requests JSON")?;
     if request.root.is_none() {
@@ -407,11 +432,14 @@ fn run_codemode_batch(cli: &Cli, requests: &Path) -> anyhow::Result<()> {
     };
     let response = ast_sgrep_codemode::run_batch(config, &request)
         .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+    // Transport ok=true even when some calls fail — per-call status lives in results[].
+    // (ok:false would make Pi parseEnvelope throw and re-run the whole wave.)
     let envelope = serde_json::json!({
         "schema_version": MACHINE_SCHEMA_VERSION,
         "tool": "asgrep",
         "command": "codemode-batch",
-        "ok": response.ok,
+        "ok": true,
+        "all_ok": response.all_ok,
         "version": env!("CARGO_PKG_VERSION"),
         "machine_schema_version": MACHINE_SCHEMA_VERSION,
         "call_count": response.call_count,
@@ -419,8 +447,22 @@ fn run_codemode_batch(cli: &Cli, requests: &Path) -> anyhow::Result<()> {
         "mode": response.mode,
         "results": response.results,
     });
-    println!("{}", serde_json::to_string_pretty(&envelope)?);
+    // Compact JSON: Code Mode waves are hot; pretty-print is pure serial waste.
+    println!("{}", serde_json::to_string(&envelope)?);
     Ok(())
+}
+
+fn run_codemode_serve(cli: &Cli) -> anyhow::Result<()> {
+    let root = cli
+        .root
+        .clone()
+        .or_else(|| Some(cli.search_root.clone()))
+        .unwrap_or_else(|| PathBuf::from("."));
+    let config = codemode_session_config(cli, root);
+    let stdin = std::io::BufReader::new(std::io::stdin());
+    let stdout = std::io::stdout();
+    ast_sgrep_codemode::run_serve(config, stdin, stdout.lock())
+        .map_err(|e| anyhow::anyhow!(e.to_string()))
 }
 fn run_version(cli: &Cli, args: &VersionArgs) -> anyhow::Result<()> {
     if cli.json || args.json {
@@ -468,7 +510,9 @@ fn run_chain(root: &Path, cli: &Cli, query: &str) -> anyhow::Result<()> {
     let store = IndexStore::open(&root, index_path.as_deref()).context("failed to open index")?;
     let config = ChainConfig {
         limit: cli.limit.unwrap_or(ChainConfig::default().limit),
-        top_n: 1,
+        // Match Code Mode session default (ChainConfig::default().top_n = 20).
+        // Previously hard-coded to 1, so CLI spawn and in-process session diverged.
+        top_n: ChainConfig::default().top_n,
         ..ChainConfig::default()
     };
     let r = expand_chain(&store, query, &config).context("chain search failed")?;

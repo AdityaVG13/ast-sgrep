@@ -42,7 +42,10 @@ pub mod tools;
 pub use adapters::{
     anthropic_discovery_tools, anthropic_tools, cloudflare_connector, openai_tools, surface_manifest,
 };
-pub use batch::{run_batch, BatchCall, BatchCallResult, BatchRequest, BatchResponse, MAX_BATCH_CALLS};
+pub use batch::{
+    run_batch, run_serve, BatchCall, BatchCallResult, BatchRequest, BatchResponse, ParallelMode,
+    ServeRequest, ServeResponse, MAX_BATCH_CALLS,
+};
 pub use catalog::{catalog_describe, catalog_search, tool_catalog, ToolDef, ToolKind};
 pub use plan::{example_plan, parse_plan, run_plan, Plan, PlanResult, PlanStep};
 pub use session::{CodeModeSession, SessionConfig};

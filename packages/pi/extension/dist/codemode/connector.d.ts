@@ -2,6 +2,13 @@ import type { MachineEnvelope } from "../runtime.js";
 import type { ChainArgs, SearchArgs } from "./types.js";
 import { type BatchCapableHost, type DispatchStats } from "./dispatch.js";
 export type ConnectorHost = {
+    /** Typed tool call (preferred — no argv archaeology). */
+    call?(tool: string, args: Record<string, unknown>, context: {
+        cwd: string;
+    }, options?: {
+        signal?: AbortSignal;
+    }): Promise<MachineEnvelope>;
+    /** Legacy CLI argv (spawn fallback / direct tools). */
     run(args: readonly string[], context: {
         cwd: string;
     }, options?: {
@@ -41,8 +48,7 @@ export type ConnectorBundle = {
  * Host-side connector: typed methods the sandbox calls.
  *
  * Same-tick calls (Promise.all) are coalesced by CodemodeDispatcher so N
- * lookups share one warm `codemode-batch` process when available, otherwise
- * overlapped CLI spawns.
+ * lookups share sticky serve / one warm batch process when available.
  */
 export declare function createAsgrepConnector(host: BatchCapableHost, context: {
     cwd: string;

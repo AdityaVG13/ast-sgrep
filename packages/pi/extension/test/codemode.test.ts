@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createAsgrepConnector } from "../src/codemode/connector.js";
-import { createCodemodeDispatcher } from "../src/codemode/dispatch.js";
+import { createCodemodeDispatcher, argvFor, asEnvelope } from "../src/codemode/dispatch.js";
 import { normalizeCode, runCodemode } from "../src/codemode/sandbox.js";
 import type { MachineEnvelope } from "../src/runtime.js";
 
@@ -66,7 +66,7 @@ test("dispatcher coalesces same-tick calls into one batch wave", async () => {
           ok: true,
           value: { tool: "asgrep", schema_version: "1.0.0", ok: true, hits: [{ symbol: c.tool }], batched: true },
         })),
-        mode: "parallel",
+        mode: "serial",
       };
     },
   };
@@ -87,6 +87,91 @@ test("dispatcher coalesces same-tick calls into one batch wave", async () => {
   assert.equal(batchCalls, 1);
   assert.equal(runCalls.length, 0);
   assert.equal(bundle.stats().batchedCalls, 2);
+});
+
+test("partial batch failure does not re-run successful siblings via spawn", async () => {
+  const runCalls: string[][] = [];
+  const host = {
+    async run(args: readonly string[]): Promise<MachineEnvelope> {
+      runCalls.push([...args]);
+      return { tool: "asgrep", schema_version: "1.0.0", ok: true, hits: [] };
+    },
+    async runBatch(calls: Array<{ id: string; tool: string; args: Record<string, unknown> }>) {
+      return {
+        all_ok: false,
+        results: calls.map((c, i) =>
+          i === 0
+            ? { id: c.id, ok: true, value: { tool: "asgrep", schema_version: "1.0.0", ok: true, hits: [{ symbol: "ok" }] } }
+            : { id: c.id, ok: false, error: "symbol is required" },
+        ),
+      };
+    },
+  };
+  const bundle = createAsgrepConnector(host, { cwd: "/p" });
+  const outcome = await runCodemode(
+    `async () => {
+      try {
+        await Promise.all([
+          asgrep.search({ query: "a" }),
+          asgrep.defs({ symbol: "" }),
+        ]);
+        return "should-not";
+      } catch (e) {
+        return String(e.message || e);
+      }
+    }`,
+    bundle.asgrep,
+    { stats: bundle.stats },
+  );
+  assert.equal(outcome.ok, true, outcome.error);
+  assert.match(String(outcome.result), /symbol|failed/i);
+  assert.equal(runCalls.length, 0, "must not fall back to spawn on per-call failure");
+  assert.equal(bundle.stats().batchedCalls, 2);
+  assert.equal(bundle.stats().parallelSpawnCalls, 0);
+});
+
+test("sticky worker handles multi-wave program without batch/spawn", async () => {
+  const stickyCalls: string[] = [];
+  const host = {
+    async run(): Promise<MachineEnvelope> {
+      throw new Error("run should not be used");
+    },
+    sticky: {
+      async call(tool: string) {
+        stickyCalls.push(tool);
+        return { tool: "asgrep", schema_version: "1.0.0", ok: true, hits: [{ symbol: tool }] };
+      },
+      async batch(calls: Array<{ id: string; tool: string }>) {
+        for (const c of calls) stickyCalls.push(c.tool);
+        return {
+          results: calls.map((c) => ({
+            id: c.id,
+            ok: true,
+            value: { tool: "asgrep", schema_version: "1.0.0", ok: true, hits: [{ symbol: c.tool }] },
+          })),
+        };
+      },
+      async end() {},
+    },
+  };
+  const bundle = createAsgrepConnector(host, { cwd: "/p" });
+  const outcome = await runCodemode(
+    `async () => {
+      const [a, b] = await Promise.all([
+        asgrep.search({ query: "one" }),
+        asgrep.defs({ symbol: "Foo" }),
+      ]);
+      const c = await asgrep.chain({ query: "Foo" });
+      return { a: a.hits[0].symbol, b: b.hits[0].symbol, c: c.hits[0].symbol };
+    }`,
+    bundle.asgrep,
+    { stats: bundle.stats },
+  );
+  assert.equal(outcome.ok, true, outcome.error);
+  assert.deepEqual(outcome.result, { a: "search", b: "defs", c: "chain" });
+  assert.ok(bundle.stats().stickyCalls >= 3);
+  assert.equal(bundle.stats().parallelSpawnCalls, 0);
+  assert.deepEqual(stickyCalls.sort(), ["chain", "defs", "search"]);
 });
 
 test("dispatcher falls back to parallel spawn when batch fails", async () => {
@@ -133,23 +218,46 @@ test("sandbox blocks require and process", async () => {
   assert.equal(processAttempt.result, "undefined");
 });
 
-test("connector maps defs/callers/chain/semantic argv", async () => {
-  const calls: string[][] = [];
-  const bundle = createAsgrepConnector({
-    async run(args: readonly string[]): Promise<MachineEnvelope> {
-      calls.push([...args]);
+test("typed connector preserves defs vs search(query containing defs:)", async () => {
+  const tools: string[] = [];
+  const host = {
+    async run(): Promise<MachineEnvelope> {
       return { tool: "asgrep", schema_version: "1.0.0", ok: true, hits: [] };
     },
-  }, { cwd: "/project" });
-  await bundle.asgrep.defs({ symbol: "Foo", limit: 4 });
-  await bundle.asgrep.callers({ symbol: "Foo", limit: 4 });
-  await bundle.asgrep.chain({ query: "Foo", limit: 4 });
-  await bundle.asgrep.semantic({ query: "credential renewal", limit: 4 });
-  // Each call is its own wave when awaited sequentially.
-  assert.deepEqual(calls[0], ["--json", "--format", "agent-capsule", "--limit", "4", "--excerpt-lines", "0", "defs: Foo", "."]);
-  assert.deepEqual(calls[1], ["--json", "--format", "agent-capsule", "--limit", "4", "--excerpt-lines", "0", "callers: Foo", "."]);
-  assert.deepEqual(calls[2], ["chain", "Foo", ".", "--json", "--format", "agent-capsule", "--limit", "4", "--excerpt-lines", "0"]);
-  assert.deepEqual(calls[3], ["semantic", "credential renewal", ".", "--json", "--format", "agent-capsule", "--limit", "4", "--excerpt-lines", "0"]);
+    async runBatch(calls: Array<{ id: string; tool: string; args: Record<string, unknown> }>) {
+      for (const c of calls) tools.push(c.tool);
+      return {
+        results: calls.map((c) => ({
+          id: c.id,
+          ok: true,
+          value: { tool: "asgrep", schema_version: "1.0.0", ok: true, hits: [], got: c.tool, args: c.args },
+        })),
+      };
+    },
+  };
+  const bundle = createAsgrepConnector(host, { cwd: "/project" });
+  await Promise.all([
+    bundle.asgrep.search({ query: "defs: auth in login flow", limit: 4 }),
+    bundle.asgrep.defs({ symbol: "Auth", limit: 4, excerptLines: 2 }),
+  ]);
+  assert.deepEqual(tools.sort(), ["defs", "search"]);
+});
+
+test("argvFor emits typed-equivalent CLI for spawn fallback", () => {
+  assert.deepEqual(argvFor("defs", { symbol: "Foo", limit: 4, excerpt_lines: 2 }), [
+    "--json", "--format", "agent-capsule", "--limit", "4", "--excerpt-lines", "2", "defs:Foo", ".",
+  ]);
+  assert.deepEqual(argvFor("chain", { query: "Foo", limit: 4 }), [
+    "chain", "Foo", ".", "--json", "--limit", "4",
+  ]);
+});
+
+test("asEnvelope does not let payload clobber ok/tool", () => {
+  const env = asEnvelope({ tool: "evil", ok: false, schema_version: "9", hits: [1] });
+  assert.equal(env.tool, "asgrep");
+  assert.equal(env.ok, true);
+  assert.equal(env.schema_version, "1.0.0");
+  assert.deepEqual(env.hits, [1]);
 });
 
 test("createCodemodeDispatcher exposes wave stats", async () => {

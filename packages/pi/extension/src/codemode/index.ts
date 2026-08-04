@@ -5,7 +5,7 @@
  * the model writes JavaScript that calls typed `asgrep.*` methods inside a
  * restricted executor. Intermediate results stay in the sandbox; only the
  * shaped return value re-enters the model context. Parallel calls use
- * `Promise.all` and are coalesced into one warm batch process when possible.
+ * `Promise.all` and are coalesced into sticky serve / one warm batch process.
  *
  * This package is intentionally independent of MCP. Both MCP and Code Mode
  * sit on the native ast-sgrep binary / core; they never import each other.
@@ -22,6 +22,11 @@ export { CODEMODE_TYPES_FOR_MODEL, type SearchArgs, type ChainArgs } from "./typ
 export {
   createCodemodeDispatcher,
   runNativeBatch,
+  argvFor,
+  asEnvelope,
   type DispatchStats,
   type BatchCapableHost,
+  type StickyWorker,
+  type BatchResult,
 } from "./dispatch.js";
+export { startStickyWorker, runBatchViaStdin } from "./worker.js";

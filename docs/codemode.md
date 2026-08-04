@@ -57,8 +57,10 @@ Model ──► asgrep_codemode({ code }) ──► Node capability sandbox
                                               │  asgrep.search / chain / defs / …
                                               │  Promise.all → same-tick coalesce
                                               │       │
-                                              │       ├─ N>1: one `codemode-batch`
-                                              │       │       (warm/parallel Searchers)
+                                              │       ├─ sticky: one `codemode-serve`
+                                              │       │         (warm Searcher, NDJSON)
+                                              │       ├─ else N>1: one `codemode-batch`
+                                              │       │       (serial warm / Auto parallel)
                                               │       └─ fallback: overlapped CLI spawns
                                               ▼
                                         shaped return + stats
@@ -72,7 +74,11 @@ Wall time ≈ serial + parallel_work / N.
 |------------------------|-------------------|
 | Process spawn, SQLite open, freshness once per Code Mode call | Independent searches inside `Promise.all` |
 
-Same-tick coalesce turns N serial spawn costs into **one** batch process. Inside the batch, Rust runs calls on a rayon pool (multiple readers) so search work overlaps.
+Same-tick coalesce turns N serial spawn costs into **one** batch process. Prefer
+**sticky serve** (`codemode-serve`): one warm Searcher for the whole Code Mode
+program (multi-wave), which removes spawn from every wave. Inside a one-shot
+batch, Rust defaults to **serial warm** (shared Searcher); parallel opens only
+when Auto sees ≥4 read-only calls or Parallel is forced.
 
 Direct tools (`asgrep_search`, `asgrep_index`, `asgrep_status`) remain for simple one-shot lookups. Prefer Code Mode whenever the task needs composition, parallel lookups, or filtering before the model sees data.
 

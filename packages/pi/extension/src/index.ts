@@ -1,6 +1,13 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { createAsgrepConnector, runCodemode, runNativeBatch, CODEMODE_TYPES_FOR_MODEL } from "./codemode/index.js";
+import {
+  createAsgrepConnector,
+  runCodemode,
+  runNativeBatch,
+  startStickyWorker,
+  runBatchViaStdin,
+  CODEMODE_TYPES_FOR_MODEL,
+} from "./codemode/index.js";
 import { AstSgrepRuntime, FreshnessCoordinator, RuntimeError, type FreshnessRuntime, type MachineEnvelope } from "./runtime.js";
 
 const DEFAULT_LIMIT = 8;
@@ -41,7 +48,12 @@ const codemodeParameters = Type.Object({
   }),
 }, { additionalProperties: false });
 
-type RuntimeLike = FreshnessRuntime;
+type RuntimeLike = FreshnessRuntime & {
+  resolveRoot?(context: { cwd: string }): Promise<string>;
+  resolveBinaryPath?(options?: { env?: NodeJS.ProcessEnv }): string;
+  nativeEnv?(options?: { env?: NodeJS.ProcessEnv }): NodeJS.ProcessEnv;
+  config?: { timeoutMs?: number };
+};
 type FreshnessLike = Pick<FreshnessCoordinator, "ensureFresh" | "markAffectedPath">;
 type ToolContext = { cwd: string };
 type CommandContext = ToolContext & {
@@ -168,17 +180,64 @@ export function registerAstSgrepTools(
     parameters: codemodeParameters,
     async execute(_toolCallId, params, signal, onUpdate, ctx) {
       report(onUpdate, "codemode", "started");
+      let sticky: Awaited<ReturnType<typeof startStickyWorker>> | null = null;
       try {
         const options = signal ? { signal } : {};
         await freshness.ensureFresh(runtime, { cwd: ctx.cwd }, options);
+        const root = runtime.resolveRoot ? await runtime.resolveRoot({ cwd: ctx.cwd }) : ctx.cwd;
+        const env = runtime.nativeEnv?.() ?? { NO_COLOR: "1" };
+        let binary: string | null = null;
+        try {
+          binary = runtime.resolveBinaryPath?.({ env }) ?? null;
+        } catch {
+          binary = null;
+        }
+        if (binary) {
+          try {
+            const stickyOpts: Parameters<typeof startStickyWorker>[0] = {
+              binary,
+              cwd: root,
+              env,
+            };
+            if (signal) stickyOpts.signal = signal;
+            if (runtime.config?.timeoutMs !== undefined) stickyOpts.timeoutMs = runtime.config.timeoutMs;
+            sticky = await startStickyWorker(stickyOpts);
+          } catch {
+            sticky = null;
+          }
+        }
         const batchHost = {
           run: (args: readonly string[], context: { cwd: string }, runOptions?: { signal?: AbortSignal }) =>
             runtime.run(args, context, runOptions ?? {}),
-          runBatch: (
-            calls: Array<{ id: string; tool: string; args: Record<string, unknown> }>,
-            context: { cwd: string },
-            runOptions?: { signal?: AbortSignal },
-          ) => runNativeBatch((a, c, o) => runtime.run(a, c, o ?? {}), calls, context, runOptions),
+          runBatch: binary
+            ? (
+                calls: Array<{ id: string; tool: string; args: Record<string, unknown> }>,
+                context: { cwd: string },
+                runOptions?: { signal?: AbortSignal },
+              ) =>
+                runNativeBatch(
+                  (a, c, o) => runtime.run(a, c, o ?? {}),
+                  calls,
+                  context,
+                  runOptions,
+                  (body, c, o) => {
+                    const stdinOpts: Parameters<typeof runBatchViaStdin>[0] = {
+                      binary: binary!,
+                      cwd: c.cwd,
+                      body,
+                      env,
+                    };
+                    if (o?.signal) stdinOpts.signal = o.signal;
+                    if (runtime.config?.timeoutMs !== undefined) stdinOpts.timeoutMs = runtime.config.timeoutMs;
+                    return runBatchViaStdin(stdinOpts);
+                  },
+                )
+            : (
+                calls: Array<{ id: string; tool: string; args: Record<string, unknown> }>,
+                context: { cwd: string },
+                runOptions?: { signal?: AbortSignal },
+              ) => runNativeBatch((a, c, o) => runtime.run(a, c, o ?? {}), calls, context, runOptions),
+          sticky,
         };
         const bundle = createAsgrepConnector(batchHost, { cwd: ctx.cwd }, options);
         bundle.resetStats();
@@ -212,6 +271,8 @@ export function registerAstSgrepTools(
         };
       } catch (cause) {
         return failure("codemode", cause);
+      } finally {
+        if (sticky) await sticky.end().catch(() => undefined);
       }
     },
   });
@@ -263,7 +324,7 @@ function safeRender(value: unknown): string {
 
 function summarizeCodemode(
   value: unknown,
-  stats?: { calls: number; batchedCalls: number; parallelSpawnCalls: number; waves: number },
+  stats?: { calls: number; batchedCalls: number; parallelSpawnCalls: number; stickyCalls?: number; waves: number },
   wallMs?: number,
 ): string {
   const parts: string[] = ["codemode completed"];
@@ -274,7 +335,14 @@ function summarizeCodemode(
     else if (typeof record.node_count === "number") parts[0] = `codemode completed: ${record.node_count} node${record.node_count === 1 ? "" : "s"}`;
   }
   if (stats && stats.calls > 0) {
-    const via = stats.batchedCalls > 0 ? `batched ${stats.batchedCalls}` : stats.parallelSpawnCalls > 0 ? `parallel-spawn ${stats.parallelSpawnCalls}` : `${stats.calls} call${stats.calls === 1 ? "" : "s"}`;
+    const via =
+      (stats.stickyCalls ?? 0) > 0
+        ? `sticky ${stats.stickyCalls}`
+        : stats.batchedCalls > 0
+          ? `batched ${stats.batchedCalls}`
+          : stats.parallelSpawnCalls > 0
+            ? `parallel-spawn ${stats.parallelSpawnCalls}`
+            : `${stats.calls} call${stats.calls === 1 ? "" : "s"}`;
     parts.push(via);
     if (stats.waves > 1) parts.push(`${stats.waves} waves`);
   }

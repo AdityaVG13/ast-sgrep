@@ -41,7 +41,8 @@ impl Default for SessionConfig {
 struct SearcherKey {
     root: PathBuf,
     index_path: Option<PathBuf>,
-    limit: usize,
+    /// Opened Searcher limit; reused for any call whose limit is ≤ this.
+    open_limit: usize,
     use_embed: bool,
 }
 
@@ -117,31 +118,43 @@ impl CodeModeSession {
     fn searcher_for(
         &self,
         root: PathBuf,
-        limit: usize,
+        needed_limit: usize,
     ) -> anyhow::Result<std::sync::MutexGuard<'_, Option<(SearcherKey, Searcher)>>> {
-        let key = SearcherKey {
-            root: root.clone(),
-            index_path: self.config.index_path.clone(),
-            limit,
-            use_embed: self.config.use_embed,
-        };
+        let needed = needed_limit.clamp(1, 500);
         let mut guard = self
             .searcher_cache
             .lock()
             .map_err(|_| anyhow!("searcher cache lock poisoned"))?;
-        let need_new = match guard.as_ref() {
-            None => true,
-            Some((k, _)) => k != &key,
+        let reuse = match guard.as_ref() {
+            Some((k, _))
+                if k.root == root
+                    && k.index_path == self.config.index_path
+                    && k.use_embed == self.config.use_embed
+                    && k.open_limit >= needed =>
+            {
+                true
+            }
+            _ => false,
         };
-        if need_new {
+        if !reuse {
+            // Open at least as wide as config + this call so later smaller calls reuse.
+            let open_limit = needed.max(self.config.limit).clamp(1, 500);
             let searcher = Searcher::new(SearchOptions {
-                root,
+                root: root.clone(),
                 index_path: self.config.index_path.clone(),
-                limit,
+                limit: open_limit,
                 use_embed: self.config.use_embed,
                 ..SearchOptions::default()
             })?;
-            *guard = Some((key, searcher));
+            *guard = Some((
+                SearcherKey {
+                    root,
+                    index_path: self.config.index_path.clone(),
+                    open_limit,
+                    use_embed: self.config.use_embed,
+                },
+                searcher,
+            ));
         }
         Ok(guard)
     }
@@ -170,11 +183,16 @@ impl CodeModeSession {
         let root = self.root_arg(args);
         let guard = self.searcher_for(root, limit)?;
         let searcher = &guard.as_ref().expect("searcher_for populates cache").1;
-        let response = if semantic_only {
+        let mut response = if semantic_only {
             searcher.search_semantic(query)?
         } else {
             searcher.search(query)?
         };
+        // Searcher may be wider than this call's limit (warm-cache reuse).
+        if response.hits.len() > limit {
+            response.hits.truncate(limit);
+            response.limit = limit;
+        }
         Ok(format_response_with(&response, format, excerpt_lines))
     }
 

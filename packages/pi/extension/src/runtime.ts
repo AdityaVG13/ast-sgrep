@@ -492,6 +492,17 @@ export class AstSgrepRuntime {
     }
   }
 
+  /** Absolute path to the native binary (for sticky serve / stdin batch spawn). */
+  resolveBinaryPath(options: { env?: NodeJS.ProcessEnv } = {}): string {
+    const env: NodeJS.ProcessEnv = { ...this.#environment, ...this.config.env, ...options.env, NO_COLOR: "1" };
+    return getBinary(this.config, env, this.#resolver);
+  }
+
+  /** Merged process env for native Code Mode workers. */
+  nativeEnv(options: { env?: NodeJS.ProcessEnv } = {}): NodeJS.ProcessEnv {
+    return { ...this.#environment, ...this.config.env, ...options.env, NO_COLOR: "1" };
+  }
+
   async checkCompatibility(context: RuntimeContext, options: RunOptions = {}): Promise<MachineEnvelope> {
     const value = await this.run(["version", "--json"], context, options);
     if (value.version !== RUNTIME_VERSION) throw new RuntimeError("VERSION_MISMATCH", "ast-sgrep binary version does not match the extension", { expected: RUNTIME_VERSION, actual: value.version });

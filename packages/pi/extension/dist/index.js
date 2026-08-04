@@ -1,5 +1,5 @@
 import { Type } from "typebox";
-import { createAsgrepConnector, runCodemode, runNativeBatch, CODEMODE_TYPES_FOR_MODEL } from "./codemode/index.js";
+import { createAsgrepConnector, runCodemode, runNativeBatch, startStickyWorker, runBatchViaStdin, CODEMODE_TYPES_FOR_MODEL, } from "./codemode/index.js";
 import { AstSgrepRuntime, FreshnessCoordinator, RuntimeError } from "./runtime.js";
 const DEFAULT_LIMIT = 8;
 const MAX_LIMIT = 100;
@@ -129,12 +129,54 @@ export function registerAstSgrepTools(pi, runtime = new AstSgrepRuntime(pi), fre
         parameters: codemodeParameters,
         async execute(_toolCallId, params, signal, onUpdate, ctx) {
             report(onUpdate, "codemode", "started");
+            let sticky = null;
             try {
                 const options = signal ? { signal } : {};
                 await freshness.ensureFresh(runtime, { cwd: ctx.cwd }, options);
+                const root = runtime.resolveRoot ? await runtime.resolveRoot({ cwd: ctx.cwd }) : ctx.cwd;
+                const env = runtime.nativeEnv?.() ?? { NO_COLOR: "1" };
+                let binary = null;
+                try {
+                    binary = runtime.resolveBinaryPath?.({ env }) ?? null;
+                }
+                catch {
+                    binary = null;
+                }
+                if (binary) {
+                    try {
+                        const stickyOpts = {
+                            binary,
+                            cwd: root,
+                            env,
+                        };
+                        if (signal)
+                            stickyOpts.signal = signal;
+                        if (runtime.config?.timeoutMs !== undefined)
+                            stickyOpts.timeoutMs = runtime.config.timeoutMs;
+                        sticky = await startStickyWorker(stickyOpts);
+                    }
+                    catch {
+                        sticky = null;
+                    }
+                }
                 const batchHost = {
                     run: (args, context, runOptions) => runtime.run(args, context, runOptions ?? {}),
-                    runBatch: (calls, context, runOptions) => runNativeBatch((a, c, o) => runtime.run(a, c, o ?? {}), calls, context, runOptions),
+                    runBatch: binary
+                        ? (calls, context, runOptions) => runNativeBatch((a, c, o) => runtime.run(a, c, o ?? {}), calls, context, runOptions, (body, c, o) => {
+                            const stdinOpts = {
+                                binary: binary,
+                                cwd: c.cwd,
+                                body,
+                                env,
+                            };
+                            if (o?.signal)
+                                stdinOpts.signal = o.signal;
+                            if (runtime.config?.timeoutMs !== undefined)
+                                stdinOpts.timeoutMs = runtime.config.timeoutMs;
+                            return runBatchViaStdin(stdinOpts);
+                        })
+                        : (calls, context, runOptions) => runNativeBatch((a, c, o) => runtime.run(a, c, o ?? {}), calls, context, runOptions),
+                    sticky,
                 };
                 const bundle = createAsgrepConnector(batchHost, { cwd: ctx.cwd }, options);
                 bundle.resetStats();
@@ -169,6 +211,10 @@ export function registerAstSgrepTools(pi, runtime = new AstSgrepRuntime(pi), fre
             }
             catch (cause) {
                 return failure("codemode", cause);
+            }
+            finally {
+                if (sticky)
+                    await sticky.end().catch(() => undefined);
             }
         },
     });
@@ -226,7 +272,13 @@ function summarizeCodemode(value, stats, wallMs) {
             parts[0] = `codemode completed: ${record.node_count} node${record.node_count === 1 ? "" : "s"}`;
     }
     if (stats && stats.calls > 0) {
-        const via = stats.batchedCalls > 0 ? `batched ${stats.batchedCalls}` : stats.parallelSpawnCalls > 0 ? `parallel-spawn ${stats.parallelSpawnCalls}` : `${stats.calls} call${stats.calls === 1 ? "" : "s"}`;
+        const via = (stats.stickyCalls ?? 0) > 0
+            ? `sticky ${stats.stickyCalls}`
+            : stats.batchedCalls > 0
+                ? `batched ${stats.batchedCalls}`
+                : stats.parallelSpawnCalls > 0
+                    ? `parallel-spawn ${stats.parallelSpawnCalls}`
+                    : `${stats.calls} call${stats.calls === 1 ? "" : "s"}`;
         parts.push(via);
         if (stats.waves > 1)
             parts.push(`${stats.waves} waves`);
