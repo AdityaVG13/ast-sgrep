@@ -20,6 +20,7 @@ Canonical entry points for humans and agents. Prefer this list over scavenging t
 | [QUERY_GRAMMAR.md](QUERY_GRAMMAR.md) | Prefixes, composition, routing contract |
 | [semantic-search.md](semantic-search.md) | Symbol chunks, provider chain, IVF-ANN, tuning |
 | [mcp.md](mcp.md) | `asgrep-mcp` setup for agents |
+| [codemode.md](codemode.md) | Code Mode / programmatic tool-calling crate (scaffold + approval gates) |
 | [use-cases.md](use-cases.md) | Agents, LSP, JSON formats, CI patterns |
 
 ## Quality and operations
@@ -45,6 +46,7 @@ ast-sgrep-embed  → embedding providers (+ optional neural/rerank)
 ast-sgrep-cli    → asgrep / ast-sgrep binaries
 ast-sgrep-lsp    → language server
 ast-sgrep-mcp    → MCP stdio server
+ast-sgrep-codemode → Code Mode / PTC tools + plan runner
 ast-sgrep-plugins→ JSON/output formats
 ast-sgrep-testkit→ shared fixtures for tests
 ```

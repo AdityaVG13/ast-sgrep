@@ -1,0 +1,32 @@
+[package]
+name = "ast-sgrep-codemode"
+description = "Code Mode / programmatic tool-calling surface for ast-sgrep"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "../../README.md"
+keywords = ["code-search", "agent", "codemode", "tool-calling"]
+categories = ["development-tools"]
+documentation = "https://docs.rs/ast-sgrep-codemode"
+publish = true
+
+[lints]
+workspace = true
+
+[lib]
+name = "ast_sgrep_codemode"
+path = "src/lib.rs"
+
+[dependencies]
+anyhow.workspace = true
+ast-sgrep-core = { path = "../ast-sgrep-core", version = "1.3.2" }
+ast-sgrep-plugins = { path = "../ast-sgrep-plugins", version = "1.3.2" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+ast-sgrep-testkit = { path = "../ast-sgrep-testkit" }
+tempfile.workspace = true

@@ -149,6 +149,7 @@ Canonical table: [head-to-head.md](benchmarks/results/head-to-head.md). Index: [
 |-----------|-------|----------|
 | **CLI** | `cargo build --release -p ast-sgrep-cli` | Terminal, scripts |
 | **MCP** | `cargo build --release -p ast-sgrep-mcp` | AI agents (stdio) |
+| **Code Mode** | `ast-sgrep-codemode` | Programmatic tool-calling / multi-step plans |
 | **LSP** | `cargo build --release -p ast-sgrep-lsp` | Editor navigation |
 | **Library** | `ast-sgrep-core` | Embed search in Rust tools |
 | **JSON plugins** | `--format agent\|github\|gitlab\|agent-capsule` | Agents / CI |
@@ -167,7 +168,7 @@ Canonical table: [head-to-head.md](benchmarks/results/head-to-head.md). Index: [
 | [Semantic search](docs/semantic-search.md) | Chunks, providers, IVF-ANN |
 | [Benchmarks](docs/benchmarks.md) | Methodology, reproduction, losses |
 | [Comparison](docs/comparison.md) | vs ripgrep / ast-grep |
-| [MCP](docs/mcp.md) · [Use cases](docs/use-cases.md) · [Releasing](docs/RELEASING.md) | Agents, LSP, release checklist |
+| [MCP](docs/mcp.md) · [Code Mode](docs/codemode.md) · [Use cases](docs/use-cases.md) · [Releasing](docs/RELEASING.md) | Agents, PTC, LSP, release checklist |
 
 ---
 
@@ -181,6 +182,7 @@ Canonical table: [head-to-head.md](benchmarks/results/head-to-head.md). Index: [
 | `crates/ast-sgrep-embed` | Embedding backends + optional rerank |
 | `crates/ast-sgrep-lsp` | Language server |
 | `crates/ast-sgrep-mcp` | MCP server |
+| `crates/ast-sgrep-codemode` | Code Mode / programmatic tool-calling |
 | `crates/ast-sgrep-plugins` | Output formats |
 | `crates/ast-sgrep-testkit` | Shared test fixtures |
 | `benchmarks/` | Published results (`results/`) and studies (`studies/`) |

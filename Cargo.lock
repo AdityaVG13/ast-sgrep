@@ -129,6 +129,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "ast-sgrep-codemode"
+version = "1.3.2"
+dependencies = [
+ "anyhow",
+ "ast-sgrep-core",
+ "ast-sgrep-plugins",
+ "ast-sgrep-testkit",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+]
+
+[[package]]
 name = "ast-sgrep-core"
 version = "1.3.2"
 dependencies = [

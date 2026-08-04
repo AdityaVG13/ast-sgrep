@@ -21,6 +21,7 @@ source tree
 | `ast-sgrep-lang` | Language-aware parsing and extraction of symbols, calls, imports, and pattern nodes |
 | `ast-sgrep-embed` | Embedding providers and the always-available offline semantic backend |
 | `ast-sgrep-mcp` | stdio MCP server exposing search to agents |
+| `ast-sgrep-codemode` | Code Mode / programmatic tool-calling: typed tools, plan runner, host adapters |
 | `ast-sgrep-lsp` | Language Server Protocol navigation surfaces |
 | `ast-sgrep-plugins` | Platform/output integrations |
 | `ast-sgrep-testkit` | Shared fixtures and helpers for integration tests |
@@ -85,6 +86,7 @@ Two self-describing CLI surfaces let an agent discover the live contract instead
 - `robot-docs guide` prints the operational guide intended for tool-using agents.
 - Read-side commands accept `--json`; `--format agent` and `--format agent-capsule` provide agent-oriented result shapes.
 - `ast-sgrep-mcp` exposes search over MCP, while `ast-sgrep-lsp` maps indexed navigation to editor protocol operations.
+- `ast-sgrep-codemode` is the execution-oriented agent surface (compose tools / filter intermediates / emit Anthropic·OpenAI·Cloudflare tool defs). See [codemode.md](codemode.md).
 
 Protocol consumers should discover capabilities first, treat stdout JSON as data, and interpret documented exit codes rather than scraping human-readable lines.
 
