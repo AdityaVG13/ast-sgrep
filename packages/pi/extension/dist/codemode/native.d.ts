@@ -3,6 +3,11 @@
  *
  * Same model as MCP: Rust `CodeModeSession` runs inside the Node process.
  * No `asgrep` CLI spawn on the hot path.
+ *
+ * Resolution order:
+ * 1. `ASGREP_CODEMODE_NAPI_PATH` (dev override)
+ * 2. `@ast-sgrep/<platform>/ast-sgrep-codemode.node` via launcher (release install)
+ * 3. Local `extension/native/` / cargo `target/release` (dev builds)
  */
 export type NativeSessionConfig = {
     root?: string;

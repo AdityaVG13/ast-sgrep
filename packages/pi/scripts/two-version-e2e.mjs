@@ -120,8 +120,11 @@ async function stageArtifacts(version, binary) {
   const nativeBinary = path.join(native, host.executable);
   await cp(binary, nativeBinary);
   if (process.platform !== 'win32') await chmod(nativeBinary, 0o755);
+  const napiPath = path.join(native, 'ast-sgrep-codemode.node');
+  await writeFile(napiPath, `two-version-e2e-napi-${version}\n`);
   const checksum = createHash('sha256').update(await readFile(nativeBinary)).digest('hex');
-  await writeFile(path.join(native, 'checksum.sha256'), `${checksum}  ${host.executable}\n`);
+  const napiChecksum = createHash('sha256').update(await readFile(napiPath)).digest('hex');
+  await writeFile(path.join(native, 'checksum.sha256'), `${checksum}  ${host.executable}\n${napiChecksum}  ast-sgrep-codemode.node\n`);
   await setJson(path.join(native, 'package.json'), (manifest) => {
     manifest.version = version;
     delete manifest.scripts;

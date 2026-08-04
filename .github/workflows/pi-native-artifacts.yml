@@ -52,19 +52,29 @@ jobs:
             "target.runner=${{ matrix.runner }}" \
             "target.rust=${{ matrix.rustTarget }}" \
             "target.package=${{ matrix.package }}" \
-            "target.executable=${{ matrix.executable }}"
-      - name: Build target-local release executable
+            "target.executable=${{ matrix.executable }}" \
+            "target.napiAddon=${{ matrix.napiAddon }}"
+      - name: Build target-local release artifacts
         shell: bash
         env:
           RUSTC_WRAPPER: ""
-        run: cargo build --locked --release -p ast-sgrep-cli --bin asgrep --no-default-features --target "${{ matrix.rustTarget }}"
+        run: |
+          cargo build --locked --release -p ast-sgrep-cli --bin asgrep --no-default-features --target "${{ matrix.rustTarget }}"
+          cargo build --locked --release -p ast-sgrep-codemode-napi --target "${{ matrix.rustTarget }}"
       - name: Prepare and verify deterministic artifact metadata
         shell: bash
         run: |
           binary="target/${{ matrix.rustTarget }}/release/${{ matrix.executable }}"
+          if [ "${{ matrix.os }}" = "win32" ]; then
+            napi="target/${{ matrix.rustTarget }}/release/ast_sgrep_codemode_napi.dll"
+          elif [ "${{ matrix.os }}" = "darwin" ]; then
+            napi="target/${{ matrix.rustTarget }}/release/libast_sgrep_codemode_napi.dylib"
+          else
+            napi="target/${{ matrix.rustTarget }}/release/libast_sgrep_codemode_napi.so"
+          fi
           output="dist/${{ matrix.id }}"
           node packages/pi/scripts/release-artifact.mjs prepare \
-            --target "${{ matrix.id }}" --binary "$binary" --output "$output" --commit "$GITHUB_SHA"
+            --target "${{ matrix.id }}" --binary "$binary" --napi "$napi" --output "$output" --commit "$GITHUB_SHA"
           node packages/pi/scripts/release-artifact.mjs verify --target "${{ matrix.id }}" --input "$output"
       - name: Pack native, launcher, and extension tarballs
         shell: bash
@@ -72,6 +82,7 @@ jobs:
           set -euo pipefail
           platform_dir="packages/pi/platforms/${{ matrix.id }}"
           cp "dist/${{ matrix.id }}/${{ matrix.executable }}" "$platform_dir/${{ matrix.executable }}"
+          cp "dist/${{ matrix.id }}/${{ matrix.napiAddon }}" "$platform_dir/${{ matrix.napiAddon }}"
           cp "dist/${{ matrix.id }}/SHA256SUMS" "$platform_dir/checksum.sha256"
           if [ "${{ matrix.os }}" != "win32" ]; then chmod 755 "$platform_dir/${{ matrix.executable }}"; fi
           mkdir -p npm-packs

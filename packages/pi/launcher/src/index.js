@@ -1,9 +1,10 @@
 import { createHash } from "node:crypto";
-import { accessSync, constants, readFileSync, statSync } from "node:fs";
+import { accessSync, constants, existsSync, readFileSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
 
 const VERSION = "1.3.2";
+const NAPI_ADDON = "ast-sgrep-codemode.node";
 const HOSTS = new Map([
   ["darwin:arm64:", ["@ast-sgrep/darwin-arm64", "asgrep", "darwin", "arm64", null]],
   ["darwin:x64:", ["@ast-sgrep/darwin-x64", "asgrep", "darwin", "x64", null]],
@@ -26,6 +27,25 @@ function defaultLibc(platform) {
   if (platform !== "linux") return "";
   return process.report?.getReport?.().header?.glibcVersionRuntime ? "glibc" : "musl";
 }
+function parseSha256Sums(text) {
+  const map = new Map();
+  for (const line of text.replace(/\r\n/gu, "\n").split("\n")) {
+    if (!line) continue;
+    const match = line.match(/^([a-f0-9]{64})  (.+)$/u);
+    if (!match) return null;
+    if (map.has(match[2])) return null;
+    map.set(match[2], match[1]);
+  }
+  return map;
+}
+function digestFor(checksumText, filename, checksumPath) {
+  const digests = parseSha256Sums(checksumText);
+  if (!digests) fail("ASGREP_CHECKSUM_CORRUPT", "Native package checksum is invalid: " + checksumPath, checksumPath);
+  const expected = digests.get(filename);
+  if (!expected) fail("ASGREP_CHECKSUM_MISSING", "Native package checksum is missing entry for " + filename + ": " + checksumPath, checksumPath);
+  if (!/^[a-f0-9]{64}$/u.test(expected)) fail("ASGREP_CHECKSUM_CORRUPT", "Native package checksum is invalid for " + filename + ": " + checksumPath, checksumPath);
+  return expected;
+}
 function validateExecutable(path, fs, checkAccess) {
   let stat;
   try { stat = fs.statSync(path); } catch (cause) { fail("ASGREP_EXECUTABLE_MISSING", "ast-sgrep executable is missing at " + path, path, cause); }
@@ -36,12 +56,10 @@ function validateExecutable(path, fs, checkAccess) {
   }
   return path;
 }
-export function resolveBinary(options = {}) {
-  const fs = options.fs ?? { accessSync, readFileSync, statSync };
+function resolveHost(options = {}) {
+  const fs = options.fs ?? { accessSync, existsSync, readFileSync, statSync };
   const env = options.env ?? process.env;
   const platform = options.platform ?? process.platform;
-  const override = options.binaryPath ?? env.ASGREP_BIN ?? env.AST_SGREP_BINARY;
-  if (override) return validateExecutable(resolve(override), fs, platform !== "win32");
   const arch = options.arch ?? process.arch;
   const libc = options.libc ?? defaultLibc(platform);
   const key = platform + ":" + arch + ":" + (platform === "linux" ? libc : "");
@@ -59,14 +77,51 @@ export function resolveBinary(options = {}) {
   const libcMetadata = Array.isArray(manifest.libc) ? manifest.libc : [];
   if (manifest.name !== packageName || !os.includes(expectedOs) || !cpu.includes(expectedCpu) || (expectedLibc !== null && !libcMetadata.includes(expectedLibc))) fail("ASGREP_PLATFORM_METADATA_CORRUPT", "Native package metadata does not match " + host + ": " + manifestPath, manifestPath);
   if (manifest.version !== VERSION) fail("ASGREP_PLATFORM_VERSION_MISMATCH", "Native package " + packageName + " version " + (manifest.version ?? "unknown") + " does not match launcher " + VERSION, manifestPath);
-  const executablePath = join(dirname(manifestPath), executableName);
-  validateExecutable(executablePath, fs, platform !== "win32");
-  const checksumPath = join(dirname(manifestPath), "checksum.sha256");
-  let expected;
-  try { expected = fs.readFileSync(checksumPath, "utf8").trim().split(/\s+/u)[0]; } catch (cause) { fail("ASGREP_CHECKSUM_MISSING", "Native package checksum is missing: " + checksumPath, checksumPath, cause); }
-  if (!/^[a-f0-9]{64}$/u.test(expected)) fail("ASGREP_CHECKSUM_CORRUPT", "Native package checksum is invalid: " + checksumPath, checksumPath);
+  return { fs, platform, packageName, executableName, packageDir: dirname(manifestPath), checksumPath: join(dirname(manifestPath), "checksum.sha256") };
+}
+export function resolveBinary(options = {}) {
+  const env = options.env ?? process.env;
+  const platform = options.platform ?? process.platform;
+  const override = options.binaryPath ?? env.ASGREP_BIN ?? env.AST_SGREP_BINARY;
+  const fs = options.fs ?? { accessSync, existsSync, readFileSync, statSync };
+  if (override) return validateExecutable(resolve(override), fs, platform !== "win32");
+  const host = resolveHost(options);
+  const executablePath = join(host.packageDir, host.executableName);
+  validateExecutable(executablePath, host.fs, platform !== "win32");
+  let checksumText;
+  try { checksumText = host.fs.readFileSync(host.checksumPath, "utf8"); } catch (cause) { fail("ASGREP_CHECKSUM_MISSING", "Native package checksum is missing: " + host.checksumPath, host.checksumPath, cause); }
+  const expected = digestFor(checksumText, host.executableName, host.checksumPath);
   let actual;
-  try { actual = createHash("sha256").update(fs.readFileSync(executablePath)).digest("hex"); } catch (cause) { fail("ASGREP_EXECUTABLE_MISSING", "Cannot read native executable: " + executablePath, executablePath, cause); }
-  if (actual !== expected) fail("ASGREP_CHECKSUM_MISMATCH", "Native executable checksum mismatch at " + executablePath + "; reinstall " + packageName + "@" + VERSION, executablePath);
+  try { actual = createHash("sha256").update(host.fs.readFileSync(executablePath)).digest("hex"); } catch (cause) { fail("ASGREP_EXECUTABLE_MISSING", "Cannot read native executable: " + executablePath, executablePath, cause); }
+  if (actual !== expected) fail("ASGREP_CHECKSUM_MISMATCH", "Native executable checksum mismatch at " + executablePath + "; reinstall " + host.packageName + "@" + VERSION, executablePath);
   return executablePath;
 }
+/** Resolve the in-process Code Mode NAPI addon from the platform package, or null if absent. */
+export function resolveCodemodeAddon(options = {}) {
+  const env = options.env ?? process.env;
+  const override = options.addonPath ?? env.ASGREP_CODEMODE_NAPI_PATH;
+  const fs = options.fs ?? { accessSync, existsSync, readFileSync, statSync };
+  if (override) {
+    const path = resolve(override);
+    let stat;
+    try { stat = fs.statSync(path); } catch (cause) { fail("ASGREP_NAPI_MISSING", "Code Mode NAPI addon is missing at " + path, path, cause); }
+    if (!stat.isFile() || stat.size === 0) fail("ASGREP_NAPI_INVALID", "Code Mode NAPI addon is not a non-empty file: " + path, path);
+    return path;
+  }
+  let host;
+  try { host = resolveHost({ ...options, fs }); } catch (error) {
+    if (error instanceof AstSgrepBinaryError && (error.code === "ASGREP_UNSUPPORTED_PLATFORM" || error.code === "ASGREP_PLATFORM_PACKAGE_MISSING")) return null;
+    throw error;
+  }
+  const addonPath = join(host.packageDir, NAPI_ADDON);
+  const exists = typeof host.fs.existsSync === "function" ? host.fs.existsSync(addonPath) : existsSync(addonPath);
+  if (!exists) return null;
+  let checksumText;
+  try { checksumText = host.fs.readFileSync(host.checksumPath, "utf8"); } catch (cause) { fail("ASGREP_CHECKSUM_MISSING", "Native package checksum is missing: " + host.checksumPath, host.checksumPath, cause); }
+  const expected = digestFor(checksumText, NAPI_ADDON, host.checksumPath);
+  let actual;
+  try { actual = createHash("sha256").update(host.fs.readFileSync(addonPath)).digest("hex"); } catch (cause) { fail("ASGREP_NAPI_MISSING", "Cannot read Code Mode NAPI addon: " + addonPath, addonPath, cause); }
+  if (actual !== expected) fail("ASGREP_CHECKSUM_MISMATCH", "Code Mode NAPI addon checksum mismatch at " + addonPath + "; reinstall " + host.packageName + "@" + VERSION, addonPath);
+  return addonPath;
+}
+export { NAPI_ADDON };

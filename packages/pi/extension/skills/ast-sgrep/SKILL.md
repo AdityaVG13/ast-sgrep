@@ -66,7 +66,7 @@ The extension executes the bundled native runtime with argv arrays, not shell co
 
 ## Security and data
 
-Install only as a trusted Pi package: the extension runs with the installing OS user's full system access and is not an OS sandbox. Local indexing writes `.asgrep` data inside the project, uses no telemetry or credentials, and package removal preserves that project data for explicit user cleanup. Local search stays on the machine; configuring an external embeddings provider may send source text and queries to that provider, so obtain authorization before enabling it.
+Install only as a trusted Pi package: the extension runs with the installing OS user's full system access and is not a sandbox. Local indexing writes `.asgrep` data inside the project, uses no telemetry or credentials, and package removal preserves that project data for explicit user cleanup. Local search stays on the machine; configuring an external embeddings provider may send source text and queries to that provider, so obtain authorization before enabling it.
 
 Code Mode and MCP are separate products. This package does not use MCP.
 

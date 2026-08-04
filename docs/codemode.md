@@ -88,7 +88,7 @@ when Auto sees ≥4 read-only calls or Parallel is forced.
 
 Install **either** MCP **or** the Pi package (Code Mode) — siblings, not a stack. Both should feel like a native grep: warm index, zero process spawn, microseconds-to-milliseconds per lookup after the first open.
 
-CLI `codemode-serve` remains only as a degraded fallback when the `.node` addon is missing (unsupported host). Prefer `npm run build:native` / release artifacts that ship the addon beside the extension.
+CLI `codemode-serve` remains only as a degraded fallback when the `.node` addon is missing (unsupported host). Official npm installs ship `ast-sgrep-codemode.node` inside each `@ast-sgrep/<platform>` package next to the CLI binary.
 
 ```bash
 # Dev: build the in-process addon for this host

@@ -32,6 +32,7 @@ const packageOrder = (state) => [...state.matrix.targets.map((target) => target.
 const validateAlignment = (state) => {
   const { contract, matrix, launcher, extension, platforms, version } = state;
   if (matrix.targets.length !== 5) fail('ASGREP_RELEASE_TARGETS', 'exactly five native targets are required');
+  if (matrix.napiAddon !== 'ast-sgrep-codemode.node') fail('ASGREP_RELEASE_TARGETS', 'napiAddon must be ast-sgrep-codemode.node');
   if (new Set(packageOrder(state)).size !== 7) fail('ASGREP_RELEASE_PACKAGE_DUPLICATE', 'release package names must be unique');
   if (contract.canonicalVersion.tag !== `v${version}`) fail('ASGREP_RELEASE_TAG_VERSION', 'canonical tag does not match canonical version');
   if (launcher.version !== version || extension.version !== version || extension.dependencies?.[launcher.name] !== version) fail('ASGREP_RELEASE_VERSION_SKEW', 'launcher/extension versions and dependency must exactly match the canonical version');
@@ -43,16 +44,29 @@ const validateAlignment = (state) => {
     const contractPlatform = contract.packages.platforms[index];
     if (manifest.name !== target.package || manifest.version !== version || dependencyVersion !== version || contractPlatform?.optionalDependencyVersion !== version) fail('ASGREP_RELEASE_VERSION_SKEW', `${target.package} is not exactly aligned to ${version}`);
     if (JSON.stringify(manifest.os) !== JSON.stringify([target.os]) || JSON.stringify(manifest.cpu) !== JSON.stringify([target.cpu]) || JSON.stringify(manifest.libc ?? []) !== JSON.stringify(target.libc ? [target.libc] : [])) fail('ASGREP_RELEASE_PLATFORM_SKEW', `${target.package} platform selectors do not match the target matrix`);
+    const expectedFiles = [target.executable, matrix.napiAddon, 'checksum.sha256', 'LICENSE'].sort();
+    if (JSON.stringify([...(manifest.files ?? [])].sort()) !== JSON.stringify(expectedFiles)) fail('ASGREP_RELEASE_PLATFORM_SKEW', `${target.package} files inventory must include CLI and NAPI addon`);
   }
 };
 const classify = (state, name) => state.matrix.targets.some((target) => target.package === name) ? 'native' : name === state.launcher.name ? 'launcher' : name === state.extension.name ? 'extension' : fail('ASGREP_RELEASE_UNKNOWN_PACKAGE', name);
+const parseSha256Sums = (text) => {
+  const map = new Map();
+  for (const line of text.replace(/\r\n/gu, '\n').split('\n')) {
+    if (!line) continue;
+    const match = line.match(/^([a-f0-9]{64})  (.+)$/u);
+    if (!match || map.has(match[2])) return null;
+    map.set(match[2], match[1]);
+  }
+  return map;
+};
 const validateFiles = (state, artifact) => {
   const files = artifact.files.map((file) => file.path).sort();
+  const nativeTarget = state.matrix.targets.find((target) => target.package === artifact.name);
   const required = artifact.layer === 'native'
-    ? ['LICENSE', 'checksum.sha256', state.matrix.targets.find((target) => target.package === artifact.name).executable, 'package.json']
+    ? ['LICENSE', 'checksum.sha256', nativeTarget.executable, state.matrix.napiAddon, 'package.json']
     : artifact.layer === 'launcher'
       ? ['LICENSE', 'README.md', 'bin/asgrep.js', 'package.json', 'src/index.d.ts', 'src/index.js']
-      : ['LICENSE', 'README.md', 'assets/preview.png', 'dist/index.d.ts', 'dist/index.js', 'dist/runtime.d.ts', 'dist/runtime.js', 'package.json', 'skills/ast-sgrep/SKILL.md', 'skills/ast-sgrep/references/query-guide.md'];
+      : ['LICENSE', 'README.md', 'assets/preview.png', 'dist/codemode/index.d.ts', 'dist/codemode/index.js', 'dist/codemode/native.d.ts', 'dist/codemode/native.js', 'dist/index.d.ts', 'dist/index.js', 'dist/runtime.d.ts', 'dist/runtime.js', 'native/README.md', 'package.json', 'skills/ast-sgrep/SKILL.md', 'skills/ast-sgrep/references/query-guide.md'];
   for (const entry of required) if (!files.includes(entry)) fail('ASGREP_RELEASE_CONTENT_MISSING', `${artifact.name} is missing ${entry}`);
   for (const entry of files) if (/(^|\/)(test|node_modules)(\/|$)/u.test(entry) || /\.(rs|toml)$/u.test(entry)) fail('ASGREP_RELEASE_CONTENT_FORBIDDEN', `${artifact.name} unexpectedly contains ${entry}`);
 };
@@ -64,23 +78,31 @@ const inspectPackResult = (state, result) => {
   validateFiles(state, artifact);
   return artifact;
 };
-const validateChecksumRecord = (target, checksumText, actual) => {
+const validateChecksumRecord = (target, napiAddon, checksumText, digests) => {
   if (checksumText === null) fail('ASGREP_RELEASE_CHECKSUM_MISSING', target.package);
-  const checksum = checksumText.trim().split(/\s+/u);
-  if (checksum.length !== 2 || checksum[1] !== target.executable || checksum[0] !== actual) fail('ASGREP_RELEASE_CHECKSUM_MISMATCH', target.package);
+  const parsed = parseSha256Sums(checksumText);
+  if (!parsed || parsed.size !== 2 || parsed.get(target.executable) !== digests.executable || parsed.get(napiAddon) !== digests.napi) {
+    fail('ASGREP_RELEASE_CHECKSUM_MISMATCH', target.package);
+  }
 };
-const verifyNativeSource = async (target) => {
+const verifyNativeSource = async (target, napiAddon) => {
   const directory = path.join(root, 'packages/pi/platforms', target.id);
   const executable = path.join(directory, target.executable);
+  const addon = path.join(directory, napiAddon);
   const checksumFile = path.join(directory, 'checksum.sha256');
   const executableStat = await stat(executable).catch(() => fail('ASGREP_RELEASE_EXECUTABLE_MISSING', target.package));
   if (!executableStat.isFile() || executableStat.size === 0) fail('ASGREP_RELEASE_EXECUTABLE_MISSING', target.package);
+  const addonStat = await stat(addon).catch(() => fail('ASGREP_RELEASE_EXECUTABLE_MISSING', `${target.package} napi`));
+  if (!addonStat.isFile() || addonStat.size === 0) fail('ASGREP_RELEASE_EXECUTABLE_MISSING', `${target.package} napi`);
   const checksumText = await readFile(checksumFile, 'utf8').catch(() => null);
-  validateChecksumRecord(target, checksumText, await sha256(executable));
+  validateChecksumRecord(target, napiAddon, checksumText, {
+    executable: await sha256(executable),
+    napi: await sha256(addon)
+  });
 };
 const stageNative = async (state, nativeRoot, commit) => {
   if (!nativeRoot) {
-    for (const target of state.matrix.targets) await verifyNativeSource(target);
+    for (const target of state.matrix.targets) await verifyNativeSource(target, state.matrix.napiAddon);
     return { directories: state.matrix.targets.map((target) => path.join(root, 'packages/pi/platforms', target.id)), cleanup: async () => {} };
   }
   const temporary = await mkdtemp(path.join(tmpdir(), 'ast-sgrep-pi-pack-'));
@@ -98,6 +120,7 @@ const stageNative = async (state, nativeRoot, commit) => {
     await mkdir(destination, { recursive: true });
     for (const file of ['package.json', 'LICENSE']) await copyFile(path.join(root, 'packages/pi/platforms', target.id, file), path.join(destination, file));
     await copyFile(path.join(source, target.executable), path.join(destination, target.executable));
+    await copyFile(path.join(source, state.matrix.napiAddon), path.join(destination, state.matrix.napiAddon));
     await copyFile(path.join(source, 'SHA256SUMS'), path.join(destination, 'checksum.sha256'));
   }
   return {
@@ -229,9 +252,11 @@ const fixtureNative = async () => {
   const commit = 'f'.repeat(40);
   for (const target of state.matrix.targets) {
     const binary = path.join(output, `${target.id}.fixture`);
+    const napi = path.join(output, `${target.id}.napi.fixture`);
     await writeFile(binary, `contract-only target-shaped fixture for ${target.package}@${state.version}\n`);
+    await writeFile(napi, `contract-only napi fixture for ${target.package}@${state.version}\n`);
     if (target.os !== 'win32') await chmod(binary, 0o755);
-    run(process.execPath, ['packages/pi/scripts/release-artifact.mjs', 'prepare', '--target', target.id, '--binary', binary, '--output', path.join(output, target.id), '--commit', commit]);
+    run(process.execPath, ['packages/pi/scripts/release-artifact.mjs', 'prepare', '--target', target.id, '--binary', binary, '--napi', napi, '--output', path.join(output, target.id), '--commit', commit]);
     run(process.execPath, ['packages/pi/scripts/release-artifact.mjs', 'verify', '--target', target.id, '--input', path.join(output, target.id)]);
   }
   console.log(`[pi-release] created and verified ${state.matrix.targets.length} disposable target-shaped fixtures at commit ${commit}`);
@@ -255,8 +280,8 @@ const selfTest = async () => {
   expect('wrong-commit', () => gateState(state, { ...canonicalInput, tagCommit: 'b'.repeat(40) }, empty));
   expect('fully-published', () => gateState(state, canonicalInput, Object.fromEntries(packageOrder(state).map((name) => [`${name}@${state.version}`, state.version]))));
   expect('version-skew', () => validateAlignment({ ...state, launcher: { ...state.launcher, version: '0.0.0' } }));
-  expect('missing-checksum', () => validateChecksumRecord(state.matrix.targets[0], null, '0'.repeat(64)));
-  expect('checksum-mismatch', () => validateChecksumRecord(state.matrix.targets[0], `${'1'.repeat(64)}  asgrep`, '0'.repeat(64)));
+  expect('missing-checksum', () => validateChecksumRecord(state.matrix.targets[0], state.matrix.napiAddon, null, { executable: '0'.repeat(64), napi: '0'.repeat(64) }));
+  expect('checksum-mismatch', () => validateChecksumRecord(state.matrix.targets[0], state.matrix.napiAddon, `${'1'.repeat(64)}  asgrep\n${'2'.repeat(64)}  ${state.matrix.napiAddon}\n`, { executable: '0'.repeat(64), napi: '0'.repeat(64) }));
   expect('local-publish', () => validatePublishContext(state, { commit }, {}));
   console.log(`[pi-release] gate self-test accepted canonical input and rejected ${rejected.join(', ')}`);
   console.log(`[pi-release] publish order: ${packageOrder(state).join(' -> ')}`);

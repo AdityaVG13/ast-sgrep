@@ -12,5 +12,6 @@ npm run build:native -w pi-ast-sgrep
 Produces e.g. `ast-sgrep-codemode.linux-x64-gnu.node`. The Pi extension loads it
 automatically and runs `CodeModeSession` in-process (no CLI spawn).
 
-Binaries are **not** committed; release CI should attach them to the extension
-or platform packages the same way `asgrep` CLI artifacts are shipped today.
+Binaries are **not** committed here; release CI ships
+`ast-sgrep-codemode.node` inside each `@ast-sgrep/<platform>` package
+alongside the `asgrep` CLI (same install path as `pi install`).

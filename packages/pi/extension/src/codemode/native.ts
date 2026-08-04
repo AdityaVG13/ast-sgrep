@@ -3,6 +3,11 @@
  *
  * Same model as MCP: Rust `CodeModeSession` runs inside the Node process.
  * No `asgrep` CLI spawn on the hot path.
+ *
+ * Resolution order:
+ * 1. `ASGREP_CODEMODE_NAPI_PATH` (dev override)
+ * 2. `@ast-sgrep/<platform>/ast-sgrep-codemode.node` via launcher (release install)
+ * 3. Local `extension/native/` / cargo `target/release` (dev builds)
  */
 
 import { createRequire } from "node:module";
@@ -70,6 +75,21 @@ function platformTriple(): string | null {
   return null;
 }
 
+function platformPackageAddon(): string | null {
+  const require = createRequire(import.meta.url);
+  try {
+    const launcher = require("ast-sgrep") as {
+      resolveCodemodeAddon?: (options?: Record<string, unknown>) => string | null;
+    };
+    if (typeof launcher.resolveCodemodeAddon === "function") {
+      return launcher.resolveCodemodeAddon();
+    }
+  } catch {
+    // Launcher may be unavailable in isolated unit tests.
+  }
+  return null;
+}
+
 function candidatePaths(): string[] {
   const here = dirname(fileURLToPath(import.meta.url));
   const triple = platformTriple();
@@ -87,6 +107,10 @@ function candidatePaths(): string[] {
     join(here, "..", "..", "..", "..", "target", "release"),
   ];
   const out: string[] = [];
+  const override = process.env.ASGREP_CODEMODE_NAPI_PATH;
+  if (override) out.push(override);
+  const packaged = platformPackageAddon();
+  if (packaged) out.push(packaged);
   for (const dir of dirs) {
     for (const name of names) out.push(join(dir, name));
     // cargo cdylib name

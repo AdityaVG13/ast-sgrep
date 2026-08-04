@@ -76,17 +76,28 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: pi-official-${{ matrix.rustTarget }}
-      - name: Build target-local release executable once
+      - name: Build target-local release artifacts once
         shell: bash
         env:
           RUSTC_WRAPPER: ""
-        run: cargo build --locked --release -p ast-sgrep-cli --bin asgrep --no-default-features --target "${{ matrix.rustTarget }}"
+        run: |
+          cargo build --locked --release -p ast-sgrep-cli --bin asgrep --no-default-features --target "${{ matrix.rustTarget }}"
+          cargo build --locked --release -p ast-sgrep-codemode-napi --target "${{ matrix.rustTarget }}"
       - name: Preserve native checksum and provenance metadata
         shell: bash
         run: |
+          binary="target/${{ matrix.rustTarget }}/release/${{ matrix.executable }}"
+          if [ "${{ matrix.os }}" = "win32" ]; then
+            napi="target/${{ matrix.rustTarget }}/release/ast_sgrep_codemode_napi.dll"
+          elif [ "${{ matrix.os }}" = "darwin" ]; then
+            napi="target/${{ matrix.rustTarget }}/release/libast_sgrep_codemode_napi.dylib"
+          else
+            napi="target/${{ matrix.rustTarget }}/release/libast_sgrep_codemode_napi.so"
+          fi
           node packages/pi/scripts/release-artifact.mjs prepare \
             --target "${{ matrix.id }}" \
-            --binary "target/${{ matrix.rustTarget }}/release/${{ matrix.executable }}" \
+            --binary "$binary" \
+            --napi "$napi" \
             --output "dist/${{ matrix.id }}" \
             --commit "$GITHUB_SHA"
           node packages/pi/scripts/release-artifact.mjs verify --target "${{ matrix.id }}" --input "dist/${{ matrix.id }}"

@@ -238,7 +238,7 @@
   "updates": {
     "mainBranch": "Pack and test relevant artifacts; never publish a stable npm version.",
     "officialTag": "Every human-approved official version tag prepares and publishes all npm layers at the canonical version in platform, launcher, extension order.",
-    "selection": "Pi/npm update selects the exact matching extension, launcher, platform binary, and protocol version.",
+    "selection": "Pi/npm update selects the exact matching extension, launcher, platform package (CLI + Code Mode NAPI addon), and protocol version.",
     "runtimeDownloads": false,
     "partialPublishRecovery": "Move forward with a new immutable version; never overwrite a published npm version."
   },
