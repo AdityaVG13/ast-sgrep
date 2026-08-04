@@ -62,6 +62,8 @@ export function createAsgrepConnector(host, context, options = {}) {
         }),
         indexStatus: () => call("index_status", {}),
         indexRepo: (input = {}) => call("index_repo", { force: input.force === true }),
+        catalogSearch: (input) => call("catalog_search", { query: input.query }),
+        catalogDescribe: (input) => call("catalog_describe", { name: input.name }),
     };
     return {
         asgrep,

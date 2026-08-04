@@ -30,3 +30,4 @@ export {
   type BatchResult,
 } from "./dispatch.js";
 export { startStickyWorker, runBatchViaStdin } from "./worker.js";
+export { NativeSessionPool, sharedNativePool } from "./session-pool.js";

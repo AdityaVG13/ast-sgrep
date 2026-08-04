@@ -1,6 +1,9 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { FreshnessCoordinator, type FreshnessRuntime } from "./runtime.js";
-type RuntimeLike = FreshnessRuntime & {
+import { FreshnessCoordinator, type MachineEnvelope, type RunOptions } from "./runtime.js";
+type RuntimeLike = {
+    run(args: readonly string[], context: {
+        cwd: string;
+    }, options?: RunOptions): Promise<MachineEnvelope>;
     resolveRoot?(context: {
         cwd: string;
     }): Promise<string>;
@@ -12,7 +15,14 @@ type RuntimeLike = FreshnessRuntime & {
     }): NodeJS.ProcessEnv;
     config?: {
         timeoutMs?: number;
+        refreshIntervalMs?: number;
     };
+    inspectIndexCompatibility?(context: {
+        cwd: string;
+    }): Promise<"ready" | "missing" | "incompatible">;
+    rebuildIncompatibleIndex?(context: {
+        cwd: string;
+    }, options?: RunOptions): Promise<MachineEnvelope>;
 };
 type FreshnessLike = Pick<FreshnessCoordinator, "ensureFresh" | "markAffectedPath">;
 export declare function registerAstSgrepTools(pi: ExtensionAPI, runtime?: RuntimeLike, freshness?: FreshnessLike): void;

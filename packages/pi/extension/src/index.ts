@@ -4,11 +4,14 @@ import {
   createAsgrepConnector,
   runCodemode,
   runNativeBatch,
-  startStickyWorker,
   runBatchViaStdin,
   CODEMODE_TYPES_FOR_MODEL,
+  NativeSessionPool,
+  argvFor,
+  asEnvelope,
+  type StickyWorker,
 } from "./codemode/index.js";
-import { AstSgrepRuntime, FreshnessCoordinator, RuntimeError, type FreshnessRuntime, type MachineEnvelope } from "./runtime.js";
+import { AstSgrepRuntime, FreshnessCoordinator, RuntimeError, type FreshnessRuntime, type MachineEnvelope, type RunOptions } from "./runtime.js";
 
 const DEFAULT_LIMIT = 8;
 const MAX_LIMIT = 100;
@@ -48,11 +51,14 @@ const codemodeParameters = Type.Object({
   }),
 }, { additionalProperties: false });
 
-type RuntimeLike = FreshnessRuntime & {
+type RuntimeLike = {
+  run(args: readonly string[], context: { cwd: string }, options?: RunOptions): Promise<MachineEnvelope>;
   resolveRoot?(context: { cwd: string }): Promise<string>;
   resolveBinaryPath?(options?: { env?: NodeJS.ProcessEnv }): string;
   nativeEnv?(options?: { env?: NodeJS.ProcessEnv }): NodeJS.ProcessEnv;
-  config?: { timeoutMs?: number };
+  config?: { timeoutMs?: number; refreshIntervalMs?: number };
+  inspectIndexCompatibility?(context: { cwd: string }): Promise<"ready" | "missing" | "incompatible">;
+  rebuildIncompatibleIndex?(context: { cwd: string }, options?: RunOptions): Promise<MachineEnvelope>;
 };
 type FreshnessLike = Pick<FreshnessCoordinator, "ensureFresh" | "markAffectedPath">;
 type ToolContext = { cwd: string };
@@ -146,22 +152,71 @@ export function registerAstSgrepTools(
     ? new FreshnessCoordinator({ refreshIntervalMs: runtime.config.refreshIntervalMs! })
     : new FreshnessCoordinator(),
 ): void {
+  const pool = new NativeSessionPool();
+  // Prefer a registration-local pool so tests / multi-agent hosts do not share
+  // sticky state. sharedNativePool remains for advanced single-session reuse.
+
+  const ensurePool = (): void => {
+    if (pool.configured()) return;
+    try {
+      const env = runtime.nativeEnv?.() ?? { NO_COLOR: "1" };
+      const binary = runtime.resolveBinaryPath?.({ env });
+      if (!binary) return;
+      const opts: { binary: string; env: NodeJS.ProcessEnv; timeoutMs?: number } = { binary, env };
+      if (runtime.config?.timeoutMs !== undefined) opts.timeoutMs = runtime.config.timeoutMs;
+      pool.configure(opts);
+    } catch {
+      // Fall back to cold CLI for this session.
+    }
+  };
+
+  const resolveRoot = async (cwd: string): Promise<string> =>
+    runtime.resolveRoot ? await runtime.resolveRoot({ cwd }) : cwd;
+
+  const nativeCall = async (
+    tool: string,
+    args: Record<string, unknown>,
+    context: { cwd: string },
+    options: RunOptions = {},
+  ): Promise<MachineEnvelope> => {
+    ensurePool();
+    const root = await resolveRoot(context.cwd);
+    const worker = await pool.acquire(root);
+    if (worker) {
+      return asEnvelope(await worker.call(tool, args, options.signal ? { signal: options.signal } : {}));
+    }
+    // No sticky worker (tests / missing binary) — cold CLI argv fallback.
+    return runtime.run(argvFor(tool, args), context, options);
+  };
+
+  // Freshness + tools share the same warm Searcher as Code Mode.
+  const warmRuntime: FreshnessRuntime = {
+    run: (args, context, options) => runtime.run(args, context, options),
+    resolveRoot: (context) => resolveRoot(context.cwd),
+    nativeCall,
+  };
+  if (runtime.inspectIndexCompatibility) {
+    warmRuntime.inspectIndexCompatibility = (context) => runtime.inspectIndexCompatibility!(context);
+  }
+  if (runtime.rebuildIncompatibleIndex) {
+    warmRuntime.rebuildIncompatibleIndex = (context, options) => runtime.rebuildIncompatibleIndex!(context, options);
+  }
+
   pi.on("tool_result", (event, ctx) => {
     if (event.isError || (event.toolName !== "write" && event.toolName !== "edit")) return;
     const path = event.input.path;
     if (typeof path === "string") freshness.markAffectedPath(path, ctx.cwd);
   });
 
-  // Primary surface: Code Mode (model writes JS; parallel asgrep.* calls; shaped return).
-  // Independent of MCP — both sit on the native binary only.
+  // Primary surface: Code Mode (compose many lookups in one JS cell — like Codex Conversion's exec).
+  // Sibling to MCP: MCP links core in-process; Pi uses a session-scoped sticky CLI worker.
   pi.registerTool({
     name: "asgrep_codemode",
     label: "ast-sgrep Code Mode",
     description: [
-      "Prefer this tool for multi-step or parallel code search.",
-      "Write JavaScript that calls typed asgrep.* methods inside a restricted executor.",
-      "Compose lookups with await / Promise.all, filter results in code, and return only what you need.",
-      "Do not dump every intermediate hit list — shape the final value.",
+      "Primary ast-sgrep tool. Write JavaScript that calls typed asgrep.* methods.",
+      "Compose with await / Promise.all, filter in code, return only the shaped final value.",
+      "One warm native process is reused for the whole Pi session (and across tool calls).",
       "",
       CODEMODE_TYPES_FOR_MODEL,
       "",
@@ -180,11 +235,11 @@ export function registerAstSgrepTools(
     parameters: codemodeParameters,
     async execute(_toolCallId, params, signal, onUpdate, ctx) {
       report(onUpdate, "codemode", "started");
-      let sticky: Awaited<ReturnType<typeof startStickyWorker>> | null = null;
       try {
         const options = signal ? { signal } : {};
-        await freshness.ensureFresh(runtime, { cwd: ctx.cwd }, options);
-        const root = runtime.resolveRoot ? await runtime.resolveRoot({ cwd: ctx.cwd }) : ctx.cwd;
+        await freshness.ensureFresh(warmRuntime, { cwd: ctx.cwd }, options);
+        ensurePool();
+        const root = await resolveRoot(ctx.cwd);
         const env = runtime.nativeEnv?.() ?? { NO_COLOR: "1" };
         let binary: string | null = null;
         try {
@@ -192,20 +247,8 @@ export function registerAstSgrepTools(
         } catch {
           binary = null;
         }
-        if (binary) {
-          try {
-            const stickyOpts: Parameters<typeof startStickyWorker>[0] = {
-              binary,
-              cwd: root,
-              env,
-            };
-            if (signal) stickyOpts.signal = signal;
-            if (runtime.config?.timeoutMs !== undefined) stickyOpts.timeoutMs = runtime.config.timeoutMs;
-            sticky = await startStickyWorker(stickyOpts);
-          } catch {
-            sticky = null;
-          }
-        }
+        // Session pool: do NOT end the worker after this tool — reuse across turns.
+        const sticky: StickyWorker | null = binary ? await pool.acquire(root) : null;
         const batchHost = {
           run: (args: readonly string[], context: { cwd: string }, runOptions?: { signal?: AbortSignal }) =>
             runtime.run(args, context, runOptions ?? {}),
@@ -271,45 +314,117 @@ export function registerAstSgrepTools(
         };
       } catch (cause) {
         return failure("codemode", cause);
-      } finally {
-        if (sticky) await sticky.end().catch(() => undefined);
       }
     },
   });
 
-  // Direct one-shot tools remain available for simple lookups (not Code Mode).
+  // Escape hatches: one-shot tools for simple lookups. Prefer asgrep_codemode.
+  // They ride the same session sticky pool when available (no cold spawn).
   pi.registerTool({
     name: "asgrep_search",
     label: "ast-sgrep search",
-    description: "Single hybrid search call. Prefer asgrep_codemode when you need multiple lookups, filtering, or parallel work.",
+    description: "One-shot search. Prefer asgrep_codemode for anything multi-step, parallel, or filtered.",
     parameters: searchParameters,
     async execute(_toolCallId, params, signal, onUpdate, ctx) {
       const options = signal ? { signal } : {};
-      return execute(runtime, "search", searchArgs(params), signal, onUpdate, ctx,
-        () => freshness.ensureFresh(runtime, { cwd: ctx.cwd }, options).then(() => undefined));
+      report(onUpdate, "search", "started");
+      try {
+        await freshness.ensureFresh(warmRuntime, { cwd: ctx.cwd }, options);
+        ensurePool();
+        const root = await resolveRoot(ctx.cwd);
+        const sticky = await pool.acquire(root);
+        const response = sticky
+          ? await sticky.call(...searchToolCall(params), options)
+          : await runtime.run(searchArgs(params), { cwd: ctx.cwd }, options);
+        report(onUpdate, "search", "completed");
+        return success("search", response);
+      } catch (cause) {
+        return failure("search", cause);
+      }
     },
   });
 
   pi.registerTool({
     name: "asgrep_index",
     label: "ast-sgrep index",
-    description: "Build or rebuild the ast-sgrep project index. Prefer asgrep_codemode (asgrep.indexRepo) inside multi-step programs.",
+    description: "Build or rebuild the index. Prefer asgrep.indexRepo inside asgrep_codemode.",
     parameters: indexParameters,
     async execute(_toolCallId, params, signal, onUpdate, ctx) {
-      const command = params.force === true ? "reindex" : "index";
-      return execute(runtime, command, [command, ".", "--json"], signal, onUpdate, ctx);
+      const force = params.force === true;
+      const command = force ? "reindex" : "index";
+      report(onUpdate, command, "started");
+      try {
+        ensurePool();
+        const root = await resolveRoot(ctx.cwd);
+        const sticky = await pool.acquire(root);
+        const response = sticky
+          ? await sticky.call("index_repo", { force }, signal ? { signal } : {})
+          : await runtime.run([command, ".", "--json"], { cwd: ctx.cwd }, signal ? { signal } : {});
+        report(onUpdate, command, "completed");
+        return success(command, response);
+      } catch (cause) {
+        return failure(command, cause);
+      }
     },
   });
 
   pi.registerTool({
     name: "asgrep_status",
     label: "ast-sgrep status",
-    description: "Return runtime version, protocol, root, index, counts, backend, IVF, and capability status.",
+    description: "Index/runtime status. Prefer asgrep.indexStatus inside asgrep_codemode.",
     parameters: statusParameters,
     async execute(_toolCallId, _params, signal, onUpdate, ctx) {
-      return execute(runtime, "status", ["status", ".", "--json"], signal, onUpdate, ctx);
+      report(onUpdate, "status", "started");
+      try {
+        ensurePool();
+        const root = await resolveRoot(ctx.cwd);
+        const sticky = await pool.acquire(root);
+        const response = sticky
+          ? await sticky.call("index_status", {}, signal ? { signal } : {})
+          : await runtime.run(["status", ".", "--json"], { cwd: ctx.cwd }, signal ? { signal } : {});
+        report(onUpdate, "status", "completed");
+        return success("status", response);
+      } catch (cause) {
+        return failure("status", cause);
+      }
     },
   });
+}
+
+/** Map one-shot search params to typed sticky tool+args. */
+function searchToolCall(params: {
+  query: string;
+  mode?: SearchMode;
+  limit?: number;
+  excerptLines?: number;
+}): [string, Record<string, unknown>] {
+  const mode = params.mode ?? "natural";
+  const limit = params.limit ?? DEFAULT_LIMIT;
+  const excerpt_lines = params.excerptLines ?? 0;
+  switch (mode) {
+    case "semantic":
+      return ["semantic", { query: params.query, limit, excerpt_lines, format: "capsule" }];
+    case "chain":
+      return ["chain", { query: params.query, limit, top_n: 20 }];
+    case "defs":
+      return ["defs", { symbol: params.query, limit, excerpt_lines }];
+    case "callers":
+      return ["callers", { symbol: params.query, limit, excerpt_lines }];
+    case "imports":
+      return ["imports", { module: params.query, limit, excerpt_lines }];
+    case "pattern":
+    case "word":
+    case "literal":
+    case "regex":
+      return ["search", { query: `${mode}: ${params.query}`, limit, excerpt_lines, format: "capsule" }];
+    case "natural":
+      return ["search", { query: params.query, limit, excerpt_lines, format: "capsule" }];
+    default: {
+      const _exhaustive: never = mode;
+      void _exhaustive;
+      return ["search", { query: params.query, limit, excerpt_lines, format: "capsule" }];
+    }
+  }
 }
 
 function safeRender(value: unknown): string {

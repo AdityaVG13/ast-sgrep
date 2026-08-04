@@ -62,6 +62,8 @@ export async function runCodemode(
     imports: asgrep.imports,
     indexStatus: asgrep.indexStatus,
     indexRepo: asgrep.indexRepo,
+    catalogSearch: asgrep.catalogSearch,
+    catalogDescribe: asgrep.catalogDescribe,
   });
 
   const context = vm.createContext({

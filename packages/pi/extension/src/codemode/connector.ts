@@ -29,6 +29,9 @@ export type AsgrepConnector = {
   imports(input: { module: string; limit?: number; excerptLines?: number }): Promise<MachineEnvelope>;
   indexStatus(): Promise<MachineEnvelope>;
   indexRepo(input?: { force?: boolean }): Promise<MachineEnvelope>;
+  /** Progressive discovery (like deferred tools) — list/filter available asgrep tools. */
+  catalogSearch(input: { query: string }): Promise<MachineEnvelope>;
+  catalogDescribe(input: { name: string }): Promise<MachineEnvelope>;
 };
 
 export type ConnectorBundle = {
@@ -111,6 +114,8 @@ export function createAsgrepConnector(
       }),
     indexStatus: () => call("index_status", {}),
     indexRepo: (input = {}) => call("index_repo", { force: input.force === true }),
+    catalogSearch: (input) => call("catalog_search", { query: input.query }),
+    catalogDescribe: (input) => call("catalog_describe", { name: input.name }),
   };
 
   return {

@@ -5,11 +5,11 @@ description: Find code by intent or structure, trace symbol relationships, and k
 
 # ast-sgrep
 
-Prefer **`asgrep_codemode`** for almost all retrieval work. Write JavaScript that calls typed `asgrep.*` methods, use `Promise.all` for independent lookups, filter in code, and return only the shaped final value. Independent `Promise.all` calls ride a sticky warm native worker when available (Amdahl: cut N cold CLI spawns to 1 process for the whole program). That is Code Mode: one tool call orchestrates many searches without model round-trips between them.
+Prefer **`asgrep_codemode`** for almost all retrieval work. Write JavaScript that calls typed `asgrep.*` methods, use `Promise.all` for independent lookups, filter in code, and return only the shaped final value. A warm native worker is kept for the whole Pi session (shared with status/index/search) so you are not paying a cold CLI spawn per lookup. That is Code Mode: one tool call orchestrates many searches without model round-trips between them — the same composition idea as Codex-style `exec` cells.
 
 Use Pi's exact-text search for literal strings, log messages, filenames, or configuration keys; do not replace a precise text lookup with semantic search.
 
-Direct one-shot tools (`asgrep_search`, `asgrep_index`, `asgrep_status`) exist for trivial single lookups. Prefer Code Mode whenever you need more than one call, filtering, or parallel work.
+Direct one-shot tools (`asgrep_search`, `asgrep_index`, `asgrep_status`) exist for trivial single lookups; they reuse the same warm worker. Prefer Code Mode whenever you need more than one call, filtering, or parallel work.
 
 ## Code Mode (`asgrep_codemode`)
 
@@ -23,6 +23,7 @@ Pass `{ "code": "..." }` — an async JavaScript body. Available API:
 - `asgrep.imports({ module, limit? })`
 - `asgrep.indexStatus()`
 - `asgrep.indexRepo({ force? })`
+- `asgrep.catalogSearch({ query })` / `asgrep.catalogDescribe({ name })` — progressive tool discovery
 
 Example:
 

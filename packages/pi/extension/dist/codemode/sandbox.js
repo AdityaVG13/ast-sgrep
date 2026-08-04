@@ -38,6 +38,8 @@ export async function runCodemode(rawCode, asgrep, options = {}) {
         imports: asgrep.imports,
         indexStatus: asgrep.indexStatus,
         indexRepo: asgrep.indexRepo,
+        catalogSearch: asgrep.catalogSearch,
+        catalogDescribe: asgrep.catalogDescribe,
     });
     const context = vm.createContext({
         asgrep: api,

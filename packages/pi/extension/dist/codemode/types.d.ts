@@ -11,7 +11,8 @@ export type ChainArgs = {
     excerptLines?: number;
 };
 /**
- * TypeScript declarations embedded in the `asgrep_codemode` tool description
- * so the model can write correct calls (Cloudflare createCodeTool style).
+ * Compact TypeScript declarations for the `asgrep_codemode` tool description.
+ * Keep short — every token here is paid on every turn (schema landfill lesson
+ * from pi-codex-conversion: compose inside Code Mode, don't dump 17 schemas).
  */
 export declare const CODEMODE_TYPES_FOR_MODEL: string;

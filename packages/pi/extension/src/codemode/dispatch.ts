@@ -266,6 +266,10 @@ export function argvFor(tool: string, args: Record<string, unknown>): string[] {
       return ["status", ".", "--json"];
     case "index_repo":
       return [args.force === true ? "reindex" : "index", ".", "--json"];
+    case "catalog_search":
+    case "catalog_describe":
+      // No CLI equivalent — sticky/batch only.
+      return ["status", ".", "--json"];
     default:
       return [...capsule, String(args.query ?? ""), "."];
   }

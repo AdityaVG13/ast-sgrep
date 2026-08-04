@@ -83,6 +83,11 @@ export interface FreshnessRuntime {
     resolveRoot(context: RuntimeContext): Promise<string>;
     inspectIndexCompatibility?(context: RuntimeContext): Promise<IndexHealth>;
     rebuildIncompatibleIndex?(context: RuntimeContext, options?: RunOptions): Promise<MachineEnvelope>;
+    /**
+     * Optional warm native call (session sticky pool). When present, freshness
+     * prefers this over cold `run` for status/index — same Searcher as Code Mode.
+     */
+    nativeCall?(tool: string, args: Record<string, unknown>, context: RuntimeContext, options?: RunOptions): Promise<MachineEnvelope>;
 }
 export interface FreshnessCoordinatorOptions {
     refreshIntervalMs?: number;

@@ -15,3 +15,4 @@ export { runCodemode, normalizeCode } from "./sandbox.js";
 export { CODEMODE_TYPES_FOR_MODEL } from "./types.js";
 export { createCodemodeDispatcher, runNativeBatch, argvFor, asEnvelope, } from "./dispatch.js";
 export { startStickyWorker, runBatchViaStdin } from "./worker.js";
+export { NativeSessionPool, sharedNativePool } from "./session-pool.js";

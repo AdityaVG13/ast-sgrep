@@ -230,7 +230,9 @@ export class FreshnessCoordinator {
             let health = await runtime.inspectIndexCompatibility?.(rootContext);
             if (health !== "incompatible") {
                 try {
-                    const status = await runtime.run(["status", ".", "--json"], rootContext, options);
+                    const status = runtime.nativeCall
+                        ? await runtime.nativeCall("index_status", {}, rootContext, options)
+                        : await runtime.run(["status", ".", "--json"], rootContext, options);
                     health = indexHealth(status);
                 }
                 catch (cause) {
@@ -243,16 +245,24 @@ export class FreshnessCoordinator {
             if (health === "incompatible") {
                 if (runtime.rebuildIncompatibleIndex)
                     await runtime.rebuildIncompatibleIndex(rootContext, options);
+                else if (runtime.nativeCall)
+                    await runtime.nativeCall("index_repo", { force: true }, rootContext, options);
                 else
                     await runtime.run(["reindex", ".", "--json"], rootContext, options);
             }
             else if (health === "missing" || !wasInitialized || dirty) {
-                await runtime.run(["index", ".", "--json"], rootContext, options);
+                if (runtime.nativeCall)
+                    await runtime.nativeCall("index_repo", { force: false }, rootContext, options);
+                else
+                    await runtime.run(["index", ".", "--json"], rootContext, options);
             }
             else if (expired) {
                 // Lease expired without dirty marks: incremental index (not force reindex)
                 // so external create/modify/delete are reconciled without rebuild thrash (5du.9).
-                await runtime.run(["index", ".", "--json"], rootContext, options);
+                if (runtime.nativeCall)
+                    await runtime.nativeCall("index_repo", { force: false }, rootContext, options);
+                else
+                    await runtime.run(["index", ".", "--json"], rootContext, options);
             }
             state.initialized = true;
             state.cleanGeneration = refreshGeneration;

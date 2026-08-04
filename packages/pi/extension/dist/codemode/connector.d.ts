@@ -38,6 +38,13 @@ export type AsgrepConnector = {
     indexRepo(input?: {
         force?: boolean;
     }): Promise<MachineEnvelope>;
+    /** Progressive discovery (like deferred tools) — list/filter available asgrep tools. */
+    catalogSearch(input: {
+        query: string;
+    }): Promise<MachineEnvelope>;
+    catalogDescribe(input: {
+        name: string;
+    }): Promise<MachineEnvelope>;
 };
 export type ConnectorBundle = {
     asgrep: AsgrepConnector;
