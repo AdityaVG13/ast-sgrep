@@ -160,7 +160,7 @@ fn symbol_span_rows_to_hits(
         )
         .collect())
 }
-pub(crate) fn symbol_pass(
+pub fn symbol_pass(
     store: &IndexStore,
     options: &SearchOptions,
     parsed: &ParsedQuery,
@@ -174,7 +174,7 @@ pub(crate) fn symbol_pass(
     )?);
     Ok(hits)
 }
-pub(crate) fn anchor_pass(
+pub fn anchor_pass(
     store: &IndexStore,
     options: &SearchOptions,
     parsed: &ParsedQuery,
@@ -260,7 +260,7 @@ fn prefixed_mode_query(parsed: &ParsedQuery) -> Option<ParsedQuery> {
         ..parsed.clone()
     })
 }
-pub(crate) fn search_callers(
+pub fn search_callers(
     store: &IndexStore,
     options: &SearchOptions,
     parsed: &ParsedQuery,
@@ -284,7 +284,7 @@ pub(crate) fn search_callers(
     )?;
     caller_rows_to_hits(rows, options, &q, CallerMatchMode::CalleeOnly)
 }
-pub(crate) fn search_defs(
+pub fn search_defs(
     store: &IndexStore,
     options: &SearchOptions,
     parsed: &ParsedQuery,
@@ -301,7 +301,7 @@ pub(crate) fn search_defs(
     let rows = query_symbol_spans(store, &where_clause, bind, MODE_SQL_LIMIT)?;
     symbol_span_rows_to_hits(rows, options, HitKind::Def, |n| score_def(&q.terms, n))
 }
-pub(crate) fn search_imports(
+pub fn search_imports(
     store: &IndexStore,
     options: &SearchOptions,
     parsed: &ParsedQuery,

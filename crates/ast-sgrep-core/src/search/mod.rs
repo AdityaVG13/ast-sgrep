@@ -103,7 +103,7 @@ impl Searcher {
     pub fn search_lexical(&self, query_str: &str) -> Result<SearchResponse> {
         self.cached("lex", query_str, || {
             let parsed = ParsedQuery::parse(query_str);
-            finish_response(
+            finish_response_checked(
                 &parsed,
                 &self.options,
                 lexical_pass(&self.store, &self.options, &parsed)?,
@@ -116,7 +116,7 @@ impl Searcher {
             let parsed = ParsedQuery::parse(query_str);
             let mut hits = symbol_pass(&self.store, &self.options, &parsed)?;
             hits.extend(anchor_pass(&self.store, &self.options, &parsed)?);
-            finish_response(&parsed, &self.options, hits, true)
+            finish_response_checked(&parsed, &self.options, hits, true)
         })
     }
     pub fn search(&self, query_str: &str) -> Result<SearchResponse> {
@@ -142,13 +142,13 @@ impl Searcher {
                     hits
                 }
             };
-            finish_response(&parsed, &self.options, hits, true)
+            finish_response_checked(&parsed, &self.options, hits, true)
         })
     }
     pub fn search_semantic(&self, query_str: &str) -> Result<SearchResponse> {
         self.cached("sem", query_str, || {
             let parsed = ParsedQuery::parse(query_str);
-            finish_response(
+            finish_response_checked(
                 &parsed,
                 &self.options,
                 run_embed_pass(&self.store, &self.options, &parsed, &self.semantic_cache)?,
@@ -159,7 +159,29 @@ impl Searcher {
     pub fn search_literal(&self, query: &str) -> Result<SearchResponse> {
         self.cached("lit", query, || {
             let parsed = ParsedQuery::literal(query);
-            finish_response(
+            finish_response_checked(
+                &parsed,
+                &self.options,
+                literal_pass(&self.store, &self.options, &parsed)?,
+                true,
+            )
+        })
+    }
+    pub fn search_regex(&self, query: &str) -> Result<SearchResponse> {
+        self.cached("re", query, || {
+            let parsed = ParsedQuery::regex(query);
+            finish_response_checked(
+                &parsed,
+                &self.options,
+                regex_pass(&self.store, &self.options, &parsed)?,
+                true,
+            )
+        })
+    }
+    pub fn search_word(&self, query: &str) -> Result<SearchResponse> {
+        self.cached("word", query, || {
+            let parsed = ParsedQuery::word(query);
+            finish_response_checked(
                 &parsed,
                 &self.options,
                 literal_pass(&self.store, &self.options, &parsed)?,
@@ -416,7 +438,27 @@ fn run_parallel_passes(
 fn join_worker<T>(join: thread::Result<Result<T>>) -> Result<T> {
     join.map_err(|e| crate::StoreError::Other(format!("search worker panicked: {e:?}")))?
 }
-pub(crate) fn finish_response(
+/// Preserve the pre-1.3 non-fallible response API. Invalid globs keep the
+/// legacy behavior and are ignored; internal search paths use the checked API.
+pub fn finish_response(
+    parsed: &ParsedQuery,
+    options: &SearchOptions,
+    hits: Vec<SearchHit>,
+    dedup: bool,
+) -> SearchResponse {
+    let mut compatibility_options = options.clone();
+    if compatibility_options
+        .file_filter
+        .as_ref()
+        .is_some_and(|filter| compile_glob(filter).is_err())
+    {
+        compatibility_options.file_filter = None;
+    }
+    finish_response_checked(parsed, &compatibility_options, hits, dedup)
+        .expect("compatibility options were validated")
+}
+
+pub(crate) fn finish_response_checked(
     parsed: &ParsedQuery,
     options: &SearchOptions,
     mut hits: Vec<SearchHit>,
@@ -843,7 +885,7 @@ mod tests {
             hit("b.rs", 1, 0.8),
             hit("c.rs", 1, 0.7),
         ];
-        let resp = finish_response(&parsed, &options, hits, false).unwrap();
+        let resp = finish_response_checked(&parsed, &options, hits, false).unwrap();
         assert_eq!(resp.hits.len(), 2);
         assert!(resp.hits.iter().all(|h| h.score > 0.0));
         assert_eq!(resp.hits[0].file, "a.rs");
@@ -863,7 +905,7 @@ mod tests {
             ..SearchOptions::default()
         };
         let hits = vec![hit("a.rs", 1, 1.0), hit("b.rs", 1, 0.9)];
-        let err = finish_response(&parsed, &options, hits, false).unwrap_err();
+        let err = finish_response_checked(&parsed, &options, hits, false).unwrap_err();
         let msg = err.to_string();
         assert!(
             msg.contains("invalid file_filter"),
@@ -919,7 +961,7 @@ mod tests {
             score: 1.0,
             excerpt: "alpha beta gamma together".into(),
         });
-        let resp = finish_response(&parsed, &options, hits, false).unwrap();
+        let resp = finish_response_checked(&parsed, &options, hits, false).unwrap();
         assert!(
             resp.hits.iter().any(|h| h.file == "full_coverage.rs"),
             "high-coverage hit must survive keep*4 prune; got {:?}",

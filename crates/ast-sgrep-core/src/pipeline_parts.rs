@@ -189,7 +189,7 @@ fn measure_hybrid_fusion(searcher: &Searcher, cfg: &Config) -> Result<PartTiming
     let (samples, work) = time_loop(cfg, || {
         let mut hits = candidates.clone();
         intent::route_hits(&parsed, &mut hits);
-        measure_hit_len(|| crate::search::finish_response(&parsed, &opts, hits, true))
+        measure_hit_len(|| crate::search::finish_response_checked(&parsed, &opts, hits, true))
     });
     Ok(summarize("hybrid_fusion_rank", cfg, samples, work))
 }

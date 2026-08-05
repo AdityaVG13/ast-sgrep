@@ -107,7 +107,10 @@ pub enum NativeKind {
     /// Function-like declaration; `name == None` means any name (`$NAME`).
     Function { name: Option<String> },
     /// Class/struct/type declaration.
-    Class { name: Option<String> },
+    Class {
+        keyword: &'static str,
+        name: Option<String>,
+    },
     /// Free or method call; method path segments may be `$` wildcards.
     Call {
         /// Exact path like `foo.bar` or single name; segments that were `$X` are None.
@@ -136,7 +139,10 @@ pub fn classify_native(pattern: &str) -> Option<NativeKind> {
                 return None;
             };
             return Some(if is_class {
-                NativeKind::Class { name }
+                NativeKind::Class {
+                    keyword: prefix.trim(),
+                    name,
+                }
             } else {
                 NativeKind::Function { name }
             });
@@ -146,17 +152,18 @@ pub fn classify_native(pattern: &str) -> Option<NativeKind> {
     // Calls: $F($$$), foo($$$), $O.$M($$$), a.b.$$$c($$$)
     let open = p.find('(')?;
     let close = p.rfind(')')?;
+    if close <= open {
+        return None;
+    }
     // Allow trailing whitespace only after the closing paren.
     if close + 1 != p.len() && !p[close + 1..].trim().is_empty() {
         return None;
     }
     let args = p[open + 1..close].trim();
-    // Args must be empty, $$$, or pure metavars / commas — no nested patterns.
+    // Args must be empty, $$$, or pure metavars separated by commas.
     if !args.is_empty()
         && args != "$$$"
-        && !args
-            .split(',')
-            .all(|a| a.trim().is_empty() || a.trim().starts_with('$'))
+        && !args.split(',').all(is_pure_metavariable)
     {
         return None;
     }
@@ -176,23 +183,35 @@ pub(crate) fn is_pattern_ident(s: &str) -> bool {
         && chars.all(|c| c == '_' || c.is_alphanumeric())
 }
 
+fn is_pure_metavariable(arg: &str) -> bool {
+    let arg = arg.trim();
+    arg.strip_prefix("$$$")
+        .or_else(|| arg.strip_prefix('$'))
+        .is_some_and(is_pattern_ident)
+}
+
 fn parse_call_path(callee: &str) -> Option<Vec<Option<String>>> {
-    let mut segs = Vec::new();
-    for part in callee.split(['.', ':']).filter(|s| !s.is_empty()) {
+    let callee = callee.strip_prefix("::").unwrap_or(callee);
+    let normalized = callee.replace("::", ".");
+    if normalized.is_empty()
+        || normalized.starts_with('.')
+        || normalized.ends_with('.')
+        || normalized.contains("..")
+    {
+        return None;
+    }
+    let mut segments = Vec::new();
+    for part in normalized.split('.') {
         let part = part.trim();
-        if part.starts_with('$') {
-            segs.push(None);
+        if is_pure_metavariable(part) {
+            segments.push(None);
         } else if is_pattern_ident(part) {
-            segs.push(Some(part.to_string()));
+            segments.push(Some(part.to_string()));
         } else {
             return None;
         }
     }
-    if segs.is_empty() {
-        None
-    } else {
-        Some(segs)
-    }
+    (!segments.is_empty()).then_some(segments)
 }
 
 fn parse_source(lang: Language, source: &str) -> anyhow::Result<tree_sitter::Tree> {
@@ -213,24 +232,42 @@ fn match_structural(
     let language = tree_sitter_language(lang);
     let tree = parse_source(lang, source)?;
     let mut out = Vec::new();
-    let (queries, name) = match kind {
-        NativeKind::Function { name } => (queries_for(FUNCTION_QUERY_TABLE, lang), name.as_deref()),
-        NativeKind::Class { name } => (queries_for(CLASS_QUERY_TABLE, lang), name.as_deref()),
+    match kind {
+        NativeKind::Function { name } => run_queries(
+            lang,
+            &language,
+            tree.root_node(),
+            source,
+            queries_for(FUNCTION_QUERY_TABLE, lang),
+            name.as_deref(),
+            None,
+            &mut out,
+        )?,
+        NativeKind::Class { keyword, name } => run_queries(
+            lang,
+            &language,
+            tree.root_node(),
+            source,
+            queries_for(CLASS_QUERY_TABLE, lang),
+            name.as_deref(),
+            Some(keyword),
+            &mut out,
+        )?,
         NativeKind::Call { path } => {
             walk_calls(tree.root_node(), source, path, &mut out);
-            return Ok(out);
         }
-    };
-    run_queries(&language, tree.root_node(), source, queries, name, &mut out)?;
+    }
     Ok(out)
 }
 
 fn run_queries(
+    lang: Language,
     language: &tree_sitter::Language,
     root: Node,
     source: &str,
     queries: &[&str],
     name_filter: Option<&str>,
+    class_keyword: Option<&str>,
     out: &mut Vec<PatternMatch>,
 ) -> anyhow::Result<()> {
     for qsrc in queries {
@@ -259,6 +296,9 @@ fn run_queries(
             if is_in_comment_or_string(&node) {
                 continue;
             }
+            if class_keyword.is_some_and(|keyword| !class_keyword_matches(lang, &node, keyword)) {
+                continue;
+            }
             if let Some(want) = name_filter {
                 if name_text != Some(want) {
                     continue;
@@ -268,6 +308,26 @@ fn run_queries(
         }
     }
     Ok(())
+}
+
+fn class_keyword_matches(lang: Language, node: &Node, keyword: &str) -> bool {
+    if lang != Language::CSharp {
+        return true;
+    }
+    match keyword {
+        "class" => node.kind() == "class_declaration",
+        "struct" => node.kind() == "struct_declaration",
+        "interface" => node.kind() == "interface_declaration",
+        "type" => matches!(
+            node.kind(),
+            "class_declaration"
+                | "struct_declaration"
+                | "interface_declaration"
+                | "record_declaration"
+                | "enum_declaration"
+        ),
+        _ => false,
+    }
 }
 
 fn walk_calls(node: Node, source: &str, path: &[Option<String>], out: &mut Vec<PatternMatch>) {

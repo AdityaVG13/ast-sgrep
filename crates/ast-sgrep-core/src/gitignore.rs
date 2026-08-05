@@ -35,6 +35,12 @@ pub fn should_skip_file(path: &Path) -> bool {
         .map(|ext| !INDEXABLE_EXTENSIONS.contains(&ext.to_lowercase().as_str()))
         .unwrap_or(true)
 }
+
+/// Check one path using the repository ignore rules.
+pub fn is_ignored(root: &Path, rel: &Path) -> bool {
+    IgnoreMatcher::new(root).is_ignored(rel)
+}
+
 #[derive(Debug, Clone)]
 struct Rule {
     base: String,
