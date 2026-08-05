@@ -174,6 +174,11 @@ pub fn main() -> anyhow::Result<()> {
         }
     }
 }
+/// Parse process arguments and run the CLI without forcing process exit.
+pub fn run() -> anyhow::Result<()> {
+    run_cli(&Cli::parse())
+}
+
 fn run_process() -> ! {
     let raw_args: Vec<_> = std::env::args_os().collect();
     let cli = match Cli::try_parse_from(&raw_args) {

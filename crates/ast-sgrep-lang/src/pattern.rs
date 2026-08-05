@@ -160,17 +160,18 @@ pub fn classify_native(pattern: &str) -> Option<NativeKind> {
     // Calls: $F($$$), foo($$$), $O.$M($$$), a.b.$$$c($$$)
     let open = p.find('(')?;
     let close = p.rfind(')')?;
+    if close <= open {
+        return None;
+    }
     // Allow trailing whitespace only after the closing paren.
     if close + 1 != p.len() && !p[close + 1..].trim().is_empty() {
         return None;
     }
     let args = p[open + 1..close].trim();
-    // Args must be empty, $$$, or pure metavars / commas — no nested patterns.
+    // Args must be empty, $$$, or pure metavars separated by commas.
     if !args.is_empty()
         && args != "$$$"
-        && !args
-            .split(',')
-            .all(|a| a.trim().is_empty() || a.trim().starts_with('$'))
+        && !args.split(',').all(is_pure_metavariable)
     {
         return None;
     }
@@ -190,19 +191,35 @@ pub(crate) fn is_pattern_ident(s: &str) -> bool {
         && chars.all(|c| c == '_' || c.is_alphanumeric())
 }
 
+fn is_pure_metavariable(arg: &str) -> bool {
+    let arg = arg.trim();
+    arg.strip_prefix("$$$")
+        .or_else(|| arg.strip_prefix('$'))
+        .is_some_and(is_pattern_ident)
+}
+
 fn parse_call_path(callee: &str) -> Option<Vec<Option<String>>> {
-    let mut segs = Vec::new();
-    for part in callee.split(['.', ':']).filter(|s| !s.is_empty()) {
+    let callee = callee.strip_prefix("::").unwrap_or(callee);
+    let normalized = callee.replace("::", ".");
+    if normalized.is_empty()
+        || normalized.starts_with('.')
+        || normalized.ends_with('.')
+        || normalized.contains("..")
+    {
+        return None;
+    }
+    let mut segments = Vec::new();
+    for part in normalized.split('.') {
         let part = part.trim();
-        if part.starts_with('$') {
-            segs.push(None);
+        if is_pure_metavariable(part) {
+            segments.push(None);
         } else if is_pattern_ident(part) {
-            segs.push(Some(part.to_string()));
+            segments.push(Some(part.to_string()));
         } else {
             return None;
         }
     }
-    (!segs.is_empty()).then_some(segs)
+    (!segments.is_empty()).then_some(segments)
 }
 
 fn parse_source(lang: Language, source: &str) -> anyhow::Result<tree_sitter::Tree> {

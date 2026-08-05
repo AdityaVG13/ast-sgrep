@@ -37,6 +37,22 @@ fn common_metavariable_patterns_are_native() {
 }
 
 #[test]
+fn malformed_metavariable_patterns_fall_back_without_panicking() {
+    for pattern in ["$)(", "foo($X + 1)", "foo.$M+.bar($$$)", "foo.$M.($$$)"] {
+        assert!(
+            needs_ast_grep_fallback(pattern),
+            "malformed pattern must use the full parser: {pattern}"
+        );
+        assert!(
+            match_pattern(Language::Rust, "fn foo() {}", pattern)
+                .unwrap()
+                .is_empty(),
+            "malformed pattern must not produce broad native matches: {pattern}"
+        );
+    }
+}
+
+#[test]
 fn structural_fn_pattern_matches_rust_source() {
     use ast_sgrep_lang::match_pattern;
     let source = sample_file("src/main.rs");
