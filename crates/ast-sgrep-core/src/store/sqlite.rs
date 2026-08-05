@@ -192,7 +192,7 @@ impl IndexStore {
             |r| r.get(0),
         )
     }
-    fn delete_meta(&self, key: &str) -> Result<()> {
+    pub fn delete_meta(&self, key: &str) -> Result<()> {
         self.conn
             .execute("DELETE FROM meta WHERE key = ?1", params![key])?;
         Ok(())
@@ -398,7 +398,7 @@ impl IndexStore {
             Ok(())
         })?;
         let _ = self.conn.execute_batch("VACUUM");
-        crate::semantic_ann::mark_semantic_ivf_stale(self)?;
+        crate::semantic_ann::try_mark_semantic_ivf_stale(self)?;
         self.bump_semantic_data_version()?;
         self.bump_index_data_version()?;
         Ok(())
@@ -495,7 +495,7 @@ impl IndexStore {
         Ok(())
     }
     /// Lines/FTS only when structure fingerprint matches (append / truncate / full rewrite).
-    pub(crate) fn refresh_lines_only(&self, input: RefreshLinesInput<'_>) -> Result<i64> {
+    pub fn refresh_lines_only(&self, input: RefreshLinesInput<'_>) -> Result<i64> {
         let RefreshLinesInput {
             file_id,
             language: lang,
@@ -569,7 +569,7 @@ impl IndexStore {
         self.insert_imports(file_id, input.imports)?;
         self.insert_pattern_nodes(file_id, input.pattern_nodes)?;
         self.set_meta(struct_key, struct_fp)?;
-        crate::semantic_ann::mark_semantic_ivf_stale(self)?;
+        crate::semantic_ann::try_mark_semantic_ivf_stale(self)?;
         self.bump_index_data_version()?;
         Ok(file_id)
     }
@@ -765,7 +765,7 @@ impl IndexStore {
             self.delete_meta(&format!("eol:{rel_path}"))?;
             self.delete_meta(&format!("struct:{rel_path}"))?;
             self.delete_meta(&format!("body:{rel_path}"))?;
-            crate::semantic_ann::mark_semantic_ivf_stale(self)?;
+            crate::semantic_ann::try_mark_semantic_ivf_stale(self)?;
             self.bump_semantic_data_version()?;
             self.bump_index_data_version()?;
             Ok(())

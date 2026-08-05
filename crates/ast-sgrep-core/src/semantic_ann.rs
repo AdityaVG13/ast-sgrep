@@ -99,6 +99,10 @@ impl SemanticAnnIndex {
         }
         seen.into_iter().all(|present| present)
     }
+    pub fn validate_member_indices(&self, chunk_count: usize) -> bool {
+        self.validate_partition(chunk_count)
+    }
+
     /// `probes`: None/0 = adaptive √k; ≥ n_clusters = all (exact).
     pub fn candidate_indices(&self, query: &[f32], probes: Option<usize>) -> Vec<usize> {
         if self.centroids.is_empty() {
@@ -353,13 +357,27 @@ struct SessionCache {
     ivf: Arc<PersistedSemanticIvf>,
 }
 static SESSION_CACHE: Mutex<Vec<(String, SessionCache)>> = Mutex::new(Vec::new());
-fn clear_semantic_ivf_session_cache() {
+pub fn clear_semantic_ivf_session_cache() {
     SESSION_CACHE
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .clear();
 }
-pub fn mark_semantic_ivf_stale(store: &IndexStore) -> crate::Result<()> {
+pub fn mark_semantic_ivf_stale(store: &IndexStore) {
+    if store
+        .get_meta("semantic_ivf_stale")
+        .ok()
+        .flatten()
+        .as_deref()
+        != Some("1")
+    {
+        let _ = store.set_meta("semantic_ivf_stale", "1");
+    }
+    let _ = invalidate_semantic_ivf(store.db_path());
+    clear_semantic_ivf_session_cache();
+}
+
+pub fn try_mark_semantic_ivf_stale(store: &IndexStore) -> crate::Result<()> {
     store.set_meta("semantic_ivf_stale", "1")?;
     invalidate_semantic_ivf(store.db_path())?;
     clear_semantic_ivf_session_cache();

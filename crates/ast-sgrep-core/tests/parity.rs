@@ -260,6 +260,18 @@ fn parity_index_defs_hybrid_chain() {
     for n in &chain.nodes {
         assert!(n.depth <= 1);
     }
-    let mut again = reopen_indexer(&indexed, IndexOptions::default());
+    let stored_backend = indexed
+        .indexer
+        .store()
+        .get_meta("embed_backend")
+        .unwrap()
+        .expect("sample index stores concrete embedding backend");
+    let mut again = reopen_indexer(
+        &indexed,
+        IndexOptions {
+            embed_backend: EmbedBackend::parse(&stored_backend),
+            ..IndexOptions::default()
+        },
+    );
     assert_eq!(again.index_all().unwrap().files_indexed, 0);
 }
