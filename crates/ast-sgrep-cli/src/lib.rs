@@ -213,6 +213,11 @@ fn run_process() -> ! {
         }
     }
 }
+
+/// Parse process arguments and run the CLI without forcing process exit.
+pub fn run() -> anyhow::Result<()> {
+    run_cli(&Cli::parse())
+}
 impl Cli {
     fn machine_output_requested(&self) -> bool {
         self.json

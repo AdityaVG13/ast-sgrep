@@ -167,6 +167,28 @@ impl Searcher {
             ))
         })
     }
+    pub fn search_regex(&self, query: &str) -> Result<SearchResponse> {
+        self.cached("re", query, || {
+            let parsed = ParsedQuery::regex(query);
+            Ok(finish_response(
+                &parsed,
+                &self.options,
+                regex_pass(&self.store, &self.options, &parsed)?,
+                true,
+            ))
+        })
+    }
+    pub fn search_word(&self, query: &str) -> Result<SearchResponse> {
+        self.cached("word", query, || {
+            let parsed = ParsedQuery::word(query);
+            Ok(finish_response(
+                &parsed,
+                &self.options,
+                literal_pass(&self.store, &self.options, &parsed)?,
+                true,
+            ))
+        })
+    }
     fn search_hybrid(&self, parsed: &ParsedQuery) -> Result<Vec<SearchHit>> {
         let parallel = self
             .store
@@ -416,7 +438,7 @@ fn lock_response_cache(cache: &Mutex<ResponseCache>) -> std::sync::MutexGuard<'_
 fn lock_poison_ok<T>(cache: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     cache.lock().unwrap_or_else(|e| e.into_inner())
 }
-pub(crate) fn finish_response(
+pub fn finish_response(
     parsed: &ParsedQuery,
     options: &SearchOptions,
     mut hits: Vec<SearchHit>,

@@ -347,7 +347,7 @@ struct SessionCache {
     ivf: Arc<PersistedSemanticIvf>,
 }
 static SESSION_CACHE: Mutex<Vec<(String, SessionCache)>> = Mutex::new(Vec::new());
-fn clear_semantic_ivf_session_cache() {
+pub fn clear_semantic_ivf_session_cache() {
     SESSION_CACHE
         .lock()
         .unwrap_or_else(|e| e.into_inner())
@@ -394,7 +394,7 @@ fn cache_session(db_key: &str, fingerprint: [u8; 32], ivf: &PersistedSemanticIvf
         },
     ));
 }
-fn load_or_build_semantic_ivf(
+pub fn load_or_build_semantic_ivf(
     store: &IndexStore,
     chunks: &[SemanticChunkRow],
     override_threshold: Option<usize>,
@@ -421,7 +421,7 @@ fn load_or_build_semantic_ivf(
     cache_session(&db_key, fingerprint, &ivf);
     Ok(Some(Arc::new(ivf)))
 }
-fn cached_semantic_ivf(
+pub fn cached_semantic_ivf(
     store: &IndexStore,
     chunks: &[SemanticChunkRow],
     override_threshold: Option<usize>,

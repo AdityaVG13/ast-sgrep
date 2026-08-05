@@ -13,6 +13,17 @@ use std::thread;
 use std::time::{Duration, Instant};
 use walkdir::WalkDir;
 const PATTERN_TIMEOUT_SECS: u64 = 30;
+
+/// Convert a simple query or `defs:`/`callers:` prefix into an ast-grep pattern.
+pub fn ast_grep_pattern_for_query(query: &str) -> Option<String> {
+    let query = query.trim();
+    let query = query
+        .strip_prefix("defs:")
+        .or_else(|| query.strip_prefix("callers:"))
+        .unwrap_or(query)
+        .trim();
+    (!query.is_empty() && !query.contains(' ')).then(|| query.to_string())
+}
 pub fn search_pattern(
     pattern: &str,
     store: &crate::store::IndexStore,

@@ -152,3 +152,13 @@ fn preview_line(excerpt: &str) -> String {
     }
 }
 
+/// Compatibility module paths retained for downstream format adapters.
+pub mod agent {
+    pub use super::{to_agent_capsule_json, to_agent_json};
+}
+pub mod github {
+    pub use super::to_github_json;
+}
+pub mod gitlab {
+    pub use super::to_gitlab_json;
+}
