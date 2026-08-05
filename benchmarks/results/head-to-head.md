@@ -53,10 +53,10 @@ The Semgrep artifact stores `asgrep_sum_p50_ms = 1520.555`, `semgrep_sum_p50_ms 
 
 | Win class | Scale / suite | asgrep | Comparator | Result | Evidence |
 |---|---:|---:|---:|---:|---|
-| Warm lexical query | self corpus, 1,107 files | 16.7 ms p95 (pr21) | ripgrep 16.4 ms p95 | **parity** (1.02×) | [`speed.md`](speed.md) |
-| Structural pattern | self corpus, 1,107 files | 31.3 ms p95 (pr21) | ast-grep 22.4 ms p95 | 0.71× — ast-grep wins on this small corpus | [`speed.md`](speed.md) |
+| Warm lexical query | self corpus, 1,107 files | 17.3 ms p95 (pr21) | ripgrep 16.4 ms p95 | **parity** (1.05×) | [`speed.md`](speed.md) |
+| Structural pattern | self corpus, 1,107 files | 29.4 ms p95 (pr21) | ast-grep 23.2 ms p95 | 0.79× — ast-grep wins on this small corpus | [`speed.md`](speed.md) |
 | Structural pattern, pre-fix path | self corpus, 1,107 files | 986.9 ms p95 (baseline) | ast-grep 26.3 ms p95 | 37.5× slower — the pre-pr21 path | [`speed.md`](speed.md) |
-| Cold index build | self corpus | 992 ms → 88.5 s p95 (baseline → pr21) | — | pr21 89× slower: eager semantic-IVF build (107 MiB vs 22 MiB) | [`speed.md`](speed.md) |
+| Cold index build | self corpus | 992 ms → 2.1 s p95 (baseline → pr21) | — | pr21 embeds chunks at index time (27 MiB); was 88.5 s before the cap fix `0ba34da` | [`speed.md`](speed.md) |
 
 ## Losses and caveats
 

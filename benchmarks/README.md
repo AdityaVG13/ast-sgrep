@@ -77,9 +77,11 @@ threshold, exceedance rate, burn rate, or `claim_within_slo`.
 **Measured status (2026-08-05):** cold self-index measured 906–992 ms p95 on
 the current 1,107-file self corpus (baseline `cea904a` and pr26 `137863f`),
 breaching the 285 ms budget set against the historical 110-file corpus. pr21
-(`5de7eb0`) measures 88.5 s p95 with a 107 MiB index (eager semantic-IVF
-build). Re-baseline the cold-index budget for the current corpus size before
-quoting it as passing; `scripts/run-benchmarks.sh` reproduces the rows.
+(`5de7eb0`) originally measured 88.5 s p95 / 107 MiB (eager per-child-node
+semantic chunks); the child-chunk cap fix (`0ba34da`, 32 → 2 per parent)
+brought it to **2.1 s p95 / 27 MiB** with semantic query latency dropping
+42 → 16 ms. Re-baseline the cold-index budget for the current corpus size;
+`scripts/run-benchmarks.sh` reproduces the rows.
 
 Example:
 

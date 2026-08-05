@@ -35,11 +35,18 @@ Part of `ast-sgrep-iw8`.
 
 | Surface | baseline p95 | pr21 p95 | pr26 p95 | comparator p95 | note |
 |---------|------------:|--------:|--------:|------------:|------|
-| cold index build | 992.0 ms | 88,452 ms | 906.3 ms | — | pr21 eagerly builds the semantic IVF sidecar |
-| warm literal query | 20.7 ms | 16.7 ms | 16.4 ms | rg 15.5–17.6 ms | ≈ ripgrep on this corpus |
-| warm semantic NL query | 19.2 ms | 42.1 ms | 18.6 ms | — | pr21's fusion/IVF path is heavier here |
-| structural pattern query | 986.9 ms | 31.3 ms | 940.6 ms | ast-grep 22.4–26.3 ms | pr21's SIMD prefilter: 31× faster than the baseline path |
-| index size | 22 MiB | 107 MiB | 22 MiB | — | pr21's IVF sidecar dominates the size |
+| cold index build | 992.0 ms | 2,087 ms | 906.3 ms | — | pr21 embeds chunks at index time; was 88.5 s before the child-chunk cap fix (`0ba34da`) |
+| warm literal query | 20.7 ms | 17.3 ms | 16.4 ms | rg 15.5–17.6 ms | ≈ ripgrep on this corpus |
+| warm semantic NL query | 19.2 ms | 16.2 ms | 18.6 ms | — | pr21's IVF path is fastest after the fix |
+| structural pattern query | 986.9 ms | 29.4 ms | 940.6 ms | ast-grep 22.4–26.3 ms | pr21's SIMD prefilter: 34× faster than the baseline path |
+| index size | 22 MiB | 27 MiB | 22 MiB | — | pr21 embeds 2,592 chunks (was 26,461 before the cap fix) |
+
+**2026-08-05 follow-up fix:** pr21's cold index was 88.5 s / 107 MiB because
+`build_semantic_chunks_with_patterns` created up to 32 chunks per parent
+function (one per AST child node) — 26,461 chunks for 1,403 symbols. The cap
+was lowered to 2 (`0ba34da`): index 88.5 s → 2.1 s p95, 107 → 27 MiB, and
+semantic NL query latency dropped 42 → 16 ms. The ANN recall@10 quality
+budget test still passes.
 
 **Budget status:** the published cold self-index budget (285 ms p95) is
 **breached** on the current self corpus by every state (906–992 ms p95). The
