@@ -1,9 +1,8 @@
 name: CI
 
-# pull_request: cheap soundness + typecheck gates.
-# Full matrix remains available via workflow_dispatch.
+# Manual-only to avoid burning GitHub Actions minutes on every push/PR.
+# Run from the Actions tab → CI → Run workflow.
 on:
-  pull_request:
   workflow_dispatch:
 
 jobs:

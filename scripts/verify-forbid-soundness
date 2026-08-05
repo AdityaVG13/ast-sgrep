@@ -65,14 +65,26 @@ done
 echo "== no first-party unsafe outside sealed mmap =="
 # Match `unsafe {` / `unsafe fn` / `unsafe impl` / `unsafe trait` in product sources.
 # Exclude the sealed mmap crate and vendored/target paths.
+# rg is preferred but not guaranteed on CI runners; fall back to GNU grep.
+if command -v rg >/dev/null 2>&1; then
+  scan_cmd=(rg -n --glob '!crates/ast-sgrep-mmap/**' --glob '!target/**' --glob '!fuzz/**' \
+    -e '\bunsafe\s*(fn|impl|trait|\{)' crates/)
+else
+  scan_cmd=(grep -rEn --exclude-dir=target --exclude-dir=fuzz --exclude-dir=ast-sgrep-mmap \
+    -e 'unsafe[[:space:]]*(fn|impl|trait|\{)' crates/)
+fi
 while IFS= read -r match; do
   echo "FAIL: first-party unsafe outside sealed boundary: $match"
   fail=1
-done < <(rg -n --glob '!crates/ast-sgrep-mmap/**' --glob '!target/**' --glob '!fuzz/**' \
-  -e '\bunsafe\s*(fn|impl|trait|\{)' crates/ || true)
+done < <("${scan_cmd[@]}" || true)
 
 echo "== sealed mmap is the only intentional unsafe =="
-if ! rg -q 'unsafe \{' crates/ast-sgrep-mmap/src/lib.rs; then
+if command -v rg >/dev/null 2>&1; then
+  has_sealed="$(rg -q 'unsafe \{' crates/ast-sgrep-mmap/src/lib.rs && echo yes || echo no)"
+else
+  has_sealed="$(grep -q 'unsafe {' crates/ast-sgrep-mmap/src/lib.rs && echo yes || echo no)"
+fi
+if [[ "$has_sealed" != "yes" ]]; then
   echo "FAIL: ast-sgrep-mmap must contain the sealed unsafe map call"
   fail=1
 else
