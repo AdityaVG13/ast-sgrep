@@ -44,6 +44,20 @@ Retrieval quality is separate because it is a relevance result, not a speed resu
 
 The Semgrep artifact stores `asgrep_sum_p50_ms = 1520.555`, `semgrep_sum_p50_ms = 31875.276`, `speedup_x = 20.96`, `patterns = 29`, match totals `51 / 19`, and `semgrep_unique_locations = 0`. The retrieval publication records `0.605 / 0.536` in [`losses.md`](losses.md), alongside all 14 reciprocal-rank rows.
 
+## 2026-08-05 measured (self corpus, 1,107 tracked files)
+
+> New rows from `scripts/run-benchmarks.sh` (reproducible from this tree; raw
+> hyperfine JSON in the run output). Same-machine rows for the 1.4.0 release
+> states; p95 wall-clock. Baseline = `origin/main` `cea904a`, pr21 =
+> `5de7eb0`, pr26 = `137863f`.
+
+| Win class | Scale / suite | asgrep | Comparator | Result | Evidence |
+|---|---:|---:|---:|---:|---|
+| Warm lexical query | self corpus, 1,107 files | 16.7 ms p95 (pr21) | ripgrep 16.4 ms p95 | **parity** (1.02×) | [`speed.md`](speed.md) |
+| Structural pattern | self corpus, 1,107 files | 31.3 ms p95 (pr21) | ast-grep 22.4 ms p95 | 0.71× — ast-grep wins on this small corpus | [`speed.md`](speed.md) |
+| Structural pattern, pre-fix path | self corpus, 1,107 files | 986.9 ms p95 (baseline) | ast-grep 26.3 ms p95 | 37.5× slower — the pre-pr21 path | [`speed.md`](speed.md) |
+| Cold index build | self corpus | 992 ms → 88.5 s p95 (baseline → pr21) | — | pr21 89× slower: eager semantic-IVF build (107 MiB vs 22 MiB) | [`speed.md`](speed.md) |
+
 ## Losses and caveats
 
 Read the query-level retrieval losses in [`losses.md`](losses.md). Three queries are explicit asgrep losses: `rg_std_printer` (rank 10 vs 1), `rg_json_output` (rank 2 vs 1), and `rg_overrides` (rank 5 vs 1). `rg_search_core` is a shared top-10 miss. The comparison is intentionally difficult but asymmetric: asgrep receives natural-language intents directly; Semgrep receives a hand-authored structural pattern per intent.

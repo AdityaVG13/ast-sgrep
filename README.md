@@ -6,7 +6,7 @@
 
 **Hybrid code search that understands intent** -- not only text or syntax.
 
-**v1.3.2** · 8 languages · lexical + AST graph + **semantic symbol search** (on by default, no API key)
+**v1.4.0** · 13 languages · lexical + AST graph + **semantic symbol search** + **Code Mode** (on by default, no API key)
 
 > **ast-grep finds shapes. ripgrep finds strings. ast-sgrep finds intent.**
 
@@ -22,13 +22,7 @@ pi install npm:pi-ast-sgrep
 
 It immediately adds **`asgrep_codemode`** (Code Mode), `asgrep_search`, `asgrep_index`, `asgrep_status`, four `/asgrep-*` commands, and the `ast-sgrep` skill. The first search lazily creates `.asgrep/`; no Rust toolchain, PATH setup, MCP adapter, credential, or runtime download is required. See the [complete Pi package guide](docs/pi-package.md) and [Code Mode](docs/codemode.md).
 
-For the standalone CLI, after `1.3.2` is published to crates.io, install with:
-
-```bash
-cargo install ast-sgrep-cli --version 1.3.2 --locked
-```
-
-Until publication, build from source:
+The standalone CLI is not yet published to crates.io; the Pi package is the packaged install path. To build from source:
 
 ```bash
 git clone https://github.com/AdityaVG13/ast-sgrep
@@ -75,6 +69,7 @@ Most code search is either **fast text** (ripgrep) or **pattern matching** (ast-
 | "credential renewal" (no token overlap) | Semantic hit on `auth_refresh` |
 | Structured JSON for an agent | `--json --format agent` |
 | Structural rewrite / codemod | `pattern:` (ast-grep when available) |
+| Agent needs search as a tool (not a subprocess) | `asgrep_codemode` — in-process, stateful session (Code Mode) |
 
 [Full comparison →](docs/comparison.md)
 
@@ -135,6 +130,9 @@ These are **checked-in run summaries**, not portable guarantees. Hardware, corpu
 | Structural workloads vs ast-grep | Large speedups in recorded cases | [speed.md](benchmarks/results/speed.md) |
 | Cross-tool bake-off | Mixed; inspect every row | [bakeoff.md](benchmarks/results/bakeoff.md) |
 | Known regressions | Published without suppression | [losses.md](benchmarks/results/losses.md) |
+| 2026-08-05 release run (self corpus) | Structural pattern 31× faster on the quality path; literal ≈ ripgrep; cold index 906 ms p95 | [speed.md](benchmarks/results/speed.md) |
+
+Measured 2026-08-05 on the self corpus (1,107 tracked files; `scripts/run-benchmarks.sh`): cold index **906 ms p95** (budget breach on the grown corpus — the 285 ms budget was set for 110 files), warm literal **16–21 ms** (≈ ripgrep 15–18 ms), structural pattern **31 ms** with the quality batch vs **987 ms** without (ast-grep: 22–26 ms). The quality batch's index build is **88 s / 107 MiB** (eager semantic IVF) versus ~1 s / 22 MiB before — see the trade-off in [speed.md](benchmarks/results/speed.md).
 
 Canonical table: [head-to-head.md](benchmarks/results/head-to-head.md). Index: [benchmarks/README.md](benchmarks/README.md). Methodology: [docs/benchmarks.md](docs/benchmarks.md).
 
@@ -178,7 +176,7 @@ Canonical table: [head-to-head.md](benchmarks/results/head-to-head.md). Index: [
 |------|------|
 | `crates/ast-sgrep-core` | Index, SQLite store, hybrid search |
 | `crates/ast-sgrep-cli` | `asgrep` / `ast-sgrep` CLI + supervisor |
-| `crates/ast-sgrep-lang` | Tree-sitter extraction (8 languages) |
+| `crates/ast-sgrep-lang` | Tree-sitter extraction (13 languages) |
 | `crates/ast-sgrep-embed` | Embedding backends + optional rerank |
 | `crates/ast-sgrep-lsp` | Language server |
 | `crates/ast-sgrep-mcp` | MCP server |
@@ -193,7 +191,7 @@ Canonical table: [head-to-head.md](benchmarks/results/head-to-head.md). Index: [
 
 ## Project status and verification
 
-**v1.3.2.** Hybrid search, semantic layer, LSP, MCP, agent JSON, and IVF path are in place.
+**v1.4.0.** Code Mode (in-process tool-calling), 13 languages (5 new: C#, Swift, Kotlin, PHP, JS), fusion-normalized ranking, SIMD/mmap performance, LSP symbol correctness, and the semantic layer are in place.
 
 GitHub Actions workflows are **manual-only** (`workflow_dispatch`) to control Actions minutes. Local quality bar for contributors:
 

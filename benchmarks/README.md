@@ -74,6 +74,13 @@ the current p95 with a prior run. A missing or different fingerprint makes drift
 non-comparable. Passing the default 10% drift envelope never changes the hard
 threshold, exceedance rate, burn rate, or `claim_within_slo`.
 
+**Measured status (2026-08-05):** cold self-index measured 906–992 ms p95 on
+the current 1,107-file self corpus (baseline `cea904a` and pr26 `137863f`),
+breaching the 285 ms budget set against the historical 110-file corpus. pr21
+(`5de7eb0`) measures 88.5 s p95 with a 107 MiB index (eager semantic-IVF
+build). Re-baseline the cold-index budget for the current corpus size before
+quoting it as passing; `scripts/run-benchmarks.sh` reproduces the rows.
+
 Example:
 
 ```bash
