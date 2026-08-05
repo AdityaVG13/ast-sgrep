@@ -3,7 +3,7 @@ use ast_sgrep_embed::expand_concepts;
 use ast_sgrep_lang::PatternNode;
 use std::collections::HashSet;
 
-const MAX_CHILD_CHUNKS_PER_PARENT: usize = 32;
+const MAX_CHILD_CHUNKS_PER_PARENT: usize = 2;
 #[derive(Debug, Clone)]
 pub struct SemanticChunkInput {
     pub symbol_name: String,
@@ -312,7 +312,9 @@ mod tests {
         ];
         let lines = [(2, "whole parent".into())];
         let chunks = build_semantic_chunks_with_patterns(&[symbol], &[], &nodes, &lines, None);
-        assert_eq!(chunks.len(), 3);
+        // Bounded by MAX_CHILD_CHUNKS_PER_PARENT: the two call: nodes win
+        // priority; the bare identifier is dropped.
+        assert_eq!(chunks.len(), 2);
         assert!(chunks
             .iter()
             .all(|chunk| (chunk.line_start, chunk.line_end) == (2, 8)));
@@ -321,7 +323,7 @@ mod tests {
                 .iter()
                 .map(|chunk| chunk.excerpt.as_str())
                 .collect::<Vec<_>>(),
-            vec!["charge", "charge(subscription)", "notify_customer()"]
+            vec!["charge(subscription)", "notify_customer()"]
         );
     }
 
