@@ -51,6 +51,12 @@ struct SearcherKey {
     use_embed: bool,
 }
 
+#[derive(Default)]
+struct SearcherCache {
+    generation: u64,
+    entry: Option<(SearcherKey, Searcher)>,
+}
+
 pub struct McpServer {
     /// Configured workspace root; all tool roots must stay under this path.
     root: PathBuf,
@@ -58,7 +64,7 @@ pub struct McpServer {
     limit: usize,
     use_embed: bool,
     /// Reused across search-channel calls; cleared after index mutations.
-    searcher_cache: Mutex<Option<(SearcherKey, Searcher)>>,
+    searcher_cache: Mutex<SearcherCache>,
     /// Single-flight lock for index_repo (es7u).
     index_lock: Mutex<()>,
 }
@@ -82,7 +88,7 @@ impl McpServer {
                     ast_sgrep_core::clamp_agent_limit(None, SearchOptions::default_limit())
                 }),
             use_embed: !ast_sgrep_core::env_flag::env_flag("ASGREP_NO_EMBED"),
-            searcher_cache: Mutex::new(None),
+            searcher_cache: Mutex::new(SearcherCache::default()),
             index_lock: Mutex::new(()),
         })
     }
@@ -306,22 +312,25 @@ impl McpServer {
     }
 
     fn invalidate_searcher_cache(&self) {
-        // Poison fails closed: clear tainted cache rather than skipping invalidation (bix3).
-        let mut guard = Self::lock_or_recover(&self.searcher_cache, |slot| {
-            *slot = None;
+        // Advance the generation even when a search temporarily owns the cached
+        // Searcher. That prevents the stale Searcher from returning after reindex.
+        let mut guard = Self::lock_or_recover(&self.searcher_cache, |cache| {
+            cache.entry = None;
         });
-        *guard = None;
+        guard.generation = guard.generation.wrapping_add(1);
+        guard.entry = None;
     }
 
-    fn searcher_for(&self, root: PathBuf, limit: usize) -> anyhow::Result<Searcher> {
+    fn searcher_for(&self, root: PathBuf, limit: usize) -> anyhow::Result<(Searcher, u64)> {
         let key = self.searcher_key(root.clone(), limit);
-        // Poison fails closed: clear and rebuild rather than reuse tainted state (bix3/sxjc).
-        let mut guard = Self::lock_or_recover(&self.searcher_cache, |slot| {
-            *slot = None;
+        // Poison fails closed: invalidate and rebuild rather than reuse tainted state.
+        let mut guard = Self::lock_or_recover(&self.searcher_cache, |cache| {
+            cache.generation = cache.generation.wrapping_add(1);
+            cache.entry = None;
         });
-        let need_new = match guard.as_ref() {
+        let need_new = match guard.entry.as_ref() {
             None => true,
-            Some((k, _)) => k != &key,
+            Some((cached_key, _)) => cached_key != &key,
         };
         if need_new {
             let searcher = Searcher::new(SearchOptions {
@@ -331,24 +340,31 @@ impl McpServer {
                 use_embed: self.use_embed,
                 ..SearchOptions::default()
             })?;
-            *guard = Some((key.clone(), searcher));
+            guard.entry = Some((key, searcher));
         }
-        // Take searcher out so the mutex is not held across search compute (bix3).
-        let (_cached_key, searcher) = guard
+        let generation = guard.generation;
+        let (_, searcher) = guard
+            .entry
             .take()
             .ok_or_else(|| anyhow::anyhow!("searcher cache missing after populate"))?;
         drop(guard);
-        Ok(searcher)
+        Ok((searcher, generation))
     }
 
-    fn restore_searcher(&self, root: PathBuf, limit: usize, searcher: Searcher) {
+    fn restore_searcher(
+        &self,
+        root: PathBuf,
+        limit: usize,
+        generation: u64,
+        searcher: Searcher,
+    ) {
         let key = self.searcher_key(root, limit);
-        let mut guard = Self::lock_or_recover(&self.searcher_cache, |slot| {
-            *slot = None;
+        let mut guard = Self::lock_or_recover(&self.searcher_cache, |cache| {
+            cache.generation = cache.generation.wrapping_add(1);
+            cache.entry = None;
         });
-        // Only restore if nothing newer was inserted (single-flight index may have cleared).
-        if guard.is_none() {
-            *guard = Some((key, searcher));
+        if guard.generation == generation && guard.entry.is_none() {
+            guard.entry = Some((key, searcher));
         }
     }
 
@@ -362,13 +378,13 @@ impl McpServer {
             .context("query must contain 1 to 4096 characters")?;
         let limit = Self::integer_arg(args, "limit", self.limit, 1, MAX_AGENT_LIMIT)?;
         let root = self.root_arg(args)?;
-        let searcher = self.searcher_for(root.clone(), limit)?;
+        let (searcher, generation) = self.searcher_for(root.clone(), limit)?;
         let response = match mode {
             AgentSearchMode::Keyword => searcher.search_lexical(query),
             AgentSearchMode::Ast => searcher.search(&format!("pattern: {query}")),
             AgentSearchMode::Semantic => searcher.search_semantic(query),
         };
-        self.restore_searcher(root, limit, searcher);
+        self.restore_searcher(root, limit, generation, searcher);
         let response = response?;
         Ok(serde_json::to_string_pretty(&format_response_with(
             &response,
@@ -615,4 +631,29 @@ fn write_resp(
         body["error"] = error;
     }
     writeln!(stdout, "{body}")
+}
+
+
+#[cfg(test)]
+mod cache_tests {
+    use super::*;
+
+    #[test]
+    fn reindex_generation_rejects_in_flight_stale_searcher() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        let server = McpServer {
+            root: root.clone(),
+            index_path: None,
+            limit: 10,
+            use_embed: false,
+            searcher_cache: Mutex::new(SearcherCache::default()),
+            index_lock: Mutex::new(()),
+        };
+        let (searcher, generation) = server.searcher_for(root.clone(), 10).unwrap();
+        server.invalidate_searcher_cache();
+        server.restore_searcher(root, 10, generation, searcher);
+        let cache = McpServer::lock_or_recover(&server.searcher_cache, |_| {});
+        assert!(cache.entry.is_none(), "stale searcher returned after reindex");
+    }
 }
