@@ -17,7 +17,12 @@ fn as_db_path(path: PathBuf) -> PathBuf {
         path.join(INDEX_DB)
     }
 }
-pub fn index_db_path(root: &Path, index_path: Option<&Path>) -> crate::Result<PathBuf> {
+pub fn index_db_path(root: &Path, index_path: Option<&Path>) -> PathBuf {
+    try_index_db_path(root, index_path)
+        .unwrap_or_else(|_| root.join(INDEX_DIR).join(INDEX_DB))
+}
+
+pub fn try_index_db_path(root: &Path, index_path: Option<&Path>) -> crate::Result<PathBuf> {
     if let Some(path) = index_path {
         return Ok(as_db_path(path.to_path_buf()));
     }

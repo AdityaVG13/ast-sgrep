@@ -4,7 +4,7 @@ use crate::machine::{print_machine_json, print_machine_json_status};
 use crate::search_cmd::do_search;
 use crate::{open_indexer, open_searcher, resolve_root_index, Cli};
 use anyhow::Context;
-use ast_sgrep_core::{index_db_path, IndexStats, SearchResponse, Searcher};
+use ast_sgrep_core::{try_index_db_path, IndexStats, SearchResponse, Searcher};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
@@ -44,7 +44,7 @@ fn maybe_index(root: &Path, cli: &Cli, skip: bool) -> anyhow::Result<(Option<Ind
 
 fn bench_searcher(root: &Path, cli: &Cli, skip_index: bool) -> anyhow::Result<Searcher> {
     let (resolved, index_path) = resolve_root_index(cli, root);
-    let db = index_db_path(&resolved, index_path.as_deref())?;
+    let db = try_index_db_path(&resolved, index_path.as_deref())?;
     if skip_index && !db.exists() {
         anyhow::bail!(
             "failed to open existing index at {} (run `asgrep index` first)",

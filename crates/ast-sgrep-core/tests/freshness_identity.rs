@@ -38,7 +38,7 @@ fn lexical_sidecar_falls_back_when_source_generation_changes() {
     let generation = store.index_data_version().unwrap();
     let sidecar = TantivySidecar::open(temp.path()).unwrap();
     sidecar
-        .rebuild_from_lines(&store.all_indexed_lines().unwrap(), generation)
+        .rebuild_from_lines_with_generation(&store.all_indexed_lines().unwrap(), generation)
         .unwrap();
     assert!(sidecar.is_fresh(generation).unwrap());
 

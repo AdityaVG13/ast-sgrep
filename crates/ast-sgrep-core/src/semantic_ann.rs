@@ -1,6 +1,6 @@
 use crate::semantic_ivf::{
     compute_ann_fingerprint, invalidate_semantic_ivf, load_semantic_ivf,
-    load_semantic_ivf_unchecked, save_semantic_ivf, semantic_ivf_path, PersistedSemanticIvf,
+    load_semantic_ivf_unchecked, save_semantic_ivf_with_publication, semantic_ivf_path, PersistedSemanticIvf,
 };
 use crate::store::IndexStore;
 use crate::Result;
@@ -178,6 +178,10 @@ impl SemanticAnnIndex {
             *slot = true;
         }
         seen.into_iter().all(|present| present)
+    }
+
+    pub fn validate_member_indices(&self, chunk_count: usize) -> bool {
+        self.validate_partition(chunk_count)
     }
 
     /// `probes`: None/0 = at most 90% of populated clusters; ≥ n_clusters = exact.
@@ -456,6 +460,10 @@ fn lock_session_cache() -> std::sync::MutexGuard<'static, Vec<(String, SessionCa
     }
 }
 
+pub fn clear_semantic_ivf_session_cache() {
+    lock_session_cache().clear();
+}
+
 pub fn mark_semantic_ivf_stale(store: &IndexStore) {
     if store
         .get_meta("semantic_ivf_stale")
@@ -519,7 +527,7 @@ pub fn load_or_build_semantic_ivf(
     }
     let flat = flatten_vectors_for_search(chunks, dim)?;
     let index = SemanticAnnIndex::build_from_flat(&flat, dim);
-    let published = save_semantic_ivf(&ivf_path, fingerprint, dim, &flat, &index)?;
+    let published = save_semantic_ivf_with_publication(&ivf_path, fingerprint, dim, &flat, &index)?;
     let _ = store.set_meta("semantic_ivf_stale", if published { "0" } else { "1" });
     let ivf = Arc::new(PersistedSemanticIvf::from_owned(
         fingerprint,
@@ -618,7 +626,7 @@ fn reassign_stale_ivf_partition(
     drop(ivf);
     index.reassign_all(&vectors, dim);
     let (fingerprint, db_key) = ann_session_key(store, chunks)?;
-    let published = save_semantic_ivf(
+    let published = save_semantic_ivf_with_publication(
         &semantic_ivf_path(store.db_path()),
         fingerprint,
         dim,
@@ -659,4 +667,3 @@ mod flatten_bounds_tests {
         assert!(out.is_empty());
     }
 }
-

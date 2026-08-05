@@ -20,6 +20,21 @@ pub mod semantic_chunk;
 pub mod semantic_ivf;
 pub mod store;
 pub mod tantivy_index;
+/// Compatibility re-exports for callers using the pre-1.3 module paths.
+pub mod skip {
+    pub use crate::gitignore::{
+        should_skip_dir, should_skip_file, DEFAULT_SKIP_DIR_NAMES, INDEXABLE_EXTENSIONS,
+    };
+}
+
+pub mod text {
+    pub use crate::index::{split_content_lines, SplitLines};
+}
+
+pub mod output {
+    pub use crate::search::format_hit_line;
+}
+
 pub mod fts {
     pub fn escape_fts_term(term: &str) -> String {
         format!("\"{}\"", term.replace('"', "\"\""))
@@ -46,7 +61,7 @@ pub use search::format_hit_line;
 pub use pattern::search_pattern;
 pub use query::{ParsedQuery, QueryMode};
 pub use search::{HitSignal, SearchHit, SearchOptions, SearchResponse, Searcher};
-pub use store::{index_db_path, IndexStatus, IndexStore};
+pub use store::{index_db_path, try_index_db_path, IndexStatus, IndexStore};
 #[derive(Debug, Error)]
 pub enum StoreError {
     #[error("database error: {0}")]

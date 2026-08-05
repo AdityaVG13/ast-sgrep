@@ -88,6 +88,10 @@ fn run_process() -> ! {
     }
 }
 
+pub fn run() -> anyhow::Result<()> {
+    run_cli(&Cli::parse())
+}
+
 fn run_cli(cli: &Cli) -> anyhow::Result<()> {
     if cli.robot_help {
         agent::print_robot_guide();

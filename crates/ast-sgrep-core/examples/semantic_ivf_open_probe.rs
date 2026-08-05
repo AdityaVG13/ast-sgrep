@@ -1,5 +1,7 @@
 use ast_sgrep_core::semantic_ann::SemanticAnnIndex;
-use ast_sgrep_core::semantic_ivf::{compute_ann_fingerprint, load_semantic_ivf, save_semantic_ivf};
+use ast_sgrep_core::semantic_ivf::{
+    compute_ann_fingerprint, load_semantic_ivf, save_semantic_ivf_with_publication,
+};
 use std::hint::black_box;
 use std::path::Path;
 use std::time::Instant;
@@ -26,7 +28,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "prepare" => {
             let vectors = vectors();
             let index = SemanticAnnIndex::build_from_flat(&vectors, DIM);
-            if !save_semantic_ivf(path, fingerprint(), DIM, &vectors, &index)? {
+            if !save_semantic_ivf_with_publication(path, fingerprint(), DIM, &vectors, &index)? {
                 return Err("sidecar publication was deferred".into());
             }
             println!(

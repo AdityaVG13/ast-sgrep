@@ -2,7 +2,7 @@ use ast_sgrep_core::bench_suite::measure_semantic_ivf_open_p99;
 use ast_sgrep_core::semantic_ann::{SemanticAnnIndex, DEFAULT_ANN_THRESHOLD};
 use ast_sgrep_core::semantic_ivf::{
     compute_ann_fingerprint, invalidate_semantic_ivf, load_semantic_ivf, load_semantic_ivf_index,
-    load_semantic_ivf_unchecked, save_semantic_ivf,
+    load_semantic_ivf_unchecked, save_semantic_ivf, save_semantic_ivf_with_publication,
 };
 use ast_sgrep_embed::{top_k_flat_similarity, MIN_SIMILARITY};
 use std::collections::HashSet;
@@ -131,7 +131,7 @@ fn mapped_reader_survives_atomic_sidecar_replacement() {
     )
     .unwrap();
     let old = load_semantic_ivf(&path, fingerprint).unwrap().unwrap();
-    let published = save_semantic_ivf(
+    let published = save_semantic_ivf_with_publication(
         &path,
         fingerprint,
         dim,

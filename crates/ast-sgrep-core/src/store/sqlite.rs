@@ -3,7 +3,7 @@ use super::embed_support::{
     read_sym_loc, requested_model_identity, structure_fingerprint,
     touch_embed_cache_entries, EmbeddedChunk, EmbeddedChunks,
 };
-use super::index_db_path;
+use super::try_index_db_path;
 use super::sql::configure_connection;
 use super::sql::{
     append_lang_filter, calls_matching, count_star, delete_file_children, delete_file_lines,
@@ -104,7 +104,7 @@ pub struct IndexStore {
 }
 impl IndexStore {
     pub fn open(root: &Path, index_path: Option<&Path>) -> Result<Self> {
-        let db_path = index_db_path(root, index_path).map_err(|e| {
+        let db_path = try_index_db_path(root, index_path).map_err(|e| {
             crate::StoreError::Other(format!(
                 "failed to resolve index path for root {}: {e}",
                 root.display()
@@ -205,7 +205,7 @@ impl IndexStore {
             |r| r.get(0),
         )
     }
-    fn delete_meta(&self, key: &str) -> Result<()> {
+    pub fn delete_meta(&self, key: &str) -> Result<()> {
         self.conn
             .execute("DELETE FROM meta WHERE key = ?1", params![key])?;
         Ok(())
@@ -234,11 +234,11 @@ impl IndexStore {
             .and_then(|s| s.parse().ok())
             .unwrap_or(0))
     }
-    fn bump_semantic_data_version(&self) -> Result<()> {
+    pub fn bump_semantic_data_version(&self) -> Result<()> {
         let v = self.semantic_data_version()?.saturating_add(1);
         self.set_meta("semantic_data_version", &v.to_string())
     }
-    pub(crate) fn file_id(&self, rel_path: &str) -> Result<Option<i64>> {
+    pub fn file_id(&self, rel_path: &str) -> Result<Option<i64>> {
         optional_row(
             &self.conn,
             "SELECT id FROM files WHERE path = ?1",
@@ -247,7 +247,7 @@ impl IndexStore {
         )
     }
     /// File-tx stays OFF until bulk commit (no re-NORMAL after each file).
-    pub(crate) fn begin_file_tx(&self) -> Result<()> {
+    pub fn begin_file_tx(&self) -> Result<()> {
         if !self.conn.is_autocommit() {
             return Ok(());
         }
@@ -256,10 +256,10 @@ impl IndexStore {
         self.file_tx_active.set(true);
         Ok(())
     }
-    pub(crate) fn commit_file_tx(&self) -> Result<()> {
+    pub fn commit_file_tx(&self) -> Result<()> {
         self.end_file_tx(true)
     }
-    pub(crate) fn rollback_file_tx(&self) -> Result<()> {
+    pub fn rollback_file_tx(&self) -> Result<()> {
         self.end_file_tx(false)
     }
     fn end_file_tx(&self, commit: bool) -> Result<()> {
@@ -312,7 +312,7 @@ impl IndexStore {
     pub fn commit_bulk_tx(&self) -> Result<()> {
         self.end_bulk_tx(true)
     }
-    pub(crate) fn rollback_bulk_tx(&self) -> Result<()> {
+    pub fn rollback_bulk_tx(&self) -> Result<()> {
         self.end_bulk_tx(false)
     }
     fn end_bulk_tx(&self, commit: bool) -> Result<()> {
@@ -418,7 +418,7 @@ impl IndexStore {
         Ok(())
     }
     /// Lines/FTS only when structure fingerprint matches (append / truncate / full rewrite).
-    pub(crate) fn refresh_lines_only(&self, input: RefreshLinesInput<'_>) -> Result<i64> {
+    pub fn refresh_lines_only(&self, input: RefreshLinesInput<'_>) -> Result<i64> {
         let RefreshLinesInput {
             file_id,
             language: lang,
@@ -705,7 +705,7 @@ impl IndexStore {
             |r| r.get(0),
         )
     }
-    pub(crate) fn all_file_paths(&self) -> Result<Vec<String>> {
+    pub fn all_file_paths(&self) -> Result<Vec<String>> {
         query_cached_map(
             &self.conn,
             "SELECT path FROM files ORDER BY path",
@@ -740,7 +740,7 @@ impl IndexStore {
         count_star(&self.conn, "lines")
     }
     /// True when indexed lines ≥ threshold (LIMIT probe; avoids full COUNT).
-    pub(crate) fn indexed_line_count_at_least(&self, threshold: usize) -> Result<bool> {
+    pub fn indexed_line_count_at_least(&self, threshold: usize) -> Result<bool> {
         super::sql::at_least_rows(&self.conn, "lines", threshold)
     }
     pub fn all_indexed_lines(&self) -> Result<Vec<IndexedLineRow>> {
@@ -800,7 +800,7 @@ impl IndexStore {
             dim: dim as usize,
         })
     }
-    pub(crate) fn semantic_chunk_ids(&self, lang: Option<&str>) -> Result<Vec<i64>> {
+    pub fn semantic_chunk_ids(&self, lang: Option<&str>) -> Result<Vec<i64>> {
         let (sql, l) = if lang.is_some() {
             ("SELECT sc.id FROM semantic_chunks sc JOIN files f ON f.id=sc.file_id WHERE f.language=?1 ORDER BY sc.id", lang)
         } else {
@@ -808,7 +808,7 @@ impl IndexStore {
         };
         query_map_rows(&self.conn, sql, l, |r| r.get(0))
     }
-    pub(crate) fn semantic_chunks_by_ids(
+    pub fn semantic_chunks_by_ids(
         &self,
         ids: &[i64],
     ) -> Result<Vec<(i64, ast_sgrep_embed::SemanticChunkRow)>> {
@@ -944,13 +944,13 @@ impl IndexStore {
     pub fn outgoing_calls(&self, caller: &str) -> Result<Vec<CallRow>> {
         calls_matching(&self.conn, "caller", caller)
     }
-    pub(crate) fn symbol_at_line(&self, path: &str, line: u32) -> Result<Option<SymbolLocationRow>> {
+    pub fn symbol_at_line(&self, path: &str, line: u32) -> Result<Option<SymbolLocationRow>> {
         optional_row(
             &self.conn, &format!("{SYM_LOC} WHERE f.path=?1 AND s.line_start<=?2 AND s.line_end>=?2 ORDER BY (s.line_end-s.line_start), s.line_start DESC, s.name LIMIT 1"),
             &[&path as &dyn ToSql, &line as &dyn ToSql], read_sym_loc,
         )
     }
-    pub(crate) fn first_symbol_in_file(&self, path: &str) -> Result<Option<SymbolLocationRow>> {
+    pub fn first_symbol_in_file(&self, path: &str) -> Result<Option<SymbolLocationRow>> {
         optional_row(
             &self.conn,
             &format!("{SYM_LOC} WHERE f.path=?1 ORDER BY s.line_start, s.line_end, s.name LIMIT 1"),
@@ -968,7 +968,7 @@ impl IndexStore {
             read_sym_loc,
         )
     }
-    pub(crate) fn imports_from_file(&self, path: &str) -> Result<Vec<ImportRow>> {
+    pub fn imports_from_file(&self, path: &str) -> Result<Vec<ImportRow>> {
         query_cached_map(
             &self.conn,
             "SELECT i.module_path, i.line_no FROM imports i JOIN files f ON f.id=i.file_id \
@@ -1006,10 +1006,10 @@ impl IndexStore {
             |r| r.get(0),
         )
     }
-    pub(crate) fn pattern_node_count(&self) -> Result<usize> {
+    pub fn pattern_node_count(&self) -> Result<usize> {
         count_star(&self.conn, "pattern_nodes")
     }
-    pub(crate) fn pattern_nodes_matching(
+    pub fn pattern_nodes_matching(
         &self,
         signature: &str,
         lang: Option<&str>,
@@ -1052,7 +1052,7 @@ impl IndexStore {
                 .join(sep),
         ))
     }
-    fn file_lines(&self, path: &str) -> Result<Vec<(u32, String)>> {
+    pub fn file_lines(&self, path: &str) -> Result<Vec<(u32, String)>> {
         query_cached_map( &self.conn, "SELECT l.line_no, l.content FROM lines l JOIN files f ON f.id=l.file_id WHERE f.path=?1 ORDER BY l.line_no",
             params![path], |r| Ok((r.get(0)?, r.get(1)?)), )
     }
@@ -1062,7 +1062,7 @@ impl IndexStore {
             &[&path as &dyn ToSql, &line as &dyn ToSql], |r| r.get(0),
         )
     }
-    pub(crate) fn query_imports(
+    pub fn query_imports(
         &self,
         module: Option<&str>,
         lang: Option<&str>,
@@ -1092,7 +1092,7 @@ impl IndexStore {
             map,
         )
     }
-    pub(crate) fn all_legacy_embeddings(
+    pub fn all_legacy_embeddings(
         &self,
         lang: Option<&str>,
     ) -> Result<Vec<ast_sgrep_embed::SemanticChunkRow>> {
@@ -1104,7 +1104,7 @@ impl IndexStore {
         );
         query_map_rows(&self.conn, &sql, lang, read_legacy_emb)
     }
-    fn file_exists(&self, path: &str) -> Result<bool> {
+    pub fn file_exists(&self, path: &str) -> Result<bool> {
         Ok(self
             .conn
             .prepare_cached("SELECT 1 FROM files WHERE path=?1")?

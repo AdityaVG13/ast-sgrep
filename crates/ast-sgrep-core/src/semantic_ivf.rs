@@ -67,25 +67,15 @@ pub fn compute_ann_fingerprint(
 }
 
 #[derive(Debug, Clone)]
-enum VectorStorage {
-    Owned(Vec<f32>),
-    Mapped {
-        mmap: Arc<Mmap>,
-        bytes: Range<usize>,
-    },
+struct MappedVectors {
+    mmap: Arc<Mmap>,
+    bytes: Range<usize>,
 }
 
-impl VectorStorage {
+impl MappedVectors {
     fn as_slice(&self) -> &[f32] {
-        match self {
-            Self::Owned(vectors) => vectors,
-            Self::Mapped { mmap, bytes } => bytemuck::try_cast_slice(&mmap[bytes.clone()])
-                .expect("validated semantic IVF vector alignment"),
-        }
-    }
-
-    fn is_mapped(&self) -> bool {
-        matches!(self, Self::Mapped { .. })
+        bytemuck::try_cast_slice(&self.mmap[self.bytes.clone()])
+            .expect("validated semantic IVF vector alignment")
     }
 }
 
@@ -93,7 +83,9 @@ impl VectorStorage {
 pub struct PersistedSemanticIvf {
     pub fingerprint: [u8; 32],
     pub dim: usize,
-    vectors: VectorStorage,
+    /// Compatibility copy for callers using the pre-1.3 public field.
+    pub vectors: Vec<f32>,
+    mapped_vectors: Option<MappedVectors>,
     pub index: SemanticAnnIndex,
 }
 
@@ -107,17 +99,20 @@ impl PersistedSemanticIvf {
         Self {
             fingerprint,
             dim,
-            vectors: VectorStorage::Owned(vectors),
+            vectors,
+            mapped_vectors: None,
             index,
         }
     }
 
     pub fn vectors(&self) -> &[f32] {
-        self.vectors.as_slice()
+        self.mapped_vectors
+            .as_ref()
+            .map_or(&self.vectors, MappedVectors::as_slice)
     }
 
     pub fn is_mapped(&self) -> bool {
-        self.vectors.is_mapped()
+        self.mapped_vectors.is_some()
     }
 
     pub fn mapped_vector_bytes(&self) -> usize {
@@ -141,6 +136,16 @@ impl PersistedSemanticIvf {
 }
 
 pub fn save_semantic_ivf(
+    path: &Path,
+    fingerprint: [u8; 32],
+    dim: usize,
+    vectors: &[f32],
+    index: &SemanticAnnIndex,
+) -> Result<()> {
+    save_semantic_ivf_with_publication(path, fingerprint, dim, vectors, index).map(|_| ())
+}
+
+pub fn save_semantic_ivf_with_publication(
     path: &Path,
     fingerprint: [u8; 32],
     dim: usize,
@@ -269,13 +274,17 @@ fn load_semantic_ivf_inner(
     let Some(mapped) = map_and_parse(path, expected_fingerprint)? else {
         return Ok(None);
     };
+    let vectors = bytemuck::try_cast_slice::<u8, f32>(&mapped.mmap[mapped.vector_bytes.clone()])
+        .expect("validated semantic IVF vector alignment")
+        .to_vec();
     Ok(Some(PersistedSemanticIvf {
         fingerprint: mapped.header.fingerprint,
         dim: mapped.header.dim,
-        vectors: VectorStorage::Mapped {
+        vectors,
+        mapped_vectors: Some(MappedVectors {
             mmap: mapped.mmap,
             bytes: mapped.vector_bytes,
-        },
+        }),
         index: mapped.index,
     }))
 }

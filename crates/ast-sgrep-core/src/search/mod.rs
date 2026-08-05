@@ -262,6 +262,28 @@ impl Searcher {
             ))
         })
     }
+    pub fn search_regex(&self, query: &str) -> Result<SearchResponse> {
+        self.cached("re", query, || {
+            let parsed = ParsedQuery::regex(query);
+            Ok(finish_response(
+                &parsed,
+                &self.options,
+                regex_pass(&self.store, &self.options, &parsed)?,
+                true,
+            ))
+        })
+    }
+    pub fn search_word(&self, query: &str) -> Result<SearchResponse> {
+        self.cached("word", query, || {
+            let parsed = ParsedQuery::word(query);
+            Ok(finish_response(
+                &parsed,
+                &self.options,
+                literal_pass(&self.store, &self.options, &parsed)?,
+                true,
+            ))
+        })
+    }
     fn search_hybrid(&self, parsed: &ParsedQuery) -> Result<Vec<SearchHit>> {
         // Constraint cascade: each stage receives only files that survived the prior stage.
         let mut lexical = literal_prefilter_pass(&self.store, &self.options, parsed)?;

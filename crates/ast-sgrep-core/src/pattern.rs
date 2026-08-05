@@ -12,6 +12,17 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 use walkdir::WalkDir;
+/// Convert a simple query or `defs:` / `callers:` prefix into an ast-grep pattern.
+pub fn ast_grep_pattern_for_query(query: &str) -> Option<String> {
+    let q = query.trim();
+    let q = q
+        .strip_prefix("defs:")
+        .or_else(|| q.strip_prefix("callers:"))
+        .unwrap_or(q)
+        .trim();
+    (!q.is_empty() && !q.contains(' ')).then(|| q.to_string())
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct PatternSearchProfile {
     pub files_considered: usize,

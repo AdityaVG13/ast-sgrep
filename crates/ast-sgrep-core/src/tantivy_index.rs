@@ -39,7 +39,11 @@ impl TantivySidecar {
     pub fn exists(&self) -> bool {
         self.db_path.exists()
     }
-    pub fn rebuild_from_lines(
+    pub fn rebuild_from_lines(&self, lines: &[crate::store::IndexedLineRow]) -> Result<()> {
+        self.rebuild_from_lines_with_generation(lines, 0)
+    }
+
+    pub fn rebuild_from_lines_with_generation(
         &self,
         lines: &[crate::store::IndexedLineRow],
         source_generation: i64,
@@ -123,8 +127,8 @@ impl TantivySidecar {
 }
 pub fn sidecar_path(root: &Path, index_path: Option<&Path>) -> PathBuf {
     index_db_path(root, index_path)
-        .ok()
-        .and_then(|db| db.parent().map(|parent| parent.join(LEXICAL_DB)))
+        .parent()
+        .map(|parent| parent.join(LEXICAL_DB))
         .unwrap_or_else(|| root.join(INDEX_DIR).join(LEXICAL_DB))
 }
 

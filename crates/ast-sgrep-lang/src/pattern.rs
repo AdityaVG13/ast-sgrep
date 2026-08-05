@@ -48,7 +48,7 @@ pub fn needs_ast_grep_fallback(pattern: &str) -> bool {
     classify_native(p).is_none()
 }
 
-pub(crate) fn tree_sitter_language(lang: Language) -> tree_sitter::Language {
+pub fn tree_sitter_language(lang: Language) -> tree_sitter::Language {
     // Re-exports each grammar's LANGUAGE constant via `.into()`. CSharp currently
     // shares the Java grammar as a stand-in (documented limitation; see l115).
     match lang {
@@ -85,7 +85,7 @@ pub fn match_pattern(
 ///
 /// This syntax-level policy intentionally differs from relevance ranking, where symbol
 /// comparisons are case-folded. A pattern for `Foo` does not match an identifier `foo`.
-pub(crate) fn match_literal_pattern(
+pub fn match_literal_pattern(
     lang: Language,
     source: &str,
     pattern: &str,

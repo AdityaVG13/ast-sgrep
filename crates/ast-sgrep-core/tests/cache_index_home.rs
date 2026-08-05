@@ -1,5 +1,5 @@
 //! Refuse HOME-unset shared /tmp cache fallback (i5ef).
-use ast_sgrep_core::store::index_db_path;
+use ast_sgrep_core::store::try_index_db_path;
 use std::path::Path;
 use std::sync::{Mutex, OnceLock};
 
@@ -19,7 +19,7 @@ fn use_cache_without_home_fails_closed() {
     std::env::remove_var("XDG_CACHE_HOME");
     std::env::remove_var("USERPROFILE");
     std::env::set_var("ASGREP_USE_CACHE", "1");
-    let err = index_db_path(Path::new("/tmp/asgrep-i5ef-root"), None).unwrap_err();
+    let err = try_index_db_path(Path::new("/tmp/asgrep-i5ef-root"), None).unwrap_err();
     let msg = err.to_string();
     assert!(
         msg.contains("HOME") || msg.contains("XDG_CACHE_HOME") || msg.contains("/tmp"),

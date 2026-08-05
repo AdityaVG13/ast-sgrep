@@ -38,7 +38,7 @@ pub(crate) fn ensure_existing_root(root: &Path, cli: &Cli) -> anyhow::Result<Pat
 }
 
 fn index_db_display(root: &Path, index_path: Option<&Path>) -> PathBuf {
-    index_db_path(root, index_path).unwrap_or_else(|_| root.join(".asgrep/index.db"))
+    index_db_path(root, index_path)
 }
 
 pub(crate) fn ensure_nonempty_index(root: &Path, file_count: usize) -> anyhow::Result<()> {

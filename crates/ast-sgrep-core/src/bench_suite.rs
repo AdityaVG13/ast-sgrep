@@ -331,6 +331,69 @@ pub fn list_fixture_names() -> Vec<&'static str> {
     bench_fixtures().iter().map(|f| f.name).collect()
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RankingStability {
+    pub jaccard: f64,
+    pub rank_correlation: f64,
+}
+
+pub fn ranking_stability(left: &[String], right: &[String]) -> RankingStability {
+    use std::collections::{HashMap, HashSet};
+    let ls: HashSet<&str> = left.iter().map(String::as_str).collect();
+    let rs: HashSet<&str> = right.iter().map(String::as_str).collect();
+    let union = ls.union(&rs).count();
+    let jaccard = if union == 0 {
+        1.0
+    } else {
+        ls.intersection(&rs).count() as f64 / union as f64
+    };
+    let right_rank: HashMap<&str, usize> = right
+        .iter()
+        .enumerate()
+        .map(|(rank, id)| (id.as_str(), rank))
+        .collect();
+    let shared: Vec<(usize, usize)> = left
+        .iter()
+        .enumerate()
+        .filter_map(|(rank, id)| right_rank.get(id.as_str()).map(|&other| (rank, other)))
+        .collect();
+    let rank_correlation = if shared.len() < 2 {
+        if shared.len() == 1 {
+            1.0
+        } else {
+            0.0
+        }
+    } else {
+        let mut by_left = shared.clone();
+        by_left.sort_by_key(|(left, _)| *left);
+        let mut by_right = shared.clone();
+        by_right.sort_by_key(|(_, right)| *right);
+        let left_rank: HashMap<usize, usize> = by_left
+            .iter()
+            .enumerate()
+            .map(|(rank, (left, _))| (*left, rank))
+            .collect();
+        let right_rank: HashMap<usize, usize> = by_right
+            .iter()
+            .enumerate()
+            .map(|(rank, (_, right))| (*right, rank))
+            .collect();
+        let n = shared.len() as f64;
+        let squared_distance: f64 = shared
+            .iter()
+            .map(|(left, right)| {
+                let distance = left_rank[left] as f64 - right_rank[right] as f64;
+                distance * distance
+            })
+            .sum();
+        1.0 - (6.0 * squared_distance) / (n * (n * n - 1.0))
+    };
+    RankingStability {
+        jaccard,
+        rank_correlation,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -369,7 +369,7 @@ impl Indexer {
             &self.options.root,
             self.options.index_path.as_deref(),
         )?
-        .rebuild_from_lines(&lines, after)
+        .rebuild_from_lines_with_generation(&lines, after)
     }
     pub fn reindex_all(&mut self) -> Result<IndexStats> {
         self.store.clear_all_data()?;
@@ -706,7 +706,7 @@ fn materialize_upsert(
     let split = split_content_lines(content);
     let body_hash = body_structure_hash(content, language);
     let semantic_chunks = if embed_semantic {
-        crate::semantic_chunk::build_semantic_chunks(
+        crate::semantic_chunk::build_semantic_chunks_with_patterns(
             symbols,
             callers,
             pattern_nodes,

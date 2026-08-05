@@ -19,6 +19,15 @@ pub struct SemanticChunkInput {
 pub fn build_semantic_chunks(
     symbols: &[SymbolRow],
     callers: &[CallerRow],
+    lines: &[(u32, String)],
+    language: Option<&str>,
+) -> Vec<SemanticChunkInput> {
+    build_semantic_chunks_with_patterns(symbols, callers, &[], lines, language)
+}
+
+pub fn build_semantic_chunks_with_patterns(
+    symbols: &[SymbolRow],
+    callers: &[CallerRow],
     pattern_nodes: &[PatternNode],
     lines: &[(u32, String)],
     language: Option<&str>,
@@ -302,7 +311,7 @@ mod tests {
             },
         ];
         let lines = [(2, "whole parent".into())];
-        let chunks = build_semantic_chunks(&[symbol], &[], &nodes, &lines, None);
+        let chunks = build_semantic_chunks_with_patterns(&[symbol], &[], &nodes, &lines, None);
         assert_eq!(chunks.len(), 3);
         assert!(chunks
             .iter()
@@ -334,7 +343,7 @@ mod tests {
             line_end: 4,
             excerpt: "inside_call()".into(),
         }];
-        let chunks = build_semantic_chunks(&[outer, inner], &[], &nodes, &lines, None);
+        let chunks = build_semantic_chunks_with_patterns(&[outer, inner], &[], &nodes, &lines, None);
         let owners = chunks
             .iter()
             .filter(|chunk| chunk.excerpt == "inside_call()")
@@ -360,7 +369,7 @@ mod tests {
                 excerpt: "charge()".into(),
             },
         ];
-        let chunks = build_semantic_chunks(&[function(1, 1)], &[], &nodes, &lines, None);
+        let chunks = build_semantic_chunks_with_patterns(&[function(1, 1)], &[], &nodes, &lines, None);
         assert_eq!(chunks.len(), 1);
         assert_eq!(chunks[0].excerpt, "charge()");
         assert_eq!((chunks[0].line_start, chunks[0].line_end), (1, 1));
@@ -378,7 +387,7 @@ mod tests {
             line_end: 1,
             excerpt: "const TIMEOUT: u64 = 30;".into(),
         }];
-        let chunks = build_semantic_chunks(&[], &[], &nodes, &lines, None);
+        let chunks = build_semantic_chunks_with_patterns(&[], &[], &nodes, &lines, None);
         assert_eq!(chunks.len(), 1);
         assert_eq!(chunks[0].kind, "file");
         assert!(chunks[0].symbol_name.is_empty());
@@ -395,11 +404,11 @@ mod tests {
                 excerpt: format!("child_{line}"),
             })
             .collect::<Vec<_>>();
-        let chunks = build_semantic_chunks(&[function(1, 60)], &[], &nodes, &[], None);
+        let chunks = build_semantic_chunks_with_patterns(&[function(1, 60)], &[], &nodes, &[], None);
         assert_eq!(chunks.len(), MAX_CHILD_CHUNKS_PER_PARENT);
 
         let lines = [(1, "fn renew_account() {}".into())];
-        let fallback = build_semantic_chunks(&[function(1, 1)], &[], &[], &lines, None);
+        let fallback = build_semantic_chunks_with_patterns(&[function(1, 1)], &[], &[], &lines, None);
         assert_eq!(fallback.len(), 1);
         assert_eq!(fallback[0].excerpt, "fn renew_account() {}");
     }
@@ -418,7 +427,7 @@ mod tests {
             (1u32, "#[derive(Debug)]".into()),
             (2, "fn foo() {}".into()),
         ];
-        let chunks = build_semantic_chunks(&symbols, &[], &[], &lines, Some("rust"));
+        let chunks = build_semantic_chunks_with_patterns(&symbols, &[], &[], &lines, Some("rust"));
         assert_eq!(chunks.len(), 1);
         assert!(
             chunks[0].doc.is_empty(),
@@ -446,7 +455,7 @@ mod tests {
             (1u32, "/// does a thing".into()),
             (2, "fn foo() {}".into()),
         ];
-        let chunks = build_semantic_chunks(&symbols, &[], &[], &lines, Some("rust"));
+        let chunks = build_semantic_chunks_with_patterns(&symbols, &[], &[], &lines, Some("rust"));
         assert_eq!(chunks[0].doc, "does a thing");
     }
 
@@ -464,7 +473,7 @@ mod tests {
             (1u32, "  #foo = 1;".into()),
             (2, "  method() {}".into()),
         ];
-        let chunks = build_semantic_chunks(&symbols, &[], &[], &lines, Some("typescript"));
+        let chunks = build_semantic_chunks_with_patterns(&symbols, &[], &[], &lines, Some("typescript"));
         assert_eq!(chunks.len(), 1);
         assert!(
             chunks[0].doc.is_empty(),
@@ -487,7 +496,7 @@ mod tests {
             (1u32, "# helper".into()),
             (2, "def foo():".into()),
         ];
-        let chunks = build_semantic_chunks(&symbols, &[], &[], &lines, Some("python"));
+        let chunks = build_semantic_chunks_with_patterns(&symbols, &[], &[], &lines, Some("python"));
         assert_eq!(chunks[0].doc, "helper");
     }
 }
