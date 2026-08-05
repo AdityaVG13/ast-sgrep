@@ -131,3 +131,6 @@ tests/artifacts/perf/
 
 # Fuzz corpora are regenerable seeds — keep the targets, not the corpus
 fuzz/corpus/
+
+# CLI benchmark-history state (regenerated on runs)
+**/.bench-history.json
