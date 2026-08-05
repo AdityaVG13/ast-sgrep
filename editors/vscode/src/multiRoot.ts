@@ -10,6 +10,14 @@ export interface FolderLike {
   fsPath: string;
 }
 
+function pathContained(root: string, candidate: string): boolean {
+  const rel = path.relative(root, candidate);
+  return (
+    rel === '' ||
+    (rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel))
+  );
+}
+
 /** Pick the workspace folder that owns a document path; fail closed in multi-root. */
 export function folderForUriPath(
   documentPath: string | undefined,
@@ -17,34 +25,28 @@ export function folderForUriPath(
 ): FolderLike | undefined {
   if (!folders.length) return undefined;
   if (documentPath) {
-    const normalized = path.resolve(documentPath);
-    const match = folders.find((f) => {
-      const root = path.resolve(f.fsPath);
-      return normalized === root || normalized.startsWith(root + path.sep);
-    });
-    if (match) return match;
+    const document = path.resolve(documentPath);
+    let best: { folder: FolderLike; root: string } | undefined;
+    for (const folder of folders) {
+      const root = path.resolve(folder.fsPath);
+      const contains = pathContained(root, document);
+      if (contains && (!best || root.length > best.root.length)) {
+        best = { folder, root };
+      }
+    }
+    if (best) return best.folder;
   }
   return folders.length === 1 ? folders[0] : undefined;
 }
 
-/**
- * Resolve a hit file against the preferred search folder, then other roots.
- * Absolute paths pass through. Missing files fall back to preferred join
- * (never silently prefer folders[0] when preferred misses).
- */
-export function resolveHitPath(
-  file: string,
-  preferred: FolderLike,
-  folders: FolderLike[],
-  exists: (p: string) => boolean,
-): string {
-  if (path.isAbsolute(file)) return file;
-  const ordered = [preferred, ...folders.filter((f) => f.fsPath !== preferred.fsPath)];
-  for (const folder of ordered) {
-    const candidate = path.join(folder.fsPath, file);
-    if (exists(candidate)) return candidate;
+/** Resolve a hit only inside the folder whose language server returned it. */
+export function resolveHitPath(file: string, preferred: FolderLike): string {
+  const root = path.resolve(preferred.fsPath);
+  const candidate = path.resolve(root, file);
+  if (!pathContained(root, candidate)) {
+    throw new Error(`ast-sgrep hit path is outside workspace root: ${file}`);
   }
-  return path.join(preferred.fsPath, file);
+  return candidate;
 }
 
 export function hitFilePath(hit: {

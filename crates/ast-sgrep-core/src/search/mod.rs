@@ -99,7 +99,7 @@ impl Searcher {
         }
         Ok(response)
     }
-    pub(crate) fn search_lexical(&self, query_str: &str) -> Result<SearchResponse> {
+    pub fn search_lexical(&self, query_str: &str) -> Result<SearchResponse> {
         self.cached("lex", query_str, || {
             let parsed = ParsedQuery::parse(query_str);
             Ok(finish_response(
@@ -110,7 +110,7 @@ impl Searcher {
             ))
         })
     }
-    pub(crate) fn search_symbol_pass(&self, query_str: &str) -> Result<SearchResponse> {
+    pub fn search_symbol_pass(&self, query_str: &str) -> Result<SearchResponse> {
         self.cached("sym", query_str, || {
             let parsed = ParsedQuery::parse(query_str);
             let mut hits = symbol_pass(&self.store, &self.options, &parsed)?;
@@ -155,9 +155,31 @@ impl Searcher {
             ))
         })
     }
-    pub(crate) fn search_literal(&self, query: &str) -> Result<SearchResponse> {
+    pub fn search_literal(&self, query: &str) -> Result<SearchResponse> {
         self.cached("lit", query, || {
             let parsed = ParsedQuery::literal(query);
+            Ok(finish_response(
+                &parsed,
+                &self.options,
+                literal_pass(&self.store, &self.options, &parsed)?,
+                true,
+            ))
+        })
+    }
+    pub fn search_regex(&self, query: &str) -> Result<SearchResponse> {
+        self.cached("re", query, || {
+            let parsed = ParsedQuery::regex(query);
+            Ok(finish_response(
+                &parsed,
+                &self.options,
+                regex_pass(&self.store, &self.options, &parsed)?,
+                true,
+            ))
+        })
+    }
+    pub fn search_word(&self, query: &str) -> Result<SearchResponse> {
+        self.cached("word", query, || {
+            let parsed = ParsedQuery::word(query);
             Ok(finish_response(
                 &parsed,
                 &self.options,
@@ -376,7 +398,7 @@ fn run_parallel_passes(
 fn join_worker<T>(join: thread::Result<Result<T>>) -> Result<T> {
     join.map_err(|e| crate::StoreError::Other(format!("search worker panicked: {e:?}")))?
 }
-pub(crate) fn finish_response(
+pub fn finish_response(
     parsed: &ParsedQuery,
     options: &SearchOptions,
     mut hits: Vec<SearchHit>,

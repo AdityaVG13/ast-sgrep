@@ -66,6 +66,7 @@ pub struct TextDocumentParams {
 }
 pub type DocumentSymbolParams = TextDocumentParams;
 pub type DidSaveTextDocumentParams = TextDocumentParams;
+pub type DidCloseTextDocumentParams = TextDocumentParams;
 pub type CallHierarchyPrepareParams = TextDocumentPositionParams;
 #[derive(Debug, Deserialize)]
 pub struct ReferenceParams {

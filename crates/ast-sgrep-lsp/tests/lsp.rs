@@ -1,11 +1,20 @@
 use ast_sgrep_lsp::backend::LspBackend;
-use ast_sgrep_lsp::support::{apply_text_edit, extract_identifier_at, path_to_file_uri};
+use ast_sgrep_lsp::support::{
+    extract_identifier_at, path_to_file_uri, try_apply_text_edit as apply_text_edit,
+};
 use ast_sgrep_lsp::types::{
     ExecuteCommandParams, Position, Range, ReferenceContext, ReferenceParams,
     TextDocumentContentChangeEvent, TextDocumentIdentifier, TextDocumentPositionParams,
 };
 use ast_sgrep_testkit::sample_backend;
 use std::fs;
+use std::sync::{Mutex, OnceLock};
+
+fn fixture_write_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
+
 #[test]
 fn lsp_smoke() {
     let (_indexed, backend) = sample_backend();
@@ -81,6 +90,8 @@ fn pure_insertion_preserves_following_char() {
     assert_eq!(insert_at(0, 0, "héllo", "X"), "Xhéllo");
     // Surrogate pair (😂 = 4 UTF-8 bytes, 2 UTF-16 units) at start: must not eat it.
     assert_eq!(insert_at(0, 0, "😂ab", "X"), "X😂ab");
+    // Empty trailing line after a newline is a valid insertion position.
+    assert_eq!(insert_at(1, 0, "hello\n", "X"), "hello\nX");
 }
 
 // Companion: non-zero range_length still replaces the correct span.
@@ -105,6 +116,27 @@ fn nonzero_range_length_replaces_correct_span() {
     )
     .unwrap();
     assert_eq!(out, "hXYlo");
+}
+
+#[test]
+fn out_of_bounds_text_edit_positions_return_errors() {
+    let invalid = |line: u32, character: u32, range_length: Option<u32>| {
+        apply_text_edit(
+            "hello",
+            &TextDocumentContentChangeEvent {
+                range: Some(Range {
+                    start: Position { line, character },
+                    end: Position { line, character },
+                }),
+                range_length,
+                text: "X".into(),
+            },
+        )
+        .expect_err("out-of-bounds edit must fail")
+    };
+    assert!(invalid(1, 0, None).to_string().contains("out of bounds"));
+    assert!(invalid(0, 99, None).to_string().contains("out of bounds"));
+    assert!(invalid(0, 4, Some(2)).to_string().contains("out of bounds"));
 }
 
 // Regression for bead ast-sgrep-nuli (F-04): find_references/goto_definition
@@ -229,6 +261,7 @@ fn missing_reindex_file_errors_without_clearing_ready() {
 // ast-sgrep-lsp-state-zblv.3: dirty buffer survives full disk index_all.
 #[test]
 fn dirty_buffer_survives_full_disk_reindex() {
+    let _fixture_guard = fixture_write_lock().lock().expect("fixture lock");
     let (_indexed, backend) = sample_backend();
     let rel = "src/main.rs";
     let path = backend.root().join(rel);
@@ -257,6 +290,49 @@ fn dirty_buffer_survives_full_disk_reindex() {
                 .any(|h| h["excerpt"].as_str().unwrap_or("").contains(marker)),
             "dirty buffer content lost after disk index_all: {hits:?}"
         );
+    }));
+    fs::write(&path, original).expect("restore fixture");
+    if let Err(payload) = result {
+        std::panic::resume_unwind(payload);
+    }
+}
+
+#[test]
+fn closed_buffer_does_not_override_later_disk_reindex() {
+    let _fixture_guard = fixture_write_lock().lock().expect("fixture lock");
+    let (_indexed, backend) = sample_backend();
+    let rel = "src/main.rs";
+    let path = backend.root().join(rel);
+    let original = fs::read_to_string(&path).expect("read fixture");
+    let uri = path_to_file_uri(&path);
+    let dirty = "closed_dirty_marker_zblv";
+    let external = "external_disk_marker_zblv";
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        backend
+            .apply_document_changes(
+                &uri,
+                &[TextDocumentContentChangeEvent {
+                    range: None,
+                    range_length: None,
+                    text: format!("fn {dirty}() {{}}\n"),
+                }],
+            )
+            .unwrap();
+        backend.close_document(&uri).unwrap();
+        fs::write(&path, format!("fn {external}() {{}}\n")).unwrap();
+        backend.ensure_index().unwrap();
+        assert!(backend
+            .search(&format!("literal:{dirty}"), false, 16)
+            .unwrap()["hits"]
+            .as_array()
+            .unwrap()
+            .is_empty());
+        assert!(!backend
+            .search(&format!("literal:{external}"), false, 16)
+            .unwrap()["hits"]
+            .as_array()
+            .unwrap()
+            .is_empty());
     }));
     fs::write(&path, original).expect("restore fixture");
     if let Err(payload) = result {

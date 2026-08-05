@@ -22,6 +22,15 @@ test('folderForUriPath binds active document to its root', () => {
   assert.strictEqual(folder?.name, 'beta');
 });
 
+test('folderForUriPath chooses the most specific nested root', () => {
+  const nested = [
+    { name: 'parent', fsPath: '/workspaces/project' },
+    { name: 'child', fsPath: '/workspaces/project/packages/child' },
+  ];
+  const folder = folderForUriPath('/workspaces/project/packages/child/src/main.ts', nested);
+  assert.strictEqual(folder?.name, 'child');
+});
+
 test('folderForUriPath fails closed when multi-root and no document', () => {
   assert.strictEqual(folderForUriPath(undefined, folders), undefined);
 });
@@ -31,16 +40,20 @@ test('folderForUriPath allows single-root without document', () => {
   assert.strictEqual(folder?.name, 'alpha');
 });
 
-test('resolveHitPath prefers the search folder then other roots', () => {
-  const exists = (p: string) => p === path.join('/workspaces/beta', 'lib.rs');
-  const resolved = resolveHitPath('lib.rs', folders[0], folders, exists);
-  assert.strictEqual(resolved, path.join('/workspaces/beta', 'lib.rs'));
+test('resolveHitPath never crosses into another workspace root', () => {
+  const resolved = resolveHitPath('lib.rs', folders[0]);
+  assert.strictEqual(resolved, path.join('/workspaces/alpha', 'lib.rs'));
 });
 
 test('resolveHitPath does not silently use folders[0] when preferred misses', () => {
-  const exists = () => false;
-  const resolved = resolveHitPath('missing.rs', folders[1], folders, exists);
+  const resolved = resolveHitPath('missing.rs', folders[1]);
   assert.strictEqual(resolved, path.join('/workspaces/beta', 'missing.rs'));
+});
+
+test('resolveHitPath rejects traversal and outside absolute paths', () => {
+  assert.throws(() => resolveHitPath('../secret.txt', folders[0]), /outside workspace root/);
+  const outside = path.resolve(folders[0].fsPath, '..', 'secret.txt');
+  assert.throws(() => resolveHitPath(outside, folders[0]), /outside workspace root/);
 });
 
 test('hitFilePath / hitLineNumber prefer canonical fields', () => {

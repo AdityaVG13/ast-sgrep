@@ -273,18 +273,26 @@ pub fn utf16_char_to_byte(line: &str, utf16_offset: u32) -> usize {
     line.len()
 }
 
-pub fn apply_text_edit(
+/// Apply an edit with the pre-1.3 best-effort contract.
+pub fn apply_text_edit(content: &str, change: &TextDocumentContentChangeEvent) -> String {
+    try_apply_text_edit(content, change).unwrap_or_else(|_| content.to_string())
+}
+
+pub fn try_apply_text_edit(
     content: &str,
     change: &TextDocumentContentChangeEvent,
 ) -> anyhow::Result<String> {
     let Some(range) = &change.range else {
         return Ok(change.text.clone());
     };
-    let start = pos_to_byte(content, &range.start);
-    let end = change.range_length.map_or_else(
-        || pos_to_byte(content, &range.end),
-        |len| utf16_span_end(content, &range.start, len),
-    );
+    let start = pos_to_byte(content, &range.start)
+        .ok_or_else(|| anyhow::anyhow!("invalid text edit range: start position is out of bounds"))?;
+    let end = match change.range_length {
+        Some(len) => utf16_span_end(content, &range.start, len)
+            .ok_or_else(|| anyhow::anyhow!("invalid text edit range: rangeLength is out of bounds"))?,
+        None => pos_to_byte(content, &range.end)
+            .ok_or_else(|| anyhow::anyhow!("invalid text edit range: end position is out of bounds"))?,
+    };
     if start > end || end > content.len() {
         anyhow::bail!(
             "invalid text edit range: start={start} end={end} len={}",
@@ -298,31 +306,50 @@ pub fn apply_text_edit(
     Ok(out)
 }
 
-fn utf16_span_end(content: &str, start: &Position, utf16_len: u32) -> usize {
-    // Check length before consuming a char (same shape as utf16_char_to_byte).
-    // Pre-fix the loop advanced first, so utf16_len==0 (VS Code pure insertion)
-    // deleted the character after the cursor. Bead ast-sgrep-c9os.
-    let sb = pos_to_byte(content, start);
-    let mut u = 0u32;
-    for (bi, ch) in content[sb..].char_indices() {
-        if u >= utf16_len {
-            return sb + bi;
-        }
-        u += ch.len_utf16() as u32;
+fn utf16_span_end(content: &str, start: &Position, utf16_len: u32) -> Option<usize> {
+    let sb = pos_to_byte(content, start)?;
+    if utf16_len == 0 {
+        return Some(sb);
     }
-    content.len()
+    let mut units = 0u32;
+    for (bi, ch) in content[sb..].char_indices() {
+        let next = units + ch.len_utf16() as u32;
+        if next > utf16_len {
+            return None;
+        }
+        units = next;
+        if units == utf16_len {
+            return Some(sb + bi + ch.len_utf8());
+        }
+    }
+    None
 }
 
-fn pos_to_byte(content: &str, pos: &Position) -> usize {
+fn pos_to_byte(content: &str, pos: &Position) -> Option<usize> {
     let mut offset = 0usize;
-    for (line_no, line) in content.split_inclusive('\n').enumerate() {
-        if line_no as u32 == pos.line {
+    let mut next_line = 0u32;
+    for line in content.split_inclusive('\n') {
+        if next_line == pos.line {
             let body = line.strip_suffix('\n').unwrap_or(line);
-            return offset + utf16_char_to_byte(body, pos.character);
+            let mut units = 0u32;
+            for (bi, ch) in body.char_indices() {
+                if pos.character == units {
+                    return Some(offset + bi);
+                }
+                let next = units + ch.len_utf16() as u32;
+                if pos.character < next {
+                    return None;
+                }
+                units = next;
+            }
+            return (pos.character == units).then_some(offset + body.len());
         }
         offset += line.len();
+        next_line += 1;
     }
-    content.len()
+    let trailing_empty_line = content.is_empty() || content.ends_with('\n');
+    (trailing_empty_line && pos.line == next_line && pos.character == 0)
+        .then_some(content.len())
 }
 
 pub fn extract_identifier_at(line: &str, byte_offset: usize) -> Option<String> {

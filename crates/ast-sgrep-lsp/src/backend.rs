@@ -1,8 +1,10 @@
 use crate::support::{
-    apply_text_edit, call_hierarchy_endpoint, document_symbol_kind, extract_identifier_at,
-    innermost_symbol, line_at_index, line_range, line_range_ext, location_value, path_to_file_uri,
-    uri_to_rel_path, utf16_char_to_byte, workspace_symbol, AsgrepSettings,
+    call_hierarchy_endpoint, document_symbol_kind, extract_identifier_at, innermost_symbol,
+    line_at_index, line_range, line_range_ext, location_value, try_apply_text_edit,
+    utf16_char_to_byte, workspace_symbol, AsgrepSettings,
 };
+use crate::support::path_to_file_uri;
+pub use crate::support::{path_to_file_uri as path_to_uri, uri_to_rel_path};
 use crate::types::{
     CallHierarchyItem, DocumentSymbolParams, ExecuteCommandParams, TextDocumentContentChangeEvent,
     TextDocumentPositionParams, SYMBOL_KIND_FUNCTION,
@@ -210,6 +212,19 @@ impl LspBackend {
         })
     }
 
+    pub fn close_document(&self, uri: &str) -> anyhow::Result<()> {
+        let rel = uri_to_rel_path(uri, &self.root)?;
+        self.with_locked_indexer(|indexer| {
+            let abs = self.root.join(&rel);
+            if abs.is_file() {
+                indexer.index_file(&abs, &rel)?;
+            } else {
+                indexer.store().remove_file(&rel)?;
+            }
+            self.forget_dirty(&rel)
+        })
+    }
+
     pub fn index_content(&self, rel: &str, content: &str) -> anyhow::Result<()> {
         self.with_locked_indexer(|i| {
             i.index_content(rel, content)?;
@@ -232,7 +247,7 @@ impl LspBackend {
                 .unwrap_or_default();
             for c in changes {
                 content = if c.range.is_some() {
-                    apply_text_edit(&content, c)?
+                    try_apply_text_edit(&content, c)?
                 } else {
                     c.text.clone()
                 };

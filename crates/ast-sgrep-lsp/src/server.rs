@@ -5,9 +5,10 @@ use crate::support::{
 };
 use crate::types::{
     CallHierarchyItemParams, CallHierarchyPrepareParams, DidChangeTextDocumentParams,
-    DidOpenTextDocumentParams, DidSaveTextDocumentParams, DocumentSymbolParams,
-    ExecuteCommandParams, InitializeParams, NotificationMessage, ReferenceParams, RequestMessage,
-    SearchParams, TextDocumentPositionParams, WorkspaceSymbolParams,
+    DidCloseTextDocumentParams, DidOpenTextDocumentParams, DidSaveTextDocumentParams,
+    DocumentSymbolParams, ExecuteCommandParams, InitializeParams, NotificationMessage,
+    ReferenceParams, RequestMessage, SearchParams, TextDocumentPositionParams,
+    WorkspaceSymbolParams,
 };
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -103,6 +104,11 @@ impl LspServer {
             "textDocument/didChange" => {
                 self.sync_rel_path(stdout, "didChange", notif.params, |b, p: DidChangeTextDocumentParams| {
                     b.apply_document_changes(&p.text_document.uri, &p.content_changes)
+                })?;
+            }
+            "textDocument/didClose" => {
+                self.sync_rel_path(stdout, "didClose", notif.params, |b, p: DidCloseTextDocumentParams| {
+                    b.close_document(&p.text_document.uri)
                 })?;
             }
             "exit" => self.shutdown = true,

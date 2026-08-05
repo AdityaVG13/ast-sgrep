@@ -1,4 +1,3 @@
-import * as fs from 'fs';
 import * as vscode from 'vscode';
 import { Executable, LanguageClient, LanguageClientOptions, ServerOptions } from 'vscode-languageclient/node';
 import {
@@ -215,10 +214,7 @@ async function openHit(hit: SearchHit, folder: vscode.WorkspaceFolder): Promise<
     void vscode.window.showWarningMessage('ast-sgrep result did not include a file path.');
     return;
   }
-  const folders = vscode.workspace.workspaceFolders ?? [folder];
-  const fsPath = resolveHitPath(file, { name: folder.name, fsPath: folder.uri.fsPath }, toFolderLikes(folders), (p) =>
-    fs.existsSync(p),
-  );
+  const fsPath = resolveHitPath(file, { name: folder.name, fsPath: folder.uri.fsPath });
   const document = await vscode.workspace.openTextDocument(vscode.Uri.file(fsPath));
   const line = Math.max(0, hitLineNumber(hit) - 1);
   const column = Math.max(0, hit.start_column ?? hit.column ?? 0);
