@@ -218,6 +218,53 @@ test("sandbox blocks require and process", async () => {
   assert.equal(processAttempt.result, "undefined");
 });
 
+test("sandbox blocks constructor escapes through globals, APIs, and returned values", async () => {
+  const bundle = createAsgrepConnector({
+    async run(): Promise<MachineEnvelope> {
+      return { tool: "asgrep", schema_version: "1.0.0", ok: true, hits: [] };
+    },
+  }, { cwd: "/project" });
+  for (const code of [
+    `return Object.constructor("return process")().pid`,
+    `return asgrep.search.constructor("return process")().pid`,
+    `const result = await asgrep.search({ query: "x" }); return result.constructor.constructor("return process")().pid`,
+  ]) {
+    const outcome = await runCodemode(code, bundle.asgrep);
+    assert.equal(outcome.ok, false, code);
+    assert.match(outcome.error ?? "", /code generation from strings disallowed/iu);
+  }
+});
+
+test("sandbox interrupts synchronous infinite loops", async () => {
+  const bundle = createAsgrepConnector({
+    async run(): Promise<MachineEnvelope> {
+      return { tool: "asgrep", schema_version: "1.0.0", ok: true };
+    },
+  }, { cwd: "/project" });
+  const started = Date.now();
+  const outcome = await runCodemode(`while (true) {}`, bundle.asgrep, { timeoutMs: 25 });
+  assert.equal(outcome.ok, false);
+  assert.match(outcome.error ?? "", /timed out/iu);
+  assert.ok(Date.now() - started < 1_000, "infinite loop must be interrupted promptly");
+});
+
+test("sandbox observes cancellation while awaiting asynchronous code", async () => {
+  const bundle = createAsgrepConnector({
+    async run(): Promise<MachineEnvelope> {
+      return { tool: "asgrep", schema_version: "1.0.0", ok: true };
+    },
+  }, { cwd: "/project" });
+  const controller = new AbortController();
+  const pending = runCodemode(`await new Promise(() => {})`, bundle.asgrep, {
+    signal: controller.signal,
+    timeoutMs: 5_000,
+  });
+  setTimeout(() => controller.abort(), 10);
+  const outcome = await pending;
+  assert.equal(outcome.ok, false);
+  assert.match(outcome.error ?? "", /aborted/iu);
+});
+
 test("typed connector preserves defs vs search(query containing defs:)", async () => {
   const tools: string[] = [];
   const host = {

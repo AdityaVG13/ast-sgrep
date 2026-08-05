@@ -11,7 +11,7 @@ export type StickyWorkerOptions = {
     cwd: string;
     env?: NodeJS.ProcessEnv;
     signal?: AbortSignal;
-    /** Kill worker if idle this long with no in-flight work (ms). Default: no idle kill. */
+    /** Kill worker when one request exceeds this duration (ms). */
     timeoutMs?: number;
 };
 export declare function startStickyWorker(options: StickyWorkerOptions): Promise<StickyWorker>;

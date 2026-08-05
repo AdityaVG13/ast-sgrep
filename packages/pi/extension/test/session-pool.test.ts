@@ -89,3 +89,39 @@ test("invalidate drops worker so next acquire restarts", async () => {
   assert.equal(starts, 2);
   await pool.shutdown();
 });
+
+test("invalidating one root does not cancel another root's in-flight start", async () => {
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const pool = new NativeSessionPool(async () => {
+    await gate;
+    return fakeWorker([]);
+  });
+  pool.configure({ binary: "/fake/asgrep" });
+  const other = pool.acquire("/other");
+  await pool.invalidate("/project");
+  release();
+  assert.ok(await other);
+  await pool.shutdown();
+});
+
+test("shutdown prevents an in-flight start from repopulating the pool", async () => {
+  const log: string[] = [];
+  let starts = 0;
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const pool = new NativeSessionPool(async () => {
+    starts += 1;
+    if (starts === 1) await gate;
+    return fakeWorker(log);
+  });
+  pool.configure({ binary: "/fake/asgrep" });
+  const stale = pool.acquire("/project");
+  await pool.shutdown();
+  release();
+  assert.equal(await stale, null);
+  assert.ok(log.includes("end"), "stale worker must be closed");
+  assert.ok(await pool.acquire("/project"));
+  assert.equal(starts, 2);
+  await pool.shutdown();
+});

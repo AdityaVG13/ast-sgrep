@@ -20,5 +20,6 @@ export declare function normalizeCode(raw: string): string;
  */
 export declare function runCodemode(rawCode: string, asgrep: AsgrepConnector, options?: {
     timeoutMs?: number;
+    signal?: AbortSignal;
     stats?: () => DispatchStats;
 }): Promise<CodemodeRunResult>;

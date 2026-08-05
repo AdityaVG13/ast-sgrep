@@ -297,7 +297,14 @@ export function registerAstSgrepTools(
         }
         const bundle = createAsgrepConnector(batchHost, { cwd: ctx.cwd }, options);
         bundle.resetStats();
-        const outcome = await runCodemode(params.code, bundle.asgrep, { stats: bundle.stats });
+        const codemodeOptions: {
+          stats: () => ReturnType<typeof bundle.stats>;
+          timeoutMs?: number;
+          signal?: AbortSignal;
+        } = { stats: bundle.stats };
+        if (runtime.config?.timeoutMs !== undefined) codemodeOptions.timeoutMs = runtime.config.timeoutMs;
+        if (signal) codemodeOptions.signal = signal;
+        const outcome = await runCodemode(params.code, bundle.asgrep, codemodeOptions);
         report(onUpdate, "codemode", "completed");
         if (!outcome.ok) {
           return {

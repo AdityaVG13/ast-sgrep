@@ -51,7 +51,7 @@ export class NativeSessionPool {
     #entries = new Map();
     #starting = new Map();
     #options = null;
-    #generation = 0;
+    #generations = new Map();
     #startFn;
     #backend = "none";
     constructor(startFn = startStickyWorker) {
@@ -80,7 +80,8 @@ export class NativeSessionPool {
             return await start;
         }
         finally {
-            this.#starting.delete(root);
+            if (this.#starting.get(root) === start)
+                this.#starting.delete(root);
         }
     }
     async call(root, tool, args = {}, options) {
@@ -92,20 +93,30 @@ export class NativeSessionPool {
         return worker.call(tool, args, options);
     }
     async invalidate(root) {
-        this.#generation += 1;
+        this.#generations.set(root, this.#generationFor(root) + 1);
+        this.#starting.delete(root);
         const entry = this.#entries.get(root);
         this.#entries.delete(root);
         if (entry)
             await entry.worker.end().catch(() => undefined);
+        if (this.#entries.size === 0)
+            this.#backend = "none";
     }
     async shutdown() {
+        const roots = new Set([...this.#entries.keys(), ...this.#starting.keys()]);
+        for (const root of roots)
+            this.#generations.set(root, this.#generationFor(root) + 1);
         const entries = [...this.#entries.values()];
         this.#entries.clear();
         this.#starting.clear();
+        this.#backend = "none";
         await Promise.all(entries.map((e) => e.worker.end().catch(() => undefined)));
     }
+    #generationFor(root) {
+        return this.#generations.get(root) ?? 0;
+    }
     async #start(root) {
-        const gen = this.#generation;
+        const gen = this.#generationFor(root);
         const opts = this.#options ?? {};
         // 1) In-process NAPI (preferred — zero spawn).
         const binding = loadCodemodeNative();
@@ -120,8 +131,10 @@ export class NativeSessionPool {
                     config.useEmbed = opts.useEmbed;
                 const session = new binding.Session(config);
                 const worker = inProcessWorker(session, binding, root);
-                if (gen !== this.#generation)
+                if (gen !== this.#generationFor(root)) {
+                    await worker.end().catch(() => undefined);
                     return null;
+                }
                 this.#entries.set(root, { root, worker, generation: gen, backend: "napi" });
                 this.#backend = "napi";
                 return worker;
@@ -143,7 +156,7 @@ export class NativeSessionPool {
             if (opts.timeoutMs !== undefined)
                 stickyOpts.timeoutMs = opts.timeoutMs;
             const worker = await this.#startFn(stickyOpts);
-            if (gen !== this.#generation) {
+            if (gen !== this.#generationFor(root)) {
                 await worker.end().catch(() => undefined);
                 return null;
             }

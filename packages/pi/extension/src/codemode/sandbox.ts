@@ -39,21 +39,21 @@ export async function runCodemode(
   asgrep: AsgrepConnector,
   options: {
     timeoutMs?: number;
+    signal?: AbortSignal;
     stats?: () => DispatchStats;
   } = {},
 ): Promise<CodemodeRunResult> {
-  const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const timeoutMs = Math.max(1, options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
   const wall0 = Date.now();
   if (rawCode.length > MAX_CODE_CHARS) {
     return resultErr(`code exceeds ${MAX_CODE_CHARS} characters`, [], rawCode.slice(0, 200), wall0, options.stats);
   }
+  if (options.signal?.aborted) {
+    return resultErr("codemode aborted", [], rawCode.slice(0, 200), wall0, options.stats);
+  }
 
   const logs: string[] = [];
-  const pushLog = (...args: unknown[]) => {
-    logs.push(args.map((a) => (typeof a === "string" ? a : safeJson(a))).join(" "));
-  };
-
-  const api = Object.freeze({
+  const hostMethods = {
     search: asgrep.search,
     semantic: asgrep.semantic,
     chain: asgrep.chain,
@@ -64,31 +64,38 @@ export async function runCodemode(
     indexRepo: asgrep.indexRepo,
     catalogSearch: asgrep.catalogSearch,
     catalogDescribe: asgrep.catalogDescribe,
-  });
+  };
+  type HostMethod = keyof typeof hostMethods;
 
-  const context = vm.createContext({
-    asgrep: api,
-    console: { log: pushLog, info: pushLog, warn: pushLog, error: pushLog, debug: pushLog },
-    Promise,
-    JSON,
-    Array,
-    Object,
-    Map,
-    Set,
-    Math,
-    Number,
-    String,
-    Boolean,
-    Date,
-    RegExp,
-    Error,
-    TypeError,
-    RangeError,
-    parseInt,
-    parseFloat,
-    isNaN,
-    isFinite,
-    undefined,
+  // Never expose host-realm functions or objects to model code. A direct host
+  // function lets `fn.constructor("return process")()` escape `node:vm`.
+  const bridge = async (method: string, payload: string): Promise<string> => {
+    try {
+      if (!Object.hasOwn(hostMethods, method)) throw new Error(`unknown asgrep method: ${method}`);
+      const input = JSON.parse(payload) as Record<string, unknown>;
+      const value = await (hostMethods[method as HostMethod] as (arg: Record<string, unknown>) => Promise<unknown>)(input);
+      return JSON.stringify({ ok: true, value });
+    } catch (cause) {
+      return JSON.stringify({
+        ok: false,
+        error: cause instanceof Error ? cause.message : String(cause),
+      });
+    }
+  };
+  const logBridge = (line: string) => logs.push(line);
+  Object.setPrototypeOf(bridge, null);
+  Object.setPrototypeOf(logBridge, null);
+  Object.freeze(bridge);
+  Object.freeze(logBridge);
+
+  const globals = Object.create(null) as Record<string, unknown>;
+  globals.__asgrepBridge = bridge;
+  globals.__asgrepLog = logBridge;
+  const context = vm.createContext(globals, {
+    codeGeneration: { strings: false, wasm: false },
+  });
+  new vm.Script(SANDBOX_BOOTSTRAP, { filename: "asgrep-codemode-bootstrap.js" }).runInContext(context, {
+    timeout: 1_000,
   });
 
   const code = normalizeCode(rawCode);
@@ -105,14 +112,26 @@ export async function runCodemode(
     );
   }
 
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let onAbort: (() => void) | undefined;
   try {
-    const produced = script.runInContext(context, { displayErrors: true });
-    const value = await Promise.race([
+    const produced = script.runInContext(context, {
+      displayErrors: true,
+      timeout: timeoutMs,
+    });
+    const races: Array<Promise<unknown>> = [
       Promise.resolve(produced),
       new Promise<never>((_, reject) => {
-        setTimeout(() => reject(new Error(`codemode timeout after ${timeoutMs}ms`)), timeoutMs);
+        timer = setTimeout(() => reject(new Error(`codemode timeout after ${timeoutMs}ms`)), timeoutMs);
       }),
-    ]);
+    ];
+    if (options.signal) {
+      races.push(new Promise<never>((_, reject) => {
+        onAbort = () => reject(new Error("codemode aborted"));
+        options.signal!.addEventListener("abort", onAbort, { once: true });
+      }));
+    }
+    const value = await Promise.race(races);
     return resultOk(cloneOut(value), logs, code, wall0, options.stats);
   } catch (cause) {
     return resultErr(
@@ -122,8 +141,53 @@ export async function runCodemode(
       wall0,
       options.stats,
     );
+  } finally {
+    if (timer) clearTimeout(timer);
+    if (onAbort) options.signal?.removeEventListener("abort", onAbort);
   }
 }
+
+const SANDBOX_BOOTSTRAP = `
+{
+  const hostCall = globalThis.__asgrepBridge;
+  const hostLog = globalThis.__asgrepLog;
+  delete globalThis.__asgrepBridge;
+  delete globalThis.__asgrepLog;
+
+  const invoke = async (method, args = {}) => {
+    const response = JSON.parse(await hostCall(method, JSON.stringify(args)));
+    if (!response.ok) throw new Error(response.error || \`asgrep.\${method} failed\`);
+    return response.value;
+  };
+  const api = Object.create(null);
+  for (const method of [
+    "search", "semantic", "chain", "defs", "callers", "imports",
+    "indexStatus", "indexRepo", "catalogSearch", "catalogDescribe",
+  ]) {
+    Object.defineProperty(api, method, {
+      enumerable: true,
+      value: (args = {}) => invoke(method, args),
+    });
+  }
+  Object.freeze(api);
+
+  const formatLog = (value) => {
+    if (typeof value === "string") return value;
+    try { return JSON.stringify(value); } catch { return String(value); }
+  };
+  const consoleApi = Object.create(null);
+  for (const level of ["log", "info", "warn", "error", "debug"]) {
+    Object.defineProperty(consoleApi, level, {
+      enumerable: true,
+      value: (...args) => hostLog(args.map(formatLog).join(" ")),
+    });
+  }
+  Object.freeze(consoleApi);
+
+  Object.defineProperty(globalThis, "asgrep", { value: api, configurable: false, writable: false });
+  Object.defineProperty(globalThis, "console", { value: consoleApi, configurable: false, writable: false });
+}
+`;
 
 function resultOk(
   result: unknown,

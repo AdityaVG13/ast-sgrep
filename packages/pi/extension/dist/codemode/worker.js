@@ -26,6 +26,14 @@ export async function startStickyWorker(options) {
             p.reject(err);
         pending.clear();
     };
+    const terminate = (err) => {
+        if (closed)
+            return;
+        closed = true;
+        killChild(child);
+        failAll(err);
+        rl.close();
+    };
     rl.on("line", (line) => {
         const trimmed = line.trim();
         if (!trimmed)
@@ -66,10 +74,7 @@ export async function startStickyWorker(options) {
             failAll(new Error(`codemode-serve exited code=${code ?? "null"} signal=${signal ?? "null"} stderr=${stderr.slice(0, 512)}`));
         }
     });
-    const onAbort = () => {
-        killChild(child);
-        failAll(new Error("codemode-serve aborted"));
-    };
+    const onAbort = () => terminate(new Error("codemode-serve aborted"));
     options.signal?.addEventListener("abort", onAbort, { once: true });
     const write = (payload) => {
         if (closed || !child.stdin.writable) {
@@ -87,13 +92,39 @@ export async function startStickyWorker(options) {
             });
         });
     };
+    const writeWithControls = (payload, label, signal) => {
+        if (signal?.aborted)
+            return Promise.reject(new Error(`${label} aborted`));
+        const response = write(payload);
+        return new Promise((resolve, reject) => {
+            let timer;
+            let settled = false;
+            const finish = (action) => {
+                if (settled)
+                    return;
+                settled = true;
+                if (timer)
+                    clearTimeout(timer);
+                signal?.removeEventListener("abort", onRequestAbort);
+                action();
+            };
+            const fail = (err) => finish(() => {
+                terminate(err);
+                reject(err);
+            });
+            const onRequestAbort = () => fail(new Error(`${label} aborted`));
+            signal?.addEventListener("abort", onRequestAbort, { once: true });
+            if (options.timeoutMs && options.timeoutMs > 0) {
+                timer = setTimeout(() => fail(new Error(`${label} timed out after ${options.timeoutMs}ms`)), options.timeoutMs);
+            }
+            response.then((value) => finish(() => resolve(value)), (cause) => finish(() => reject(cause)));
+        });
+    };
     // Probe: empty End would close — instead send a tiny catalog call to verify protocol,
     // or just return and let first real call fail. Prefer lazy: no probe.
     return {
         async call(tool, args, callOptions) {
-            if (callOptions?.signal?.aborted)
-                throw new Error("codemode call aborted");
-            const msg = await write({ type: "call", tool, args });
+            const msg = await writeWithControls({ type: "call", tool, args }, "codemode call", callOptions?.signal);
             if (msg.type === "error") {
                 throw new Error(typeof msg.error === "string" ? msg.error : "codemode-serve error");
             }
@@ -103,9 +134,7 @@ export async function startStickyWorker(options) {
             return asEnvelope(msg.value);
         },
         async batch(calls, callOptions) {
-            if (callOptions?.signal?.aborted)
-                throw new Error("codemode batch aborted");
-            const msg = await write({ type: "batch", calls });
+            const msg = await writeWithControls({ type: "batch", calls }, "codemode batch", callOptions?.signal);
             if (msg.type === "error") {
                 throw new Error(typeof msg.error === "string" ? msg.error : "codemode-serve batch error");
             }
@@ -201,16 +230,17 @@ export async function runBatchViaStdin(options) {
     });
 }
 function killChild(child) {
+    if (child.exitCode !== null || child.signalCode !== null)
+        return;
     try {
-        if (!child.killed)
-            child.kill("SIGTERM");
+        child.kill("SIGTERM");
     }
     catch {
-        // ignore
+        return;
     }
     setTimeout(() => {
         try {
-            if (!child.killed)
+            if (child.exitCode === null && child.signalCode === null)
                 child.kill("SIGKILL");
         }
         catch {
