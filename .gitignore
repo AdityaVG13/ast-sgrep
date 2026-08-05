@@ -103,6 +103,7 @@ __pycache__/
 
 # Fuzz / editor build artifacts
 fuzz/target/
+fuzz/Cargo.lock
 editors/**/node_modules/
 editors/**/out/
 editors/**/*.vsix
