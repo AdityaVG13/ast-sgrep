@@ -116,6 +116,10 @@ jobs:
           node packages/pi/scripts/release-artifact.mjs verify --target "${{ matrix.id }}" --input "dist/${{ matrix.id }}"
       - name: Clean-install and execute target-native npm family
         shell: bash
+        # GH's macOS fleet is arm64; only run the runtime smoke when the runner
+        # arch matches the package cpu (darwin-x64's binary is exercised via
+        # Rosetta locally — no Intel runners exist for CI).
+        if: ${{ !(matrix.os == 'darwin' && matrix.cpu != 'arm64' && runner.arch != 'X64') }}
         run: |
           set -euo pipefail
           platform_dir="packages/pi/platforms/${{ matrix.id }}"

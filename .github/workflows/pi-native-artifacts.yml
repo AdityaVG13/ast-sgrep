@@ -93,6 +93,9 @@ jobs:
           node -e "const fs=require('fs'); console.log('[pi-ci] package inventory: '+fs.readdirSync('npm-packs').sort().join(','))"
       - name: Clean-install local tarballs
         shell: bash
+        # GH's macOS fleet is arm64; the darwin-x64 runtime smoke can't run on
+        # an ARM runner (launcher resolves the host arch), so skip it there.
+        if: ${{ !(matrix.os == 'darwin' && matrix.cpu != 'arm64' && runner.arch != 'X64') }}
         run: |
           set -euo pipefail
           version="$(node -p "require('./packages/pi/release-contract.json').canonicalVersion.version")"
@@ -105,6 +108,7 @@ jobs:
           node -e "const fs=require('fs'); console.log('[pi-ci] install inventory: '+fs.readdirSync(process.argv[1]).sort().join(','))" "$clean/node_modules"
       - name: Exercise installed launcher and extension
         shell: bash
+        if: ${{ !(matrix.os == 'darwin' && matrix.cpu != 'arm64' && runner.arch != 'X64') }}
         run: |
           set -euo pipefail
           clean="$RUNNER_TEMP/clean-pi-npm-install"
