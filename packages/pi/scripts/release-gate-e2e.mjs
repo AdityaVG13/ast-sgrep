@@ -124,7 +124,13 @@ function execAction(command, args, options) {
     let stderr = '';
     let bytes = 0;
     let settled = false;
-    const finish = (fn, value) => { if (!settled) { settled = true; children.delete(child); fn(value); } };
+    // Sandbox tool subprocesses must never hang the gate: fail fast and let
+    // the stage name + stderr identify the stuck call.
+    const watchdog = setTimeout(() => {
+      child.kill('SIGKILL');
+      finish(reject, new Error('extension subprocess exceeded 120s: ' + command + ' ' + args.join(' ') + '\nstderr:\n' + bounded(stderr)));
+    }, 120_000);
+    const finish = (fn, value) => { if (!settled) { settled = true; clearTimeout(watchdog); children.delete(child); fn(value); } };
     const append = (which, chunk) => {
       bytes += chunk.length;
       if (bytes > maxCapturedBytes) {
@@ -292,3 +298,6 @@ try {
   await rm(temporary, { recursive: true, force: true });
   if (restorationFailure && !primaryFailure) throw restorationFailure;
 }
+// The pi runtime keeps a handle alive after cleanup; exit explicitly so the
+// CI spawnSync returns promptly instead of waiting for the event loop to drain.
+process.exit(primaryFailure ? 1 : 0);
