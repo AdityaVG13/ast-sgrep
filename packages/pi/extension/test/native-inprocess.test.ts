@@ -33,7 +33,7 @@ test("NAPI addon loads and reports version", (t) => {
     return;
   }
   assert.equal(binding.isNative(), true);
-  assert.equal(binding.bindingVersion(), "1.3.2");
+  assert.equal(binding.bindingVersion(), "1.4.0");
 });
 
 test("in-process session search is sub-millisecond warm", (t) => {
