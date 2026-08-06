@@ -121,6 +121,7 @@ jobs:
           platform_dir="packages/pi/platforms/${{ matrix.id }}"
           binary="dist/${{ matrix.id }}/${{ matrix.executable }}"
           cp "$binary" "$platform_dir/${{ matrix.executable }}"
+          cp "dist/${{ matrix.id }}/${{ matrix.napiAddon }}" "$platform_dir/${{ matrix.napiAddon }}"
           cp "dist/${{ matrix.id }}/SHA256SUMS" "$platform_dir/checksum.sha256"
           if [ "${{ matrix.os }}" != "win32" ]; then chmod 755 "$platform_dir/${{ matrix.executable }}"; fi
           mkdir -p npm-packs
