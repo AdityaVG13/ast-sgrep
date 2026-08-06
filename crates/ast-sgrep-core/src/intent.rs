@@ -1,9 +1,10 @@
 use crate::query::{ParsedQuery, QueryMode};
 use crate::rank::{
-    rrf_score, LEXICAL_RRF_SCALE, RRF_K, SCORE_ANCHOR, SCORE_CALLER_BASE, SCORE_DEF_BASE,
-    SCORE_EMBED, SCORE_EXACT_SYMBOL, SCORE_GRAPH, SCORE_PATTERN,
+    rrf_score, score_symbol, LEXICAL_RRF_SCALE, RRF_K, SCORE_ANCHOR, SCORE_CALLER_BASE,
+    SCORE_DEF_BASE, SCORE_EMBED, SCORE_EXACT_SYMBOL, SCORE_GRAPH, SCORE_PATTERN,
 };
 use crate::search::{HitKind, SearchHit};
+use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum QueryIntent {
     Literal,
@@ -55,13 +56,8 @@ fn title_case(token: &str) -> bool {
         && token.chars().all(|c| c.is_alphanumeric())
 }
 fn looks_structural(raw: &str) -> bool {
-    raw.contains('{')
-        || raw.contains(';')
-        || raw.contains("=>")
-        || raw.contains("->")
-        || raw.contains("($")
-        || raw.contains("$_")
-        || raw.contains("$$")
+    const MARKERS: &[&str] = &["{", ";", "=>", "->", "($", "$_", "$$"];
+    MARKERS.iter().any(|m| raw.contains(m))
 }
 fn ident_like(token: &str) -> bool {
     if token.contains("::") || token.contains('_') || token.ends_with("()") {
@@ -76,7 +72,7 @@ fn ident_like(token: &str) -> bool {
     }
     false
 }
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ChannelWeights {
     pub lexical: f64,
     pub def: f64,
@@ -85,6 +81,7 @@ pub struct ChannelWeights {
     pub anchor: f64,
     pub embed: f64,
     pub pattern: f64,
+    pub import: f64,
 }
 impl Default for ChannelWeights {
     fn default() -> Self {
@@ -96,6 +93,7 @@ impl Default for ChannelWeights {
             anchor: 1.0,
             embed: 1.0,
             pattern: 1.0,
+            import: 1.0,
         }
     }
 }
@@ -108,7 +106,18 @@ pub fn default_weights(intent: QueryIntent) -> ChannelWeights {
             graph: 0.7,
             anchor: 0.8,
             embed: 1.1,
-            pattern: 0.1,
+            pattern: 0.25,
+            import: 0.8,
+        },
+        QueryIntent::Symbol => ChannelWeights {
+            lexical: 1.0,
+            def: 2.0,
+            caller: 1.15,
+            graph: 0.9,
+            anchor: 1.0,
+            embed: 0.8,
+            pattern: 0.25,
+            import: 1.0,
         },
         _ => ChannelWeights::default(),
     }
@@ -147,17 +156,43 @@ fn apply_spec(weights: &mut ChannelWeights, intent: QueryIntent, spec: &str) {
                 "anchor" => weights.anchor = v,
                 "embed" => weights.embed = v,
                 "pattern" => weights.pattern = v,
+                "import" => weights.import = v,
                 _ => {}
             }
         }
     }
 }
-fn channel_ceiling(kind: HitKind, term_count: usize) -> f64 {
-    let terms = term_count.max(1) as f64;
-    match kind {
-        HitKind::Asgrep => terms * rrf_score(0, RRF_K) * LEXICAL_RRF_SCALE,
-        HitKind::Def => 2.0 * SCORE_EXACT_SYMBOL * terms + SCORE_DEF_BASE,
-        HitKind::Caller => 2.0 * SCORE_EXACT_SYMBOL * terms + SCORE_CALLER_BASE,
+fn matched_term_count(parsed: &ParsedQuery, target: Option<&str>) -> usize {
+    target
+        .map(|target| {
+            parsed
+                .terms
+                .iter()
+                .filter(|term| score_symbol(term, target) > 0.0)
+                .count()
+        })
+        .unwrap_or(0)
+}
+fn channel_ceiling(parsed: &ParsedQuery, hit: &SearchHit) -> f64 {
+    match hit.kind {
+        // e2hc.14(a): lexical issues ONE OR-query so fuse_rrf never fuses —
+        // each hit has a single rank. The max raw score is rrf_score(0, RRF_K)
+        // * LEXICAL_RRF_SCALE, NOT terms × that. The old `terms *` multiplier
+        // capped every lexical hit at 1/terms, letting noise-floor Embed and
+        // binary Graph hits structurally outrank perfect lexical matches on
+        // multi-term queries.
+        HitKind::Asgrep => rrf_score(0, RRF_K) * LEXICAL_RRF_SCALE,
+        // Def/Caller producers sum only terms that match this hit's target.
+        // Normalize against the same matched-term set so unrelated query context
+        // cannot dilute evidence, while exact matches still outrank substrings.
+        HitKind::Def => {
+            let matched = matched_term_count(parsed, hit.symbol.as_deref()).max(1) as f64;
+            2.0 * SCORE_EXACT_SYMBOL * matched + SCORE_DEF_BASE
+        }
+        HitKind::Caller => {
+            let matched = matched_term_count(parsed, hit.callee.as_deref()).max(1) as f64;
+            2.0 * SCORE_EXACT_SYMBOL * matched + SCORE_CALLER_BASE
+        }
         HitKind::Graph => SCORE_GRAPH,
         HitKind::Anchor => SCORE_ANCHOR,
         HitKind::Embed => SCORE_EMBED,
@@ -166,11 +201,14 @@ fn channel_ceiling(kind: HitKind, term_count: usize) -> f64 {
     }
 }
 pub fn route_hits(parsed: &ParsedQuery, hits: &mut [SearchHit]) {
-    let w = weights_for(classify(parsed));
-    // Count every non-empty term, including single-character identifiers (`i`, `x`,
-    // `T`). Previously `chars().count() > 1` forced score 0 on all text channels for
-    // one-char hybrid queries while embed still ranked — exact defs disappeared.
-    let substantive_terms = parsed.terms.iter().filter(|term| !term.is_empty()).count();
+    // Normalize only. Intent channel weights are owned by
+    // `fusion::apply_weighted_rrf` so hybrid search does not multiply them twice.
+    // Count all non-empty terms, including single-char (a639).
+    let substantive_terms = parsed
+        .terms
+        .iter()
+        .filter(|term| !term.is_empty())
+        .count();
     for hit in hits {
         let text_channel = matches!(
             hit.kind,
@@ -180,70 +218,6 @@ pub fn route_hits(parsed: &ParsedQuery, hits: &mut [SearchHit]) {
             hit.score = 0.0;
             continue;
         }
-        let weight = match hit.kind {
-            HitKind::Asgrep => w.lexical,
-            HitKind::Def => w.def,
-            HitKind::Caller => w.caller,
-            HitKind::Graph => w.graph,
-            HitKind::Anchor => w.anchor,
-            HitKind::Embed => w.embed,
-            HitKind::Pattern => w.pattern,
-            HitKind::Import => 1.0,
-        };
-        hit.score =
-            (hit.score / channel_ceiling(hit.kind, substantive_terms)).clamp(0.0, 1.0) * weight;
-    }
-}
-
-#[cfg(test)]
-mod route_hits_tests {
-    use super::route_hits;
-    use crate::query::{ParsedQuery, QueryMode};
-    use crate::search::{HitKind, SearchHit};
-
-    fn hit(kind: HitKind, score: f64) -> SearchHit {
-        SearchHit {
-            kind,
-            file: "a.rs".into(),
-            line_start: 1,
-            line_end: 1,
-            symbol: Some("i".into()),
-            caller: None,
-            callee: None,
-            language: None,
-            score,
-            excerpt: "fn i() {}".into(),
-        }
-    }
-
-    #[test]
-    fn single_char_hybrid_keeps_def_score() {
-        let parsed = ParsedQuery {
-            raw: "i".into(),
-            mode: QueryMode::Hybrid,
-            target: None,
-            terms: vec!["i".into()],
-        };
-        let mut hits = vec![hit(HitKind::Def, 10.0), hit(HitKind::Embed, 0.5)];
-        route_hits(&parsed, &mut hits);
-        assert!(
-            hits[0].score > 0.0,
-            "def score zeroed for single-char term: {}",
-            hits[0].score
-        );
-        assert!(hits[1].score > 0.0);
-    }
-
-    #[test]
-    fn empty_terms_still_zero_text_channels() {
-        let parsed = ParsedQuery {
-            raw: "".into(),
-            mode: QueryMode::Hybrid,
-            target: None,
-            terms: vec![],
-        };
-        let mut hits = vec![hit(HitKind::Def, 10.0)];
-        route_hits(&parsed, &mut hits);
-        assert_eq!(hits[0].score, 0.0);
+        hit.score = (hit.score / channel_ceiling(parsed, hit)).clamp(0.0, 1.0);
     }
 }

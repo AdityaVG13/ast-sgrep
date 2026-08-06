@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 mod cli;
 mod fixture;
 mod hit;
@@ -9,7 +11,7 @@ pub use fixture::{sample_file, sample_root};
 pub use hit::{hit_keys, HitKey};
 pub use index::{
     core_search_hit_keys, index_sample, json_hit_keys, reopen_indexer, response_hit_keys,
-    searcher_from, IndexedFixture,
+    searcher_from, HitKey as SurfaceHitKey, IndexedFixture,
 };
 pub use lang::{
     assert_has_callee, assert_has_symbol, assert_language_conformance, parse, ExpectedCall,

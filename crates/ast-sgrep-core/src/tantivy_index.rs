@@ -1,7 +1,7 @@
 use crate::store::sql::configure_connection;
 use crate::store::{index_db_path, INDEX_DIR};
 use crate::Result;
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use std::path::{Path, PathBuf};
 type TantivySearchRow = (String, u32, String, Option<String>, usize);
 pub const LEXICAL_DB: &str = "lexical.db";
@@ -15,17 +15,43 @@ impl TantivySidecar {
         Self::open_for_index(root, None)
     }
     pub fn open_for_index(root: &Path, index_path: Option<&Path>) -> Result<Self> {
-        let dir = index_db_path(root, index_path)
-            .parent()
-            .map(|p| p.to_path_buf())
-            .unwrap_or_else(|| root.join(INDEX_DIR));
-        std::fs::create_dir_all(&dir)?;
-        let db_path = dir.join(LEXICAL_DB);
+        let db_path = sidecar_path(root, index_path);
+        if let Some(dir) = db_path.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
         let conn = Connection::open(&db_path)?;
         configure_connection(&conn)?;
         let sidecar = Self { db_path, conn };
         sidecar.init_schema()?;
         Ok(sidecar)
+    }
+    /// Open an existing lexical sidecar for search without creating an empty DB.
+    ///
+    /// Empty / schema-only auto-created sidecars are not treated as ready (hkdi / s7jw.2).
+    pub fn open_existing_for_search(
+        root: &Path,
+        index_path: Option<&Path>,
+    ) -> Result<Option<Self>> {
+        let dir = index_db_path(root, index_path)
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| root.join(INDEX_DIR));
+        let db_path = dir.join(LEXICAL_DB);
+        if !db_path.exists() {
+            return Ok(None);
+        }
+        let metadata = std::fs::metadata(&db_path)?;
+        // Never treat a zero-length / freshly-touched empty file as ready.
+        if metadata.len() == 0 {
+            return Ok(None);
+        }
+        let conn = Connection::open(&db_path)?;
+        configure_connection(&conn)?;
+        let sidecar = Self { db_path, conn };
+        if !sidecar.is_search_ready()? {
+            return Ok(None);
+        }
+        Ok(Some(sidecar))
     }
     fn init_schema(&self) -> Result<()> {
         self.conn.execute_batch(
@@ -41,16 +67,42 @@ impl TantivySidecar {
     pub fn exists(&self) -> bool {
         self.db_path.exists()
     }
+    /// True when the sidecar has indexed at least one line (hkdi / y1oy.4).
+    pub fn is_search_ready(&self) -> Result<bool> {
+        let lines: Option<String> = self
+            .conn
+            .query_row("SELECT value FROM meta WHERE key = 'lines'", [], |r| {
+                r.get(0)
+            })
+            .ok();
+        let Some(raw) = lines else {
+            return Ok(false);
+        };
+        let n: usize = raw.parse().unwrap_or(0);
+        Ok(n > 0)
+    }
     pub fn rebuild_from_lines(&self, lines: &[crate::store::IndexedLineRow]) -> Result<()> {
+        self.rebuild_from_lines_with_generation(lines, 0)
+    }
+
+    pub fn rebuild_from_lines_with_generation(
+        &self,
+        lines: &[crate::store::IndexedLineRow],
+        source_generation: i64,
+    ) -> Result<()> {
         self.conn.execute_batch("BEGIN IMMEDIATE")?;
-        if let Err(e) = self.rebuild_inner(lines) {
+        if let Err(e) = self.rebuild_inner(lines, source_generation) {
             let _ = self.conn.execute_batch("ROLLBACK");
             return Err(e);
         }
         self.conn.execute_batch("COMMIT")?;
         Ok(())
     }
-    fn rebuild_inner(&self, lines: &[crate::store::IndexedLineRow]) -> Result<()> {
+    fn rebuild_inner(
+        &self,
+        lines: &[crate::store::IndexedLineRow],
+        source_generation: i64,
+    ) -> Result<()> {
         self.conn.execute("DELETE FROM lines_fts", [])?;
         let mut stmt = self.conn.prepare_cached(
             "INSERT INTO lines_fts(file, line_no, language, content) VALUES(?1, ?2, ?3, ?4)",
@@ -66,7 +118,22 @@ impl TantivySidecar {
         self.conn.execute(
             "INSERT INTO meta(key, value) VALUES('lines', ?1) ON CONFLICT(key) DO UPDATE SET value = excluded.value", params![lines.len().to_string()],
         )?;
+        self.conn.execute(
+            "INSERT INTO meta(key, value) VALUES('source_generation', ?1) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![source_generation.to_string()],
+        )?;
         Ok(())
+    }
+    pub fn is_fresh(&self, source_generation: i64) -> Result<bool> {
+        let stored = self
+            .conn
+            .query_row(
+                "SELECT value FROM meta WHERE key = 'source_generation'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        Ok(stored.and_then(|value| value.parse::<i64>().ok()) == Some(source_generation))
     }
     pub fn search(&self, terms: &[String], limit: usize) -> Result<Vec<TantivySearchRow>> {
         if terms.is_empty() {
@@ -100,6 +167,13 @@ impl TantivySidecar {
             .collect()
     }
 }
+pub fn sidecar_path(root: &Path, index_path: Option<&Path>) -> PathBuf {
+    index_db_path(root, index_path)
+        .parent()
+        .map(|parent| parent.join(LEXICAL_DB))
+        .unwrap_or_else(|| root.join(INDEX_DIR).join(LEXICAL_DB))
+}
+
 pub fn should_use_tantivy(file_count: usize, force: bool) -> bool {
     force || file_count >= TANTIVY_AUTO_THRESHOLD
 }

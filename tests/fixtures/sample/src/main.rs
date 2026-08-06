@@ -17,6 +17,7 @@ fn validate_input(input: &str) {
 }
 
 fn auth_refresh() {
+    // Renew the credential before the current session expires.
     let token = fetch_token();
     store_token(token);
 }

@@ -36,7 +36,15 @@ pub struct NeuralEmbeddingConfig {
 }
 impl NeuralEmbeddingConfig {
     pub fn from_env() -> Option<Self> {
-        (std::env::var("ASGREP_NEURAL_EMBED").ok().as_deref() == Some("1")).then(Self::configured)
+        std::env::var("ASGREP_NEURAL_EMBED")
+            .ok()
+            .filter(|v| {
+                matches!(
+                    v.trim().to_ascii_lowercase().as_str(),
+                    "1" | "true" | "yes" | "on"
+                )
+            })
+            .map(|_| Self::configured())
     }
     pub(crate) fn configured() -> Self {
         Self {
@@ -53,7 +61,15 @@ impl NeuralEmbeddingConfig {
                 .ok()
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(2),
-            coreml: std::env::var("ASGREP_NEURAL_COREML").ok().as_deref() == Some("1"),
+            coreml: std::env::var("ASGREP_NEURAL_COREML")
+                .ok()
+                .filter(|v| {
+                    matches!(
+                        v.trim().to_ascii_lowercase().as_str(),
+                        "1" | "true" | "yes" | "on"
+                    )
+                })
+                .is_some(),
         }
     }
 }

@@ -163,9 +163,9 @@ pub fn worker_authenticate() -> bool {
 #[cfg(unix)]
 pub fn worker_start() {
     use nix::sys::signal;
-    use nix::unistd::{self, Pid};
     clear_internal_envs();
-    let _ = unistd::setpgid(Pid::this(), Pid::this());
+    // Parent owns process-group setup via CommandExt::process_group (rzzp).
+    // Worker only stops for the duty-cycle handshake.
     let _ = signal::raise(signal::Signal::SIGSTOP);
 }
 #[cfg(unix)]
@@ -241,7 +241,10 @@ mod unix_impl {
     }
     impl Drop for ChildGuard {
         fn drop(&mut self) {
+            // Always reap when still armed (panic unwind, early return, signal exit path).
+            // kill_and_reap is signal-safe enough for Drop: best-effort TERM→KILL→wait.
             if self.armed {
+                self.armed = false;
                 kill_and_reap(self.child_pid);
             }
         }
@@ -260,10 +263,16 @@ mod unix_impl {
         cmd.stdin(std::process::Stdio::inherit());
         cmd.stdout(std::process::Stdio::inherit());
         cmd.stderr(std::process::Stdio::inherit());
+        // Single owner for process-group setup: child becomes its own PG leader at spawn (rzzp).
+        {
+            use std::os::unix::process::CommandExt;
+            cmd.process_group(0);
+        }
         let mut child = cmd.spawn().context("failed to spawn worker")?;
+        // Pid::from_raw bridges std Child::id() into nix. Child ids are OS PIDs;
+        // casting to i32 matches nix's Pid representation on supported unix targets (l115/732x).
         let child_pid = Pid::from_raw(child.id() as i32);
         let mut guard = ChildGuard::new(child_pid);
-        let _ = nix::unistd::setpgid(child_pid, child_pid);
         wait_for_child_stop(child_pid)?;
         let pgid_neg = Pid::from_raw(-child_pid.as_raw());
         loop {
@@ -385,5 +394,36 @@ mod unix_impl {
                     .min(Duration::from_millis(10)),
             );
         }
+    }
+}
+
+#[cfg(all(test, unix))]
+mod childguard_tests {
+    use super::unix_impl::*;
+    use nix::unistd::Pid;
+
+    // Re-export helpers through a thin test surface: ChildGuard is private inside
+    // unix_impl, so we validate public duty-cycle / kill contracts and document
+    // Drop semantics in docs/validation/childguard.md (732x).
+
+    #[test]
+    fn duty_cycle_respects_cpu_cap() {
+        let (work, sleep) = crate::supervisor::duty_cycle_ms(50);
+        assert_eq!(work + sleep, crate::supervisor::CYCLE_MS);
+        assert!(work > 0 && sleep > 0);
+    }
+
+    #[test]
+    fn parse_cpu_limit_clamps() {
+        assert_eq!(crate::supervisor::parse_cpu_limit(""), crate::supervisor::DEFAULT_CPU_LIMIT);
+        assert_eq!(crate::supervisor::parse_cpu_limit("0"), crate::supervisor::DEFAULT_CPU_LIMIT);
+        assert_eq!(crate::supervisor::parse_cpu_limit("80"), 80);
+        assert_eq!(crate::supervisor::parse_cpu_limit("99"), crate::supervisor::DEFAULT_CPU_LIMIT);
+    }
+
+    #[test]
+    fn kill_and_reap_tolerates_missing_pid() {
+        // Pid 1<<22 is extremely unlikely to exist; must not panic (732x).
+        kill_and_reap(Pid::from_raw(1 << 22));
     }
 }

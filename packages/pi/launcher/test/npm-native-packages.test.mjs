@@ -127,6 +127,13 @@ test("committed target, contract, package, and checksum metadata do not drift", 
   }
 });
 
+test("rejects empty native executable even when checksum matches empty digest", () => {
+  const EMPTY = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+  const f = fixture(targets[0], { checksum: EMPTY, payload: Buffer.alloc(0) });
+  try { expectCode("ASGREP_EXECUTABLE_EMPTY", () => resolveBinary(f.options), /asgrep$/u); }
+  finally { rmSync(f.root, { recursive: true, force: true }); }
+});
+
 test("validates checksum, executable presence, mode, version, and metadata", () => {
   const cases = [
     ["ASGREP_CHECKSUM_MISMATCH", { checksum: "0".repeat(64) }, /asgrep$/u],

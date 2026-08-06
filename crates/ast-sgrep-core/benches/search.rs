@@ -44,6 +44,8 @@ fn bench_search(c: &mut Criterion) {
         "token".to_owned(),
         "cache".to_owned(),
     ];
+    // am6l: hoist normalization once per query (bench mirrors production caller path).
+    let normalized_terms = ast_sgrep_core::rank::normalize_query_terms(&symbol_terms);
     let symbol_candidates = [
         "auth_refresh_token",
         "refresh_auth_cache",
@@ -55,6 +57,20 @@ fn bench_search(c: &mut Criterion) {
         "session_store",
     ];
     c.bench_function("rank_symbol_candidates_multi_term", |b| {
+        b.iter(|| {
+            let score = black_box(symbol_candidates)
+                .iter()
+                .map(|symbol| {
+                    ast_sgrep_core::rank::coverage_symbol_score_normalized(
+                        black_box(&normalized_terms),
+                        black_box(symbol),
+                    )
+                })
+                .sum::<f64>();
+            black_box(score);
+        });
+    });
+    c.bench_function("coverage_symbol_score", |b| {
         b.iter(|| {
             let score = black_box(symbol_candidates)
                 .iter()

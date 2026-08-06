@@ -19,7 +19,7 @@ pub fn fuse_rrf(ranks: &[usize], k: f64) -> f64 {
 pub fn score_lexical_rrf(per_term_ranks: &[usize]) -> f64 {
     fuse_rrf(per_term_ranks, RRF_K) * LEXICAL_RRF_SCALE
 }
-fn normalized_symbol(symbol: &str) -> Cow<'_, str> {
+pub(crate) fn normalized_symbol(symbol: &str) -> Cow<'_, str> {
     if symbol
         .bytes()
         .all(|b| b.is_ascii() && !b.is_ascii_uppercase())
@@ -33,11 +33,7 @@ fn has_minimum_substring_chars(value: &str) -> bool {
     value.len() >= MIN_SUBSTRING_SYMBOL_CHARS
         && (value.is_ascii() || value.chars().nth(MIN_SUBSTRING_SYMBOL_CHARS - 1).is_some())
 }
-fn score_normalized_symbol(term: &str, symbol: &str, symbol_can_substring: bool) -> f64 {
-    // Normalize BOTH sides: prefixed modes (callers:/defs:/imports:) pass the raw,
-    // possibly mixed-case target as the term, while `symbol` is already normalized.
-    let term = normalized_symbol(term);
-    let term = term.as_ref();
+fn score_pre_normalized_symbol(term: &str, symbol: &str, symbol_can_substring: bool) -> f64 {
     if symbol == term {
         SCORE_EXACT_SYMBOL
     } else if symbol_can_substring
@@ -49,27 +45,48 @@ fn score_normalized_symbol(term: &str, symbol: &str, symbol_can_substring: bool)
         0.0
     }
 }
+fn score_normalized_symbol(term: &str, symbol: &str, symbol_can_substring: bool) -> f64 {
+    // Normalize BOTH sides: prefixed modes (callers:/defs:/imports:) pass the raw,
+    // possibly mixed-case target as the term, while `symbol` is already normalized.
+    let term = normalized_symbol(term);
+    score_pre_normalized_symbol(term.as_ref(), symbol, symbol_can_substring)
+}
 pub fn score_symbol(term: &str, symbol: &str) -> f64 {
     let symbol = normalized_symbol(symbol);
     score_normalized_symbol(term, symbol.as_ref(), has_minimum_substring_chars(&symbol))
 }
-pub fn best_symbol_score(terms: &[String], symbol: &str) -> f64 {
-    let symbol = normalized_symbol(symbol);
-    let symbol_can_substring = has_minimum_substring_chars(&symbol);
+/// am6l: normalize query terms once per query before scoring many rows.
+pub fn normalize_query_terms(terms: &[String]) -> Vec<String> {
     terms
         .iter()
-        .map(|term| score_normalized_symbol(term, symbol.as_ref(), symbol_can_substring))
+        .map(|t| normalized_symbol(t).into_owned())
+        .collect()
+}
+pub fn best_symbol_score(terms: &[String], symbol: &str) -> f64 {
+    best_symbol_score_normalized(&normalize_query_terms(terms), symbol)
+}
+/// Like [`best_symbol_score`] but assumes `terms` are already lowercased.
+pub fn best_symbol_score_normalized(normalized_terms: &[String], symbol: &str) -> f64 {
+    let symbol = normalized_symbol(symbol);
+    let symbol_can_substring = has_minimum_substring_chars(&symbol);
+    normalized_terms
+        .iter()
+        .map(|term| score_pre_normalized_symbol(term, symbol.as_ref(), symbol_can_substring))
         .fold(0.0_f64, f64::max)
 }
 pub fn coverage_symbol_score(terms: &[String], symbol: &str) -> f64 {
-    if terms.is_empty() {
+    coverage_symbol_score_normalized(&normalize_query_terms(terms), symbol)
+}
+/// Like [`coverage_symbol_score`] but assumes `terms` are already lowercased.
+pub fn coverage_symbol_score_normalized(normalized_terms: &[String], symbol: &str) -> f64 {
+    if normalized_terms.is_empty() {
         return 0.0;
     }
     let symbol = normalized_symbol(symbol);
     let symbol_can_substring = has_minimum_substring_chars(&symbol);
     let mut sum = 0.0;
-    for term in terms {
-        let score = score_normalized_symbol(term, symbol.as_ref(), symbol_can_substring);
+    for term in normalized_terms {
+        let score = score_pre_normalized_symbol(term, symbol.as_ref(), symbol_can_substring);
         if score > 0.0 {
             sum += score;
         }
@@ -79,7 +96,10 @@ pub fn coverage_symbol_score(terms: &[String], symbol: &str) -> f64 {
     sum
 }
 pub fn score_def(terms: &[String], symbol: &str) -> f64 {
-    let coverage = coverage_symbol_score(terms, symbol);
+    score_def_normalized(&normalize_query_terms(terms), symbol)
+}
+pub fn score_def_normalized(normalized_terms: &[String], symbol: &str) -> f64 {
+    let coverage = coverage_symbol_score_normalized(normalized_terms, symbol);
     // Do not award base score to non-matches (prevents rank pollution from weak LIKE hits).
     if coverage == 0.0 {
         0.0
@@ -88,7 +108,10 @@ pub fn score_def(terms: &[String], symbol: &str) -> f64 {
     }
 }
 pub fn score_caller(terms: &[String], callee: &str) -> f64 {
-    let coverage = coverage_symbol_score(terms, callee);
+    score_caller_normalized(&normalize_query_terms(terms), callee)
+}
+pub fn score_caller_normalized(normalized_terms: &[String], callee: &str) -> f64 {
+    let coverage = coverage_symbol_score_normalized(normalized_terms, callee);
     if coverage == 0.0 {
         0.0
     } else {
@@ -152,6 +175,25 @@ mod tests {
         assert!(
             coverage_symbol_score(&expanded, "init_handler")
                 >= coverage_symbol_score(&focused, "init_handler")
+        );
+    }
+
+    /// am6l: pre-normalized terms must match the normalizing public path.
+    #[test]
+    fn normalized_term_apis_match_public_scorers() {
+        let terms = vec!["RefreshToken".into(), "Auth".into()];
+        let norm = normalize_query_terms(&terms);
+        assert_eq!(
+            best_symbol_score(&terms, "refreshToken"),
+            best_symbol_score_normalized(&norm, "refreshToken")
+        );
+        assert_eq!(
+            coverage_symbol_score(&terms, "refreshToken"),
+            coverage_symbol_score_normalized(&norm, "refreshToken")
+        );
+        assert_eq!(
+            score_caller(&terms, "refreshToken"),
+            score_caller_normalized(&norm, "refreshToken")
         );
     }
 }

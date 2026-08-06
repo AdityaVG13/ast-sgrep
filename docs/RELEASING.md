@@ -21,9 +21,11 @@ npm run test:pi-release-gate
 npm run test:pi-e2e
 ```
 
-The release-gate and E2E commands exercise packed artifacts and the official Pi loader without publishing. Package-level `npm pack --dry-run`/`npm pack` preparation is allowed; do not run `npm publish` locally. The manual **Pi native artifacts** workflow (`.github/workflows/pi-native-artifacts.yml`) is dry-run only. The tag-only **Pi npm official release** workflow (`.github/workflows/pi-npm-release.yml`) is the canonical publisher. External npm publication requires explicit human approval of its protected `npm-production` environment and trusted-publishing OIDC/provenance. Before the first publication, re-verify every npm name and publisher ownership; a prior 404 is not a reservation. Publish native packages before the launcher and the launcher before the extension.
+The release-gate and E2E commands exercise packed artifacts and the official Pi loader without publishing. Package-level `npm pack --dry-run`/`npm pack` preparation is allowed; do not run `npm publish` locally. The manual **Pi native artifacts** workflow (`.github/workflows/pi-native-artifacts.yml`) is dry-run only. The tag-only **Pi npm official release** workflow (`.github/workflows/pi-npm-release.yml`) is the canonical publisher. Both pin Rust `1.97.1`; the official matrix packs, clean-installs, and executes each native artifact on its matching host before upload.
 
-If publication stops after an immutable npm version becomes visible, do not overwrite it or finish a mixed family. Correct the cause, advance every coupled component to a new version, repeat all checks, obtain new approval, and publish the complete family in order.
+External npm publication requires explicit human approval of its protected `npm-production` environment, the `NPM_OWNERSHIP_APPROVED=true` secret in that environment, and trusted-publishing OIDC/provenance. Before first publication, re-verify every npm name and publisher ownership; a prior 404 is not a reservation. Publish native packages before the launcher and the launcher before the extension. GitHub Release assets are immutable: reruns download and byte-compare existing assets and never clobber them.
+
+If publication stops after a package becomes visible, retry the same preserved family only when npm's integrity for every live package exactly matches its local release tarball. The retry skips identical packages and continues in canonical order. Any mismatch requires a new version, repeated checks, and new approval.
 
 ## Version policy
 

@@ -1,5 +1,23 @@
 use crate::EmbedBackend;
 use std::path::PathBuf;
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum HitSignal {
+    Exact,
+    Structural,
+    Semantic,
+}
+impl HitSignal {
+    pub const ALL: [Self; 3] = [Self::Exact, Self::Structural, Self::Semantic];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Exact => "exact",
+            Self::Structural => "structural",
+            Self::Semantic => "semantic",
+        }
+    }
+}
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum HitKind {
@@ -13,6 +31,18 @@ pub enum HitKind {
     Embed,
 }
 impl HitKind {
+    pub fn signal(self) -> HitSignal {
+        match self {
+            HitKind::Asgrep => HitSignal::Exact,
+            HitKind::Embed => HitSignal::Semantic,
+            HitKind::Def
+            | HitKind::Caller
+            | HitKind::Graph
+            | HitKind::Anchor
+            | HitKind::Import
+            | HitKind::Pattern => HitSignal::Structural,
+        }
+    }
     pub fn as_str(self) -> &'static str {
         match self {
             HitKind::Asgrep => "asgrep",
@@ -26,7 +56,7 @@ impl HitKind {
         }
     }
 }
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct SearchHit {
     pub kind: HitKind,
     pub file: String,
@@ -41,7 +71,58 @@ pub struct SearchHit {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub language: Option<String>,
     pub score: f64,
+    pub signal: HitSignal,
+    pub contributors: Vec<HitKind>,
+    pub margin: f64,
     pub excerpt: String,
+}
+#[derive(serde::Deserialize)]
+struct SearchHitWire {
+    kind: HitKind,
+    file: String,
+    line_start: u32,
+    line_end: u32,
+    symbol: Option<String>,
+    caller: Option<String>,
+    callee: Option<String>,
+    language: Option<String>,
+    score: f64,
+    #[serde(default)]
+    signal: Option<HitSignal>,
+    #[serde(default)]
+    contributors: Vec<HitKind>,
+    #[serde(default)]
+    margin: f64,
+    excerpt: String,
+}
+impl<'de> serde::Deserialize<'de> for SearchHit {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let wire = <SearchHitWire as serde::Deserialize>::deserialize(deserializer)?;
+        let _untrusted_signal = wire.signal;
+        let _untrusted_contributors = wire.contributors;
+        Ok(Self {
+            kind: wire.kind,
+            file: wire.file,
+            line_start: wire.line_start,
+            line_end: wire.line_end,
+            symbol: wire.symbol,
+            caller: wire.caller,
+            callee: wire.callee,
+            language: wire.language,
+            score: wire.score,
+            signal: wire.kind.signal(),
+            contributors: vec![wire.kind],
+            margin: if wire.margin.is_finite() {
+                wire.margin.max(0.0)
+            } else {
+                0.0
+            },
+            excerpt: wire.excerpt,
+        })
+    }
 }
 #[derive(Debug, Clone)]
 pub struct SpanHitInput {
@@ -73,6 +154,9 @@ impl SearchHit {
             callee: None,
             language: None,
             score,
+            signal: kind.signal(),
+            contributors: vec![kind],
+            margin: 0.0,
             excerpt,
         }
     }
@@ -159,7 +243,7 @@ pub struct SearchOptions {
     pub use_neural_embed: bool,
     pub use_semantic_only: bool,
     pub ann_threshold: Option<usize>,
-    /// IVF clusters to probe (0/None = adaptive √k; ≥ n_clusters = exact).
+    /// IVF clusters to probe (0/None = adaptive, at most 90% populated; ≥ n_clusters = exact).
     pub ann_probes: Option<usize>,
     pub use_rerank: bool,
     pub rerank_top_k: usize,
@@ -171,25 +255,25 @@ pub struct SearchOptions {
 }
 impl Default for SearchOptions {
     fn default() -> Self {
-        let env1 = |k: &str| std::env::var(k).ok().as_deref() == Some("1");
+        use crate::env_flag::env_flag;
         Self {
             root: PathBuf::from("."),
             index_path: None,
             limit: Self::default_limit(),
             lang_filter: None,
-            use_embed: !env1("ASGREP_NO_EMBED"),
-            use_tantivy: env1("ASGREP_TANTIVY"),
-            use_cloud_embed: env1("ASGREP_CLOUD_EMBED"),
-            use_ollama_embed: env1("ASGREP_OLLAMA_EMBED"),
-            use_neural_embed: env1("ASGREP_NEURAL_EMBED"),
-            use_semantic_only: env1("ASGREP_SEMANTIC_ONLY"),
+            use_embed: !env_flag("ASGREP_NO_EMBED"),
+            use_tantivy: env_flag("ASGREP_TANTIVY"),
+            use_cloud_embed: env_flag("ASGREP_CLOUD_EMBED"),
+            use_ollama_embed: env_flag("ASGREP_OLLAMA_EMBED"),
+            use_neural_embed: env_flag("ASGREP_NEURAL_EMBED"),
+            use_semantic_only: env_flag("ASGREP_SEMANTIC_ONLY"),
             ann_threshold: std::env::var("ASGREP_ANN_THRESHOLD")
                 .ok()
                 .and_then(|v| v.parse().ok()),
             ann_probes: std::env::var("ASGREP_ANN_PROBES")
                 .ok()
                 .and_then(|v| v.parse().ok()),
-            use_rerank: env1("ASGREP_RERANK"),
+            use_rerank: env_flag("ASGREP_RERANK"),
             rerank_top_k: std::env::var("ASGREP_RERANK_TOP_K")
                 .ok()
                 .and_then(|v| v.parse().ok())
@@ -204,10 +288,12 @@ impl Default for SearchOptions {
 }
 impl SearchOptions {
     pub fn default_limit() -> usize {
-        std::env::var("ASGREP_LIMIT")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(16)
+        crate::limits::clamp_output_limit(
+            std::env::var("ASGREP_LIMIT")
+                .ok()
+                .and_then(|v| v.parse().ok()),
+            16,
+        )
     }
     pub fn embed_preference(&self) -> ast_sgrep_embed::EmbedPreference {
         EmbedBackend::from_flags(
@@ -217,6 +303,31 @@ impl SearchOptions {
             self.use_semantic_only,
         )
         .to_preference()
+    }
+    /// Stable fingerprint of options that affect search results (nyui).
+    pub fn cache_identity(&self) -> String {
+        format!(
+            "root={}\0idx={:?}\0lim={}\0lang={:?}\0embed={}\0tantivy={}\0cloud={}\0ollama={}\0neural={}\0sem={}\0ann_t={:?}\0ann_p={:?}\0rerank={}\0rk={}\0ci={}\0cb={}\0ca={}\0co={}\0ff={:?}",
+            self.root.display(),
+            self.index_path,
+            self.limit,
+            self.lang_filter,
+            self.use_embed,
+            self.use_tantivy,
+            self.use_cloud_embed,
+            self.use_ollama_embed,
+            self.use_neural_embed,
+            self.use_semantic_only,
+            self.ann_threshold,
+            self.ann_probes,
+            self.use_rerank,
+            self.rerank_top_k,
+            self.case_insensitive,
+            self.context_before,
+            self.context_after,
+            self.count_only,
+            self.file_filter,
+        )
     }
 }
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -290,6 +401,48 @@ pub fn matches_lang(language: Option<&str>, filter: Option<&str>) -> bool {
         })
     })
 }
+pub fn assign_signal_margins(hits: &mut [SearchHit]) {
+    for hit in hits.iter_mut() {
+        hit.signal = hit.kind.signal();
+        hit.margin = 0.0;
+    }
+    for signal in HitSignal::ALL {
+        let mut indices = hits
+            .iter()
+            .enumerate()
+            .filter_map(|(index, hit)| {
+                (hit.signal == signal && hit.score.is_finite()).then_some(index)
+            })
+            .collect::<Vec<_>>();
+        indices.sort_unstable_by(|left, right| hits[*right].score.total_cmp(&hits[*left].score));
+        let mut start = 0;
+        while start < indices.len() {
+            let score = hits[indices[start]].score;
+            let mut end = start + 1;
+            while end < indices.len() && hits[indices[end]].score == score {
+                end += 1;
+            }
+            let margin = if end - start > 1 || end == indices.len() {
+                0.0
+            } else {
+                let next = hits[indices[end]].score;
+                let delta = score - next;
+                if delta.is_finite() {
+                    delta.max(0.0)
+                } else if score > next {
+                    f64::MAX
+                } else {
+                    0.0
+                }
+            };
+            for index in &indices[start..end] {
+                hits[*index].margin = margin;
+            }
+            start = end;
+        }
+    }
+}
+
 pub fn dedup_hits(hits: Vec<SearchHit>) -> Vec<SearchHit> {
     let mut best: Vec<SearchHit> = Vec::with_capacity(hits.len());
     let mut positions: std::collections::HashMap<_, usize> = std::collections::HashMap::new();

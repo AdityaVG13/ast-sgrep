@@ -77,8 +77,7 @@ struct ModuleResolveRules {
 
 const JS_INDEX_EXTS: &[&str] = &["ts", "tsx", "js", "jsx"];
 const DEFAULT_MODULE_EXTS: &[&str] = &[
-    "rs", "ts", "tsx", "js", "jsx", "py", "go", "java", "cs", "rb", "swift", "c", "h", "cpp",
-    "cc", "cxx", "hpp", "kt", "kts", "php",
+    "rs", "ts", "tsx", "js", "jsx", "py", "go", "java", "cs", "rb",
 ];
 
 fn extras_python(cands: &mut BTreeSet<String>, n: &str, _base: &Path) {
@@ -128,41 +127,6 @@ fn module_resolve_rules(lang: Option<&str>) -> ModuleResolveRules {
         },
         Some("rust") => ModuleResolveRules {
             exts: &["rs"],
-            bases: resolve_bases_rust,
-            add_extras: extras_default_rustish,
-        },
-        Some("swift") => ModuleResolveRules {
-            exts: &["swift"],
-            bases: resolve_bases_rust,
-            add_extras: extras_default_rustish,
-        },
-        Some("csharp") => ModuleResolveRules {
-            exts: &["cs"],
-            bases: resolve_bases_rust,
-            add_extras: extras_default_rustish,
-        },
-        Some("c") => ModuleResolveRules {
-            exts: &["c", "h"],
-            bases: resolve_bases_rust,
-            add_extras: extras_default_rustish,
-        },
-        Some("cpp") => ModuleResolveRules {
-            exts: &["cpp", "cc", "cxx", "hpp", "hxx", "hh", "ipp"],
-            bases: resolve_bases_rust,
-            add_extras: extras_default_rustish,
-        },
-        Some("kotlin") => ModuleResolveRules {
-            exts: &["kt", "kts"],
-            bases: resolve_bases_rust,
-            add_extras: extras_default_rustish,
-        },
-        Some("php") => ModuleResolveRules {
-            exts: &["php"],
-            bases: resolve_bases_rust,
-            add_extras: extras_default_rustish,
-        },
-        Some("ruby") => ModuleResolveRules {
-            exts: &["rb"],
             bases: resolve_bases_rust,
             add_extras: extras_default_rustish,
         },

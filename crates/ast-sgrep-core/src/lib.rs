@@ -1,9 +1,15 @@
+#![forbid(unsafe_code)]
+
 use thiserror::Error;
 pub mod bench_suite;
 pub mod chain;
+pub mod env_flag;
+pub mod fusion;
 pub mod gitignore;
 pub mod index;
 pub mod intent;
+pub mod io_bounds;
+pub mod limits;
 pub mod pattern;
 pub mod pipeline_parts;
 pub mod query;
@@ -41,12 +47,21 @@ pub mod fts {
             .join(" OR ")
     }
 }
+pub use fusion::{
+    analyze_weight_sensitivity, learn_fusion_weights, ChannelRanks, FusionCandidate, FusionChannel,
+    FusionExample, LearnedFusionModel, WeightSensitivity,
+};
 pub use index::{EmbedBackend, FileIndexStats, IndexOptions, IndexStats, Indexer};
+pub use io_bounds::{read_text_capped, MAX_INDEX_FILE_BYTES};
+pub use limits::{
+    clamp_agent_limit, clamp_output_limit, DEFAULT_AGENT_LIMIT, MAX_EXCERPT_LINES,
+    MAX_OUTPUT_RESULTS,
+};
+pub use search::format_hit_line;
 pub use pattern::search_pattern;
 pub use query::{ParsedQuery, QueryMode};
-pub use search::format_hit_line;
-pub use search::{SearchHit, SearchOptions, SearchResponse, Searcher};
-pub use store::{index_db_path, IndexStatus, IndexStore};
+pub use search::{HitSignal, SearchHit, SearchOptions, SearchResponse, Searcher};
+pub use store::{index_db_path, try_index_db_path, IndexStatus, IndexStore};
 #[derive(Debug, Error)]
 pub enum StoreError {
     #[error("database error: {0}")]

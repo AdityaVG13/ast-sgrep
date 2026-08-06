@@ -161,10 +161,10 @@ rg wins clearly here (~3.5x at p50) -- called out below as the honest loss.
 | `ast-grep --lang rust --pattern 'struct RegexMatcherBuilder'` | 70 | **34.4** | 48.3 | 35.9 | 22.4 | 61.9 |
 | `semgrep --lang rust --pattern 'struct RegexMatcherBuilder' --json --quiet` | 10 | 1582.1 | 1804.0 | 1600.8 | 1450.2 | 1835.2 |
 
-This pattern has a space, so asgrep's native matcher can't resolve it and
-delegates to the external `ast-grep` binary as a subprocess (see Losses
-below) -- asgrep's 2.1s here is mostly *that subprocess plus asgrep's own
-overhead*, not a second independent implementation.
+This is a historical pre-native-index row. The fixed 29-pattern rerun below
+supersedes it: `struct RegexMatcherBuilder` measures 5.9ms p50 through exact
+`pattern_nodes` equality. Current production pattern search never delegates to
+an external process.
 
 ### flask 3.0.3 (python)
 
@@ -234,30 +234,13 @@ reproducible via the command above.
    ripgrep: index-accelerated literal/regex search" -- trigram/posting-list
    plan), and this benchmark is fresh quantified evidence for it.
 
-2. **asgrep's own structural `pattern:` mode is 15x-58x slower than raw
-   `ast-grep`, in every corpus, for two different reasons:**
-   - For multi-token patterns with a literal space (`struct
-     RegexMatcherBuilder`), `search_pattern` in
-     `crates/ast-sgrep-core/src/pattern.rs` can never resolve them natively
-     (`identifier_matches` only matches a *single* tree-sitter identifier
-     node whose text equals the *entire* pattern string, so a pattern
-     containing a space never matches a single node) and unconditionally
-     falls back to shelling out to the external `ast-grep` binary as a
-     subprocess (`search_pattern_ast_grep`, `Command::new("ast-grep")`).
-     The reported 2.1s for asgrep on the ripgrep corpus is therefore ast-grep's
-     own cost *plus* asgrep's process-spawn and JSON-parsing overhead on top
-     -- asgrep cannot beat the tool it is shelling out to.
-   - Even for a bare single-token identifier (`SearchHit`, `request_started`)
-     that *does* resolve natively without a subprocess, asgrep is still
-     38x slower (self) / 15x slower (flask) than ast-grep. The native path
-     (`search_pattern_native`) walks the filesystem with `WalkDir` and
-     re-parses every file with tree-sitter on every single query, ignoring
-     the persistent SQLite index entirely and running single-threaded; raw
-     `ast-grep` is a mature, rayon-parallel, purpose-built scanner. This is
-     exactly the gap **`ast-sgrep-6ev`** ("Structural queries beat ast-grep:
-     pre-parsed AST index vs re-parse-every-run") already exists to close --
-     this benchmark is fresh quantified evidence that the gap is real and
-     large (15x-58x), not just directionally true.
+2. **The historical structural loss above is resolved by the native index
+   path.** Exact declaration, kind, call, and bare-identifier signatures query
+   `pattern_nodes`; tree-sitter reparsing happens only on an index miss. The
+   fixed 29-pattern rerun below records 5.6-6.7ms declaration medians, including
+   5.9ms for `struct RegexMatcherBuilder`. Production search no longer shells
+   out. Unsupported nested rule syntax returns no hits and is documented in
+   `docs/structural-patterns.md` instead of adding process-startup latency.
 
 3. **semgrep is the slowest tool in absolute terms everywhere** (1.18s-2.5s
    p50 per structural query), consistent with the ~1235ms mean already
