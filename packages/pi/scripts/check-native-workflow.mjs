@@ -78,7 +78,7 @@ const validateOfficial = (text, signersText = allowedSignersText) => {
   const build = workflow.jobs?.['build-native'];
   const verify = workflow.jobs?.['verify-release'];
   const publish = workflow.jobs?.publish;
-  const bootstrapToken = "${{ inputs.bootstrap_token && secrets.NPM_TOKEN || '' }}";
+  const bootstrapToken = "${{ inputs.bootstrap_token == 'true' && secrets.NPM_TOKEN || '' }}";
   report(build?.strategy?.matrix === '${{ fromJSON(needs.release-gate.outputs.matrix) }}' && build?.['runs-on'] === '${{ matrix.runner }}', 'official native build must use the authoritative native matrix once');
   const gateRuns = (gate?.steps ?? []).map(activeRun);
   const sshSetup = 'git config --local gpg.format ssh\ngit config --local gpg.ssh.allowedSignersFile \"$GITHUB_WORKSPACE/packages/pi/release/allowed-signers\"';
