@@ -236,9 +236,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p npm-packs
-          api="repos/${GITHUB_REPOSITORY}/releases/tags/${{ github.ref_name }}"
-          release_id="$(gh api "$api" --jq '.id')"
-          gh api "$api/assets" --jq '.[] | [.name, .id] | @tsv' | while IFS=$'\t' read -r name id; do
+          # Draft releases are not resolvable via /releases/tags/:tag (404 even
+          # with full auth) — use the list endpoint and select by tag_name.
+          api="repos/${GITHUB_REPOSITORY}/releases"
+          release_id="$(gh api "$api" --jq ".[] | select(.tag_name == \"${{ github.ref_name }}\") | .id" | head -1)"
+          test -n "$release_id" || { echo "release ${{ github.ref_name }} not found" >&2; exit 1; }
+          gh api "$api/$release_id/assets" --jq '.[] | [.name, .id] | @tsv' | while IFS=$'\t' read -r name id; do
             case "$name" in
               *.tgz|release-manifest.json)
                 gh api -H "Accept: application/octet-stream" "repos/${GITHUB_REPOSITORY}/releases/assets/$id" > "npm-packs/$name"
