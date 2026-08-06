@@ -10,7 +10,7 @@ This changelog follows [Keep a Changelog](https://keepachangelog.com/) conventio
 
 | Version | Date | Summary |
 |---------|------|---------|
-| [v1.4.0](#v140-unreleased) | *unreleased* | 7-PR release: Code Mode (PTC), 13-language pattern surface, search/ranking correctness, LSP symbol fixes, watch freshness, durability hardening, quality gates + anti-bloat |
+| [v1.4.0](#v140-2026-08-06) | 2026-08-06 | 7-PR release: Code Mode (PTC), 13-language pattern surface, search/ranking correctness, LSP symbol fixes, watch freshness, durability hardening, quality gates + anti-bloat |
 | [v1.3.2](https://github.com/AdityaVG13/ast-sgrep/releases/tag/v1.3.2) | 2026-07-23 | **The Pi Package Update** — "Out of the Alpha and into the Light" |
 | [v1.2.0-alpha](#v120-alpha-draft-superseded) | 2026-07-21 | *The Fast Update* — draft release, superseded by 1.3.2 |
 | [v1.1.0-alpha.1](https://github.com/AdityaVG13/ast-sgrep/tree/v1.1.0-alpha.1) | 2026-07-17 | Pi npm bootstrap, SSH-signed tag verification |
@@ -19,7 +19,7 @@ This changelog follows [Keep a Changelog](https://keepachangelog.com/) conventio
 
 ---
 
-## v1.4.0 (unreleased)
+## v1.4.0 (2026-08-06)
 
 The next release ships **seven pull requests** plus direct-to-main hardening. Highlights in one line: a new in-process **Code Mode (PTC)** API, a **13-language** pattern/extraction surface with native C# and Swift grammars, **search and ranking correctness** (fusion normalization, coverage-aware ranking), **LSP symbol navigation** that finally handles case-mismatched identifiers, **bounded watch freshness**, **durability/cache correctness**, and a large **quality + anti-bloat** wave with measured release gates.
 
