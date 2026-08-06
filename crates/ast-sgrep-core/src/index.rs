@@ -214,9 +214,9 @@ impl Indexer {
                         stats.files_skipped += 1;
                     }
                     PrepareOutcome::Filtered => {
-                        if self.store.file_hash(rel_str)?.is_some() {
-                            self.store.remove_file(rel_str)?;
-                        }
+                        // --lang must not destructively wipe other languages (y1oy.8):
+                        // filtered paths are skipped here; prune_missing_files also
+                        // respects lang_filter when removing absent files.
                     }
                     PrepareOutcome::Failed(msg) => {
                         eprintln!("[asgrep] failed to index {rel_str}: {msg}");
@@ -324,6 +324,15 @@ impl Indexer {
         for path in self.store.all_file_paths()? {
             if seen_paths.contains(&path) {
                 continue;
+            }
+            // With --lang, only prune missing files for that language so other
+            // languages remain searchable (y1oy.8).
+            if let Some(filter) = self.options.lang_filter.as_ref() {
+                match self.store.file_language(&path)? {
+                    Some(lang) if lang == *filter => {}
+                    Some(_) => continue,
+                    None => {}
+                }
             }
             self.store.remove_file(&path)?;
             stats.files_removed += 1;

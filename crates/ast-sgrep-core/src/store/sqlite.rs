@@ -99,7 +99,9 @@ pub struct IndexStore {
     conn: Connection,
     root: std::path::PathBuf,
     db_path: std::path::PathBuf,
-    file_tx_active: std::cell::Cell<bool>,
+    file_tx_depth: std::cell::Cell<u32>,
+    file_tx_owns: std::cell::Cell<bool>,
+    file_tx_poisoned: std::cell::Cell<bool>,
     cache_seq: std::cell::Cell<i64>,
 }
 impl IndexStore {
@@ -131,7 +133,9 @@ impl IndexStore {
             conn,
             root: root.to_path_buf(),
             db_path,
-            file_tx_active: std::cell::Cell::new(false),
+            file_tx_depth: std::cell::Cell::new(0),
+            file_tx_owns: std::cell::Cell::new(false),
+            file_tx_poisoned: std::cell::Cell::new(false),
             cache_seq: std::cell::Cell::new(0),
         };
         store.init_schema()?;
@@ -247,13 +251,22 @@ impl IndexStore {
         )
     }
     /// File-tx stays OFF until bulk commit (no re-NORMAL after each file).
+    /// Nested begins only increment depth; only the owning outermost end commits
+    /// or rolls back (bead ast-sgrep-j97d.37er).
     pub fn begin_file_tx(&self) -> Result<()> {
-        if !self.conn.is_autocommit() {
-            return Ok(());
+        let depth = self.file_tx_depth.get();
+        if depth == 0 {
+            self.file_tx_poisoned.set(false);
+            if self.conn.is_autocommit() {
+                self.conn
+                    .execute_batch("PRAGMA synchronous = OFF; BEGIN IMMEDIATE")?;
+                self.file_tx_owns.set(true);
+            } else {
+                // Bulk (or other) transaction owns the write set.
+                self.file_tx_owns.set(false);
+            }
         }
-        self.conn
-            .execute_batch("PRAGMA synchronous = OFF; BEGIN IMMEDIATE")?;
-        self.file_tx_active.set(true);
+        self.file_tx_depth.set(depth + 1);
         Ok(())
     }
     pub fn commit_file_tx(&self) -> Result<()> {
@@ -262,22 +275,54 @@ impl IndexStore {
     pub fn rollback_file_tx(&self) -> Result<()> {
         self.end_file_tx(false)
     }
+    fn restore_synchronous(&self) -> Result<()> {
+        self.conn
+            .execute_batch("PRAGMA synchronous = NORMAL; PRAGMA cache_size = -16384")?;
+        Ok(())
+    }
     fn end_file_tx(&self, commit: bool) -> Result<()> {
-        if !self.file_tx_active.replace(false) {
+        let depth = self.file_tx_depth.get();
+        if depth == 0 {
             return Ok(());
         }
-        if commit {
-            self.conn.execute_batch("COMMIT")?;
-        } else {
-            let _ = self.conn.execute_batch("ROLLBACK");
+        if !commit {
+            self.file_tx_poisoned.set(true);
+        }
+        if depth > 1 {
+            // Nested end: never COMMIT/ROLLBACK the outer transaction here.
+            self.file_tx_depth.set(depth - 1);
+            return Ok(());
+        }
+        let owns = self.file_tx_owns.get();
+        let poisoned = self.file_tx_poisoned.get();
+        if owns {
+            if commit && !poisoned {
+                self.conn.execute_batch("COMMIT")?;
+            } else {
+                let _ = self.conn.execute_batch("ROLLBACK");
+            }
+            // Always restore NORMAL after file_tx ends (bead ast-sgrep-j97d.5kj8).
+            let _ = self.restore_synchronous();
+        }
+        self.file_tx_depth.set(0);
+        self.file_tx_owns.set(false);
+        self.file_tx_poisoned.set(false);
+        if poisoned && commit {
+            return Err(crate::StoreError::Other(
+                "file_tx commit refused: nested file_tx rolled back".into(),
+            ));
         }
         Ok(())
     }
-    fn with_file_tx<T>(&self, f: impl FnOnce() -> Result<T>) -> Result<T> {
+    pub(crate) fn with_file_tx<T>(&self, f: impl FnOnce() -> Result<T>) -> Result<T> {
         self.begin_file_tx()?;
         match f() {
             Ok(v) => {
-                self.commit_file_tx()?;
+                if self.file_tx_poisoned.get() {
+                    self.rollback_file_tx()?;
+                } else {
+                    self.commit_file_tx()?;
+                }
                 Ok(v)
             }
             Err(e) => {
@@ -319,15 +364,16 @@ impl IndexStore {
         if self.conn.is_autocommit() {
             return Ok(());
         }
-        self.file_tx_active.set(false);
         if commit {
             self.conn.execute_batch("COMMIT")?;
-            let _ = self
-                .conn
-                .execute_batch("PRAGMA synchronous = NORMAL; PRAGMA cache_size = -16384");
         } else {
             let _ = self.conn.execute_batch("ROLLBACK");
         }
+        // Restore NORMAL after both commit and rollback (bead ast-sgrep-j97d.5kj8).
+        let _ = self.restore_synchronous();
+        self.file_tx_depth.set(0);
+        self.file_tx_owns.set(false);
+        self.file_tx_poisoned.set(false);
         Ok(())
     }
     pub fn clear_all_data(&self) -> Result<()> {
@@ -998,7 +1044,7 @@ impl IndexStore {
         Ok(out)
     }
 
-    fn file_language(&self, path: &str) -> Result<Option<String>> {
+    pub(crate) fn file_language(&self, path: &str) -> Result<Option<String>> {
         optional_row(
             &self.conn,
             "SELECT language FROM files WHERE path=?1",

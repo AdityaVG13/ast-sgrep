@@ -311,7 +311,10 @@ impl Searcher {
             .map(|hit| hit.file.clone())
             .collect::<HashSet<_>>();
         if structural_files.is_empty() {
-            return Ok(Vec::new());
+            // No structural signal for the prefetched files: return the literal
+            // prefilter hits alone rather than dropping valid lexical matches
+            // (ht1h.3 / durability_epics: plain-content files must stay findable).
+            return Ok(lexical);
         }
 
         lexical.retain(|hit| structural_files.contains(&hit.file));

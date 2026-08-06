@@ -200,3 +200,4 @@ Adding a language (contributors): tree-sitter grammar in `ast-sgrep-lang`, imple
 - [Semantic search](semantic-search.md), symbol chunks, providers, IVF tuning
 - [Getting started](getting-started.md), CLI commands and flags
 - [Use cases](use-cases.md), LSP and agent integration
+- [Index consistency](index-consistency.md), snapshot model, IVF fingerprint, hybrid multi-connection guarantees

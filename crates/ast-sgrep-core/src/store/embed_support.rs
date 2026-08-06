@@ -59,7 +59,7 @@ pub(super) fn embed_cache_cap() -> usize {
 }
 fn semantic_mid() -> String {
     format!(
-        "semantic:hashed-v1:{}",
+        "semantic:hashed-v2:{}",
         ast_sgrep_embed::default_semantic_dim()
     )
 }
@@ -321,7 +321,7 @@ pub(super) fn read_sym_loc(r: &rusqlite::Row<'_>) -> rusqlite::Result<SymbolLoca
         line_end: r.get(4)?,
     })
 }
-pub(super) fn normalize_rel(path: &Path) -> String {
+pub(super) fn normalize_rel(path: &Path) -> crate::Result<String> {
     let mut parts = Vec::new();
     for c in path.components() {
         match c {
@@ -329,11 +329,19 @@ pub(super) fn normalize_rel(path: &Path) -> String {
             Component::ParentDir => {
                 parts.pop();
             }
-            Component::Normal(p) => parts.push(p.to_string_lossy().into_owned()),
+            Component::Normal(p) => {
+                let s = p.to_str().ok_or_else(|| {
+                    crate::StoreError::Other(format!(
+                        "non-UTF8 path rejected (asgrep-kqhp): {}",
+                        path.display()
+                    ))
+                })?;
+                parts.push(s.to_string());
+            }
             Component::RootDir | Component::Prefix(_) => {}
         }
     }
-    parts.join("/")
+    Ok(parts.join("/"))
 }
 /// Graph rows + body-dependent semantic/pattern content. Equal fingerprints ⇒ lines-only upsert safe.
 pub(super) fn structure_fingerprint(

@@ -427,7 +427,7 @@ impl EmbedBackendKind {
             Self::Cloud => "cloud",
             Self::Ollama => "ollama",
             Self::Neural => "neural",
-            Self::Semantic => "semantic",
+            Self::Semantic => "semantic-v2",
         }
     }
     pub fn parse(s: &str) -> Option<Self> {
@@ -435,7 +435,7 @@ impl EmbedBackendKind {
             "cloud" => Some(Self::Cloud),
             "ollama" => Some(Self::Ollama),
             "neural" | "fastembed" => Some(Self::Neural),
-            "semantic" | "local" => Some(Self::Semantic),
+            "semantic-v2" | "semantic" | "local" => Some(Self::Semantic),
             _ => None,
         }
     }

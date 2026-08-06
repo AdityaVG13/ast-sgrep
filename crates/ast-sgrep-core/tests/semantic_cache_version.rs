@@ -1,7 +1,8 @@
+use ast_sgrep_core::search::HitKind;
 use ast_sgrep_core::semantic_chunk::SemanticChunkInput;
 use ast_sgrep_core::semantic_ivf::compute_ann_fingerprint;
 use ast_sgrep_core::store::UpsertFileInput;
-use ast_sgrep_core::IndexStore;
+use ast_sgrep_core::{IndexStore, SearchOptions, Searcher};
 use tempfile::TempDir;
 
 // Regression for bead ast-sgrep-44a4 (F-02): SemanticCache + ANN fingerprint
@@ -118,6 +119,52 @@ fn semantic_data_version_bumps_on_insert_remove_and_readd() {
         compute_ann_fingerprint(1, max_id_after_add, dim, Some(&backend), v1),
         "pre-delete and post-readd fingerprints must differ"
     );
+}
+
+#[test]
+fn delete_readd_with_changed_content_serves_fresh_semantic_vectors() {
+    let temp = TempDir::new().unwrap();
+    let store = IndexStore::open(temp.path(), None).unwrap();
+    let options = SearchOptions {
+        root: temp.path().to_path_buf(),
+        index_path: Some(store.db_path().to_path_buf()),
+        use_embed: true,
+        use_semantic_only: true,
+        ann_threshold: Some(usize::MAX),
+        ..SearchOptions::default()
+    };
+    let searcher = Searcher::with_store(store, options);
+
+    let old_lines = [(1u32, "def legacy_handler(): return 'obsolete'".into())];
+    let old_chunks = [chunk(
+        "legacy_handler",
+        "credential legacy obsolete handler",
+    )];
+    searcher
+        .store()
+        .upsert_file(base("a.py", &old_lines, "old-hash", &old_chunks))
+        .unwrap();
+    let old = searcher.search("credential legacy obsolete").unwrap();
+    assert!(old.hits.iter().any(|hit| {
+        hit.kind == HitKind::Embed && hit.symbol.as_deref() == Some("legacy_handler")
+    }));
+
+    searcher.store().remove_file("a.py").unwrap();
+    let fresh_lines = [(1u32, "def fresh_handler(): return 'renewed'".into())];
+    let fresh_chunks = [chunk("fresh_handler", "payment renewal fresh handler")];
+    searcher
+        .store()
+        .upsert_file(base("a.py", &fresh_lines, "fresh-hash", &fresh_chunks))
+        .unwrap();
+
+    let fresh = searcher.search("payment renewal fresh").unwrap();
+    assert!(fresh.hits.iter().any(|hit| {
+        hit.kind == HitKind::Embed && hit.symbol.as_deref() == Some("fresh_handler")
+    }));
+    assert!(!fresh
+        .hits
+        .iter()
+        .any(|hit| hit.symbol.as_deref() == Some("legacy_handler")));
 }
 
 #[test]

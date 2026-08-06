@@ -61,11 +61,45 @@ where
         Err(e) => Err(e.into()),
     }
 }
+/// Allowlisted caller-column names for dynamic SQL (bead ast-sgrep-j97d.045r).
+pub const CALLER_COLUMN_ALLOWLIST: &[&str] = &["callee", "caller"];
+/// Allowlisted table names for dynamic COUNT / DELETE helpers.
+pub const COUNT_TABLE_ALLOWLIST: &[&str] = &[
+    "files",
+    "lines",
+    "symbols",
+    "callers",
+    "imports",
+    "pattern_nodes",
+    "embeddings",
+    "semantic_chunks",
+    "embed_cache",
+    "lines_fts",
+    "lines_trigram",
+];
+pub const FILE_CHILD_TABLE_ALLOWLIST: &[&str] = &[
+    "symbols",
+    "callers",
+    "imports",
+    "pattern_nodes",
+    "embeddings",
+    "semantic_chunks",
+];
+pub fn assert_sql_ident(name: &str, allowlist: &[&str]) -> Result<()> {
+    if allowlist.iter().any(|a| *a == name) {
+        Ok(())
+    } else {
+        Err(crate::StoreError::Other(format!(
+            "disallowed SQL identifier: {name}"
+        )))
+    }
+}
 pub fn calls_matching(
     conn: &Connection,
     column: &str,
     name: &str,
 ) -> Result<Vec<(String, u32, String, String)>> {
+    assert_sql_ident(column, CALLER_COLUMN_ALLOWLIST)?;
     let sql = format!( "SELECT f.path, c.line_no, c.caller, c.callee FROM callers c JOIN files f ON f.id = c.file_id
          WHERE lower(c.{column}) = lower(?1) ORDER BY f.path, c.line_no"
     );
@@ -206,6 +240,7 @@ where
         .map_err(Into::into)
 }
 pub fn count_star(conn: &Connection, table: &str) -> Result<usize> {
+    assert_sql_ident(table, COUNT_TABLE_ALLOWLIST)?;
     conn.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
         row.get::<_, i64>(0)
     })
@@ -214,6 +249,7 @@ pub fn count_star(conn: &Connection, table: &str) -> Result<usize> {
 }
 /// Fast existence-style probe: true when table has ≥ `threshold` rows (LIMIT probe, not full COUNT).
 pub fn at_least_rows(conn: &Connection, table: &str, threshold: usize) -> Result<bool> {
+    assert_sql_ident(table, COUNT_TABLE_ALLOWLIST)?;
     if threshold == 0 {
         return Ok(true);
     }
@@ -255,27 +291,49 @@ pub fn delete_file_lines(conn: &Connection, file_id: i64, from_line: Option<u32>
 /// Delete per-file child rows (lines/FTS/trigram first, then relational tables).
 pub fn delete_file_children(conn: &Connection, file_id: i64) -> Result<()> {
     delete_file_lines(conn, file_id, None)?;
-    for t in [
-        "symbols",
-        "callers",
-        "imports",
-        "pattern_nodes",
-        "embeddings",
-        "semantic_chunks",
-    ] {
+    for t in FILE_CHILD_TABLE_ALLOWLIST {
+        assert_sql_ident(t, FILE_CHILD_TABLE_ALLOWLIST)?;
         conn.prepare_cached(&format!("DELETE FROM {t} WHERE file_id=?1"))?
             .execute(params![file_id])?;
     }
     Ok(())
 }
+/// Meta keys preserved across `clear_all_data` / reindex (schema + monotonic gens).
+/// Fingerprints (`body:`/`struct:`/`eol:`) and `embed_*` backend/dim/cache stats
+/// are wiped so a reindex cannot inherit stale identity (ast-sgrep-28vo).
+#[allow(dead_code)] // kept in sync with CLEAR_ALL_SQL (see clear_all_meta_whitelist_matches_sql)
+pub const CLEAR_ALL_META_WHITELIST: &[&str] =
+    &["root", "semantic_data_version", "index_data_version"];
 /// Full wipe of index content tables (schema left intact). Order keeps FTS/content-sync safe.
+/// Meta is cleared except the schema whitelist (bead ast-sgrep-28vo).
 pub const CLEAR_ALL_SQL: &str = "\
 DELETE FROM lines_trigram; DELETE FROM lines_fts; DELETE FROM semantic_chunks; \
 DELETE FROM pattern_nodes; DELETE FROM embeddings; DELETE FROM imports; \
-DELETE FROM callers; DELETE FROM symbols; DELETE FROM lines; DELETE FROM files;";
-fn emb_vec(r: &rusqlite::Row<'_>, idx: usize) -> rusqlite::Result<Vec<f32>> {
+DELETE FROM callers; DELETE FROM symbols; DELETE FROM lines; DELETE FROM files; \
+DELETE FROM embed_cache; \
+DELETE FROM meta WHERE key NOT IN ('root', 'semantic_data_version', 'index_data_version');";
+
+#[cfg(test)]
+#[test]
+fn clear_all_meta_whitelist_matches_sql() {
+    for key in CLEAR_ALL_META_WHITELIST {
+        assert!(
+            CLEAR_ALL_SQL.contains(&format!("'{key}'")),
+            "CLEAR_ALL_SQL must list whitelist key {key}"
+        );
+    }
+}
+
+pub(crate) fn emb_vec(r: &rusqlite::Row<'_>, idx: usize) -> rusqlite::Result<Vec<f32>> {
     let v: Vec<u8> = r.get(idx)?;
-    Ok(ast_sgrep_embed::embed_from_bytes(&v).unwrap_or_default())
+    // Fail closed on corrupt blobs (bead ast-sgrep-j97d.5qpa) — never default to zeros.
+    ast_sgrep_embed::embed_from_bytes(&v).map_err(|msg| {
+        rusqlite::Error::FromSqlConversionFailure(
+            idx,
+            rusqlite::types::Type::Blob,
+            Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, msg)),
+        )
+    })
 }
 pub fn read_legacy_emb(
     r: &rusqlite::Row<'_>,

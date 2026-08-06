@@ -65,6 +65,37 @@ pub fn compute_ann_fingerprint(
     hasher.update(&source_generation.to_le_bytes());
     *hasher.finalize().as_bytes()
 }
+/// Content-identity digest over flat vectors (additional IVF binding when vectors
+/// are already loaded). Combined with data_version at build/load sites.
+pub fn vectors_content_digest(vectors: &[f32]) -> [u8; 32] {
+    let mut h = Hasher::new();
+    h.update(b"asgrep-ivf-vectors-v1");
+    h.update(&(vectors.len() as u64).to_le_bytes());
+    for v in vectors {
+        h.update(&v.to_le_bytes());
+    }
+    *h.finalize().as_bytes()
+}
+/// ANN fingerprint bound to vector content as well as chunk identity: catches
+/// rebuilds where ids are reused but vector payloads changed.
+pub fn compute_ann_fingerprint_with_content(
+    chunk_count: usize,
+    max_chunk_id: i64,
+    dim: usize,
+    embed_backend: Option<&str>,
+    data_version: i64,
+    content_digest: &[u8; 32],
+) -> [u8; 32] {
+    let mut h = Hasher::new();
+    h.update(b"asgrep-semantic-ivf-v2");
+    h.update(&(chunk_count as u64).to_le_bytes());
+    h.update(&max_chunk_id.to_le_bytes());
+    h.update(&(dim as u32).to_le_bytes());
+    h.update(embed_backend.unwrap_or("semantic").as_bytes());
+    h.update(&data_version.to_le_bytes());
+    h.update(content_digest);
+    *h.finalize().as_bytes()
+}
 
 #[derive(Debug, Clone)]
 struct MappedVectors {
