@@ -16,8 +16,8 @@
   
   <!-- Version Pill -->
   <g transform="translate(580, 72)">
-    <rect x="0" y="0" width="124" height="36" rx="18" fill="#56d364" fill-opacity="0.1" stroke="#56d364" stroke-opacity="0.3" stroke-width="1.5"/>
-    <text x="62" y="24" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, monospace" font-weight="600" font-size="16" fill="#56d364">1.0.0-alpha</text>
+    <rect x="0" y="0" width="110" height="36" rx="18" fill="#56d364" fill-opacity="0.1" stroke="#56d364" stroke-opacity="0.3" stroke-width="1.5"/>
+    <text x="55" y="24" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, monospace" font-weight="600" font-size="16" fill="#56d364">v1.4.0</text>
   </g>
   
   <text x="84" y="184" font-family="system-ui, -apple-system, sans-serif" font-weight="600" font-size="26" fill="#c9d1d9">Hybrid code search that understands intent</text>
