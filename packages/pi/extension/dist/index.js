@@ -44,16 +44,22 @@ function success(command, response) {
     const summary = count === undefined ? `${command} completed` : `${command} completed: ${count} result${count === 1 ? "" : "s"}`;
     return {
         content: [{ type: "text", text: bounded(summary) }],
-        details: { ok: true, command, response },
+        // The tool execute owns its machine command: normalize the envelope's
+        // command (native catalog names like index_status/index_repo must surface
+        // as the machine commands status/index/reindex).
+        details: { ok: true, command, response: { ...response, command } },
     };
 }
-function errorDetails(cause) {
+function errorDetails(cause, signal) {
+    if (signal?.aborted) {
+        return { code: "CANCELLED", message: "cancelled", details: {} };
+    }
     return cause instanceof RuntimeError
         ? { code: cause.code, message: cause.message, details: cause.details }
         : { code: "UNEXPECTED_ERROR", message: cause instanceof Error ? cause.message : String(cause), details: {} };
 }
-function failure(command, cause) {
-    const error = errorDetails(cause);
+function failure(command, cause, signal) {
+    const error = errorDetails(cause, signal);
     return {
         content: [{ type: "text", text: bounded(`${command} failed [${error.code}]: ${error.message}`) }],
         details: { ok: false, command, error },
@@ -303,7 +309,7 @@ export function registerAstSgrepTools(pi, runtime = new AstSgrepRuntime(pi), fre
                 return success(command, response);
             }
             catch (cause) {
-                return failure(command, cause);
+                return failure(command, cause, signal);
             }
         },
     });

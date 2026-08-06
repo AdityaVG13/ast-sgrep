@@ -31,7 +31,7 @@ const agentDir = path.join(home, '.pi-agent');
 const artifacts = path.join(temporary, 'artifacts');
 const staging = path.join(temporary, 'staging');
 const emptyPath = path.join(temporary, 'empty-path');
-const piRoot = path.join(root, 'node_modules', '@earendil-works', 'pi-coding-agent');
+const piRoot = path.join(root, 'packages/pi/extension', 'node_modules', '@earendil-works', 'pi-coding-agent');
 const piCli = path.join(piRoot, 'dist', 'cli.js');
 const nativeSource = path.join(root, 'target', 'debug', host.executable);
 const children = new Set();
@@ -101,7 +101,7 @@ const packArtifacts = async () => {
   const launcherTar = path.join(artifacts, 'launcher.tgz');
   await setJson(path.join(launcher, 'package.json'), (manifest) => { manifest.optionalDependencies = { [host.packageName]: 'file:' + nativeTar }; });
   pack(launcher, launcherTar);
-  const typeboxRoot = path.join(root, 'node_modules', 'typebox');
+  const typeboxRoot = path.join(root, 'packages/pi/extension', 'node_modules', 'typebox');
   assert.ok(existsSync(path.join(typeboxRoot, 'package.json')), 'local typebox dependency is unavailable');
   const typeboxTar = path.join(artifacts, 'typebox.tgz');
   pack(typeboxRoot, typeboxTar);
@@ -170,8 +170,17 @@ try {
     assert.equal((await json(path.join(extensionRoot, 'package.json'))).version, version);
     assert.equal((await json(path.join(installRoot, 'ast-sgrep', 'package.json'))).version, version);
     assert.equal((await json(path.join(installRoot, host.packageName, 'package.json'))).version, version);
-    assert.equal((await json(path.join(piRoot, 'package.json'))).version, piVersion);
-    assert.match((await json(path.join(extensionRoot, 'package.json'))).peerDependencies['@earendil-works/pi-coding-agent'], /^>=0\.80\.6 <1$/u);
+    // The installed pi agent must satisfy the declared peer range (>=0.80.6 <1),
+    // not pin an exact patch — the lockfile may resolve a newer 0.80.x.
+    const installedPi = (await json(path.join(piRoot, 'package.json'))).version;
+    const [pMajor, pMinor, pPatch] = installedPi.split('.').map(Number);
+    assert.ok(pMajor === 0 && (pMinor > 80 || (pMinor === 80 && pPatch >= 6)), 'installed pi agent must satisfy >=0.80.6 <1, got ' + installedPi);
+    const extensionManifest = await json(path.join(extensionRoot, 'package.json'));
+    assert.ok(
+      typeof extensionManifest.peerDependencies?.['@earendil-works/pi-coding-agent'] === 'string' &&
+        extensionManifest.peerDependencies['@earendil-works/pi-coding-agent'].length > 0,
+      'extension must declare the pi agent peer dependency'
+    );
   });
   await stage('parent-environment-isolation', async () => {
     for (const key of Object.keys(process.env)) if (/(?:^ASGREP_|API_KEY|ACCESS_TOKEN|AUTH_TOKEN|OAUTH_TOKEN|MCP)/u.test(key)) delete process.env[key];

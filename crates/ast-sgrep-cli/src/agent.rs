@@ -1,5 +1,6 @@
 use crate::{index_options, Cli};
 use anyhow::Context;
+use ast_sgrep_core::semantic_ann::should_use_ann;
 use ast_sgrep_core::Indexer;
 use clap::{CommandFactory, Parser, Subcommand};
 use serde_json::{json, Value};
@@ -194,8 +195,8 @@ fn doctor_triage_json(cli: &Cli, root: &Path) -> anyhow::Result<Value> {
             );
             next.push(format!("asgrep index {root_display} --json"));
         }
-        if !st.semantic_ivf_present && st.semantic_chunk_count > 0 {
-            issues.push(json!({"kind": "semantic_ivf_missing", "message": "semantic chunks present but IVF sidecar not built (may be below ANN threshold)"}));
+        if !st.semantic_ivf_present && should_use_ann(st.semantic_chunk_count, None) {
+            issues.push(json!({"kind": "semantic_ivf_missing", "message": "semantic chunks present but IVF sidecar not built"}));
         }
     }
     if next.is_empty() {

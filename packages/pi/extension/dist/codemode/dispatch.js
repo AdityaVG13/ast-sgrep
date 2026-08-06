@@ -157,7 +157,7 @@ function settleFromBatch(wave, batch) {
             item.reject(new Error(result.error ?? `codemode call ${i} failed`));
             continue;
         }
-        item.resolve(asEnvelope(result.value));
+        item.resolve(asEnvelope(result.value, item.tool));
     }
 }
 function emptyStats() {
@@ -286,7 +286,7 @@ function readFlag(args, flag) {
     const n = Number(args[idx + 1]);
     return Number.isFinite(n) ? n : undefined;
 }
-export function asEnvelope(value) {
+export function asEnvelope(value, command) {
     if (value &&
         typeof value === "object" &&
         value.tool === "asgrep" &&
@@ -298,6 +298,7 @@ export function asEnvelope(value) {
     return {
         ...record,
         tool: "asgrep",
+        ...(command ? { command } : {}),
         schema_version: "1.0.0",
         ok: true,
     };

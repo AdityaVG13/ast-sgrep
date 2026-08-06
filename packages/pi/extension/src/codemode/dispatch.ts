@@ -229,7 +229,7 @@ function settleFromBatch(wave: Pending[], batch: BatchResult): void {
       item.reject(new Error(result.error ?? `codemode call ${i} failed`));
       continue;
     }
-    item.resolve(asEnvelope(result.value));
+    item.resolve(asEnvelope(result.value, item.tool));
   }
 }
 
@@ -342,7 +342,7 @@ function readFlag(args: readonly string[], flag: string): number | undefined {
   return Number.isFinite(n) ? n : undefined;
 }
 
-export function asEnvelope(value: unknown): MachineEnvelope {
+export function asEnvelope(value: unknown, command?: string): MachineEnvelope {
   if (
     value &&
     typeof value === "object" &&
@@ -356,6 +356,7 @@ export function asEnvelope(value: unknown): MachineEnvelope {
   return {
     ...record,
     tool: "asgrep",
+    ...(command ? { command } : {}),
     schema_version: "1.0.0",
     ok: true,
   };

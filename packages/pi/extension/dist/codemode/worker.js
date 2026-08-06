@@ -131,7 +131,7 @@ export async function startStickyWorker(options) {
             if (msg.ok === false) {
                 throw new Error(typeof msg.error === "string" ? msg.error : `codemode ${tool} failed`);
             }
-            return asEnvelope(msg.value);
+            return asEnvelope(msg.value, tool);
         },
         async batch(calls, callOptions) {
             const msg = await writeWithControls({ type: "batch", calls }, "codemode batch", callOptions?.signal);
