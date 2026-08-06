@@ -1,9 +1,15 @@
+#![forbid(unsafe_code)]
+
 use thiserror::Error;
 pub mod bench_suite;
 pub mod chain;
+pub mod env_flag;
+pub mod fusion;
 pub mod gitignore;
 pub mod index;
 pub mod intent;
+pub mod io_bounds;
+pub mod limits;
 pub mod pattern;
 pub mod pipeline_parts;
 pub mod query;
@@ -14,6 +20,21 @@ pub mod semantic_chunk;
 pub mod semantic_ivf;
 pub mod store;
 pub mod tantivy_index;
+/// Compatibility re-exports for callers using the pre-1.3 module paths.
+pub mod skip {
+    pub use crate::gitignore::{
+        should_skip_dir, should_skip_file, DEFAULT_SKIP_DIR_NAMES, INDEXABLE_EXTENSIONS,
+    };
+}
+
+pub mod text {
+    pub use crate::index::{split_content_lines, SplitLines};
+}
+
+pub mod output {
+    pub use crate::search::format_hit_line;
+}
+
 pub mod fts {
     pub fn escape_fts_term(term: &str) -> String {
         format!("\"{}\"", term.replace('"', "\"\""))
@@ -26,23 +47,21 @@ pub mod fts {
             .join(" OR ")
     }
 }
-pub mod skip {
-    pub use crate::gitignore::{
-        should_skip_dir, should_skip_file, DEFAULT_SKIP_DIR_NAMES, INDEXABLE_EXTENSIONS,
-    };
-}
-pub mod text {
-    pub use crate::index::{split_content_lines, SplitLines};
-}
-pub mod output {
-    pub use crate::search::format_hit_line;
-}
+pub use fusion::{
+    analyze_weight_sensitivity, learn_fusion_weights, ChannelRanks, FusionCandidate, FusionChannel,
+    FusionExample, LearnedFusionModel, WeightSensitivity,
+};
 pub use index::{EmbedBackend, FileIndexStats, IndexOptions, IndexStats, Indexer};
-pub use output::format_hit_line;
+pub use io_bounds::{read_text_capped, MAX_INDEX_FILE_BYTES};
+pub use limits::{
+    clamp_agent_limit, clamp_output_limit, DEFAULT_AGENT_LIMIT, MAX_EXCERPT_LINES,
+    MAX_OUTPUT_RESULTS,
+};
+pub use search::format_hit_line;
 pub use pattern::search_pattern;
 pub use query::{ParsedQuery, QueryMode};
-pub use search::{SearchHit, SearchOptions, SearchResponse, Searcher};
-pub use store::{index_db_path, IndexStatus, IndexStore};
+pub use search::{HitSignal, SearchHit, SearchOptions, SearchResponse, Searcher};
+pub use store::{index_db_path, try_index_db_path, IndexStatus, IndexStore};
 #[derive(Debug, Error)]
 pub enum StoreError {
     #[error("database error: {0}")]

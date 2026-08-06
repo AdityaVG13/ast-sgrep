@@ -8,7 +8,11 @@
 //!   decls and calls with `$NAME` / `$$$` holes). Complex rules still fall
 //!   through to external ast-grep when installed.
 
-use crate::extract::{byte_to_line, is_in_comment_or_string, node_lines, node_text};
+use crate::extract::{
+    byte_to_line, is_ident_kind, is_in_comment_or_string, is_member_expr_kind,
+    last_identifier_in_chain, node_lines, node_text,
+};
+use crate::pattern_queries::{class_queries_for, queries_for, FUNCTION_QUERY_TABLE};
 use crate::{Language, PatternNode};
 use tree_sitter::{Node, Parser, Query, QueryCursor, StreamingIterator};
 
@@ -18,6 +22,20 @@ pub struct PatternMatch {
     pub line_end: u32,
     pub excerpt: String,
 }
+
+/// Declaration / type keyword prefixes used by native classification and prefilters.
+///
+/// `true` means class-like (`Class`); `false` means function-like (`Function`).
+pub const DECL_PATTERN_PREFIXES: &[(&str, bool)] = &[
+    ("fn ", false),
+    ("def ", false),
+    ("function ", false),
+    ("func ", false),
+    ("class ", true),
+    ("struct ", true),
+    ("interface ", true),
+    ("type ", true),
+];
 
 /// True when the pattern needs external ast-grep (we cannot handle it natively).
 ///
@@ -29,7 +47,6 @@ pub fn needs_ast_grep_fallback(pattern: &str) -> bool {
     if p.is_empty() || !p.contains('$') {
         return false;
     }
-    // Native shapes we handle: fn/def/function/class $NAME, calls, member calls.
     classify_native(p).is_none()
 }
 
@@ -40,8 +57,17 @@ pub fn tree_sitter_language(lang: Language) -> tree_sitter::Language {
         Language::JavaScript => tree_sitter_typescript::LANGUAGE_TSX.into(),
         Language::Python => tree_sitter_python::LANGUAGE.into(),
         Language::Go => tree_sitter_go::LANGUAGE.into(),
-        Language::Java | Language::CSharp => tree_sitter_java::LANGUAGE.into(),
+        Language::Java => tree_sitter_java::LANGUAGE.into(),
+        // e2hc/difu.5: C# patterns were parsed with the Java grammar, causing
+        // misparses of C#-specific syntax. Use the real C# grammar so the
+        // pattern channel agrees with the extraction channel.
+        Language::CSharp => tree_sitter_c_sharp::LANGUAGE.into(),
         Language::Ruby => tree_sitter_ruby::LANGUAGE.into(),
+        Language::Swift => tree_sitter_swift::LANGUAGE.into(),
+        Language::C => tree_sitter_c::LANGUAGE.into(),
+        Language::Cpp => tree_sitter_cpp::LANGUAGE.into(),
+        Language::Kotlin => tree_sitter_kotlin_ng::LANGUAGE.into(),
+        Language::Php => tree_sitter_php::LANGUAGE_PHP.into(),
     }
 }
 
@@ -82,12 +108,17 @@ pub fn match_literal_pattern(
     Ok(matches)
 }
 
-#[derive(Debug, Clone)]
-enum NativeKind {
+/// Native structural pattern shapes handled in-process.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NativeKind {
     /// Function-like declaration; `name == None` means any name (`$NAME`).
     Function { name: Option<String> },
-    /// Class/struct/type declaration.
-    Class { name: Option<String> },
+    /// Class/struct/type declaration. `keyword` is the pattern prefix
+    /// (`class`, `struct`, `interface`, or `type`) so queries stay kind-specific.
+    Class {
+        keyword: &'static str,
+        name: Option<String>,
+    },
     /// Free or method call; method path segments may be `$` wildcards.
     Call {
         /// Exact path like `foo.bar` or single name; segments that were `$X` are None.
@@ -95,19 +126,10 @@ enum NativeKind {
     },
 }
 
-fn classify_native(pattern: &str) -> Option<NativeKind> {
+/// Classify a metavariable / structural pattern into the native subset.
+pub fn classify_native(pattern: &str) -> Option<NativeKind> {
     let p = pattern.trim();
-    // fn $NAME / fn $NAME($$$) / fn foo / fn foo($$$)
-    for (prefix, is_class) in [
-        ("fn ", false),
-        ("def ", false),
-        ("function ", false),
-        ("func ", false),
-        ("class ", true),
-        ("struct ", true),
-        ("interface ", true),
-        ("type ", true),
-    ] {
+    for &(prefix, is_class) in DECL_PATTERN_PREFIXES {
         if let Some(rest) = p.strip_prefix(prefix) {
             let head = rest
                 .split(|c: char| c == '(' || c == '{' || c == '<' || c.is_whitespace())
@@ -119,13 +141,16 @@ fn classify_native(pattern: &str) -> Option<NativeKind> {
             }
             let name = if head.starts_with('$') {
                 None
-            } else if is_ident(head) {
+            } else if is_pattern_ident(head) {
                 Some(head.to_string())
             } else {
                 return None;
             };
             return Some(if is_class {
-                NativeKind::Class { name }
+                NativeKind::Class {
+                    keyword: prefix.trim(),
+                    name,
+                }
             } else {
                 NativeKind::Function { name }
             });
@@ -135,21 +160,18 @@ fn classify_native(pattern: &str) -> Option<NativeKind> {
     // Calls: $F($$$), foo($$$), $O.$M($$$), a.b.$$$c($$$)
     let open = p.find('(')?;
     let close = p.rfind(')')?;
-    if close + 1 != p.len() {
-        // allow trailing whitespace only
-        if p[close + 1..].trim().is_empty() {
-            // ok
-        } else {
-            return None;
-        }
+    if close <= open {
+        return None;
+    }
+    // Allow trailing whitespace only after the closing paren.
+    if close + 1 != p.len() && !p[close + 1..].trim().is_empty() {
+        return None;
     }
     let args = p[open + 1..close].trim();
-    // Args must be empty, $$$, or pure metavars / commas — no nested patterns.
+    // Args must be empty, $$$, or pure metavars separated by commas.
     if !args.is_empty()
         && args != "$$$"
-        && !args
-            .split(',')
-            .all(|a| a.trim().is_empty() || a.trim().starts_with('$'))
+        && !args.split(',').all(is_pure_metavariable)
     {
         return None;
     }
@@ -161,29 +183,43 @@ fn classify_native(pattern: &str) -> Option<NativeKind> {
     Some(NativeKind::Call { path })
 }
 
+/// Identifier token check shared with index signature builders.
+#[inline]
+pub(crate) fn is_pattern_ident(s: &str) -> bool {
+    let mut chars = s.chars();
+    chars.next().is_some_and(|c| c == '_' || c.is_alphabetic())
+        && chars.all(|c| c == '_' || c.is_alphanumeric())
+}
+
+fn is_pure_metavariable(arg: &str) -> bool {
+    let arg = arg.trim();
+    arg.strip_prefix("$$$")
+        .or_else(|| arg.strip_prefix('$'))
+        .is_some_and(is_pattern_ident)
+}
+
 fn parse_call_path(callee: &str) -> Option<Vec<Option<String>>> {
-    let mut segs = Vec::new();
-    for part in callee.split(['.', ':']).filter(|s| !s.is_empty()) {
+    let callee = callee.strip_prefix("::").unwrap_or(callee);
+    let normalized = callee.replace("::", ".");
+    if normalized.is_empty()
+        || normalized.starts_with('.')
+        || normalized.ends_with('.')
+        || normalized.contains("..")
+    {
+        return None;
+    }
+    let mut segments = Vec::new();
+    for part in normalized.split('.') {
         let part = part.trim();
-        if part.starts_with('$') {
-            segs.push(None);
-        } else if is_ident(part) {
-            segs.push(Some(part.to_string()));
+        if is_pure_metavariable(part) {
+            segments.push(None);
+        } else if is_pattern_ident(part) {
+            segments.push(Some(part.to_string()));
         } else {
             return None;
         }
     }
-    if segs.is_empty() {
-        None
-    } else {
-        Some(segs)
-    }
-}
-
-fn is_ident(s: &str) -> bool {
-    let mut chars = s.chars();
-    chars.next().is_some_and(|c| c == '_' || c.is_alphabetic())
-        && chars.all(|c| c == '_' || c.is_alphanumeric())
+    (!segments.is_empty()).then_some(segments)
 }
 
 fn parse_source(lang: Language, source: &str) -> anyhow::Result<tree_sitter::Tree> {
@@ -206,24 +242,24 @@ fn match_structural(
     let mut out = Vec::new();
     match kind {
         NativeKind::Function { name } => {
-            let queries = function_queries(lang);
             run_queries(
                 &language,
                 tree.root_node(),
                 source,
-                &queries,
+                queries_for(FUNCTION_QUERY_TABLE, lang),
                 name.as_deref(),
+                None,
                 &mut out,
             )?;
         }
-        NativeKind::Class { name } => {
-            let queries = class_queries(lang);
+        NativeKind::Class { keyword, name } => {
             run_queries(
                 &language,
                 tree.root_node(),
                 source,
-                &queries,
+                class_queries_for(lang, keyword),
                 name.as_deref(),
+                Some((lang, *keyword)),
                 &mut out,
             )?;
         }
@@ -234,56 +270,13 @@ fn match_structural(
     Ok(out)
 }
 
-fn function_queries(lang: Language) -> Vec<&'static str> {
-    match lang {
-        Language::Rust => vec![
-            "(function_item name: (identifier) @name) @match",
-            "(impl_item body: (declaration_list (function_item name: (identifier) @name) @match))",
-        ],
-        Language::Python => vec!["(function_definition name: (identifier) @name) @match"],
-        Language::Go => vec!["(function_declaration name: (identifier) @name) @match"],
-        Language::Java | Language::CSharp => vec![
-            "(method_declaration name: (identifier) @name) @match",
-            "(constructor_declaration name: (identifier) @name) @match",
-        ],
-        Language::JavaScript | Language::TypeScript => vec![
-            "(function_declaration name: (identifier) @name) @match",
-            "(method_definition name: (property_identifier) @name) @match",
-            "(lexical_declaration (variable_declarator name: (identifier) @name value: [(arrow_function) (function_expression)]) @match)",
-        ],
-        Language::Ruby => vec![
-            "(method name: (identifier) @name) @match",
-            "(singleton_method name: (identifier) @name) @match",
-        ],
-    }
-}
-
-fn class_queries(lang: Language) -> Vec<&'static str> {
-    match lang {
-        Language::Rust => vec![
-            "(struct_item name: (type_identifier) @name) @match",
-            "(enum_item name: (type_identifier) @name) @match",
-            "(trait_item name: (type_identifier) @name) @match",
-        ],
-        Language::Python => vec!["(class_definition name: (identifier) @name) @match"],
-        Language::Go => vec!["(type_declaration (type_spec name: (type_identifier) @name) @match)"],
-        Language::Java | Language::CSharp => vec![
-            "(class_declaration name: (identifier) @name) @match",
-            "(interface_declaration name: (identifier) @name) @match",
-        ],
-        Language::JavaScript | Language::TypeScript => {
-            vec!["(class_declaration name: (identifier) @name) @match"]
-        }
-        Language::Ruby => vec!["(class name: (constant) @name) @match"],
-    }
-}
-
 fn run_queries(
     language: &tree_sitter::Language,
     root: Node,
     source: &str,
     queries: &[&str],
     name_filter: Option<&str>,
+    class_filter: Option<(Language, &str)>,
     out: &mut Vec<PatternMatch>,
 ) -> anyhow::Result<()> {
     for qsrc in queries {
@@ -312,6 +305,11 @@ fn run_queries(
             if is_in_comment_or_string(&node) {
                 continue;
             }
+            if let Some((lang, keyword)) = class_filter {
+                if !class_keyword_matches(lang, &node, source, keyword) {
+                    continue;
+                }
+            }
             if let Some(want) = name_filter {
                 if name_text != Some(want) {
                     continue;
@@ -323,13 +321,41 @@ fn run_queries(
     Ok(())
 }
 
-fn walk_calls(node: Node, source: &str, path: &[Option<String>], out: &mut Vec<PatternMatch>) {
-    if !is_in_comment_or_string(&node) && is_call_kind(node.kind()) {
-        if let Some(callee) = call_target_path(&node, source) {
-            if path_matches(&callee, path) {
-                push_match(&node, source, &callee.join("."), out);
+fn class_keyword_matches(lang: Language, node: &Node, source: &str, keyword: &str) -> bool {
+    if lang != Language::Kotlin {
+        return true;
+    }
+    let kind = kotlin_class_keyword(node, source);
+    match keyword {
+        "class" => kind == "class",
+        "interface" => kind == "interface",
+        "type" => true,
+        _ => false,
+    }
+}
+
+fn kotlin_class_keyword(node: &Node, source: &str) -> &'static str {
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if matches!(child.kind(), "modifiers" | "class_modifier")
+            && kotlin_class_keyword(&child, source) == "enum"
+        {
+            return "enum";
+        }
+        if let Some(text) = node_text(&child, source) {
+            match text.trim() {
+                "enum" => return "enum",
+                "interface" => return "interface",
+                _ => {}
             }
         }
+    }
+    "class"
+}
+
+fn walk_calls(node: Node, source: &str, path: &[Option<String>], out: &mut Vec<PatternMatch>) {
+    if let Some(callee) = call_match_path(&node, source, path) {
+        push_match(&node, source, &callee.join("."), out);
     }
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
@@ -337,60 +363,57 @@ fn walk_calls(node: Node, source: &str, path: &[Option<String>], out: &mut Vec<P
     }
 }
 
-fn call_target_path(node: &Node, source: &str) -> Option<Vec<String>> {
-    let target = ["function", "name"]
+/// When `node` is a call outside trivia that matches `path`, return its callee segments.
+fn call_match_path(node: &Node, source: &str, path: &[Option<String>]) -> Option<Vec<String>> {
+    if is_in_comment_or_string(node) || !is_call_kind(node.kind()) {
+        return None;
+    }
+    let callee = call_target_path(node, source)?;
+    path_matches(&callee, path).then_some(callee)
+}
+
+fn call_field_node<'a>(node: &Node<'a>) -> Option<Node<'a>> {
+    ["function", "name"]
         .into_iter()
-        .find_map(|f| node.child_by_field_name(f))?;
-    path_from_node(&target, source)
+        .find_map(|f| node.child_by_field_name(f))
+        // Swift/Kotlin call_expression has no function/name fields; callee is the
+        // first named child. Safe for other langs: Ruby uses `call`, C# uses
+        // `invocation_expression`, and field-bearing grammars hit find_map first.
+        .or_else(|| {
+            (node.kind() == "call_expression")
+                .then(|| node.named_child(0))
+                .flatten()
+        })
+}
+
+fn call_target_path(node: &Node, source: &str) -> Option<Vec<String>> {
+    path_from_node(&call_field_node(node)?, source)
 }
 
 fn path_from_node(node: &Node, source: &str) -> Option<Vec<String>> {
-    match node.kind() {
-        "identifier" | "type_identifier" | "field_identifier" | "property_identifier" => {
-            node_text(node, source).map(|t| vec![t.to_string()])
-        }
-        "field_expression"
-        | "member_expression"
-        | "selector_expression"
-        | "member_access_expression"
-        | "scoped_identifier" => {
-            let mut segs = Vec::new();
-            let mut cursor = node.walk();
-            for child in node.children(&mut cursor) {
-                if let Some(mut p) = path_from_node(&child, source) {
-                    segs.append(&mut p);
-                }
-            }
-            if segs.is_empty() {
-                None
-            } else {
-                Some(segs)
-            }
-        }
-        _ => last_identifier_chain(node, source).map(|s| vec![s]),
+    if is_ident_kind(node.kind()) {
+        return node_text(node, source).map(|t| vec![t.to_string()]);
     }
-}
-
-fn last_identifier_chain(node: &Node, source: &str) -> Option<String> {
-    crate::extract::last_identifier_in_chain(node, source)
+    if !is_member_expr_kind(node.kind()) {
+        return last_identifier_in_chain(node, source).map(|s| vec![s]);
+    }
+    let mut segs = Vec::new();
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if let Some(mut p) = path_from_node(&child, source) {
+            segs.append(&mut p);
+        }
+    }
+    (!segs.is_empty()).then_some(segs)
 }
 
 fn path_matches(actual: &[String], pattern: &[Option<String>]) -> bool {
-    if actual.len() != pattern.len() {
-        // Allow pattern `$M($$$ )` to match last segment of multi-part calls? No — keep exact length.
-        // Exception: single-segment pattern matches last segment of call (method name only).
-        if pattern.len() == 1 {
-            let want = &pattern[0];
-            return actual
-                .last()
-                .is_some_and(|last| want.as_ref().map(|w| w == last).unwrap_or(true));
-        }
-        return false;
+    let segment_ok = |a: &String, p: &Option<String>| p.as_ref().is_none_or(|w| w == a);
+    if actual.len() == pattern.len() {
+        return actual.iter().zip(pattern.iter()).all(|(a, p)| segment_ok(a, p));
     }
-    actual
-        .iter()
-        .zip(pattern.iter())
-        .all(|(a, p)| p.as_ref().map(|w| w == a).unwrap_or(true))
+    // Exact length only — except a single-segment pattern matches the last call segment.
+    pattern.len() == 1 && actual.last().is_some_and(|last| segment_ok(last, &pattern[0]))
 }
 
 fn walk_literal(node: Node, source: &str, pattern: &str, out: &mut Vec<PatternMatch>) {
@@ -411,19 +434,7 @@ fn walk_literal(node: Node, source: &str, pattern: &str, out: &mut Vec<PatternMa
 }
 
 fn identifier_matches(node: &Node, source: &str, pattern: &str) -> bool {
-    is_identifier_kind(node.kind()) && node_text(node, source).is_some_and(|t| t == pattern)
-}
-
-fn is_identifier_kind(kind: &str) -> bool {
-    matches!(
-        kind,
-        "identifier"
-            | "type_identifier"
-            | "field_identifier"
-            | "property_identifier"
-            | "package_identifier"
-            | "constant"
-    )
+    is_ident_kind(node.kind()) && node_text(node, source).is_some_and(|t| t == pattern)
 }
 
 pub(crate) fn collect_pattern_nodes(root: Node, source: &str) -> Vec<PatternNode> {
@@ -440,30 +451,7 @@ fn collect_node_signatures(
     seen: &mut std::collections::HashSet<(String, u32)>,
 ) {
     if !is_in_comment_or_string(&node) {
-        if is_identifier_kind(node.kind()) {
-            if let Some(text) = node_text(&node, source) {
-                push_pattern_node(node, source, text, out, seen);
-            }
-        }
-        if let Some(prefix) = declaration_prefix(node.kind()) {
-            push_pattern_node(node, source, &format!("kind:{}", node.kind()), out, seen);
-            if let Some(name) = node
-                .child_by_field_name("name")
-                .and_then(|n| node_text(&n, source))
-            {
-                push_pattern_node(node, source, &format!("{prefix} {name}"), out, seen);
-                push_pattern_node(node, source, &format!("decl:{prefix}:{name}"), out, seen);
-            }
-        }
-        if is_call_kind(node.kind()) {
-            push_pattern_node(node, source, &format!("kind:{}", node.kind()), out, seen);
-            if let Some(callee) = call_target(&node, source) {
-                push_pattern_node(node, source, &format!("call:{callee}"), out, seen);
-                if let Some(name) = callee.rsplit(['.', ':']).find(|p| !p.is_empty()) {
-                    push_pattern_node(node, source, &format!("call-name:{name}"), out, seen);
-                }
-            }
-        }
+        record_node_signatures(&node, source, out, seen);
     }
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
@@ -471,30 +459,114 @@ fn collect_node_signatures(
     }
 }
 
-fn declaration_prefix(kind: &str) -> Option<&'static str> {
-    match kind {
-        "function_item" => Some("fn"),
-        "struct_item" => Some("struct"),
-        "function_definition" => Some("def"),
-        "function_declaration" | "method_definition" | "method_declaration" | "method" => {
-            Some("function")
+fn record_node_signatures(
+    node: &Node,
+    source: &str,
+    out: &mut Vec<PatternNode>,
+    seen: &mut std::collections::HashSet<(String, u32)>,
+) {
+    if is_ident_kind(node.kind()) {
+        if let Some(text) = node_text(node, source) {
+            push_pattern_node(*node, source, text, out, seen);
         }
-        "class_definition" | "class_declaration" | "class" => Some("class"),
-        "trait_item" | "interface_declaration" => Some("interface"),
-        "enum_item" => Some("enum"),
-        _ => None,
+    }
+    if let Some(prefix) = declaration_prefix(node, source) {
+        push_pattern_node(*node, source, &format!("kind:{}", node.kind()), out, seen);
+        if let Some(name) = node
+            .child_by_field_name("name")
+            .and_then(|n| node_text(&n, source))
+        {
+            push_pattern_node(*node, source, &format!("{prefix} {name}"), out, seen);
+            push_pattern_node(*node, source, &format!("decl:{prefix}:{name}"), out, seen);
+        }
+    }
+    if !is_call_kind(node.kind()) {
+        return;
+    }
+    push_pattern_node(*node, source, &format!("kind:{}", node.kind()), out, seen);
+    let Some(callee) = call_target(node, source) else {
+        return;
+    };
+    push_pattern_node(*node, source, &format!("call:{callee}"), out, seen);
+    if let Some(name) = callee.rsplit(['.', ':']).find(|p| !p.is_empty()) {
+        push_pattern_node(*node, source, &format!("call-name:{name}"), out, seen);
     }
 }
 
+/// Map a tree-sitter declaration node to its indexed `decl:` / display prefix.
+///
+/// Most kinds are table-driven; `class_declaration` inspects Swift
+/// `declaration_kind` / Kotlin keyword tokens so singleton forms stay exact.
+pub fn declaration_prefix(node: &Node, source: &str) -> Option<&'static str> {
+    let kind = node.kind();
+    if kind == "class_declaration" {
+        return class_declaration_prefix(node, source);
+    }
+    DECL_KIND_PREFIXES
+        .iter()
+        .find_map(|&(node_kind, prefix)| (node_kind == kind).then_some(prefix))
+}
+
+fn class_declaration_prefix(node: &Node, source: &str) -> Option<&'static str> {
+    match node
+        .child_by_field_name("declaration_kind")
+        .and_then(|kind| node_text(&kind, source))
+    {
+        Some("struct" | "actor") => Some("struct"),
+        Some("enum") => Some("enum"),
+        Some("extension") => Some("type"),
+        // No Swift declaration_kind (or unrecognised) — Kotlin reuses class_declaration.
+        _ => match kotlin_class_keyword(node, source) {
+            "interface" => Some("interface"),
+            "enum" => Some("enum"),
+            _ => Some("class"),
+        },
+    }
+}
+
+/// AST node kind → short declaration prefix used in `decl:{prefix}:{name}` signatures.
+pub const DECL_KIND_PREFIXES: &[(&str, &str)] = &[
+    ("function_item", "fn"),
+    ("struct_item", "struct"),
+    ("struct_declaration", "struct"),
+    ("struct_specifier", "struct"),
+    ("function_definition", "def"),
+    ("function_declaration", "function"),
+    ("protocol_function_declaration", "function"),
+    ("method_definition", "function"),
+    ("method_declaration", "function"),
+    ("method", "function"),
+    ("singleton_method", "function"),
+    ("local_function_statement", "function"),
+    ("class_definition", "class"),
+    ("class", "class"),
+    ("record_declaration", "class"),
+    ("class_specifier", "class"),
+    ("trait_item", "interface"),
+    ("interface_declaration", "interface"),
+    ("protocol_declaration", "interface"),
+    ("enum_item", "enum"),
+    ("enum_declaration", "enum"),
+    ("enum_specifier", "enum"),
+];
+
+// e2hc/difu.5: invocation_expression is the C# tree-sitter grammar's call node.
+const CALL_KINDS: &[&str] = &[
+    "call_expression",
+    "call",
+    "method_invocation",
+    "invocation_expression",
+    "function_call_expression",
+    "member_call_expression",
+    "scoped_call_expression",
+];
+
 fn is_call_kind(kind: &str) -> bool {
-    matches!(kind, "call_expression" | "call" | "method_invocation")
+    CALL_KINDS.contains(&kind)
 }
 
 fn call_target<'a>(node: &Node<'a>, source: &'a str) -> Option<&'a str> {
-    ["function", "name"]
-        .into_iter()
-        .find_map(|f| node.child_by_field_name(f))
-        .and_then(|t| node_text(&t, source))
+    call_field_node(node).and_then(|t| node_text(&t, source))
 }
 
 fn push_pattern_node(

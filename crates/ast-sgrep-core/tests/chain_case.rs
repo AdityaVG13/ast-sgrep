@@ -1,3 +1,4 @@
+use ast_sgrep_core::chain::{expand_chain, ChainConfig, EdgeLabel};
 use ast_sgrep_core::store::{CallerRow, SymbolRow, UpsertFileInput};
 use ast_sgrep_core::IndexStore;
 use tempfile::TempDir;
@@ -97,4 +98,78 @@ fn symbols_named_is_case_insensitive() {
         "case-mismatched callee from outgoing_calls must resolve via symbols_named"
     );
     assert_eq!(resolved[0].name, "baz");
+}
+
+#[test]
+fn case_mismatched_callee_expands_to_definition_node() {
+    let temp = TempDir::new().unwrap();
+    let store = IndexStore::open(temp.path(), None).unwrap();
+    let caller_symbols = [SymbolRow {
+        name: "FooBar".into(),
+        kind: "function".into(),
+        line_start: 1,
+        line_end: 1,
+        byte_start: 0,
+        byte_end: 24,
+    }];
+    let callers = [CallerRow {
+        caller: "FooBar".into(),
+        callee: "Baz".into(),
+        line_no: 1,
+        byte_start: 14,
+        byte_end: 17,
+    }];
+    let caller_lines = [(1, "fn FooBar() { Baz(); }".into())];
+    store
+        .upsert_file(base(
+            "caller.rs",
+            &caller_lines,
+            "caller-hash",
+            &caller_symbols,
+            &callers,
+        ))
+        .unwrap();
+
+    let callee_symbols = [SymbolRow {
+        name: "baz".into(),
+        kind: "function".into(),
+        line_start: 1,
+        line_end: 1,
+        byte_start: 0,
+        byte_end: 11,
+    }];
+    let callee_lines = [(1, "fn baz() {}".into())];
+    store
+        .upsert_file(base(
+            "callee.rs",
+            &callee_lines,
+            "callee-hash",
+            &callee_symbols,
+            &[],
+        ))
+        .unwrap();
+
+    let response = expand_chain(
+        &store,
+        "defs:foobar",
+        &ChainConfig {
+            max_depth: 1,
+            top_n: 4,
+            limit: 8,
+            ..ChainConfig::default()
+        },
+    )
+    .unwrap();
+    assert!(response
+        .seeds
+        .iter()
+        .any(|node| node.symbol.as_deref() == Some("FooBar")));
+    assert!(response.nodes.iter().any(|node| {
+        node.file == "callee.rs" && node.symbol.as_deref() == Some("baz") && node.depth == 1
+    }));
+    assert!(response.edges.iter().any(|edge| {
+        edge.label == EdgeLabel::Calls
+            && edge.from_symbol.as_deref() == Some("FooBar")
+            && edge.to_symbol.as_deref() == Some("baz")
+    }));
 }

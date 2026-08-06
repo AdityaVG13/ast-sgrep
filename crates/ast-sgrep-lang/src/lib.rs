@@ -11,6 +11,11 @@ pub enum Language {
     Java,
     CSharp,
     Ruby,
+    Swift,
+    C,
+    Cpp,
+    Kotlin,
+    Php,
 }
 impl Language {
     pub fn as_str(self) -> &'static str {
@@ -23,6 +28,11 @@ impl Language {
             Language::Java => "java",
             Language::CSharp => "csharp",
             Language::Ruby => "ruby",
+            Language::Swift => "swift",
+            Language::C => "c",
+            Language::Cpp => "cpp",
+            Language::Kotlin => "kotlin",
+            Language::Php => "php",
         }
     }
     pub fn all() -> &'static [Language] {
@@ -35,7 +45,70 @@ impl Language {
             Language::Java,
             Language::CSharp,
             Language::Ruby,
+            Language::Swift,
+            Language::C,
+            Language::Cpp,
+            Language::Kotlin,
+            Language::Php,
         ]
+    }
+    /// Parse a language id into a `Language`, accepting `Language::as_str` forms
+    /// and common aliases (including Title Case labels from external tools).
+    pub fn parse(raw: &str) -> Option<Language> {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+        let lower = trimmed.to_ascii_lowercase();
+        match lower.as_str() {
+            "rust" | "rs" => Some(Language::Rust),
+            "typescript" | "ts" | "tsx" => Some(Language::TypeScript),
+            "javascript" | "js" | "jsx" | "mjs" | "cjs" => Some(Language::JavaScript),
+            "python" | "py" | "pyi" => Some(Language::Python),
+            "go" | "golang" => Some(Language::Go),
+            "java" => Some(Language::Java),
+            "csharp" | "c#" | "cs" | "c-sharp" => Some(Language::CSharp),
+            "ruby" | "rb" => Some(Language::Ruby),
+            "swift" => Some(Language::Swift),
+            "c" => Some(Language::C),
+            "cpp" | "c++" | "cc" | "cxx" => Some(Language::Cpp),
+            "kotlin" | "kt" | "kts" => Some(Language::Kotlin),
+            "php" => Some(Language::Php),
+            _ => None,
+        }
+    }
+    /// Normalize an external language label to `Language::as_str` casing.
+    /// Unknown labels are lowercased so case-sensitive filters stay consistent.
+    pub fn normalize_id(raw: &str) -> String {
+        Self::parse(raw)
+            .map(|lang| lang.as_str().to_string())
+            .unwrap_or_else(|| raw.trim().to_ascii_lowercase())
+    }
+}
+
+#[cfg(test)]
+mod language_id_tests {
+    use super::Language;
+
+    #[test]
+    fn all_languages_round_trip_as_str_parse() {
+        for &lang in Language::all() {
+            assert_eq!(Language::parse(lang.as_str()), Some(lang));
+            assert_eq!(Language::normalize_id(lang.as_str()), lang.as_str());
+        }
+        assert_eq!(Language::all().len(), 13);
+    }
+
+    #[test]
+    fn title_case_and_aliases_normalize_to_as_str() {
+        assert_eq!(Language::normalize_id("Rust"), "rust");
+        assert_eq!(Language::normalize_id("TypeScript"), "typescript");
+        assert_eq!(Language::normalize_id("C#"), "csharp");
+        assert_eq!(Language::normalize_id("CSharp"), "csharp");
+        assert_eq!(Language::normalize_id("C++"), "cpp");
+        assert_eq!(Language::normalize_id("Kotlin"), "kotlin");
+        assert_eq!(Language::normalize_id("PHP"), "php");
+        assert_eq!(Language::normalize_id("Swift"), "swift");
     }
 }
 impl std::fmt::Display for Language {
@@ -101,6 +174,11 @@ pub fn detect_language(path: &Path, content: Option<&str>) -> Option<Language> {
             "java" => Some(Language::Java),
             "cs" => Some(Language::CSharp),
             "rb" => Some(Language::Ruby),
+            "swift" => Some(Language::Swift),
+            "c" | "h" => Some(Language::C),
+            "cpp" | "cc" | "cxx" | "hpp" | "hxx" | "hh" | "ipp" => Some(Language::Cpp),
+            "kt" | "kts" => Some(Language::Kotlin),
+            "php" => Some(Language::Php),
             _ => None,
         };
         if lang.is_some() {
@@ -116,6 +194,9 @@ pub fn detect_language(path: &Path, content: Option<&str>) -> Option<Language> {
     }
     if trimmed.starts_with("#!/usr/bin/env python") || trimmed.starts_with("#!/usr/bin/python") {
         return Some(Language::Python);
+    }
+    if trimmed.starts_with("#!/usr/bin/env php") || trimmed.starts_with("<?php") {
+        return Some(Language::Php);
     }
     None
 }
@@ -150,13 +231,19 @@ impl Default for ParserRegistry {
 mod extract;
 mod langs;
 mod pattern;
+mod pattern_queries;
+mod signature;
 use langs::{
-    CSharpParser, GoParser, JavaParser, JavaScriptParser, PythonParser, RubyParser, RustParser,
-    TypeScriptParser,
+    CParser, CSharpParser, CppParser, GoParser, JavaParser, JavaScriptParser, KotlinParser,
+    PhpParser, PythonParser, RubyParser, RustParser, SwiftParser, TypeScriptParser,
 };
 pub use pattern::{
-    match_literal_pattern, match_pattern, needs_ast_grep_fallback, tree_sitter_language,
-    PatternMatch,
+    classify_native, declaration_prefix, match_literal_pattern, match_pattern,
+    needs_ast_grep_fallback, tree_sitter_language, DECL_KIND_PREFIXES,
+    DECL_PATTERN_PREFIXES, NativeKind, PatternMatch,
+};
+pub use signature::{
+    cached_pattern_signatures, required_pattern_literal, structural_term_signatures, DECL_PREFIXES,
 };
 fn make_parser(lang: Language) -> Box<dyn LanguageParser> {
     match lang {
@@ -168,5 +255,10 @@ fn make_parser(lang: Language) -> Box<dyn LanguageParser> {
         Language::Java => Box::new(JavaParser),
         Language::CSharp => Box::new(CSharpParser),
         Language::Ruby => Box::new(RubyParser),
+        Language::Swift => Box::new(SwiftParser),
+        Language::C => Box::new(CParser),
+        Language::Cpp => Box::new(CppParser),
+        Language::Kotlin => Box::new(KotlinParser),
+        Language::Php => Box::new(PhpParser),
     }
 }

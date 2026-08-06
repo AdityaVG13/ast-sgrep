@@ -24,8 +24,9 @@ pub fn regex_pass(
         Regex::new(pattern)
     }
     .map_err(|e| StoreError::Other(format!("invalid regex: {e}")))?;
-    let lines = if let Some(literal) = required_literal(pattern) {
-        trigram_regex_candidates(store, &literal)?
+    let trigram_literal = required_literal(pattern);
+    let lines = if let Some(literal) = trigram_literal.as_deref() {
+        trigram_regex_candidates(store, literal)?
     } else {
         store.all_indexed_lines()?
     };
@@ -38,7 +39,11 @@ pub fn regex_pass(
         .min(lines.len());
     let chunk_size = lines.len().div_ceil(num_threads).max(1);
     let file_map = if needs_context(options) {
-        Some(Arc::new(build_file_lines_map(&store.all_indexed_lines()?)))
+        if trigram_literal.is_some() {
+            Some(Arc::new(build_file_lines_map(&store.all_indexed_lines()?)))
+        } else {
+            Some(Arc::new(build_file_lines_map(&lines)))
+        }
     } else {
         None
     };
@@ -56,10 +61,21 @@ pub fn regex_pass(
                 scan_regex_chunk(chunk, &re, &lang_filter, &options, file_map.as_deref())
             }));
         }
-        Ok(handles
-            .into_iter()
-            .flat_map(|h| h.join().unwrap_or_default())
-            .collect())
+        Ok({
+            let mut out = Vec::new();
+            for handle in handles {
+                match handle.join() {
+                    Ok(hits) => out.extend(hits),
+                    // Fail closed: a panicked worker must not silently drop hits (sxjc).
+                    Err(_) => {
+                        return Err(StoreError::Other(
+                            "regex search worker panicked".to_string(),
+                        ));
+                    }
+                }
+            }
+            out
+        })
     })
 }
 fn required_literal(pattern: &str) -> Option<String> {

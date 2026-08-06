@@ -14,8 +14,9 @@ pub const DEFAULT_SKIP_DIR_NAMES: &[&str] = &[
     "~",
 ];
 pub const INDEXABLE_EXTENSIONS: &[&str] = &[
-    "rs", "ts", "tsx", "js", "jsx", "mjs", "cjs", "py", "pyi", "go", "java", "cs", "rb", "toml",
-    "md", "txt", "json", "yaml", "yml",
+    "rs", "ts", "tsx", "js", "jsx", "mjs", "cjs", "py", "pyi", "go", "java", "cs", "rb", "swift",
+    "c", "h", "cpp", "cc", "cxx", "hpp", "hxx", "hh", "ipp", "kt", "kts", "php", "toml", "md",
+    "txt", "json", "yaml", "yml",
 ];
 pub fn should_skip_dir(path: &Path) -> bool {
     path.file_name()
@@ -35,6 +36,12 @@ pub fn should_skip_file(path: &Path) -> bool {
         .map(|ext| !INDEXABLE_EXTENSIONS.contains(&ext.to_lowercase().as_str()))
         .unwrap_or(true)
 }
+
+/// Check one path using the repository ignore rules.
+pub fn is_ignored(root: &Path, rel: &Path) -> bool {
+    IgnoreMatcher::new(root).is_ignored(rel)
+}
+
 #[derive(Debug, Clone)]
 struct Rule {
     base: String,
@@ -96,9 +103,6 @@ impl IgnoreMatcher {
             .insert(prefix.to_string(), Rc::clone(&rc));
         rc
     }
-}
-pub fn is_ignored(root: &Path, rel: &Path) -> bool {
-    IgnoreMatcher::new(root).is_ignored(rel)
 }
 fn parent_prefix(rel: &Path) -> String {
     let mut prefix = String::new();
@@ -225,11 +229,26 @@ fn dir_ignored(dir_path: &str, rules: &[Rule]) -> bool {
 }
 #[cfg(test)]
 mod tests {
-    use super::should_skip_dir;
+    use super::{should_skip_dir, should_skip_file};
     use std::path::Path;
+
     #[test]
     fn skips_path_escape_noise_directory() {
         assert!(should_skip_dir(Path::new("~")));
         assert!(!should_skip_dir(Path::new("src")));
+    }
+
+    #[test]
+    fn indexes_swift_source_files() {
+        assert!(!should_skip_file(Path::new("Sources/App/Main.swift")));
+    }
+
+    #[test]
+    fn indexes_c_cpp_kotlin_php_source_files() {
+        assert!(!should_skip_file(Path::new("src/main.c")));
+        assert!(!should_skip_file(Path::new("include/app.h")));
+        assert!(!should_skip_file(Path::new("src/main.cpp")));
+        assert!(!should_skip_file(Path::new("src/Main.kt")));
+        assert!(!should_skip_file(Path::new("src/index.php")));
     }
 }

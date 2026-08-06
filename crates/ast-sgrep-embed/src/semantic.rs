@@ -141,14 +141,14 @@ fn char_trigrams(text: &str) -> Vec<String> {
         .collect()
 }
 fn hash_feature(feature: &str, vec: &mut [f32], weight: f32) {
-    let digest = blake3::hash(feature.as_bytes());
-    let bytes = digest.as_bytes();
-    for (i, slot) in vec.iter_mut().enumerate() {
-        *slot += if bytes[i % bytes.len()] & 1 == 0 {
-            weight
-        } else {
-            -weight
-        };
+    // Use BLAKE3 XOF so each dimension gets an independent bit. The previous
+    // `digest[i % 32]` tiling made every vector period-32 (effective rank 32, not 256).
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(feature.as_bytes());
+    let mut bytes = vec![0u8; vec.len()];
+    hasher.finalize_xof().fill(&mut bytes);
+    for (slot, &b) in vec.iter_mut().zip(bytes.iter()) {
+        *slot += if b & 1 == 0 { weight } else { -weight };
     }
 }
 fn normalize(vec: &mut [f32]) {
@@ -176,5 +176,37 @@ impl SemanticLocalEmbedding {
     }
     pub fn similarity(&self, a: &[f32], b: &[f32]) -> f32 {
         dot_similarity(a, b)
+    }
+}
+
+#[cfg(test)]
+mod hash_rank_tests {
+    use super::{hash_feature, SemanticLocalEmbedding, SEMANTIC_DIM};
+
+    #[test]
+    fn hash_feature_is_not_period_32() {
+        let mut vec = vec![0.0_f32; SEMANTIC_DIM];
+        hash_feature("tok:example_feature", &mut vec, 1.0);
+        // Period-32 tiling would force sign(vec[i]) == sign(vec[i+32]) for all i.
+        let mismatches = (0..32)
+            .filter(|&i| vec[i].signum() != vec[i + 32].signum() || vec[i] != vec[i + 32])
+            .count();
+        assert!(
+            mismatches > 0,
+            "expected independent dims; period-32 tiling still present"
+        );
+        // Across a few blocks, not all identical
+        let block0: Vec<_> = vec[0..32].to_vec();
+        let block1: Vec<_> = vec[32..64].to_vec();
+        let block2: Vec<_> = vec[64..96].to_vec();
+        assert_ne!(block0, block1);
+        assert_ne!(block1, block2);
+    }
+
+    #[test]
+    fn embed_text_has_full_dim() {
+        let emb = SemanticLocalEmbedding.embed_text("refresh_token authentication");
+        assert_eq!(emb.len(), SEMANTIC_DIM);
+        assert!(emb.iter().any(|x| *x != 0.0));
     }
 }

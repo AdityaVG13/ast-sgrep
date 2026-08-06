@@ -39,6 +39,10 @@
     "./runtime": {
       "types": "./dist/runtime.d.ts",
       "import": "./dist/runtime.js"
+    },
+    "./code-mode": {
+      "types": "./dist/code-mode.d.ts",
+      "import": "./dist/code-mode.js"
     }
   },
   "pi": {
