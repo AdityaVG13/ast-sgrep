@@ -2,7 +2,7 @@ import { resolveBinary } from "ast-sgrep";
 export declare const RUNTIME_VERSION = "1.3.2";
 export declare const MACHINE_SCHEMA_VERSION = "1.0.0";
 export declare const CONFIG_SCHEMA_VERSION: 1;
-export declare const INDEX_FORMAT_VERSION: 5;
+export declare const INDEX_FORMAT_VERSION: 7;
 export declare const DEFAULT_TIMEOUT_MS = 30000;
 export declare const DEFAULT_MAX_OUTPUT_BYTES: number;
 export declare const DEFAULT_REFRESH_INTERVAL_MS = 30000;
@@ -83,6 +83,11 @@ export interface FreshnessRuntime {
     resolveRoot(context: RuntimeContext): Promise<string>;
     inspectIndexCompatibility?(context: RuntimeContext): Promise<IndexHealth>;
     rebuildIncompatibleIndex?(context: RuntimeContext, options?: RunOptions): Promise<MachineEnvelope>;
+    /**
+     * Optional warm native call (session sticky pool). When present, freshness
+     * prefers this over cold `run` for status/index — same Searcher as Code Mode.
+     */
+    nativeCall?(tool: string, args: Record<string, unknown>, context: RuntimeContext, options?: RunOptions): Promise<MachineEnvelope>;
 }
 export interface FreshnessCoordinatorOptions {
     refreshIntervalMs?: number;
@@ -105,6 +110,14 @@ export declare class AstSgrepRuntime {
     inspectIndexCompatibility(context: RuntimeContext): Promise<IndexHealth>;
     rebuildIncompatibleIndex(context: RuntimeContext, options?: RunOptions): Promise<MachineEnvelope>;
     run(args: readonly string[], context: RuntimeContext, options?: RunOptions): Promise<MachineEnvelope>;
+    /** Absolute path to the native binary (for sticky serve / stdin batch spawn). */
+    resolveBinaryPath(options?: {
+        env?: NodeJS.ProcessEnv;
+    }): string;
+    /** Merged process env for native Code Mode workers. */
+    nativeEnv(options?: {
+        env?: NodeJS.ProcessEnv;
+    }): NodeJS.ProcessEnv;
     checkCompatibility(context: RuntimeContext, options?: RunOptions): Promise<MachineEnvelope>;
 }
 export {};

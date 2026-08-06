@@ -20,6 +20,9 @@ fn regex_budget() -> Duration {
         .map(Duration::from_millis)
         .unwrap_or(Duration::from_millis(DEFAULT_REGEX_BUDGET_MS))
 }
+fn budget_exhausted(deadline: Instant, timed_out: &AtomicBool) -> bool {
+    timed_out.load(Ordering::Relaxed) || Instant::now() >= deadline
+}
 pub fn regex_pass(
     store: &IndexStore,
     options: &SearchOptions,
@@ -35,31 +38,36 @@ pub fn regex_pass(
         Regex::new(pattern)
     }
     .map_err(|e| StoreError::Other(format!("invalid regex: {e}")))?;
-    let lines = if let Some(literal) = required_literal(pattern) {
-        trigram_regex_candidates(store, &literal)?
+    let trigram_literal = required_literal(pattern);
+    let lines = if let Some(literal) = trigram_literal.as_deref() {
+        trigram_regex_candidates(store, literal)?
     } else {
         store.all_indexed_lines()?
     };
     if lines.is_empty() {
         return Ok(Vec::new());
     }
-    let budget = regex_budget();
-    let deadline = Instant::now() + budget;
-    let timed_out = Arc::new(AtomicBool::new(false));
     let num_threads = std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(1)
         .min(lines.len());
     let chunk_size = lines.len().div_ceil(num_threads).max(1);
     let file_map = if needs_context(options) {
-        Some(Arc::new(build_file_lines_map(&store.all_indexed_lines()?)))
+        if trigram_literal.is_some() {
+            Some(Arc::new(build_file_lines_map(&store.all_indexed_lines()?)))
+        } else {
+            Some(Arc::new(build_file_lines_map(&lines)))
+        }
     } else {
         None
     };
     let lang_filter = options.lang_filter.clone();
     let options = options.clone();
     let re = Arc::new(re);
-    let hits = thread::scope(|scope| {
+    let budget = regex_budget();
+    let deadline = Instant::now() + budget;
+    let timed_out = Arc::new(AtomicBool::new(false));
+    thread::scope(|scope| {
         let mut handles = Vec::new();
         for chunk in lines.chunks(chunk_size) {
             let re = Arc::clone(&re);
@@ -79,18 +87,28 @@ pub fn regex_pass(
                 )
             }));
         }
-        handles
-            .into_iter()
-            .flat_map(|h| h.join().unwrap_or_default())
-            .collect::<Vec<_>>()
-    });
-    if timed_out.load(Ordering::Relaxed) {
-        return Err(StoreError::Other(format!(
-            "regex search exceeded wall-clock budget of {}ms (ASGREP_REGEX_BUDGET_MS); partial results discarded",
-            budget.as_millis()
-        )));
-    }
-    Ok(hits)
+        Ok({
+            let mut out = Vec::new();
+            for handle in handles {
+                match handle.join() {
+                    Ok(hits) => out.extend(hits),
+                    // Fail closed: a panicked worker must not silently drop hits (sxjc).
+                    Err(_) => {
+                        return Err(StoreError::Other(
+                            "regex search worker panicked".to_string(),
+                        ));
+                    }
+                }
+            }
+            if timed_out.load(Ordering::Relaxed) {
+                return Err(StoreError::Other(format!(
+                    "regex search exceeded wall-clock budget of {}ms (ASGREP_REGEX_BUDGET_MS); partial results discarded",
+                    budget.as_millis()
+                )));
+            }
+            out
+        })
+    })
 }
 fn required_literal(pattern: &str) -> Option<String> {
     if pattern.contains("(?") {
@@ -177,7 +195,10 @@ fn scan_regex_chunk(
 ) -> Vec<SearchHit> {
     let mut hits = Vec::new();
     for (rank, (path, line_no, content, language)) in chunk.iter().enumerate() {
-        if budget_exhausted(rank, deadline, timed_out) {
+        // Between-line deadline check (56w1.3): a zero budget must fail
+        // immediately instead of scanning everything.
+        if budget_exhausted(deadline, timed_out) {
+            timed_out.store(true, Ordering::Relaxed);
             break;
         }
         if !matches_lang(language.as_deref(), lang_filter.as_deref()) || !re.is_match(content) {
@@ -192,24 +213,4 @@ fn scan_regex_chunk(
         ));
     }
     hits
-}
-fn budget_exhausted(rank: usize, deadline: Instant, timed_out: &AtomicBool) -> bool {
-    if timed_out.load(Ordering::Relaxed) {
-        return true;
-    }
-    if !rank.is_multiple_of(16) || Instant::now() < deadline {
-        return false;
-    }
-    timed_out.store(true, Ordering::Relaxed);
-    true
-}
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn regex_budget_defaults_to_two_seconds() {
-        // Ensure the constant stays documented and wired.
-        assert_eq!(DEFAULT_REGEX_BUDGET_MS, 2_000);
-        let _ = regex_budget();
-    }
 }

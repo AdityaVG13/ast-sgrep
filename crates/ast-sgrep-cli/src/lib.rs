@@ -1,160 +1,34 @@
+#![forbid(unsafe_code)]
+
 mod agent;
 mod bench;
+mod cli_args;
 mod eval;
+mod index_cmd;
 mod machine;
 mod search_cmd;
 pub mod supervisor;
 mod watch;
 
 use anyhow::Context;
-use ast_sgrep_core::{
-    index_db_path, EmbedBackend, IndexOptions, IndexStats, Indexer, SearchOptions, Searcher,
-};
-use clap::{Args, Parser, Subcommand};
+use clap::Parser;
+use cli_args::{Cli, Commands, VersionArgs};
 use machine::{
-    print_machine_failure, raw_command_name, raw_machine_output_requested, MACHINE_SCHEMA_VERSION,
+    print_machine_failure, print_machine_json, raw_command_name, raw_machine_output_requested,
+    MACHINE_SCHEMA_VERSION,
 };
-use std::fmt;
+use index_cmd::{
+    print_index_stats, run_index_dry_run, print_status_command, with_index,
+};
 use std::path::{Path, PathBuf};
 
-pub(crate) use machine::print_machine_json;
+pub(crate) use cli_args::{UsageError, usage_error};
+pub(crate) use index_cmd::{
+    ensure_existing_root, ensure_nonempty_index, ensure_unambiguous_root, effective_root,
+    index_options, open_indexer, open_searcher, resolve_root_index, search_options,
+};
+pub(crate) use machine::print_machine_json_status;
 
-#[derive(Args)]
-struct RootArg {
-    #[arg(default_value = ".")]
-    root: PathBuf,
-}
-#[derive(Args)]
-struct QueryRootArg {
-    query: String,
-    #[arg(default_value = ".")]
-    root: PathBuf,
-}
-#[derive(Parser)]
-#[command(
-    name = "asgrep",
-    version,
-    about = "Polyglot hybrid code search",
-    after_help = "Agent: asgrep capabilities --json | robot-docs guide | doctor --robot-triage\nExit: 0=ok 1=usage 2=fail"
-)]
-pub(crate) struct Cli {
-    #[command(subcommand)]
-    command: Option<Commands>,
-    #[arg(value_name = "QUERY")]
-    query: Option<String>,
-    #[arg(long, global = true)]
-    root: Option<PathBuf>,
-    #[arg(long, global = true, env = "ASGREP_LIMIT", value_parser = parse_output_limit)]
-    limit: Option<usize>,
-    #[arg(long, global = true)]
-    json: bool,
-    #[arg(long, global = true, env = "ASGREP_INDEX_PATH")]
-    index_path: Option<PathBuf>,
-    #[arg(long, global = true)]
-    lang: Option<String>,
-    #[arg(long, global = true, env = "ASGREP_NO_EMBED")]
-    no_embed: bool,
-    #[arg(long, global = true, env = "ASGREP_CLOUD_EMBED")]
-    cloud_embed: bool,
-    #[arg(long, global = true, env = "ASGREP_OLLAMA_EMBED")]
-    ollama_embed: bool,
-    /// Use local neural embeddings (fastembed/ONNX; needs `neural-embed` feature)
-    #[arg(long, global = true, env = "ASGREP_NEURAL_EMBED")]
-    neural_embed: bool,
-    #[arg(long, global = true, env = "ASGREP_SEMANTIC_ONLY")]
-    semantic_only: bool,
-    #[arg(long, global = true, env = "ASGREP_TANTIVY")]
-    tantivy: bool,
-    #[arg(long, global = true, env = "ASGREP_ANN_THRESHOLD")]
-    ann_threshold: Option<usize>,
-    /// IVF clusters to probe (0 = adaptive √k; ≥ n_clusters = exact)
-    #[arg(long, global = true, env = "ASGREP_ANN_PROBES")]
-    ann_probes: Option<usize>,
-    /// Rerank fused top candidates with local ONNX cross-encoder (`rerank` feature)
-    #[arg(long, global = true, env = "ASGREP_RERANK", action = clap::ArgAction::Set, default_value_t = false, num_args = 0..=1, default_missing_value = "true", value_parser = clap::builder::BoolishValueParser::new())]
-    rerank: bool,
-    #[arg(long, global = true, env = "ASGREP_RERANK_TOP_K", default_value_t = 20)]
-    rerank_top_k: usize,
-    #[arg(long, global = true, value_name = "FORMAT")]
-    format: Option<String>,
-    #[arg(long, global = true, default_value = "0", value_name = "N", value_parser = parse_excerpt_lines)]
-    excerpt_lines: usize,
-    #[arg(value_name = "ROOT", default_value = ".")]
-    search_root: PathBuf,
-}
-#[derive(Subcommand)]
-enum Commands {
-    Index(RootArg),
-    Status(RootArg),
-    Reindex(RootArg),
-    Bench {
-        #[command(flatten)]
-        root: RootArg,
-        #[arg(long, default_value = "process_request")]
-        query: String,
-        #[arg(long, default_value = "100")]
-        iterations: u32,
-        #[arg(long)]
-        suite: Option<String>,
-        #[arg(long, default_value = "sample")]
-        fixture: String,
-        #[arg(long)]
-        queries_file: Option<PathBuf>,
-        #[arg(long, default_value_t = false)]
-        skip_index: bool,
-    },
-    Watch {
-        #[command(flatten)]
-        root: RootArg,
-        #[arg(long, default_value = "300")]
-        debounce_ms: u64,
-    },
-    Semantic(QueryRootArg),
-    Chain(QueryRootArg),
-    Capabilities(agent::CapabilitiesArgs),
-    Version(VersionArgs),
-    RobotDocs(agent::RobotDocsArgs),
-    Doctor {
-        #[command(flatten)]
-        root: RootArg,
-        #[command(flatten)]
-        args: agent::DoctorArgs,
-    },
-    Eval(eval::EvalArgs),
-}
-#[derive(Parser)]
-struct VersionArgs {
-    #[arg(long)]
-    json: bool,
-}
-const MAX_OUTPUT_RESULTS: usize = 1_000;
-const MAX_EXCERPT_LINES: usize = 100;
-#[derive(Debug)]
-pub(crate) struct UsageError(String);
-impl fmt::Display for UsageError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.0)
-    }
-}
-impl std::error::Error for UsageError {}
-pub(crate) fn usage_error(message: impl Into<String>) -> anyhow::Error {
-    UsageError(message.into()).into()
-}
-fn parse_bounded_usize(raw: &str, maximum: usize, name: &str) -> Result<usize, String> {
-    let value = raw
-        .parse::<usize>()
-        .map_err(|_| format!("{name} must be a non-negative integer"))?;
-    if value > maximum {
-        return Err(format!("{name} must not exceed {maximum}"));
-    }
-    Ok(value)
-}
-fn parse_output_limit(raw: &str) -> Result<usize, String> {
-    parse_bounded_usize(raw, MAX_OUTPUT_RESULTS, "--limit")
-}
-fn parse_excerpt_lines(raw: &str) -> Result<usize, String> {
-    parse_bounded_usize(raw, MAX_EXCERPT_LINES, "--excerpt-lines")
-}
 pub fn main() -> anyhow::Result<()> {
     #[cfg(not(unix))]
     {
@@ -174,6 +48,7 @@ pub fn main() -> anyhow::Result<()> {
         }
     }
 }
+
 fn run_process() -> ! {
     let raw_args: Vec<_> = std::env::args_os().collect();
     let cli = match Cli::try_parse_from(&raw_args) {
@@ -187,8 +62,9 @@ fn run_process() -> ! {
                     exit_code,
                     &error.to_string(),
                 );
+            } else {
+                let _ = error.print();
             }
-            let _ = error.print();
             std::process::exit(exit_code);
         }
     };
@@ -204,9 +80,8 @@ fn run_process() -> ! {
                     exit_code,
                     &format!("{error:#}"),
                 );
-            }
-            eprintln!("{error:#}");
-            if !cli.machine_output_requested() {
+            } else {
+                eprintln!("{error:#}");
                 agent::print_agent_help_footer();
             }
             std::process::exit(exit_code);
@@ -214,84 +89,77 @@ fn run_process() -> ! {
     }
 }
 
-/// Parse process arguments and run the CLI without forcing process exit.
 pub fn run() -> anyhow::Result<()> {
     run_cli(&Cli::parse())
 }
-impl Cli {
-    fn machine_output_requested(&self) -> bool {
-        self.json
-            || matches!(self.command.as_ref(), Some(Commands::Capabilities(a)) if a.json)
-            || matches!(self.command.as_ref(), Some(Commands::Version(a)) if a.json)
-            || matches!(self.command.as_ref(), Some(Commands::Doctor { args, .. }) if args.json || args.robot_triage)
-    }
-    fn command_name(&self) -> &'static str {
-        match self.command.as_ref() {
-            None => "search",
-            Some(Commands::Index(_)) => "index",
-            Some(Commands::Status(_)) => "status",
-            Some(Commands::Reindex(_)) => "reindex",
-            Some(Commands::Bench { .. }) => "bench",
-            Some(Commands::Watch { .. }) => "watch",
-            Some(Commands::Semantic(_)) => "semantic",
-            Some(Commands::Chain(_)) => "chain",
-            Some(Commands::Capabilities(_)) => "capabilities",
-            Some(Commands::Version(_)) => "version",
-            Some(Commands::RobotDocs(_)) => "robot-docs",
-            Some(Commands::Doctor { .. }) => "doctor",
-            Some(Commands::Eval(_)) => "eval",
-        }
-    }
-}
+
 fn run_cli(cli: &Cli) -> anyhow::Result<()> {
-    require_compiled_features(cli)?;
+    if cli.robot_help {
+        agent::print_robot_guide();
+        return Ok(());
+    }
+    if cli.active_tuning().format.is_some()
+        && !matches!(
+            cli.command.as_ref(),
+            None
+                | Some(
+                    Commands::Search(_)
+                        | Commands::Keyword(_)
+                        | Commands::Semantic(_)
+                        | Commands::Index(_)
+                        | Commands::Reindex(_)
+                        | Commands::Bench { .. }
+                )
+        )
+    {
+        return Err(usage_error(
+            "--format applies only to search, keyword, or semantic commands",
+        ));
+    }
     match cli.command.as_ref() {
         Some(c) => run_command(cli, c),
         None => run_default_search(cli),
     }
 }
-fn require_compiled_features(cli: &Cli) -> anyhow::Result<()> {
-    if cli.neural_embed {
-        #[cfg(not(feature = "neural-embed"))]
-        {
-            return Err(anyhow::anyhow!(
-                "--neural-embed requested but this binary was built without the `neural-embed` feature; rebuild with --features neural-embed"
-            ));
-        }
-    }
-    if cli.rerank {
-        #[cfg(not(feature = "rerank"))]
-        {
-            return Err(anyhow::anyhow!(
-                "--rerank requested but this binary was built without the `rerank` feature; rebuild with --features rerank"
-            ));
-        }
-    }
-    Ok(())
-}
+
 fn run_command(cli: &Cli, command: &Commands) -> anyhow::Result<()> {
     match command {
-        Commands::Index(r) => with_index(
-            "index",
-            &r.root,
-            cli,
-            |i| i.index_all().context("indexing failed"),
-            print_index_stats,
-        ),
-        Commands::Status(r) => {
-            let st = open_indexer(&r.root, cli)?
-                .store()
-                .status()
-                .context("failed to read status")?;
-            print_json_or(cli.json, "status", &st, || print_status(&st))
+        Commands::Index(c) => {
+            if c.dry_run {
+                return run_index_dry_run("index", &c.root.root, cli);
+            }
+            with_index(
+                "index",
+                &c.root.root,
+                cli,
+                |i| {
+                    if !cli.json {
+                        eprintln!("asgrep: indexing {} ...", c.root.root.display());
+                    }
+                    i.index_all().context("indexing failed")
+                },
+                print_index_stats,
+            )
         }
-        Commands::Reindex(r) => with_index(
-            "reindex",
-            &r.root,
-            cli,
-            |i| i.reindex_all().context("reindex failed"),
-            print_index_stats,
-        ),
+        Commands::Status(r) => print_status_command(cli, &r.root),
+        Commands::Reindex(c) => {
+            if c.dry_run {
+                return run_index_dry_run("reindex", &c.root.root, cli);
+            }
+            with_index(
+                "reindex",
+                &c.root.root,
+                cli,
+                |i| {
+                    if !cli.json {
+                        eprintln!("asgrep: reindexing {} ...", c.root.root.display());
+                    }
+                    i.reindex_all().context("reindex failed")
+                },
+                print_index_stats,
+            )
+        }
+        Commands::Search(q) => search_cmd::run_search(&q.query.root, cli, &q.query.query, false),
         Commands::Bench {
             root,
             query,
@@ -300,6 +168,7 @@ fn run_command(cli: &Cli, command: &Commands) -> anyhow::Result<()> {
             fixture,
             queries_file,
             skip_index,
+            ..
         } => bench::run_bench_command(
             &root.root,
             cli,
@@ -311,15 +180,104 @@ fn run_command(cli: &Cli, command: &Commands) -> anyhow::Result<()> {
             *skip_index,
         ),
         Commands::Watch { root, debounce_ms } => watch::run_watch(&root.root, cli, *debounce_ms),
-        Commands::Semantic(q) => search_cmd::run_search(&q.root, cli, &q.query, true),
+        Commands::Keyword(q) => {
+            search_cmd::run_keyword_search(&q.query.root, cli, &q.query.query)
+        }
+        Commands::Semantic(q) => search_cmd::run_search(&q.query.root, cli, &q.query.query, true),
         Commands::Chain(q) => search_cmd::run_chain(&q.root, cli, &q.query),
         Commands::Capabilities(args) => agent::run_capabilities(cli, args),
         Commands::Version(args) => run_version(cli, args),
         Commands::RobotDocs(args) => agent::run_robot_docs(cli, args),
         Commands::Doctor { root, args } => agent::run_doctor(cli, &root.root, args),
         Commands::Eval(args) => eval::run_eval(cli, args),
+        Commands::CodemodeBatch { requests } => run_codemode_batch(cli, requests),
+        Commands::CodemodeServe => run_codemode_serve(cli),
     }
 }
+
+fn codemode_session_config(cli: &Cli, root: PathBuf) -> ast_sgrep_codemode::SessionConfig {
+    ast_sgrep_codemode::SessionConfig {
+        root,
+        index_path: cli.index_path.clone(),
+        limit: cli
+            .limit
+            .unwrap_or_else(ast_sgrep_core::SearchOptions::default_limit),
+        use_embed: !cli.active_tuning().no_embed,
+        ..ast_sgrep_codemode::SessionConfig::default()
+    }
+}
+
+fn run_codemode_batch(cli: &Cli, requests: &Path) -> anyhow::Result<()> {
+    let raw = if requests.as_os_str() == "-" {
+        let mut buf = String::new();
+        std::io::Read::read_to_string(&mut std::io::stdin(), &mut buf)
+            .context("read batch requests from stdin")?;
+        buf
+    } else {
+        std::fs::read_to_string(requests)
+            .with_context(|| format!("read batch requests {}", requests.display()))?
+    };
+    let mut request: ast_sgrep_codemode::BatchRequest =
+        serde_json::from_str(&raw).context("parse batch requests JSON")?;
+    if request.root.is_none() {
+        request.root = Some(cli.root.clone().unwrap_or_else(|| PathBuf::from(".")));
+    }
+    if request.index_path.is_none() {
+        request.index_path = cli.index_path.clone();
+    }
+    if request.use_embed.is_none() {
+        request.use_embed = Some(!cli.active_tuning().no_embed);
+    }
+    if request.limit.is_none() {
+        request.limit = cli.limit;
+    }
+    let config = ast_sgrep_codemode::SessionConfig {
+        root: request
+            .root
+            .clone()
+            .unwrap_or_else(|| PathBuf::from(".")),
+        index_path: request.index_path.clone(),
+        limit: request
+            .limit
+            .unwrap_or_else(ast_sgrep_core::SearchOptions::default_limit),
+        use_embed: request.use_embed.unwrap_or(true),
+        ..ast_sgrep_codemode::SessionConfig::default()
+    };
+    let response = ast_sgrep_codemode::run_batch(config, &request)
+        .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+    // Transport ok=true even when some calls fail — per-call status lives in results[].
+    // (ok:false would make Pi parseEnvelope throw and re-run the whole wave.)
+    let envelope = serde_json::json!({
+        "schema_version": MACHINE_SCHEMA_VERSION,
+        "tool": "asgrep",
+        "command": "codemode-batch",
+        "ok": true,
+        "all_ok": response.all_ok,
+        "version": env!("CARGO_PKG_VERSION"),
+        "machine_schema_version": MACHINE_SCHEMA_VERSION,
+        "call_count": response.call_count,
+        "wall_ms": response.wall_ms,
+        "mode": response.mode,
+        "results": response.results,
+    });
+    // Compact JSON: Code Mode waves are hot; pretty-print is pure serial waste.
+    println!("{}", serde_json::to_string(&envelope)?);
+    Ok(())
+}
+
+fn run_codemode_serve(cli: &Cli) -> anyhow::Result<()> {
+    let root = cli
+        .root
+        .clone()
+        .or_else(|| Some(cli.search_root.clone()))
+        .unwrap_or_else(|| PathBuf::from("."));
+    let config = codemode_session_config(cli, root);
+    let stdin = std::io::BufReader::new(std::io::stdin());
+    let stdout = std::io::stdout();
+    ast_sgrep_codemode::run_serve(config, stdin, stdout.lock())
+        .map_err(|e| anyhow::anyhow!(e.to_string()))
+}
+
 fn run_version(cli: &Cli, args: &VersionArgs) -> anyhow::Result<()> {
     if cli.json || args.json {
         print_machine_json(
@@ -331,137 +289,11 @@ fn run_version(cli: &Cli, args: &VersionArgs) -> anyhow::Result<()> {
         Ok(())
     }
 }
-fn with_index<T: serde::Serialize>(
-    command: &str,
-    root: &Path,
-    cli: &Cli,
-    op: impl FnOnce(&mut Indexer) -> anyhow::Result<T>,
-    human: impl FnOnce(&T),
-) -> anyhow::Result<()> {
-    let mut indexer = open_indexer(root, cli)?;
-    let v = op(&mut indexer)?;
-    print_json_or(cli.json, command, &v, || human(&v))
-}
+
 fn run_default_search(cli: &Cli) -> anyhow::Result<()> {
     let query = cli.query.as_deref().ok_or_else(|| usage_error("search query required (e.g. asgrep \"auth refresh\") or use a subcommand: asgrep capabilities --json"))?;
     if let Some(sub) = agent::query_looks_like_subcommand_typo(query) {
         return Err(usage_error(format!("unknown subcommand '{query}'; did you mean: asgrep {sub} ... ? Try: asgrep capabilities --json")));
     }
     search_cmd::run_search(&cli.search_root, cli, query, false)
-}
-pub(crate) fn effective_root(cli: &Cli, fallback: &Path) -> PathBuf {
-    cli.root.clone().unwrap_or_else(|| fallback.to_path_buf())
-}
-pub(crate) fn resolve_root_index(cli: &Cli, root: &Path) -> (PathBuf, Option<PathBuf>) {
-    (effective_root(cli, root), cli.index_path.clone())
-}
-fn index_db_display(root: &Path, index_path: Option<&Path>) -> PathBuf {
-    index_db_path(root, index_path)
-}
-pub(crate) fn open_indexer(root: &Path, cli: &Cli) -> anyhow::Result<Indexer> {
-    let opts = index_options(root, cli);
-    let db = index_db_display(&opts.root, opts.index_path.as_deref());
-    Indexer::new(opts).with_context(|| {
-        format!(
-            "failed to open index at {} (root {})",
-            db.display(),
-            root.display()
-        )
-    })
-}
-pub(crate) fn open_searcher(root: &Path, cli: &Cli) -> anyhow::Result<Searcher> {
-    let opts = search_options(root, cli);
-    let db = index_db_display(&opts.root, opts.index_path.as_deref());
-    Searcher::new(opts).with_context(|| {
-        format!(
-            "failed to open index at {} (root {})",
-            db.display(),
-            root.display()
-        )
-    })
-}
-fn print_json_or<T: serde::Serialize>(
-    json: bool,
-    command: &str,
-    value: &T,
-    human: impl FnOnce(),
-) -> anyhow::Result<()> {
-    if json {
-        print_machine_json(command, value)?;
-    } else {
-        human();
-    }
-    Ok(())
-}
-pub(crate) fn index_options(root: &Path, cli: &Cli) -> IndexOptions {
-    let (root, index_path) = resolve_root_index(cli, root);
-    IndexOptions {
-        root,
-        index_path,
-        lang_filter: cli.lang.clone(),
-        respect_gitignore: true,
-        use_tantivy: cli.tantivy,
-        embed_semantic: !cli.no_embed,
-        embed_backend: EmbedBackend::from_flags(
-            cli.cloud_embed,
-            cli.ollama_embed,
-            cli.neural_embed,
-            cli.semantic_only,
-        ),
-        force_reindex: false,
-        ann_threshold: cli.ann_threshold,
-    }
-}
-pub(crate) fn search_options(root: &Path, cli: &Cli) -> SearchOptions {
-    let (root, index_path) = resolve_root_index(cli, root);
-    SearchOptions {
-        root,
-        index_path,
-        limit: cli.limit.unwrap_or_else(SearchOptions::default_limit),
-        lang_filter: cli.lang.clone(),
-        use_embed: !cli.no_embed,
-        use_tantivy: cli.tantivy,
-        use_cloud_embed: cli.cloud_embed,
-        use_ollama_embed: cli.ollama_embed,
-        use_neural_embed: cli.neural_embed,
-        use_semantic_only: cli.semantic_only,
-        ann_threshold: cli.ann_threshold,
-        ann_probes: cli.ann_probes,
-        use_rerank: cli.rerank,
-        rerank_top_k: cli.rerank_top_k,
-        ..SearchOptions::default()
-    }
-}
-fn print_index_stats(stats: &IndexStats) {
-    println!(
-        "Indexed {} files ({} skipped, {} removed)\nExtracted {} symbols, {} callers, {} imports",
-        stats.files_indexed,
-        stats.files_skipped,
-        stats.files_removed,
-        stats.symbols_extracted,
-        stats.callers_extracted,
-        stats.imports_extracted
-    );
-    if stats.walk_errors {
-        eprintln!("Warning: directory walk errors left the index unpruned; stale paths may remain until a clean reindex");
-    }
-}
-fn print_status(s: &ast_sgrep_core::IndexStatus) {
-    println!(
-        "Root: {}\nIndex: {}\nFiles: {}\nLines: {}\nSymbols: {}\nCallers: {}\nImports: {}\nSemantic chunks: {}",
-        s.root, s.index_path, s.file_count, s.line_count, s.symbol_count, s.caller_count,
-        s.import_count, s.semantic_chunk_count
-    );
-    if let Some(ref b) = s.embed_backend {
-        println!("Embed backend: {b}");
-    }
-    if let Some(d) = s.embed_dim {
-        println!("Embed dim: {d}");
-    }
-    let ivf = if s.semantic_ivf_present {
-        "present"
-    } else {
-        "not built (below ANN threshold or not indexed)"
-    };
-    println!("Semantic IVF sidecar: {ivf}");
 }

@@ -1,9 +1,9 @@
 use super::embed_support::{
     embed_cache_cap, embed_chunks, evict_embed_cache, init_cache_seq, insert_embed_cache_entries,
-    read_sym_loc, structure_fingerprint, touch_embed_cache_entries, EmbeddedChunk,
-    EmbeddedChunks,
+    read_sym_loc, requested_model_identity, structure_fingerprint,
+    touch_embed_cache_entries, EmbeddedChunk, EmbeddedChunks,
 };
-use super::index_db_path;
+use super::try_index_db_path;
 use super::sql::configure_connection;
 use super::sql::{
     append_lang_filter, calls_matching, count_star, delete_file_children, delete_file_lines,
@@ -17,7 +17,9 @@ use rusqlite::{params, Connection, ToSql};
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
-const SCHEMA_VERSION: i64 = 6;
+// 6 = symbols_name_lower (main / z47q). 7 = semantic-layout-v2 wipe (this PR).
+// Never reuse a SCHEMA_VERSION for two different migrations.
+const SCHEMA_VERSION: i64 = 7;
 const IMPORT_SELECT: &str =
     "SELECT f.path, f.language, i.module_path, i.line_no FROM imports i JOIN files f ON f.id = i.file_id";
 const SYM_LOC: &str = "SELECT f.path, s.name, f.language, s.line_start, s.line_end FROM symbols s JOIN files f ON f.id = s.file_id";
@@ -97,22 +99,43 @@ pub struct IndexStore {
     conn: Connection,
     root: std::path::PathBuf,
     db_path: std::path::PathBuf,
-    file_tx_active: std::cell::Cell<bool>,
+    file_tx_depth: std::cell::Cell<u32>,
+    file_tx_owns: std::cell::Cell<bool>,
+    file_tx_poisoned: std::cell::Cell<bool>,
     cache_seq: std::cell::Cell<i64>,
 }
 impl IndexStore {
     pub fn open(root: &Path, index_path: Option<&Path>) -> Result<Self> {
-        let db_path = index_db_path(root, index_path);
+        let db_path = try_index_db_path(root, index_path).map_err(|e| {
+            crate::StoreError::Other(format!(
+                "failed to resolve index path for root {}: {e}",
+                root.display()
+            ))
+        })?;
         if let Some(p) = db_path.parent() {
-            std::fs::create_dir_all(p)?;
+            std::fs::create_dir_all(p).map_err(|e| {
+                crate::StoreError::Other(format!(
+                    "failed to create index directory {} (root {}): {e}",
+                    p.display(),
+                    root.display()
+                ))
+            })?;
         }
-        let conn = Connection::open(&db_path)?;
+        let conn = Connection::open(&db_path).map_err(|e| {
+            crate::StoreError::Other(format!(
+                "failed to open index at {} (root {}): {e}",
+                db_path.display(),
+                root.display()
+            ))
+        })?;
         configure_connection(&conn)?;
         let store = Self {
             conn,
             root: root.to_path_buf(),
             db_path,
-            file_tx_active: std::cell::Cell::new(false),
+            file_tx_depth: std::cell::Cell::new(0),
+            file_tx_owns: std::cell::Cell::new(false),
+            file_tx_poisoned: std::cell::Cell::new(false),
             cache_seq: std::cell::Cell::new(0),
         };
         store.init_schema()?;
@@ -124,13 +147,36 @@ impl IndexStore {
             .conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))?;
         if version >= SCHEMA_VERSION {
-            return Ok(());
+            // Probe core tables even when user_version is current (a639).
+            let core: i64 = self.conn.query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('files','lines','meta','symbols')",
+                [],
+                |r| r.get(0),
+            )?;
+            if core >= 4 {
+                return Ok(());
+            }
+            // Corrupt/partial schema with current user_version — rebuild.
         }
         self.conn.execute_batch(SCHEMA_DDL)?;
         if version < 3 {
             self.conn.execute_batch(
                 "INSERT INTO lines_trigram(rowid, content) SELECT rowid, content FROM lines;",
             )?;
+        }
+        // Schema 6 (main): idx_symbols_name_lower arrives via SCHEMA_DDL above.
+        // Schema 7: force re-embed under parent-mapped child layout (e2hc.6).
+        if version < 7 {
+            self.conn.execute_batch(
+                "DELETE FROM semantic_chunks;
+                 DELETE FROM embeddings;
+                 DELETE FROM embed_cache;
+                 DELETE FROM meta WHERE key LIKE 'body:%' OR key LIKE 'struct:%'
+                   OR key IN ('embed_backend', 'embed_model', 'embed_dim');
+                 UPDATE files SET content_hash = 'semantic-layout-v2:' || content_hash
+                   WHERE content_hash NOT LIKE 'semantic-layout-v2:%';",
+            )?;
+            crate::semantic_ivf::invalidate_semantic_ivf(&self.db_path)?;
         }
         self.conn
             .execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION}"))?;
@@ -143,6 +189,11 @@ impl IndexStore {
         &self.db_path
     }
     pub fn connection(&self) -> &Connection {
+        // Sealed for first-party use: external crates should prefer typed store
+        // APIs (status/query helpers). Direct connection access remains for
+        // in-tree search passes and integration tests that need prepared SQL
+        // beyond the public facade (l115). Do not open a second connection to
+        // the same db_path from agent surfaces.
         &self.conn
     }
     pub fn set_meta(&self, key: &str, value: &str) -> Result<()> {
@@ -161,6 +212,26 @@ impl IndexStore {
     pub fn delete_meta(&self, key: &str) -> Result<()> {
         self.conn
             .execute("DELETE FROM meta WHERE key = ?1", params![key])?;
+        Ok(())
+    }
+    /// Monotonic generation for searchable-index mutations on every connection.
+    pub fn index_data_version(&self) -> Result<i64> {
+        Ok(self
+            .get_meta("index_data_version")?
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(0))
+    }
+    /// True when the index was built with the legacy `"semantic"` embed backend.
+    /// Search refuses this meta; indexing must rewrite every chunk before
+    /// promoting to `"semantic-v2"` (semantic_v1_rewrite contract).
+    pub fn needs_semantic_v1_rewrite(&self) -> Result<bool> {
+        Ok(self.get_meta("embed_backend")?.as_deref() == Some("semantic"))
+    }
+    fn bump_index_data_version(&self) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO meta(key, value) VALUES('index_data_version', '1')              ON CONFLICT(key) DO UPDATE SET value =              CAST(COALESCE(meta.value, '0') AS INTEGER) + 1",
+            [],
+        )?;
         Ok(())
     }
     /// Monotonic counter bumped on every semantic_chunks mutation (insert or delete).
@@ -186,13 +257,22 @@ impl IndexStore {
         )
     }
     /// File-tx stays OFF until bulk commit (no re-NORMAL after each file).
+    /// Nested begins only increment depth; only the owning outermost end commits
+    /// or rolls back (bead ast-sgrep-j97d.37er).
     pub fn begin_file_tx(&self) -> Result<()> {
-        if !self.conn.is_autocommit() {
-            return Ok(());
+        let depth = self.file_tx_depth.get();
+        if depth == 0 {
+            self.file_tx_poisoned.set(false);
+            if self.conn.is_autocommit() {
+                self.conn
+                    .execute_batch("PRAGMA synchronous = OFF; BEGIN IMMEDIATE")?;
+                self.file_tx_owns.set(true);
+            } else {
+                // Bulk (or other) transaction owns the write set.
+                self.file_tx_owns.set(false);
+            }
         }
-        self.conn
-            .execute_batch("PRAGMA synchronous = OFF; BEGIN IMMEDIATE")?;
-        self.file_tx_active.set(true);
+        self.file_tx_depth.set(depth + 1);
         Ok(())
     }
     pub fn commit_file_tx(&self) -> Result<()> {
@@ -201,22 +281,54 @@ impl IndexStore {
     pub fn rollback_file_tx(&self) -> Result<()> {
         self.end_file_tx(false)
     }
+    fn restore_synchronous(&self) -> Result<()> {
+        self.conn
+            .execute_batch("PRAGMA synchronous = NORMAL; PRAGMA cache_size = -16384")?;
+        Ok(())
+    }
     fn end_file_tx(&self, commit: bool) -> Result<()> {
-        if !self.file_tx_active.replace(false) {
+        let depth = self.file_tx_depth.get();
+        if depth == 0 {
             return Ok(());
         }
-        if commit {
-            self.conn.execute_batch("COMMIT")?;
-        } else {
-            let _ = self.conn.execute_batch("ROLLBACK");
+        if !commit {
+            self.file_tx_poisoned.set(true);
+        }
+        if depth > 1 {
+            // Nested end: never COMMIT/ROLLBACK the outer transaction here.
+            self.file_tx_depth.set(depth - 1);
+            return Ok(());
+        }
+        let owns = self.file_tx_owns.get();
+        let poisoned = self.file_tx_poisoned.get();
+        if owns {
+            if commit && !poisoned {
+                self.conn.execute_batch("COMMIT")?;
+            } else {
+                let _ = self.conn.execute_batch("ROLLBACK");
+            }
+            // Always restore NORMAL after file_tx ends (bead ast-sgrep-j97d.5kj8).
+            let _ = self.restore_synchronous();
+        }
+        self.file_tx_depth.set(0);
+        self.file_tx_owns.set(false);
+        self.file_tx_poisoned.set(false);
+        if poisoned && commit {
+            return Err(crate::StoreError::Other(
+                "file_tx commit refused: nested file_tx rolled back".into(),
+            ));
         }
         Ok(())
     }
-    fn with_file_tx<T>(&self, f: impl FnOnce() -> Result<T>) -> Result<T> {
+    pub(crate) fn with_file_tx<T>(&self, f: impl FnOnce() -> Result<T>) -> Result<T> {
         self.begin_file_tx()?;
         match f() {
             Ok(v) => {
-                self.commit_file_tx()?;
+                if self.file_tx_poisoned.get() {
+                    self.rollback_file_tx()?;
+                } else {
+                    self.commit_file_tx()?;
+                }
                 Ok(v)
             }
             Err(e) => {
@@ -258,34 +370,46 @@ impl IndexStore {
         if self.conn.is_autocommit() {
             return Ok(());
         }
-        self.file_tx_active.set(false);
         if commit {
             self.conn.execute_batch("COMMIT")?;
-            let _ = self
-                .conn
-                .execute_batch("PRAGMA synchronous = NORMAL; PRAGMA cache_size = -16384");
         } else {
             let _ = self.conn.execute_batch("ROLLBACK");
         }
+        // Restore NORMAL after both commit and rollback (bead ast-sgrep-j97d.5kj8).
+        let _ = self.restore_synchronous();
+        self.file_tx_depth.set(0);
+        self.file_tx_owns.set(false);
+        self.file_tx_poisoned.set(false);
         Ok(())
     }
     pub fn clear_all_data(&self) -> Result<()> {
-        self.conn.execute_batch(CLEAR_ALL_SQL)?;
+        self.with_file_tx(|| {
+            self.conn.execute_batch(CLEAR_ALL_SQL)?;
+            self.bump_index_data_version()
+        })?;
         let _ = self.conn.execute_batch("VACUUM");
         self.bump_semantic_data_version()?;
         Ok(())
     }
     pub fn upsert_file(&self, input: UpsertFileInput<'_>) -> Result<i64> {
+        let requested_identity = input
+            .embed_semantic
+            .then(|| requested_model_identity(input.embed_backend));
         let struct_fp = structure_fingerprint(
             input.symbols,
             input.callers,
             input.imports,
             input.pattern_nodes,
             input.semantic_chunks,
+            requested_identity.as_deref(),
         );
         let struct_key = format!("struct:{}", input.rel_path);
+        let embed_identity_matches = !input.embed_semantic
+            || self.get_meta("embed_model")?.as_deref() == requested_identity.as_deref();
         if let Some(file_id) = self.file_id(input.rel_path)? {
-            if self.get_meta(&struct_key)?.as_deref() == Some(struct_fp.as_str()) {
+            if embed_identity_matches
+                && self.get_meta(&struct_key)?.as_deref() == Some(struct_fp.as_str())
+            {
                 return self.with_file_tx(|| {
                     self.refresh_lines_only(RefreshLinesInput {
                         file_id,
@@ -389,6 +513,7 @@ impl IndexStore {
             )?
             .execute(params![lang, mtime_secs, mtime_nanos, hash, file_id])?;
         self.set_meta(&format!("eol:{rel_path}"), eol)?;
+        self.bump_index_data_version()?;
         Ok(file_id)
     }
     fn upsert_file_inner(
@@ -414,12 +539,14 @@ impl IndexStore {
             &symbol_ids,
             input.semantic_chunks,
             emb,
+            input.embed_backend,
         )?;
         self.insert_callers(file_id, input.callers)?;
         self.insert_imports(file_id, input.imports)?;
         self.insert_pattern_nodes(file_id, input.pattern_nodes)?;
         self.set_meta(struct_key, struct_fp)?;
         crate::semantic_ann::mark_semantic_ivf_stale(self);
+        self.bump_index_data_version()?;
         Ok(file_id)
     }
     fn upsert_file_row(
@@ -441,6 +568,20 @@ impl IndexStore {
         )?.execute(params![path, lang, mtime_secs, mtime_nanos, hash])?;
         Ok(self.conn.last_insert_rowid())
     }
+    /// Prepare a cached INSERT and bind each row. SQL text must remain byte-identical.
+    fn insert_each<T>(
+        &self,
+        sql: &'static str,
+        rows: &[T],
+        mut bind: impl FnMut(&mut rusqlite::CachedStatement<'_>, &T) -> rusqlite::Result<()>,
+    ) -> Result<()> {
+        let mut st = self.conn.prepare_cached(sql)?;
+        for row in rows {
+            bind(&mut st, row)?;
+        }
+        Ok(())
+    }
+
     fn insert_lines(&self, file_id: i64, lines: &[(u32, String)]) -> Result<()> {
         let mut ls = self
             .conn
@@ -485,6 +626,7 @@ impl IndexStore {
         symbol_ids: &[i64],
         chunks: &[crate::semantic_chunk::SemanticChunkInput],
         emb: &[EmbeddedChunk],
+        preference: ast_sgrep_embed::EmbedPreference,
     ) -> Result<()> {
         if emb.is_empty() {
             // A re-upsert of an EXISTING file reaches here AFTER upsert_file_row's
@@ -495,15 +637,12 @@ impl IndexStore {
             self.bump_semantic_data_version()?;
             return Ok(());
         }
-        if emb.len() < chunks.len() && emb[0].backend == ast_sgrep_embed::EmbedBackendKind::Neural {
-            let (first, last) = (&chunks[0], &chunks[chunks.len() - 1]);
-            for e in emb {
-                self.conn.execute(
-                    "INSERT INTO semantic_chunks(file_id, symbol_id, chunk_kind, line_start, line_end, symbol_name, text, vector) VALUES(?1, NULL, ?2, ?3, ?4, ?5, ?6, ?7)",
-                    params![file_id, "file", first.line_start, last.line_end, "", &e.text, &e.vector_bytes], )?;
-            }
-            let last = &emb[emb.len() - 1];
-            return self.persist_embed_metadata(Some(last.dim), Some(last.backend));
+        if emb.len() != chunks.len() {
+            return Err(crate::StoreError::Other(format!(
+                "embedding result count {} does not match semantic child count {}",
+                emb.len(),
+                chunks.len()
+            )));
         }
         let name_to_id: HashMap<String, i64> = symbols
             .iter()
@@ -519,26 +658,42 @@ impl IndexStore {
             st.execute(params![
                 file_id,
                 sid,
-                "symbol",
+                if c.kind == "file" { "file" } else { "symbol" },
                 c.line_start,
                 c.line_end,
                 c.symbol_name,
-                e.text,
+                c.excerpt,
                 e.vector_bytes
             ])?;
         }
         let last = emb.last();
-        self.persist_embed_metadata(last.map(|e| e.dim), last.map(|e| e.backend))
+        self.persist_embed_metadata(last.map(|e| e.dim), last.map(|e| e.backend), preference)
     }
     fn persist_embed_metadata(
         &self,
         dim: Option<usize>,
         kind: Option<ast_sgrep_embed::EmbedBackendKind>,
+        preference: ast_sgrep_embed::EmbedPreference,
     ) -> Result<()> {
         if let Some(k) = kind {
-            self.set_meta("embed_backend", k.as_meta_str())?;
-            if k == ast_sgrep_embed::EmbedBackendKind::Neural {
-                self.set_meta("embed_model", ast_sgrep_embed::neural_configured_model_id())?;
+            // embed_backend always stores the RESOLVED kind (search loads
+            // vectors by it). The build-time preference lives separately so
+            // identity checks can distinguish an Auto build (reopen no-ops
+            // under Auto) from an explicit one (28vo exactness) — parity.
+            // e2hc.13: a partial (single-file) update must not promote a
+            // legacy v1 store (meta == "semantic") to v2 while sibling chunks
+            // remain v1 — only a full index_all rewrite may.
+            if self.get_meta("embed_backend")?.as_deref() != Some("semantic") {
+                self.set_meta("embed_backend", k.as_meta_str())?;
+                if preference == ast_sgrep_embed::EmbedPreference::Auto {
+                    self.set_meta("embed_backend_pref", "auto")?;
+                } else {
+                    self.delete_meta("embed_backend_pref")?;
+                }
+            }
+            let model = dim.and_then(|dim| ast_sgrep_embed::configured_backend_model_id(k, dim));
+            if let Some(model) = model {
+                self.set_meta("embed_model", &model)?;
             } else {
                 self.delete_meta("embed_model")?;
             }
@@ -552,53 +707,64 @@ impl IndexStore {
         Ok(())
     }
     fn insert_callers(&self, file_id: i64, callers: &[CallerRow]) -> Result<()> {
-        let mut st = self.conn.prepare_cached( "INSERT INTO callers(file_id, caller, callee, line_no, byte_start, byte_end) VALUES(?1,?2,?3,?4,?5,?6)",
-        )?;
-        for c in callers {
-            st.execute(params![
-                file_id,
-                c.caller,
-                c.callee,
-                c.line_no,
-                c.byte_start as i64,
-                c.byte_end as i64
-            ])?;
-        }
-        Ok(())
+        self.insert_each(
+            "INSERT INTO callers(file_id, caller, callee, line_no, byte_start, byte_end) VALUES(?1,?2,?3,?4,?5,?6)",
+            callers,
+            |st, c| {
+                st.execute(params![
+                    file_id,
+                    c.caller,
+                    c.callee,
+                    c.line_no,
+                    c.byte_start as i64,
+                    c.byte_end as i64
+                ])?;
+                Ok(())
+            },
+        )
     }
     fn insert_pattern_nodes(&self, file_id: i64, nodes: &[PatternNode]) -> Result<()> {
-        let mut st = self.conn.prepare_cached( "INSERT INTO pattern_nodes(file_id, signature, line_start, line_end, excerpt) VALUES(?1,?2,?3,?4,?5)",
-        )?;
-        for n in nodes {
-            st.execute(params![
-                file_id,
-                n.signature,
-                n.line_start,
-                n.line_end,
-                n.excerpt
-            ])?;
-        }
-        Ok(())
+        self.insert_each(
+            "INSERT INTO pattern_nodes(file_id, signature, line_start, line_end, excerpt) VALUES(?1,?2,?3,?4,?5)",
+            nodes,
+            |st, n| {
+                st.execute(params![
+                    file_id,
+                    n.signature,
+                    n.line_start,
+                    n.line_end,
+                    n.excerpt
+                ])?;
+                Ok(())
+            },
+        )
     }
     fn insert_imports(&self, file_id: i64, imports: &[ImportRow]) -> Result<()> {
-        let mut st = self.conn.prepare_cached(
+        self.insert_each(
             "INSERT INTO imports(file_id, module_path, line_no) VALUES(?1,?2,?3)",
-        )?;
-        for i in imports {
-            st.execute(params![file_id, i.module_path, i.line_no])?;
-        }
-        Ok(())
+            imports,
+            |st, i| {
+                st.execute(params![file_id, i.module_path, i.line_no])?;
+                Ok(())
+            },
+        )
     }
     pub fn remove_file(&self, rel_path: &str) -> Result<()> {
-        if let Some(id) = self.file_id(rel_path)? {
+        self.with_file_tx(|| {
+            let Some(id) = self.file_id(rel_path)? else {
+                return Ok(());
+            };
             delete_file_children(&self.conn, id)?;
             self.conn
                 .execute("DELETE FROM files WHERE id = ?1", params![id])?;
             self.delete_meta(&format!("eol:{rel_path}"))?;
+            self.delete_meta(&format!("body:{rel_path}"))?;
+            self.delete_meta(&format!("struct:{rel_path}"))?;
             crate::semantic_ann::mark_semantic_ivf_stale(self);
+            self.bump_index_data_version()?;
             self.bump_semantic_data_version()?;
-        }
-        Ok(())
+            Ok(())
+        })
     }
     pub fn file_hash(&self, rel_path: &str) -> Result<Option<String>> {
         optional_row(
@@ -755,6 +921,74 @@ impl IndexStore {
         );
         query_map_rows(&self.conn, &sql, lang, read_sem_row)
     }
+    /// Walk sorted file paths and extend with per-path query results (stable path order).
+    fn map_sorted_files<T>(
+        files: &std::collections::HashSet<String>,
+        mut query: impl FnMut(&str) -> Result<Vec<T>>,
+    ) -> Result<Vec<T>> {
+        let mut paths = files.iter().collect::<Vec<_>>();
+        paths.sort_unstable();
+        let mut out = Vec::new();
+        for path in paths {
+            out.extend(query(path)?);
+        }
+        Ok(out)
+    }
+
+    pub(crate) fn semantic_chunks_for_files(
+        &self,
+        files: &std::collections::HashSet<String>,
+        lang: Option<&str>,
+    ) -> Result<Vec<ast_sgrep_embed::SemanticChunkRow>> {
+        Self::map_sorted_files(files, |path| match lang {
+            Some(language) => query_cached_map(
+                &self.conn,
+                "SELECT f.path, sc.line_start, sc.line_end, sc.symbol_name, sc.text, sc.vector \
+                 FROM semantic_chunks sc JOIN files f ON f.id=sc.file_id \
+                 WHERE f.path=?1 AND f.language=?2 ORDER BY sc.id",
+                params![path, language],
+                read_sem_row,
+            ),
+            None => query_cached_map(
+                &self.conn,
+                "SELECT f.path, sc.line_start, sc.line_end, sc.symbol_name, sc.text, sc.vector \
+                 FROM semantic_chunks sc JOIN files f ON f.id=sc.file_id \
+                 WHERE f.path=?1 ORDER BY sc.id",
+                params![path],
+                read_sem_row,
+            ),
+        })
+    }
+
+    pub(crate) fn legacy_embeddings_for_files(
+        &self,
+        files: &std::collections::HashSet<String>,
+        lang: Option<&str>,
+    ) -> Result<Vec<ast_sgrep_embed::SemanticChunkRow>> {
+        Self::map_sorted_files(files, |path| match lang {
+            Some(language) => query_cached_map(
+                &self.conn,
+                "SELECT f.path, l.line_no, l.content, sc.symbol_name, e.vector \
+                 FROM embeddings e JOIN lines l ON l.file_id=e.file_id AND l.line_no=e.line_no \
+                 JOIN files f ON f.id=e.file_id \
+                 LEFT JOIN semantic_chunks sc ON sc.file_id=f.id AND sc.line_start=l.line_no \
+                 WHERE f.path=?1 AND f.language=?2 ORDER BY l.line_no LIMIT 5000",
+                params![path, language],
+                read_legacy_emb,
+            ),
+            None => query_cached_map(
+                &self.conn,
+                "SELECT f.path, l.line_no, l.content, sc.symbol_name, e.vector \
+                 FROM embeddings e JOIN lines l ON l.file_id=e.file_id AND l.line_no=e.line_no \
+                 JOIN files f ON f.id=e.file_id \
+                 LEFT JOIN semantic_chunks sc ON sc.file_id=f.id AND sc.line_start=l.line_no \
+                 WHERE f.path=?1 ORDER BY l.line_no LIMIT 5000",
+                params![path],
+                read_legacy_emb,
+            ),
+        })
+    }
+
     pub fn symbols_in_file(&self, rel_path: &str) -> Result<Vec<SymbolRow>> {
         query_cached_map(
             &self.conn,
@@ -833,7 +1067,7 @@ impl IndexStore {
         Ok(out)
     }
 
-    fn file_language(&self, path: &str) -> Result<Option<String>> {
+    pub(crate) fn file_language(&self, path: &str) -> Result<Option<String>> {
         optional_row(
             &self.conn,
             "SELECT language FROM files WHERE path=?1",
@@ -946,4 +1180,3 @@ impl IndexStore {
             .exists(params![path])?)
     }
 }
-

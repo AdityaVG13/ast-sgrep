@@ -21,7 +21,10 @@ pub(crate) fn collect_module_candidates(
     let bases = (rules.bases)(from_file, parent, module);
     let mut cands = BTreeSet::new();
     for base in bases {
-        let n = normalize_rel(&base);
+        // Non-UTF8 paths are rejected by the store layer (asgrep-kqhp).
+        let Ok(n) = normalize_rel(&base) else {
+            continue;
+        };
         cands.insert(n.clone());
         if base.extension().is_none() {
             for e in rules.exts {

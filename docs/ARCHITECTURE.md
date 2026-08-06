@@ -20,7 +20,8 @@ source tree
 | `ast-sgrep-core` | Index orchestration, SQLite storage, query parsing, retrieval passes, ranking, semantic chunks/ANN, and result models |
 | `ast-sgrep-lang` | Language-aware parsing and extraction of symbols, calls, imports, and pattern nodes |
 | `ast-sgrep-embed` | Embedding providers and the always-available offline semantic backend |
-| `ast-sgrep-mcp` | stdio MCP server exposing search to agents |
+| `ast-sgrep-mcp` | stdio MCP server (transport only; never linked to Code Mode) |
+| `ast-sgrep-codemode` | Code Mode catalog/session/plan + host adapters (sibling to MCP; Pi JS sandbox is the agent executor) |
 | `ast-sgrep-lsp` | Language Server Protocol navigation surfaces |
 | `ast-sgrep-plugins` | Platform/output integrations |
 | `ast-sgrep-testkit` | Shared fixtures and helpers for integration tests |
@@ -84,7 +85,8 @@ Two self-describing CLI surfaces let an agent discover the live contract instead
 - `capabilities --json` emits machine-readable commands, flags, output formats, and exit-code meanings for the current binary.
 - `robot-docs guide` prints the operational guide intended for tool-using agents.
 - Read-side commands accept `--json`; `--format agent` and `--format agent-capsule` provide agent-oriented result shapes.
-- `ast-sgrep-mcp` exposes search over MCP, while `ast-sgrep-lsp` maps indexed navigation to editor protocol operations.
+- `ast-sgrep-mcp` exposes search over MCP (transport). `ast-sgrep-lsp` maps indexed navigation to editor protocol operations.
+- Code Mode is a separate execution model: Pi's `asgrep_codemode` JS sandbox (and the `ast-sgrep-codemode` Rust catalog/session) let the model write code that orchestrates parallel search. MCP and Code Mode must not depend on each other. See [codemode.md](codemode.md).
 
 Protocol consumers should discover capabilities first, treat stdout JSON as data, and interpret documented exit codes rather than scraping human-readable lines.
 

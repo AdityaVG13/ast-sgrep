@@ -90,8 +90,11 @@ const packArtifacts = async () => {
   await cp(path.join(root, 'packages/pi/extension'), extension, { recursive: true });
   await cp(nativeSource, path.join(native, host.executable));
   if (process.platform !== 'win32') await chmod(path.join(native, host.executable), 0o755);
+  const napiPath = path.join(native, 'ast-sgrep-codemode.node');
+  await writeFile(napiPath, 'e2e-napi-placeholder\n');
   const checksum = createHash('sha256').update(await readFile(path.join(native, host.executable))).digest('hex');
-  await writeFile(path.join(native, 'checksum.sha256'), checksum + '  ' + host.executable + '\n');
+  const napiChecksum = createHash('sha256').update(await readFile(napiPath)).digest('hex');
+  await writeFile(path.join(native, 'checksum.sha256'), checksum + '  ' + host.executable + '\n' + napiChecksum + '  ast-sgrep-codemode.node\n');
   await setJson(path.join(native, 'package.json'), (manifest) => { delete manifest.scripts; });
   const nativeTar = path.join(artifacts, 'native.tgz');
   pack(native, nativeTar);
@@ -186,13 +189,14 @@ try {
   const runner = new pi.ExtensionRunner(loaded.extensions, runtime, project, {}, {});
   const toolNames = runner.getAllRegisteredTools().map(({ definition }) => definition.name).sort();
   const commandNames = runner.getRegisteredCommands().map(({ invocationName }) => invocationName).sort();
-  assert.deepEqual(toolNames, ['asgrep_index', 'asgrep_search', 'asgrep_status']);
+  assert.deepEqual(toolNames, ['asgrep_codemode', 'asgrep_index', 'asgrep_search', 'asgrep_status']);
   assert.deepEqual(commandNames, ['asgrep-doctor', 'asgrep-index', 'asgrep-reindex', 'asgrep-status']);
   const context = runner.createContext();
+  const codemodeTool = runner.getToolDefinition('asgrep_codemode');
   const searchTool = runner.getToolDefinition('asgrep_search');
   const indexTool = runner.getToolDefinition('asgrep_index');
   const statusTool = runner.getToolDefinition('asgrep_status');
-  assert.ok(searchTool && indexTool && statusTool);
+  assert.ok(codemodeTool && searchTool && indexTool && statusTool);
   const invokeSearch = (params, signal = undefined) => searchTool.execute('release-gate', params, signal, undefined, context);
   await stage('skill-discovery-workflow', async () => {
     const skills = pi.loadSkillsFromDir({ dir: path.join(extensionRoot, 'skills'), source: 'release-gate' });

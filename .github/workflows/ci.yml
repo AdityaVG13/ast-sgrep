@@ -6,7 +6,26 @@ on:
   workflow_dispatch:
 
 jobs:
+  forbid-soundness:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: verify-forbid-soundness
+        run: bash scripts/verify-forbid-soundness
+
+  cargo-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo check workspace
+        run: cargo check --workspace -j1
+
   build-and-test:
+    if: github.event_name == 'workflow_dispatch'
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest]
@@ -25,6 +44,7 @@ jobs:
         run: cargo test --workspace --release
 
   windows-smoke:
+    if: github.event_name == 'workflow_dispatch'
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -79,6 +99,7 @@ jobs:
           }
 
   clippy:
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -93,6 +114,7 @@ jobs:
         run: cargo clippy --workspace --release --all-targets -- -D warnings
 
   fmt:
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -105,6 +127,7 @@ jobs:
         run: cargo fmt --check
 
   audit:
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -115,6 +138,7 @@ jobs:
         run: cargo audit
 
   bounded-fuzz:
+    if: github.event_name == 'workflow_dispatch'
     name: Bounded parser fuzzing
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -128,13 +152,19 @@ jobs:
         with:
           workspaces: fuzz -> target
 
+      - name: Cache cargo-fuzz
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-fuzz
+          key: cargo-fuzz-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'fuzz/Cargo.toml') }}
+
       - name: Install cargo-fuzz
-        run: cargo install cargo-fuzz --locked
+        run: command -v cargo-fuzz >/dev/null || cargo install cargo-fuzz --locked
 
       - name: Fuzz legacy query parser
         working-directory: fuzz
         run: cargo +nightly fuzz run parsed_query -- -max_total_time=30 -timeout=5
 
-      - name: Fuzz query grammar
+      - name: Fuzz ranking invariants
         working-directory: fuzz
-        run: cargo +nightly fuzz run query_grammar -- -max_total_time=30 -timeout=5
+        run: cargo +nightly fuzz run rank -- -max_total_time=30 -timeout=5

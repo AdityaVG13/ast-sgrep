@@ -4,6 +4,9 @@ const WORKER_MARKER: &str = "ASGREP_WORKER_MARKER";
 const SUPERVISOR_PID_ENV: &str = "ASGREP_SUPERVISOR_PID";
 #[cfg(unix)]
 const WORKER_NONCE_ENV: &str = "ASGREP_WORKER_NONCE";
+/// Minimum hex chars for a worker nonce (16 random bytes → 32 hex).
+#[cfg(unix)]
+const WORKER_NONCE_MIN_LEN: usize = 32;
 const CPU_LIMIT_ENV: &str = "ASGREP_CPU_LIMIT_PERCENT";
 pub const DEFAULT_CPU_LIMIT: u8 = 80;
 pub const MIN_CPU_LIMIT: u8 = 1;
@@ -56,6 +59,80 @@ pub fn supervise() -> anyhow::Result<()> {
     unix_impl::supervise()
 }
 #[cfg(unix)]
+fn generate_worker_nonce() -> String {
+    use std::io::Read;
+    let mut bytes = [0u8; 16];
+    if let Ok(mut f) = std::fs::File::open("/dev/urandom") {
+        let _ = f.read_exact(&mut bytes);
+    } else {
+        // Fallback mix if urandom is unavailable (extremely rare).
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let mut hasher = DefaultHasher::new();
+        std::process::id().hash(&mut hasher);
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+            .hash(&mut hasher);
+        nix::unistd::getpid().as_raw().hash(&mut hasher);
+        let a = hasher.finish().to_le_bytes();
+        bytes[..8].copy_from_slice(&a);
+        bytes[8..].copy_from_slice(&a);
+    }
+    let mut out = String::with_capacity(32);
+    for b in bytes {
+        out.push_str(&format!("{b:02x}"));
+    }
+    out
+}
+
+#[cfg(unix)]
+fn parent_exe_matches(supervisor_pid: i32) -> bool {
+    let Some(self_exe) = std::env::current_exe().ok() else {
+        return false;
+    };
+    #[cfg(target_os = "linux")]
+    {
+        let parent_exe = std::fs::read_link(format!("/proc/{supervisor_pid}/exe")).ok();
+        return parent_exe.as_ref() == Some(&self_exe);
+    }
+    #[cfg(target_os = "macos")]
+    {
+        // No unsafe/libproc (workspace `unsafe_code = forbid`). Best-effort: parent
+        // process command name from `ps` must match our binary basename.
+        let Some(self_name) = self_exe.file_name().and_then(|s| s.to_str()) else {
+            return false;
+        };
+        let output = std::process::Command::new("/bin/ps")
+            .args(["-p", &supervisor_pid.to_string(), "-o", "comm="])
+            .output()
+            .ok();
+        let Some(out) = output.filter(|o| o.status.success()) else {
+            return false;
+        };
+        let comm = String::from_utf8_lossy(&out.stdout);
+        let comm = comm.trim();
+        // ps may return basename or truncated name; accept prefix/suffix matches.
+        !comm.is_empty()
+            && (comm == self_name
+                || self_name.starts_with(comm)
+                || comm.ends_with(self_name)
+                || std::path::Path::new(comm)
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    == Some(self_name))
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        let _ = (supervisor_pid, self_exe);
+        // Other Unix: long nonce + parent pid only (see worker_authenticate).
+        true
+    }
+}
+
+#[cfg(unix)]
 pub fn worker_authenticate() -> bool {
     if std::env::var(WORKER_MARKER).is_err() {
         return false;
@@ -73,26 +150,22 @@ pub fn worker_authenticate() -> bool {
     if nix::unistd::getppid().as_raw() != supervisor_pid {
         return fail();
     }
+    // Reject constant/"1" nonces: supervisor always emits >= 32 hex chars.
     match std::env::var(WORKER_NONCE_ENV) {
-        Ok(ref v) if !v.is_empty() => {}
+        Ok(ref v) if v.len() >= WORKER_NONCE_MIN_LEN && v.bytes().all(|b| b.is_ascii_hexdigit()) => {}
         _ => return fail(),
     }
-    #[cfg(target_os = "linux")]
-    {
-        let parent_exe = std::fs::read_link(format!("/proc/{supervisor_pid}/exe")).ok();
-        let self_exe = std::env::current_exe().ok();
-        if !matches!((parent_exe, self_exe), (Some(p), Some(s)) if p == s) {
-            return fail();
-        }
+    if !parent_exe_matches(supervisor_pid) {
+        return fail();
     }
     true
 }
 #[cfg(unix)]
 pub fn worker_start() {
     use nix::sys::signal;
-    use nix::unistd::{self, Pid};
     clear_internal_envs();
-    let _ = unistd::setpgid(Pid::this(), Pid::this());
+    // Parent owns process-group setup via CommandExt::process_group (rzzp).
+    // Worker only stops for the duty-cycle handshake.
     let _ = signal::raise(signal::Signal::SIGSTOP);
 }
 #[cfg(unix)]
@@ -168,7 +241,10 @@ mod unix_impl {
     }
     impl Drop for ChildGuard {
         fn drop(&mut self) {
+            // Always reap when still armed (panic unwind, early return, signal exit path).
+            // kill_and_reap is signal-safe enough for Drop: best-effort TERM→KILL→wait.
             if self.armed {
+                self.armed = false;
                 kill_and_reap(self.child_pid);
             }
         }
@@ -180,17 +256,23 @@ mod unix_impl {
         cmd.args(std::env::args_os().skip(1));
         cmd.env(WORKER_MARKER, "1");
         cmd.env(SUPERVISOR_PID_ENV, std::process::id().to_string());
-        cmd.env(WORKER_NONCE_ENV, "1");
+        cmd.env(WORKER_NONCE_ENV, generate_worker_nonce());
         for var in THREAD_ENV_VARS {
             cmd.env(var, "1");
         }
         cmd.stdin(std::process::Stdio::inherit());
         cmd.stdout(std::process::Stdio::inherit());
         cmd.stderr(std::process::Stdio::inherit());
+        // Single owner for process-group setup: child becomes its own PG leader at spawn (rzzp).
+        {
+            use std::os::unix::process::CommandExt;
+            cmd.process_group(0);
+        }
         let mut child = cmd.spawn().context("failed to spawn worker")?;
+        // Pid::from_raw bridges std Child::id() into nix. Child ids are OS PIDs;
+        // casting to i32 matches nix's Pid representation on supported unix targets (l115/732x).
         let child_pid = Pid::from_raw(child.id() as i32);
         let mut guard = ChildGuard::new(child_pid);
-        let _ = nix::unistd::setpgid(child_pid, child_pid);
         wait_for_child_stop(child_pid)?;
         let pgid_neg = Pid::from_raw(-child_pid.as_raw());
         loop {
@@ -312,5 +394,36 @@ mod unix_impl {
                     .min(Duration::from_millis(10)),
             );
         }
+    }
+}
+
+#[cfg(all(test, unix))]
+mod childguard_tests {
+    use super::unix_impl::*;
+    use nix::unistd::Pid;
+
+    // Re-export helpers through a thin test surface: ChildGuard is private inside
+    // unix_impl, so we validate public duty-cycle / kill contracts and document
+    // Drop semantics in docs/validation/childguard.md (732x).
+
+    #[test]
+    fn duty_cycle_respects_cpu_cap() {
+        let (work, sleep) = crate::supervisor::duty_cycle_ms(50);
+        assert_eq!(work + sleep, crate::supervisor::CYCLE_MS);
+        assert!(work > 0 && sleep > 0);
+    }
+
+    #[test]
+    fn parse_cpu_limit_clamps() {
+        assert_eq!(crate::supervisor::parse_cpu_limit(""), crate::supervisor::DEFAULT_CPU_LIMIT);
+        assert_eq!(crate::supervisor::parse_cpu_limit("0"), crate::supervisor::DEFAULT_CPU_LIMIT);
+        assert_eq!(crate::supervisor::parse_cpu_limit("80"), 80);
+        assert_eq!(crate::supervisor::parse_cpu_limit("99"), crate::supervisor::DEFAULT_CPU_LIMIT);
+    }
+
+    #[test]
+    fn kill_and_reap_tolerates_missing_pid() {
+        // Pid 1<<22 is extremely unlikely to exist; must not panic (732x).
+        kill_and_reap(Pid::from_raw(1 << 22));
     }
 }

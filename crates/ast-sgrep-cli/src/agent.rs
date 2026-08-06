@@ -1,7 +1,7 @@
 use crate::{index_options, Cli};
 use anyhow::Context;
 use ast_sgrep_core::Indexer;
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
 use serde_json::{json, Value};
 use std::io::{self, IsTerminal};
 use std::path::Path;
@@ -18,7 +18,7 @@ pub(crate) enum RobotDocsCommand {
 #[derive(Parser)]
 pub(crate) struct RobotDocsArgs {
     #[command(subcommand)]
-    command: RobotDocsCommand,
+    command: Option<RobotDocsCommand>,
 }
 #[derive(Parser)]
 pub(crate) struct DoctorArgs {
@@ -28,16 +28,11 @@ pub(crate) struct DoctorArgs {
     pub(crate) robot_triage: bool,
 }
 pub(crate) fn run_capabilities(cli: &Cli, args: &CapabilitiesArgs) -> anyhow::Result<()> {
-    if !cli.json && !args.json {
-        eprintln!("hint: agents should run `{TOOL} capabilities --json` (stdout is JSON only)");
-        return Err(crate::usage_error(
-            "capabilities requires --json for deterministic agent output",
-        ));
-    }
+    let _ = (cli.json, args.json);
     crate::print_machine_json("capabilities", capabilities_json(cli)?)
 }
 pub(crate) fn run_robot_docs(_cli: &Cli, args: &RobotDocsArgs) -> anyhow::Result<()> {
-    match args.command {
+    match args.command.as_ref().unwrap_or(&RobotDocsCommand::Guide) {
         RobotDocsCommand::Guide => {
             print_robot_guide();
             Ok(())
@@ -45,45 +40,136 @@ pub(crate) fn run_robot_docs(_cli: &Cli, args: &RobotDocsArgs) -> anyhow::Result
     }
 }
 pub(crate) fn run_doctor(cli: &Cli, root: &Path, args: &DoctorArgs) -> anyhow::Result<()> {
-    if cli.json || args.robot_triage || args.json {
-        return crate::print_machine_json("doctor", doctor_triage_json(cli, root)?);
+    let _ = (cli.json, args.json, args.robot_triage);
+    let triage = doctor_triage_json(cli, root)?;
+    let healthy = triage
+        .get("healthy")
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false);
+    if !healthy {
+        // Fail-closed: never emit ok:true / exit 0 when healthy:false (s6ze.1).
+        crate::print_machine_json_status("doctor", triage, false, 2)?;
+        std::process::exit(2);
     }
-    eprintln!("hint: use `{TOOL} doctor --json` or `{TOOL} doctor --robot-triage` for agent-readable triage");
-    Err(crate::usage_error(
-        "doctor requires --json or --robot-triage",
-    ))
+    crate::print_machine_json("doctor", triage)
 }
 pub(crate) fn capabilities_json(_cli: &Cli) -> anyhow::Result<Value> {
+    let command = crate::Cli::command();
+    let (commands, global_flags, search_tuning_flags) = clap_catalog(&command);
     Ok(json!({
         "version": env!("CARGO_PKG_VERSION"),
-        "description": "Polyglot hybrid code search (lexical + structural + semantic)",
-        "agent_contract": {"stdout": "data payloads only when --json / robot modes are set", "stderr": "human hints and diagnostics", "deterministic": "stable JSON key ordering via serde_json; disable color with NO_COLOR=1"},
-        "commands": [
-            {"name": "search", "usage": "asgrep [--json] [--format agent] \"QUERY\" [ROOT]", "robot_output": "--json [--format native|agent|agent-capsule|github|gitlab]"},
-            {"name": "semantic", "usage": "asgrep semantic \"QUERY\" [ROOT] [--json]", "robot_output": "--json (defaults to agent format)"},
-            {"name": "index", "usage": "asgrep index [ROOT] [--json]"}, {"name": "status", "usage": "asgrep status [ROOT] [--json]"},
-            {"name": "reindex", "usage": "asgrep reindex [ROOT] [--json]"}, {"name": "capabilities", "usage": "asgrep capabilities --json"},
-            {"name": "version", "usage": "asgrep version --json"}, {"name": "robot-docs", "usage": "asgrep robot-docs guide"},
-            {"name": "doctor", "usage": "asgrep doctor [ROOT] --json | --robot-triage"},
-        ],
-        "global_flags": ["--json", "--root", "--limit", "--index-path", "--lang", "--format", "--no-embed", "--tantivy", "--ann-threshold", "--neural-embed", "--rerank"],
-        "feature_gated_flags": {
-            "--neural-embed": "requires binary built with --features neural-embed (fail-closed otherwise)",
-            "--rerank": "requires binary built with --features rerank (fail-closed otherwise)",
-            "--tantivy": "forces secondary SQLite FTS5 lexical.db (flag name is historical; not the Tantivy crate)"
+        "description": command.get_about().map(|s| s.to_string()).unwrap_or_else(|| "Polyglot hybrid code search".into()),
+        "agent_contract": {"stdout": "one data payload in machine/default-agent modes", "stderr": "empty in machine modes; human diagnostics otherwise", "deterministic": "stable JSON key ordering via serde_json; disable color with NO_COLOR=1"},
+        "commands": commands,
+        "global_flags": global_flags,
+        "search_tuning_flags": search_tuning_flags,
+        "root_specification": {
+            "canonical": "positional ROOT on the subcommand (or bare-search ROOT)",
+            "alias": "--root ROOT",
+            "precedence": "conflicting --root and positional ROOT is a usage error; effective_root prefers --root when set",
+            "bin_aliases": ["asgrep", "ast-sgrep"]
         },
-        "environment": ["ASGREP_LIMIT", "ASGREP_INDEX_PATH", "ASGREP_NO_EMBED", "ASGREP_CLOUD_EMBED", "ASGREP_OLLAMA_EMBED", "ASGREP_SEMANTIC_ONLY", "ASGREP_TANTIVY", "ASGREP_ANN_THRESHOLD", "ASGREP_NEURAL_EMBED", "ASGREP_RERANK", "ASGREP_RERANK_TOP_K", "ASGREP_REGEX_BUDGET_MS", "ASGREP_BENCH_HISTORY", "ASGREP_BENCH_RATCHET", "NO_COLOR", "CI"],
-        "output_limits": {"max_results": 1000, "max_excerpt_lines": 100, "max_error_message_chars": 4096},
-        "search_formats": ["native", "agent", "agent-capsule", "github", "gitlab"],
+        "environment": ["ASGREP_LIMIT", "ASGREP_INDEX_PATH", "ASGREP_NO_EMBED", "ASGREP_CLOUD_EMBED", "ASGREP_OLLAMA_EMBED", "ASGREP_NEURAL_EMBED", "ASGREP_NEURAL_FALLBACK", "ASGREP_EMBED_FALLBACK", "ASGREP_SEMANTIC_ONLY", "ASGREP_TANTIVY", "ASGREP_ANN_THRESHOLD", "ASGREP_ANN_PROBES", "ASGREP_RERANK", "ASGREP_RERANK_TOP_K", "ASGREP_EMBED_URL_ALLOWLIST", "ASGREP_ALLOW_AST_GREP", "ASGREP_AST_GREP", "ASGREP_LEDGER_PATH", "ASGREP_USE_CACHE", "XDG_CACHE_HOME", "NO_COLOR", "CI"],
+        "environment_bool_values": ["1", "0", "true", "false", "yes", "no", "on", "off"],
+        "sibling_binaries": [
+            {"name":"asgrep-mcp","purpose":"MCP stdio server","launch":"asgrep-mcp (stdio JSON-RPC)"},
+            {"name":"asgrep-lsp","purpose":"Language Server Protocol server","launch":"asgrep-lsp"}
+        ],
+        "integrations": {
+            "mcp": {"binary": "asgrep-mcp", "transport": "stdio"},
+            "lsp": {"binary": "asgrep-lsp", "transport": "stdio"}
+        },
+        "aliases": ["ast-sgrep"],
+        "query_prefixes": ["callers:", "defs:", "imports:", "pattern:", "literal:", "regex:", "word:"],
+        "output_limits": {
+            "max_results": ast_sgrep_core::MAX_OUTPUT_RESULTS,
+            "max_excerpt_lines": ast_sgrep_core::MAX_EXCERPT_LINES,
+            "default_snippet_tokens": 96,
+            "default_response_snippet_tokens": 768,
+            "max_snippet_tokens": 4096,
+            "max_response_snippet_tokens": 65536,
+            "max_error_message_chars": 4096
+        },
+        "machine_schema": {
+            "schema_version": "1.0.0",
+            "ok_field": "boolean",
+            "exit_code_field": "integer",
+            "notes": "ok:true only on successful operations; doctor uses ok:false when healthy:false; operational faults use exit_code 2"
+        },
+        "search_formats": ["native", "agent", "agent-capsule", "compact", "github", "gitlab"],
         "exit_codes": [{"code": 0, "meaning": "success"}, {"code": 1, "meaning": "user input / usage error"}, {"code": 2, "meaning": "index or search operation failed"}],
-        "canonical_tasks": ["asgrep index . && asgrep --json --format agent \"where is auth refreshed\" .", "asgrep status . --json", "asgrep doctor . --robot-triage"],
+        "canonical_tasks": ["asgrep capabilities --json", "asgrep robot-docs guide", "asgrep doctor --robot-triage", "asgrep index . && asgrep --json --format compact \"where is auth refreshed\" ."],
+        "notes": {
+            "default_search": "Bare QUERY without a subcommand runs hybrid search; the word 'search' is not a required verb — use the `search`/`find`/`query` subcommand only when you want an explicit search command.",
+            "format_implies_json": true
+        }
     }))
 }
+
+fn clap_catalog(command: &clap::Command) -> (Vec<Value>, Vec<String>, Vec<String>) {
+    const SEARCH_TUNING: &[&str] = &[
+        "--no-embed", "--cloud-embed", "--ollama-embed", "--neural-embed", "--semantic-only",
+        "--tantivy", "--ann-threshold", "--ann-probes", "--rerank", "--rerank-top-k",
+        "--format", "--excerpt-lines", "--snippet-tokens", "--response-snippet-tokens", "--dry-run",
+    ];
+    let mut global_flags = Vec::new();
+    let mut search_tuning_flags = Vec::new();
+    for arg in command.get_arguments() {
+        let Some(long) = arg.get_long() else { continue };
+        let flag = format!("--{long}");
+        if arg.is_global_set() {
+            global_flags.push(flag);
+        } else if SEARCH_TUNING.iter().any(|s| *s == flag) {
+            search_tuning_flags.push(flag);
+        } else if matches!(flag.as_str(), "--json" | "--robot-help" | "--root" | "--limit" | "--index-path" | "--lang") {
+            // Non-global copies still documented as agent-visible globals when present on root.
+            global_flags.push(flag);
+        }
+    }
+    global_flags.sort();
+    global_flags.dedup();
+    search_tuning_flags.sort();
+    search_tuning_flags.dedup();
+
+    let mut commands = Vec::new();
+    for sub in command.get_subcommands() {
+        let name = sub.get_name().to_string();
+        let aliases: Vec<String> = sub.get_all_aliases().map(str::to_string).collect();
+        let about = sub.get_about().map(|s| s.to_string()).unwrap_or_default();
+        let mut flags = Vec::new();
+        for arg in sub.get_arguments() {
+            if let Some(long) = arg.get_long() {
+                flags.push(format!("--{long}"));
+            }
+        }
+        flags.sort();
+        flags.dedup();
+        let mut entry = json!({
+            "name": name,
+            "about": about,
+            "usage": format!("asgrep {name}"),
+            "flags": flags,
+        });
+        if !aliases.is_empty() {
+            entry["aliases"] = json!(aliases);
+        }
+        if matches!(name.as_str(), "search" | "keyword" | "semantic") {
+            entry["robot_output"] = json!("--format implies --json; formats: native|agent|agent-capsule|compact|github|gitlab");
+        }
+        commands.push(entry);
+    }
+    commands.sort_by(|a, b| a["name"].as_str().cmp(&b["name"].as_str()));
+    (commands, global_flags, search_tuning_flags)
+}
 fn doctor_triage_json(cli: &Cli, root: &Path) -> anyhow::Result<Value> {
+    crate::ensure_unambiguous_root(root, cli)?;
     let root = crate::effective_root(cli, root);
     let mut issues = Vec::<Value>::new();
-    let mut next = Vec::<&'static str>::new();
-    let status =
+    let mut next = Vec::<String>::new();
+    let status = if !root.is_dir() {
+        issues.push(json!({"kind": "missing_root", "message": format!("project root does not exist or is not a directory: {}", root.display())}));
+        None
+    } else {
         match Indexer::new(index_options(&root, cli)).context("failed to open index for doctor") {
             Ok(idx) => match idx.store().status() {
                 Ok(status) => Some(status),
@@ -96,54 +182,69 @@ fn doctor_triage_json(cli: &Cli, root: &Path) -> anyhow::Result<Value> {
                 issues.push(json!({"kind": "index_open", "message": e.to_string()}));
                 None
             }
-        };
+        }
+    };
+    let root_display = root.display().to_string();
     if status.is_none() {
-        next.push("asgrep index . --json");
+        next.push(format!("asgrep index {root_display} --json"));
     } else if let Some(ref st) = status {
         if st.file_count == 0 {
             issues.push(
                 json!({"kind": "empty_index", "message": "index exists but indexes zero files"}),
             );
-            next.push("asgrep index . --json");
+            next.push(format!("asgrep index {root_display} --json"));
         }
         if !st.semantic_ivf_present && st.semantic_chunk_count > 0 {
             issues.push(json!({"kind": "semantic_ivf_missing", "message": "semantic chunks present but IVF sidecar not built (may be below ANN threshold)"}));
         }
     }
     if next.is_empty() {
-        next.push("asgrep --json --format agent \"<your query>\" .");
+        next.push(format!(
+            "asgrep --json --format compact \"<your query>\" {root_display}"
+        ));
     }
-    next.extend(["asgrep capabilities --json", "asgrep robot-docs guide"]);
+    next.extend([
+        "asgrep capabilities --json".to_string(),
+        "asgrep robot-docs guide".to_string(),
+    ]);
     Ok(
         json!({"robot_triage": true, "root": root, "index_path": cli.index_path, "status": status, "issues": issues, "suggested_commands": next, "healthy": issues.is_empty(), "tty": io::stdout().is_terminal()}),
     )
 }
-fn print_robot_guide() {
+pub(crate) fn print_robot_guide() {
+    // Handbook text is kept in sync with clap/capabilities (hceb): prefer capabilities --json
+    // for the authoritative command/flag catalog derived from Cli::command().
     print!(
         r#"# asgrep — agent handbook (robot-docs guide)
+## Agent triad (start here)
+1. `asgrep capabilities --json` — authoritative command/flag/env contract (derived from clap).
+2. `asgrep robot-docs guide` — this handbook.
+3. `asgrep doctor --robot-triage` — health + recovery commands using the effective root.
 ## Quick start
 1. `asgrep index . --json` — build or refresh the index (required once per checkout).
-2. `asgrep doctor . --robot-triage` — one-shot health + suggested commands.
-3. `asgrep --json --format agent "natural language intent" .` — ranked hits with follow-up hints.
-## Subcommands (always use explicit subcommands; bare tokens are treated as search queries)
-- `index`, `status`, `reindex`, `semantic`, `bench`, `watch`
-- `capabilities --json` — machine-readable contract
-- `robot-docs guide` — this document
-- `doctor --json` or `doctor --robot-triage` — triage bundle
+2. `asgrep --json --format compact "natural language intent" .` — ranked hits with bounded snippets.
+## Subcommands
+See `capabilities --json` → `commands` (complete clap catalog). Notable: `search`/`find`/`query`, `keyword`, `semantic`, `chain`, `index`/`reindex` (`--dry-run`), `status`, `bench`, `watch`, `eval`, `doctor`, `version`.
+## Integrations / sibling binaries
+- `asgrep-mcp` — MCP stdio server (`ASGREP_ROOT`, tools: keyword/ast/semantic search, index_repo, code_read)
+- `asgrep-lsp` — Language Server Protocol server
+- `ast-sgrep` — alias of the `asgrep` executable
+## Root specification
+- Canonical: positional `ROOT` on the subcommand (or bare-search ROOT).
+- Alias: `--root ROOT`. Conflicting `--root` + positional ROOT → usage error.
 ## JSON / automation
-- Pass `--json` on any read-side command for stdout JSON.
-- Prefer `--format agent` for LLM consumption.
-- Diagnostics and hints go to stderr; parse stdout only.
+- `--format` implies `--json`. Prefer `--format compact` for bounded LLM consumption.
+- Machine mode emits one JSON value on stdout and no duplicate stderr diagnostics.
+## Index cancel / dry-run
+- `asgrep index --dry-run` / `asgrep reindex --dry-run` report planned work without mutating the index.
+- SIGINT during a real index leaves the previous on-disk index if the build uses build-then-swap; incomplete writes are not promoted.
 ## Exit codes
-- 0 success
-- 1 usage / unknown subcommand / missing required args
-- 2 index or search failure
+- 0 success · 1 usage · 2 index/search failure
 ## Environment
-`ASGREP_INDEX_PATH`, `ASGREP_LIMIT`, `ASGREP_NO_EMBED`, `NO_COLOR`, `CI`
+See `capabilities --json` → `environment`. Common: `ASGREP_INDEX_PATH`, `ASGREP_LIMIT`, `ASGREP_NO_EMBED`, `NO_COLOR`, `CI`.
 ## Common mistakes
-- `asgrep capabilities` without `capabilities` subcommand runs a search for the word "capabilities".
-  Use: `asgrep capabilities --json`
-- Missing index: run `asgrep index .` before searching.
+- Missing or empty index: run `asgrep index <root> --json` before searching.
+- Missing ROOT is an operational error; it is never reported as an empty result.
 "#
     );
 }
@@ -153,33 +254,87 @@ pub(crate) fn query_looks_like_subcommand_typo(query: &str) -> Option<&'static s
         return None;
     }
     let lower = q.to_ascii_lowercase();
-    const EXACT: &[&str] = &[
+    // Plausible search tokens that sit near a command name at edit-distance 2.
+    const SEARCH_SAFE: &[&str] = &[
+        "static", "string", "struct", "switch", "symbol", "sample", "searchable",
+    ];
+    if SEARCH_SAFE.contains(&lower.as_str()) {
+        return None;
+    }
+    const ALIASES: &[(&str, &str)] = &[
+        ("capability", "capabilities"),
+        ("robot_docs", "robot-docs"),
+        ("robotdocs", "robot-docs"),
+    ];
+    if let Some((_, canonical)) = ALIASES.iter().find(|(alias, _)| *alias == lower) {
+        return Some(*canonical);
+    }
+    const COMMANDS: &[&str] = &[
         "index",
         "status",
         "reindex",
+        "search",
+        "keyword",
+        "semantic",
+        "chain",
         "bench",
         "watch",
-        "semantic",
         "capabilities",
-        "capability",
+        "version",
         "robot-docs",
-        "robot_docs",
         "doctor",
-        "help",
+        "eval",
     ];
-    if let Some(c) = EXACT.iter().find(|c| lower == **c) {
-        return Some(*c);
+    COMMANDS
+        .iter()
+        .map(|command| (*command, edit_distance(&lower, command)))
+        .min_by_key(|(_, distance)| *distance)
+        .filter(|(command, distance)| {
+            is_adjacent_transposition(&lower, command)
+                || *distance <= 1
+                || (*distance == 2
+                    && lower.len().abs_diff(command.len()) <= 1
+                    && lower.len().min(command.len()) >= 5)
+        })
+        .map(|(command, _)| command)
+}
+
+fn is_adjacent_transposition(left: &str, right: &str) -> bool {
+    if left.len() != right.len() {
+        return false;
     }
-    const TYPOS: &[(&str, &str)] = &[
-        ("capabilites", "capabilities"),
-        ("capabilty", "capabilities"),
-        ("statu", "status"),
-        ("indx", "index"),
-        ("reindx", "reindex"),
-        ("sematic", "semantic"),
-        ("doctr", "doctor"),
-    ];
-    TYPOS.iter().find(|(t, _)| lower == *t).map(|(_, f)| *f)
+    let mismatches = left
+        .bytes()
+        .zip(right.bytes())
+        .enumerate()
+        .filter_map(|(index, (left, right))| (left != right).then_some((index, left, right)))
+        .collect::<Vec<_>>();
+    matches!(
+        mismatches.as_slice(),
+        [(first_index, first_left, first_right), (second_index, second_left, second_right)]
+            if *second_index == *first_index + 1
+                && first_left == second_right
+                && first_right == second_left
+    )
+}
+
+fn edit_distance(left: &str, right: &str) -> usize {
+    let mut previous = (0..=right.len()).collect::<Vec<_>>();
+    let mut current = vec![0; right.len() + 1];
+    for (left_index, left_byte) in left.bytes().enumerate() {
+        current[0] = left_index + 1;
+        for (right_index, right_byte) in right.bytes().enumerate() {
+            current[right_index + 1] = if left_byte == right_byte {
+                previous[right_index]
+            } else {
+                1 + previous[right_index]
+                    .min(previous[right_index + 1])
+                    .min(current[right_index])
+            };
+        }
+        std::mem::swap(&mut previous, &mut current);
+    }
+    previous[right.len()]
 }
 pub(crate) fn print_agent_help_footer() {
     eprintln!("\nAgent surfaces: {TOOL} capabilities --json | {TOOL} robot-docs guide | {TOOL} doctor --robot-triage");

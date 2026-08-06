@@ -3,12 +3,13 @@
 | Goal | Pi action | Example |
 | --- | --- | --- |
 | Find a literal string | exact-text search | `ASGREP_TIMEOUT_MS` |
-| Find code by purpose | `asgrep_search` with `mode: "natural"` | `refresh the index after edits` |
-| Find a syntax shape | `asgrep_search` with `mode: "pattern"` | `await $CLIENT.fetch($URL)` |
-| Locate a symbol definition | `asgrep_search` with `mode: "defs"` | `FreshnessCoordinator` |
-| Locate callers | `asgrep_search` with `mode: "callers"` | `ensureFresh` |
-| Trace a flow | `asgrep_search` with `mode: "chain"` | `write to next search` |
-| Broaden intent retrieval | `asgrep_search` with `mode: "semantic"` | `native package selection` |
+| Find code by purpose | `asgrep_codemode` calling `asgrep.search` | `refresh the index after edits` |
+| Find a syntax shape | `asgrep.search` / `asgrep_search` with `mode: "pattern"` | `await $CLIENT.fetch($URL)` |
+| Locate a symbol definition | `asgrep.defs` or `asgrep_search` `mode: "defs"` | `FreshnessCoordinator` |
+| Locate callers | `asgrep.callers` or `asgrep_search` `mode: "callers"` | `ensureFresh` |
+| Trace a flow | `asgrep.chain` | `write to next search` |
+| Broaden intent retrieval | `asgrep.semantic` | `native package selection` |
+| Compose many lookups | **`asgrep_codemode`** with `Promise.all` | parallel defs + callers |
 
 ## Failure recovery
 
@@ -18,4 +19,4 @@
 - `ROOT_OUTSIDE_PROJECT`: choose a path inside the current project. Do not relax confinement without explicit user authorization.
 - `TIMEOUT`, cancellation, or output-limit failures: narrow the query or reduce the limit; do not silently discard the error envelope.
 
-For an unfamiliar codebase, a deterministic first pass is: `/asgrep-doctor`, `/asgrep-status`, `asgrep_search` in `natural` mode with the default limit, then a `defs`, `callers`, or `chain` query for the selected symbol.
+For an unfamiliar codebase, prefer `asgrep_codemode`: doctor/status/index via slash commands, then one Code Mode program that searches, picks a symbol, and fans out `defs`/`callers`/`chain` with `Promise.all`. Return a shaped object — not every intermediate hit list.

@@ -1,0 +1,112 @@
+#!/usr/bin/env bash
+# verify-forbid-soundness — product crates must forbid unsafe_code.
+#
+# Distinct from `cargo audit` (dependency CVE scanning). This gate checks that
+# first-party product code cannot introduce `unsafe` without an explicit sealed
+# exception (ast-sgrep-mmap only).
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$ROOT"
+
+fail=0
+
+echo "== workspace lints: unsafe_code = forbid =="
+if ! grep -q 'unsafe_code = "forbid"' Cargo.toml; then
+  echo "FAIL: workspace Cargo.toml must set [workspace.lints.rust] unsafe_code = \"forbid\""
+  fail=1
+else
+  echo "ok: workspace forbid present"
+fi
+
+echo "== product crate roots carry #![forbid(unsafe_code)] =="
+product_roots=(
+  crates/ast-sgrep-core/src/lib.rs
+  crates/ast-sgrep-cli/src/lib.rs
+  crates/ast-sgrep-embed/src/lib.rs
+  crates/ast-sgrep-lang/src/lib.rs
+  crates/ast-sgrep-lsp/src/lib.rs
+  crates/ast-sgrep-mcp/src/lib.rs
+  crates/ast-sgrep-plugins/src/lib.rs
+  crates/ast-sgrep-testkit/src/lib.rs
+)
+for root in "${product_roots[@]}"; do
+  if ! grep -q '#!\[forbid(unsafe_code)\]' "$root"; then
+    echo "FAIL: missing #![forbid(unsafe_code)] in $root"
+    fail=1
+  else
+    echo "ok: $root"
+  fi
+done
+
+echo "== product crates inherit workspace lints (no deny/allow override) =="
+for toml in crates/*/Cargo.toml; do
+  name="$(basename "$(dirname "$toml")")"
+  if [[ "$name" == "ast-sgrep-mmap" ]]; then
+    if ! grep -q 'unsafe_code = "allow"' "$toml"; then
+      echo "FAIL: sealed mmap crate must explicitly allow unsafe_code"
+      fail=1
+    else
+      echo "ok: $name is sealed allow exception"
+    fi
+    continue
+  fi
+  if grep -q 'unsafe_code = "deny"' "$toml" || grep -q 'unsafe_code = "allow"' "$toml"; then
+    echo "FAIL: $toml must not override unsafe_code (use workspace forbid)"
+    fail=1
+  elif ! grep -q '\[lints\]' "$toml" || ! grep -q 'workspace = true' "$toml"; then
+    echo "FAIL: $toml must inherit [lints] workspace = true"
+    fail=1
+  else
+    echo "ok: $name inherits workspace lints"
+  fi
+done
+
+echo "== no first-party unsafe outside sealed mmap =="
+# Match `unsafe {` / `unsafe fn` / `unsafe impl` / `unsafe trait` in product sources.
+# Exclude the sealed mmap crate and vendored/target paths.
+# rg is preferred but not guaranteed on CI runners; fall back to GNU grep.
+if command -v rg >/dev/null 2>&1; then
+  scan_cmd=(rg -n --glob '!crates/ast-sgrep-mmap/**' --glob '!target/**' --glob '!fuzz/**' \
+    -e '\bunsafe\s*(fn|impl|trait|\{)' crates/)
+else
+  scan_cmd=(grep -rEn --exclude-dir=target --exclude-dir=fuzz --exclude-dir=ast-sgrep-mmap \
+    -e 'unsafe[[:space:]]*(fn|impl|trait|\{)' crates/)
+fi
+while IFS= read -r match; do
+  echo "FAIL: first-party unsafe outside sealed boundary: $match"
+  fail=1
+done < <("${scan_cmd[@]}" || true)
+
+echo "== sealed mmap is the only intentional unsafe =="
+if command -v rg >/dev/null 2>&1; then
+  has_sealed="$(rg -q 'unsafe \{' crates/ast-sgrep-mmap/src/lib.rs && echo yes || echo no)"
+else
+  has_sealed="$(grep -q 'unsafe {' crates/ast-sgrep-mmap/src/lib.rs && echo yes || echo no)"
+fi
+if [[ "$has_sealed" != "yes" ]]; then
+  echo "FAIL: ast-sgrep-mmap must contain the sealed unsafe map call"
+  fail=1
+else
+  echo "ok: sealed unsafe present in ast-sgrep-mmap"
+fi
+
+echo "== rustc enforces forbid on a product crate =="
+# Compile-check that core (which previously overrode to deny) builds under forbid.
+if ! cargo check -p ast-sgrep-core -j1 --quiet; then
+  echo "FAIL: ast-sgrep-core does not build under workspace forbid"
+  fail=1
+else
+  echo "ok: ast-sgrep-core checks clean"
+fi
+
+if [[ "$fail" -ne 0 ]]; then
+  echo
+  echo "verify-forbid-soundness FAILED"
+  echo "Note: cargo-audit scans dependency advisories; it does NOT replace this gate."
+  exit 1
+fi
+
+echo
+echo "verify-forbid-soundness PASSED"
+echo "Note: cargo-audit ≠ forbid-soundness (advisories vs first-party unsafe ban)."

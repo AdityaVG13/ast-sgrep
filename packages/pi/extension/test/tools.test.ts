@@ -42,13 +42,14 @@ async function invoke(tool: Tool, params: Record<string, unknown> = {}, signal =
   return { result, updates, signal };
 }
 
-test("registers exact Pi tool names with bounded TypeBox schemas", () => {
+test("registers Code Mode first, then direct one-shot tools", () => {
   const { tools, byName } = fixture();
-  assert.deepEqual(tools.map(({ name }) => name), ["asgrep_search", "asgrep_index", "asgrep_status"]);
+  assert.deepEqual(tools.map(({ name }) => name), ["asgrep_codemode", "asgrep_search", "asgrep_index", "asgrep_status"]);
   const search = byName("asgrep_search").parameters;
   assert.equal(search.additionalProperties, false);
   assert.equal(search.properties.query.minLength, 1);
   assert.equal(search.properties.query.maxLength, 4096);
+  assert.equal(search.properties.mode.default, "keyword");
   assert.equal(search.properties.limit.minimum, 1);
   assert.equal(search.properties.limit.maximum, 100);
   assert.equal(search.properties.limit.default, 8);
@@ -57,24 +58,53 @@ test("registers exact Pi tool names with bounded TypeBox schemas", () => {
   assert.equal(search.properties.excerptLines.default, 0);
   assert.equal(byName("asgrep_index").parameters.properties.force.default, false);
   assert.equal(byName("asgrep_status").parameters.additionalProperties, false);
+  const codemode = byName("asgrep_codemode").parameters;
+  assert.equal(codemode.additionalProperties, false);
+  assert.equal(codemode.properties.code.minLength, 1);
+  assert.equal(codemode.properties.code.maxLength, 32000);
+});
+
+test("asgrep_codemode runs JS against the connector and returns a shaped result", async () => {
+  const f = fixture({
+    tool: "asgrep",
+    schema_version: "1.0.0",
+    ok: true,
+    hits: [{ file: "src/a.ts", symbol: "auth_refresh", kind: "embed", score: 2 }],
+  });
+  const { result } = await invoke(f.byName("asgrep_codemode"), {
+    code: `async () => {
+      const seed = await asgrep.search({ query: "auth", limit: 3 });
+      return { symbol: seed.hits[0].symbol, n: seed.hits.length };
+    }`,
+  });
+  assert.equal(result.details.ok, true);
+  assert.deepEqual(result.details.result, { symbol: "auth_refresh", n: 1 });
+  assert.ok(f.calls.some((call) => call.args.includes("agent-capsule")));
+  assert.ok(result.details.stats);
+  assert.ok(typeof result.details.wallMs === "number");
 });
 
 test("search defaults to a small zero-excerpt agent capsule", async () => {
   const f = fixture({ tool: "asgrep", schema_version: "1.0.0", ok: true, hits: new Array(500).fill({ preview: "x".repeat(500) }) });
   const { result } = await invoke(f.byName("asgrep_search"), { query: "where auth refreshes" });
-  assert.deepEqual(f.calls[0]?.args, ["--json", "--format", "agent-capsule", "--limit", "8", "--excerpt-lines", "0", "where auth refreshes", "."]);
+  assert.deepEqual(f.calls[0]?.args, ["--json", "--format", "agent-capsule", "--limit", "8", "--excerpt-lines", "0", "keyword", "--", "where auth refreshes", "."]);
   assert.ok(result.content[0]!.text.length <= 1200);
   assert.equal((result.details.response as MachineEnvelope).hits instanceof Array, true);
 });
 
 test("maps every query mode and bounded output option to argv arrays", async () => {
   const cases: Array<[string, string[]]> = [
-    ["natural", ["--json", "--format", "agent-capsule", "--limit", "25", "--excerpt-lines", "3", "needle", "."]],
-    ["pattern", ["--json", "--format", "agent-capsule", "--limit", "25", "--excerpt-lines", "3", "pattern: needle", "."]],
-    ["defs", ["--json", "--format", "agent-capsule", "--limit", "25", "--excerpt-lines", "3", "defs: needle", "."]],
-    ["callers", ["--json", "--format", "agent-capsule", "--limit", "25", "--excerpt-lines", "3", "callers: needle", "."]],
-    ["chain", ["chain", "needle", ".", "--json", "--format", "agent-capsule", "--limit", "25", "--excerpt-lines", "3"]],
-    ["semantic", ["semantic", "needle", ".", "--json", "--format", "agent-capsule", "--limit", "25", "--excerpt-lines", "3"]],
+    ["keyword", ["--json", "--format", "agent-capsule", "--limit", "25", "--excerpt-lines", "3", "keyword", "--", "needle", "."]],
+    ["natural", ["--json", "--format", "agent-capsule", "--limit", "25", "--excerpt-lines", "3", "keyword", "--", "needle", "."]],
+    ["pattern", ["--json", "--format", "agent-capsule", "--limit", "25", "--excerpt-lines", "3", "--", "pattern: needle", "."]],
+    ["defs", ["--json", "--format", "agent-capsule", "--limit", "25", "--excerpt-lines", "3", "--", "defs: needle", "."]],
+    ["callers", ["--json", "--format", "agent-capsule", "--limit", "25", "--excerpt-lines", "3", "--", "callers: needle", "."]],
+    ["chain", ["--json", "--format", "agent-capsule", "--limit", "25", "--excerpt-lines", "3", "chain", "--", "needle", "."]],
+    ["semantic", ["--json", "--format", "agent-capsule", "--limit", "25", "--excerpt-lines", "3", "semantic", "--", "needle", "."]],
+    ["word", ["--json", "--format", "agent-capsule", "--limit", "25", "--excerpt-lines", "3", "--", "word: needle", "."]],
+    ["literal", ["--json", "--format", "agent-capsule", "--limit", "25", "--excerpt-lines", "3", "--", "literal: needle", "."]],
+    ["regex", ["--json", "--format", "agent-capsule", "--limit", "25", "--excerpt-lines", "3", "--", "regex: needle", "."]],
+    ["imports", ["--json", "--format", "agent-capsule", "--limit", "25", "--excerpt-lines", "3", "--", "imports: needle", "."]],
   ];
   for (const [mode, expected] of cases) {
     const f = fixture();
@@ -147,12 +177,13 @@ test("search refreshes before querying and refuses unknown index health", async 
     },
   };
   registerAstSgrepTools(pi, runtime);
-  await invoke(tools[0]!, { query: "first" });
+  const search = tools.find((tool) => tool.name === "asgrep_search")!;
+  await invoke(search, { query: "first" });
   assert.deepEqual(calls, ["status", "index", "--json"]);
 
   handlers[0]!({ toolName: "edit", input: { path: "src/a.ts" }, isError: false }, { cwd: "/project" });
   status = { tool: "asgrep", schema_version: "1.0.0", ok: true };
-  const { result } = await invoke(tools[0]!, { query: "blocked" });
+  const { result } = await invoke(search, { query: "blocked" });
   assert.equal((result.details.error as { code: string }).code, "INDEX_STATUS_UNKNOWN");
   assert.deepEqual(calls, ["status", "index", "--json", "status"]);
 });
@@ -165,7 +196,8 @@ test("maps runtime failures to concise structured tool errors", async () => {
     async run() { throw new RuntimeError("CANCELLED", "execution cancelled", { source: "signal" }); },
   };
   registerAstSgrepTools(pi, runtime);
-  const { result } = await invoke(tools[0]!, { query: "x" });
+  const search = tools.find((tool) => tool.name === "asgrep_search")!;
+  const { result } = await invoke(search, { query: "x" });
   assert.equal(result.content[0]!.text, "search failed [CANCELLED]: execution cancelled");
   assert.deepEqual(result.details, {
     ok: false,

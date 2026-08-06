@@ -12,13 +12,6 @@ libfuzzer-sys = "0.4"
 ast-sgrep-core = { path = "../crates/ast-sgrep-core" }
 
 [[bin]]
-name = "parsed_query"
-path = "fuzz_targets/parsed_query.rs"
-test = false
-doc = false
-bench = false
-
-[[bin]]
 name = "query_grammar"
 path = "fuzz_targets/query_grammar.rs"
 test = false

@@ -103,6 +103,7 @@ __pycache__/
 
 # Fuzz / editor build artifacts
 fuzz/target/
+fuzz/Cargo.lock
 editors/**/node_modules/
 editors/**/out/
 editors/**/*.vsix
@@ -116,3 +117,24 @@ tests/artifacts/perf/
 
 # Agent skill specs (local-only)
 .agents/
+
+# Agent / tool harness scratch (never product surface)
+.cline/
+.gemini/
+.opencode/
+.windsurf/
+.pi-subagents/
+.ee/
+.worktrees/
+/_*.txt
+/.bead-count.txt
+/passes/
+
+# Internal research notes (not product docs)
+/CHANGELOG_RESEARCH.md
+
+# Fuzz corpora are regenerable seeds — keep the targets, not the corpus
+fuzz/corpus/
+
+# CLI benchmark-history state (regenerated on runs)
+**/.bench-history.json

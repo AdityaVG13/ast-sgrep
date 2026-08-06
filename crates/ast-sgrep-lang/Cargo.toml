@@ -24,8 +24,13 @@ tree-sitter-javascript.workspace = true
 tree-sitter-python.workspace = true
 tree-sitter-ruby = "0.23"
 tree-sitter-rust.workspace = true
-tree-sitter-typescript.workspace = true
+tree-sitter-typescript = "0.23"
+tree-sitter-c = "0.24"
+tree-sitter-cpp = "0.23"
 tree-sitter-c-sharp = "0.23"
+tree-sitter-swift = "0.7"
+tree-sitter-kotlin-ng = "1.1"
+tree-sitter-php = "0.24"
 
 [dev-dependencies]
 ast-sgrep-testkit = { path = "../ast-sgrep-testkit" }

@@ -2,9 +2,9 @@
 
 ast-sgrep’s semantic layer answers **intent queries** when the words in your question do not appear in the code, *“credential renewal”* finding `auth_refresh`, *“sanitize user input”* finding `validate_input`. It is **on by default** and works **offline without an API key**.
 
-## Why symbol chunks, not lines
+## Why child chunks mapped to symbols
 
-Line-level embeddings treat every line equally. Code navigation needs **symbols in context**:
+Whole-file or independent line embeddings lose code structure. ast-sgrep embeds bounded AST-derived child excerpts while keeping each child mapped to its enclosing function or method:
 
 ```
 symbol: auth_refresh kind: function
@@ -13,9 +13,11 @@ calls: fetch_token store_token
 excerpt: fn auth_refresh() { ... }
 ```
 
-Each extracted symbol becomes an enriched text chunk, embedded into a vector stored in `semantic_chunks`. At search time, the query is embedded with the same provider and compared via cosine similarity (or IVF-ANN at scale).
+Each function or method contributes up to 32 distinct child spans. One-line functions retain their best nested child, and top-level nodes map to a bounded file parent. If extraction yields no function child, the parent excerpt is the fallback. Every child is enriched and embedded into `semantic_chunks`, but retains its parent symbol or file range.
 
-This is what makes ast-sgrep semantic search **code-aware**: similarity reflects naming, neighborhood in the call graph, and excerpt content, not just adjacent lines in a file.
+At search time, child vectors are compared by cosine similarity (or IVF-ANN at scale), grouped by parent, and ranked by the maximum child score. One parent result is returned with up to three highest-scoring raw source children as its snippet; enrichment text is used only to produce vectors and is never exposed as source. This gives fine-grained matching without losing a meaningful read unit or letting a large function consume multiple result slots.
+
+Schema version 6 clears legacy whole-symbol vectors, cached vectors, backend/model identity, and stored file fingerprints. The next index refresh rebuilds every file into the child-to-parent layout, so old and new layouts cannot mix. Backend model identity is persisted for semantic, neural, cloud, and Ollama vectors; indexing refreshes and search refuses stale vectors after a configured model change.
 
 ## Concept expansion
 
@@ -78,15 +80,15 @@ OpenAI-compatible embedding API. Dimension depends on model; stored in index met
 
 ### Hybrid (default)
 
-Semantic is one pass among lexical, symbol, graph, and anchor. Semantic hits appear as kind `EMBED` in output.
+Default search is a constraint cascade: lexical candidates must survive AST-derived symbol, graph, anchor, or pattern evidence before semantic chunks are ranked. Semantic hits appear as kind `EMBED`, but they cannot widen the survivor file set.
 
 ```bash
-asgrep "credential renewal"
+asgrep "auth refresh"
 ```
 
 ### Semantic-only
 
-Skips lexical/symbol/graph passes; useful for pure synonym or NL probes.
+Skips lexical and structural gates; use this for pure synonym or zero-token-overlap NL probes.
 
 ```bash
 asgrep semantic "credential renewal" --json
@@ -101,6 +103,27 @@ With `--json`, defaults to **agent** format.
 | &lt; `ann_threshold` symbols (default 2000) | Brute-force cosine over all vectors | Sub-millisecond |
 | ≥ threshold | IVF-ANN with persisted `.asgrep/semantic.ivf` | Fast approximate NN; no k-means rebuild on restart |
 
+Adaptive search probes at most 90% of populated clusters by default. The bound
+is deliberate: the 2048-vector quality fixture misses the 0.99 recall target at
+75%, while 90% restores exact top-10 recall and remains below the 95% candidate
+ceiling.
+
+Release-mode RCH measurements use 64 deterministic queries at dimension 32:
+
+| vectors | probes | recall@10 | average query | candidate fraction |
+|--------:|-------:|----------:|--------------:|-------------------:|
+| 2,048 | 50% | 0.931250 | 276.794 µs | 0.511459 |
+| 2,048 | 75% | 0.989062 | 296.533 µs | 0.754547 |
+| 2,048 | default ≤90% | 0.998437 | 325.768 µs | 0.888893 |
+| 10,000 | 50% | 0.982812 | 565.221 µs | 0.499580 |
+| 10,000 | 75% | 0.996875 | 694.175 µs | 0.749023 |
+| 10,000 | default ≤90% | 1.000000 | 780.488 µs | 0.899686 |
+
+Full-cluster reference latency was 323.250 µs at 2,048 vectors and 849.215 µs
+at 10,000 vectors on the same run. Timings are comparative within that run;
+the enforced invariant is recall@10 at least 0.99 with no more than 95% of
+candidates. `--ann-probes` can still request an explicit probe count.
+
 Tune threshold:
 
 ```bash
@@ -108,7 +131,9 @@ asgrep --ann-threshold 5000 index .
 # or ASGREP_ANN_THRESHOLD=5000
 ```
 
-The IVF sidecar stores cluster centroids and vector layout. On reindex, a **fingerprint** mismatch invalidates the sidecar and triggers rebuild.
+The version-2 IVF sidecar stores a bounded cluster index followed by 4096-byte-aligned vectors. Open validates and decodes the cluster metadata, then retains the vector payload as a read-only mmap; it does not deserialize vectors into heap memory. Atomic temp-file publication keeps existing mappings valid, and a **fingerprint** mismatch triggers rebuild. Language-filtered searches use their filtered in-memory vectors and never overwrite the shared global sidecar.
+
+On a 10,000-vector medium fixture, measured p99 was 0.963 ms cold, 0.135 ms for a fresh inode under normal cache policy, and 0.037 ms warm. Methodology and byte accounting are recorded in [semantic IVF mmap validation](validation/semantic-ivf-mmap.md).
 
 LSP `initializationOptions` also accepts `annThreshold`, see [use-cases.md](use-cases.md).
 
@@ -146,6 +171,8 @@ Agent format exposes semantic signal explicitly:
   "has_semantic_hits": true,
   "hits": [{
     "kind": "embed",
+    "signal": "semantic",
+    "margin": 0.18,
     "semantic": true,
     "symbol": "auth_refresh",
     "score": 3.42,
@@ -154,7 +181,7 @@ Agent format exposes semantic signal explicitly:
 }
 ```
 
-LSP `workspace/symbol` includes `detail: "semantic · score 3.42"` and `data.semantic: true` for embed hits.
+LSP `workspace/symbol` includes `detail: "semantic · score 3.42 · margin 0.18"` and `data.signal`, `data.score`, and `data.margin` for every hit. `data.semantic` remains available for compatibility.
 
 ## Related docs
 

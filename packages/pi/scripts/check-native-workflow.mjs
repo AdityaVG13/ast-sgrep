@@ -11,21 +11,24 @@ const expectedAllowedSigner = 'adityavgcode@gmail.com ssh-ed25519 AAAAC3NzaC1lZD
 const releaseHelper = await readFile(path.join(root, 'packages/pi/scripts/release-acceptance.mjs'), 'utf8');
 const targets = JSON.parse(await readFile(path.join(root, 'packages/pi/release/targets.json'), 'utf8')).targets;
 const helper = await readFile(path.join(root, 'packages/pi/scripts/ci-install-smoke.mjs'), 'utf8');
-const YAML_PARSE = 'import json,sys,yaml; print(json.dumps(yaml.safe_load(sys.stdin.read())))';
 const parse = (text) => {
-  const result = spawnSync('python3', ['-c', YAML_PARSE], { input: text, encoding: 'utf8', windowsHide: true });
-  if (result.status !== 0) throw new Error(String(result.stderr || result.error?.message || '').trim() || 'Python YAML parser failed');
-  const value = JSON.parse(result.stdout);
+  const ruby = spawnSync('ruby', ['-rjson', '-ryaml', '-e', "document = YAML.safe_load(STDIN.read, aliases: true); puts JSON.generate(document)"], { input: text, encoding: 'utf8', windowsHide: true });
+  let stdout = ruby.stdout;
+  if (ruby.status !== 0) {
+    const python = spawnSync('python3', ['-c', 'import json,sys,yaml\nd=yaml.safe_load(sys.stdin.read())\nprint(json.dumps(d))'], { input: text, encoding: 'utf8', windowsHide: true });
+    if (python.status !== 0) throw new Error((ruby.stderr || python.stderr || 'YAML parser failed').trim());
+    stdout = python.stdout;
+  }
+  const value = JSON.parse(stdout);
   if (value.on === undefined && value.true !== undefined) { value.on = value.true; delete value.true; }
   return value;
 };
 const activeRun = (step) => typeof step?.run === 'string' ? step.run.split('\n').map((line) => line.trim()).filter((line) => line && !line.startsWith('#')).join('\n') : '';
-const reportPush = (errors) => (condition, message) => { if (!condition) errors.push(message); };
 const validate = (text) => {
   const errors = [];
   let workflow;
   try { workflow = parse(text); } catch (error) { return ['YAML parse failed: ' + error.message]; }
-  const report = reportPush(errors);
+  const report = (condition, message) => { if (!condition) errors.push(message); };
   const triggers = Object.keys(workflow.on ?? {});
   report(triggers.length === 1 && triggers[0] === 'workflow_dispatch', 'native artifact workflow must be manual-only');
   const load = workflow.jobs?.['target-matrix'];
@@ -37,11 +40,11 @@ const validate = (text) => {
   report(loadRuns.some((run) => run.includes('node packages/pi/scripts/release-artifact.mjs matrix')), 'authoritative matrix command is missing');
   report(loadRuns.some((run) => run.includes('node packages/pi/scripts/check-contract.mjs') && run.includes('node packages/pi/scripts/check-native-workflow.mjs')), 'contract checker commands are missing');
   const steps = new Map((native?.steps ?? []).filter((step) => step.name).map((step) => [step.name, activeRun(step)]));
-  report(steps.get('Build target-local release executable')?.includes('cargo build --locked --release'), 'locked native build step is missing');
+  report(steps.get('Build target-local release artifacts')?.includes('cargo build --locked --release') && steps.get('Build target-local release artifacts')?.includes('ast-sgrep-codemode-napi'), 'locked native CLI+NAPI build step is missing');
   const metadata = steps.get('Prepare and verify deterministic artifact metadata') ?? '';
-  report(metadata.includes('release-artifact.mjs prepare') && metadata.includes('release-artifact.mjs verify'), 'metadata prepare/verify step is missing');
+  report(metadata.includes('release-artifact.mjs prepare') && metadata.includes('--napi') && metadata.includes('release-artifact.mjs verify'), 'metadata prepare/verify step is missing');
   const pack = steps.get('Pack native, launcher, and extension tarballs') ?? '';
-  report(pack.includes('npm pack "$platform_dir"') && pack.includes('npm pack packages/pi/launcher') && pack.includes('npm pack packages/pi/extension'), 'all npm pack commands are required');
+  report(pack.includes('npm pack "$platform_dir"') && pack.includes('matrix.napiAddon') && pack.includes('npm pack packages/pi/launcher') && pack.includes('npm pack packages/pi/extension'), 'all npm pack commands are required');
   report((steps.get('Clean-install local tarballs') ?? '').includes('npm install --no-audit --no-fund --prefix "$clean"'), 'clean local install is missing');
   report((steps.get('Exercise installed launcher and extension') ?? '').includes('node packages/pi/scripts/ci-install-smoke.mjs'), 'installed smoke command is missing');
   report((native?.steps ?? []).some((step) => step.name === 'Upload native artifact' && step.uses === 'actions/upload-artifact@v4'), 'artifact upload is missing');
@@ -58,7 +61,7 @@ const validateOfficial = (text, signersText = allowedSignersText) => {
   const errors = [];
   let workflow;
   try { workflow = parse(text); } catch (error) { return ['official YAML parse failed: ' + error.message]; }
-  const report = reportPush(errors);
+  const report = (condition, message) => { if (!condition) errors.push(message); };
   const triggers = Object.keys(workflow.on ?? {});
   const inputs = workflow.on?.workflow_dispatch?.inputs;
   report(triggers.length === 1 && triggers[0] === 'workflow_dispatch', 'official publication workflow must be manual-only');

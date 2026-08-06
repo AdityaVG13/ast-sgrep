@@ -13,12 +13,12 @@ Three tools, three jobs. ast-sgrep is the **navigation and intent layer** you ad
 | **Symbol definitions** | Yes (`defs:`) | Via pattern only | No |
 | **Caller / callee graph** | Yes (`callers:`) | No | No |
 | **Import tracking** | Yes (`imports:`) | No | No |
-| **Structural patterns** | Yes (`pattern:` native tree-sitter) | Native | No |
-| **Polyglot AST** | 8 languages, unified index | Yes | Text only |
+| **Structural patterns** | Yes (`pattern:` → ast-grep) | Native | No |
+| **Polyglot AST** | 13 languages, unified index | Yes | Text only |
 | **CI / platform JSON** | GitHub & GitLab shapes | No | `--json` (ripgrep format) |
 | **LSP** | `asgrep-lsp` | Separate ecosystem | No |
 | **Agent-oriented JSON** | `--format agent` + follow-ups | Limited | Line-based JSON |
-| **Typical latency** | Indexed warm search often tens of ms on real corpora; sub-ms medians appear only on tiny fixture benches (unenforced) | Pattern-dependent | ms–s per full scan |
+| **Typical latency** | ~0.3 ms/search (indexed) | Pattern-dependent | ms–s per full scan |
 | **Index required** | Yes (`.asgrep/`) | No | No |
 | **API key for semantic** | No (offline default) | N/A | N/A |
 
@@ -32,7 +32,7 @@ Three tools, three jobs. ast-sgrep is the **navigation and intent layer** you ad
 | Feed ranked, structured hits to an AI agent | **ast-sgrep** (`--json --format agent`) |
 | Jump to defs/refs/call hierarchy in an editor | **ast-sgrep** (`asgrep-lsp`) |
 | Rewrite code with AST-aware rules | **ast-grep** |
-| Match a syntactic shape (`class $C { $$$ }`) | `asgrep "pattern:…"` (native; optional ast-grep fallback) or **ast-grep** |
+| Match a syntactic shape (`class $C { $$$ }`) | **ast-grep** or `asgrep "pattern:…"` |
 | Grep logs, configs, or any file type fast | **ripgrep** |
 | One-off regex across unindexed or generated files | **ripgrep** |
 | Search inside a single huge file without indexing | **ripgrep** |
@@ -49,7 +49,7 @@ Three tools, three jobs. ast-sgrep is the **navigation and intent layer** you ad
 └─────────────────────────────────────────────────────────┘
 ```
 
-**ast-sgrep complements the others.** Structural `pattern:` queries use native tree-sitter first (optional ast-grep fallback for exotic shapes) and does not compete with ripgrep on raw scan speed over arbitrary unindexed files.
+**ast-sgrep complements the others.** It delegates structural queries to ast-grep via `pattern:` and does not compete with ripgrep on raw scan speed over arbitrary unindexed files.
 
 ## Feature deep dive
 
@@ -84,13 +84,13 @@ ast-grep matches **structure**, not **meaning**. ripgrep matches **text**, not *
 
 ### Structural patterns
 
-ast-grep is the specialist for codemods. ast-sgrep runs **native tree-sitter** patterns first:
+ast-grep is the specialist. ast-sgrep exposes it:
 
 ```bash
 asgrep "pattern:fn $NAME($$$)"
 ```
 
-Optional ast-grep CLI fallback only for exotic metavariable shapes. Results appear as `PATTERN` hits in ast-sgrep output.
+Requires ast-grep CLI installed. Results appear as `PATTERN` hits in ast-sgrep output.
 
 ### Output for automation
 

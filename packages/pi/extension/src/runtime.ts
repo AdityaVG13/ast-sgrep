@@ -171,6 +171,16 @@ export interface FreshnessRuntime {
   resolveRoot(context: RuntimeContext): Promise<string>;
   inspectIndexCompatibility?(context: RuntimeContext): Promise<IndexHealth>;
   rebuildIncompatibleIndex?(context: RuntimeContext, options?: RunOptions): Promise<MachineEnvelope>;
+  /**
+   * Optional warm native call (session sticky pool). When present, freshness
+   * prefers this over cold `run` for status/index — same Searcher as Code Mode.
+   */
+  nativeCall?(
+    tool: string,
+    args: Record<string, unknown>,
+    context: RuntimeContext,
+    options?: RunOptions,
+  ): Promise<MachineEnvelope>;
 }
 
 export interface FreshnessCoordinatorOptions {
@@ -280,7 +290,9 @@ export class FreshnessCoordinator {
       let health = await runtime.inspectIndexCompatibility?.(rootContext);
       if (health !== "incompatible") {
         try {
-          const status = await runtime.run(["status", ".", "--json"], rootContext, options);
+          const status = runtime.nativeCall
+            ? await runtime.nativeCall("index_status", {}, rootContext, options)
+            : await runtime.run(["status", ".", "--json"], rootContext, options);
           health = indexHealth(status);
         } catch (cause) {
           if (!incompatibleStatusFailure(cause)) throw cause;
@@ -290,13 +302,16 @@ export class FreshnessCoordinator {
       const dirty = refreshGeneration > state!.cleanGeneration;
       if (health === "incompatible") {
         if (runtime.rebuildIncompatibleIndex) await runtime.rebuildIncompatibleIndex(rootContext, options);
+        else if (runtime.nativeCall) await runtime.nativeCall("index_repo", { force: true }, rootContext, options);
         else await runtime.run(["reindex", ".", "--json"], rootContext, options);
       } else if (health === "missing" || !wasInitialized || dirty) {
-        await runtime.run(["index", ".", "--json"], rootContext, options);
+        if (runtime.nativeCall) await runtime.nativeCall("index_repo", { force: false }, rootContext, options);
+        else await runtime.run(["index", ".", "--json"], rootContext, options);
       } else if (expired) {
         // Lease expired without dirty marks: incremental index (not force reindex)
         // so external create/modify/delete are reconciled without rebuild thrash (5du.9).
-        await runtime.run(["index", ".", "--json"], rootContext, options);
+        if (runtime.nativeCall) await runtime.nativeCall("index_repo", { force: false }, rootContext, options);
+        else await runtime.run(["index", ".", "--json"], rootContext, options);
       }
       state!.initialized = true;
       state!.cleanGeneration = refreshGeneration;
@@ -501,6 +516,17 @@ export class AstSgrepRuntime {
       if (/timeout|timed out/i.test(message)) throw new RuntimeError("TIMEOUT", `ast-sgrep exceeded ${timeout}ms`, { timeoutMs: timeout });
       throw new RuntimeError("EXEC_FAILED", "Unable to execute ast-sgrep", { cause: message });
     }
+  }
+
+  /** Absolute path to the native binary (for sticky serve / stdin batch spawn). */
+  resolveBinaryPath(options: { env?: NodeJS.ProcessEnv } = {}): string {
+    const env: NodeJS.ProcessEnv = { ...this.#environment, ...this.config.env, ...options.env, NO_COLOR: "1" };
+    return getBinary(this.config, env, this.#resolver);
+  }
+
+  /** Merged process env for native Code Mode workers. */
+  nativeEnv(options: { env?: NodeJS.ProcessEnv } = {}): NodeJS.ProcessEnv {
+    return { ...this.#environment, ...this.config.env, ...options.env, NO_COLOR: "1" };
   }
 
   async checkCompatibility(context: RuntimeContext, options: RunOptions = {}): Promise<MachineEnvelope> {

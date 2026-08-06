@@ -6,7 +6,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { resolveBinary } from "../src/index.js";
+import { resolveBinary, resolveCodemodeAddon } from "../src/index.js";
 
 const launcherDir = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const repoRoot = resolve(launcherDir, "../../..");
@@ -31,14 +31,22 @@ function fixture(target = targets[0], changes = {}) {
   const manifestPath = join(packageDir, "package.json");
   writeFileSync(manifestPath, changes.manifestText ?? JSON.stringify(manifest));
   const executablePath = join(packageDir, target.executable);
+  const addonPath = join(packageDir, "ast-sgrep-codemode.node");
   const payload = changes.payload ?? Buffer.from("native fixture");
+  const addonPayload = changes.addonPayload ?? Buffer.from("napi fixture");
   if (!changes.missingExecutable) {
     writeFileSync(executablePath, payload);
     chmodSync(executablePath, changes.mode ?? 0o755);
   }
+  if (!changes.missingAddon) writeFileSync(addonPath, addonPayload);
   const digest = createHash("sha256").update(payload).digest("hex");
-  if (!changes.missingChecksum) writeFileSync(join(packageDir, "checksum.sha256"), (changes.checksum ?? digest) + "  " + target.executable + "\n");
-  return { root, manifestPath, executablePath, options: { platform: target.platform, arch: target.arch, libc: target.libc, requireResolve: () => manifestPath } };
+  const addonDigest = createHash("sha256").update(addonPayload).digest("hex");
+  if (!changes.missingChecksum) {
+    const checksum = changes.checksum
+      ?? (digest + "  " + target.executable + "\n" + addonDigest + "  ast-sgrep-codemode.node\n");
+    writeFileSync(join(packageDir, "checksum.sha256"), checksum);
+  }
+  return { root, manifestPath, executablePath, addonPath, options: { platform: target.platform, arch: target.arch, libc: target.libc, requireResolve: () => manifestPath } };
 }
 function expectCode(code, action, pathPart) {
   assert.throws(action, error => {
@@ -48,7 +56,7 @@ function expectCode(code, action, pathPart) {
   });
 }
 
-function stagedPackage(root, target, payload = Buffer.from("staged native executable")) {
+function stagedPackage(root, target, payload = Buffer.from("staged native executable"), addonPayload = Buffer.from("staged napi addon")) {
   const piDir = join(root, "packages/pi");
   const platformsDir = join(piDir, "platforms");
   const packageDir = join(platformsDir, target.id);
@@ -59,17 +67,32 @@ function stagedPackage(root, target, payload = Buffer.from("staged native execut
   cpSync(join(repoRoot, "packages/pi/platforms/prepack-verify.mjs"), join(platformsDir, "prepack-verify.mjs"));
   cpSync(join(repoRoot, "packages/pi/platforms", target.id), packageDir, { recursive: true });
   const executablePath = join(packageDir, target.executable);
+  const addonPath = join(packageDir, "ast-sgrep-codemode.node");
   writeFileSync(executablePath, payload);
   chmodSync(executablePath, 0o755);
-  writeFileSync(join(packageDir, "checksum.sha256"), createHash("sha256").update(payload).digest("hex") + "  " + target.executable + "\n");
+  writeFileSync(addonPath, addonPayload);
+  writeFileSync(join(packageDir, "checksum.sha256"),
+    createHash("sha256").update(payload).digest("hex") + "  " + target.executable + "\n" +
+    createHash("sha256").update(addonPayload).digest("hex") + "  ast-sgrep-codemode.node\n");
   return packageDir;
 }
 
 test("resolves every supported host deterministically", () => {
   for (const target of targets) {
     const f = fixture(target);
-    try { assert.equal(resolveBinary(f.options), f.executablePath); } finally { rmSync(f.root, { recursive: true, force: true }); }
+    try {
+      assert.equal(resolveBinary(f.options), f.executablePath);
+      assert.equal(resolveCodemodeAddon(f.options), f.addonPath);
+    } finally { rmSync(f.root, { recursive: true, force: true }); }
   }
+});
+
+test("returns null when the NAPI addon is absent from an otherwise valid package", () => {
+  const f = fixture(targets[0], { missingAddon: true });
+  try {
+    assert.equal(resolveBinary(f.options), f.executablePath);
+    assert.equal(resolveCodemodeAddon(f.options), null);
+  } finally { rmSync(f.root, { recursive: true, force: true }); }
 });
 
 test("reports representative unsupported tuples and omitted packages", () => {
@@ -120,16 +143,27 @@ test("committed target, contract, package, and checksum metadata do not drift", 
     assert.equal(contractPackage.optionalDependencyVersion, contract.canonicalVersion.version);
     assert.equal(launcher.optionalDependencies[target.name], contract.canonicalVersion.version);
     const checksumText = readFileSync(join(packageDir, "checksum.sha256"), "utf8");
-    assert.match(checksumText, new RegExp("^[0-9a-f]{64}  " + target.executable.replace(".", "\\.") + "\\n$", "u"));
-    const checksum = checksumText.trim().split(/\s+/u);
-    assert.equal(checksum[1], target.executable);
-    assert.equal(checksum[0], createHash("sha256").update(readFileSync(join(packageDir, target.executable))).digest("hex"));
+    assert.match(checksumText, new RegExp("^[0-9a-f]{64}  " + target.executable.replace(".", "\\.") + "\\n[0-9a-f]{64}  ast-sgrep-codemode\\.node\\n$", "u"));
+    const lines = checksumText.trimEnd().split("\n");
+    assert.equal(lines.length, 2);
+    assert.equal(lines[0].split(/\s+/u)[1], target.executable);
+    assert.equal(lines[0].split(/\s+/u)[0], createHash("sha256").update(readFileSync(join(packageDir, target.executable))).digest("hex"));
+    assert.equal(lines[1].split(/\s+/u)[1], "ast-sgrep-codemode.node");
+    assert.equal(lines[1].split(/\s+/u)[0], createHash("sha256").update(readFileSync(join(packageDir, "ast-sgrep-codemode.node"))).digest("hex"));
+    assert.deepEqual(manifest.files?.slice().sort(), [target.executable, "ast-sgrep-codemode.node", "checksum.sha256", "LICENSE"].sort());
   }
+});
+
+test("rejects empty native executable even when checksum matches empty digest", () => {
+  const EMPTY = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+  const f = fixture(targets[0], { checksum: EMPTY, payload: Buffer.alloc(0) });
+  try { expectCode("ASGREP_EXECUTABLE_EMPTY", () => resolveBinary(f.options), /asgrep$/u); }
+  finally { rmSync(f.root, { recursive: true, force: true }); }
 });
 
 test("validates checksum, executable presence, mode, version, and metadata", () => {
   const cases = [
-    ["ASGREP_CHECKSUM_MISMATCH", { checksum: "0".repeat(64) }, /asgrep$/u],
+    ["ASGREP_CHECKSUM_MISMATCH", { checksum: "0".repeat(64) + "  asgrep\n" + "1".repeat(64) + "  ast-sgrep-codemode.node\n" }, /asgrep$/u],
     ["ASGREP_EXECUTABLE_MISSING", { missingExecutable: true }, /asgrep$/u],
     ["ASGREP_EXECUTABLE_NOT_EXECUTABLE", { mode: 0o644 }, /asgrep$/u],
     ["ASGREP_PLATFORM_VERSION_MISMATCH", { version: "1.0.0" }, /package\.json$/u],
@@ -198,7 +232,7 @@ test("raw placeholders cannot pack and staged inventories are exact", () => {
       assert.equal(result.status, 0, result.stderr);
       const packed = JSON.parse(result.stdout)[0];
       const inventory = packed.files.map(file => file.path).sort();
-      assert.deepEqual(inventory, ["LICENSE", "checksum.sha256", "package.json", target.executable].sort());
+      assert.deepEqual(inventory, ["LICENSE", "ast-sgrep-codemode.node", "checksum.sha256", "package.json", target.executable].sort());
       assert.match(packed.integrity, /^sha512-[A-Za-z0-9+/]+={0,2}$/u);
       assert.match(packed.shasum, /^[0-9a-f]{40}$/u);
     } finally { rmSync(root, { recursive: true, force: true }); }

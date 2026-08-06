@@ -1,0 +1,58 @@
+/**
+ * Load the in-process Code Mode NAPI addon.
+ *
+ * Same model as MCP: Rust `CodeModeSession` runs inside the Node process.
+ * No `asgrep` CLI spawn on the hot path.
+ *
+ * Resolution order:
+ * 1. `ASGREP_CODEMODE_NAPI_PATH` (dev override)
+ * 2. `@ast-sgrep/<platform>/ast-sgrep-codemode.node` via launcher (release install)
+ * 3. Local `extension/native/` / cargo `target/release` (dev builds)
+ */
+export type NativeSessionConfig = {
+    root?: string;
+    indexPath?: string;
+    limit?: number;
+    useEmbed?: boolean;
+};
+export type NativeBatchCall = {
+    id: string;
+    tool: string;
+    args?: Record<string, unknown>;
+};
+export type NativeBatchResult = {
+    id: string;
+    ok: boolean;
+    value?: unknown;
+    error?: string;
+};
+export type NativeBatchResponse = {
+    allOk: boolean;
+    results: NativeBatchResult[];
+    callCount: number;
+    wallMs: number;
+    mode: string;
+};
+export type NativeSession = {
+    call(tool: string, args?: Record<string, unknown>): unknown;
+    readonly callCount: number;
+    readonly root: string;
+};
+export type CodemodeNativeBinding = {
+    Session: new (config?: NativeSessionConfig) => NativeSession;
+    batch(request: {
+        root?: string;
+        indexPath?: string;
+        useEmbed?: boolean;
+        limit?: number;
+        parallelMode?: string;
+        calls: NativeBatchCall[];
+    }): NativeBatchResponse;
+    bindingVersion(): string;
+    isNative(): boolean;
+};
+/** Load the NAPI binding once. Returns null if unavailable on this host. */
+export declare function loadCodemodeNative(): CodemodeNativeBinding | null;
+export declare function nativeAvailable(): boolean;
+/** Reset cache (tests). */
+export declare function resetNativeCache(): void;

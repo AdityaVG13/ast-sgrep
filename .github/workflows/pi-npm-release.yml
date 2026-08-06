@@ -42,6 +42,19 @@ jobs:
         with:
           node-version: 22.19.0
           cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install nightly for fuzzing
+        run: rustup toolchain install nightly --profile minimal
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: fuzz -> target
+      - name: Cache cargo-fuzz
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-fuzz
+          key: cargo-fuzz-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'fuzz/Cargo.toml') }}
+      - name: Install cargo-fuzz
+        run: command -v cargo-fuzz >/dev/null || cargo install cargo-fuzz --locked
       - run: npm ci --ignore-scripts
       - name: Configure SSH tag verification
         run: |
@@ -70,26 +83,55 @@ jobs:
           node-version: 22.19.0
           cache: npm
       - run: npm ci
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.97.1
         with:
           targets: ${{ matrix.rustTarget }}
       - uses: Swatinem/rust-cache@v2
         with:
           key: pi-official-${{ matrix.rustTarget }}
-      - name: Build target-local release executable once
+      - name: Build target-local release artifacts once
         shell: bash
         env:
           RUSTC_WRAPPER: ""
-        run: cargo build --locked --release -p ast-sgrep-cli --bin asgrep --no-default-features --target "${{ matrix.rustTarget }}"
+        run: |
+          cargo build --locked --release -p ast-sgrep-cli --bin asgrep --no-default-features --target "${{ matrix.rustTarget }}"
+          cargo build --locked --release -p ast-sgrep-codemode-napi --target "${{ matrix.rustTarget }}"
       - name: Preserve native checksum and provenance metadata
         shell: bash
         run: |
+          binary="target/${{ matrix.rustTarget }}/release/${{ matrix.executable }}"
+          if [ "${{ matrix.os }}" = "win32" ]; then
+            napi="target/${{ matrix.rustTarget }}/release/ast_sgrep_codemode_napi.dll"
+          elif [ "${{ matrix.os }}" = "darwin" ]; then
+            napi="target/${{ matrix.rustTarget }}/release/libast_sgrep_codemode_napi.dylib"
+          else
+            napi="target/${{ matrix.rustTarget }}/release/libast_sgrep_codemode_napi.so"
+          fi
           node packages/pi/scripts/release-artifact.mjs prepare \
             --target "${{ matrix.id }}" \
-            --binary "target/${{ matrix.rustTarget }}/release/${{ matrix.executable }}" \
+            --binary "$binary" \
+            --napi "$napi" \
             --output "dist/${{ matrix.id }}" \
             --commit "$GITHUB_SHA"
           node packages/pi/scripts/release-artifact.mjs verify --target "${{ matrix.id }}" --input "dist/${{ matrix.id }}"
+      - name: Clean-install and execute target-native npm family
+        shell: bash
+        run: |
+          set -euo pipefail
+          platform_dir="packages/pi/platforms/${{ matrix.id }}"
+          binary="dist/${{ matrix.id }}/${{ matrix.executable }}"
+          cp "$binary" "$platform_dir/${{ matrix.executable }}"
+          cp "dist/${{ matrix.id }}/SHA256SUMS" "$platform_dir/checksum.sha256"
+          if [ "${{ matrix.os }}" != "win32" ]; then chmod 755 "$platform_dir/${{ matrix.executable }}"; fi
+          mkdir -p npm-packs
+          npm pack "$platform_dir" --pack-destination npm-packs
+          npm pack packages/pi/launcher --pack-destination npm-packs
+          npm pack packages/pi/extension --pack-destination npm-packs
+          version="$(node -p "require('./packages/pi/release-contract.json').canonicalVersion.version")"
+          clean="$RUNNER_TEMP/official-pi-native-install"
+          mkdir -p "$clean"
+          npm install --no-audit --no-fund --prefix "$clean"             "$PWD/npm-packs/ast-sgrep-${{ matrix.id }}-$version.tgz"             "$PWD/npm-packs/ast-sgrep-$version.tgz"             "$PWD/npm-packs/pi-ast-sgrep-$version.tgz"
+          node packages/pi/scripts/ci-install-smoke.mjs             --launcher "$clean/node_modules/ast-sgrep/bin/asgrep.js"             --install-root "$clean"             --fixture "$RUNNER_TEMP/pi-official-native-fixture"
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.id }}
@@ -118,7 +160,7 @@ jobs:
           path: dist/native
       - name: Restore native executable bit stripped by upload-artifact
         run: find dist/native -type f -name asgrep -exec chmod +x {} +
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.97.1
       - uses: Swatinem/rust-cache@v2
         with:
           key: pi-e2e-debug
@@ -148,8 +190,20 @@ jobs:
           gh release view "${{ github.ref_name }}" >/dev/null 2>&1 || \
             gh release create "${{ github.ref_name }}" --verify-tag --draft \
               --title "ast-sgrep ${{ github.ref_name }}" \
-              --notes "Attested, immutable npm tarballs and manifest for ${{ github.ref_name }}. To finish or repeat publication without rebuilding, re-run the publish job (it idempotently skips packages already live)."
-          gh release upload "${{ github.ref_name }}" npm-packs/*.tgz npm-packs/release-manifest.json --clobber
+              --notes "Attested, immutable npm tarballs and manifest for ${{ github.ref_name }}. To finish or repeat publication without rebuilding, re-run the publish job (it idempotently verifies packages already live)."
+            remote="$RUNNER_TEMP/existing-release-assets"
+            mkdir -p "$remote"
+            upload=()
+            for artifact in npm-packs/*.tgz npm-packs/release-manifest.json; do
+              name="$(basename "$artifact")"
+              if gh release view "${{ github.ref_name }}" --json assets --jq '.assets[].name' | grep -Fxq "$name"; then
+                gh release download "${{ github.ref_name }}" --pattern "$name" --dir "$remote"
+                cmp --silent "$artifact" "$remote/$name" || { echo "release asset differs: $name" >&2; exit 1; }
+              else
+                upload+=("$artifact")
+              fi
+            done
+            if [ "${#upload[@]}" -gt 0 ]; then gh release upload "${{ github.ref_name }}" "${upload[@]}"; fi
 
   publish:
     name: Protected npm OIDC publication
@@ -158,6 +212,7 @@ jobs:
     environment: npm-production
     env:
       ASGREP_NPM_PROTECTED_ENVIRONMENT: npm-production
+      ASGREP_NPM_OWNERSHIP_APPROVED: ${{ secrets.NPM_OWNERSHIP_APPROVED }}
       NODE_AUTH_TOKEN: ${{ inputs.bootstrap_token && secrets.NPM_TOKEN || '' }}
     permissions:
       contents: read
@@ -171,10 +226,12 @@ jobs:
           cache: npm
       - run: npm ci --ignore-scripts
       - run: npm install --global npm@11
-      - uses: actions/download-artifact@v4
-        with:
-          name: pi-npm-${{ github.ref_name }}-${{ github.sha }}
-          path: npm-packs
+      - name: Download immutable GitHub Release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p npm-packs
+          gh release download "${{ github.ref_name }}" --pattern '*.tgz' --pattern release-manifest.json --dir npm-packs
       - name: Re-verify preserved checksums
         run: node packages/pi/scripts/release-acceptance.mjs verify --artifacts npm-packs
       - name: Publish five native packages

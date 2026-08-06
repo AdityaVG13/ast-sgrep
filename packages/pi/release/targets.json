@@ -1,6 +1,7 @@
 {
   "schemaVersion": 1,
-  "artifactSchemaVersion": 1,
+  "artifactSchemaVersion": 2,
+  "napiAddon": "ast-sgrep-codemode.node",
   "targets": [
     {
       "id": "darwin-arm64",

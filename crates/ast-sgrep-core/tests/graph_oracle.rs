@@ -93,7 +93,10 @@ fn graph_oracle_defs_callers_imports_chain_parity() {
     let searcher = searcher_for(corpus.path(), &index_path);
     let store = IndexStore::open(corpus.path(), Some(&index_path)).unwrap();
     let stats = store.status().unwrap();
-    assert!(stats.symbol_count >= SYMBOLS.len(), "fixture must index symbols");
+    assert!(
+        stats.symbol_count >= SYMBOLS.len(),
+        "fixture must index symbols"
+    );
     assert!(stats.caller_count > 0, "fixture must index callers");
     assert!(stats.import_count > 0, "fixture must index imports");
 
@@ -198,7 +201,10 @@ fn graph_oracle_defs_callers_imports_chain_parity() {
     }
 
     // Non-empty parity gate: at least N symbols × query variants covered.
-    assert!(defs_ok >= 12, "expected >=12 defs assertions, got {defs_ok}");
+    assert!(
+        defs_ok >= 12,
+        "expected >=12 defs assertions, got {defs_ok}"
+    );
     assert!(
         callers_ok >= 12,
         "expected >=12 callers assertions, got {callers_ok}"

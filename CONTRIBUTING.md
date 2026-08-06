@@ -12,6 +12,9 @@ Keep this cheap and single-process. Do **not** treat full workspace test matrice
 From the repository root:
 
 ```bash
+# Forbid-soundness (first-party unsafe ban; distinct from cargo audit)
+bash scripts/verify-forbid-soundness
+
 # Typecheck
 cargo check --workspace -j1
 
@@ -23,15 +26,26 @@ cargo build --release -p ast-sgrep-cli -j1
 ./target/release/asgrep --help
 ```
 
-Optional, when you intentionally want broader coverage:
+New workspace members **must** set `[lints] workspace = true` so they inherit
+`unsafe_code = "forbid"`. The only sealed exception is `ast-sgrep-mmap`
+(see [SECURITY.md](SECURITY.md)).
+
+Before a release, run the same gate used by official release acceptance:
 
 ```bash
-cargo fmt --all -- --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace -j1 -- --test-threads=1
+bash scripts/local-release-gate.sh
 ```
 
-GitHub Actions (`CI`, bake-off, speed, install-smoke) are **manual-only** (`workflow_dispatch`). Trigger from the Actions tab; they do not run on every push.
+The release gate checks formatting, workspace clippy and tests, then exercises
+ranking invariants with a bounded 30-second fuzz run. It requires stable Rust,
+nightly Rust, and `cargo-fuzz`. Ordinary changes should keep using the cheaper,
+targeted default bar above.
+
+GitHub Actions runs `forbid-soundness` and `cargo check` on every `pull_request`.
+Full build/test/clippy/audit/fuzz matrices remain `workflow_dispatch` (Actions tab).
+The speed and bake-off workflows execute real harnesses and fail on correctness,
+identity, or latency threshold breaches. The official package release invokes
+`scripts/local-release-gate.sh` through the release-acceptance command.
 
 ## Pull requests
 

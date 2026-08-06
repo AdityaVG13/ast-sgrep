@@ -50,7 +50,7 @@ flowchart TB
 ast-sgrep/
 ├── crates/ast-sgrep-core/    # Index + hybrid search engine
 ├── crates/ast-sgrep-cli/     # asgrep / ast-sgrep binaries
-├── crates/ast-sgrep-lang/    # tree-sitter parsers (8 languages)
+├── crates/ast-sgrep-lang/    # tree-sitter parsers (13 languages)
 ├── crates/ast-sgrep-embed/   # Semantic local + Ollama + cloud
 ├── crates/ast-sgrep-plugins/ # GitHub / GitLab / agent JSON
 ├── crates/ast-sgrep-lsp/     # asgrep-lsp
@@ -74,7 +74,7 @@ flowchart LR
     P -->|callers:| C["Caller graph SQL"]
     P -->|defs:| D["Symbol lookup SQL"]
     P -->|imports:| I["Import lookup SQL"]
-    P -->|pattern:| AG["native tree-sitter (+ optional ast-grep)"]
+    P -->|pattern:| AG["ast-grep delegate"]
     P -->|hybrid| H["Multi-pass fusion"]
     H --> L["Lexical FTS5"]
     H --> S["Symbol match"]
@@ -94,12 +94,12 @@ flowchart LR
 
 ### Query routing
 
-1. **Prefixed queries** bypass hybrid fusion and hit dedicated SQL or structural paths:
+1. **Prefixed queries** bypass hybrid fusion and hit dedicated SQL or external tools:
    - `callers:`, `defs:`, `imports:` → graph/symbol tables
-   - `pattern:` → native tree-sitter patterns (optional ast-grep subprocess only for exotic shapes)
+   - `pattern:` → ast-grep subprocess (when installed)
 
 2. **Hybrid queries** (no prefix) run multiple passes in parallel conceptually, then fuse:
-   - **Lexical**, FTS5 BM25 on `lines_fts` (and optional secondary FTS5 `lexical.db` at scale; `--tantivy` flag name is historical)
+   - **Lexical**, FTS5 BM25 on `lines_fts` (and optional Tantivy sidecar at scale)
    - **Symbol**, name/kind match on `symbols`
    - **Graph**, caller/callee neighborhood for matched symbols
    - **Anchor**, line-bounded excerpts around symbol definitions
@@ -128,7 +128,7 @@ Metadata (SQLite `meta` table) stores embed backend, dimension, and index finger
 
 | File | When | Purpose |
 |------|------|---------|
-| `.asgrep/lexical.db` | 1000+ files or `--tantivy` | Secondary SQLite FTS5 lexical index (not Tantivy) |
+| `.asgrep/lexical.db` | 1000+ files or `--tantivy` | Dedicated FTS5 / Tantivy lexical index |
 | `.asgrep/semantic.ivf` | ≥ `ann_threshold` symbols | Persisted IVF clusters + vectors; fingerprint-invalidated on reindex |
 
 Below the ANN threshold, semantic search uses brute-force cosine over all symbol vectors (sub-millisecond for typical repos).
@@ -137,7 +137,7 @@ Below the ANN threshold, semantic search uses brute-force cosine over all symbol
 
 1. **Walk** project tree (respect `.gitignore`, `.asgrepignore`)
 2. **Detect language** from extension / shebang
-3. **Parse** with tree-sitter (including C#)
+3. **Parse** with tree-sitter, including native C, C++, C#, Swift, Kotlin, and PHP grammars
 4. **Extract** symbols, caller edges, imports
 5. **Build semantic chunks** per symbol (name, kind, callers, callees, excerpt) → embed → `semantic_chunks`
 6. **Upsert** file row, lines, symbols, graph edges; remove stale rows for changed files
@@ -147,7 +147,7 @@ Incremental skip: if `content_hash` and mtime match, file is not re-parsed.
 
 ## Caller graph safety
 
-Caller edges are extracted from AST call expressions, not naive substring match. This avoids many false positives like matching `auth_refresh` inside a string literal or comment. Conformance goldens assert a **finite, hand-picked forbid list** of doc/string/comment tokens must not appear as callers (`extraction_goldens.rs`); that is **not** a measured 0% false-caller rate on arbitrary code, and language-specific gaps can still miss edges or mis-attribute ownership.
+Caller edges are extracted from AST call expressions, not naive substring match. This avoids false positives like matching `auth_refresh` inside a string literal or comment. Regression tests enforce 0% false caller rate on fixtures.
 
 ## Library usage
 
@@ -191,7 +191,7 @@ let agent = format_response(&response, OutputFormat::Agent);
 
 ## Supported languages
 
-Rust, TypeScript, JavaScript, Python, Go, Java, C#, Ruby, unified index, single query surface.
+Rust, TypeScript, JavaScript, Python, Go, Java, C#, Ruby, Swift, C, C++, Kotlin, and PHP -- unified index, single query surface.
 
 Adding a language (contributors): tree-sitter grammar in `ast-sgrep-lang`, implement `LanguageParser`, register in `ParserRegistry`, map extensions in `detect_language()`.
 
@@ -200,3 +200,4 @@ Adding a language (contributors): tree-sitter grammar in `ast-sgrep-lang`, imple
 - [Semantic search](semantic-search.md), symbol chunks, providers, IVF tuning
 - [Getting started](getting-started.md), CLI commands and flags
 - [Use cases](use-cases.md), LSP and agent integration
+- [Index consistency](index-consistency.md), snapshot model, IVF fingerprint, hybrid multi-connection guarantees

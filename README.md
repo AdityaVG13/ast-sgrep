@@ -6,7 +6,7 @@
 
 **Hybrid code search that understands intent** -- not only text or syntax.
 
-**v1.3.2** · 8 languages · lexical + AST graph + **semantic symbol search** (on by default, no API key)
+**v1.4.0** · 13 languages · lexical + AST graph + **semantic symbol search** + **Code Mode** (on by default, no API key)
 
 > **ast-grep finds shapes. ripgrep finds strings. ast-sgrep finds intent.**
 
@@ -20,15 +20,9 @@ For Pi, install the native package directly:
 pi install npm:pi-ast-sgrep
 ```
 
-It immediately adds `asgrep_search`, `asgrep_index`, `asgrep_status`, four `/asgrep-*` commands, and the `ast-sgrep` skill. The first search lazily creates `.asgrep/`; no Rust toolchain, PATH setup, MCP adapter, credential, or runtime download is required. See the [complete Pi package guide](docs/pi-package.md) for supported hosts, data/privacy behavior, updates, rollback, troubleshooting, and uninstall.
+It immediately adds **`asgrep_codemode`** (Code Mode), `asgrep_search`, `asgrep_index`, `asgrep_status`, four `/asgrep-*` commands, and the `ast-sgrep` skill. The first search lazily creates `.asgrep/`; no Rust toolchain, PATH setup, MCP adapter, credential, or runtime download is required. See the [complete Pi package guide](docs/pi-package.md) and [Code Mode](docs/codemode.md).
 
-For the standalone CLI, after `1.3.2` is published to crates.io, install with:
-
-```bash
-cargo install ast-sgrep-cli --version 1.3.2 --locked
-```
-
-Until publication, build from source:
+The standalone CLI is not yet published to crates.io; the Pi package is the packaged install path. To build from source:
 
 ```bash
 git clone https://github.com/AdityaVG13/ast-sgrep
@@ -74,7 +68,8 @@ Most code search is either **fast text** (ripgrep) or **pattern matching** (ast-
 | How does auth refresh work? | NL → symbols + anchors + semantic similarity |
 | "credential renewal" (no token overlap) | Semantic hit on `auth_refresh` |
 | Structured JSON for an agent | `--json --format agent` |
-| Structural rewrite / codemod | `pattern:` (native tree-sitter; optional ast-grep fallback) |
+| Structural rewrite / codemod | `pattern:` (ast-grep when available) |
+| Agent needs search as a tool (not a subprocess) | `asgrep_codemode` — in-process, stateful session (Code Mode) |
 
 [Full comparison →](docs/comparison.md)
 
@@ -101,10 +96,10 @@ cargo build --release -p ast-sgrep-cli
 ./target/release/asgrep index .
 ./target/release/asgrep 'defs:auth_refresh' . --limit 3
 ./target/release/asgrep semantic 'credential renewal' . --limit 3
-./target/release/asgrep chain 'auth_refresh' . --limit 3  # graph node cap; seeds use top_n=1
+./target/release/asgrep chain 'auth_refresh' . --limit 3
 ```
 
-Unprefixed queries run **hybrid** retrieval. See the [query prefixes](docs/QUERY_GRAMMAR.md).
+Unprefixed queries run **hybrid** retrieval. See the [query grammar](docs/QUERY_GRAMMAR.md).
 
 [Getting started →](docs/getting-started.md) · [Architecture →](docs/ARCHITECTURE.md) · [Docs index →](docs/README.md)
 
@@ -135,10 +130,14 @@ These are **checked-in run summaries**, not portable guarantees. Hardware, corpu
 | Structural workloads vs ast-grep | Large speedups in recorded cases | [speed.md](benchmarks/results/speed.md) |
 | Cross-tool bake-off | Mixed; inspect every row | [bakeoff.md](benchmarks/results/bakeoff.md) |
 | Known regressions | Published without suppression | [losses.md](benchmarks/results/losses.md) |
+| 2026-08-05 release run (self corpus) | Structural pattern 31× faster on the quality path; literal ≈ ripgrep; cold index 906 ms p95 | [speed.md](benchmarks/results/speed.md) |
+
+Measured 2026-08-05 on the self corpus (1,107 tracked files; `scripts/run-benchmarks.sh`) on the **integrated release/1.4.0 tree** (all 7 PRs merged + gated, 66/66 workspace suites green): cold index **2.3 s p95** with semantic embedding (budget breach on the grown corpus — the 285 ms budget was set for 110 files; the original 88.5 s pr21 build was fixed by capping child chunks, `0ba34da`), warm literal **19.5 ms** (≈ ripgrep 15.7 ms), structural pattern **33.1 ms** with the quality batch vs **987 ms** without (ast-grep: 24.2 ms), semantic NL **19.6 ms**. Full provenance in [speed.md](benchmarks/results/speed.md).
 
 Canonical table: [head-to-head.md](benchmarks/results/head-to-head.md). Index: [benchmarks/README.md](benchmarks/README.md). Methodology: [docs/benchmarks.md](docs/benchmarks.md).
 
-**Quality snapshot (self corpus, 18 labeled gold queries):** hybrid MRR **0.712**, Recall@k **0.889**, nDCG@k **0.751** (fingerprint `self-hybrid-d3eab74`). Canonical row and reproduction status: [baselines.md](benchmarks/results/baselines.md#canonical-fingerprint-rows). Historical ~0.75 / 0.746 figures are **superseded** (`self-hist-pre-29129bd`) and must not be quoted as current. On some foreign corpora the offline embedder currently adds little over lexical + AST; a stronger local model is on the roadmap.
+**Quality snapshot (self corpus, 18 labeled gold queries):** hybrid MRR **0.712**, Recall@k **0.889**, nDCG@k **0.751**. The canonical row and its reproduction status are in [baselines.md](benchmarks/results/baselines.md#retrieval-quality--self-corpus-18-gold-queries). On some foreign corpora the offline embedder currently adds little over lexical + AST; a stronger local model is on the roadmap.
+**Historical quality snapshot (self corpus, labeled gold):** hybrid MRR ≈ 0.75, Recall@k ≈ 0.94 (see docs/benchmarks for commands). These are point estimates from an historical evaluation whose sample size and confidence intervals were not recorded; they are not product guarantees and must not be used to claim statistically significant improvements. On some foreign corpora the offline embedder currently adds little over lexical + AST; a stronger local model is on the roadmap.
 
 ---
 
@@ -148,6 +147,7 @@ Canonical table: [head-to-head.md](benchmarks/results/head-to-head.md). Index: [
 |-----------|-------|----------|
 | **CLI** | `cargo build --release -p ast-sgrep-cli` | Terminal, scripts |
 | **MCP** | `cargo build --release -p ast-sgrep-mcp` | AI agents (stdio) |
+| **Code Mode** | `ast-sgrep-codemode` | Programmatic tool-calling / multi-step plans |
 | **LSP** | `cargo build --release -p ast-sgrep-lsp` | Editor navigation |
 | **Library** | `ast-sgrep-core` | Embed search in Rust tools |
 | **JSON plugins** | `--format agent\|github\|gitlab\|agent-capsule` | Agents / CI |
@@ -162,11 +162,11 @@ Canonical table: [head-to-head.md](benchmarks/results/head-to-head.md). Index: [
 | [Getting started](docs/getting-started.md) | Install, index, queries, flags |
 | [Pi package guide](docs/pi-package.md) | Pi install, tools, data, security, updates, rollback, uninstall |
 | [Architecture](docs/ARCHITECTURE.md) | Index schema, search pipeline, crates |
-| [Query prefixes](docs/QUERY_GRAMMAR.md) | Mode prefixes (`defs:`, `callers:`, …) |
+| [Query grammar](docs/QUERY_GRAMMAR.md) | Prefixes and composition |
 | [Semantic search](docs/semantic-search.md) | Chunks, providers, IVF-ANN |
 | [Benchmarks](docs/benchmarks.md) | Methodology, reproduction, losses |
 | [Comparison](docs/comparison.md) | vs ripgrep / ast-grep |
-| [MCP](docs/mcp.md) · [Use cases](docs/use-cases.md) · [Releasing](docs/RELEASING.md) | Agents, LSP, release checklist |
+| [MCP](docs/mcp.md) · [Code Mode](docs/codemode.md) · [Use cases](docs/use-cases.md) · [Releasing](docs/RELEASING.md) | Agents, PTC, LSP, release checklist |
 
 ---
 
@@ -176,10 +176,11 @@ Canonical table: [head-to-head.md](benchmarks/results/head-to-head.md). Index: [
 |------|------|
 | `crates/ast-sgrep-core` | Index, SQLite store, hybrid search |
 | `crates/ast-sgrep-cli` | `asgrep` / `ast-sgrep` CLI + supervisor |
-| `crates/ast-sgrep-lang` | Tree-sitter extraction (8 languages) |
+| `crates/ast-sgrep-lang` | Tree-sitter extraction (13 languages) |
 | `crates/ast-sgrep-embed` | Embedding backends + optional rerank |
 | `crates/ast-sgrep-lsp` | Language server |
 | `crates/ast-sgrep-mcp` | MCP server |
+| `crates/ast-sgrep-codemode` | Code Mode / programmatic tool-calling |
 | `crates/ast-sgrep-plugins` | Output formats |
 | `crates/ast-sgrep-testkit` | Shared test fixtures |
 | `benchmarks/` | Published results (`results/`) and studies (`studies/`) |
@@ -190,7 +191,7 @@ Canonical table: [head-to-head.md](benchmarks/results/head-to-head.md). Index: [
 
 ## Project status and verification
 
-**v1.3.2.** Hybrid search, semantic layer, LSP, MCP, agent JSON, and IVF path are in place.
+**v1.4.0.** Code Mode (in-process tool-calling), 13 languages (5 new: C#, Swift, Kotlin, PHP, JS), fusion-normalized ranking, SIMD/mmap performance, LSP symbol correctness, and the semantic layer are in place.
 
 GitHub Actions workflows are **manual-only** (`workflow_dispatch`) to control Actions minutes. Local quality bar for contributors:
 
