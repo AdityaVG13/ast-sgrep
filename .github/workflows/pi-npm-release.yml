@@ -131,7 +131,7 @@ jobs:
           version="$(node -p "require('./packages/pi/release-contract.json').canonicalVersion.version")"
           clean="$RUNNER_TEMP/official-pi-native-install"
           mkdir -p "$clean"
-          npm install --no-audit --no-fund --prefix "$clean"             "$PWD/npm-packs/ast-sgrep-${{ matrix.id }}-$version.tgz"             "$PWD/npm-packs/ast-sgrep-$version.tgz"             "$PWD/npm-packs/pi-ast-sgrep-$version.tgz"
+          npm install --force --no-audit --no-fund --prefix "$clean"             "$PWD/npm-packs/ast-sgrep-${{ matrix.id }}-$version.tgz"             "$PWD/npm-packs/ast-sgrep-$version.tgz"             "$PWD/npm-packs/pi-ast-sgrep-$version.tgz"
           node packages/pi/scripts/ci-install-smoke.mjs             --launcher "$clean/node_modules/ast-sgrep/bin/asgrep.js"             --install-root "$clean"             --fixture "$RUNNER_TEMP/pi-official-native-fixture"
       - uses: actions/upload-artifact@v4
         with:

@@ -98,7 +98,7 @@ jobs:
           version="$(node -p "require('./packages/pi/release-contract.json').canonicalVersion.version")"
           clean="$RUNNER_TEMP/clean-pi-npm-install"
           mkdir -p "$clean"
-          npm install --no-audit --no-fund --prefix "$clean" \
+          npm install --force --no-audit --no-fund --prefix "$clean" \
             "$PWD/npm-packs/ast-sgrep-${{ matrix.id }}-$version.tgz" \
             "$PWD/npm-packs/ast-sgrep-$version.tgz" \
             "$PWD/npm-packs/pi-ast-sgrep-$version.tgz"
