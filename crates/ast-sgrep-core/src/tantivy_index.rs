@@ -1,7 +1,7 @@
 use crate::store::sql::configure_connection;
 use crate::store::{index_db_path, INDEX_DIR};
 use crate::Result;
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use std::path::{Path, PathBuf};
 type TantivySearchRow = (String, u32, String, Option<String>, usize);
 pub const LEXICAL_DB: &str = "lexical.db";
@@ -15,12 +15,10 @@ impl TantivySidecar {
         Self::open_for_index(root, None)
     }
     pub fn open_for_index(root: &Path, index_path: Option<&Path>) -> Result<Self> {
-        let dir = index_db_path(root, index_path)
-            .parent()
-            .map(|p| p.to_path_buf())
-            .unwrap_or_else(|| root.join(INDEX_DIR));
-        std::fs::create_dir_all(&dir)?;
-        let db_path = dir.join(LEXICAL_DB);
+        let db_path = sidecar_path(root, index_path);
+        if let Some(dir) = db_path.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
         let conn = Connection::open(&db_path)?;
         configure_connection(&conn)?;
         let sidecar = Self { db_path, conn };
@@ -42,15 +40,27 @@ impl TantivySidecar {
         self.db_path.exists()
     }
     pub fn rebuild_from_lines(&self, lines: &[crate::store::IndexedLineRow]) -> Result<()> {
+        self.rebuild_from_lines_with_generation(lines, 0)
+    }
+
+    pub fn rebuild_from_lines_with_generation(
+        &self,
+        lines: &[crate::store::IndexedLineRow],
+        source_generation: i64,
+    ) -> Result<()> {
         self.conn.execute_batch("BEGIN IMMEDIATE")?;
-        if let Err(e) = self.rebuild_inner(lines) {
+        if let Err(e) = self.rebuild_inner(lines, source_generation) {
             let _ = self.conn.execute_batch("ROLLBACK");
             return Err(e);
         }
         self.conn.execute_batch("COMMIT")?;
         Ok(())
     }
-    fn rebuild_inner(&self, lines: &[crate::store::IndexedLineRow]) -> Result<()> {
+    fn rebuild_inner(
+        &self,
+        lines: &[crate::store::IndexedLineRow],
+        source_generation: i64,
+    ) -> Result<()> {
         self.conn.execute("DELETE FROM lines_fts", [])?;
         let mut stmt = self.conn.prepare_cached(
             "INSERT INTO lines_fts(file, line_no, language, content) VALUES(?1, ?2, ?3, ?4)",
@@ -66,7 +76,22 @@ impl TantivySidecar {
         self.conn.execute(
             "INSERT INTO meta(key, value) VALUES('lines', ?1) ON CONFLICT(key) DO UPDATE SET value = excluded.value", params![lines.len().to_string()],
         )?;
+        self.conn.execute(
+            "INSERT INTO meta(key, value) VALUES('source_generation', ?1) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![source_generation.to_string()],
+        )?;
         Ok(())
+    }
+    pub fn is_fresh(&self, source_generation: i64) -> Result<bool> {
+        let stored = self
+            .conn
+            .query_row(
+                "SELECT value FROM meta WHERE key = 'source_generation'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        Ok(stored.and_then(|value| value.parse::<i64>().ok()) == Some(source_generation))
     }
     pub fn search(&self, terms: &[String], limit: usize) -> Result<Vec<TantivySearchRow>> {
         if terms.is_empty() {
@@ -100,6 +125,13 @@ impl TantivySidecar {
             .collect()
     }
 }
+pub fn sidecar_path(root: &Path, index_path: Option<&Path>) -> PathBuf {
+    index_db_path(root, index_path)
+        .parent()
+        .map(|parent| parent.join(LEXICAL_DB))
+        .unwrap_or_else(|| root.join(INDEX_DIR).join(LEXICAL_DB))
+}
+
 pub fn should_use_tantivy(file_count: usize, force: bool) -> bool {
     force || file_count >= TANTIVY_AUTO_THRESHOLD
 }

@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 use ast_sgrep_lsp::server::LspServer;
 fn main() {
     let args: Vec<String> = std::env::args().collect();

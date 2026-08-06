@@ -251,10 +251,11 @@ pub(crate) fn run_eval(cli: &Cli, args: &EvalArgs) -> anyhow::Result<()> {
     let mut idx_opts = index_options(&root, cli);
     idx_opts.index_path = Some(index_path.clone());
     idx_opts.embed_semantic = true;
+    let tuning = cli.active_tuning();
     idx_opts.embed_backend = ast_sgrep_core::EmbedBackend::from_flags(
-        cli.cloud_embed,
-        cli.ollama_embed,
-        cli.neural_embed,
+        tuning.cloud_embed,
+        tuning.ollama_embed,
+        tuning.neural_embed,
         false,
     );
     Indexer::new(idx_opts)
@@ -282,9 +283,10 @@ pub(crate) fn run_eval(cli: &Cli, args: &EvalArgs) -> anyhow::Result<()> {
             )
         }
         None => {
+            let tuning = cli.active_tuning();
             let cfg = EvalConfig {
-                no_embed: cli.no_embed,
-                semantic_only: cli.semantic_only,
+                no_embed: tuning.no_embed,
+                semantic_only: tuning.semantic_only,
             };
             let (evals, agg) = run_single(cli, &root, &index_path, limit, &gold, cfg)?;
             print_single(

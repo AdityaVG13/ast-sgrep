@@ -36,6 +36,7 @@
     {
       "name": "synonym_credential_renewal",
       "query": "credential renewal",
+      "mode": "semantic",
       "top_k": 16,
       "must_include": [
         { "kind": "embed", "symbol": "auth_refresh", "max_rank": 16 }

@@ -22,7 +22,7 @@ pub fn lexical_pass(
             &options.root,
             options.index_path.as_deref(),
         )?;
-        if sidecar.exists() {
+        if sidecar.exists() && sidecar.is_fresh(store.index_data_version()?)? {
             return lexical_from_sidecar(options, parsed, &sidecar);
         }
     }

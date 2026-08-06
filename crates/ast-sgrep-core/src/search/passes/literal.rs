@@ -58,6 +58,9 @@ fn literal_trigram(
         }
         let excerpt_text = excerpt_opt(file_map.as_ref(), &path, line_no, &content, options);
         hits.push(asgrep_line_hit(path, language, line_no, excerpt_text, 1.0));
+        if hits.len() >= options.limit.max(100) {
+            break;
+        }
     }
     Ok(hits)
 }

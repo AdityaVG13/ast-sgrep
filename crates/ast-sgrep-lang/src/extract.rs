@@ -9,7 +9,7 @@ thread_local! {
 }
 
 /// Parse `source` and run `extract` on the tree. When `lang_key` is set, reuses a thread-local parser for that language.
-pub fn parse_and_extract_for(
+pub(crate) fn parse_and_extract_for(
     lang_key: Option<Language>,
     language: tree_sitter::Language,
     source: &str,
@@ -54,70 +54,92 @@ fn parse_tree(
         .parse(source, None)
         .ok_or_else(|| anyhow::anyhow!("failed to parse source"))
 }
-pub fn byte_to_line(source: &str, byte: usize) -> u32 {
+pub(crate) fn byte_to_line(source: &str, byte: usize) -> u32 {
     source[..byte.min(source.len())]
         .bytes()
         .filter(|&b| b == b'\n')
         .count() as u32
         + 1
 }
-pub fn node_lines(node: &Node, source: &str) -> (u32, u32) {
+pub(crate) fn node_lines(node: &Node, source: &str) -> (u32, u32) {
     (
         byte_to_line(source, node.start_byte()),
         byte_to_line(source, node.end_byte()),
     )
 }
-pub fn node_text<'a>(node: &Node, source: &'a str) -> Option<&'a str> {
+pub(crate) fn node_text<'a>(node: &Node, source: &'a str) -> Option<&'a str> {
     source.get(node.start_byte()..node.end_byte())
 }
-pub fn last_identifier_in_chain(node: &Node, source: &str) -> Option<String> {
-    match node.kind() {
-        "identifier" | "type_identifier" | "field_identifier" | "property_identifier" => {
-            node_text(node, source).map(str::to_string)
-        }
-        "field_expression"
-        | "scoped_identifier"
-        | "scoped_type_identifier"
-        | "member_expression"
-        | "member_access_expression"
-        | "selector_expression" => {
-            let mut cursor = node.walk();
-            let mut last = None;
-            for child in node.children(&mut cursor) {
-                if let Some(name) = last_identifier_in_chain(&child, source) {
-                    last = Some(name);
-                }
+
+/// Identifier-like tree-sitter kinds used by pattern matching and extraction.
+pub(crate) const IDENT_KINDS: &[&str] = &[
+    "identifier",
+    "type_identifier",
+    "field_identifier",
+    "property_identifier",
+    "package_identifier",
+    "constant",
+];
+
+/// Member / scoped expression kinds that chain identifiers.
+pub(crate) const MEMBER_EXPR_KINDS: &[&str] = &[
+    "field_expression",
+    "scoped_identifier",
+    "scoped_type_identifier",
+    "member_expression",
+    "member_access_expression",
+    "selector_expression",
+];
+
+#[inline]
+pub(crate) fn is_ident_kind(kind: &str) -> bool {
+    IDENT_KINDS.contains(&kind)
+}
+
+#[inline]
+pub(crate) fn is_member_expr_kind(kind: &str) -> bool {
+    MEMBER_EXPR_KINDS.contains(&kind)
+}
+
+pub(crate) fn last_identifier_in_chain(node: &Node, source: &str) -> Option<String> {
+    if is_ident_kind(node.kind()) {
+        return node_text(node, source).map(str::to_string);
+    }
+    if is_member_expr_kind(node.kind()) {
+        let mut cursor = node.walk();
+        let mut last = None;
+        for child in node.children(&mut cursor) {
+            if let Some(name) = last_identifier_in_chain(&child, source) {
+                last = Some(name);
             }
-            last
         }
-        _ => {
-            let mut cursor = node.walk();
-            let mut found = None;
-            for c in node.children(&mut cursor) {
-                if let Some(name) = last_identifier_in_chain(&c, source) {
-                    found = Some(name);
-                    break;
-                }
-            }
-            found
+        return last;
+    }
+    let mut cursor = node.walk();
+    let mut found = None;
+    for c in node.children(&mut cursor) {
+        if let Some(name) = last_identifier_in_chain(&c, source) {
+            found = Some(name);
+            break;
         }
     }
+    found
 }
-pub fn is_in_comment_or_string(node: &Node) -> bool {
+pub(crate) fn is_in_comment_or_string(node: &Node) -> bool {
+    const KINDS: &[&str] = &[
+        "comment",
+        "line_comment",
+        "block_comment",
+        "string_literal",
+        "raw_string_literal",
+        "string",
+        "template_string",
+        "interpreted_string_literal",
+        "quoted_string_literal",
+    ];
     let mut current = Some(*node);
     while let Some(n) = current {
-        if matches!(
-            n.kind(),
-            "comment"
-                | "line_comment"
-                | "block_comment"
-                | "string_literal"
-                | "raw_string_literal"
-                | "string"
-                | "template_string"
-                | "interpreted_string_literal"
-                | "quoted_string_literal"
-        ) {
+        if KINDS.contains(&n.kind()) {
             return true;
         }
         current = n.parent();
@@ -125,7 +147,7 @@ pub fn is_in_comment_or_string(node: &Node) -> bool {
     false
 }
 /// True if any ancestor node has a kind in `kinds`.
-pub fn is_inside_any(node: &Node, kinds: &[&str]) -> bool {
+pub(crate) fn is_inside_any(node: &Node, kinds: &[&str]) -> bool {
     let mut current = node.parent();
     while let Some(n) = current {
         if kinds.iter().any(|&k| n.kind() == k) {
@@ -136,15 +158,17 @@ pub fn is_inside_any(node: &Node, kinds: &[&str]) -> bool {
     false
 }
 
-pub fn add_named_symbol(ext: &mut Extractor, node: &Node, source: &str, kind: SymbolKind) {
-    if let Some(name_node) = node.child_by_field_name("name") {
-        if let Some(name) = node_text(&name_node, source) {
-            ext.add_symbol(node, source, name, kind);
-        }
-    }
+pub(crate) fn add_named_symbol(ext: &mut Extractor, node: &Node, source: &str, kind: SymbolKind) {
+    let Some(name_node) = node.child_by_field_name("name") else {
+        return;
+    };
+    let Some(name) = node_text(&name_node, source) else {
+        return;
+    };
+    ext.add_symbol(node, source, name, kind);
 }
 
-pub fn trim_string_literal(raw: &str) -> &str {
+pub(crate) fn trim_string_literal(raw: &str) -> &str {
     raw.trim().trim_matches(|c| matches!(c, '"' | '\'' | '`'))
 }
 
@@ -152,7 +176,7 @@ pub fn trim_string_literal(raw: &str) -> &str {
 ///
 /// Prefer positional variants so language kind-maps stay compact and scannable.
 #[derive(Clone, Copy)]
-pub enum KindRule {
+pub(crate) enum KindRule {
     /// Named symbol with fixed kind.
     Sym(SymbolKind),
     /// Named symbol: Method if inside any of these parents, else Function.
@@ -187,7 +211,7 @@ pub enum KindRule {
 }
 
 /// Apply the first matching kind rule. Returns true if a rule fired.
-pub fn apply_kind_table(
+pub(crate) fn apply_kind_table(
     ext: &mut Extractor,
     node: &Node,
     source: &str,
@@ -233,16 +257,16 @@ fn apply_kind_rule(ext: &mut Extractor, node: &Node, source: &str, rule: KindRul
             }
         }
         KindRule::SymParent(parent_kind, sk) => {
-            if let Some(parent) = node.parent() {
-                if parent.kind() == parent_kind {
-                    add_named_symbol(ext, &parent, source, sk);
-                }
-            }
+            let Some(parent) = node.parent().filter(|p| p.kind() == parent_kind) else {
+                return;
+            };
+            add_named_symbol(ext, &parent, source, sk);
         }
         KindRule::Call(field) => {
-            if let Some(func) = field_child(node, field) {
-                ext.add_call(node, source, &func);
-            }
+            let Some(func) = field_child(node, field) else {
+                return;
+            };
+            ext.add_call(node, source, &func);
         }
         KindRule::CallOrImport(callee_field, import_names, args_field) => {
             let Some(method) = field_child(node, callee_field) else {
@@ -268,25 +292,26 @@ fn apply_kind_rule(ext: &mut Extractor, node: &Node, source: &str, rule: KindRul
             }
         }
         KindRule::ImportQuoted(field) => {
-            if let Some(path_node) = field_child(node, field) {
-                if let Some(path) = node_text(&path_node, source) {
-                    ext.add_import(node, source, trim_string_literal(path));
-                }
-            }
+            let Some(path_node) = field_child(node, field) else {
+                return;
+            };
+            let Some(path) = node_text(&path_node, source) else {
+                return;
+            };
+            ext.add_import(node, source, trim_string_literal(path));
         }
         KindRule::ImportQuotedOrChild(field, fallback_kind) => {
-            if let Some(path_node) = field_child(node, field) {
-                if let Some(path) = node_text(&path_node, source) {
-                    ext.add_import(node, source, trim_string_literal(path));
-                    return;
-                }
+            if let Some(path) = field_child(node, field).and_then(|n| node_text(&n, source)) {
+                ext.add_import(node, source, trim_string_literal(path));
+                return;
             }
             let mut cursor = node.walk();
             for child in node.children(&mut cursor) {
-                if child.kind() == fallback_kind {
-                    if let Some(path) = node_text(&child, source) {
-                        ext.add_import(node, source, trim_string_literal(path));
-                    }
+                if child.kind() != fallback_kind {
+                    continue;
+                }
+                if let Some(path) = node_text(&child, source) {
+                    ext.add_import(node, source, trim_string_literal(path));
                 }
             }
         }
@@ -309,7 +334,7 @@ fn apply_kind_rule(ext: &mut Extractor, node: &Node, source: &str, rule: KindRul
 }
 
 /// First direct (or recursive) child whose kind is in `name_kinds` and text is not in `skip`.
-pub fn path_from_name_children(
+pub(crate) fn path_from_name_children(
     node: &Node,
     source: &str,
     name_kinds: &[&str],
@@ -342,7 +367,7 @@ const STRING_KINDS: &[&str] = &[
 ];
 
 /// First string-like descendant (quoted literals / string content nodes).
-pub fn first_string_literal(node: &Node, source: &str) -> Option<String> {
+pub(crate) fn first_string_literal(node: &Node, source: &str) -> Option<String> {
     if STRING_KINDS.iter().any(|&k| node.kind() == k) {
         return node_text(node, source).map(|raw| trim_string_literal(raw).to_string());
     }
@@ -354,45 +379,50 @@ pub fn first_string_literal(node: &Node, source: &str) -> Option<String> {
     }
     None
 }
-pub fn enclosing_symbol_name(node: &Node, source: &str) -> Option<String> {
+fn field_name_text(node: &Node, source: &str) -> Option<String> {
+    node.child_by_field_name("name")
+        .and_then(|n| node_text(&n, source).map(str::to_string))
+}
+
+const ENCLOSING_NAMED_FN_KINDS: &[&str] = &[
+    "function_item",
+    "function_declaration",
+    "function_definition",
+    "method_declaration",
+    "method_definition",
+    "method",
+];
+const ENCLOSING_ARROW_FN_KINDS: &[&str] = &["arrow_function", "function_expression"];
+
+pub(crate) fn enclosing_symbol_name(node: &Node, source: &str) -> Option<String> {
     let mut current = node.parent();
     while let Some(n) = current {
-        match n.kind() {
-            "function_item"
-            | "function_declaration"
-            | "function_definition"
-            | "method_declaration"
-            | "method_definition"
-            | "method" => {
-                if let Some(name_node) = n.child_by_field_name("name") {
-                    return node_text(&name_node, source).map(str::to_string);
+        let kind = n.kind();
+        if ENCLOSING_NAMED_FN_KINDS.contains(&kind) {
+            if let Some(name) = field_name_text(&n, source) {
+                return Some(name);
+            }
+        } else if ENCLOSING_ARROW_FN_KINDS.contains(&kind) {
+            if let Some(name) = field_name_text(&n, source) {
+                return Some(name);
+            }
+            if let Some(parent) = n.parent().filter(|p| p.kind() == "variable_declarator") {
+                if let Some(name) = field_name_text(&parent, source) {
+                    return Some(name);
                 }
             }
-            "arrow_function" | "function_expression" => {
-                if let Some(name_node) = n.child_by_field_name("name") {
-                    return node_text(&name_node, source).map(str::to_string);
-                }
-                if let Some(parent) = n.parent() {
-                    if parent.kind() == "variable_declarator" {
-                        if let Some(name_node) = parent.child_by_field_name("name") {
-                            return node_text(&name_node, source).map(str::to_string);
-                        }
-                    }
-                }
-            }
-            _ => {}
         }
         current = n.parent();
     }
     None
 }
-pub struct Extractor {
-    pub symbols: Vec<SymbolDef>,
-    pub calls: Vec<CallSite>,
-    pub imports: Vec<ImportSite>,
+pub(crate) struct Extractor {
+    pub(crate) symbols: Vec<SymbolDef>,
+    pub(crate) calls: Vec<CallSite>,
+    pub(crate) imports: Vec<ImportSite>,
 }
 impl Extractor {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             symbols: vec![],
             calls: vec![],
@@ -400,7 +430,7 @@ impl Extractor {
         }
     }
 
-    pub fn into_result(self) -> ExtractionResult {
+    pub(crate) fn into_result(self) -> ExtractionResult {
         ExtractionResult {
             symbols: self.symbols,
             calls: self.calls,
@@ -409,7 +439,7 @@ impl Extractor {
         }
     }
 
-    pub fn add_symbol(&mut self, node: &Node, source: &str, name: &str, kind: SymbolKind) {
+    pub(crate) fn add_symbol(&mut self, node: &Node, source: &str, name: &str, kind: SymbolKind) {
         let (line_start, line_end) = node_lines(node, source);
         self.symbols.push(SymbolDef {
             name: name.to_string(),
@@ -421,7 +451,7 @@ impl Extractor {
         });
     }
 
-    pub fn add_call(&mut self, node: &Node, source: &str, callee_node: &Node) {
+    pub(crate) fn add_call(&mut self, node: &Node, source: &str, callee_node: &Node) {
         if is_in_comment_or_string(node) {
             return;
         }
@@ -437,28 +467,20 @@ impl Extractor {
         });
     }
 
-    pub fn add_import(&mut self, node: &Node, source: &str, module: &str) {
+    pub(crate) fn add_import(&mut self, node: &Node, source: &str, module: &str) {
         self.imports.push(ImportSite {
             module_path: module.to_string(),
             line: byte_to_line(source, node.start_byte()),
         });
     }
 }
-impl Default for Extractor {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-pub fn collect_identifiers(node: &Node, source: &str) -> Vec<String> {
+pub(crate) fn collect_identifiers(node: &Node, source: &str) -> Vec<String> {
     let mut ids = Vec::new();
     collect_identifiers_rec(node, source, &mut ids);
     ids
 }
 fn collect_identifiers_rec(node: &Node, source: &str, ids: &mut Vec<String>) {
-    if matches!(
-        node.kind(),
-        "identifier" | "type_identifier" | "property_identifier" | "package_identifier"
-    ) {
+    if is_ident_kind(node.kind()) {
         if let Some(text) = node_text(node, source) {
             ids.push(text.to_string());
         }
@@ -470,10 +492,10 @@ fn collect_identifiers_rec(node: &Node, source: &str, ids: &mut Vec<String>) {
         }
     }
 }
-pub fn field_child<'a>(node: &'a Node, name: &str) -> Option<Node<'a>> {
+pub(crate) fn field_child<'a>(node: &'a Node, name: &str) -> Option<Node<'a>> {
     node.child_by_field_name(name)
 }
-pub fn parse_ts_language_for(
+pub(crate) fn parse_ts_language_for(
     lang_key: Option<Language>,
     language: tree_sitter::Language,
     source: &str,

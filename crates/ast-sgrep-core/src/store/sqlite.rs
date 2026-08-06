@@ -1,9 +1,9 @@
 use super::embed_support::{
     embed_cache_cap, embed_chunks, evict_embed_cache, init_cache_seq, insert_embed_cache_entries,
-    normalize_rel, read_sym_loc, structure_fingerprint, touch_embed_cache_entries, EmbeddedChunk,
-    EmbeddedChunks,
+    read_sym_loc, requested_model_identity, structure_fingerprint,
+    touch_embed_cache_entries, EmbeddedChunk, EmbeddedChunks,
 };
-use super::index_db_path;
+use super::try_index_db_path;
 use super::sql::configure_connection;
 use super::sql::{
     append_lang_filter, calls_matching, count_star, delete_file_children, delete_file_lines,
@@ -14,10 +14,12 @@ use crate::{IndexStatus, Result};
 use ast_sgrep_lang::PatternNode;
 use rusqlite::types::{Type, ValueRef};
 use rusqlite::{params, Connection, ToSql};
-use std::collections::{BTreeSet, HashMap};
-use std::path::{Path, PathBuf};
+use std::collections::HashMap;
+use std::path::Path;
 use std::sync::Arc;
-const SCHEMA_VERSION: i64 = 6;
+// 6 = symbols_name_lower (main / z47q). 7 = semantic-layout-v2 wipe (this PR).
+// Never reuse a SCHEMA_VERSION for two different migrations.
+const SCHEMA_VERSION: i64 = 7;
 const IMPORT_SELECT: &str =
     "SELECT f.path, f.language, i.module_path, i.line_no FROM imports i JOIN files f ON f.id = i.file_id";
 const SYM_LOC: &str = "SELECT f.path, s.name, f.language, s.line_start, s.line_end FROM symbols s JOIN files f ON f.id = s.file_id";
@@ -102,11 +104,28 @@ pub struct IndexStore {
 }
 impl IndexStore {
     pub fn open(root: &Path, index_path: Option<&Path>) -> Result<Self> {
-        let db_path = index_db_path(root, index_path);
+        let db_path = try_index_db_path(root, index_path).map_err(|e| {
+            crate::StoreError::Other(format!(
+                "failed to resolve index path for root {}: {e}",
+                root.display()
+            ))
+        })?;
         if let Some(p) = db_path.parent() {
-            std::fs::create_dir_all(p)?;
+            std::fs::create_dir_all(p).map_err(|e| {
+                crate::StoreError::Other(format!(
+                    "failed to create index directory {} (root {}): {e}",
+                    p.display(),
+                    root.display()
+                ))
+            })?;
         }
-        let conn = Connection::open(&db_path)?;
+        let conn = Connection::open(&db_path).map_err(|e| {
+            crate::StoreError::Other(format!(
+                "failed to open index at {} (root {}): {e}",
+                db_path.display(),
+                root.display()
+            ))
+        })?;
         configure_connection(&conn)?;
         let store = Self {
             conn,
@@ -124,13 +143,36 @@ impl IndexStore {
             .conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))?;
         if version >= SCHEMA_VERSION {
-            return Ok(());
+            // Probe core tables even when user_version is current (a639).
+            let core: i64 = self.conn.query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('files','lines','meta','symbols')",
+                [],
+                |r| r.get(0),
+            )?;
+            if core >= 4 {
+                return Ok(());
+            }
+            // Corrupt/partial schema with current user_version — rebuild.
         }
         self.conn.execute_batch(SCHEMA_DDL)?;
         if version < 3 {
             self.conn.execute_batch(
                 "INSERT INTO lines_trigram(rowid, content) SELECT rowid, content FROM lines;",
             )?;
+        }
+        // Schema 6 (main): idx_symbols_name_lower arrives via SCHEMA_DDL above.
+        // Schema 7: force re-embed under parent-mapped child layout (e2hc.6).
+        if version < 7 {
+            self.conn.execute_batch(
+                "DELETE FROM semantic_chunks;
+                 DELETE FROM embeddings;
+                 DELETE FROM embed_cache;
+                 DELETE FROM meta WHERE key LIKE 'body:%' OR key LIKE 'struct:%'
+                   OR key IN ('embed_backend', 'embed_model', 'embed_dim');
+                 UPDATE files SET content_hash = 'semantic-layout-v2:' || content_hash
+                   WHERE content_hash NOT LIKE 'semantic-layout-v2:%';",
+            )?;
+            crate::semantic_ivf::invalidate_semantic_ivf(&self.db_path)?;
         }
         self.conn
             .execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION}"))?;
@@ -143,6 +185,11 @@ impl IndexStore {
         &self.db_path
     }
     pub fn connection(&self) -> &Connection {
+        // Sealed for first-party use: external crates should prefer typed store
+        // APIs (status/query helpers). Direct connection access remains for
+        // in-tree search passes and integration tests that need prepared SQL
+        // beyond the public facade (l115). Do not open a second connection to
+        // the same db_path from agent surfaces.
         &self.conn
     }
     pub fn set_meta(&self, key: &str, value: &str) -> Result<()> {
@@ -161,6 +208,20 @@ impl IndexStore {
     pub fn delete_meta(&self, key: &str) -> Result<()> {
         self.conn
             .execute("DELETE FROM meta WHERE key = ?1", params![key])?;
+        Ok(())
+    }
+    /// Monotonic generation for searchable-index mutations on every connection.
+    pub fn index_data_version(&self) -> Result<i64> {
+        Ok(self
+            .get_meta("index_data_version")?
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(0))
+    }
+    fn bump_index_data_version(&self) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO meta(key, value) VALUES('index_data_version', '1')              ON CONFLICT(key) DO UPDATE SET value =              CAST(COALESCE(meta.value, '0') AS INTEGER) + 1",
+            [],
+        )?;
         Ok(())
     }
     /// Monotonic counter bumped on every semantic_chunks mutation (insert or delete).
@@ -270,22 +331,33 @@ impl IndexStore {
         Ok(())
     }
     pub fn clear_all_data(&self) -> Result<()> {
-        self.conn.execute_batch(CLEAR_ALL_SQL)?;
+        self.with_file_tx(|| {
+            self.conn.execute_batch(CLEAR_ALL_SQL)?;
+            self.bump_index_data_version()
+        })?;
         let _ = self.conn.execute_batch("VACUUM");
         self.bump_semantic_data_version()?;
         Ok(())
     }
     pub fn upsert_file(&self, input: UpsertFileInput<'_>) -> Result<i64> {
+        let requested_identity = input
+            .embed_semantic
+            .then(|| requested_model_identity(input.embed_backend));
         let struct_fp = structure_fingerprint(
             input.symbols,
             input.callers,
             input.imports,
             input.pattern_nodes,
             input.semantic_chunks,
+            requested_identity.as_deref(),
         );
         let struct_key = format!("struct:{}", input.rel_path);
+        let embed_identity_matches = !input.embed_semantic
+            || self.get_meta("embed_model")?.as_deref() == requested_identity.as_deref();
         if let Some(file_id) = self.file_id(input.rel_path)? {
-            if self.get_meta(&struct_key)?.as_deref() == Some(struct_fp.as_str()) {
+            if embed_identity_matches
+                && self.get_meta(&struct_key)?.as_deref() == Some(struct_fp.as_str())
+            {
                 return self.with_file_tx(|| {
                     self.refresh_lines_only(RefreshLinesInput {
                         file_id,
@@ -389,6 +461,7 @@ impl IndexStore {
             )?
             .execute(params![lang, mtime_secs, mtime_nanos, hash, file_id])?;
         self.set_meta(&format!("eol:{rel_path}"), eol)?;
+        self.bump_index_data_version()?;
         Ok(file_id)
     }
     fn upsert_file_inner(
@@ -420,6 +493,7 @@ impl IndexStore {
         self.insert_pattern_nodes(file_id, input.pattern_nodes)?;
         self.set_meta(struct_key, struct_fp)?;
         crate::semantic_ann::mark_semantic_ivf_stale(self);
+        self.bump_index_data_version()?;
         Ok(file_id)
     }
     fn upsert_file_row(
@@ -441,6 +515,20 @@ impl IndexStore {
         )?.execute(params![path, lang, mtime_secs, mtime_nanos, hash])?;
         Ok(self.conn.last_insert_rowid())
     }
+    /// Prepare a cached INSERT and bind each row. SQL text must remain byte-identical.
+    fn insert_each<T>(
+        &self,
+        sql: &'static str,
+        rows: &[T],
+        mut bind: impl FnMut(&mut rusqlite::CachedStatement<'_>, &T) -> rusqlite::Result<()>,
+    ) -> Result<()> {
+        let mut st = self.conn.prepare_cached(sql)?;
+        for row in rows {
+            bind(&mut st, row)?;
+        }
+        Ok(())
+    }
+
     fn insert_lines(&self, file_id: i64, lines: &[(u32, String)]) -> Result<()> {
         let mut ls = self
             .conn
@@ -495,15 +583,12 @@ impl IndexStore {
             self.bump_semantic_data_version()?;
             return Ok(());
         }
-        if emb.len() < chunks.len() && emb[0].backend == ast_sgrep_embed::EmbedBackendKind::Neural {
-            let (first, last) = (&chunks[0], &chunks[chunks.len() - 1]);
-            for e in emb {
-                self.conn.execute(
-                    "INSERT INTO semantic_chunks(file_id, symbol_id, chunk_kind, line_start, line_end, symbol_name, text, vector) VALUES(?1, NULL, ?2, ?3, ?4, ?5, ?6, ?7)",
-                    params![file_id, "file", first.line_start, last.line_end, "", &e.text, &e.vector_bytes], )?;
-            }
-            let last = &emb[emb.len() - 1];
-            return self.persist_embed_metadata(Some(last.dim), Some(last.backend));
+        if emb.len() != chunks.len() {
+            return Err(crate::StoreError::Other(format!(
+                "embedding result count {} does not match semantic child count {}",
+                emb.len(),
+                chunks.len()
+            )));
         }
         let name_to_id: HashMap<String, i64> = symbols
             .iter()
@@ -519,11 +604,11 @@ impl IndexStore {
             st.execute(params![
                 file_id,
                 sid,
-                "symbol",
+                if c.kind == "file" { "file" } else { "symbol" },
                 c.line_start,
                 c.line_end,
                 c.symbol_name,
-                e.text,
+                c.excerpt,
                 e.vector_bytes
             ])?;
         }
@@ -537,8 +622,9 @@ impl IndexStore {
     ) -> Result<()> {
         if let Some(k) = kind {
             self.set_meta("embed_backend", k.as_meta_str())?;
-            if k == ast_sgrep_embed::EmbedBackendKind::Neural {
-                self.set_meta("embed_model", ast_sgrep_embed::neural_configured_model_id())?;
+            let model = dim.and_then(|dim| ast_sgrep_embed::configured_backend_model_id(k, dim));
+            if let Some(model) = model {
+                self.set_meta("embed_model", &model)?;
             } else {
                 self.delete_meta("embed_model")?;
             }
@@ -552,53 +638,64 @@ impl IndexStore {
         Ok(())
     }
     fn insert_callers(&self, file_id: i64, callers: &[CallerRow]) -> Result<()> {
-        let mut st = self.conn.prepare_cached( "INSERT INTO callers(file_id, caller, callee, line_no, byte_start, byte_end) VALUES(?1,?2,?3,?4,?5,?6)",
-        )?;
-        for c in callers {
-            st.execute(params![
-                file_id,
-                c.caller,
-                c.callee,
-                c.line_no,
-                c.byte_start as i64,
-                c.byte_end as i64
-            ])?;
-        }
-        Ok(())
+        self.insert_each(
+            "INSERT INTO callers(file_id, caller, callee, line_no, byte_start, byte_end) VALUES(?1,?2,?3,?4,?5,?6)",
+            callers,
+            |st, c| {
+                st.execute(params![
+                    file_id,
+                    c.caller,
+                    c.callee,
+                    c.line_no,
+                    c.byte_start as i64,
+                    c.byte_end as i64
+                ])?;
+                Ok(())
+            },
+        )
     }
     fn insert_pattern_nodes(&self, file_id: i64, nodes: &[PatternNode]) -> Result<()> {
-        let mut st = self.conn.prepare_cached( "INSERT INTO pattern_nodes(file_id, signature, line_start, line_end, excerpt) VALUES(?1,?2,?3,?4,?5)",
-        )?;
-        for n in nodes {
-            st.execute(params![
-                file_id,
-                n.signature,
-                n.line_start,
-                n.line_end,
-                n.excerpt
-            ])?;
-        }
-        Ok(())
+        self.insert_each(
+            "INSERT INTO pattern_nodes(file_id, signature, line_start, line_end, excerpt) VALUES(?1,?2,?3,?4,?5)",
+            nodes,
+            |st, n| {
+                st.execute(params![
+                    file_id,
+                    n.signature,
+                    n.line_start,
+                    n.line_end,
+                    n.excerpt
+                ])?;
+                Ok(())
+            },
+        )
     }
     fn insert_imports(&self, file_id: i64, imports: &[ImportRow]) -> Result<()> {
-        let mut st = self.conn.prepare_cached(
+        self.insert_each(
             "INSERT INTO imports(file_id, module_path, line_no) VALUES(?1,?2,?3)",
-        )?;
-        for i in imports {
-            st.execute(params![file_id, i.module_path, i.line_no])?;
-        }
-        Ok(())
+            imports,
+            |st, i| {
+                st.execute(params![file_id, i.module_path, i.line_no])?;
+                Ok(())
+            },
+        )
     }
     pub fn remove_file(&self, rel_path: &str) -> Result<()> {
-        if let Some(id) = self.file_id(rel_path)? {
+        self.with_file_tx(|| {
+            let Some(id) = self.file_id(rel_path)? else {
+                return Ok(());
+            };
             delete_file_children(&self.conn, id)?;
             self.conn
                 .execute("DELETE FROM files WHERE id = ?1", params![id])?;
             self.delete_meta(&format!("eol:{rel_path}"))?;
+            self.delete_meta(&format!("body:{rel_path}"))?;
+            self.delete_meta(&format!("struct:{rel_path}"))?;
             crate::semantic_ann::mark_semantic_ivf_stale(self);
+            self.bump_index_data_version()?;
             self.bump_semantic_data_version()?;
-        }
-        Ok(())
+            Ok(())
+        })
     }
     pub fn file_hash(&self, rel_path: &str) -> Result<Option<String>> {
         optional_row(
@@ -755,6 +852,74 @@ impl IndexStore {
         );
         query_map_rows(&self.conn, &sql, lang, read_sem_row)
     }
+    /// Walk sorted file paths and extend with per-path query results (stable path order).
+    fn map_sorted_files<T>(
+        files: &std::collections::HashSet<String>,
+        mut query: impl FnMut(&str) -> Result<Vec<T>>,
+    ) -> Result<Vec<T>> {
+        let mut paths = files.iter().collect::<Vec<_>>();
+        paths.sort_unstable();
+        let mut out = Vec::new();
+        for path in paths {
+            out.extend(query(path)?);
+        }
+        Ok(out)
+    }
+
+    pub(crate) fn semantic_chunks_for_files(
+        &self,
+        files: &std::collections::HashSet<String>,
+        lang: Option<&str>,
+    ) -> Result<Vec<ast_sgrep_embed::SemanticChunkRow>> {
+        Self::map_sorted_files(files, |path| match lang {
+            Some(language) => query_cached_map(
+                &self.conn,
+                "SELECT f.path, sc.line_start, sc.line_end, sc.symbol_name, sc.text, sc.vector \
+                 FROM semantic_chunks sc JOIN files f ON f.id=sc.file_id \
+                 WHERE f.path=?1 AND f.language=?2 ORDER BY sc.id",
+                params![path, language],
+                read_sem_row,
+            ),
+            None => query_cached_map(
+                &self.conn,
+                "SELECT f.path, sc.line_start, sc.line_end, sc.symbol_name, sc.text, sc.vector \
+                 FROM semantic_chunks sc JOIN files f ON f.id=sc.file_id \
+                 WHERE f.path=?1 ORDER BY sc.id",
+                params![path],
+                read_sem_row,
+            ),
+        })
+    }
+
+    pub(crate) fn legacy_embeddings_for_files(
+        &self,
+        files: &std::collections::HashSet<String>,
+        lang: Option<&str>,
+    ) -> Result<Vec<ast_sgrep_embed::SemanticChunkRow>> {
+        Self::map_sorted_files(files, |path| match lang {
+            Some(language) => query_cached_map(
+                &self.conn,
+                "SELECT f.path, l.line_no, l.content, sc.symbol_name, e.vector \
+                 FROM embeddings e JOIN lines l ON l.file_id=e.file_id AND l.line_no=e.line_no \
+                 JOIN files f ON f.id=e.file_id \
+                 LEFT JOIN semantic_chunks sc ON sc.file_id=f.id AND sc.line_start=l.line_no \
+                 WHERE f.path=?1 AND f.language=?2 ORDER BY l.line_no LIMIT 5000",
+                params![path, language],
+                read_legacy_emb,
+            ),
+            None => query_cached_map(
+                &self.conn,
+                "SELECT f.path, l.line_no, l.content, sc.symbol_name, e.vector \
+                 FROM embeddings e JOIN lines l ON l.file_id=e.file_id AND l.line_no=e.line_no \
+                 JOIN files f ON f.id=e.file_id \
+                 LEFT JOIN semantic_chunks sc ON sc.file_id=f.id AND sc.line_start=l.line_no \
+                 WHERE f.path=?1 ORDER BY l.line_no LIMIT 5000",
+                params![path],
+                read_legacy_emb,
+            ),
+        })
+    }
+
     pub fn symbols_in_file(&self, rel_path: &str) -> Result<Vec<SymbolRow>> {
         query_cached_map(
             &self.conn,
@@ -818,62 +983,12 @@ impl IndexStore {
         )
     }
     pub fn resolve_module_path(&self, from_file: &str, module: &str) -> Result<Vec<String>> {
-        let module = module.trim().trim_matches(['"', '\'']);
-        if module.is_empty() {
-            return Ok(Vec::new());
-        }
         let lang = self.file_language(from_file)?;
-        let parent = Path::new(from_file)
-            .parent()
-            .unwrap_or_else(|| Path::new(""));
-        let bases = match lang.as_deref() {
-            Some("python") => resolve_bases_python(parent, module),
-            Some("javascript") | Some("typescript") => resolve_bases_js(parent, module),
-            Some("go") => resolve_bases_go(from_file, parent, module),
-            // Rust (default): :: paths, crate/super/self, /src/ layout.
-            _ => resolve_bases_rust(from_file, parent, module),
-        };
-        let exts: &[&str] = match lang.as_deref() {
-            Some("python") => &["py"],
-            Some("javascript") => &["js", "jsx", "mjs", "cjs"],
-            Some("typescript") => &["ts", "tsx", "js", "jsx"],
-            Some("go") => &["go"],
-            Some("rust") => &["rs"],
-            _ => &[
-                "rs", "ts", "tsx", "js", "jsx", "py", "go", "java", "cs", "rb",
-            ],
-        };
-        let mut cands = BTreeSet::new();
-        for base in bases {
-            let n = normalize_rel(&base);
-            cands.insert(n.clone());
-            if base.extension().is_none() {
-                for e in exts {
-                    cands.insert(format!("{n}.{e}"));
-                }
-                match lang.as_deref() {
-                    Some("python") => {
-                        cands.insert(format!("{n}/__init__.py"));
-                    }
-                    Some("javascript") | Some("typescript") => {
-                        for e in ["ts", "tsx", "js", "jsx"] {
-                            cands.insert(format!("{n}/index.{e}"));
-                        }
-                    }
-                    Some("go") => {
-                        // package dir: any .go file under the package path is matched
-                        // via file_exists on exact candidates; also try package.go.
-                        cands.insert(format!("{n}/{}.go", base.file_name().and_then(|s| s.to_str()).unwrap_or("pkg")));
-                    }
-                    _ => {
-                        cands.insert(format!("{n}/mod.rs"));
-                        for e in ["ts", "tsx", "js", "jsx"] {
-                            cands.insert(format!("{n}/index.{e}"));
-                        }
-                    }
-                }
-            }
-        }
+        let cands = super::module_resolve::collect_module_candidates(
+            from_file,
+            module,
+            lang.as_deref(),
+        );
         let mut out = Vec::new();
         for c in cands {
             if self.file_exists(&c)? {
@@ -995,114 +1110,4 @@ impl IndexStore {
             .prepare_cached("SELECT 1 FROM files WHERE path=?1")?
             .exists(params![path])?)
     }
-}
-
-fn resolve_bases_rust(from_file: &str, parent: &Path, module: &str) -> Vec<PathBuf> {
-    let crate_src = from_file
-        .find("/src/")
-        .map(|i| Path::new(&from_file[..i + 4]));
-    let slash = module.replace("::", "/");
-    let mut bases = Vec::new();
-    if let Some(rest) = slash.strip_prefix("crate/") {
-        if let Some(src) = crate_src {
-            bases.push(src.join(rest));
-        }
-    } else if slash == "crate" {
-        if let Some(src) = crate_src {
-            bases.push(src.to_path_buf());
-        }
-    } else if slash.starts_with("super/") || slash.starts_with("self/") {
-        let mut base = parent.to_path_buf();
-        let mut rest = slash.as_str();
-        while let Some(n) = rest.strip_prefix("super/") {
-            base.pop();
-            rest = n;
-        }
-        rest = rest.strip_prefix("self/").unwrap_or(rest);
-        bases.push(base.join(rest));
-    } else if module.starts_with('.') {
-        bases.push(parent.join(module));
-    } else {
-        bases.push(parent.join(&slash));
-        if let Some(src) = crate_src {
-            bases.push(src.join(&slash));
-        }
-    }
-    bases
-}
-
-fn resolve_bases_python(parent: &Path, module: &str) -> Vec<PathBuf> {
-    let mut bases = Vec::new();
-    if module.starts_with('.') {
-        let dots = module.chars().take_while(|c| *c == '.').count();
-        let cleaned = module.trim_start_matches('.');
-        let mut base = parent.to_path_buf();
-        // PEP 328: one leading dot = current package; each extra pops one level.
-        for _ in 1..dots {
-            base.pop();
-        }
-        if cleaned.is_empty() {
-            bases.push(base);
-        } else {
-            bases.push(base.join(cleaned.replace('.', "/")));
-        }
-    } else {
-        let slash = module.replace('.', "/");
-        bases.push(PathBuf::from(&slash));
-        let mut cur = parent.to_path_buf();
-        for _ in 0..6 {
-            bases.push(cur.join(&slash));
-            if !cur.pop() {
-                break;
-            }
-        }
-    }
-    bases
-}
-
-fn resolve_bases_js(parent: &Path, module: &str) -> Vec<PathBuf> {
-    let mut bases = Vec::new();
-    if module.starts_with('.') {
-        bases.push(parent.join(module));
-    } else {
-        // Bare specifier: walk up for node_modules/<name>, plus same-dir fallback.
-        bases.push(parent.join(module));
-        let mut cur = parent.to_path_buf();
-        for _ in 0..8 {
-            bases.push(cur.join("node_modules").join(module));
-            if !cur.pop() {
-                break;
-            }
-        }
-    }
-    bases
-}
-
-fn resolve_bases_go(from_file: &str, parent: &Path, module: &str) -> Vec<PathBuf> {
-    let mut bases = Vec::new();
-    if module.starts_with('.') {
-        bases.push(parent.join(module));
-        return bases;
-    }
-    let parts: Vec<&str> = module.split('/').filter(|p| !p.is_empty()).collect();
-    if parts.is_empty() {
-        return bases;
-    }
-    // Match local packages by import-path suffix against indexed tree roots.
-    for n in 1..=parts.len().min(4) {
-        let suffix = parts[parts.len() - n..].join("/");
-        bases.push(PathBuf::from(&suffix));
-        let mut cur = parent.to_path_buf();
-        for _ in 0..6 {
-            bases.push(cur.join(&suffix));
-            if !cur.pop() {
-                break;
-            }
-        }
-        // Also try beside the importing file's module root (first path segment).
-        if let Some(root) = Path::new(from_file).components().next() {
-            bases.push(PathBuf::from(root.as_os_str()).join(&suffix));
-        }
-    }
-    bases
 }
