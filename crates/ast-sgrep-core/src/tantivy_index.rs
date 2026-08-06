@@ -25,6 +25,34 @@ impl TantivySidecar {
         sidecar.init_schema()?;
         Ok(sidecar)
     }
+    /// Open an existing lexical sidecar for search without creating an empty DB.
+    ///
+    /// Empty / schema-only auto-created sidecars are not treated as ready (hkdi / s7jw.2).
+    pub fn open_existing_for_search(
+        root: &Path,
+        index_path: Option<&Path>,
+    ) -> Result<Option<Self>> {
+        let dir = index_db_path(root, index_path)
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| root.join(INDEX_DIR));
+        let db_path = dir.join(LEXICAL_DB);
+        if !db_path.exists() {
+            return Ok(None);
+        }
+        let metadata = std::fs::metadata(&db_path)?;
+        // Never treat a zero-length / freshly-touched empty file as ready.
+        if metadata.len() == 0 {
+            return Ok(None);
+        }
+        let conn = Connection::open(&db_path)?;
+        configure_connection(&conn)?;
+        let sidecar = Self { db_path, conn };
+        if !sidecar.is_search_ready()? {
+            return Ok(None);
+        }
+        Ok(Some(sidecar))
+    }
     fn init_schema(&self) -> Result<()> {
         self.conn.execute_batch(
             " CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL); CREATE VIRTUAL TABLE IF NOT EXISTS lines_fts USING fts5(
@@ -38,6 +66,20 @@ impl TantivySidecar {
     }
     pub fn exists(&self) -> bool {
         self.db_path.exists()
+    }
+    /// True when the sidecar has indexed at least one line (hkdi / y1oy.4).
+    pub fn is_search_ready(&self) -> Result<bool> {
+        let lines: Option<String> = self
+            .conn
+            .query_row("SELECT value FROM meta WHERE key = 'lines'", [], |r| {
+                r.get(0)
+            })
+            .ok();
+        let Some(raw) = lines else {
+            return Ok(false);
+        };
+        let n: usize = raw.parse().unwrap_or(0);
+        Ok(n > 0)
     }
     pub fn rebuild_from_lines(&self, lines: &[crate::store::IndexedLineRow]) -> Result<()> {
         self.rebuild_from_lines_with_generation(lines, 0)

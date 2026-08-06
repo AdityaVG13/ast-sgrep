@@ -185,12 +185,12 @@ impl Searcher {
     pub fn search_lexical(&self, query_str: &str) -> Result<SearchResponse> {
         self.cached("lex", query_str, || {
             let parsed = ParsedQuery::parse(query_str);
-            Ok(finish_response(
+            Ok(finish_response_checked(
                 &parsed,
                 &self.options,
                 lexical_pass(&self.store, &self.options, &parsed)?,
                 true,
-            ))
+            )?)
         })
     }
     pub fn search_symbol_pass(&self, query_str: &str) -> Result<SearchResponse> {
@@ -198,7 +198,7 @@ impl Searcher {
             let parsed = ParsedQuery::parse(query_str);
             let mut hits = symbol_pass(&self.store, &self.options, &parsed)?;
             hits.extend(anchor_pass(&self.store, &self.options, &parsed)?);
-            Ok(finish_response(&parsed, &self.options, hits, true))
+            Ok(finish_response_checked(&parsed, &self.options, hits, true)?)
         })
     }
     pub fn search(&self, query_str: &str) -> Result<SearchResponse> {
@@ -237,51 +237,51 @@ impl Searcher {
                     }
                 }
             };
-            Ok(finish_response(&parsed, &self.options, hits, true))
+            Ok(finish_response_checked(&parsed, &self.options, hits, true)?)
         })
     }
     pub fn search_semantic(&self, query_str: &str) -> Result<SearchResponse> {
         self.cached("sem", query_str, || {
             let parsed = ParsedQuery::parse(query_str);
-            Ok(finish_response(
+            Ok(finish_response_checked(
                 &parsed,
                 &self.options,
                 run_embed_pass(&self.store, &self.options, &parsed, &self.semantic_cache)?,
                 false,
-            ))
+            )?)
         })
     }
     pub fn search_literal(&self, query: &str) -> Result<SearchResponse> {
         self.cached("lit", query, || {
             let parsed = ParsedQuery::literal(query);
-            Ok(finish_response(
+            Ok(finish_response_checked(
                 &parsed,
                 &self.options,
                 literal_pass(&self.store, &self.options, &parsed)?,
                 true,
-            ))
+            )?)
         })
     }
     pub fn search_regex(&self, query: &str) -> Result<SearchResponse> {
         self.cached("re", query, || {
             let parsed = ParsedQuery::regex(query);
-            Ok(finish_response(
+            Ok(finish_response_checked(
                 &parsed,
                 &self.options,
                 regex_pass(&self.store, &self.options, &parsed)?,
                 true,
-            ))
+            )?)
         })
     }
     pub fn search_word(&self, query: &str) -> Result<SearchResponse> {
         self.cached("word", query, || {
             let parsed = ParsedQuery::word(query);
-            Ok(finish_response(
+            Ok(finish_response_checked(
                 &parsed,
                 &self.options,
                 literal_pass(&self.store, &self.options, &parsed)?,
                 true,
-            ))
+            )?)
         })
     }
     fn search_hybrid(&self, parsed: &ParsedQuery) -> Result<Vec<SearchHit>> {
@@ -483,19 +483,41 @@ fn same_definition_locus(hit: &SearchHit, definition: &SearchHit) -> bool {
         && hit.symbol == definition.symbol
 }
 
+/// Preserve the pre-1.3 non-fallible response API. Invalid globs keep the
+/// legacy behavior and are ignored; internal search paths use the checked API.
 pub fn finish_response(
+    parsed: &ParsedQuery,
+    options: &SearchOptions,
+    hits: Vec<SearchHit>,
+    dedup: bool,
+) -> SearchResponse {
+    let mut compatibility_options = options.clone();
+    if compatibility_options
+        .file_filter
+        .as_ref()
+        .is_some_and(|filter| compile_glob(filter).is_err())
+    {
+        compatibility_options.file_filter = None;
+    }
+    finish_response_checked(parsed, &compatibility_options, hits, dedup)
+        .expect("compatibility options were validated")
+}
+
+pub(crate) fn finish_response_checked(
     parsed: &ParsedQuery,
     options: &SearchOptions,
     mut hits: Vec<SearchHit>,
     dedup: bool,
-) -> SearchResponse {
+) -> Result<SearchResponse> {
     if dedup {
         hits = dedup_hits(hits);
     }
     if let Some(ref filter) = options.file_filter {
-        if let Ok(re) = compile_glob(filter) {
-            hits.retain(|h| re.is_match(&h.file));
-        }
+        // iva9.2: invalid globs error — never silently skip the filter.
+        let re = compile_glob(filter).map_err(|e| {
+            crate::StoreError::Other(format!("invalid file_filter glob '{filter}': {e}"))
+        })?;
+        hits.retain(|h| re.is_match(&h.file));
     }
     assign_signal_margins(&mut hits);
     if options.count_only {
@@ -515,7 +537,7 @@ pub fn finish_response(
             prevented_read_bytes: 0,
         };
         record_ledger_from_env(&response);
-        return response;
+        return Ok(response);
     }
     let gate_limit = rerank_candidate_limit(options);
     let hybrid = parsed.mode == QueryMode::Hybrid;
@@ -595,7 +617,7 @@ pub fn finish_response(
         prevented_read_bytes,
     };
     record_ledger_from_env(&response);
-    response
+    Ok(response)
 }
 fn rerank_candidate_limit(options: &SearchOptions) -> usize {
     if options.use_rerank {
@@ -804,7 +826,16 @@ fn cap_per_file(hits: Vec<SearchHit>) -> Vec<SearchHit> {
     kept.extend(overflow);
     kept
 }
-fn compile_glob(pattern: &str) -> std::result::Result<regex::Regex, regex::Error> {
+fn compile_glob(pattern: &str) -> std::result::Result<regex::Regex, String> {
+    if pattern.is_empty() {
+        return Err("file_filter must be non-empty".into());
+    }
+    if pattern
+        .chars()
+        .any(|c| c == '\0' || (c.is_control() && c != '\t'))
+    {
+        return Err("file_filter contains invalid control characters".into());
+    }
     let mut result = String::from("^");
     let mut chars = pattern.chars().peekable();
     while let Some(c) = chars.next() {
@@ -828,7 +859,7 @@ fn compile_glob(pattern: &str) -> std::result::Result<regex::Regex, regex::Error
         }
     }
     result.push('$');
-    regex::Regex::new(&result)
+    regex::Regex::new(&result).map_err(|e| e.to_string())
 }
 fn contains_term_token(text: &str, term: &str) -> bool {
     !term.is_empty()

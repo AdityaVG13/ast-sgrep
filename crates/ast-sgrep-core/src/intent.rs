@@ -1,7 +1,7 @@
 use crate::query::{ParsedQuery, QueryMode};
 use crate::rank::{
-    rrf_score, LEXICAL_RRF_SCALE, RRF_K, SCORE_ANCHOR, SCORE_CALLER_BASE, SCORE_DEF_BASE,
-    SCORE_EMBED, SCORE_EXACT_SYMBOL, SCORE_GRAPH, SCORE_PATTERN,
+    rrf_score, score_symbol, LEXICAL_RRF_SCALE, RRF_K, SCORE_ANCHOR, SCORE_CALLER_BASE,
+    SCORE_DEF_BASE, SCORE_EMBED, SCORE_EXACT_SYMBOL, SCORE_GRAPH, SCORE_PATTERN,
 };
 use crate::search::{HitKind, SearchHit};
 use serde::{Deserialize, Serialize};
@@ -162,12 +162,37 @@ fn apply_spec(weights: &mut ChannelWeights, intent: QueryIntent, spec: &str) {
         }
     }
 }
-fn channel_ceiling(kind: HitKind, term_count: usize) -> f64 {
-    let terms = term_count.max(1) as f64;
-    match kind {
-        HitKind::Asgrep => terms * rrf_score(0, RRF_K) * LEXICAL_RRF_SCALE,
-        HitKind::Def => 2.0 * SCORE_EXACT_SYMBOL * terms + SCORE_DEF_BASE,
-        HitKind::Caller => 2.0 * SCORE_EXACT_SYMBOL * terms + SCORE_CALLER_BASE,
+fn matched_term_count(parsed: &ParsedQuery, target: Option<&str>) -> usize {
+    target
+        .map(|target| {
+            parsed
+                .terms
+                .iter()
+                .filter(|term| score_symbol(term, target) > 0.0)
+                .count()
+        })
+        .unwrap_or(0)
+}
+fn channel_ceiling(parsed: &ParsedQuery, hit: &SearchHit) -> f64 {
+    match hit.kind {
+        // e2hc.14(a): lexical issues ONE OR-query so fuse_rrf never fuses —
+        // each hit has a single rank. The max raw score is rrf_score(0, RRF_K)
+        // * LEXICAL_RRF_SCALE, NOT terms × that. The old `terms *` multiplier
+        // capped every lexical hit at 1/terms, letting noise-floor Embed and
+        // binary Graph hits structurally outrank perfect lexical matches on
+        // multi-term queries.
+        HitKind::Asgrep => rrf_score(0, RRF_K) * LEXICAL_RRF_SCALE,
+        // Def/Caller producers sum only terms that match this hit's target.
+        // Normalize against the same matched-term set so unrelated query context
+        // cannot dilute evidence, while exact matches still outrank substrings.
+        HitKind::Def => {
+            let matched = matched_term_count(parsed, hit.symbol.as_deref()).max(1) as f64;
+            2.0 * SCORE_EXACT_SYMBOL * matched + SCORE_DEF_BASE
+        }
+        HitKind::Caller => {
+            let matched = matched_term_count(parsed, hit.callee.as_deref()).max(1) as f64;
+            2.0 * SCORE_EXACT_SYMBOL * matched + SCORE_CALLER_BASE
+        }
         HitKind::Graph => SCORE_GRAPH,
         HitKind::Anchor => SCORE_ANCHOR,
         HitKind::Embed => SCORE_EMBED,
@@ -193,6 +218,6 @@ pub fn route_hits(parsed: &ParsedQuery, hits: &mut [SearchHit]) {
             hit.score = 0.0;
             continue;
         }
-        hit.score = (hit.score / channel_ceiling(hit.kind, substantive_terms)).clamp(0.0, 1.0);
+        hit.score = (hit.score / channel_ceiling(parsed, hit)).clamp(0.0, 1.0);
     }
 }

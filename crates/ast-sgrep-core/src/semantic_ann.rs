@@ -442,6 +442,11 @@ pub fn ann_threshold(override_threshold: Option<usize>) -> usize {
 pub fn should_use_ann(chunk_count: usize, override_threshold: Option<usize>) -> bool {
     chunk_count >= ann_threshold(override_threshold)
 }
+/// Empty / under-filled ANN results must not short-circuit the flat path:
+/// sufficient only when at least `min(limit, total)` candidates survived.
+pub fn ann_result_is_sufficient(found: usize, total: usize, limit: usize) -> bool {
+    found >= limit.min(total)
+}
 struct SessionCache {
     fingerprint: [u8; 32],
     ivf: Arc<PersistedSemanticIvf>,

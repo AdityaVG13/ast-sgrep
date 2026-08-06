@@ -3,7 +3,8 @@ use crate::rank::SCORE_PATTERN;
 use crate::search::{HitKind, SearchHit, SpanHitInput};
 use crate::Result;
 use ast_sgrep_lang::{
-    cached_pattern_signatures, detect_language, match_pattern, required_pattern_literal,
+    cached_pattern_signatures, detect_language, match_pattern, needs_ast_grep_fallback,
+    required_pattern_literal,
 };
 use rayon::prelude::*;
 use serde::Serialize;
@@ -93,7 +94,23 @@ pub fn search_pattern(
         Err(e) if hits.is_empty() => return Err(e),
         Err(_) => {}
     }
+    if hits.is_empty() && needs_ast_grep_fallback(pattern) {
+        // Fail-closed (iva9.7): exotic shapes never return silent empty when
+        // the structural fallback is disabled or unavailable.
+        if !external_ast_grep_allowed() || find_ast_grep_binary().is_none() {
+            return Err(crate::StoreError::Other(format!(
+                "pattern requires structural fallback but ast-grep is unavailable (fail-closed): {pattern}"
+            )));
+        }
+    }
     Ok(hits)
+}
+/// When set, skip external ast-grep entirely (iva9.7 fail-closed / no-subprocess mode).
+fn external_ast_grep_allowed() -> bool {
+    !matches!(
+        std::env::var("ASGREP_DISABLE_AST_GREP").as_deref(),
+        Ok("1") | Ok("true") | Ok("TRUE")
+    )
 }
 fn search_pattern_cached(
     pattern: &str,
