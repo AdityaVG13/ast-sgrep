@@ -61,10 +61,21 @@ pub fn regex_pass(
                 scan_regex_chunk(chunk, &re, &lang_filter, &options, file_map.as_deref())
             }));
         }
-        Ok(handles
-            .into_iter()
-            .flat_map(|h| h.join().unwrap_or_default())
-            .collect())
+        Ok({
+            let mut out = Vec::new();
+            for handle in handles {
+                match handle.join() {
+                    Ok(hits) => out.extend(hits),
+                    // Fail closed: a panicked worker must not silently drop hits (sxjc).
+                    Err(_) => {
+                        return Err(StoreError::Other(
+                            "regex search worker panicked".to_string(),
+                        ));
+                    }
+                }
+            }
+            out
+        })
     })
 }
 fn required_literal(pattern: &str) -> Option<String> {

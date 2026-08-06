@@ -83,7 +83,7 @@ Two self-describing CLI surfaces let an agent discover the live contract instead
 
 - `capabilities --json` emits machine-readable commands, flags, output formats, and exit-code meanings for the current binary.
 - `robot-docs guide` prints the operational guide intended for tool-using agents.
-- Read-side commands accept `--json`; `--format agent` and `--format agent-capsule` provide agent-oriented result shapes.
+- Read-side commands accept `--json`; `--format agent`, `--format agent-capsule`, and `--format compact` provide agent-oriented result shapes. Compact mode uses deduplicated paths, short stable IDs, minified JSON, and hard snippet budgets.
 - `ast-sgrep-mcp` exposes search over MCP, while `ast-sgrep-lsp` maps indexed navigation to editor protocol operations.
 
 Protocol consumers should discover capabilities first, treat stdout JSON as data, and interpret documented exit codes rather than scraping human-readable lines.

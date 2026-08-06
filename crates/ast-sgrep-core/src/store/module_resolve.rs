@@ -1,5 +1,40 @@
+//! Language-specific module path resolution for import graph expansion.
+
+use super::embed_support::normalize_rel;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
+
+/// Collect candidate relative paths for a module import (existence checked by caller).
+pub(crate) fn collect_module_candidates(
+    from_file: &str,
+    module: &str,
+    lang: Option<&str>,
+) -> BTreeSet<String> {
+    let module = module.trim().trim_matches(['"', '\'']);
+    if module.is_empty() {
+        return BTreeSet::new();
+    }
+    let parent = Path::new(from_file)
+        .parent()
+        .unwrap_or_else(|| Path::new(""));
+    let rules = module_resolve_rules(lang);
+    let bases = (rules.bases)(from_file, parent, module);
+    let mut cands = BTreeSet::new();
+    for base in bases {
+        // Non-UTF8 paths are rejected by the store layer (asgrep-kqhp).
+        let Ok(n) = normalize_rel(&base) else {
+            continue;
+        };
+        cands.insert(n.clone());
+        if base.extension().is_none() {
+            for e in rules.exts {
+                cands.insert(format!("{n}.{e}"));
+            }
+            (rules.add_extras)(&mut cands, &n, &base);
+        }
+    }
+    cands
+}
 
 fn resolve_bases_rust(from_file: &str, parent: &Path, module: &str) -> Vec<PathBuf> {
     let crate_src = from_file
@@ -37,10 +72,10 @@ fn resolve_bases_rust(from_file: &str, parent: &Path, module: &str) -> Vec<PathB
 
 /// Language → {extensions, base resolver, package-style extras}. Candidate sets must stay
 /// identical to the prior match arms (BTreeSet order is key-ordered).
-pub(crate) struct ModuleResolveRules {
-    pub(crate) exts: &'static [&'static str],
-    pub(crate) bases: fn(&str, &Path, &str) -> Vec<PathBuf>,
-    pub(crate) add_extras: fn(&mut BTreeSet<String>, &str, &Path),
+struct ModuleResolveRules {
+    exts: &'static [&'static str],
+    bases: fn(&str, &Path, &str) -> Vec<PathBuf>,
+    add_extras: fn(&mut BTreeSet<String>, &str, &Path),
 }
 
 const JS_INDEX_EXTS: &[&str] = &["ts", "tsx", "js", "jsx"];
@@ -71,7 +106,7 @@ fn extras_default_rustish(cands: &mut BTreeSet<String>, n: &str, _base: &Path) {
     }
 }
 
-pub(crate) fn module_resolve_rules(lang: Option<&str>) -> ModuleResolveRules {
+fn module_resolve_rules(lang: Option<&str>) -> ModuleResolveRules {
     match lang {
         Some("python") => ModuleResolveRules {
             exts: &["py"],

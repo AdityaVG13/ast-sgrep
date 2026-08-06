@@ -11,20 +11,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 use walkdir::WalkDir;
-
-/// Policy for paths stored as SQLite `files.path` keys (ast-sgrep-kqhp).
-///
-/// Indexed relative paths must be valid UTF-8. Lossy conversion is forbidden:
-/// two distinct non-UTF8 `OsStr` paths must not collide into one DB key.
-pub fn indexed_rel_path(rel: &Path) -> Result<String> {
-    let raw = rel.to_str().ok_or_else(|| {
-        crate::StoreError::Other(format!(
-            "non-UTF8 path rejected (asgrep-kqhp): {}",
-            rel.display()
-        ))
-    })?;
-    Ok(raw.replace('\\', "/"))
-}
 #[derive(Debug, Clone)]
 pub struct SplitLines {
     pub lines: Vec<(u32, String)>,
@@ -86,7 +72,7 @@ impl EmbedBackend {
             Self::Cloud => "cloud",
             Self::Ollama => "ollama",
             Self::Neural => "neural",
-            Self::Semantic => "semantic-v2",
+            Self::Semantic => "semantic",
         }
     }
     pub fn parse(s: &str) -> Self {
@@ -94,7 +80,7 @@ impl EmbedBackend {
             "cloud" => Self::Cloud,
             "ollama" => Self::Ollama,
             "neural" | "fastembed" => Self::Neural,
-            "semantic-v2" | "semantic" | "local" => Self::Semantic,
+            "semantic" | "local" => Self::Semantic,
             _ => Self::Auto,
         }
     }
@@ -201,17 +187,35 @@ impl Indexer {
         let force = self.options.force_reindex;
         let lang_filter = self.options.lang_filter.clone();
         let embed_semantic = self.options.embed_semantic;
+        let current_hashes = candidates
+            .iter()
+            .map(|(_, rel)| self.store.file_hash(rel))
+            .collect::<Result<Vec<_>>>()?;
         let prepared: Vec<PrepareOutcome> = candidates
             .par_iter()
-            .map(|(abs, rel)| prepare_file(abs, rel, force, lang_filter.as_deref(), embed_semantic))
+            .zip(current_hashes.par_iter())
+            .map(|((abs, rel), current_hash)| {
+                prepare_file(
+                    abs,
+                    rel,
+                    force,
+                    current_hash.as_deref(),
+                    lang_filter.as_deref(),
+                    embed_semantic,
+                )
+            })
             .collect();
         self.store.begin_bulk_tx()?;
         let write_result = (|| -> Result<()> {
             for (rel_str, outcome) in candidates.iter().map(|(_, r)| r).zip(prepared) {
                 match outcome {
+                    PrepareOutcome::Unchanged => {
+                        seen_paths.insert(rel_str.clone());
+                        stats.files_skipped += 1;
+                    }
                     PrepareOutcome::Filtered => {
-                        // --lang must not destructively wipe other languages (y1oy.8).
-                        // Filtered paths are skipped; prune_missing_files also
+                        // --lang must not destructively wipe other languages (y1oy.8):
+                        // filtered paths are skipped here; prune_missing_files also
                         // respects lang_filter when removing absent files.
                     }
                     PrepareOutcome::Failed(msg) => {
@@ -220,10 +224,6 @@ impl Indexer {
                     }
                     PrepareOutcome::Ready(prep) => {
                         seen_paths.insert(rel_str.clone());
-                        if self.is_unchanged(rel_str, &prep.hash)? {
-                            stats.files_skipped += 1;
-                            continue;
-                        }
                         self.store.upsert_file(UpsertFileInput {
                             rel_path: rel_str,
                             language: prep.language.as_deref(),
@@ -240,8 +240,9 @@ impl Indexer {
                             embed_semantic: self.options.embed_semantic,
                             embed_backend: self.options.embed_backend.to_preference(),
                         })?;
-                        self.store
-                            .set_meta(&format!("body:{rel_str}"), &prep.body_hash)?;
+                        let _ = self
+                            .store
+                            .set_meta(&format!("body:{rel_str}"), &prep.body_hash);
                         stats.files_indexed += 1;
                         stats.symbols_extracted += prep.symbols.len();
                         stats.callers_extracted += prep.callers.len();
@@ -265,15 +266,6 @@ impl Indexer {
             }
         }
         self.rebuild_dirty_sidecars(&stats, semantic_ivf_dirty)?;
-        // Promote only after a complete walk rewrote every reachable file. Partial
-        // update_paths must not advertise semantic-v2 while v1 vectors remain.
-        if self.options.embed_semantic
-            && stats.files_failed == 0
-            && !stats.walk_errors
-            && self.store.needs_semantic_v1_rewrite()?
-        {
-            self.store.set_meta("embed_backend", "semantic-v2")?;
-        }
         Ok(stats)
     }
     /// Walk the project once using the Indexer's IgnoreMatcher for both directory
@@ -307,15 +299,7 @@ impl Indexer {
                     let Ok(rel) = path.strip_prefix(root) else {
                         continue;
                     };
-                    let rel_str = match indexed_rel_path(rel) {
-                        Ok(s) => s,
-                        Err(e) => {
-                            eprintln!("[asgrep] {e}");
-                            stats.files_failed += 1;
-                            stats.walk_errors = true;
-                            continue;
-                        }
-                    };
+                    let rel_str = rel.to_string_lossy().replace('\\', "/");
                     if (respect_gitignore && ignore.is_ignored(rel)) || should_skip_file(&path) {
                         stats.files_skipped += 1;
                         continue;
@@ -358,10 +342,9 @@ impl Indexer {
         }
         Ok(())
     }
-    fn rebuild_dirty_sidecars(&self, stats: &IndexStats, semantic_ivf_dirty: bool) -> Result<()> {
-        if self.options.use_tantivy
-            || crate::tantivy_index::should_use_tantivy(stats.files_indexed, false)
-        {
+    fn rebuild_dirty_sidecars(&self, _stats: &IndexStats, semantic_ivf_dirty: bool) -> Result<()> {
+        let file_count = self.store.status()?.file_count;
+        if crate::tantivy_index::should_use_tantivy(file_count, self.options.use_tantivy) {
             self.rebuild_tantivy_sidecar()?;
         }
         if self.options.embed_semantic && semantic_ivf_dirty {
@@ -383,12 +366,19 @@ impl Indexer {
         )
     }
     fn rebuild_tantivy_sidecar(&self) -> Result<()> {
+        let before = self.store.index_data_version()?;
         let lines = self.store.all_indexed_lines()?;
+        let after = self.store.index_data_version()?;
+        if before != after {
+            return Err(crate::StoreError::Other(
+                "index changed while preparing lexical sidecar; retry the rebuild".into(),
+            ));
+        }
         crate::tantivy_index::TantivySidecar::open_for_index(
             &self.options.root,
             self.options.index_path.as_deref(),
         )?
-        .rebuild_from_lines(&lines)
+        .rebuild_from_lines_with_generation(&lines, after)
     }
     pub fn reindex_all(&mut self) -> Result<IndexStats> {
         self.store.clear_all_data()?;
@@ -410,14 +400,7 @@ impl Indexer {
             if rel.as_os_str().is_empty() || abs.is_dir() {
                 continue;
             }
-            let rel_str = match indexed_rel_path(rel) {
-                Ok(s) => s,
-                Err(e) => {
-                    eprintln!("[asgrep] {e}");
-                    stats.files_failed += 1;
-                    continue;
-                }
-            };
+            let rel_str = rel.to_string_lossy().replace('\\', "/");
             if rel
                 .components()
                 .any(|c| should_skip_dir(Path::new(c.as_os_str())))
@@ -432,7 +415,7 @@ impl Indexer {
                     Ok(fs) if fs.skipped => stats.files_skipped += 1,
                     Ok(_) => {
                         stats.files_indexed += 1;
-                        self.mark_sidecars_dirty();
+                        self.mark_sidecars_dirty()?;
                     }
                     Err(e) => {
                         eprintln!("[asgrep] failed to index {rel_str}: {e}");
@@ -442,7 +425,7 @@ impl Indexer {
             } else if self.store.file_hash(&rel_str)?.is_some() {
                 self.store.remove_file(&rel_str)?;
                 stats.files_removed += 1;
-                self.mark_sidecars_dirty();
+                self.mark_sidecars_dirty()?;
             }
         }
         Ok(stats)
@@ -461,25 +444,26 @@ impl Indexer {
     pub fn deferred_rebuilds_pending(&self) -> bool {
         self.sidecars_dirty.tantivy || self.sidecars_dirty.semantic_ivf
     }
-    fn mark_sidecars_dirty(&mut self) {
-        if self.options.use_tantivy {
-            self.sidecars_dirty.tantivy = true;
-        }
+    fn mark_sidecars_dirty(&mut self) -> Result<()> {
+        let lexical_exists = crate::tantivy_index::sidecar_path(
+            &self.options.root,
+            self.options.index_path.as_deref(),
+        )
+        .exists();
+        let file_count = self.store.status()?.file_count;
+        self.sidecars_dirty.tantivy = self.sidecars_dirty.tantivy
+            || lexical_exists
+            || crate::tantivy_index::should_use_tantivy(file_count, self.options.use_tantivy);
         if self.options.embed_semantic {
             self.sidecars_dirty.semantic_ivf = true;
         }
+        Ok(())
     }
     pub fn index_file(&mut self, abs_path: &Path, rel_path: &str) -> Result<FileIndexStats> {
         let metadata = fs::metadata(abs_path)?;
         let mtime = metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH);
         let (mtime_secs, mtime_nanos) = system_time_to_parts(mtime);
-        let content = match fs::read_to_string(abs_path) {
-            Ok(c) => c,
-            Err(e) if e.kind() == std::io::ErrorKind::InvalidData => {
-                return Err(crate::StoreError::Other(format!("binary file: {rel_path}")));
-            }
-            Err(e) => return Err(e.into()),
-        };
+        let content = crate::io_bounds::read_text_capped(abs_path, crate::io_bounds::MAX_INDEX_FILE_BYTES)?;
         self.index_content_at(rel_path, &content, abs_path, mtime_secs, mtime_nanos)
     }
     pub fn index_content(&mut self, rel_path: &str, content: &str) -> Result<FileIndexStats> {
@@ -511,27 +495,32 @@ impl Indexer {
         if !self.language_filter_allows(rel_path, language)? {
             return Ok(FileIndexStats::default());
         }
-        let body_hash = body_structure_hash(content);
+        let body_hash = body_structure_hash(content, language);
         let body_key = format!("body:{rel_path}");
-        // refresh_lines_only skips semantic re-embed; refuse it while v1 vectors
-        // still need rewriting (e2hc.13).
-        if !self.store.needs_semantic_v1_rewrite()? {
+        if !self.options.embed_semantic {
             if let Some(file_id) = self.store.file_id(rel_path)? {
                 if self.store.get_meta(&body_key)?.as_deref() == Some(body_hash.as_str()) {
                     let split = split_content_lines(content);
-                    self.store.with_file_tx(|| {
-                        self.store.refresh_lines_only(RefreshLinesInput {
-                            file_id,
-                            language: language.map(|l| l.as_str()),
-                            mtime_secs,
-                            mtime_nanos,
-                            content_hash: &hash,
-                            lines: &split.lines,
-                            eol: split.eol,
-                            rel_path,
-                        })
-                    })?;
-                    return Ok(FileIndexStats::default());
+                    self.store.begin_file_tx()?;
+                    match self.store.refresh_lines_only(RefreshLinesInput {
+                        file_id,
+                        language: language.map(|l| l.as_str()),
+                        mtime_secs,
+                        mtime_nanos,
+                        content_hash: &hash,
+                        lines: &split.lines,
+                        eol: split.eol,
+                        rel_path,
+                    }) {
+                        Ok(_) => {
+                            self.store.commit_file_tx()?;
+                            return Ok(FileIndexStats::default());
+                        }
+                        Err(e) => {
+                            self.store.rollback_file_tx()?;
+                            return Err(e);
+                        }
+                    }
                 }
             }
         }
@@ -539,10 +528,11 @@ impl Indexer {
             self.extract_rows(rel_path, content, language)?;
         let material = materialize_upsert(
             content,
+            language,
             &symbols,
             &callers,
+            &pattern_nodes,
             self.options.embed_semantic,
-            language,
         );
         self.store.upsert_file(UpsertFileInput {
             rel_path,
@@ -560,8 +550,7 @@ impl Indexer {
             embed_semantic: self.options.embed_semantic,
             embed_backend: self.options.embed_backend.to_preference(),
         })?;
-        // Propagate body-hash meta failures (bead ast-sgrep-j97d.3ddd).
-        self.store.set_meta(&body_key, &material.body_hash)?;
+        let _ = self.store.set_meta(&body_key, &material.body_hash);
         Ok(FileIndexStats {
             symbols: symbols.len(),
             callers: callers.len(),
@@ -577,19 +566,24 @@ impl Indexer {
             return Ok(false);
         }
         if self.options.embed_semantic {
-            // Legacy unversioned semantic-v1 (e2hc.13): force rewrite even under
-            // Auto. Without this, Auto skips the backend mismatch check and a
-            // single-file update can flip meta to semantic-v2 while sibling
-            // chunks remain v1.
-            if self.store.needs_semantic_v1_rewrite()? {
-                return Ok(false);
-            }
-            // Exact backend identity only (ast-sgrep-28vo): Auto is not a
-            // wildcard for concrete stored backends, and stored "auto" does not
-            // match a concrete active preference.
             let stored = self.store.get_meta("embed_backend")?;
             let active = self.options.embed_backend.to_preference_str();
-            if stored.as_deref() != Some(active) {
+            if stored.as_deref() != Some(active)
+                && stored.as_deref() != Some("auto")
+                && active != "auto"
+            {
+                return Ok(false);
+            }
+            let dim = self
+                .store
+                .get_meta("embed_dim")?
+                .and_then(|value| value.parse::<usize>().ok())
+                .unwrap_or_else(ast_sgrep_embed::default_semantic_dim);
+            let current_model = stored
+                .as_deref()
+                .and_then(ast_sgrep_embed::EmbedBackendKind::parse)
+                .and_then(|backend| ast_sgrep_embed::configured_backend_model_id(backend, dim));
+            if self.store.get_meta("embed_model")? != current_model {
                 return Ok(false);
             }
         }
@@ -602,8 +596,9 @@ impl Indexer {
         if language.is_some_and(|lang| lang.as_str() == lang_filter.as_str()) {
             return Ok(true);
         }
-        // Do not delete other-language rows when --lang filters this path (y1oy.8).
-        let _ = rel_path;
+        if self.store.file_hash(rel_path)?.is_some() {
+            self.store.remove_file(rel_path)?;
+        }
         Ok(false)
     }
     fn extract_rows(
@@ -640,12 +635,13 @@ struct PreparedFile {
 }
 #[allow(clippy::large_enum_variant)]
 enum PrepareOutcome {
+    Unchanged,
     Filtered,
     Failed(String),
     Ready(PreparedFile),
 }
 /// Hash with trailing blank/line-comment trivia removed. Equal ⇒ structure unchanged for trailing edits.
-fn body_structure_hash(content: &str) -> String {
+fn body_structure_hash(content: &str, language: Option<Language>) -> String {
     let mut end = content.len();
     let bytes = content.as_bytes();
     while end > 0 {
@@ -657,7 +653,7 @@ fn body_structure_hash(content: &str) -> String {
         }
         let line_start = content[..end].rfind('\n').map(|i| i + 1).unwrap_or(0);
         let line = content[line_start..end].trim();
-        if !is_trailing_trivia_line(line) {
+        if !is_trailing_trivia_line(line, language) {
             break;
         }
         end = line_start;
@@ -673,13 +669,31 @@ fn body_structure_hash(content: &str) -> String {
     h.finalize().to_hex().to_string()
 }
 
-/// Table-driven trailing trivia prefixes (language-agnostic on this tip).
-fn is_trailing_trivia_line(line: &str) -> bool {
+/// Table-driven trailing trivia: hash-style vs C-family line/block comment prefixes.
+fn is_trailing_trivia_line(line: &str, language: Option<Language>) -> bool {
     if line.is_empty() {
         return true;
     }
-    const PREFIXES: &[&str] = &["//", "#", "/*", "*", "--"];
-    PREFIXES.iter().any(|p| line.starts_with(p))
+    const HASH_PREFIXES: &[&str] = &["#"];
+    const C_FAMILY_PREFIXES: &[&str] = &["//", "/*", "*"];
+    let prefixes: &[&str] = match language {
+        Some(Language::Python | Language::Ruby) => HASH_PREFIXES,
+        Some(
+            Language::Rust
+            | Language::TypeScript
+            | Language::JavaScript
+            | Language::Go
+            | Language::Java
+            | Language::CSharp
+            | Language::Swift
+            | Language::C
+            | Language::Cpp
+            | Language::Kotlin
+            | Language::Php,
+        ) => C_FAMILY_PREFIXES,
+        None => return false,
+    };
+    prefixes.iter().any(|p| line.starts_with(p))
 }
 
 fn hash_content(content: &str) -> String {
@@ -697,17 +711,19 @@ struct UpsertMaterial {
 
 fn materialize_upsert(
     content: &str,
+    language: Option<Language>,
     symbols: &[SymbolRow],
     callers: &[CallerRow],
+    pattern_nodes: &[ast_sgrep_lang::PatternNode],
     embed_semantic: bool,
-    language: Option<Language>,
 ) -> UpsertMaterial {
     let split = split_content_lines(content);
-    let body_hash = body_structure_hash(content);
+    let body_hash = body_structure_hash(content, language);
     let semantic_chunks = if embed_semantic {
-        crate::semantic_chunk::build_semantic_chunks(
+        crate::semantic_chunk::build_semantic_chunks_with_patterns(
             symbols,
             callers,
+            pattern_nodes,
             &split.lines,
             language.map(|l| l.as_str()),
         )
@@ -735,7 +751,8 @@ fn normalize_watch_path(root: &Path, input_path: &Path) -> Option<PathBuf> {
 fn prepare_file(
     abs: &Path,
     rel: &str,
-    _force: bool,
+    force: bool,
+    current_hash: Option<&str>,
     lang_filter: Option<&str>,
     embed_semantic: bool,
 ) -> PrepareOutcome {
@@ -745,11 +762,9 @@ fn prepare_file(
     };
     let mtime = metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH);
     let (mtime_secs, mtime_nanos) = system_time_to_parts(mtime);
-    let content = match fs::read_to_string(abs) {
+    let content = match crate::io_bounds::read_text_capped(abs, crate::io_bounds::MAX_INDEX_FILE_BYTES)
+    {
         Ok(c) => c,
-        Err(e) if e.kind() == std::io::ErrorKind::InvalidData => {
-            return PrepareOutcome::Failed(format!("binary file: {rel}"));
-        }
         Err(e) => return PrepareOutcome::Failed(e.to_string()),
     };
     let hash = hash_content(&content);
@@ -758,6 +773,9 @@ fn prepare_file(
         if language.is_none_or(|l| l.as_str() != filter) {
             return PrepareOutcome::Filtered;
         }
+    }
+    if !force && current_hash == Some(hash.as_str()) {
+        return PrepareOutcome::Unchanged;
     }
     let (symbols, callers, imports, pattern_nodes) = match language {
         Some(lang) => {
@@ -778,7 +796,14 @@ fn prepare_file(
         }
         None => (vec![], vec![], vec![], vec![]),
     };
-    let material = materialize_upsert(&content, &symbols, &callers, embed_semantic, language);
+    let material = materialize_upsert(
+        &content,
+        language,
+        &symbols,
+        &callers,
+        &pattern_nodes,
+        embed_semantic,
+    );
     PrepareOutcome::Ready(PreparedFile {
         hash,
         body_hash: material.body_hash,
@@ -851,10 +876,24 @@ mod tests {
 #[cfg(test)]
 mod body_hash_tests {
     use super::body_structure_hash;
+    use ast_sgrep_lang::Language;
+
     #[test]
-    fn trailing_comment_preserves_body_hash() {
+    fn trailing_comment_preserves_body_hash_for_its_language() {
         let a = "export function x() {\n  return 1;\n}\n";
-        let b = format!("{a}\n// sub1ms-bench-marker\n");
-        assert_eq!(body_structure_hash(a), body_structure_hash(&b));
+        let js_comment = format!("{a}\n// sub1ms-bench-marker\n");
+        assert_eq!(
+            body_structure_hash(a, Some(Language::JavaScript)),
+            body_structure_hash(&js_comment, Some(Language::JavaScript))
+        );
+        let hash_line = format!("{a}\n# not-a-javascript-comment\n");
+        assert_ne!(
+            body_structure_hash(a, Some(Language::JavaScript)),
+            body_structure_hash(&hash_line, Some(Language::JavaScript))
+        );
+        assert_eq!(
+            body_structure_hash(a, Some(Language::Python)),
+            body_structure_hash(&hash_line, Some(Language::Python))
+        );
     }
 }

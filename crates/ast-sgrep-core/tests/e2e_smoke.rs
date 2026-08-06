@@ -1,4 +1,4 @@
-//! Thin end-to-end parity: one sample index, real search/chain entry points.
+//! End-to-end smoke (renamed from parity.rs — e9qc). External oracle compare lives elsewhere.
 use ast_sgrep_core::chain::{expand_chain, ChainConfig};
 use ast_sgrep_core::search::HitKind;
 use ast_sgrep_core::store::IndexStore;
@@ -6,6 +6,17 @@ use ast_sgrep_core::{EmbedBackend, IndexOptions, Indexer, SearchOptions, Searche
 use ast_sgrep_embed::EmbedPreference;
 use ast_sgrep_testkit::{index_sample, reopen_indexer, searcher_from};
 use std::fs;
+use std::path::Path;
+
+fn stored_text_column(root: &Path, index_path: &Path, sql: &str) -> Vec<String> {
+    let store = IndexStore::open(root, Some(index_path)).unwrap();
+    let mut statement = store.connection().prepare(sql).unwrap();
+    statement
+        .query_map([], |row| row.get::<_, String>(0))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap()
+}
 
 /// Regression for Issue #12 / F-01: prefixed callers:/defs: must return hits even
 /// when the query casing differs from the stored symbol casing. Pre-fix, the raw
@@ -31,6 +42,21 @@ fn prefixed_modes_are_case_insensitive_on_mixed_case_symbols() {
     .unwrap();
     indexer.index_all().unwrap();
 
+    let stored_callees = stored_text_column(
+        corpus.path(),
+        &index_path,
+        "SELECT callee FROM callers ORDER BY callee",
+    );
+    assert_eq!(stored_callees, vec!["RefreshToken"]);
+    let queried_callees = [
+        "callers:RefreshToken",
+        "callers:refreshtoken",
+        "callers:REFRESHTOKEN",
+    ];
+    eprintln!(
+        "normalization evidence: stored callers.callee={stored_callees:?}; queried={queried_callees:?}; comparison=lower(c.callee)=lower(?)"
+    );
+
     let searcher = Searcher::new(SearchOptions {
         root: corpus.path().to_path_buf(),
         index_path: Some(index_path.clone()),
@@ -41,11 +67,7 @@ fn prefixed_modes_are_case_insensitive_on_mixed_case_symbols() {
     .unwrap();
 
     // Query casing differs from stored casing; each must still return caller hits.
-    for q in [
-        "callers:RefreshToken",
-        "callers:refreshtoken",
-        "callers:REFRESHTOKEN",
-    ] {
+    for q in queried_callees {
         let resp = searcher.search(q).unwrap();
         let caller_hit = resp
             .hits
@@ -97,6 +119,17 @@ fn imports_mode_is_case_insensitive_on_mixed_case_module_path() {
     .unwrap();
     indexer.index_all().unwrap();
 
+    let stored_modules = stored_text_column(
+        corpus.path(),
+        &index_path,
+        "SELECT module_path FROM imports ORDER BY module_path",
+    );
+    assert_eq!(stored_modules, vec!["./Utils"]);
+    let queried_modules = ["imports:./Utils", "imports:./utils", "imports:./UTILS"];
+    eprintln!(
+        "normalization evidence: stored imports.module_path={stored_modules:?}; queried={queried_modules:?}; comparison=lower(module_path) LIKE escaped lower substring"
+    );
+
     let searcher = Searcher::new(SearchOptions {
         root: corpus.path().to_path_buf(),
         index_path: Some(index_path.clone()),
@@ -107,7 +140,7 @@ fn imports_mode_is_case_insensitive_on_mixed_case_module_path() {
     .unwrap();
 
     // Query casing differs from stored casing; each must still return an import hit.
-    for q in ["imports:./Utils", "imports:./utils", "imports:./UTILS"] {
+    for q in queried_modules {
         let resp = searcher.search(q).unwrap();
         let import_hit = resp
             .hits
@@ -120,6 +153,219 @@ fn imports_mode_is_case_insensitive_on_mixed_case_module_path() {
         );
     }
 }
+#[test]
+#[ignore = "requires ASGREP_REAL_PI_FIXTURE archive"]
+fn archived_pi_fixture_graph_modes_match_indexed_keys() {
+    let root = std::env::var_os("ASGREP_REAL_PI_FIXTURE")
+        .map(std::path::PathBuf::from)
+        .expect("ASGREP_REAL_PI_FIXTURE must name the archived Pi corpus");
+    let index_dir = tempfile::tempdir().unwrap();
+    let index_path = index_dir.path().join("index.db");
+    let mut indexer = Indexer::new(IndexOptions {
+        root: root.clone(),
+        index_path: Some(index_path.clone()),
+        force_reindex: true,
+        embed_semantic: false,
+        ..IndexOptions::default()
+    })
+    .unwrap();
+    let indexed = indexer.index_all().unwrap();
+    let stats = indexer.store().status().unwrap();
+    eprintln!(
+        "archived Pi corpus: indexed={} skipped={} files={} symbols={} callers={} imports={}",
+        indexed.files_indexed,
+        indexed.files_skipped,
+        stats.file_count,
+        stats.symbol_count,
+        stats.caller_count,
+        stats.import_count
+    );
+    assert!(
+        stats.file_count >= 3_000,
+        "archive is unexpectedly incomplete"
+    );
+    assert!(
+        stats.caller_count >= 100_000,
+        "archive must contain the large indexed call graph"
+    );
+    assert!(
+        stats.import_count >= 10_000,
+        "archive must contain the large indexed import graph"
+    );
+
+    let store = IndexStore::open(&root, Some(&index_path)).unwrap();
+    let defined_names = {
+        let mut statement = store
+            .connection()
+            .prepare("SELECT DISTINCT lower(name) FROM symbols")
+            .unwrap();
+        statement
+            .query_map([], |row| row.get::<_, String>(0))
+            .unwrap()
+            .collect::<Result<std::collections::HashSet<_>, _>>()
+            .unwrap()
+    };
+    let caller_keys = {
+        let mut statement = store
+            .connection()
+            .prepare(
+                "SELECT callee, COUNT(*) AS n FROM callers \
+                 GROUP BY callee HAVING n BETWEEN 2 AND 20 \
+                 ORDER BY n DESC, callee LIMIT 200",
+            )
+            .unwrap();
+        statement
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            })
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap()
+            .into_iter()
+            .filter(|(name, _)| defined_names.contains(&name.to_lowercase()))
+            .take(3)
+            .collect::<Vec<_>>()
+    };
+    let import_keys = {
+        let mut statement = store
+            .connection()
+            .prepare(
+                "SELECT module_path, COUNT(*) AS n FROM imports \
+                 GROUP BY module_path ORDER BY n DESC, module_path LIMIT 3",
+            )
+            .unwrap();
+        statement
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            })
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap()
+    };
+    assert!(
+        !caller_keys.is_empty(),
+        "no defined callees found in real corpus"
+    );
+    assert!(
+        !import_keys.is_empty(),
+        "no import keys found in real corpus"
+    );
+    eprintln!("defined caller keys={caller_keys:?}");
+    eprintln!("import keys={import_keys:?}");
+
+    let searcher = Searcher::new(SearchOptions {
+        root: root.clone(),
+        index_path: Some(index_path),
+        limit: 500,
+        use_embed: false,
+        ..SearchOptions::default()
+    })
+    .unwrap();
+    let reported_defs = searcher.search("defs:refreshToken").unwrap();
+    let reported_callers = searcher.search("callers:refreshToken").unwrap();
+    let reported_callers_lower = searcher.search("callers:refreshtoken").unwrap();
+    assert!(
+        reported_defs
+            .hits
+            .iter()
+            .any(|hit| hit.kind == HitKind::Def),
+        "the issue's refreshToken definition must remain in the real corpus"
+    );
+    let reported_count = reported_callers
+        .hits
+        .iter()
+        .filter(|hit| hit.kind == HitKind::Caller)
+        .count();
+    assert!(
+        reported_count > 0,
+        "callers:refreshToken reproduced issue #12"
+    );
+    assert_eq!(
+        reported_count,
+        reported_callers_lower
+            .hits
+            .iter()
+            .filter(|hit| hit.kind == HitKind::Caller)
+            .count(),
+        "the reported caller changes across casing"
+    );
+    let reported_chain = expand_chain(
+        &store,
+        "refreshToken",
+        &ChainConfig {
+            top_n: 5,
+            max_depth: 1,
+            limit: 64,
+            ..ChainConfig::default()
+        },
+    )
+    .unwrap();
+    assert!(
+        !reported_chain.seeds.is_empty() || !reported_chain.nodes.is_empty(),
+        "chain refreshToken returned no graph evidence"
+    );
+    eprintln!(
+        "refreshToken evidence: defs={} callers={} lowercase_callers={} chain_seeds={} chain_nodes={}",
+        reported_defs.hits.iter().filter(|hit| hit.kind == HitKind::Def).count(),
+        reported_count,
+        reported_callers_lower
+            .hits
+            .iter()
+            .filter(|hit| hit.kind == HitKind::Caller)
+            .count(),
+        reported_chain.seeds.len(),
+        reported_chain.nodes.len()
+    );
+
+    for (symbol, _) in &caller_keys {
+        let mixed = searcher.search(&format!("callers:{symbol}")).unwrap();
+        let lower = searcher
+            .search(&format!("callers:{}", symbol.to_lowercase()))
+            .unwrap();
+        let mixed_count = mixed
+            .hits
+            .iter()
+            .filter(|hit| hit.kind == HitKind::Caller)
+            .count();
+        let lower_count = lower
+            .hits
+            .iter()
+            .filter(|hit| hit.kind == HitKind::Caller)
+            .count();
+        assert!(mixed_count > 0, "callers:{symbol} returned no hits");
+        assert_eq!(
+            mixed_count, lower_count,
+            "caller casing changed hit count for {symbol}"
+        );
+        let defs = searcher.search(&format!("defs:{symbol}")).unwrap();
+        assert!(
+            defs.hits.iter().any(|hit| hit.kind == HitKind::Def),
+            "defs:{symbol} returned no definition"
+        );
+    }
+    for (module, _) in &import_keys {
+        let mixed = searcher.search(&format!("imports:{module}")).unwrap();
+        let lower = searcher
+            .search(&format!("imports:{}", module.to_lowercase()))
+            .unwrap();
+        let mixed_count = mixed
+            .hits
+            .iter()
+            .filter(|hit| hit.kind == HitKind::Import)
+            .count();
+        let lower_count = lower
+            .hits
+            .iter()
+            .filter(|hit| hit.kind == HitKind::Import)
+            .count();
+        assert!(mixed_count > 0, "imports:{module} returned no hits");
+        assert_eq!(
+            mixed_count, lower_count,
+            "import casing changed hit count for {module}"
+        );
+    }
+}
+
 #[test]
 fn parity_embed_backend_and_search_option_wiring() {
     assert_eq!(
@@ -227,16 +473,20 @@ fn parity_index_defs_hybrid_chain() {
         "callers:process_request; got {:#?}",
         callers.hits
     );
-    let nl = searcher.search("credential renewal").unwrap();
+    let nl = searcher.search_semantic("credential renewal").unwrap();
+    // e2hc.19(b): The old oracle accepted ANY Embed hit via
+    // `|| h.kind == HitKind::Embed`, making the assertion vacuous — an
+    // irrelevant semantic chunk would satisfy it. Removed that clause so the
+    // oracle requires an actually-relevant hit: either the symbol is
+    // auth_refresh or the excerpt mentions it.
     assert!(
         !nl.hits.is_empty()
             && nl
                 .hits
                 .iter()
                 .any(|h| h.symbol.as_deref() == Some("auth_refresh")
-                    || h.excerpt.contains("auth_refresh")
-                    || h.kind == HitKind::Embed),
-        "NL/hybrid should surface auth_refresh; got {:#?}",
+                    || h.excerpt.contains("auth_refresh")),
+        "semantic search should surface auth_refresh; got {:#?}",
         nl.hits
     );
     let root = indexed.indexer.store().root().to_path_buf();

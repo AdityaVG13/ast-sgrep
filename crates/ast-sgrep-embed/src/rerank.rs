@@ -17,6 +17,9 @@ struct RerankConfig {
 }
 impl std::hash::Hash for RerankConfig {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        // RerankerModel does not implement Hash; Display/`to_string` is the
+        // stable model identity (alias strings in resolve_model). Eq still
+        // compares the enum discriminant via PartialEq/Eq on RerankConfig.
         self.model.to_string().hash(state);
         self.cache_dir.hash(state);
         self.max_length.hash(state);

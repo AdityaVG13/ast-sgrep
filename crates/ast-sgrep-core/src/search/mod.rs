@@ -1,82 +1,96 @@
 pub mod passes;
 mod types;
 use crate::query::{ParsedQuery, QueryMode};
-use crate::semantic_ann::flatten_vectors_for_search;
 use crate::store::IndexStore;
 use crate::Result;
-use ast_sgrep_embed::SemanticChunkRow;
-use passes::embed::{embed_pass_lazy_ivf, embed_pass_with_context, EmbedContext};
+use passes::embed::{
+    embed_pass_for_files, run_embed_pass, SemanticCache,
+};
 use passes::lexical::lexical_pass;
 use passes::literal::literal_pass;
 use passes::regex::regex_pass;
-use passes::symbol::{anchor_pass, search_callers, search_defs, search_imports, symbol_pass};
+use passes::symbol::{
+    anchor_pass, anchor_pass_for_files, search_callers, search_defs, search_imports, symbol_pass,
+    symbol_pass_for_files,
+};
 use std::collections::HashSet;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::Path;
-use std::sync::{Arc, Mutex};
-use std::thread;
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{SystemTime, UNIX_EPOCH};
-use types::dedup_hits;
-pub use types::{format_hit_line, HitKind, SearchHit, SearchOptions, SearchResponse, SpanHitInput};
-const PARALLEL_PASS_FILE_THRESHOLD: usize = 128;
+use types::{assign_signal_margins, dedup_hits};
+pub use types::{
+    format_hit_line, HitKind, HitSignal, SearchHit, SearchOptions, SearchResponse, SpanHitInput,
+};
+const CASCADE_PREFILTER_FILE_LIMIT: usize = 100;
 const MAX_HITS_PER_FILE: usize = 3;
-fn lock_response_cache(cache: &Mutex<ResponseCache>) -> std::sync::MutexGuard<'_, ResponseCache> {
-    cache.lock().unwrap_or_else(|e| e.into_inner())
+
+/// On mutex poison, clear cached state before continuing so a panicked
+/// computation cannot leave a half-written entry visible (sxjc).
+fn lock_clear_on_poison<T>(
+    mutex: &Mutex<T>,
+    clear: impl FnOnce(&mut T),
+) -> MutexGuard<'_, T> {
+    match mutex.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            mutex.clear_poison();
+            let mut guard = PoisonError::into_inner(poisoned);
+            clear(&mut guard);
+            guard
+        }
+    }
 }
-struct SemanticCache {
-    lang_filter: Option<String>,
-    max_id: i64,
-    embed_backend: String,
-    data_version: i64,
-    chunks: Arc<Vec<SemanticChunkRow>>,
-    flat_vectors: Arc<Vec<f32>>,
+fn invalidate_response_cache(cache: &mut ResponseCache) {
+    cache.map.clear();
+    cache.order.clear();
+    cache.enabled = false;
+    cache.gen = IndexGeneration {
+        external: -1,
+        local: -1,
+    };
+}
+fn lock_response_cache(cache: &Mutex<ResponseCache>) -> MutexGuard<'_, ResponseCache> {
+    lock_clear_on_poison(cache, invalidate_response_cache)
 }
 /// Hybrid search may combine adjacent committed snapshots under concurrent reindex.
-/// ResponseCache keys on (PRAGMA data_version, index_data_version) and fails closed
-/// if either cannot be read. SemanticCache drops on lang/max_id/backend/data_version
-/// change. IVF is fingerprint-validated (count+max_id+dim+backend+generation) with
-/// flat cosine fallback when the sidecar is stale or absent.
+/// Semantic cache drops on database generation changes; IVF fingerprint-validates with flat fallback.
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) struct IndexGeneration {
+struct IndexGeneration {
     external: i64,
     local: i64,
 }
 struct ResponseCache {
     gen: IndexGeneration,
+    /// Insertion-order LRU: front = oldest. Cap RESPONSE_CACHE_CAP (fj96).
     map: std::collections::HashMap<String, SearchResponse>,
+    order: std::collections::VecDeque<String>,
+    /// When false, PRAGMA/gen probe failed — never cache (hdwh).
+    enabled: bool,
 }
+const RESPONSE_CACHE_CAP: usize = 128;
 pub struct Searcher {
     store: IndexStore,
     options: SearchOptions,
     semantic_cache: Arc<Mutex<Option<SemanticCache>>>,
     response_cache: Mutex<ResponseCache>,
 }
-/// Decide whether a ResponseCache insert is gen-safe after unlock-compute (hdwh).
-/// `post_gen=None` means PRAGMA/meta read failed (disable cache insert).
-pub(crate) fn response_cache_may_insert(
-    pre: IndexGeneration,
-    post: Option<IndexGeneration>,
-    guard_gen: IndexGeneration,
-    guard_map_empty: bool,
-) -> bool {
-    let Some(post) = post else {
-        return false;
-    };
-    if post != pre {
-        return false;
-    }
-    if guard_gen != pre {
-        let ours_newer = pre.external > guard_gen.external
-            || (pre.external == guard_gen.external && pre.local > guard_gen.local);
-        if !(ours_newer || guard_map_empty) {
-            return false;
-        }
-    }
-    true
-}
 impl Searcher {
-    pub fn new(options: SearchOptions) -> Result<Self> {
+    pub fn new(mut options: SearchOptions) -> Result<Self> {
+        // Match Indexer: canonicalize roots so relative/symlink inputs share identity (0fg6/0f7r).
+        options.root = options.root.canonicalize().map_err(|e| {
+            crate::StoreError::Other(format!(
+                "project root does not exist or is not a directory: {}: {e}",
+                options.root.display()
+            ))
+        })?;
+        if !options.root.is_dir() {
+            return Err(crate::StoreError::Other(format!(
+                "project root is not a directory: {}",
+                options.root.display()
+            )));
+        }
         Ok(Self::with_store(
             IndexStore::open(&options.root, options.index_path.as_deref())?,
             options,
@@ -93,6 +107,8 @@ impl Searcher {
                     local: 0,
                 },
                 map: std::collections::HashMap::new(),
+                order: std::collections::VecDeque::new(),
+                enabled: true,
             }),
         }
     }
@@ -102,15 +118,19 @@ impl Searcher {
     pub fn options(&self) -> &SearchOptions {
         &self.options
     }
-    fn index_gen(&self) -> Result<IndexGeneration> {
-        // Fail closed when generation cannot be read (jiyy.4) — never treat
-        // unreadable data_version as a cacheable generation 0.
+    fn index_gen(&self) -> Option<IndexGeneration> {
+        // PRAGMA failure disables caching rather than pinning gen=0 (hdwh).
         let external = self
             .store
             .connection()
-            .query_row("PRAGMA data_version", [], |r| r.get::<_, i64>(0))?;
-        let local = self.store.index_data_version()?;
-        Ok(IndexGeneration { external, local })
+            .query_row("PRAGMA data_version", [], |row| row.get::<_, i64>(0))
+            .ok()?;
+        let local = self.store.index_data_version().ok()?;
+        Some(IndexGeneration { external, local })
+    }
+    fn cache_key(&self, kind: &str, query: &str) -> String {
+        // Full SearchOptions identity (nyui).
+        format!("{kind}\0{query}\0{}", self.options.cache_identity())
     }
     fn cached(
         &self,
@@ -118,30 +138,46 @@ impl Searcher {
         query: &str,
         compute: impl FnOnce() -> Result<SearchResponse>,
     ) -> Result<SearchResponse> {
-        let gen = self.index_gen()?;
-        let key = format!("{kind}\0{query}");
+        let Some(gen) = self.index_gen() else {
+            return compute();
+        };
+        let key = self.cache_key(kind, query);
         {
             let guard = lock_response_cache(&self.response_cache);
-            if guard.gen == gen {
+            if guard.enabled && guard.gen == gen {
                 if let Some(hit) = guard.map.get(&key) {
                     return Ok(hit.clone());
                 }
             }
         }
         let response = compute()?;
-        // Gen-safe insert (ast-sgrep-hdwh): re-read generation after unlock-compute.
-        // Concurrent reindex must not cache pre-reindex results under a newer gen,
-        // and PRAGMA/meta failures disable insert (fail closed for caching).
-        let gen_after = self.index_gen().ok();
+        // Re-check generation after compute so concurrent reindex cannot poison wrong-gen (hdwh).
+        let Some(gen_after) = self.index_gen() else {
+            return Ok(response);
+        };
+        if gen_after != gen {
+            return Ok(response);
+        }
         let mut guard = lock_response_cache(&self.response_cache);
-        if !response_cache_may_insert(gen, gen_after, guard.gen, guard.map.is_empty()) {
+        if !guard.enabled {
             return Ok(response);
         }
         if guard.gen != gen {
             guard.map.clear();
+            guard.order.clear();
             guard.gen = gen;
         }
-        if guard.map.len() < 128 {
+        if guard.map.contains_key(&key) {
+            guard.map.insert(key, response.clone());
+        } else {
+            while guard.map.len() >= RESPONSE_CACHE_CAP {
+                if let Some(old) = guard.order.pop_front() {
+                    guard.map.remove(&old);
+                } else {
+                    break;
+                }
+            }
+            guard.order.push_back(key.clone());
             guard.map.insert(key, response.clone());
         }
         Ok(response)
@@ -149,12 +185,12 @@ impl Searcher {
     pub fn search_lexical(&self, query_str: &str) -> Result<SearchResponse> {
         self.cached("lex", query_str, || {
             let parsed = ParsedQuery::parse(query_str);
-            Ok(finish_response(
+            Ok(finish_response_checked(
                 &parsed,
                 &self.options,
                 lexical_pass(&self.store, &self.options, &parsed)?,
                 true,
-            ))
+            )?)
         })
     }
     pub fn search_symbol_pass(&self, query_str: &str) -> Result<SearchResponse> {
@@ -162,7 +198,7 @@ impl Searcher {
             let parsed = ParsedQuery::parse(query_str);
             let mut hits = symbol_pass(&self.store, &self.options, &parsed)?;
             hits.extend(anchor_pass(&self.store, &self.options, &parsed)?);
-            Ok(finish_response(&parsed, &self.options, hits, true))
+            Ok(finish_response_checked(&parsed, &self.options, hits, true)?)
         })
     }
     pub fn search(&self, query_str: &str) -> Result<SearchResponse> {
@@ -183,191 +219,151 @@ impl Searcher {
                 }
                 QueryMode::Regex => regex_pass(&self.store, &self.options, &parsed)?,
                 QueryMode::Hybrid => {
-                    let mut hits = self.search_hybrid(&parsed)?;
-                    crate::intent::route_hits(&parsed, &mut hits);
-                    hits
+                    // Quoted → Literal intent must run phrase literal_pass (50hx).
+                    if crate::intent::classify(&parsed) == crate::intent::QueryIntent::Literal {
+                        let phrase = strip_wrapping_quotes(&parsed.raw);
+                        literal_pass(
+                            &self.store,
+                            &self.options,
+                            &ParsedQuery::literal(phrase),
+                        )?
+                    } else {
+                        let mut hits = self.search_hybrid(&parsed)?;
+                        crate::intent::route_hits(&parsed, &mut hits);
+                        let weights =
+                            crate::intent::weights_for(crate::intent::classify(&parsed));
+                        crate::fusion::apply_weighted_rrf(&mut hits, &weights);
+                        hits
+                    }
                 }
             };
-            Ok(finish_response(&parsed, &self.options, hits, true))
+            Ok(finish_response_checked(&parsed, &self.options, hits, true)?)
         })
     }
     pub fn search_semantic(&self, query_str: &str) -> Result<SearchResponse> {
         self.cached("sem", query_str, || {
             let parsed = ParsedQuery::parse(query_str);
-            Ok(finish_response(
+            Ok(finish_response_checked(
                 &parsed,
                 &self.options,
                 run_embed_pass(&self.store, &self.options, &parsed, &self.semantic_cache)?,
                 false,
-            ))
+            )?)
         })
     }
     pub fn search_literal(&self, query: &str) -> Result<SearchResponse> {
         self.cached("lit", query, || {
             let parsed = ParsedQuery::literal(query);
-            Ok(finish_response(
+            Ok(finish_response_checked(
                 &parsed,
                 &self.options,
                 literal_pass(&self.store, &self.options, &parsed)?,
                 true,
-            ))
+            )?)
         })
     }
     pub fn search_regex(&self, query: &str) -> Result<SearchResponse> {
         self.cached("re", query, || {
             let parsed = ParsedQuery::regex(query);
-            Ok(finish_response(
+            Ok(finish_response_checked(
                 &parsed,
                 &self.options,
                 regex_pass(&self.store, &self.options, &parsed)?,
                 true,
-            ))
+            )?)
         })
     }
     pub fn search_word(&self, query: &str) -> Result<SearchResponse> {
         self.cached("word", query, || {
             let parsed = ParsedQuery::word(query);
-            Ok(finish_response(
+            Ok(finish_response_checked(
                 &parsed,
                 &self.options,
                 literal_pass(&self.store, &self.options, &parsed)?,
                 true,
-            ))
+            )?)
         })
     }
     fn search_hybrid(&self, parsed: &ParsedQuery) -> Result<Vec<SearchHit>> {
-        let parallel = self
-            .store
-            .status()
-            .map(|s| s.file_count >= PARALLEL_PASS_FILE_THRESHOLD)
-            .unwrap_or(false);
-        if parallel {
-            return self.search_hybrid_large(parsed);
+        // Constraint cascade: each stage receives only files that survived the prior stage.
+        let mut lexical = literal_prefilter_pass(&self.store, &self.options, parsed)?;
+        let lexical_files = lexical
+            .iter()
+            .map(|hit| hit.file.clone())
+            .collect::<HashSet<_>>();
+        if lexical_files.is_empty() {
+            return Ok(Vec::new());
         }
-        let mut hits = run_serial_passes(&self.store, &self.options, parsed)?;
+
+        let ast_matches =
+            structural_index_pass(&self.store, &self.options, parsed, &lexical_files)?;
+        let mut structural =
+            symbol_pass_for_files(&self.store, &self.options, parsed, &lexical_files)?;
+        structural.extend(anchor_pass_for_files(
+            &self.store,
+            &self.options,
+            parsed,
+            &lexical_files,
+        )?);
+        structural.extend(ast_matches);
+        let structural_files = structural
+            .iter()
+            .map(|hit| hit.file.clone())
+            .collect::<HashSet<_>>();
+        if structural_files.is_empty() {
+            // No structural signal for the prefetched files: return the literal
+            // prefilter hits alone rather than dropping valid lexical matches
+            // (ht1h.3 / durability_epics: plain-content files must stay findable).
+            return Ok(lexical);
+        }
+
+        lexical.retain(|hit| structural_files.contains(&hit.file));
+        let mut hits = lexical;
+        hits.extend(structural);
         if self.options.use_embed {
-            if let Some(ctx) =
-                load_semantic_context(&self.store, &self.options, &self.semantic_cache)?
-            {
-                hits.extend(embed_pass_with_context(
-                    &self.store,
-                    &self.options,
-                    parsed,
-                    Some(ctx),
-                )?);
-            }
+            hits.extend(embed_pass_for_files(
+                &self.store,
+                &self.options,
+                parsed,
+                &structural_files,
+            )?);
         }
         Ok(hits)
     }
-    fn search_hybrid_large(&self, parsed: &ParsedQuery) -> Result<Vec<SearchHit>> {
-        let root = self.options.root.clone();
-        let index_path = self.options.index_path.clone();
-        let options = self.options.clone();
-        let parsed_c = parsed.clone();
-        let parsed_sql = parsed.clone();
-        thread::scope(|scope| -> Result<Vec<SearchHit>> {
-            let embed = self.options.use_embed.then(|| {
-                let cache = Arc::clone(&self.semantic_cache);
-                let (root_e, index_path_e, options_e, parsed_e) = (
-                    root.clone(),
-                    index_path.clone(),
-                    options.clone(),
-                    parsed_c.clone(),
-                );
-                scope.spawn(move || {
-                    run_embed_pass(
-                        &IndexStore::open(&root_e, index_path_e.as_deref())?,
-                        &options_e,
-                        &parsed_e,
-                        &cache,
-                    )
-                })
-            });
-            let sql = scope.spawn(move || {
-                run_parallel_passes(&root, index_path.as_deref(), &options, &parsed_sql)
-            });
-            let mut hits = join_worker(sql.join())?;
-            if let Some(embed) = embed {
-                hits.extend(join_worker(embed.join())?);
-            }
-            Ok(hits)
-        })
-    }
 }
-fn run_embed_pass(
+fn literal_prefilter_pass(
     store: &IndexStore,
     options: &SearchOptions,
     parsed: &ParsedQuery,
-    cache: &Mutex<Option<SemanticCache>>,
 ) -> Result<Vec<SearchHit>> {
-    if let Some(hits) = embed_pass_lazy_ivf(store, options, parsed)? {
-        return Ok(hits);
-    }
-    match load_semantic_context(store, options, cache)? {
-        Some(ctx) => embed_pass_with_context(store, options, parsed, Some(ctx)),
-        None => Ok(vec![]),
-    }
-}
-fn load_semantic_context(
-    store: &IndexStore,
-    options: &SearchOptions,
-    cache: &Mutex<Option<SemanticCache>>,
-) -> Result<Option<EmbedContext>> {
-    if !options.use_embed {
-        return Ok(None);
-    }
-    let lang_filter = options.lang_filter.clone();
-    let max_id = store.semantic_chunk_max_id()?.unwrap_or(0);
-    let embed_backend = store
-        .get_meta("embed_backend")?
-        .unwrap_or_else(|| "semantic".into());
-    let data_version = store.semantic_data_version()?;
-    {
-        let guard = cache.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(c) = guard.as_ref() {
-            if c.lang_filter == lang_filter
-                && c.max_id == max_id
-                && c.embed_backend == embed_backend
-                && c.data_version == data_version
-            {
-                return Ok(Some(EmbedContext {
-                    chunks: Arc::clone(&c.chunks),
-                    flat_vectors: Arc::clone(&c.flat_vectors),
-                }));
-            }
+    let mut terms = parsed
+        .terms
+        .iter()
+        .filter(|term| !term.is_empty())
+        .collect::<Vec<_>>();
+    terms.sort_by_key(|term| std::cmp::Reverse(term.chars().count()));
+    let mut prefilter_options = options.clone();
+    prefilter_options.case_insensitive = true;
+    prefilter_options.limit = CASCADE_PREFILTER_FILE_LIMIT;
+    let mut hits = Vec::new();
+    let mut file_scores = std::collections::HashMap::<String, f64>::new();
+    for term in terms {
+        for hit in literal_pass(store, &prefilter_options, &ParsedQuery::literal(term))? {
+            *file_scores.entry(hit.file.clone()).or_default() +=
+                hit.score * term.chars().count() as f64;
+            hits.push(hit);
         }
     }
-    let chunks = store.all_semantic_chunks(lang_filter.as_deref())?;
-    if chunks.is_empty() {
-        return Ok(None);
-    }
-    let flat_vectors = flatten_vectors_for_search(&chunks, chunks[0].5.len())?;
-    let entry = SemanticCache {
-        lang_filter,
-        max_id,
-        embed_backend,
-        data_version,
-        chunks: Arc::new(chunks),
-        flat_vectors: Arc::new(flat_vectors),
-    };
-    let ctx = EmbedContext {
-        chunks: Arc::clone(&entry.chunks),
-        flat_vectors: Arc::clone(&entry.flat_vectors),
-    };
-    *cache.lock().unwrap_or_else(|e| e.into_inner()) = Some(entry);
-    Ok(Some(ctx))
-}
-fn run_serial_passes(
-    store: &IndexStore,
-    options: &SearchOptions,
-    parsed: &ParsedQuery,
-) -> Result<Vec<SearchHit>> {
-    let mut hits = Vec::with_capacity(64);
-    hits.extend(lexical_pass(store, options, parsed)?);
-    hits.extend(symbol_pass(store, options, parsed)?);
-    hits.extend(anchor_pass(store, options, parsed)?);
-    // Indexed structural signatures (AST-derived) — cheap, no re-parse.
-    hits.extend(structural_index_pass(store, options, parsed)?);
+    let mut ranked_files = file_scores.into_iter().collect::<Vec<_>>();
+    ranked_files.sort_by(|(file_a, score_a), (file_b, score_b)| {
+        score_b.total_cmp(score_a).then_with(|| file_a.cmp(file_b))
+    });
+    let allowed_files = ranked_files
+        .into_iter()
+        .take(CASCADE_PREFILTER_FILE_LIMIT)
+        .map(|(file, _)| file)
+        .collect::<HashSet<_>>();
+    hits.retain(|hit| allowed_files.contains(&hit.file));
     Ok(hits)
 }
 
@@ -376,6 +372,7 @@ fn structural_index_pass(
     store: &IndexStore,
     options: &SearchOptions,
     parsed: &ParsedQuery,
+    allowed_files: &HashSet<String>,
 ) -> Result<Vec<SearchHit>> {
     use crate::rank::SCORE_PATTERN;
     use crate::search::types::{HitKind, SpanHitInput};
@@ -386,17 +383,12 @@ fn structural_index_pass(
         if term.len() < 3 || !term.chars().all(|c| c == '_' || c.is_alphanumeric()) {
             continue;
         }
-        let signatures = [
-            format!("call-name:{term}"),
-            format!("call:{term}"),
-            format!("decl:fn:{term}"),
-            format!("decl:def:{term}"),
-            format!("decl:function:{term}"),
-            term.clone(),
-        ];
+        let signatures = ast_sgrep_lang::structural_term_signatures(term);
         for sig in &signatures {
             for row in store.pattern_nodes_matching(sig, lang)? {
-                if !seen.insert((row.path.clone(), row.line_start, row.line_end)) {
+                if !allowed_files.contains(&row.path)
+                    || !seen.insert((row.path.clone(), row.line_start, row.line_end))
+                {
                     continue;
                 }
                 hits.push(SearchHit::span(SpanHitInput {
@@ -414,59 +406,123 @@ fn structural_index_pass(
     }
     Ok(hits)
 }
-fn run_parallel_passes(
-    root: &Path,
-    index_path: Option<&Path>,
-    options: &SearchOptions,
-    parsed: &ParsedQuery,
-) -> Result<Vec<SearchHit>> {
-    let (parsed, options, root, index_path) = (
-        parsed.clone(),
-        options.clone(),
-        root.to_path_buf(),
-        index_path.map(|p| p.to_path_buf()),
-    );
-    thread::scope(|scope| {
-        let lex = scope.spawn(|| {
-            let store = IndexStore::open(&root, index_path.as_deref())?;
-            lexical_pass(&store, &options, &parsed)
-        });
-        let sym = scope.spawn(|| {
-            let store = IndexStore::open(&root, index_path.as_deref())?;
-            symbol_pass(&store, &options, &parsed)
-        });
-        let anchor = scope.spawn(|| {
-            let store = IndexStore::open(&root, index_path.as_deref())?;
-            anchor_pass(&store, &options, &parsed)
-        });
-        let structural = scope.spawn(|| {
-            let store = IndexStore::open(&root, index_path.as_deref())?;
-            structural_index_pass(&store, &options, &parsed)
-        });
-        let mut hits = join_worker(lex.join())?;
-        hits.extend(join_worker(sym.join())?);
-        hits.extend(join_worker(anchor.join())?);
-        hits.extend(join_worker(structural.join())?);
-        Ok(hits)
-    })
+fn identifier_tokens(symbol: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+    let mut previous_lower_or_digit = false;
+    for ch in symbol.chars() {
+        if !ch.is_alphanumeric() {
+            if !current.is_empty() {
+                tokens.push(std::mem::take(&mut current));
+            }
+            previous_lower_or_digit = false;
+            continue;
+        }
+        if ch.is_uppercase() && previous_lower_or_digit && !current.is_empty() {
+            tokens.push(std::mem::take(&mut current));
+        }
+        current.extend(ch.to_lowercase());
+        previous_lower_or_digit = ch.is_lowercase() || ch.is_ascii_digit();
+    }
+    if !current.is_empty() {
+        tokens.push(current);
+    }
+    tokens
 }
-fn join_worker<T>(join: thread::Result<Result<T>>) -> Result<T> {
-    join.map_err(|e| crate::StoreError::Other(format!("search worker panicked: {e:?}")))?
+
+fn definition_query_affinity(parsed: &ParsedQuery, hit: &SearchHit) -> u8 {
+    let Some(symbol) = hit.symbol.as_deref() else {
+        return 0;
+    };
+    let symbol_tokens = identifier_tokens(symbol);
+    if symbol_tokens.is_empty() || symbol_tokens.len() > parsed.terms.len() {
+        return 0;
+    }
+    let matches_boundary = parsed.terms.windows(symbol_tokens.len()).any(|window| {
+        window
+            .iter()
+            .map(String::as_str)
+            .eq(symbol_tokens.iter().map(String::as_str))
+    });
+    if !matches_boundary {
+        return 0;
+    }
+    let snake_spelling = symbol_tokens.join("_");
+    if symbol.to_lowercase() == snake_spelling {
+        3
+    } else {
+        2
+    }
 }
+
+/// Shared ranking key for pre-truncate prune and final sort in `finish_response`.
+/// Multi-term queries prefer coverage so high-coverage lower-score evidence is retained (8mb8).
+fn cmp_ranked_hits(
+    a: &SearchHit,
+    coverage_a: u32,
+    b: &SearchHit,
+    coverage_b: u32,
+    multi_term: bool,
+) -> std::cmp::Ordering {
+    let score_ord = b
+        .score
+        .partial_cmp(&a.score)
+        .unwrap_or(std::cmp::Ordering::Equal);
+    let coverage_ord = coverage_b.cmp(&coverage_a);
+    let primary = if multi_term {
+        coverage_ord.then(score_ord)
+    } else {
+        score_ord.then(coverage_ord)
+    };
+    primary
+        .then_with(|| a.file.cmp(&b.file))
+        .then_with(|| a.line_start.cmp(&b.line_start))
+}
+
+fn same_definition_locus(hit: &SearchHit, definition: &SearchHit) -> bool {
+    hit.kind == HitKind::Def
+        && hit.file == definition.file
+        && hit.line_start == definition.line_start
+        && hit.symbol == definition.symbol
+}
+
+/// Preserve the pre-1.3 non-fallible response API. Invalid globs keep the
+/// legacy behavior and are ignored; internal search paths use the checked API.
 pub fn finish_response(
+    parsed: &ParsedQuery,
+    options: &SearchOptions,
+    hits: Vec<SearchHit>,
+    dedup: bool,
+) -> SearchResponse {
+    let mut compatibility_options = options.clone();
+    if compatibility_options
+        .file_filter
+        .as_ref()
+        .is_some_and(|filter| compile_glob(filter).is_err())
+    {
+        compatibility_options.file_filter = None;
+    }
+    finish_response_checked(parsed, &compatibility_options, hits, dedup)
+        .expect("compatibility options were validated")
+}
+
+pub(crate) fn finish_response_checked(
     parsed: &ParsedQuery,
     options: &SearchOptions,
     mut hits: Vec<SearchHit>,
     dedup: bool,
-) -> SearchResponse {
+) -> Result<SearchResponse> {
     if dedup {
         hits = dedup_hits(hits);
     }
     if let Some(ref filter) = options.file_filter {
-        if let Ok(re) = compile_glob(filter) {
-            hits.retain(|h| re.is_match(&h.file));
-        }
+        // iva9.2: invalid globs error — never silently skip the filter.
+        let re = compile_glob(filter).map_err(|e| {
+            crate::StoreError::Other(format!("invalid file_filter glob '{filter}': {e}"))
+        })?;
+        hits.retain(|h| re.is_match(&h.file));
     }
+    assign_signal_margins(&mut hits);
     if options.count_only {
         let mut counts: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
         for hit in &hits {
@@ -484,26 +540,54 @@ pub fn finish_response(
             prevented_read_bytes: 0,
         };
         record_ledger_from_env(&response);
-        return response;
+        return Ok(response);
     }
     let gate_limit = rerank_candidate_limit(options);
-    let keep = if parsed.mode == QueryMode::Hybrid {
+    let hybrid = parsed.mode == QueryMode::Hybrid;
+    let best_definition = if hybrid {
+        hits.iter()
+            .filter(|hit| hit.kind == HitKind::Def)
+            .max_by(|a, b| {
+                a.score
+                    .partial_cmp(&b.score)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+                    .then_with(|| {
+                        definition_query_affinity(parsed, a)
+                            .cmp(&definition_query_affinity(parsed, b))
+                    })
+                    .then_with(|| b.file.cmp(&a.file))
+            })
+            .cloned()
+    } else {
+        None
+    };
+    let keep = if hybrid {
         gate_limit.saturating_mul(MAX_HITS_PER_FILE).max(gate_limit)
     } else {
         gate_limit
     };
-    if hits.len() > keep.saturating_mul(4).max(keep + 32) {
-        hits.select_nth_unstable_by(keep, |a, b| {
-            cmp_ranked_hits(0, a, 0, b)
+    let prune_keep = keep.saturating_mul(4).max(keep.saturating_add(32));
+    let multi_term = parsed.terms.len() > 1;
+    if hits.len() > prune_keep {
+        // Keep coverage in the pre-truncate sort key so high-coverage lower-score
+        // hits survive the keep*4 prune (8mb8).
+        hits.select_nth_unstable_by(prune_keep, |a, b| {
+            cmp_ranked_hits(
+                a,
+                excerpt_term_coverage(&parsed.terms, a),
+                b,
+                excerpt_term_coverage(&parsed.terms, b),
+                multi_term,
+            )
         });
-        hits.truncate(keep);
+        hits.truncate(prune_keep);
     }
     let mut keyed: Vec<(u32, SearchHit)> = hits
         .into_iter()
         .map(|h| (excerpt_term_coverage(&parsed.terms, &h), h))
         .collect();
     let mut compare = |(ca, a): &(u32, SearchHit), (cb, b): &(u32, SearchHit)| {
-        cmp_ranked_hits(*ca, a, *cb, b)
+        cmp_ranked_hits(a, *ca, b, *cb, multi_term)
     };
     if keyed.len() > keep {
         keyed.select_nth_unstable_by(keep, &mut compare);
@@ -511,7 +595,15 @@ pub fn finish_response(
     }
     keyed.sort_unstable_by(compare);
     let mut hits: Vec<_> = keyed.into_iter().map(|(_, h)| h).collect();
-    hits = enforce_result_gates(hits, parsed.mode == QueryMode::Hybrid, gate_limit);
+    if let Some(definition) = best_definition {
+        let retained = hits
+            .iter()
+            .any(|hit| same_definition_locus(hit, &definition));
+        if !retained {
+            hits.push(definition);
+        }
+    }
+    hits = enforce_result_gates(hits, hybrid, gate_limit);
     if options.use_rerank {
         hits = maybe_rerank(&parsed.raw, hits, options.rerank_top_k);
         hits = enforce_result_gates(hits, parsed.mode == QueryMode::Hybrid, options.limit);
@@ -528,7 +620,7 @@ pub fn finish_response(
         prevented_read_bytes,
     };
     record_ledger_from_env(&response);
-    response
+    Ok(response)
 }
 fn rerank_candidate_limit(options: &SearchOptions) -> usize {
     if options.use_rerank {
@@ -603,32 +695,58 @@ fn apply_rerank_order(
 }
 fn enforce_result_gates(mut hits: Vec<SearchHit>, hybrid: bool, limit: usize) -> Vec<SearchHit> {
     if hybrid {
+        let preferred_definition = hits.iter().find(|hit| hit.kind == HitKind::Def).cloned();
         hits = cap_per_file(hits);
+        let head = limit.min(hits.len());
+        if head > 0 && !hits[..head].iter().any(|hit| hit.kind == HitKind::Def) {
+            if let Some(definition) = preferred_definition {
+                if let Some(index) = hits
+                    .iter()
+                    .position(|hit| same_definition_locus(hit, &definition))
+                {
+                    hits.remove(index);
+                }
+                hits.insert(head - 1, definition);
+            }
+        }
     }
     hits.truncate(limit);
     hits
 }
 fn estimate_prevented_reads(root: &Path, hits: &[SearchHit]) -> (u64, u64, u64) {
+    use std::path::Component;
     use std::sync::OnceLock;
+    const META_CACHE_CAP: usize = 4_096;
     static META_CACHE: OnceLock<Mutex<std::collections::HashMap<String, u64>>> = OnceLock::new();
     let cache = META_CACHE.get_or_init(|| Mutex::new(std::collections::HashMap::new()));
     let mut files = HashSet::new();
     let mut read_bytes_estimate = 0u64;
     {
-        let mut guard = cache.lock().unwrap_or_else(|e| e.into_inner());
+        let mut guard = lock_clear_on_poison(cache, |map| map.clear());
         for h in hits {
             if !files.insert(h.file.as_str()) {
                 continue;
             }
-            let key = if Path::new(&h.file).is_absolute() {
-                h.file.clone()
-            } else {
-                root.join(&h.file).to_string_lossy().into_owned()
-            };
+            // Sanitize: reject absolute escapes and parent-directory joins (89er).
+            let hit_path = Path::new(&h.file);
+            if hit_path.is_absolute()
+                || hit_path.components().any(|c| {
+                    matches!(c, Component::ParentDir | Component::RootDir | Component::Prefix(_))
+                })
+            {
+                continue;
+            }
+            let key = root.join(hit_path).to_string_lossy().into_owned();
             let len = if let Some(&n) = guard.get(&key) {
                 n
             } else {
                 let n = std::fs::metadata(&key).ok().map(|m| m.len()).unwrap_or(0);
+                if guard.len() >= META_CACHE_CAP {
+                    // Bound growth: drop arbitrary entry when full.
+                    if let Some(evict) = guard.keys().next().cloned() {
+                        guard.remove(&evict);
+                    }
+                }
                 guard.insert(key, n);
                 n
             };
@@ -646,7 +764,37 @@ fn record_ledger_from_env(response: &SearchResponse) {
     let Some(path) = std::env::var_os("ASGREP_LEDGER_PATH") else {
         return;
     };
-    let _ = append_ledger_entry(Path::new(&path), response);
+    let path = Path::new(&path);
+    // Constrain ledger writes: absolute path required; no `..`; must stay under cwd (5xf2).
+    if !path.is_absolute()
+        || path
+            .components()
+            .any(|c| matches!(c, std::path::Component::ParentDir))
+    {
+        eprintln!("[asgrep] ignoring ASGREP_LEDGER_PATH: must be an absolute path without '..'");
+        return;
+    }
+    let Ok(cwd) = std::env::current_dir() else {
+        return;
+    };
+    let Ok(cwd) = cwd.canonicalize() else {
+        return;
+    };
+    let parent = path.parent().unwrap_or(path);
+    let Ok(parent_canon) = parent.canonicalize() else {
+        // Parent may not exist yet; require it under cwd by prefix check on the raw absolute path.
+        if !path.starts_with(&cwd) {
+            eprintln!("[asgrep] ignoring ASGREP_LEDGER_PATH: outside process cwd");
+            return;
+        }
+        let _ = append_ledger_entry(path, response);
+        return;
+    };
+    if !parent_canon.starts_with(&cwd) {
+        eprintln!("[asgrep] ignoring ASGREP_LEDGER_PATH: outside process cwd");
+        return;
+    }
+    let _ = append_ledger_entry(path, response);
 }
 fn append_ledger_entry(path: &Path, response: &SearchResponse) -> std::io::Result<()> {
     let ts = SystemTime::now()
@@ -681,7 +829,16 @@ fn cap_per_file(hits: Vec<SearchHit>) -> Vec<SearchHit> {
     kept.extend(overflow);
     kept
 }
-fn compile_glob(pattern: &str) -> std::result::Result<regex::Regex, regex::Error> {
+fn compile_glob(pattern: &str) -> std::result::Result<regex::Regex, String> {
+    if pattern.is_empty() {
+        return Err("file_filter must be non-empty".into());
+    }
+    if pattern
+        .chars()
+        .any(|c| c == '\0' || (c.is_control() && c != '\t'))
+    {
+        return Err("file_filter contains invalid control characters".into());
+    }
     let mut result = String::from("^");
     let mut chars = pattern.chars().peekable();
     while let Some(c) = chars.next() {
@@ -705,7 +862,7 @@ fn compile_glob(pattern: &str) -> std::result::Result<regex::Regex, regex::Error
         }
     }
     result.push('$');
-    regex::Regex::new(&result)
+    regex::Regex::new(&result).map_err(|e| e.to_string())
 }
 fn contains_term_token(text: &str, term: &str) -> bool {
     !term.is_empty()
@@ -717,20 +874,25 @@ fn contains_term_token(text: &str, term: &str) -> bool {
         })
 }
 fn excerpt_term_coverage(terms: &[String], hit: &SearchHit) -> u32 {
-    let text = hit.excerpt.to_lowercase();
     terms
         .iter()
-        .filter(|term| contains_term_token(&text, term))
+        .filter(|term| {
+            // Match term casing: mixed/upper terms stay case-sensitive (hhca).
+            if term.chars().any(|c| c.is_uppercase()) {
+                contains_term_token(&hit.excerpt, term)
+            } else {
+                contains_term_token(&hit.excerpt.to_lowercase(), &term.to_lowercase())
+            }
+        })
         .count() as u32
 }
-/// Shared pre-truncate + final sort key: score desc, coverage desc, file, line.
-fn cmp_ranked_hits(ca: u32, a: &SearchHit, cb: u32, b: &SearchHit) -> std::cmp::Ordering {
-    b.score
-        .partial_cmp(&a.score)
-        .unwrap_or(std::cmp::Ordering::Equal)
-        .then_with(|| cb.cmp(&ca))
-        .then_with(|| a.file.cmp(&b.file))
-        .then_with(|| a.line_start.cmp(&b.line_start))
+fn strip_wrapping_quotes(raw: &str) -> &str {
+    let t = raw.trim();
+    if t.len() >= 2 && t.starts_with('"') && t.ends_with('"') {
+        &t[1..t.len() - 1]
+    } else {
+        t
+    }
 }
 #[cfg(test)]
 mod tests {
@@ -746,9 +908,88 @@ mod tests {
             callee: None,
             language: None,
             score,
+            signal: HitSignal::Exact,
+            contributors: vec![HitKind::Asgrep],
+            margin: 0.0,
             excerpt: String::new(),
         }
     }
+    #[test]
+    fn excerpt_coverage_respects_term_casing() {
+        let mut h = hit("a.rs", 1, 1.0);
+        h.excerpt = "AuthRefresh token".into();
+        assert_eq!(excerpt_term_coverage(&["AuthRefresh".into()], &h), 1);
+        // Lowercase terms are case-insensitive and match the lowered excerpt.
+        assert_eq!(excerpt_term_coverage(&["authrefresh".into()], &h), 1);
+        // Mixed/upper terms stay case-sensitive and miss wrong casing.
+        assert_eq!(excerpt_term_coverage(&["AUTHREFRESH".into()], &h), 0);
+        assert_eq!(excerpt_term_coverage(&["token".into()], &h), 1);
+    }
+
+    #[test]
+    fn pretruncate_keeps_high_coverage_lower_score() {
+        let parsed = ParsedQuery::parse("alpha beta gamma");
+        let mut low = hit("low.rs", 1, 0.1);
+        low.excerpt = "alpha beta gamma present".into();
+        let mut highs: Vec<_> = (0..40)
+            .map(|i| {
+                let mut h = hit(&format!("high-{i}.rs"), 1, 1.0);
+                h.excerpt = "alpha only".into();
+                h
+            })
+            .collect();
+        highs.push(low);
+        let options = SearchOptions {
+            limit: 5,
+            ..SearchOptions::default()
+        };
+        let response = finish_response(&parsed, &options, highs, false);
+        assert!(
+            response.hits.iter().any(|h| h.file == "low.rs"),
+            "high-coverage lower-score hit must survive pre-truncate"
+        );
+    }
+
+    #[test]
+    fn definition_affinity_prefers_phrase_boundary_spelling() {
+        let parsed = ParsedQuery::parse("how does auth refresh work");
+        let mut snake = hit("snake.rs", 1, 1.0);
+        snake.kind = HitKind::Def;
+        snake.symbol = Some("auth_refresh".into());
+        let mut camel = hit("camel.rs", 1, 1.0);
+        camel.kind = HitKind::Def;
+        camel.symbol = Some("authRefresh".into());
+        assert!(
+            definition_query_affinity(&parsed, &snake) > definition_query_affinity(&parsed, &camel)
+        );
+
+        let unrelated = ParsedQuery::parse("authorization workflow");
+        let mut short = hit("short.rs", 1, 1.0);
+        short.kind = HitKind::Def;
+        short.symbol = Some("auth".into());
+        assert_eq!(definition_query_affinity(&unrelated, &short), 0);
+
+        let suffix = ParsedQuery::parse("refreshable token");
+        short.symbol = Some("refresh".into());
+        assert_eq!(definition_query_affinity(&suffix, &short), 0);
+    }
+
+    #[test]
+    fn hybrid_window_retains_definition_evidence() {
+        let mut hits = vec![
+            hit("embed-a.rs", 1, 1.0),
+            hit("embed-b.rs", 1, 0.9),
+            hit("def.rs", 1, 0.2),
+        ];
+        hits[0].kind = HitKind::Embed;
+        hits[1].kind = HitKind::Embed;
+        hits[2].kind = HitKind::Def;
+        let gated = enforce_result_gates(hits, true, 2);
+        assert_eq!(gated.len(), 2);
+        assert_eq!(gated[0].kind, HitKind::Embed);
+        assert_eq!(gated[1].kind, HitKind::Def);
+    }
+
     #[test]
     fn rerank_can_promote_candidate_beyond_final_limit() {
         let options = SearchOptions {
@@ -801,6 +1042,83 @@ mod tests {
         );
     }
     #[test]
+    fn literal_prefilter_handles_trigram_casefold_short_terms_and_bounds() {
+        use crate::store::UpsertFileInput;
+        use tempfile::TempDir;
+
+        let temp = TempDir::new().unwrap();
+        let store = IndexStore::open(temp.path(), None).unwrap();
+        let mut lines = (1..=1_000)
+            .map(|line| (line, format!("filler line {line}")))
+            .collect::<Vec<_>>();
+        lines.push((1_001, "NeedleCase id".to_string()));
+        store
+            .upsert_file(UpsertFileInput {
+                rel_path: "large.rs",
+                language: Some("rust"),
+                mtime_secs: 1,
+                mtime_nanos: 0,
+                content_hash: "large",
+                lines: &lines,
+                eol: "\n",
+                symbols: &[],
+                callers: &[],
+                imports: &[],
+                pattern_nodes: &[],
+                semantic_chunks: &[],
+                embed_semantic: false,
+                embed_backend: ast_sgrep_embed::EmbedPreference::Semantic,
+            })
+            .unwrap();
+        let options = SearchOptions {
+            root: temp.path().to_path_buf(),
+            ..SearchOptions::default()
+        };
+        let hits =
+            literal_prefilter_pass(&store, &options, &ParsedQuery::parse("needlecase id")).unwrap();
+        assert!(hits.iter().any(|hit| hit.excerpt == "NeedleCase id"));
+
+        for index in 0..120 {
+            let path = format!("bound-{index:03}.rs");
+            let term = if index < 60 {
+                "alphauniqueterm"
+            } else {
+                "betauniqueterm"
+            };
+            let bound_lines = [(1, term.to_string())];
+            store
+                .upsert_file(UpsertFileInput {
+                    rel_path: &path,
+                    language: Some("rust"),
+                    mtime_secs: 1,
+                    mtime_nanos: 0,
+                    content_hash: &path,
+                    lines: &bound_lines,
+                    eol: "\n",
+                    symbols: &[],
+                    callers: &[],
+                    imports: &[],
+                    pattern_nodes: &[],
+                    semantic_chunks: &[],
+                    embed_semantic: false,
+                    embed_backend: ast_sgrep_embed::EmbedPreference::Semantic,
+                })
+                .unwrap();
+        }
+        let bounded = literal_prefilter_pass(
+            &store,
+            &options,
+            &ParsedQuery::parse("alphauniqueterm betauniqueterm"),
+        )
+        .unwrap();
+        let files = bounded
+            .iter()
+            .map(|hit| hit.file.as_str())
+            .collect::<HashSet<_>>();
+        assert_eq!(files.len(), CASCADE_PREFILTER_FILE_LIMIT);
+    }
+
+    #[test]
     fn hybrid_cap_and_limit_are_reapplied_after_rerank() {
         let hits = vec![
             hit("a.rs", 1, 0.9),
@@ -826,27 +1144,17 @@ mod tests {
             ]
         );
     }
+
     #[test]
-    fn response_cache_may_insert_rejects_gen_skew_and_pragma_fail() {
-        let g1 = IndexGeneration {
-            external: 1,
-            local: 2,
-        };
-        let g2 = IndexGeneration {
-            external: 2,
-            local: 2,
-        };
-        // Happy path: gen stable, guard matches.
-        assert!(response_cache_may_insert(g1, Some(g1), g1, false));
-        // Mid-compute reindex: post gen moved — do not cache.
-        assert!(!response_cache_may_insert(g1, Some(g2), g1, false));
-        // PRAGMA/meta failure disables insert.
-        assert!(!response_cache_may_insert(g1, None, g1, true));
-        // Do not downgrade a newer populated cache.
-        assert!(!response_cache_may_insert(g1, Some(g1), g2, false));
-        // Empty cache may adopt our gen.
-        assert!(response_cache_may_insert(g2, Some(g2), g1, true));
-        // Newer gen may replace older populated cache.
-        assert!(response_cache_may_insert(g2, Some(g2), g1, false));
+    fn lock_clear_on_poison_resets_state() {
+        let mutex = Mutex::new(vec![1, 2, 3]);
+        let _ = std::panic::catch_unwind(|| {
+            let _guard = mutex.lock().unwrap();
+            panic!("inject poison");
+        });
+        assert!(mutex.is_poisoned());
+        let guard = lock_clear_on_poison(&mutex, |v| v.clear());
+        assert!(guard.is_empty());
+        assert!(!mutex.is_poisoned());
     }
 }

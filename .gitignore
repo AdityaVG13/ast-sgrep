@@ -112,3 +112,11 @@ tests/artifacts/perf/
 
 # Agent skill specs (local-only)
 .agents/
+
+# Multi-pass bug hunt local artifacts
+.bug-hunt-artifacts/
+
+# Private gauntlet workspace (sibling preferred; ignore if nested)
+ast-sgrep__gauntlet_workspace/
+__gauntlet_workspace/
+.gauntlet-workspace/

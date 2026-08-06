@@ -36,11 +36,16 @@ pub fn searcher_from(indexed: &IndexedFixture, mut opts: SearchOptions) -> Searc
 /// Stable identity shared by surface-equivalence tests. Scores, excerpts, and
 /// response wrappers intentionally do not participate. Callers must align
 /// surface-specific limit and embedding defaults before comparing these keys.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// x1p5: rich HitKey includes symbol/callee/caller when present.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct HitKey {
     pub file: String,
     pub line_start: u32,
     pub kind: String,
+    pub symbol: Option<String>,
+    pub callee: Option<String>,
+    pub caller: Option<String>,
 }
 pub fn response_hit_keys(response: &SearchResponse) -> Vec<HitKey> {
     response
@@ -50,6 +55,9 @@ pub fn response_hit_keys(response: &SearchResponse) -> Vec<HitKey> {
             file: hit.file.clone(),
             line_start: hit.line_start,
             kind: hit.kind.as_str().to_owned(),
+            symbol: hit.symbol.clone(),
+            callee: hit.callee.clone(),
+            caller: hit.caller.clone(),
         })
         .collect()
 }
@@ -62,6 +70,18 @@ pub fn json_hit_keys(response: &Value) -> Vec<HitKey> {
             file: hit["file"].as_str().expect("hit file").to_owned(),
             line_start: hit["line_start"].as_u64().expect("hit line_start") as u32,
             kind: hit["kind"].as_str().expect("hit kind").to_owned(),
+            symbol: hit
+                .get("symbol")
+                .and_then(|v| v.as_str())
+                .map(str::to_owned),
+            callee: hit
+                .get("callee")
+                .and_then(|v| v.as_str())
+                .map(str::to_owned),
+            caller: hit
+                .get("caller")
+                .and_then(|v| v.as_str())
+                .map(str::to_owned),
         })
         .collect()
 }

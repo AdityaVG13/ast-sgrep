@@ -1,7 +1,8 @@
-//! Search / chain / semantic command runners.
+//! Search / keyword / semantic / chain command helpers.
 
+use crate::machine::{print_machine_json, print_machine_json_with_style};
 use crate::{
-    open_searcher, print_machine_json, resolve_root_index, usage_error, Cli,
+    ensure_existing_root, ensure_nonempty_index, open_searcher, resolve_root_index, usage_error, Cli,
 };
 use anyhow::Context;
 use ast_sgrep_core::{
@@ -11,8 +12,10 @@ use ast_sgrep_core::{
 use std::path::Path;
 
 pub(crate) fn run_chain(root: &Path, cli: &Cli, query: &str) -> anyhow::Result<()> {
-    let (root, index_path) = resolve_root_index(cli, root);
+    let root = ensure_existing_root(root, cli)?;
+    let (_, index_path) = resolve_root_index(cli, &root);
     let store = IndexStore::open(&root, index_path.as_deref()).context("failed to open index")?;
+    ensure_nonempty_index(&root, store.status()?.file_count)?;
     let config = ChainConfig {
         limit: cli.limit.unwrap_or(ChainConfig::default().limit),
         top_n: 1,
@@ -45,30 +48,86 @@ pub(crate) fn run_chain(root: &Path, cli: &Cli, query: &str) -> anyhow::Result<(
     }
     Ok(())
 }
-pub(crate) fn run_search(root: &Path, cli: &Cli, query: &str, semantic: bool) -> anyhow::Result<()> {
-    let ctx = if semantic {
-        "semantic search failed"
-    } else {
-        "search failed"
-    };
-    let response = do_search(&open_searcher(root, cli)?, query, semantic).context(ctx)?;
-    if !cli.json {
+
+pub(crate) fn run_keyword_search(root: &Path, cli: &Cli, query: &str) -> anyhow::Result<()> {
+    let response = open_searcher(root, cli)?
+        .search_lexical(query)
+        .context("keyword search failed")?;
+    if !cli.search_machine_output() {
         for hit in &response.hits {
             println!("{}", format_hit_line(hit));
         }
         return Ok(());
     }
-    let default = if semantic {
+    let format = resolve_output_format(
+        cli.active_tuning().format.as_deref(),
+        ast_sgrep_plugins::OutputFormat::Native,
+    )?;
+    print_search_response("keyword", &response, format, cli)
+}
+
+pub(crate) fn run_search(
+    root: &Path,
+    cli: &Cli,
+    query: &str,
+    semantic: bool,
+) -> anyhow::Result<()> {
+    let ctx = if semantic || cli.active_tuning().semantic_only {
+        "semantic search failed"
+    } else {
+        "search failed"
+    };
+    let response =
+        do_search_with_cli(&open_searcher(root, cli)?, query, semantic, cli).context(ctx)?;
+    if !cli.search_machine_output() {
+        for hit in &response.hits {
+            println!("{}", format_hit_line(hit));
+        }
+        return Ok(());
+    }
+    let tuning = cli.active_tuning();
+    let default = if semantic || tuning.semantic_only {
         ast_sgrep_plugins::OutputFormat::Agent
     } else {
         ast_sgrep_plugins::OutputFormat::Native
     };
-    let format = resolve_output_format(cli.format.as_deref(), default)?;
-    print_machine_json(
-        if semantic { "semantic" } else { "search" },
-        ast_sgrep_plugins::format_response_with(&response, format, cli.excerpt_lines),
+    let format = resolve_output_format(tuning.format.as_deref(), default)?;
+    print_search_response(
+        if semantic || tuning.semantic_only {
+            "semantic"
+        } else {
+            "search"
+        },
+        &response,
+        format,
+        cli,
     )
 }
+
+fn print_search_response(
+    command: &str,
+    response: &ast_sgrep_core::SearchResponse,
+    format: ast_sgrep_plugins::OutputFormat,
+    cli: &Cli,
+) -> anyhow::Result<()> {
+    let value = ast_sgrep_plugins::format_response_with_budget(
+        response,
+        format,
+        cli.active_tuning().excerpt_lines,
+        ast_sgrep_plugins::CompactBudget {
+            per_result_tokens: cli.active_tuning().snippet_tokens,
+            response_tokens: cli.active_tuning().response_snippet_tokens,
+        },
+    );
+    print_machine_json_with_style(
+        command,
+        value,
+        format == ast_sgrep_plugins::OutputFormat::Compact,
+        true,
+        0,
+    )
+}
+
 fn resolve_output_format(
     raw: Option<&str>,
     default: ast_sgrep_plugins::OutputFormat,
@@ -76,7 +135,7 @@ fn resolve_output_format(
     match raw {
         Some(raw) => ast_sgrep_plugins::OutputFormat::parse(raw).ok_or_else(|| {
             usage_error(format!(
-                "unknown output format {raw:?}; expected native, agent, agent-capsule, github, or gitlab"
+                "unknown output format {raw:?}; expected native, agent, agent-capsule, compact, github, or gitlab"
             ))
         }),
         None => Ok(default),
@@ -89,4 +148,14 @@ pub(crate) fn do_search(s: &Searcher, q: &str, semantic: bool) -> anyhow::Result
     } else {
         Ok(s.search(q)?)
     }
+}
+
+pub(crate) fn do_search_with_cli(
+    s: &Searcher,
+    q: &str,
+    semantic: bool,
+    cli: &Cli,
+) -> anyhow::Result<SearchResponse> {
+    // `--semantic-only` / ASGREP_SEMANTIC_ONLY forces the semantic channel (ziij).
+    do_search(s, q, semantic || cli.active_tuning().semantic_only)
 }

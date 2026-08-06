@@ -1,0 +1,20 @@
+[package]
+name = "ast-sgrep-mmap"
+description = "Sealed read-only mmap wrapper (sole intentional unsafe boundary)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+publish = false
+
+# Intentionally does NOT inherit workspace.lints.unsafe_code = forbid.
+# This crate is the documented sealed boundary that wraps memmap2::map.
+[lints.rust]
+unsafe_code = "allow"
+
+[dependencies]
+memmap2.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

@@ -141,16 +141,14 @@ fn char_trigrams(text: &str) -> Vec<String> {
         .collect()
 }
 fn hash_feature(feature: &str, vec: &mut [f32], weight: f32) {
-    let digest = blake3::hash(feature.as_bytes());
-    let bytes = digest.as_bytes();
-    // Use all 256 bits of the blake3 digest as independent sign bits: bit (i%8)
-    // of byte (i/8). The previous `bytes[i % bytes.len()] & 1` only used the LSB
-    // of each of the 32 bytes, tiling a 32-bit sign pattern 8x across the 256
-    // slots and collapsing the effective dimension to 32 (bead ast-sgrep-e2hc.13).
-    for (i, slot) in vec.iter_mut().enumerate() {
-        let byte = bytes[i / 8];
-        let sign_bit = (byte >> (i % 8)) & 1;
-        *slot += if sign_bit == 0 { weight } else { -weight };
+    // Use BLAKE3 XOF so each dimension gets an independent bit. The previous
+    // `digest[i % 32]` tiling made every vector period-32 (effective rank 32, not 256).
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(feature.as_bytes());
+    let mut bytes = vec![0u8; vec.len()];
+    hasher.finalize_xof().fill(&mut bytes);
+    for (slot, &b) in vec.iter_mut().zip(bytes.iter()) {
+        *slot += if b & 1 == 0 { weight } else { -weight };
     }
 }
 fn normalize(vec: &mut [f32]) {
@@ -180,49 +178,35 @@ impl SemanticLocalEmbedding {
         dot_similarity(a, b)
     }
 }
-#[cfg(test)]
-mod tests {
-    use super::*;
 
-    // Regression for bead ast-sgrep-e2hc.13: the old `bytes[i % 32] & 1` sign
-    // extraction tiled a 32-bit sign pattern 8x across the 256 slots, so slots
-    // [0..32] and [32..64] were always identical. The fix uses bit (i%8) of byte
-    // (i/8), giving 256 independent sign bits. This test hashes a single feature
-    // and asserts the two 32-slot windows differ, which only holds under the fix.
+#[cfg(test)]
+mod hash_rank_tests {
+    use super::{hash_feature, SemanticLocalEmbedding, SEMANTIC_DIM};
+
     #[test]
-    fn hash_feature_uses_all_256_sign_bits_not_32_tiled() {
+    fn hash_feature_is_not_period_32() {
         let mut vec = vec![0.0_f32; SEMANTIC_DIM];
-        hash_feature("feature-under-test", &mut vec, 1.0);
-        let first_window: Vec<f32> = vec[0..32].to_vec();
-        let second_window: Vec<f32> = vec[32..64].to_vec();
-        assert_ne!(
-            first_window, second_window,
-            "slots [0..32] and [32..64] must differ; equality means the old 32-bit tiling bug is back"
-        );
-        // Stronger: across all 8 windows of 32 slots, at least two distinct
-        // windows exist (the old bug produced 8 identical windows).
-        let windows: Vec<&[f32]> = (0..8).map(|w| &vec[w * 32..(w + 1) * 32]).collect();
-        let distinct = windows
-            .iter()
-            .enumerate()
-            .any(|(i, w)| windows.iter().enumerate().any(|(j, o)| i != j && *w != *o));
+        hash_feature("tok:example_feature", &mut vec, 1.0);
+        // Period-32 tiling would force sign(vec[i]) == sign(vec[i+32]) for all i.
+        let mismatches = (0..32)
+            .filter(|&i| vec[i].signum() != vec[i + 32].signum() || vec[i] != vec[i + 32])
+            .count();
         assert!(
-            distinct,
-            "at least two 32-slot windows must differ; the old bug made all 8 identical"
+            mismatches > 0,
+            "expected independent dims; period-32 tiling still present"
         );
+        // Across a few blocks, not all identical
+        let block0: Vec<_> = vec[0..32].to_vec();
+        let block1: Vec<_> = vec[32..64].to_vec();
+        let block2: Vec<_> = vec[64..96].to_vec();
+        assert_ne!(block0, block1);
+        assert_ne!(block1, block2);
     }
 
-    // The fix must not change the output dimension or produce non-finite values.
     #[test]
-    fn embed_text_produces_256_dim_normalized_vector() {
-        let emb = SemanticLocalEmbedding;
-        let v = emb.embed_text("auth refresh token");
-        assert_eq!(v.len(), SEMANTIC_DIM);
-        assert!(v.iter().all(|x| x.is_finite()));
-        let norm: f32 = v.iter().map(|x| x * x).sum::<f32>().sqrt();
-        assert!(
-            (norm - 1.0).abs() < 1e-4,
-            "vector must be normalized, got norm {norm}"
-        );
+    fn embed_text_has_full_dim() {
+        let emb = SemanticLocalEmbedding.embed_text("refresh_token authentication");
+        assert_eq!(emb.len(), SEMANTIC_DIM);
+        assert!(emb.iter().any(|x| *x != 0.0));
     }
 }

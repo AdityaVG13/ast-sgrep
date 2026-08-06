@@ -1,15 +1,6 @@
-use ast_sgrep_lang::{ExtractionResult, ImportSite, Language, SymbolKind};
-use ast_sgrep_testkit::parse;
-type Sym = (&'static str, SymbolKind);
-type Call = (&'static str, &'static str);
-struct Case {
-    language: Language,
-    source: &'static str,
-    symbols: &'static [Sym],
-    imports: &'static [&'static str],
-    calls: &'static [Call],
-    forbid: &'static [&'static str],
-}
+use ast_sgrep_lang::{Language, SymbolKind};
+use ast_sgrep_testkit::{assert_language_conformance, LanguageConformanceCase};
+
 const RUST: &str = include_str!("fixtures/extract/rust.rs");
 const TS: &str = include_str!("fixtures/extract/typescript.ts");
 const JS: &str = include_str!("fixtures/extract/javascript.js");
@@ -18,64 +9,23 @@ const GO: &str = include_str!("fixtures/extract/go.go");
 const JAVA: &str = include_str!("fixtures/extract/java.java");
 const CS: &str = include_str!("fixtures/extract/csharp.cs");
 const RB: &str = include_str!("fixtures/extract/ruby.rb");
+const SWIFT: &str = include_str!("fixtures/extract/swift.swift");
+const C: &str = include_str!("fixtures/extract/c.c");
+const CPP: &str = include_str!("fixtures/extract/cpp.cpp");
+const KT: &str = include_str!("fixtures/extract/kotlin.kt");
+const PHP: &str = include_str!("fixtures/extract/php.php");
+
 use SymbolKind::*;
+
 #[test]
-fn extractors_emit_language_goldens_with_sane_spans_and_relationships() {
-    for c in CASES {
-        let r = parse(c.language, c.source);
-        for &(name, kind) in c.symbols {
-            assert!(
-                r.symbols.iter().any(|s| s.name == name && s.kind == kind),
-                "{} must emit {:?} {}; got {:?}",
-                c.language,
-                kind,
-                name,
-                r.symbols
-            );
-        }
-        for &imp in c.imports {
-            assert!(
-                r.imports.iter().any(|i| i.module_path == imp),
-                "{} must emit import {}; got {:?}",
-                c.language,
-                imp,
-                mods(&r.imports)
-            );
-        }
-        for &(caller, callee) in c.calls {
-            assert!(
-                r.calls
-                    .iter()
-                    .any(|x| x.caller == caller && x.callee == callee),
-                "{} must preserve {} -> {}; got {:?}",
-                c.language,
-                caller,
-                callee,
-                r.calls
-            );
-        }
-        assert_spans(c, &r);
-        for term in c.forbid {
-            assert!(
-                !r.symbols.iter().any(|s| s.name == *term),
-                "{} must not emit symbol {term}",
-                c.language
-            );
-            assert!(
-                !r.calls.iter().any(|x| x.callee == *term),
-                "{} must not emit call {term}",
-                c.language
-            );
-            assert!(
-                !r.imports.iter().any(|i| i.module_path.contains(term)),
-                "{} must not emit import {term}",
-                c.language
-            );
-        }
+fn all_languages_satisfy_shared_parse_extract_and_pattern_contract() {
+    for case in CASES {
+        assert_language_conformance(case);
     }
 }
-const CASES: &[Case] = &[
-    Case {
+
+const CASES: &[LanguageConformanceCase] = &[
+    LanguageConformanceCase {
         language: Language::Rust,
         source: RUST,
         symbols: &[
@@ -88,9 +38,10 @@ const CASES: &[Case] = &[
         ],
         imports: &["std::collections::HashMap"],
         calls: &[("process", "top_level_helper")],
+        patterns: &[("function $NAME($$$)", "top_level_helper")],
         forbid: &["doc_only_rust"],
     },
-    Case {
+    LanguageConformanceCase {
         language: Language::TypeScript,
         source: TS,
         symbols: &[
@@ -104,9 +55,10 @@ const CASES: &[Case] = &[
         ],
         imports: &["lib/widgets"],
         calls: &[("render", "formatWidget"), ("formatWidget", "trim")],
+        patterns: &[("function $NAME($$$)", "makeWidget")],
         forbid: &["docOnlyTypeScript"],
     },
-    Case {
+    LanguageConformanceCase {
         language: Language::JavaScript,
         source: JS,
         symbols: &[
@@ -117,9 +69,10 @@ const CASES: &[Case] = &[
         ],
         imports: &["./widgets.js"],
         calls: &[("render", "formatWidget"), ("formatWidget", "trim")],
+        patterns: &[("function $NAME($$$)", "makeWidget")],
         forbid: &["docOnlyJavaScript"],
     },
-    Case {
+    LanguageConformanceCase {
         language: Language::Python,
         source: PY,
         symbols: &[
@@ -130,9 +83,10 @@ const CASES: &[Case] = &[
         ],
         imports: &["pathlib.Path"],
         calls: &[("render", "format_widget")],
+        patterns: &[("function $NAME($$$)", "make_widget")],
         forbid: &["doc_only_python"],
     },
-    Case {
+    LanguageConformanceCase {
         language: Language::Go,
         source: GO,
         symbols: &[
@@ -143,9 +97,10 @@ const CASES: &[Case] = &[
         ],
         imports: &["fmt"],
         calls: &[("Render", "formatWidget")],
+        patterns: &[("function $NAME($$$)", "MakeWidget")],
         forbid: &["docOnlyGo"],
     },
-    Case {
+    LanguageConformanceCase {
         language: Language::Java,
         source: JAVA,
         symbols: &[
@@ -156,75 +111,157 @@ const CASES: &[Case] = &[
         ],
         imports: &["java.util.List"],
         calls: &[("render", "formatWidget"), ("formatWidget", "trim")],
+        patterns: &[("function $NAME($$$)", "render")],
         forbid: &["docOnlyJava"],
     },
-    Case {
+    LanguageConformanceCase {
         language: Language::CSharp,
         source: CS,
         symbols: &[
             ("Render", Method),
+            ("Echo", Method),
             ("Helper", Method),
+            ("Move", Method),
+            ("Local", Function),
+            ("Touch", Method),
             ("GoldenWidget", Class),
+            ("GoldenPoint", Type),
+            ("GoldenRecord", Class),
+            ("GoldenState", Enum),
         ],
         imports: &["System.Text"],
-        calls: &[("Render", "Helper"), ("Helper", "Trim")],
+        calls: &[
+            ("GoldenWidget", "Helper"),
+            ("Render", "Helper"),
+            ("Helper", "Trim"),
+            ("Move", "Local"),
+            ("Local", "Touch"),
+        ],
+        patterns: &[("function $NAME($$$)", "Render"), ("Local($$$)", "Local")],
         forbid: &["DocOnlyCSharp"],
     },
-    Case {
+    LanguageConformanceCase {
         language: Language::Ruby,
         source: RB,
         symbols: &[
+            ("create", Method),
             ("make_widget", Function),
             ("render", Method),
             ("format_widget", Function),
             ("GoldenWidget", Class),
         ],
         imports: &["json"],
-        calls: &[("render", "format_widget")],
+        calls: &[
+            ("create", "format_widget"),
+            ("render", "format_widget"),
+            ("render", "make_widget"),
+        ],
+        patterns: &[
+            ("function $NAME($$$)", "make_widget"),
+            ("function $NAME($$$)", "create"),
+        ],
         forbid: &["doc_only_ruby"],
     },
+    LanguageConformanceCase {
+        language: Language::Swift,
+        source: SWIFT,
+        symbols: &[
+            ("GoldenRenderable", Interface),
+            ("GoldenWidget", Type),
+            ("GoldenWorker", Type),
+            ("GoldenState", Enum),
+            ("render", Method),
+            ("makeWidget", Function),
+            ("formatWidget", Function),
+        ],
+        imports: &["Foundation"],
+        calls: &[("render", "formatWidget"), ("makeWidget", "GoldenWidget")],
+        patterns: &[
+            ("function $NAME($$$)", "makeWidget"),
+            ("formatWidget($$$)", "formatWidget"),
+        ],
+        forbid: &[
+            "docOnlySwift",
+            "stringOnlySwift",
+            "multilineOnlySwift",
+            "blockOnlySwift",
+        ],
+    },
+    LanguageConformanceCase {
+        language: Language::C,
+        source: C,
+        symbols: &[
+            ("render", Function),
+            ("format_widget", Function),
+            ("GoldenWidget", Type),
+            ("GoldenState", Enum),
+            ("GoldenAlias", Type),
+        ],
+        imports: &["<stdio.h>", "local.h"],
+        calls: &[("render", "helper"), ("format_widget", "render")],
+        patterns: &[("function $NAME($$$)", "render")],
+        forbid: &["doc_only_c"],
+    },
+    LanguageConformanceCase {
+        language: Language::Cpp,
+        source: CPP,
+        symbols: &[
+            ("render", Method),
+            ("move", Method),
+            ("make_widget", Function),
+            ("GoldenWidget", Class),
+            ("GoldenPoint", Type),
+            ("GoldenState", Enum),
+        ],
+        imports: &["<string>", "local.hpp"],
+        calls: &[
+            ("render", "helper"),
+            ("move", "touch"),
+            ("make_widget", "render"),
+        ],
+        patterns: &[("function $NAME($$$)", "make_widget"), ("render($$$)", "render")],
+        forbid: &["doc_only_cpp"],
+    },
+    LanguageConformanceCase {
+        language: Language::Kotlin,
+        source: KT,
+        symbols: &[
+            ("GoldenRenderable", Interface),
+            ("GoldenWidget", Class),
+            ("GoldenState", Enum),
+            ("render", Method),
+            ("makeWidget", Function),
+            ("formatWidget", Function),
+        ],
+        imports: &["kotlin.text.trim"],
+        calls: &[
+            ("render", "formatWidget"),
+            ("formatWidget", "trim"),
+            ("makeWidget", "GoldenWidget"),
+        ],
+        patterns: &[
+            ("function $NAME($$$)", "makeWidget"),
+            ("formatWidget($$$)", "formatWidget"),
+        ],
+        forbid: &["doc_only_kotlin"],
+    },
+    LanguageConformanceCase {
+        language: Language::Php,
+        source: PHP,
+        symbols: &[
+            ("GoldenRenderable", Interface),
+            ("GoldenWidget", Class),
+            ("GoldenState", Enum),
+            ("render", Method),
+            ("make_widget", Function),
+            ("format_widget", Function),
+        ],
+        imports: &["App\\Support\\Helper"],
+        calls: &[("render", "format_widget"), ("format_widget", "trim")],
+        patterns: &[
+            ("function $NAME($$$)", "make_widget"),
+            ("format_widget($$$)", "format_widget"),
+        ],
+        forbid: &["doc_only_php"],
+    },
 ];
-fn assert_spans(c: &Case, r: &ExtractionResult) {
-    let lines = c.source.lines().count() as u32;
-    let bytes = c.source.len();
-    for s in &r.symbols {
-        assert!(
-            s.line_start >= 1 && s.line_start <= s.line_end && s.line_end <= lines,
-            "{} {} bad line span {}..{} / {lines}",
-            c.language,
-            s.name,
-            s.line_start,
-            s.line_end
-        );
-        assert!(
-            s.byte_start < s.byte_end && s.byte_end <= bytes,
-            "{} {} bad byte span {}..{} / {bytes}",
-            c.language,
-            s.name,
-            s.byte_start,
-            s.byte_end
-        );
-        assert!(
-            c.source[s.byte_start..s.byte_end].contains(&s.name),
-            "{} {} span must cover name",
-            c.language,
-            s.name
-        );
-    }
-    for call in &r.calls {
-        assert!(
-            call.line >= 1 && call.line <= lines,
-            "{} call line {}",
-            c.language,
-            call.line
-        );
-        assert!(
-            call.byte_start < call.byte_end && call.byte_end <= bytes,
-            "{} call byte span",
-            c.language
-        );
-    }
-}
-fn mods(imports: &[ImportSite]) -> Vec<&str> {
-    imports.iter().map(|i| i.module_path.as_str()).collect()
-}

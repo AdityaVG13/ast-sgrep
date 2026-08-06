@@ -144,7 +144,10 @@ fn resolve_go_import_path_suffix() {
         "cmd/main.go",
         "go",
         "h2",
-        &[(1, "package main\nimport \"example.com/demo/pkg/util\"".into())],
+        &[(
+            1,
+            "package main\nimport \"example.com/demo/pkg/util\"".into(),
+        )],
         &[sym("main", 3)],
         &[ImportRow {
             module_path: "example.com/demo/pkg/util".into(),
@@ -238,9 +241,7 @@ fn chain_imports_edge_resolves_for_typescript() {
     .unwrap();
     assert!(
         chain.edges.iter().any(|e| {
-            e.label == EdgeLabel::Imports
-                && e.from_file == "main.ts"
-                && e.to_file == "lib.ts"
+            e.label == EdgeLabel::Imports && e.from_file == "main.ts" && e.to_file == "lib.ts"
         }),
         "chain must emit Imports edge main.ts -> lib.ts; edges={:#?}",
         chain.edges

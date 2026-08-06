@@ -99,8 +99,7 @@ fn semantic_data_version_bumps_on_insert_remove_and_readd() {
     assert_eq!(v3, 3, "re-add must bump data_version");
 
     let max_id_after_readd = store.semantic_chunk_max_id().unwrap().unwrap_or(0);
-    let fp_after_readd =
-        compute_ann_fingerprint(1, max_id_after_readd, dim, Some(&backend), v3);
+    let fp_after_readd = compute_ann_fingerprint(1, max_id_after_readd, dim, Some(&backend), v3);
 
     // The fingerprint must differ across the delete boundary even if max_id
     // happens to be reused, because data_version is hashed in.
@@ -182,10 +181,7 @@ fn clear_all_data_bumps_semantic_data_version() {
 
     store.clear_all_data().unwrap();
     let v_after = store.semantic_data_version().unwrap();
-    assert_eq!(
-        v_after, 2,
-        "clear_all_data must bump semantic_data_version"
-    );
+    assert_eq!(v_after, 2, "clear_all_data must bump semantic_data_version");
 }
 
 // Regression for the emb-empty re-upsert path: a re-upsert of an existing file

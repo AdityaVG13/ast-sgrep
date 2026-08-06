@@ -39,6 +39,28 @@ fn assert_success(output: &Output, command: &str) -> Value {
     assert_eq!(value["tool"], "asgrep");
     assert_eq!(value["command"], command);
     assert_eq!(value["ok"], true);
+    assert_eq!(value["exit_code"], 0);
+    value
+}
+fn assert_doctor_unhealthy(output: &Output) -> Value {
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        output.stderr.is_empty(),
+        "unexpected diagnostic: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let value = parse_stdout(output);
+    assert_eq!(value["schema_version"], "1.0.0");
+    assert_eq!(value["tool"], "asgrep");
+    assert_eq!(value["command"], "doctor");
+    assert_eq!(value["ok"], false);
+    assert_eq!(value["exit_code"], 2);
+    assert_eq!(value["healthy"], false);
     value
 }
 fn fixture(name: &str) -> Value {
@@ -115,13 +137,10 @@ fn index_reindex_status_and_doctor_have_stable_shapes() {
     let blocked_index = blocked.path().join("blocked.db");
     std::fs::create_dir(&blocked_index).expect("blocking directory");
     let blocked_index = blocked_index.to_str().expect("blocked path utf8");
-    let doctor = assert_success(
-        &run(
-            &session.bin,
-            &["--json", "--index-path", blocked_index, "doctor", root],
-        ),
-        "doctor",
-    );
+    let doctor = assert_doctor_unhealthy(&run(
+        &session.bin,
+        &["--json", "--index-path", blocked_index, "doctor", root],
+    ));
     assert_shape(&doctor, &shapes["doctor"]);
     assert_eq!(doctor["healthy"], false);
     assert_eq!(doctor["status"], Value::Null);
@@ -158,6 +177,26 @@ fn agent_search_modes_are_stable_and_bounded() {
         assert!(hit["preview"].as_str().expect("preview").chars().count() <= 121);
         assert!(hit["excerpt"].as_str().expect("excerpt").lines().count() <= 2);
     }
+    let compact = session.search_json(
+        "process_request",
+        &[
+            "--no-embed",
+            "--limit",
+            "2",
+            "--format",
+            "compact",
+            "--snippet-tokens",
+            "12",
+            "--response-snippet-tokens",
+            "16",
+        ],
+    );
+    assert_shape(&compact, &shapes["compact"]);
+    assert!(compact["h"].as_array().expect("compact hits").len() <= 2);
+    assert!(compact["p"].is_object());
+    assert_eq!(compact["b"][0], 12);
+    assert_eq!(compact["b"][1], 16);
+    assert!(compact["b"][2].as_u64().expect("used budget") <= 16);
 }
 #[test]
 fn chain_eval_and_bench_successes_use_machine_envelope() {
@@ -280,12 +319,266 @@ fn bounded_arguments_are_json_usage_errors() {
     ] {
         let output = run(&bin, &args);
         assert_eq!(output.status.code(), Some(1));
+        assert!(output.stderr.is_empty());
         let mut value = parse_stdout(&output);
         assert_eq!(value["error"]["kind"], "usage");
         value["error"]["message"] = "<message>".into();
         assert_eq!(&value, golden);
     }
 }
+
+#[test]
+fn agent_discovery_defaults_and_boolish_envs_are_round_trip_free() {
+    let bin = asgrep_bin();
+    for value in ["1", "0", "true", "false", "yes", "no", "on", "off"] {
+        let output = Command::new(&bin)
+            .arg("capabilities")
+            .env("ASGREP_NO_EMBED", value)
+            .env("ASGREP_CLOUD_EMBED", value)
+            .env("ASGREP_OLLAMA_EMBED", value)
+            .env("ASGREP_NEURAL_EMBED", value)
+            .env("ASGREP_SEMANTIC_ONLY", value)
+            .env("ASGREP_TANTIVY", value)
+            .env("ASGREP_RERANK", value)
+            .env("NO_COLOR", "1")
+            .output()
+            .expect("run capabilities");
+        assert_success(&output, "capabilities");
+    }
+    let output = run(&bin, &["--robot-help"]);
+    assert_eq!(output.status.code(), Some(0));
+    assert!(String::from_utf8_lossy(&output.stdout).contains("agent handbook"));
+    let missing = TempDir::new().expect("tempdir").path().join("missing");
+    let doctor = assert_doctor_unhealthy(&run(
+        &bin,
+        &["doctor", missing.to_str().expect("utf8")],
+    ));
+    assert_eq!(doctor["issues"][0]["kind"], "missing_root");
+}
+
+#[test]
+fn format_aliases_typos_and_root_failures_are_unambiguous() {
+    let session = CliSession::sample(asgrep_bin());
+    let index = session.index_path.to_str().expect("index utf8");
+    let root = session.root.to_str().expect("root utf8");
+    for command in ["search", "find", "query"] {
+        let output = run(
+            &session.bin,
+            &[
+                "--no-embed",
+                "--index-path",
+                index,
+                "--format",
+                "compact",
+                command,
+                "process_request",
+                root,
+            ],
+        );
+        let value = assert_success(&output, "search");
+        assert_eq!(value["v"], 1);
+    }
+    for args in [
+        vec!["--json", "serach"],
+        vec!["--json", "chian"],
+        vec!["--json", "evall"],
+        vec!["--format", "invalid", "query", "/definitely/missing"],
+        vec!["--format", "compact", "status", root],
+        vec!["--json", "--root", root, "status", root],
+    ] {
+        let output = run(&session.bin, &args);
+        assert_eq!(output.status.code(), Some(1));
+        assert!(output.stderr.is_empty());
+        assert_eq!(parse_stdout(&output)["error"]["kind"], "usage");
+    }
+    let static_query = assert_success(
+        &run(
+            &session.bin,
+            &[
+                "--no-embed",
+                "--index-path",
+                index,
+                "--format",
+                "compact",
+                "static",
+                root,
+            ],
+        ),
+        "search",
+    );
+    assert_eq!(static_query["q"], "static");
+    let missing = session._temp.path().join("missing");
+    let output = run(
+        &session.bin,
+        &[
+            "--format",
+            "compact",
+            "search",
+            "needle",
+            missing.to_str().expect("utf8"),
+        ],
+    );
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stderr.is_empty());
+    assert!(parse_stdout(&output)["error"]["message"]
+        .as_str()
+        .expect("message")
+        .contains("project root does not exist"));
+    let empty = TempDir::new().expect("tempdir");
+    let output = run(
+        &session.bin,
+        &[
+            "--json",
+            "--no-embed",
+            "search",
+            "needle",
+            empty.path().to_str().expect("utf8"),
+        ],
+    );
+    assert_eq!(output.status.code(), Some(2));
+    assert!(parse_stdout(&output)["error"]["message"]
+        .as_str()
+        .expect("message")
+        .contains("index is empty"));
+    let chain = run(
+        &session.bin,
+        &[
+            "--json",
+            "--no-embed",
+            "chain",
+            "needle",
+            empty.path().to_str().expect("utf8"),
+        ],
+    );
+    assert_eq!(chain.status.code(), Some(2));
+    assert!(parse_stdout(&chain)["error"]["message"]
+        .as_str()
+        .expect("message")
+        .contains("index is empty"));
+}
+
+#[test]
+fn doctor_suggested_commands_echo_effective_root() {
+    let tmp = TempDir::new().expect("tempdir");
+    let root = tmp.path().join("proj");
+    std::fs::create_dir_all(&root).unwrap();
+    let bin = asgrep_bin();
+    let doctor = assert_doctor_unhealthy(&run(
+        &bin,
+        &[
+            "doctor",
+            "--robot-triage",
+            root.to_str().expect("utf8"),
+        ],
+    ));
+    let root_s = root.to_str().expect("utf8");
+    assert_eq!(doctor["root"], root_s);
+    let suggested = doctor["suggested_commands"].as_array().expect("cmds");
+    assert!(
+        suggested
+            .iter()
+            .any(|c| c.as_str().is_some_and(|s| s.contains(root_s) && s.contains("index"))),
+        "suggested_commands must echo effective root, got {suggested:?}"
+    );
+}
+
+#[test]
+fn format_alone_implies_json_machine_output() {
+    let session = CliSession::sample(asgrep_bin());
+    let index = session.index_path.to_str().expect("index utf8");
+    let root = session.root.to_str().expect("root utf8");
+    let output = run(
+        &session.bin,
+        &[
+            "--no-embed",
+            "--index-path",
+            index,
+            "--format",
+            "agent",
+            "process_request",
+            root,
+        ],
+    );
+    let value = assert_success(&output, "search");
+    assert!(value.get("hits").is_some() || value.get("hit_count").is_some() || value.get("q").is_some() || value.get("query").is_some());
+}
+
+#[test]
+fn capabilities_lists_all_clap_subcommands_and_siblings() {
+    let bin = asgrep_bin();
+    let caps = assert_success(&run(&bin, &["capabilities", "--json"]), "capabilities");
+    let names: Vec<_> = caps["commands"]
+        .as_array()
+        .expect("commands")
+        .iter()
+        .map(|c| c["name"].as_str().expect("name"))
+        .collect();
+    for required in [
+        "index", "status", "reindex", "search", "bench", "watch", "keyword", "semantic",
+        "chain", "capabilities", "version", "robot-docs", "doctor", "eval",
+    ] {
+        assert!(names.contains(&required), "missing command {required} in {names:?}");
+    }
+    assert!(caps["sibling_binaries"].as_array().unwrap().len() >= 2);
+    assert!(caps["integrations"]["mcp"]["binary"] == "asgrep-mcp");
+    assert!(caps["root_specification"]["canonical"]
+        .as_str()
+        .unwrap()
+        .contains("positional"));
+    let help = run(&bin, &["capabilities", "--help"]);
+    let help_text = String::from_utf8_lossy(&help.stdout);
+    assert!(
+        !help_text.contains("--ann-probes") && !help_text.contains("--rerank"),
+        "capabilities --help must not list search-tuning flags"
+    );
+    let root_help = run(&bin, &["--help"]);
+    let root_text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&root_help.stdout),
+        String::from_utf8_lossy(&root_help.stderr)
+    );
+    assert!(
+        root_text.contains("asgrep-mcp") && root_text.contains("asgrep-lsp"),
+        "root --help must surface sibling binaries"
+    );
+}
+
+#[test]
+fn edit_distance_two_typos_are_rejected_before_search() {
+    let bin = asgrep_bin();
+    // distance 2 from `index`
+    let output = run(&bin, &["--json", "indxx"]);
+    assert_eq!(output.status.code(), Some(1));
+    let value = parse_stdout(&output);
+    let msg = value["error"]["message"].as_str().expect("message");
+    assert!(
+        msg.contains("did you mean") && msg.contains("index"),
+        "expected edit-distance≤2 suggestion, got {msg}"
+    );
+}
+
+#[test]
+fn index_dry_run_does_not_mutate() {
+    let tmp = TempDir::new().expect("tempdir");
+    let root = tmp.path().join("proj");
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    std::fs::write(root.join("src/a.rs"), "fn hello() {}\n").unwrap();
+    let bin = asgrep_bin();
+    let out = run(
+        &bin,
+        &[
+            "--json",
+            "index",
+            "--dry-run",
+            root.to_str().expect("utf8"),
+        ],
+    );
+    let value = assert_success(&out, "index");
+    assert_eq!(value["dry_run"], true);
+    assert_eq!(value["mutates_index"], false);
+    assert!(!root.join(".asgrep").exists() || !root.join(".asgrep/index.db").exists());
+}
+
 #[test]
 fn bench_json_emits_cv_pct_and_skips_vacuous_ast_grep_speedup() {
     let session = CliSession::sample(asgrep_bin());
@@ -320,6 +613,7 @@ fn bench_json_emits_cv_pct_and_skips_vacuous_ast_grep_speedup() {
     assert!(value.get("speedup_vs_ast_grep").is_none());
     assert!(history.exists(), "bench history file should be written");
 }
+
 #[test]
 fn bench_suite_json_is_single_envelope_even_on_failure() {
     let session = CliSession::sample(asgrep_bin());
