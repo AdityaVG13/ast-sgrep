@@ -20,7 +20,7 @@ fn machine_value(command: &str, value: impl serde::Serialize) -> anyhow::Result<
         _ => {
             return Ok(serde_json::json!({
                 "schema_version": MACHINE_SCHEMA_VERSION, "tool": "asgrep",
-                "command": command, "ok": true, "data": value
+                "command": command, "ok": true, "exit_code": 0, "data": value
             }));
         }
     };
@@ -34,6 +34,7 @@ fn machine_value(command: &str, value: impl serde::Serialize) -> anyhow::Result<
     object.insert("tool".into(), "asgrep".into());
     object.insert("command".into(), command.into());
     object.insert("ok".into(), true.into());
+    object.insert("exit_code".into(), 0.into());
     Ok(value)
 }
 
@@ -41,10 +42,36 @@ pub(crate) fn print_machine_json(
     command: &str,
     value: impl serde::Serialize,
 ) -> anyhow::Result<()> {
-    println!(
-        "{}",
-        serde_json::to_string_pretty(&machine_value(command, value)?)?
-    );
+    print_machine_json_with_style(command, value, false, true, 0)
+}
+
+/// Machine envelope with explicit ok/exit_code (doctor unhealthy path).
+pub(crate) fn print_machine_json_status(
+    command: &str,
+    value: impl serde::Serialize,
+    ok: bool,
+    exit_code: i32,
+) -> anyhow::Result<()> {
+    print_machine_json_with_style(command, value, false, ok, exit_code)
+}
+
+pub(crate) fn print_machine_json_with_style(
+    command: &str,
+    value: impl serde::Serialize,
+    compact: bool,
+    ok: bool,
+    exit_code: i32,
+) -> anyhow::Result<()> {
+    let mut value = machine_value(command, value)?;
+    if let Some(object) = value.as_object_mut() {
+        object.insert("ok".into(), ok.into());
+        object.insert("exit_code".into(), exit_code.into());
+    }
+    if compact {
+        println!("{}", serde_json::to_string(&value)?);
+    } else {
+        println!("{}", serde_json::to_string_pretty(&value)?);
+    }
     Ok(())
 }
 
@@ -61,7 +88,12 @@ pub(crate) fn print_machine_failure(command: &str, kind: &str, exit_code: i32, m
 }
 
 pub(crate) fn raw_machine_output_requested(args: &[std::ffi::OsString]) -> bool {
-    args.iter().any(|a| a == "--json" || a == "--robot-triage")
+    args.iter().any(|a| {
+        a == "--json"
+            || a == "--robot-triage"
+            || a == "--format"
+            || a.to_str().is_some_and(|raw| raw.starts_with("--format="))
+    }) || args.iter().any(|a| a == "capabilities" || a == "doctor")
 }
 
 pub(crate) fn raw_command_name(args: &[std::ffi::OsString]) -> &'static str {
@@ -69,8 +101,10 @@ pub(crate) fn raw_command_name(args: &[std::ffi::OsString]) -> &'static str {
         "index",
         "status",
         "reindex",
+        "search",
         "bench",
         "watch",
+        "keyword",
         "semantic",
         "chain",
         "capabilities",

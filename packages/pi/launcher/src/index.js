@@ -65,8 +65,11 @@ export function resolveBinary(options = {}) {
   let expected;
   try { expected = fs.readFileSync(checksumPath, "utf8").trim().split(/\s+/u)[0]; } catch (cause) { fail("ASGREP_CHECKSUM_MISSING", "Native package checksum is missing: " + checksumPath, checksumPath, cause); }
   if (!/^[a-f0-9]{64}$/u.test(expected)) fail("ASGREP_CHECKSUM_CORRUPT", "Native package checksum is invalid: " + checksumPath, checksumPath);
+  // Empty native payload must never validate, even if checksum matches the empty digest (oykd).
   let actual;
   try { actual = createHash("sha256").update(fs.readFileSync(executablePath)).digest("hex"); } catch (cause) { fail("ASGREP_EXECUTABLE_MISSING", "Cannot read native executable: " + executablePath, executablePath, cause); }
+  const EMPTY_SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+  if (actual === EMPTY_SHA256) fail("ASGREP_EXECUTABLE_EMPTY", "Native executable is empty at " + executablePath + "; reinstall " + packageName + "@" + VERSION, executablePath);
   if (actual !== expected) fail("ASGREP_CHECKSUM_MISMATCH", "Native executable checksum mismatch at " + executablePath + "; reinstall " + packageName + "@" + VERSION, executablePath);
   return executablePath;
 }

@@ -33,18 +33,10 @@ pub(crate) const FUNCTION_QUERY_TABLE: &[(&[Language], &[&str])] = &[
         &["(function_declaration name: (identifier) @name) @match"],
     ),
     (
-        &[Language::Java],
+        &[Language::Java, Language::CSharp],
         &[
             "(method_declaration name: (identifier) @name) @match",
             "(constructor_declaration name: (identifier) @name) @match",
-        ],
-    ),
-    (
-        &[Language::CSharp],
-        &[
-            "(method_declaration name: (identifier) @name) @match",
-            "(constructor_declaration name: (identifier) @name) @match",
-            "(local_function_statement name: (identifier) @name) @match",
         ],
     ),
     (
@@ -82,20 +74,10 @@ pub(crate) const CLASS_QUERY_TABLE: &[(&[Language], &[&str])] = &[
         &["(type_declaration (type_spec name: (type_identifier) @name) @match)"],
     ),
     (
-        &[Language::Java],
+        &[Language::Java, Language::CSharp],
         &[
             "(class_declaration name: (identifier) @name) @match",
             "(interface_declaration name: (identifier) @name) @match",
-        ],
-    ),
-    (
-        &[Language::CSharp],
-        &[
-            "(class_declaration name: (identifier) @name) @match",
-            "(interface_declaration name: (identifier) @name) @match",
-            "(struct_declaration name: (identifier) @name) @match",
-            "(record_declaration name: (identifier) @name) @match",
-            "(enum_declaration name: (identifier) @name) @match",
         ],
     ),
     (

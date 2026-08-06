@@ -6,7 +6,7 @@ use ast_sgrep_core::rank::{rrf_score, LEXICAL_RRF_SCALE, RRF_K};
 use ast_sgrep_core::search::passes::lexical::{
     lexical_pass, lexical_pool_limit, LEXICAL_POOL_FLOOR,
 };
-use ast_sgrep_core::search::{HitKind, SearchHit, SearchOptions, Searcher};
+use ast_sgrep_core::search::{HitKind, HitSignal, SearchHit, SearchOptions, Searcher};
 use ast_sgrep_core::semantic_ann::ann_result_is_sufficient;
 use ast_sgrep_core::store::{CallerRow, SymbolRow, UpsertFileInput};
 use ast_sgrep_core::tantivy_index::{TantivySidecar, LEXICAL_DB};
@@ -60,6 +60,9 @@ fn cbnw_asgrep_ceiling_is_single_list_rrf() {
         callee: None,
         language: None,
         score: expected,
+        signal: HitSignal::Exact,
+        contributors: Vec::new(),
+        margin: 0.0,
         excerpt: "alpha beta gamma".into(),
     };
     let mut one = vec![hit.clone()];

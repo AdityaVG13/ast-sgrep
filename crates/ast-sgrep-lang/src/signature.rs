@@ -156,7 +156,10 @@ mod tests {
         );
         assert_eq!(
             cached_pattern_signatures("$F($$$)").unwrap(),
-            vec!["kind:call_expression".to_string(), "kind:call".to_string(),]
+            vec![
+                "kind:call_expression".to_string(),
+                "kind:call".to_string(),
+            ]
         );
         assert_eq!(
             cached_pattern_signatures("kind:function_item").unwrap(),

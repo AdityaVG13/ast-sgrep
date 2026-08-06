@@ -26,10 +26,11 @@ pub fn lexical_pass(
         return Ok(Vec::new());
     }
     if options.use_tantivy {
-        if let Some(sidecar) = crate::tantivy_index::TantivySidecar::open_existing_for_search(
+        let sidecar = crate::tantivy_index::TantivySidecar::open_for_index(
             &options.root,
             options.index_path.as_deref(),
-        )? {
+        )?;
+        if sidecar.exists() && sidecar.is_fresh(store.index_data_version()?)? {
             let hits = lexical_from_sidecar(options, parsed, &sidecar)?;
             // s7jw.2: never empty-succeed on auto/sidecar path when SQL FTS still has hits.
             if !hits.is_empty() {

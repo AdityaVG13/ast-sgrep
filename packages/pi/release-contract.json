@@ -155,16 +155,18 @@
         "policy": "Migrate schema 0 copies without mutating their rollback source; reject ambiguous or newer schemas."
       },
       "indexFormat": {
-        "current": 5,
+        "current": 7,
         "reusable": [
-          5
+          7
         ],
         "rebuild": [
           0,
           1,
           2,
           3,
-          4
+          4,
+          5,
+          6
         ],
         "newer": "reject-and-preserve",
         "policy": "Reuse only an exact compatible format. Build an incompatible replacement separately and swap only after validation; failed replacement preserves recoverable prior data."
@@ -239,7 +241,7 @@
     "officialTag": "Every human-approved official version tag prepares and publishes all npm layers at the canonical version in platform, launcher, extension order.",
     "selection": "Pi/npm update selects the exact matching extension, launcher, platform binary, and protocol version.",
     "runtimeDownloads": false,
-    "partialPublishRecovery": "Move forward with a new immutable version; never overwrite a published npm version."
+    "partialPublishRecovery": "Resume only when every live package at the version has registry integrity identical to the preserved release tarball; otherwise move forward with a new immutable version."
   },
   "registries": {
     "sharedAnchor": [
@@ -281,7 +283,8 @@
     "trustedPublishingRequired": true,
     "provenanceRequired": true,
     "authorizationRecordRequired": true,
-    "gate": "Before any external registry side effect, a human MUST verify every package name and publisher ownership and approve the protected release environment."
+    "gate": "Before any external registry side effect, a human MUST verify every package name and publisher ownership and approve the protected release environment.",
+    "ownershipApprovalVariable": "npm-production environment secret NPM_OWNERSHIP_APPROVED=true"
   },
   "releaseAutomation": {
     "dryRunWorkflow": ".github/workflows/pi-native-artifacts.yml",
@@ -299,7 +302,10 @@
       "ast-sgrep",
       "pi-ast-sgrep"
     ],
-    "idempotence": "Refuse dirty, unsigned, wrong-tag, wrong-commit, version-skewed, checksum-incomplete, or already-published releases; immutable versions are never overwritten."
+    "idempotence": "Refuse dirty, unsigned, wrong-tag, wrong-commit, version-skewed, checksum-incomplete, registry-integrity-mismatched, or fully published releases; identical live tarballs may be skipped during an approved partial-family retry.",
+    "rustToolchain": "1.97.1",
+    "nativeExecution": "Every native artifact is packed, clean-installed, and exercised on its matching matrix runner before upload.",
+    "durableAssetPolicy": "Existing GitHub Release assets are downloaded and byte-compared; mismatches fail and assets are never clobbered."
   },
   "nonGoals": [
     "JavaScript search reimplementation",

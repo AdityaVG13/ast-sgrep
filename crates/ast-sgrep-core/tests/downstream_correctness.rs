@@ -1,7 +1,7 @@
 //! Downstream correctness beads (PR #22 wave): 2hhq, 50hx, ql1u, firi, 6dx9, vwga, …
 use ast_sgrep_core::chain::{expand_chain, ChainConfig};
 use ast_sgrep_core::query::{ParsedQuery, QueryMode};
-use ast_sgrep_core::search::{SearchOptions, Searcher, PARALLEL_PASS_FILE_THRESHOLD};
+use ast_sgrep_core::search::{SearchOptions, Searcher};
 use ast_sgrep_core::semantic_ann::SemanticAnnIndex;
 use ast_sgrep_core::store::{CallerRow, SymbolRow, UpsertFileInput};
 use ast_sgrep_core::tantivy_index::{should_use_tantivy, TANTIVY_AUTO_THRESHOLD};
@@ -292,10 +292,12 @@ fn bead_firi_ivf_and_flat_min_similarity_agree() {
     }
 }
 
-/// 6dx9 — both sides of parallel-128 and tantivy-1000 thresholds are exercised.
+/// 6dx9 — hybrid search returns hits on both small and large corpora; both
+/// sides of the tantivy-1000 threshold are exercised. The parallel-pass gate
+/// concept (128 files) is a historical constant kept as a corpus size here.
 #[test]
 fn bead_6dx9_threshold_sides_differentially_exercised() {
-    assert_eq!(PARALLEL_PASS_FILE_THRESHOLD, 128);
+    const PARALLEL_PASS_FILE_THRESHOLD: usize = 128;
     assert_eq!(TANTIVY_AUTO_THRESHOLD, 1000);
     assert!(!should_use_tantivy(TANTIVY_AUTO_THRESHOLD - 1, false));
     assert!(should_use_tantivy(TANTIVY_AUTO_THRESHOLD, false));

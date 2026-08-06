@@ -322,13 +322,16 @@ pub fn workspace_symbol(root: &Path, file: &str, hit: &SearchHit) -> Option<Valu
         HitKind::Caller | HitKind::Graph => SYMBOL_KIND_METHOD,
         _ => SYMBOL_KIND_FUNCTION,
     };
-    let detail = match hit.kind {
-        HitKind::Embed => format!("semantic · score {:.2}", hit.score),
-        other => format!("{} · score {:.2}", other.as_str(), hit.score),
-    };
+    let detail = format!(
+        "{} · score {:.2} · margin {:.2}",
+        hit.signal.as_str(),
+        hit.score,
+        hit.margin
+    );
     Some(json!({
         "name": name, "kind": kind, "location": location_value(root, file, hit.line_start, hit.line_end), "containerName": file, "detail": detail,
-        "data": { "asgrepKind": hit.kind.as_str(), "score": hit.score, "excerpt": hit.excerpt.chars().take(120).collect::<String>(), "semantic": hit.kind == HitKind::Embed }
+        "data": { "asgrepKind": hit.kind.as_str(), "signal": hit.signal, "contributors": hit.contributors, "score": hit.score, "margin": hit.margin,
+            "excerpt": hit.excerpt.chars().take(120).collect::<String>(), "semantic": hit.contributors.contains(&HitKind::Embed) }
     }))
 }
 pub fn location_value(root: &Path, file: &str, line_start: u32, line_end: u32) -> Value {

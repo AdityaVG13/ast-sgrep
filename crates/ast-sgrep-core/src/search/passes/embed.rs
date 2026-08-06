@@ -1,17 +1,115 @@
 use crate::query::ParsedQuery;
 use crate::rank::SCORE_EMBED;
 use crate::search::types::{HitKind, SearchHit, SearchOptions, SpanHitInput};
-use crate::semantic_ann::rank_chunk_indices_flat;
+use crate::semantic_ann::{flatten_vectors_for_search, rank_chunk_indices_flat};
 use crate::store::IndexStore;
 use crate::Result;
 use ast_sgrep_embed::{embed_query, SemanticChunkRow};
-use std::collections::HashMap;
-use std::sync::Arc;
+use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 const EMBED_HIT_LIMIT: usize = 50;
 pub struct EmbedContext {
     pub chunks: Arc<Vec<SemanticChunkRow>>,
     pub flat_vectors: Arc<Vec<f32>>,
 }
+
+pub(crate) struct SemanticCache {
+    lang_filter: Option<String>,
+    max_id: i64,
+    index_data_version: i64,
+    semantic_data_version: i64,
+    embed_backend: String,
+    chunks: Arc<Vec<SemanticChunkRow>>,
+    flat_vectors: Arc<Vec<f32>>,
+}
+
+fn lock_clear_on_poison<T>(
+    mutex: &Mutex<T>,
+    clear: impl FnOnce(&mut T),
+) -> MutexGuard<'_, T> {
+    match mutex.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            mutex.clear_poison();
+            let mut guard = PoisonError::into_inner(poisoned);
+            clear(&mut guard);
+            guard
+        }
+    }
+}
+
+pub(crate) fn load_semantic_context(
+    store: &IndexStore,
+    options: &SearchOptions,
+    cache: &Mutex<Option<SemanticCache>>,
+) -> Result<Option<EmbedContext>> {
+    if !options.use_embed {
+        return Ok(None);
+    }
+    let lang_filter = options.lang_filter.clone();
+    let max_id = store.semantic_chunk_max_id()?.unwrap_or(0);
+    let index_data_version = store.index_data_version()?;
+    let semantic_data_version = store.semantic_data_version()?;
+    let embed_backend = store
+        .get_meta("embed_backend")?
+        .unwrap_or_else(|| "semantic".into());
+    {
+        let guard = lock_clear_on_poison(cache, |slot| {
+            *slot = None;
+        });
+        if let Some(c) = guard.as_ref() {
+            if c.lang_filter == lang_filter
+                && c.max_id == max_id
+                && c.index_data_version == index_data_version
+                && c.semantic_data_version == semantic_data_version
+                && c.embed_backend == embed_backend
+            {
+                return Ok(Some(EmbedContext {
+                    chunks: Arc::clone(&c.chunks),
+                    flat_vectors: Arc::clone(&c.flat_vectors),
+                }));
+            }
+        }
+    }
+    let chunks = store.all_semantic_chunks(lang_filter.as_deref())?;
+    if chunks.is_empty() {
+        return Ok(None);
+    }
+    let flat_vectors = flatten_vectors_for_search(&chunks, chunks[0].5.len())?;
+    let entry = SemanticCache {
+        lang_filter,
+        max_id,
+        index_data_version,
+        semantic_data_version,
+        embed_backend,
+        chunks: Arc::new(chunks),
+        flat_vectors: Arc::new(flat_vectors),
+    };
+    let ctx = EmbedContext {
+        chunks: Arc::clone(&entry.chunks),
+        flat_vectors: Arc::clone(&entry.flat_vectors),
+    };
+    *lock_clear_on_poison(cache, |slot| {
+        *slot = None;
+    }) = Some(entry);
+    Ok(Some(ctx))
+}
+
+pub(crate) fn run_embed_pass(
+    store: &IndexStore,
+    options: &SearchOptions,
+    parsed: &ParsedQuery,
+    cache: &Mutex<Option<SemanticCache>>,
+) -> Result<Vec<SearchHit>> {
+    if let Some(hits) = embed_pass_lazy_ivf(store, options, parsed)? {
+        return Ok(hits);
+    }
+    match load_semantic_context(store, options, cache)? {
+        Some(ctx) => embed_pass_with_context(store, options, parsed, Some(ctx)),
+        None => Ok(vec![]),
+    }
+}
+
 pub fn embed_pass_lazy_ivf(
     store: &IndexStore,
     options: &SearchOptions,
@@ -20,20 +118,22 @@ pub fn embed_pass_lazy_ivf(
     if parsed.terms.is_empty() || !options.use_embed {
         return Ok(Some(Vec::new()));
     }
-    let stats = store.semantic_chunk_stats(options.lang_filter.as_deref())?;
+    if options.lang_filter.is_some() {
+        return Ok(None);
+    }
+    let stats = store.semantic_chunk_stats(None)?;
     if !crate::semantic_ann::should_use_ann(stats.count, options.ann_threshold) || stats.dim == 0 {
         return Ok(None);
     }
     let backend = store
         .get_meta("embed_backend")?
         .unwrap_or_else(|| "semantic".into());
-    let data_version = store.semantic_data_version()?;
     let fingerprint = crate::semantic_ivf::compute_ann_fingerprint(
         stats.count,
         stats.max_id,
         stats.dim,
         Some(&backend),
-        data_version,
+        store.index_data_version()?,
     );
     let path = crate::semantic_ivf::semantic_ivf_path(store.db_path());
     let Some(ivf) = crate::semantic_ivf::load_semantic_ivf_index(&path, fingerprint)? else {
@@ -48,7 +148,7 @@ pub fn embed_pass_lazy_ivf(
     if candidate_indices.is_empty() {
         return Ok(None);
     }
-    let ids = store.semantic_chunk_ids(options.lang_filter.as_deref())?;
+    let ids = store.semantic_chunk_ids(None)?;
     if ids.len() != stats.count {
         return Ok(None);
     }
@@ -70,14 +170,46 @@ pub fn embed_pass_lazy_ivf(
         };
         chunks.push(row);
     }
-    let ranked =
-        ast_sgrep_embed::rank_chunk_indices_by_vector(&query_vec, &chunks, EMBED_HIT_LIMIT);
-    // iva9.6: empty / under-filled ANN must not short-circuit the flat path.
-    if !crate::semantic_ann::ann_result_is_sufficient(ranked.len(), chunks.len(), EMBED_HIT_LIMIT) {
-        return Ok(None);
-    }
+    let ranked = ast_sgrep_embed::rank_chunk_indices_by_vector(&query_vec, &chunks, chunks.len());
     Ok(Some(embed_similarity_hits(&chunks, ranked)))
 }
+pub fn embed_pass_for_files(
+    store: &IndexStore,
+    options: &SearchOptions,
+    parsed: &ParsedQuery,
+    allowed_files: &HashSet<String>,
+) -> Result<Vec<SearchHit>> {
+    if parsed.terms.is_empty() || !options.use_embed || allowed_files.is_empty() {
+        return Ok(Vec::new());
+    }
+    let query = parsed.terms.join(" ");
+    let mut survivors =
+        store.semantic_chunks_for_files(allowed_files, options.lang_filter.as_deref())?;
+    let modern_files = survivors
+        .iter()
+        .map(|chunk| chunk.0.clone())
+        .collect::<HashSet<_>>();
+    let legacy_only_files = allowed_files
+        .difference(&modern_files)
+        .cloned()
+        .collect::<HashSet<_>>();
+    survivors.extend(
+        store.legacy_embeddings_for_files(&legacy_only_files, options.lang_filter.as_deref())?,
+    );
+    if survivors.is_empty() {
+        return Ok(Vec::new());
+    }
+    let query_vec = embed_query_vector(
+        store,
+        options,
+        &query,
+        survivors.first().map(|chunk| chunk.5.len()),
+    )?;
+    let ranked =
+        ast_sgrep_embed::rank_chunk_indices_by_vector(&query_vec, &survivors, survivors.len());
+    Ok(embed_similarity_hits(&survivors, ranked))
+}
+
 pub fn embed_pass_with_context(
     store: &IndexStore,
     options: &SearchOptions,
@@ -101,14 +233,13 @@ pub fn embed_pass_with_context(
     }
     let flat = ctx.as_ref().map(|c| c.flat_vectors.as_slice());
     let query_vec = embed_query_vector(store, options, &query, chunks.first().map(|c| c.5.len()))?;
-    let indices = rank_chunk_indices_flat(
-        store,
-        &query_vec,
-        chunks,
-        flat,
-        EMBED_HIT_LIMIT,
-        options.ann_threshold,
-    )?;
+    let ann_threshold = if options.lang_filter.is_some() {
+        Some(usize::MAX)
+    } else {
+        options.ann_threshold
+    };
+    let indices =
+        rank_chunk_indices_flat(store, &query_vec, chunks, flat, chunks.len(), ann_threshold)?;
     Ok(embed_similarity_hits(chunks, indices))
 }
 fn embed_query_vector(
@@ -120,20 +251,26 @@ fn embed_query_vector(
     use std::sync::{Mutex, OnceLock};
     static QCACHE: OnceLock<Mutex<HashMap<String, Vec<f32>>>> = OnceLock::new();
     let stored_backend = store.get_meta("embed_backend")?;
-    if stored_backend.as_deref() == Some("neural") {
-        let stored_model = store.get_meta("embed_model")?;
-        let active_model = ast_sgrep_embed::neural_configured_model_id();
-        if stored_model.as_deref() != Some(active_model) {
-            return Err(crate::StoreError::Other(format!( "stored neural model {:?} does not match active model {active_model}; reindex with: asgrep reindex",
-                stored_model.as_deref().unwrap_or("unknown")
+    let stored_model = store.get_meta("embed_model")?;
+    let dim = stored_dim.unwrap_or(ast_sgrep_embed::default_semantic_dim());
+    if let Some(backend_name) = stored_backend.as_deref() {
+        let backend = ast_sgrep_embed::EmbedBackendKind::parse(backend_name).ok_or_else(|| {
+            crate::StoreError::Other(format!("unknown stored embedding backend {backend_name:?}"))
+        })?;
+        let active_model = ast_sgrep_embed::configured_backend_model_id(backend, dim);
+        if stored_model != active_model {
+            return Err(crate::StoreError::Other(format!(
+                "stored embedding model {:?} does not match active model {:?}; reindex with: asgrep reindex",
+                stored_model.as_deref().unwrap_or("unknown"),
+                active_model.as_deref().unwrap_or("unavailable")
             )));
         }
     }
-    let dim = stored_dim.unwrap_or(ast_sgrep_embed::default_semantic_dim());
     let cache_key = format!(
-        "{}|{}|{}|{:?}",
+        "{}|{}|{}|{}|{:?}",
         query,
         stored_backend.as_deref().unwrap_or(""),
+        stored_model.as_deref().unwrap_or(""),
         dim,
         options.embed_preference()
     );
@@ -161,17 +298,67 @@ fn embed_query_vector(
     Ok(vector)
 }
 fn embed_similarity_hits(chunks: &[SemanticChunkRow], ranked: Vec<(usize, f32)>) -> Vec<SearchHit> {
-    ranked
+    #[derive(Debug)]
+    struct ParentMatch {
+        best_index: usize,
+        best_similarity: f32,
+        children: Vec<(f32, String)>,
+    }
+
+    let mut parents = HashMap::<(String, u32, u32, String), ParentMatch>::new();
+    for (index, similarity) in ranked {
+        let Some((file, line_start, line_end, symbol, excerpt, _)) = chunks.get(index) else {
+            continue;
+        };
+        let parent = parents
+            .entry((file.clone(), *line_start, *line_end, symbol.clone()))
+            .or_insert_with(|| ParentMatch {
+                best_index: index,
+                best_similarity: similarity,
+                children: Vec::new(),
+            });
+        if similarity > parent.best_similarity {
+            parent.best_index = index;
+            parent.best_similarity = similarity;
+        }
+        if !parent.children.iter().any(|(_, child)| child == excerpt) {
+            parent.children.push((similarity, excerpt.clone()));
+        }
+    }
+    let mut parents = parents.into_values().collect::<Vec<_>>();
+    parents.sort_by(|left, right| {
+        right
+            .best_similarity
+            .total_cmp(&left.best_similarity)
+            .then_with(|| chunks[left.best_index].0.cmp(&chunks[right.best_index].0))
+            .then_with(|| chunks[left.best_index].1.cmp(&chunks[right.best_index].1))
+            .then_with(|| chunks[left.best_index].2.cmp(&chunks[right.best_index].2))
+            .then_with(|| chunks[left.best_index].3.cmp(&chunks[right.best_index].3))
+    });
+    parents.truncate(EMBED_HIT_LIMIT);
+    parents
         .into_iter()
-        .map(|(idx, sim)| {
-            let (file, line_start, line_end, symbol, excerpt, _) = &chunks[idx];
+        .map(|mut parent| {
+            parent.children.sort_by(|left, right| {
+                right
+                    .0
+                    .total_cmp(&left.0)
+                    .then_with(|| left.1.cmp(&right.1))
+            });
+            parent.children.truncate(3);
+            let (file, line_start, line_end, symbol, _, _) = &chunks[parent.best_index];
             SearchHit::span(SpanHitInput {
                 kind: HitKind::Embed,
                 file: file.clone(),
                 line_start: *line_start,
                 line_end: *line_end,
-                score: SCORE_EMBED * f64::from(sim),
-                excerpt: excerpt.clone(),
+                score: SCORE_EMBED * f64::from(parent.best_similarity),
+                excerpt: parent
+                    .children
+                    .into_iter()
+                    .map(|(_, excerpt)| excerpt)
+                    .collect::<Vec<_>>()
+                    .join("\n...\n"),
                 symbol: (!symbol.is_empty()).then_some(symbol.clone()),
                 language: None,
             })
@@ -190,6 +377,213 @@ fn embed_legacy_hits(
     let query_vec = embed_query_vector(store, options, query, chunks.first().map(|c| c.5.len()))?;
     Ok(embed_similarity_hits(
         &chunks,
-        ast_sgrep_embed::rank_chunk_indices_by_vector(&query_vec, &chunks, EMBED_HIT_LIMIT),
+        ast_sgrep_embed::rank_chunk_indices_by_vector(&query_vec, &chunks, chunks.len()),
     ))
+}
+
+#[cfg(test)]
+mod cascade_tests {
+    use super::{embed_pass_for_files, embed_pass_with_context, embed_similarity_hits};
+    use crate::query::ParsedQuery;
+    use crate::search::SearchOptions;
+    use crate::semantic_chunk::SemanticChunkInput;
+    use crate::store::{IndexStore, UpsertFileInput};
+    use std::collections::HashSet;
+    use tempfile::TempDir;
+
+    #[test]
+    fn child_scores_use_parent_max_and_return_one_parent_hit() {
+        let chunks = vec![
+            (
+                "parent.rs".into(),
+                10,
+                20,
+                "parent".into(),
+                "weaker child".into(),
+                vec![0.0],
+            ),
+            (
+                "parent.rs".into(),
+                10,
+                20,
+                "parent".into(),
+                "best child".into(),
+                vec![0.0],
+            ),
+            (
+                "other.rs".into(),
+                1,
+                3,
+                "other".into(),
+                "other child".into(),
+                vec![0.0],
+            ),
+        ];
+        let hits = embed_similarity_hits(&chunks, vec![(0, 0.2), (2, 0.8), (1, 0.9)]);
+        assert_eq!(hits.len(), 2);
+        assert_eq!(hits[0].file, "parent.rs");
+        assert_eq!((hits[0].line_start, hits[0].line_end), (10, 20));
+        assert_eq!(hits[0].score, super::SCORE_EMBED * f64::from(0.9_f32));
+        assert_eq!(hits[0].excerpt, "best child\n...\nweaker child");
+    }
+
+    #[test]
+    fn language_filtered_semantic_search_does_not_publish_global_sidecar() {
+        let temp = TempDir::new().unwrap();
+        let store = IndexStore::open(temp.path(), None).unwrap();
+        let lines = [(1, "fn filtered_handler() {}".to_string())];
+        let chunks = [SemanticChunkInput {
+            symbol_name: "filtered_handler".into(),
+            kind: "function".into(),
+            line_start: 1,
+            line_end: 1,
+            excerpt: "filtered semantic handler".into(),
+            callers: Vec::new(),
+            callees: Vec::new(),
+            doc: String::new(),
+            scope: String::new(),
+        }];
+        store
+            .upsert_file(UpsertFileInput {
+                rel_path: "filtered.rs",
+                language: Some("rust"),
+                mtime_secs: 1,
+                mtime_nanos: 0,
+                content_hash: "filtered",
+                lines: &lines,
+                eol: "\n",
+                symbols: &[],
+                callers: &[],
+                imports: &[],
+                pattern_nodes: &[],
+                semantic_chunks: &chunks,
+                embed_semantic: true,
+                embed_backend: ast_sgrep_embed::EmbedPreference::Semantic,
+            })
+            .unwrap();
+        let hits = embed_pass_with_context(
+            &store,
+            &SearchOptions {
+                root: temp.path().to_path_buf(),
+                use_embed: true,
+                lang_filter: Some("rust".into()),
+                ann_threshold: Some(1),
+                ..SearchOptions::default()
+            },
+            &ParsedQuery::parse("filtered semantic"),
+            None,
+        )
+        .unwrap();
+        assert!(!hits.is_empty());
+        assert!(!crate::semantic_ivf::semantic_ivf_path(store.db_path()).exists());
+    }
+
+    #[test]
+    fn cascade_ranks_modern_and_legacy_vectors_in_allowed_files() {
+        let temp = TempDir::new().unwrap();
+        let store = IndexStore::open(temp.path(), None).unwrap();
+        let lines = [(1, "fn renewal_handler() {}".to_string())];
+        store
+            .upsert_file(UpsertFileInput {
+                rel_path: "allowed.rs",
+                language: Some("rust"),
+                mtime_secs: 1,
+                mtime_nanos: 0,
+                content_hash: "legacy",
+                lines: &lines,
+                eol: "\n",
+                symbols: &[],
+                callers: &[],
+                imports: &[],
+                pattern_nodes: &[],
+                semantic_chunks: &[],
+                embed_semantic: false,
+                embed_backend: ast_sgrep_embed::EmbedPreference::Semantic,
+            })
+            .unwrap();
+        let file_id = store.file_id("allowed.rs").unwrap().unwrap();
+        let vector = ast_sgrep_embed::embed_query(
+            "renewal handler",
+            None,
+            0,
+            ast_sgrep_embed::EmbedPreference::Semantic,
+        )
+        .unwrap()
+        .vector;
+        store
+            .connection()
+            .execute(
+                "INSERT INTO embeddings(file_id, line_no, vector) VALUES(?1, ?2, ?3)",
+                rusqlite::params![file_id, 1, ast_sgrep_embed::embed_to_bytes(&vector)],
+            )
+            .unwrap();
+
+        let modern_lines = [(1, "fn payment_renewal() {}".to_string())];
+        let modern_chunks = [SemanticChunkInput {
+            symbol_name: "payment_renewal".into(),
+            kind: "function".into(),
+            line_start: 1,
+            line_end: 1,
+            excerpt: "payment renewal modern handler".into(),
+            callers: Vec::new(),
+            callees: Vec::new(),
+            doc: String::new(),
+            scope: String::new(),
+        }];
+        store
+            .upsert_file(UpsertFileInput {
+                rel_path: "modern.rs",
+                language: Some("rust"),
+                mtime_secs: 1,
+                mtime_nanos: 0,
+                content_hash: "modern",
+                lines: &modern_lines,
+                eol: "\n",
+                symbols: &[],
+                callers: &[],
+                imports: &[],
+                pattern_nodes: &[],
+                semantic_chunks: &modern_chunks,
+                embed_semantic: true,
+                embed_backend: ast_sgrep_embed::EmbedPreference::Semantic,
+            })
+            .unwrap();
+
+        let allowed = HashSet::from(["allowed.rs".to_string(), "modern.rs".to_string()]);
+        let stored = store.semantic_chunks_for_files(&allowed, None).unwrap();
+        assert!(stored.iter().any(|chunk| {
+            chunk.0 == "modern.rs" && chunk.4 == "payment renewal modern handler"
+        }));
+        assert!(stored.iter().all(|chunk| !chunk.4.starts_with("symbol:")));
+        let hits = embed_pass_for_files(
+            &store,
+            &SearchOptions {
+                root: temp.path().to_path_buf(),
+                use_embed: true,
+                ..SearchOptions::default()
+            },
+            &ParsedQuery::parse("renewal handler"),
+            &allowed,
+        )
+        .unwrap();
+        let hit_files = hits
+            .iter()
+            .map(|hit| hit.file.as_str())
+            .collect::<HashSet<_>>();
+        assert_eq!(hit_files, HashSet::from(["allowed.rs", "modern.rs"]));
+
+        store.set_meta("embed_model", "stale-model").unwrap();
+        let error = embed_pass_for_files(
+            &store,
+            &SearchOptions {
+                root: temp.path().to_path_buf(),
+                use_embed: true,
+                ..SearchOptions::default()
+            },
+            &ParsedQuery::parse("renewal handler"),
+            &allowed,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("does not match active model"));
+    }
 }

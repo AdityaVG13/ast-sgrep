@@ -8,6 +8,7 @@ use crate::search::types::{HitKind, SearchHit, SearchOptions, SpanHitInput};
 use crate::store::sql::{caller_terms_filter, like_terms_filter, query_limit_map};
 use crate::store::IndexStore;
 use crate::Result;
+use std::collections::HashSet;
 const SYMBOL_SQL_LIMIT: usize = 500;
 const CALLER_SQL_LIMIT: usize = 500;
 const MODE_SQL_LIMIT: usize = 200;
@@ -37,14 +38,32 @@ fn map_caller_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<CallerQueryRow> {
         row.get(5)?,
     ))
 }
+fn restrict_to_files(
+    where_clause: &mut String,
+    bind: &mut Vec<String>,
+    allowed_files: Option<&HashSet<String>>,
+) {
+    let Some(allowed_files) = allowed_files else {
+        return;
+    };
+    let mut paths = allowed_files.iter().collect::<Vec<_>>();
+    paths.sort_unstable();
+    where_clause.push_str(" AND f.path IN (");
+    where_clause.push_str(&vec!["?"; paths.len()].join(","));
+    where_clause.push(')');
+    bind.extend(paths.into_iter().cloned());
+}
+
 fn query_caller_rows(
     store: &IndexStore,
     filter: CallerFilter,
     terms: &[String],
     lang_filter: Option<&str>,
+    allowed_files: Option<&HashSet<String>>,
     limit: usize,
 ) -> Result<Vec<CallerQueryRow>> {
-    let (where_clause, bind) = filter(terms, lang_filter);
+    let (mut where_clause, mut bind) = filter(terms, lang_filter);
+    restrict_to_files(&mut where_clause, &mut bind, allowed_files);
     let sql = format!("{CALLER_SELECT}{where_clause} LIMIT ?{}", bind.len() + 1);
     query_limit_map(store.connection(), &sql, bind, limit, map_caller_row)
 }
@@ -174,6 +193,79 @@ pub fn symbol_pass(
     )?);
     Ok(hits)
 }
+pub fn symbol_pass_for_files(
+    store: &IndexStore,
+    options: &SearchOptions,
+    parsed: &ParsedQuery,
+    allowed_files: &HashSet<String>,
+) -> Result<Vec<SearchHit>> {
+    if parsed.terms.is_empty() || allowed_files.is_empty() {
+        return Ok(Vec::new());
+    }
+    let (mut where_clause, mut bind) =
+        like_terms_filter("s.name", &parsed.terms, options.lang_filter.as_deref());
+    restrict_to_files(&mut where_clause, &mut bind, Some(allowed_files));
+    let rows = query_symbol_spans(store, &where_clause, bind, SYMBOL_SQL_LIMIT)?;
+    let mut hits = symbol_span_rows_to_hits(rows, options, HitKind::Def, |name| {
+        score_def(&parsed.terms, name)
+    })?;
+    hits.extend(caller_rows_to_hits(
+        query_caller_rows(
+            store,
+            caller_terms_filter,
+            &parsed.terms,
+            options.lang_filter.as_deref(),
+            Some(allowed_files),
+            CALLER_SQL_LIMIT,
+        )?,
+        options,
+        parsed,
+        CallerMatchMode::Hybrid,
+    )?);
+    Ok(hits)
+}
+
+pub fn anchor_pass_for_files(
+    store: &IndexStore,
+    options: &SearchOptions,
+    parsed: &ParsedQuery,
+    allowed_files: &HashSet<String>,
+) -> Result<Vec<SearchHit>> {
+    if allowed_files.is_empty() {
+        return Ok(Vec::new());
+    }
+    let anchor_symbol = match parsed.primary_symbol() {
+        Some(symbol) => symbol.to_string(),
+        None => parsed
+            .terms
+            .iter()
+            .find(|term| term.len() > 3)
+            .cloned()
+            .unwrap_or_default(),
+    };
+    if anchor_symbol.is_empty() {
+        return Ok(Vec::new());
+    }
+    let terms = vec![anchor_symbol];
+    let (mut where_clause, mut bind) =
+        like_terms_filter("s.name", &terms, options.lang_filter.as_deref());
+    restrict_to_files(&mut where_clause, &mut bind, Some(allowed_files));
+    let rows = query_symbol_spans(store, &where_clause, bind, SYMBOL_SQL_LIMIT)?;
+    let term_count = parsed.terms.len();
+    symbol_span_rows_to_hits(rows, options, HitKind::Anchor, |name| {
+        let matched = parsed
+            .terms
+            .iter()
+            .filter(|term| crate::rank::score_symbol(term, name) > 0.0)
+            .count();
+        if matched == 0 {
+            0.0
+        } else {
+            SCORE_ANCHOR * (matched as f64 / term_count as f64).sqrt()
+        }
+    })
+}
+
 pub fn anchor_pass(
     store: &IndexStore,
     options: &SearchOptions,
@@ -246,6 +338,7 @@ pub(crate) fn caller_hits_for_terms(
             caller_terms_filter,
             &parsed.terms,
             options.lang_filter.as_deref(),
+            None,
             limit,
         )?,
         options,
@@ -315,4 +408,70 @@ pub fn search_imports(
             SearchHit::import(path, language, module_path, line_no)
         })
         .collect())
+}
+
+#[cfg(test)]
+mod cascade_tests {
+    use super::symbol_pass_for_files;
+    use crate::query::ParsedQuery;
+    use crate::search::SearchOptions;
+    use crate::store::{IndexStore, SymbolRow, UpsertFileInput};
+    use std::collections::HashSet;
+    use tempfile::TempDir;
+
+    #[test]
+    fn survivor_file_filter_precedes_global_symbol_limit() {
+        let temp = TempDir::new().unwrap();
+        let store = IndexStore::open(temp.path(), None).unwrap();
+        let symbol = SymbolRow {
+            name: "target_symbol".into(),
+            kind: "function".into(),
+            line_start: 1,
+            line_end: 1,
+            byte_start: 0,
+            byte_end: 13,
+        };
+        for index in 0..=500 {
+            let path = if index == 500 {
+                "survivor.rs".to_string()
+            } else {
+                format!("decoy_{index:03}.rs")
+            };
+            let lines = [(1, "fn target_symbol() {}".to_string())];
+            store
+                .upsert_file(UpsertFileInput {
+                    rel_path: &path,
+                    language: Some("rust"),
+                    mtime_secs: 1,
+                    mtime_nanos: 0,
+                    content_hash: &format!("hash-{index}"),
+                    lines: &lines,
+                    eol: "\n",
+                    symbols: std::slice::from_ref(&symbol),
+                    callers: &[],
+                    imports: &[],
+                    pattern_nodes: &[],
+                    semantic_chunks: &[],
+                    embed_semantic: false,
+                    embed_backend: ast_sgrep_embed::EmbedPreference::Semantic,
+                })
+                .unwrap();
+        }
+        let allowed = HashSet::from(["survivor.rs".to_string()]);
+        let hits = symbol_pass_for_files(
+            &store,
+            &SearchOptions {
+                root: temp.path().to_path_buf(),
+                ..SearchOptions::default()
+            },
+            &ParsedQuery::parse("target_symbol"),
+            &allowed,
+        )
+        .unwrap();
+        assert!(
+            hits.iter().any(|hit| hit.file == "survivor.rs"),
+            "survivor after the global SQL ceiling was lost: {hits:#?}"
+        );
+        assert!(hits.iter().all(|hit| allowed.contains(&hit.file)));
+    }
 }

@@ -8,7 +8,7 @@ import { resolveBinary } from "ast-sgrep";
 export const RUNTIME_VERSION = "1.3.2";
 export const MACHINE_SCHEMA_VERSION = "1.0.0";
 export const CONFIG_SCHEMA_VERSION = 1 as const;
-export const INDEX_FORMAT_VERSION = 5 as const;
+export const INDEX_FORMAT_VERSION = 7 as const;
 export const DEFAULT_TIMEOUT_MS = 30_000;
 export const DEFAULT_MAX_OUTPUT_BYTES = 4 * 1024 * 1024;
 export const DEFAULT_REFRESH_INTERVAL_MS = 30_000;
@@ -104,9 +104,8 @@ export function rollbackConfig(input: RuntimeConfig): LegacyRuntimeConfig {
   const legacy: LegacyRuntimeConfig = { ...current, schemaVersion: 0 };
   const mutable = legacy as Record<string, unknown>;
   for (const [currentName, legacyName] of LEGACY_NUMBER_FIELDS) {
-    if (current[currentName as keyof RuntimeConfig] !== undefined) {
-      mutable[legacyName] = current[currentName as keyof RuntimeConfig] as number;
-    }
+    const next = current[currentName];
+    if (next !== undefined) mutable[legacyName] = next;
     delete mutable[currentName];
   }
   return legacy;
@@ -200,10 +199,10 @@ function indexHealth(status: MachineEnvelope): IndexHealth {
   if (state === "incompatible" || index?.compatible === false || status.index_compatible === false) return "incompatible";
   if (state === "missing" || index?.exists === false || status.indexed === false) return "missing";
   if (state === "ready" || state === "current" || index?.exists === true || status.indexed === true) return "ready";
-  if (typeof status.index_path === "string" && typeof status.file_count === "number") {
-    return status.file_count === 0 ? "missing" : "ready";
+  if (typeof status.index_path !== "string" || typeof status.file_count !== "number") {
+    throw new RuntimeError("INDEX_STATUS_UNKNOWN", "ast-sgrep status did not report index freshness", { index: status.index, index_status: status.index_status });
   }
-  throw new RuntimeError("INDEX_STATUS_UNKNOWN", "ast-sgrep status did not report index freshness", { index: status.index, index_status: status.index_status });
+  return status.file_count === 0 ? "missing" : "ready";
 }
 
 function incompatibleStatusFailure(cause: unknown): boolean {
@@ -225,6 +224,57 @@ function canonicalizeAffectedPath(path: string): string {
       unresolved.push(basename(existing));
       existing = parent;
     }
+  }
+}
+
+function emptyRootFreshness(): RootFreshness {
+  return { dirtyGeneration: 0, cleanGeneration: 0, initialized: false, lastRefreshAt: 0, inFlight: undefined };
+}
+
+function leaseExpired(state: RootFreshness, now: number, interval: number): boolean {
+  if (!state.initialized) return false;
+  const elapsed = now - state.lastRefreshAt;
+  return elapsed < 0 || elapsed >= interval;
+}
+
+function isFresh(state: RootFreshness, now: number, interval: number): boolean {
+  return state.initialized
+    && state.cleanGeneration === state.dirtyGeneration
+    && !leaseExpired(state, now, interval);
+}
+
+async function resolveIndexHealth(
+  runtime: FreshnessRuntime,
+  rootContext: RuntimeContext,
+  options: RunOptions,
+): Promise<IndexHealth | undefined> {
+  let health = await runtime.inspectIndexCompatibility?.(rootContext);
+  if (health === "incompatible") return health;
+  try {
+    const status = await runtime.run(["status", ".", "--json"], rootContext, options);
+    return indexHealth(status);
+  } catch (cause) {
+    if (!incompatibleStatusFailure(cause)) throw cause;
+    return "incompatible";
+  }
+}
+
+async function reconcileIndex(
+  runtime: FreshnessRuntime,
+  rootContext: RuntimeContext,
+  options: RunOptions,
+  health: IndexHealth | undefined,
+  needsIncremental: boolean,
+): Promise<void> {
+  if (health === "incompatible") {
+    if (runtime.rebuildIncompatibleIndex) await runtime.rebuildIncompatibleIndex(rootContext, options);
+    else await runtime.run(["reindex", ".", "--json"], rootContext, options);
+    return;
+  }
+  if (health === "missing" || needsIncremental) {
+    // Missing / first touch / dirty / lease expiry all reconcile via incremental index
+    // (not force reindex) so external create/modify/delete avoid rebuild thrash (5du.9).
+    await runtime.run(["index", ".", "--json"], rootContext, options);
   }
 }
 
@@ -254,52 +304,43 @@ export class FreshnessCoordinator {
     else this.#pendingPaths.add(canonical);
   }
 
-  async ensureFresh(runtime: FreshnessRuntime, context: RuntimeContext, options: RunOptions = {}): Promise<string> {
-    const root = await runtime.resolveRoot(context);
-    const rootContext: InternalRuntimeContext = { cwd: root, [RESOLVED_ROOT]: true };
-    let state = this.#states.get(root);
-    if (!state) {
-      state = { dirtyGeneration: 0, cleanGeneration: 0, initialized: false, lastRefreshAt: 0, inFlight: undefined };
-      this.#states.set(root, state);
-    }
+  #absorbPending(root: string, state: RootFreshness): void {
     for (const path of this.#pendingPaths) {
       if (!pathContained(root, path)) continue;
       state.dirtyGeneration += 1;
       this.#pendingPaths.delete(path);
     }
+  }
+
+  async ensureFresh(runtime: FreshnessRuntime, context: RuntimeContext, options: RunOptions = {}): Promise<string> {
+    const root = await runtime.resolveRoot(context);
+    const rootContext: InternalRuntimeContext = { cwd: root, [RESOLVED_ROOT]: true };
+    let state = this.#states.get(root);
+    if (!state) {
+      state = emptyRootFreshness();
+      this.#states.set(root, state);
+    }
+    this.#absorbPending(root, state);
     if (state.inFlight) {
       await state.inFlight;
       return this.ensureFresh(runtime, rootContext, options);
     }
     const now = this.#now();
-    const elapsed = now - state.lastRefreshAt;
-    const expired = state.initialized && (elapsed < 0 || elapsed >= this.#interval);
-    if (state.initialized && state.cleanGeneration === state.dirtyGeneration && !expired) return root;
+    if (isFresh(state, now, this.#interval)) return root;
 
     const refreshGeneration = state.dirtyGeneration;
     const wasInitialized = state.initialized;
+    const expired = leaseExpired(state, now, this.#interval);
     const refresh = (async () => {
-      let health = await runtime.inspectIndexCompatibility?.(rootContext);
-      if (health !== "incompatible") {
-        try {
-          const status = await runtime.run(["status", ".", "--json"], rootContext, options);
-          health = indexHealth(status);
-        } catch (cause) {
-          if (!incompatibleStatusFailure(cause)) throw cause;
-          health = "incompatible";
-        }
-      }
+      const health = await resolveIndexHealth(runtime, rootContext, options);
       const dirty = refreshGeneration > state!.cleanGeneration;
-      if (health === "incompatible") {
-        if (runtime.rebuildIncompatibleIndex) await runtime.rebuildIncompatibleIndex(rootContext, options);
-        else await runtime.run(["reindex", ".", "--json"], rootContext, options);
-      } else if (health === "missing" || !wasInitialized || dirty) {
-        await runtime.run(["index", ".", "--json"], rootContext, options);
-      } else if (expired) {
-        // Lease expired without dirty marks: incremental index (not force reindex)
-        // so external create/modify/delete are reconciled without rebuild thrash (5du.9).
-        await runtime.run(["index", ".", "--json"], rootContext, options);
-      }
+      await reconcileIndex(
+        runtime,
+        rootContext,
+        options,
+        health,
+        !wasInitialized || dirty || expired,
+      );
       state!.initialized = true;
       state!.cleanGeneration = refreshGeneration;
       state!.lastRefreshAt = this.#now();
@@ -336,15 +377,27 @@ function getBinary(config: RuntimeConfig, env: NodeJS.ProcessEnv, resolver: Bina
 
 function byteLength(value: string): number { return Buffer.byteLength(value, "utf8"); }
 
+/** Version-triple conjunction (ls6.2): when either identity field is present, both must be present and match.
+ *  Pass `requireIdentity` for surfaces (version --json) that must always report both fields.
+ *  Optional path: report value mismatches on present fields before incompleteness (stable fail codes). */
 function assertVersionTriple(envelope: Partial<MachineEnvelope>, requireIdentity = false): void {
-  if (envelope.tool !== "asgrep") throw new RuntimeError("TOOL_MISMATCH", "Response is not from ast-sgrep", { actual: envelope.tool });
-  if (envelope.schema_version !== MACHINE_SCHEMA_VERSION) throw new RuntimeError("PROTOCOL_MISMATCH", "Unsupported ast-sgrep machine protocol", { expected: MACHINE_SCHEMA_VERSION, actual: envelope.schema_version });
-  if (typeof envelope.ok !== "boolean") throw new RuntimeError("MALFORMED_OUTPUT", "ast-sgrep response is missing boolean ok");
-  if (requireIdentity || envelope.version !== undefined) {
-    if (envelope.version !== RUNTIME_VERSION) throw new RuntimeError("VERSION_MISMATCH", "ast-sgrep binary version does not match the extension", { expected: RUNTIME_VERSION, actual: envelope.version });
+  const hasVersion = envelope.version !== undefined;
+  const hasMachineSchema = envelope.machine_schema_version !== undefined;
+  if (requireIdentity || hasVersion) {
+    if (envelope.version !== RUNTIME_VERSION) {
+      throw new RuntimeError("VERSION_MISMATCH", "ast-sgrep binary version does not match the extension", { expected: RUNTIME_VERSION, actual: envelope.version });
+    }
   }
-  if (requireIdentity || envelope.machine_schema_version !== undefined) {
-    if (envelope.machine_schema_version !== MACHINE_SCHEMA_VERSION) throw new RuntimeError("PROTOCOL_MISMATCH", "ast-sgrep binary reports an incompatible machine protocol", { expected: MACHINE_SCHEMA_VERSION, actual: envelope.machine_schema_version });
+  if (requireIdentity || hasMachineSchema) {
+    if (envelope.machine_schema_version !== MACHINE_SCHEMA_VERSION) {
+      throw new RuntimeError("PROTOCOL_MISMATCH", "ast-sgrep binary reports an incompatible machine protocol", { expected: MACHINE_SCHEMA_VERSION, actual: envelope.machine_schema_version });
+    }
+  }
+  if (!requireIdentity && hasVersion !== hasMachineSchema) {
+    throw new RuntimeError("PROTOCOL_MISMATCH", "Incomplete version triple: version and machine_schema_version must appear together", {
+      hasVersion,
+      hasMachineSchema,
+    });
   }
 }
 
@@ -373,12 +426,15 @@ function parseEnvelope(result: ExecResult, limit: number): MachineEnvelope {
   catch (cause) { throw new RuntimeError("MALFORMED_OUTPUT", "ast-sgrep returned malformed JSON", { cause: cause instanceof Error ? cause.message : String(cause) }); }
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new RuntimeError("MALFORMED_OUTPUT", "ast-sgrep returned a non-object JSON payload");
   const envelope = value as Partial<MachineEnvelope>;
-  assertVersionTriple(envelope);
+  if (envelope.tool !== "asgrep") throw new RuntimeError("TOOL_MISMATCH", "Response is not from ast-sgrep", { actual: envelope.tool });
+  if (envelope.schema_version !== MACHINE_SCHEMA_VERSION) throw new RuntimeError("PROTOCOL_MISMATCH", "Unsupported ast-sgrep machine protocol", { expected: MACHINE_SCHEMA_VERSION, actual: envelope.schema_version });
+  if (typeof envelope.ok !== "boolean") throw new RuntimeError("MALFORMED_OUTPUT", "ast-sgrep response is missing boolean ok");
   if (!envelope.ok) {
     const failure = envelope.error && typeof envelope.error === "object" ? envelope.error as Record<string, unknown> : undefined;
     const message = typeof failure?.message === "string" ? failure.message : "ast-sgrep reported an operational failure";
     throw new RuntimeError("OPERATIONAL_ERROR", message, { command: envelope.command, error: failure });
   }
+  assertVersionTriple(envelope);
   return envelope as MachineEnvelope;
 }
 function indexPathFor(root: string, env: NodeJS.ProcessEnv): string {
@@ -411,6 +467,47 @@ function inspectIndexFile(path: string): IndexHealth {
   }
 }
 
+
+async function swapRebuiltIndex(
+  indexPath: string,
+  replacementPath: string,
+  backupPath: string,
+): Promise<boolean> {
+  let priorMoved = false;
+  if (existsSync(indexPath)) {
+    await rename(indexPath, backupPath);
+    priorMoved = true;
+  }
+  try {
+    await rename(replacementPath, indexPath);
+  } catch (cause) {
+    if (priorMoved) await rename(backupPath, indexPath);
+    throw cause;
+  }
+  if (priorMoved) await rm(backupPath, { force: true });
+  return priorMoved;
+}
+
+function rebuildFailureDetails(
+  indexPath: string,
+  backupPath: string,
+  priorMoved: boolean,
+  cause: unknown,
+): ConstructorParameters<typeof RuntimeError>[2] {
+  let recoveryPath = indexPath;
+  let priorIndexPreserved = existsSync(indexPath);
+  if (priorMoved && !priorIndexPreserved && existsSync(backupPath)) {
+    recoveryPath = backupPath;
+    priorIndexPreserved = true;
+  }
+  return {
+    indexPath,
+    recoveryPath,
+    priorIndexPreserved,
+    expectedIndexFormat: INDEX_FORMAT_VERSION,
+    cause: cause instanceof Error ? cause.message : String(cause),
+  };
+}
 
 export class AstSgrepRuntime {
   readonly config: ReturnType<typeof resolveConfig>;
@@ -447,32 +544,14 @@ export class AstSgrepRuntime {
       if (inspectIndexFile(replacementPath) !== "ready") {
         throw new RuntimeError("INDEX_REBUILD_INVALID", "Replacement index has an incompatible format", { expected: INDEX_FORMAT_VERSION });
       }
-      if (existsSync(indexPath)) {
-        await rename(indexPath, backupPath);
-        priorMoved = true;
-      }
-      try {
-        await rename(replacementPath, indexPath);
-      } catch (cause) {
-        if (priorMoved) await rename(backupPath, indexPath);
-        throw cause;
-      }
-      if (priorMoved) await rm(backupPath, { force: true });
+      priorMoved = await swapRebuiltIndex(indexPath, replacementPath, backupPath);
       return response;
     } catch (cause) {
-      let recoveryPath = indexPath;
-      let priorIndexPreserved = existsSync(indexPath);
-      if (priorMoved && !priorIndexPreserved && existsSync(backupPath)) {
-        recoveryPath = backupPath;
-        priorIndexPreserved = true;
-      }
-      throw new RuntimeError("INDEX_REBUILD_FAILED", "Incompatible index rebuild failed; the prior index remains recoverable", {
-        indexPath,
-        recoveryPath,
-        priorIndexPreserved,
-        expectedIndexFormat: INDEX_FORMAT_VERSION,
-        cause: cause instanceof Error ? cause.message : String(cause),
-      });
+      throw new RuntimeError(
+        "INDEX_REBUILD_FAILED",
+        "Incompatible index rebuild failed; the prior index remains recoverable",
+        rebuildFailureDetails(indexPath, backupPath, priorMoved, cause),
+      );
     } finally {
       await rm(temporaryDirectory, { recursive: true, force: true });
     }

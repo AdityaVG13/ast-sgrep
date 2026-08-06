@@ -2,11 +2,9 @@
 //!
 //! **Why this exists (vs shelling out to ast-grep):**
 //! - Indexed hybrid search needs a fast, in-process structural channel.
-//! - External `ast-grep` is excellent for full metavariable rules, but process
-//!   spawn + JSON parse is too heavy for tight loops and offline agents.
-//! - We implement the common ~80% of patterns natively (function/method/class
-//!   decls and calls with `$NAME` / `$$$` holes). Complex rules still fall
-//!   through to external ast-grep when core enables the fail-closed layer.
+//! - Process spawn + JSON parsing is too heavy for tight loops and offline agents.
+//! - Production search implements declarations, calls, kind predicates, and exact
+//!   indexed signatures natively. Unsupported exotic rule syntax returns no hits.
 
 use crate::extract::{
     byte_to_line, is_ident_kind, is_in_comment_or_string, is_member_expr_kind,
@@ -37,11 +35,10 @@ pub const DECL_PATTERN_PREFIXES: &[(&str, bool)] = &[
     ("type ", true),
 ];
 
-/// True when the pattern needs external ast-grep (we cannot handle it natively).
+/// True when syntax is outside the native structural subset.
 ///
-/// Patterns without `$` always run in-process. Patterns with `$`/`$$$` use the
-/// native structural matcher when they fit a known shape; only exotic shapes
-/// still require the external binary (core fail-closed layer).
+/// Production callers use this for capability reporting only; they never spawn
+/// an external matcher.
 pub fn needs_ast_grep_fallback(pattern: &str) -> bool {
     let p = pattern.trim();
     if p.is_empty() || !p.contains('$') {
@@ -52,14 +49,15 @@ pub fn needs_ast_grep_fallback(pattern: &str) -> bool {
 }
 
 pub fn tree_sitter_language(lang: Language) -> tree_sitter::Language {
+    // Re-exports each grammar's LANGUAGE constant via `.into()`. CSharp currently
+    // shares the Java grammar as a stand-in (documented limitation; see l115).
     match lang {
         Language::Rust => tree_sitter_rust::LANGUAGE.into(),
         Language::TypeScript => tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
         Language::JavaScript => tree_sitter_typescript::LANGUAGE_TSX.into(),
         Language::Python => tree_sitter_python::LANGUAGE.into(),
         Language::Go => tree_sitter_go::LANGUAGE.into(),
-        Language::Java => tree_sitter_java::LANGUAGE.into(),
-        Language::CSharp => tree_sitter_c_sharp::LANGUAGE.into(),
+        Language::Java | Language::CSharp => tree_sitter_java::LANGUAGE.into(),
         Language::Ruby => tree_sitter_ruby::LANGUAGE.into(),
     }
 }
@@ -107,10 +105,7 @@ pub enum NativeKind {
     /// Function-like declaration; `name == None` means any name (`$NAME`).
     Function { name: Option<String> },
     /// Class/struct/type declaration.
-    Class {
-        keyword: &'static str,
-        name: Option<String>,
-    },
+    Class { name: Option<String> },
     /// Free or method call; method path segments may be `$` wildcards.
     Call {
         /// Exact path like `foo.bar` or single name; segments that were `$X` are None.
@@ -139,10 +134,7 @@ pub fn classify_native(pattern: &str) -> Option<NativeKind> {
                 return None;
             };
             return Some(if is_class {
-                NativeKind::Class {
-                    keyword: prefix.trim(),
-                    name,
-                }
+                NativeKind::Class { name }
             } else {
                 NativeKind::Function { name }
             });
@@ -232,42 +224,31 @@ fn match_structural(
     let language = tree_sitter_language(lang);
     let tree = parse_source(lang, source)?;
     let mut out = Vec::new();
-    match kind {
-        NativeKind::Function { name } => run_queries(
-            lang,
-            &language,
-            tree.root_node(),
-            source,
-            queries_for(FUNCTION_QUERY_TABLE, lang),
-            name.as_deref(),
-            None,
-            &mut out,
-        )?,
-        NativeKind::Class { keyword, name } => run_queries(
-            lang,
-            &language,
-            tree.root_node(),
-            source,
-            queries_for(CLASS_QUERY_TABLE, lang),
-            name.as_deref(),
-            Some(keyword),
-            &mut out,
-        )?,
+    let (queries, name) = match kind {
+        NativeKind::Function { name } => (queries_for(FUNCTION_QUERY_TABLE, lang), name.as_deref()),
+        NativeKind::Class { name } => (queries_for(CLASS_QUERY_TABLE, lang), name.as_deref()),
         NativeKind::Call { path } => {
             walk_calls(tree.root_node(), source, path, &mut out);
+            return Ok(out);
         }
-    }
+    };
+    run_queries(
+        &language,
+        tree.root_node(),
+        source,
+        queries,
+        name,
+        &mut out,
+    )?;
     Ok(out)
 }
 
 fn run_queries(
-    lang: Language,
     language: &tree_sitter::Language,
     root: Node,
     source: &str,
     queries: &[&str],
     name_filter: Option<&str>,
-    class_keyword: Option<&str>,
     out: &mut Vec<PatternMatch>,
 ) -> anyhow::Result<()> {
     for qsrc in queries {
@@ -296,9 +277,6 @@ fn run_queries(
             if is_in_comment_or_string(&node) {
                 continue;
             }
-            if class_keyword.is_some_and(|keyword| !class_keyword_matches(lang, &node, keyword)) {
-                continue;
-            }
             if let Some(want) = name_filter {
                 if name_text != Some(want) {
                     continue;
@@ -308,26 +286,6 @@ fn run_queries(
         }
     }
     Ok(())
-}
-
-fn class_keyword_matches(lang: Language, node: &Node, keyword: &str) -> bool {
-    if lang != Language::CSharp {
-        return true;
-    }
-    match keyword {
-        "class" => node.kind() == "class_declaration",
-        "struct" => node.kind() == "struct_declaration",
-        "interface" => node.kind() == "interface_declaration",
-        "type" => matches!(
-            node.kind(),
-            "class_declaration"
-                | "struct_declaration"
-                | "interface_declaration"
-                | "record_declaration"
-                | "enum_declaration"
-        ),
-        _ => false,
-    }
 }
 
 fn walk_calls(node: Node, source: &str, path: &[Option<String>], out: &mut Vec<PatternMatch>) {
@@ -345,7 +303,7 @@ fn call_match_path(node: &Node, source: &str, path: &[Option<String>]) -> Option
     if is_in_comment_or_string(node) || !is_call_kind(node.kind()) {
         return None;
     }
-    let callee = call_target_path(node, source)?;
+    let callee = path_from_node(&call_field_node(node)?, source)?;
     path_matches(&callee, path).then_some(callee)
 }
 
@@ -353,10 +311,6 @@ fn call_field_node<'a>(node: &Node<'a>) -> Option<Node<'a>> {
     ["function", "name"]
         .into_iter()
         .find_map(|f| node.child_by_field_name(f))
-}
-
-fn call_target_path(node: &Node, source: &str) -> Option<Vec<String>> {
-    path_from_node(&call_field_node(node)?, source)
 }
 
 fn path_from_node(node: &Node, source: &str) -> Option<Vec<String>> {
@@ -379,18 +333,13 @@ fn path_from_node(node: &Node, source: &str) -> Option<Vec<String>> {
 fn path_matches(actual: &[String], pattern: &[Option<String>]) -> bool {
     let segment_ok = |a: &String, p: &Option<String>| p.as_ref().is_none_or(|w| w == a);
     if actual.len() == pattern.len() {
-        return actual
-            .iter()
-            .zip(pattern.iter())
-            .all(|(a, p)| segment_ok(a, p));
+        return actual.iter().zip(pattern.iter()).all(|(a, p)| segment_ok(a, p));
     }
     // Exact length only — except a single-segment pattern matches the last call segment.
     if pattern.len() != 1 {
         return false;
     }
-    actual
-        .last()
-        .is_some_and(|last| segment_ok(last, &pattern[0]))
+    actual.last().is_some_and(|last| segment_ok(last, &pattern[0]))
 }
 
 fn walk_literal(node: Node, source: &str, pattern: &str, out: &mut Vec<PatternMatch>) {
@@ -471,7 +420,7 @@ fn record_node_signatures(
 }
 
 /// Map a tree-sitter declaration kind to its indexed `decl:` / display prefix.
-pub fn declaration_prefix(kind: &str) -> Option<&'static str> {
+pub(crate) fn declaration_prefix(kind: &str) -> Option<&'static str> {
     DECL_KIND_PREFIXES
         .iter()
         .find_map(|&(node_kind, prefix)| (node_kind == kind).then_some(prefix))
@@ -581,21 +530,5 @@ mod tests {
         let hits = match_pattern(Language::Rust, src, "process_request($$$)").unwrap();
         assert_eq!(hits.len(), 1);
         assert!(hits[0].excerpt.contains("process_request"));
-    }
-
-    #[test]
-    fn csharp_pattern_channel_uses_csharp_grammar() {
-        let src = r#"
-namespace Fixtures {
-    public class Widget {
-        public void DoWork() {}
-    }
-}
-"#;
-        let hits = match_literal_pattern(Language::CSharp, src, "DoWork").unwrap();
-        assert!(
-            !hits.is_empty(),
-            "C# grammar must parse namespace/class and find DoWork"
-        );
     }
 }
