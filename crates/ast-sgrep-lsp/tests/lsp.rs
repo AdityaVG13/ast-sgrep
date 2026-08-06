@@ -1,9 +1,20 @@
-use ast_sgrep_lsp::backend::path_to_uri;
+use ast_sgrep_lsp::backend::LspBackend;
+use ast_sgrep_lsp::support::{
+    extract_identifier_at, path_to_file_uri, try_apply_text_edit as apply_text_edit,
+};
 use ast_sgrep_lsp::types::{
-    ExecuteCommandParams, Position, ReferenceContext, ReferenceParams, TextDocumentContentChangeEvent,
-    TextDocumentIdentifier, TextDocumentPositionParams,
+    ExecuteCommandParams, Position, Range, ReferenceContext, ReferenceParams,
+    TextDocumentContentChangeEvent, TextDocumentIdentifier, TextDocumentPositionParams,
 };
 use ast_sgrep_testkit::sample_backend;
+use std::fs;
+use std::sync::{Mutex, OnceLock};
+
+fn fixture_write_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
+
 #[test]
 fn lsp_smoke() {
     let (_indexed, backend) = sample_backend();
@@ -13,7 +24,7 @@ fn lsp_smoke() {
     };
     backend.execute_command(&reindex).unwrap();
     assert!(backend.is_index_ready());
-    let uri = path_to_uri(&backend.root().join("src/main.rs"));
+    let uri = path_to_file_uri(&backend.root().join("src/main.rs"));
     let search = ExecuteCommandParams {
         command: "asgrep.search".into(),
         arguments: vec![serde_json::json!("process_request")],
@@ -55,6 +66,82 @@ fn successful_read_does_not_heal_failed_index() {
     assert!(!backend.is_index_ready());
 }
 
+// Regression for bead ast-sgrep-c9os: utf16_span_end consumed the first char on
+// zero-length ranges (rangeLength=0), so every pure insertion VS Code sends
+// deleted the char after the cursor in the mirrored document.
+#[test]
+fn pure_insertion_preserves_following_char() {
+    let insert_at = |line: u32, character: u32, content: &str, text: &str| {
+        apply_text_edit(
+            content,
+            &TextDocumentContentChangeEvent {
+                range: Some(Range {
+                    start: Position { line, character },
+                    end: Position { line, character },
+                }),
+                range_length: Some(0),
+                text: text.to_string(),
+            },
+        )
+        .unwrap()
+    };
+    // ASCII insertion at start: must not eat 'h'.
+    assert_eq!(insert_at(0, 0, "hello", "X"), "Xhello");
+    // ASCII insertion mid-string: must not eat 'l'.
+    assert_eq!(insert_at(0, 2, "hello", "X"), "heXllo");
+    // Multibyte (é = 2 UTF-8 bytes, 1 UTF-16 unit): must not eat 'h'.
+    assert_eq!(insert_at(0, 0, "héllo", "X"), "Xhéllo");
+    // Surrogate pair (😂 = 4 UTF-8 bytes, 2 UTF-16 units) at start: must not eat it.
+    assert_eq!(insert_at(0, 0, "😂ab", "X"), "X😂ab");
+    // Empty trailing line after a newline is a valid insertion position.
+    assert_eq!(insert_at(1, 0, "hello\n", "X"), "hello\nX");
+}
+
+// Companion: non-zero range_length still replaces the correct span.
+#[test]
+fn nonzero_range_length_replaces_correct_span() {
+    let out = apply_text_edit(
+        "hello",
+        &TextDocumentContentChangeEvent {
+            range: Some(Range {
+                start: Position {
+                    line: 0,
+                    character: 1,
+                },
+                end: Position {
+                    line: 0,
+                    character: 3,
+                },
+            }),
+            range_length: Some(2),
+            text: "XY".to_string(),
+        },
+    )
+    .unwrap();
+    assert_eq!(out, "hXYlo");
+}
+
+#[test]
+fn out_of_bounds_text_edit_positions_return_errors() {
+    let invalid = |line: u32, character: u32, range_length: Option<u32>| {
+        apply_text_edit(
+            "hello",
+            &TextDocumentContentChangeEvent {
+                range: Some(Range {
+                    start: Position { line, character },
+                    end: Position { line, character },
+                }),
+                range_length,
+                text: "X".into(),
+            },
+        )
+        .expect_err("out-of-bounds edit must fail")
+    };
+    assert!(invalid(1, 0, None).to_string().contains("out of bounds"));
+    assert!(invalid(0, 99, None).to_string().contains("out of bounds"));
+    assert!(invalid(0, 4, Some(2)).to_string().contains("out of bounds"));
+}
+
 // Regression for bead ast-sgrep-nuli (F-04): find_references/goto_definition
 // returned empty on uppercase/mixed-case symbols (inherited from F-01). Pin the
 // full public navigation path: identifier-at-position -> defs:/callers: search ->
@@ -63,7 +150,7 @@ fn successful_read_does_not_heal_failed_index() {
 #[test]
 fn uppercase_symbol_resolves_through_definition_and_reference_endpoints() {
     let (_indexed, backend) = sample_backend();
-    let uri = path_to_uri(&backend.root().join("src/main.rs"));
+    let uri = path_to_file_uri(&backend.root().join("src/main.rs"));
     backend
         .apply_document_changes(
             &uri,
@@ -139,4 +226,180 @@ fn uppercase_symbol_resolves_through_definition_and_reference_endpoints() {
     assert!(with_declaration
         .iter()
         .any(|location| location["range"]["start"]["line"] == 1));
+}
+
+// ast-sgrep-lsp-state-zblv.2: single-file index success must not set index_ready.
+#[test]
+fn single_file_index_does_not_mark_index_ready() {
+    let (indexed, _) = sample_backend();
+    let root = indexed.indexer.store().root().to_path_buf();
+    let index_path = indexed.indexer.store().db_path().to_path_buf();
+    let mut backend = LspBackend::new(root);
+    backend.set_index_path(index_path);
+    assert!(!backend.is_index_ready());
+    backend
+        .index_content("src/main.rs", "fn only_single_file() {}\n")
+        .unwrap();
+    assert!(
+        !backend.is_index_ready(),
+        "single-file index_content must not flip index_ready"
+    );
+}
+
+// ast-sgrep-lsp-state-zblv.2 + x46g: missing reindex_file errors and must not clear ready.
+#[test]
+fn missing_reindex_file_errors_without_clearing_ready() {
+    let (_indexed, backend) = sample_backend();
+    assert!(backend.is_index_ready());
+    let err = backend
+        .reindex_file("no/such/file.rs")
+        .expect_err("missing file must not Ok");
+    assert!(
+        err.to_string().contains("file not found"),
+        "unexpected error: {err}"
+    );
+    assert!(backend.is_index_ready());
+}
+
+// ast-sgrep-lsp-state-zblv.3: dirty buffer survives full disk index_all.
+#[test]
+fn dirty_buffer_survives_full_disk_reindex() {
+    let _fixture_guard = fixture_write_lock().lock().expect("fixture lock");
+    let (_indexed, backend) = sample_backend();
+    let rel = "src/main.rs";
+    let path = backend.root().join(rel);
+    let original = fs::read_to_string(&path).expect("read fixture");
+    let uri = path_to_file_uri(&path);
+    let marker = "dirty_buffer_unique_marker_zblv3";
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        backend
+            .apply_document_changes(
+                &uri,
+                &[TextDocumentContentChangeEvent {
+                    range: None,
+                    range_length: None,
+                    text: format!("fn {marker}() {{}}\nfn main() {{ {marker}(); }}\n"),
+                }],
+            )
+            .unwrap();
+        // Disk still has the old on-disk sample; full reindex must re-apply dirty text.
+        fs::write(&path, "fn main() {}\n").unwrap();
+        backend.ensure_index().unwrap();
+        assert!(backend.is_index_ready());
+        let hits = backend.search(marker, false, 16).unwrap();
+        let hits = hits["hits"].as_array().unwrap();
+        assert!(
+            hits.iter()
+                .any(|h| h["excerpt"].as_str().unwrap_or("").contains(marker)),
+            "dirty buffer content lost after disk index_all: {hits:?}"
+        );
+    }));
+    fs::write(&path, original).expect("restore fixture");
+    if let Err(payload) = result {
+        std::panic::resume_unwind(payload);
+    }
+}
+
+#[test]
+fn closed_buffer_does_not_override_later_disk_reindex() {
+    let _fixture_guard = fixture_write_lock().lock().expect("fixture lock");
+    let (_indexed, backend) = sample_backend();
+    let rel = "src/main.rs";
+    let path = backend.root().join(rel);
+    let original = fs::read_to_string(&path).expect("read fixture");
+    let uri = path_to_file_uri(&path);
+    let dirty = "closed_dirty_marker_zblv";
+    let external = "external_disk_marker_zblv";
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        backend
+            .apply_document_changes(
+                &uri,
+                &[TextDocumentContentChangeEvent {
+                    range: None,
+                    range_length: None,
+                    text: format!("fn {dirty}() {{}}\n"),
+                }],
+            )
+            .unwrap();
+        backend.close_document(&uri).unwrap();
+        fs::write(&path, format!("fn {external}() {{}}\n")).unwrap();
+        backend.ensure_index().unwrap();
+        assert!(backend
+            .search(&format!("literal:{dirty}"), false, 16)
+            .unwrap()["hits"]
+            .as_array()
+            .unwrap()
+            .is_empty());
+        assert!(!backend
+            .search(&format!("literal:{external}"), false, 16)
+            .unwrap()["hits"]
+            .as_array()
+            .unwrap()
+            .is_empty());
+    }));
+    fs::write(&path, original).expect("restore fixture");
+    if let Err(payload) = result {
+        std::panic::resume_unwind(payload);
+    }
+}
+
+// ast-sgrep-x46g: invalid edit range must Err, not silently return original content.
+#[test]
+fn invalid_text_edit_range_returns_error() {
+    let err = apply_text_edit(
+        "hello",
+        &TextDocumentContentChangeEvent {
+            range: Some(Range {
+                start: Position {
+                    line: 0,
+                    character: 4,
+                },
+                end: Position {
+                    line: 0,
+                    character: 1,
+                },
+            }),
+            range_length: None,
+            text: "X".into(),
+        },
+    )
+    .expect_err("inverted range must error");
+    assert!(
+        err.to_string().contains("invalid text edit range"),
+        "unexpected error: {err}"
+    );
+}
+
+// Epic acceptance / zblv.1: blank-line navigation must not panic.
+#[test]
+fn blank_line_navigation_does_not_panic() {
+    assert_eq!(extract_identifier_at("", 0), None);
+    assert_eq!(extract_identifier_at("", 3), None);
+    assert_eq!(extract_identifier_at("   ", 1), None);
+
+    let (_indexed, backend) = sample_backend();
+    let uri = path_to_file_uri(&backend.root().join("src/main.rs"));
+    backend
+        .apply_document_changes(
+            &uri,
+            &[TextDocumentContentChangeEvent {
+                range: None,
+                range_length: None,
+                text: "fn keep() {}\n\nfn other() {}\n".into(),
+            }],
+        )
+        .unwrap();
+    let err = backend
+        .goto_definition(&TextDocumentPositionParams {
+            text_document: TextDocumentIdentifier { uri },
+            position: Position {
+                line: 1,
+                character: 0,
+            },
+        })
+        .expect_err("blank line has no symbol");
+    assert!(
+        err.to_string().contains("no symbol"),
+        "unexpected error: {err}"
+    );
 }
