@@ -44,6 +44,16 @@ the checked-out HEAD and this change. The median estimate moved from 1.0042 us t
 638.88 ns, a 1.57x speedup (36.4% lower latency). This isolated microbenchmark is
 evidence for the normalization hot path, not a claim about end-to-end indexed search.
 
+## Semantic IVF open latency separates cold, fresh-inode, and warm
+
+The version-2 semantic IVF sidecar decodes bounded centroid/posting metadata but maps its aligned vector payload read-only. Open benchmarks must report three distinct conditions rather than calling every first mapping cold:
+
+- **cold**: a unique sidecar written with OS cache bypass, fsynced, and opened by a fresh process;
+- **fresh inode**: a unique inode under ordinary page-cache policy, with preparation outside the timed region;
+- **warm**: repeated opens of one page-cached sidecar after an untimed warmup.
+
+The 2026-07-26 Apple M5 Max release-perf run used 10,000 vectors, dimension 8, and 100 samples: cold p99 0.963 ms, fresh-inode p99 0.135 ms, warm p99 0.037 ms. The warm gate is 1 ms and is enabled in dedicated runs with `ASGREP_PERF_ASSERTS=1`; default correctness runs still assert mapped storage and explicit vector/index byte accounting without a wall-clock threshold. Full procedure: [validation/semantic-ivf-mmap.md](validation/semantic-ivf-mmap.md).
+
 ## Watch-to-search latency is a multi-station path
 
 Watch mode is a tandem pipeline, not a single search queue:

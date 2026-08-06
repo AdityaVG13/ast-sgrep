@@ -6,7 +6,7 @@
 
 **Hybrid code search that understands intent** -- not only text or syntax.
 
-**v1.3.2** · 8 languages · lexical + AST graph + **semantic symbol search** (on by default, no API key)
+**v1.3.2** · 13 languages · lexical + AST graph + **semantic symbol search** (on by default, no API key)
 
 > **ast-grep finds shapes. ripgrep finds strings. ast-sgrep finds intent.**
 
@@ -52,10 +52,14 @@ handling are supported, but the duty cycle is not enforced.
 Paste into your agent:
 
 ```text
-Clone https://github.com/AdityaVG13/ast-sgrep, cd into it, run `cargo build --release -p ast-sgrep-cli`.
-Register target/release/asgrep-mcp as a stdio MCP server named "ast-sgrep" (build with: cargo build --release -p ast-sgrep-mcp).
-Verify: run ./target/release/asgrep index . then search for defs: of a symbol in this repo.
+1) Discover the contract: `asgrep capabilities --json`
+2) Read the handbook: `asgrep robot-docs guide`
+3) Triage health: `asgrep doctor --robot-triage`
+Then: `asgrep index . --json` and search with `asgrep --json --format compact "your intent" .`
+Bin aliases: `asgrep` and `ast-sgrep`. Sibling binaries: `asgrep-mcp` (MCP stdio), `asgrep-lsp` (LSP).
 ```
+
+Build from source if needed: `cargo build --release -p ast-sgrep-cli` (and `-p ast-sgrep-mcp` / `-p ast-sgrep-lsp` for siblings).
 
 ---
 
@@ -63,7 +67,7 @@ Verify: run ./target/release/asgrep index . then search for defs: of a symbol in
 
 Most code search is either **fast text** (ripgrep) or **pattern matching** (ast-grep). Neither answers questions like *"where does credential renewal happen?"* when the words in your question do not appear in the code.
 
-**ast-sgrep** builds a **persistent index**: symbols, caller/callee edges, imports, lexical FTS, and **symbol-level semantic vectors** enriched with call-graph context. Query in natural language or with graph prefixes; get ranked hits with excerpts for humans or agents.
+**ast-sgrep** builds a **persistent index**: symbols, caller/callee edges, imports, lexical FTS, and **symbol-level semantic vectors** enriched with call-graph context. Default queries cascade lexical candidates through AST-derived evidence and semantic reranking; the dedicated `semantic` command handles zero-token-overlap discovery.
 
 **No API key required.** Offline semantic search works out of the box. Cloud, Ollama, and optional neural embeddings are upgrades.
 
@@ -72,7 +76,7 @@ Most code search is either **fast text** (ripgrep) or **pattern matching** (ast-
 | Where is X defined? | `defs:` + ranked hybrid hits |
 | Who calls this? | `callers:` + call hierarchy (LSP) |
 | How does auth refresh work? | NL → symbols + anchors + semantic similarity |
-| "credential renewal" (no token overlap) | Semantic hit on `auth_refresh` |
+| "credential renewal" (no token overlap) | `asgrep semantic "credential renewal"` → `auth_refresh` |
 | Structured JSON for an agent | `--json --format agent` |
 | Structural rewrite / codemod | `pattern:` (ast-grep when available) |
 
@@ -151,7 +155,7 @@ Canonical table: [head-to-head.md](benchmarks/results/head-to-head.md). Index: [
 | **MCP** | `cargo build --release -p ast-sgrep-mcp` | AI agents (stdio) |
 | **LSP** | `cargo build --release -p ast-sgrep-lsp` | Editor navigation |
 | **Library** | `ast-sgrep-core` | Embed search in Rust tools |
-| **JSON plugins** | `--format agent\|github\|gitlab\|agent-capsule` | Agents / CI |
+| **JSON plugins** | `--format compact\|agent\|agent-capsule\|github\|gitlab` | Agents / CI |
 
 ---
 
@@ -177,7 +181,7 @@ Canonical table: [head-to-head.md](benchmarks/results/head-to-head.md). Index: [
 |------|------|
 | `crates/ast-sgrep-core` | Index, SQLite store, hybrid search |
 | `crates/ast-sgrep-cli` | `asgrep` / `ast-sgrep` CLI + supervisor |
-| `crates/ast-sgrep-lang` | Tree-sitter extraction (8 languages) |
+| `crates/ast-sgrep-lang` | Tree-sitter extraction (13 languages) |
 | `crates/ast-sgrep-embed` | Embedding backends + optional rerank |
 | `crates/ast-sgrep-lsp` | Language server |
 | `crates/ast-sgrep-mcp` | MCP server |

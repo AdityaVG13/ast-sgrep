@@ -1,10 +1,10 @@
-//! Benchmark suite / batch helpers.
+//! Bench / suite / batch timing commands.
 
-use crate::machine::{print_machine_json, print_machine_json_with_ok};
+use crate::machine::{print_machine_json, print_machine_json_status};
 use crate::search_cmd::do_search;
 use crate::{open_indexer, open_searcher, resolve_root_index, Cli};
 use anyhow::Context;
-use ast_sgrep_core::{index_db_path, IndexStats, SearchResponse, Searcher};
+use ast_sgrep_core::{try_index_db_path, IndexStats, SearchResponse, Searcher};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
@@ -29,7 +29,8 @@ pub(crate) fn run_bench_command(
         None => run_bench(root, cli, query, iterations, skip_index),
     }
 }
-pub(crate) fn maybe_index(root: &Path, cli: &Cli, skip: bool) -> anyhow::Result<(Option<IndexStats>, f64)> {
+
+fn maybe_index(root: &Path, cli: &Cli, skip: bool) -> anyhow::Result<(Option<IndexStats>, f64)> {
     if skip {
         return Ok((None, 0.0));
     }
@@ -40,9 +41,10 @@ pub(crate) fn maybe_index(root: &Path, cli: &Cli, skip: bool) -> anyhow::Result<
         t0.elapsed().as_secs_f64() * 1000.0,
     ))
 }
+
 fn bench_searcher(root: &Path, cli: &Cli, skip_index: bool) -> anyhow::Result<Searcher> {
     let (resolved, index_path) = resolve_root_index(cli, root);
-    let db = index_db_path(&resolved, index_path.as_deref());
+    let db = try_index_db_path(&resolved, index_path.as_deref())?;
     if skip_index && !db.exists() {
         anyhow::bail!(
             "failed to open existing index at {} (run `asgrep index` first)",
@@ -51,6 +53,7 @@ fn bench_searcher(root: &Path, cli: &Cli, skip_index: bool) -> anyhow::Result<Se
     }
     open_searcher(root, cli)
 }
+
 fn timed_searches(
     s: &Searcher,
     q: &str,
@@ -66,6 +69,7 @@ fn timed_searches(
     }
     Ok((times, last))
 }
+
 fn mean_ms(samples: &[f64]) -> f64 {
     if samples.is_empty() {
         0.0
@@ -73,6 +77,7 @@ fn mean_ms(samples: &[f64]) -> f64 {
         samples.iter().sum::<f64>() / samples.len() as f64
     }
 }
+
 /// Sample coefficient of variation as a percent (0 when fewer than 2 samples).
 fn cv_pct(samples: &[f64]) -> f64 {
     if samples.len() < 2 {
@@ -92,6 +97,7 @@ fn cv_pct(samples: &[f64]) -> f64 {
         / (samples.len() - 1) as f64;
     (var.sqrt() / mean) * 100.0
 }
+
 /// Optional ast-grep timing only for `pattern:` queries when the binary exists.
 /// Hybrid/token comparisons are vacuous and must not emit speedup claims.
 fn ast_grep_comparison(query: &str, root: &Path, iterations: u32, avg_ms: f64) -> serde_json::Value {
@@ -125,18 +131,21 @@ fn ast_grep_comparison(query: &str, root: &Path, iterations: u32, avg_ms: f64) -
         }),
     }
 }
+
 const BENCH_HISTORY_PATH: &str = ".bench-history.json";
-/// Default regression ratchet: fail when current mean exceeds prior mean by this percent.
 const BENCH_RATCHET_PCT: f64 = 50.0;
+
 fn bench_history_enabled() -> bool {
     std::env::var("ASGREP_BENCH_HISTORY")
         .ok()
         .map(|v| v != "0")
         .unwrap_or(true)
 }
+
 fn bench_ratchet_enabled() -> bool {
     std::env::var("ASGREP_BENCH_RATCHET").ok().as_deref() == Some("1")
 }
+
 fn update_bench_history(
     label: &str,
     avg_ms: f64,
@@ -199,6 +208,7 @@ fn update_bench_history(
     }
     Ok(Some(meta))
 }
+
 fn add_index_json(obj: &mut serde_json::Value, stats: Option<&IndexStats>, index_ms: f64) {
     if let Some(s) = stats {
         obj["files_indexed"] = serde_json::json!(s.files_indexed);
@@ -209,6 +219,7 @@ fn add_index_json(obj: &mut serde_json::Value, stats: Option<&IndexStats>, index
         obj["files_indexed"] = serde_json::Value::Null;
     }
 }
+
 fn print_index_skipped(stats: Option<&IndexStats>, index_ms: Option<f64>) {
     match (stats, index_ms) {
         (Some(s), Some(ms)) => println!("Indexed {} files in {ms:.2}ms", s.files_indexed),
@@ -216,6 +227,7 @@ fn print_index_skipped(stats: Option<&IndexStats>, index_ms: Option<f64>) {
         _ => println!("Index skipped (using existing index)"),
     }
 }
+
 fn run_bench_suite(
     root: &Path,
     cli: &Cli,
@@ -251,11 +263,22 @@ fn run_bench_suite(
     let searcher = bench_searcher(&bench_root, cli, skip_index)?;
     let mut results: Vec<serde_json::Value> = Vec::with_capacity(cases.len());
     for case in cases {
-        let (times, last) = timed_searches(&searcher, case.query, false, iterations)?;
+        let expected = ast_sgrep_core::bench_suite::benchmark_expectation(case)
+            .ok_or_else(|| anyhow::anyhow!("benchmark case '{}' has no identity contract", case.name))?;
+        let semantic_only = expected.kind == Some(ast_sgrep_core::search::HitKind::Embed);
+        let (times, last) = timed_searches(&searcher, case.query, semantic_only, iterations)?;
         let hits = last.as_ref().map_or(0, |r| r.hits.len());
+        let identity_ok = last.as_ref().is_some_and(|response| {
+            response
+                .hits
+                .iter()
+                .take(expected.max_rank)
+                .any(|hit| expected.matches(hit))
+        });
         let avg = mean_ms(&times);
         let cv = cv_pct(&times);
         let comparison = ast_grep_comparison(case.query, &bench_root, iterations.min(3), avg);
+        let case_ok = hits >= case.min_hits && identity_ok;
         results.push(serde_json::json!({
             "name": case.name,
             "query": case.query,
@@ -263,7 +286,9 @@ fn run_bench_suite(
             "cv_pct": cv,
             "hits": hits,
             "min_hits": case.min_hits,
-            "ok": hits >= case.min_hits,
+            "identity_ok": identity_ok,
+            "identity_max_rank": expected.max_rank,
+            "ok": case_ok,
             "ast_grep_comparison": comparison,
         }));
     }
@@ -312,8 +337,7 @@ fn run_bench_suite(
             obj["index_ms"] = serde_json::json!(0.0);
             obj["files_indexed"] = serde_json::Value::Null;
         }
-        // Single envelope: ok reflects suite outcome (no success-then-failure dual JSON).
-        print_machine_json_with_ok("bench", &obj, suite_ok)?;
+        print_machine_json_status("bench", &obj, suite_ok, if suite_ok { 0 } else { 2 })?;
         if !suite_ok {
             std::process::exit(2);
         }
@@ -346,11 +370,12 @@ fn run_bench_suite(
             }
         }
         if !suite_ok {
-            anyhow::bail!("benchmark suite had cases below min_hits threshold");
+            anyhow::bail!("benchmark suite failed hit-count or result-identity thresholds");
         }
     }
     Ok(())
 }
+
 fn run_bench(
     root: &Path,
     cli: &Cli,
@@ -360,7 +385,12 @@ fn run_bench(
 ) -> anyhow::Result<()> {
     let (stats_opt, index_ms) = maybe_index(root, cli, skip_index)?;
     let searcher = bench_searcher(root, cli, skip_index)?;
-    let (times, last) = timed_searches(&searcher, query, cli.semantic_only, iterations)?;
+    let (times, last) = timed_searches(
+        &searcher,
+        query,
+        cli.active_tuning().semantic_only,
+        iterations,
+    )?;
     let hits = last.as_ref().map_or(0, |r| r.hits.len());
     let avg = mean_ms(&times);
     let cv = cv_pct(&times);
@@ -418,6 +448,7 @@ fn run_bench(
     }
     Ok(())
 }
+
 fn run_bench_batch(
     root: &Path,
     cli: &Cli,
@@ -446,7 +477,12 @@ fn run_bench_batch(
     let searcher = bench_searcher(root, cli, skip_index)?;
     let mut results = Vec::with_capacity(queries.len());
     for query in &queries {
-        let (mut samples, last) = timed_searches(&searcher, query, cli.semantic_only, iterations)?;
+        let (mut samples, last) = timed_searches(
+            &searcher,
+            query,
+            cli.active_tuning().semantic_only,
+            iterations,
+        )?;
         samples.sort_by(f64::total_cmp);
         let avg = samples.iter().sum::<f64>() / f64::from(iterations.max(1));
         let p50 = if samples.is_empty() {
@@ -464,7 +500,14 @@ fn run_bench_batch(
                         .then_with(|| a.line_start.cmp(&b.line_start))
                 });
                 hs.truncate(10);
-                (r.hits.len(), hs.iter().map(|h| serde_json::json!({"file": h.file, "line_start": h.line_start, "symbol": h.symbol})).collect::<Vec<_>>())
+                (
+                    r.hits.len(),
+                    hs.iter()
+                        .map(|h| {
+                            serde_json::json!({"file": h.file, "line_start": h.line_start, "symbol": h.symbol})
+                        })
+                        .collect::<Vec<_>>(),
+                )
             }
             None => (0, vec![]),
         };

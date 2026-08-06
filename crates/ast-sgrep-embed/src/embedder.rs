@@ -1,6 +1,96 @@
 use anyhow::{anyhow, Result};
 #[cfg(feature = "cloud")]
 use serde::{Deserialize, Serialize};
+
+fn is_boolish_true(value: &str) -> bool {
+    matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "1" | "true" | "yes" | "on"
+    )
+}
+
+fn env_flag(name: &str) -> bool {
+    std::env::var(name)
+        .ok()
+        .as_deref()
+        .is_some_and(is_boolish_true)
+}
+
+fn env_allows_neural_fallback() -> bool {
+    env_flag("ASGREP_NEURAL_FALLBACK")
+}
+
+/// Allowlist env-driven embed HTTP endpoints against SSRF (j0x4 / 2lbz / rl1p.7).
+///
+/// Default hosts: `api.openai.com`, `api.azure.com`, loopback for Ollama.
+/// Extra hosts: comma-separated `ASGREP_EMBED_URL_ALLOWLIST`.
+pub fn embed_url_is_allowed(url: &str) -> Result<(), String> {
+    let url = url.trim();
+    let (scheme, rest) = url
+        .split_once("://")
+        .ok_or_else(|| "embed URL missing scheme".to_string())?;
+    let scheme = scheme.to_ascii_lowercase();
+    if scheme != "https" && scheme != "http" {
+        return Err(format!("embed URL scheme {scheme:?} is not allowed"));
+    }
+    let authority = rest
+        .split(|c| c == '/' || c == '?' || c == '#')
+        .next()
+        .unwrap_or("");
+    if authority.is_empty() {
+        return Err("embed URL missing host".to_string());
+    }
+    // Strip userinfo and port: [user@]host[:port]
+    let hostport = authority.rsplit('@').next().unwrap_or(authority);
+    let host = if hostport.starts_with('[') {
+        hostport
+            .trim_start_matches('[')
+            .split(']')
+            .next()
+            .unwrap_or("")
+            .to_ascii_lowercase()
+    } else {
+        hostport
+            .split(':')
+            .next()
+            .unwrap_or(hostport)
+            .to_ascii_lowercase()
+    };
+    if host.is_empty() {
+        return Err("embed URL missing host".to_string());
+    }
+    let mut allowed = vec![
+        "api.openai.com".to_string(),
+        "api.azure.com".to_string(),
+        "127.0.0.1".to_string(),
+        "localhost".to_string(),
+        "::1".to_string(),
+    ];
+    if let Ok(extra) = std::env::var("ASGREP_EMBED_URL_ALLOWLIST") {
+        for part in extra.split(',') {
+            let host = part.trim().to_ascii_lowercase();
+            if !host.is_empty() {
+                allowed.push(host);
+            }
+        }
+    }
+    if allowed.iter().any(|h| h == &host) {
+        if scheme == "http"
+            && !matches!(host.as_str(), "127.0.0.1" | "localhost" | "::1")
+            && !env_flag("ASGREP_EMBED_ALLOW_INSECURE_HTTP")
+        {
+            return Err(
+                "http embed URLs are limited to loopback unless ASGREP_EMBED_ALLOW_INSECURE_HTTP=1"
+                    .into(),
+            );
+        }
+        return Ok(());
+    }
+    Err(format!(
+        "embed URL host {host:?} is not allowlisted; set ASGREP_EMBED_URL_ALLOWLIST"
+    ))
+}
+
 // ---- remote cloud/ollama ----
 #[derive(Debug, Clone)]
 pub struct CloudEmbeddingConfig {
@@ -13,6 +103,7 @@ impl CloudEmbeddingConfig {
         let api_key = std::env::var("ASGREP_EMBED_API_KEY").ok()?;
         let api_url = std::env::var("ASGREP_EMBED_API_URL")
             .unwrap_or_else(|_| "https://api.openai.com/v1/embeddings".to_string());
+        embed_url_is_allowed(&api_url).ok()?;
         let model = std::env::var("ASGREP_EMBED_MODEL")
             .unwrap_or_else(|_| "text-embedding-3-small".to_string());
         Some(Self {
@@ -40,6 +131,7 @@ struct EmbedData {
 }
 #[cfg(feature = "cloud")]
 pub fn embed_via_api(text: &str, config: &CloudEmbeddingConfig) -> Result<Vec<f32>, String> {
+    embed_url_is_allowed(&config.api_url)?;
     let body = EmbedRequest {
         model: &config.model,
         input: text,
@@ -69,16 +161,17 @@ pub struct OllamaEmbeddingConfig {
 }
 impl OllamaEmbeddingConfig {
     pub fn from_env() -> Option<Self> {
-        if std::env::var("ASGREP_NO_OLLAMA").ok().as_deref() == Some("1") {
+        if env_flag("ASGREP_NO_OLLAMA") {
             return None;
         }
-        let explicit = std::env::var("ASGREP_OLLAMA_EMBED").ok().as_deref() == Some("1");
+        let explicit = env_flag("ASGREP_OLLAMA_EMBED");
         let url_set = std::env::var("ASGREP_OLLAMA_URL").is_ok();
         if !explicit && !url_set {
             return None;
         }
         let api_url = std::env::var("ASGREP_OLLAMA_URL")
             .unwrap_or_else(|_| "http://127.0.0.1:11434".to_string());
+        embed_url_is_allowed(&api_url).ok()?;
         let model =
             std::env::var("ASGREP_OLLAMA_MODEL").unwrap_or_else(|_| "nomic-embed-text".to_string());
         Some(Self { api_url, model })
@@ -101,6 +194,7 @@ struct OllamaEmbedResponse {
 }
 #[cfg(feature = "cloud")]
 pub fn embed_via_ollama(text: &str, config: &OllamaEmbeddingConfig) -> Result<Vec<f32>, String> {
+    embed_url_is_allowed(&config.api_url)?;
     let body = OllamaEmbedRequest {
         model: &config.model,
         prompt: text,
@@ -145,7 +239,8 @@ impl Default for HashedEmbedder {
     fn default() -> Self {
         Self {
             inner: SemanticLocalEmbedding,
-            model_id: format!("hashed-{SEMANTIC_DIM}"),
+            // `-xof` marks full-rank feature hashing (not period-32 blake3 tiling).
+            model_id: format!("hashed-{SEMANTIC_DIM}-xof"),
         }
     }
 }
@@ -298,7 +393,16 @@ fn neural_embedder() -> Option<Box<dyn Embedder>> {
     let cached = match NeuralEmbedder::new(config.clone()) {
         Ok(embedder) => Some(Arc::new(embedder)),
         Err(err) => {
-            eprintln!("asgrep: neural embedder unavailable, falling back: {err}");
+            // Fail closed unless the operator explicitly opts into hashed fallback (2058).
+            if env_allows_neural_fallback() {
+                eprintln!(
+                    "asgrep: neural embedder unavailable; ASGREP_NEURAL_FALLBACK=1 acknowledged hashed fallback: {err}"
+                );
+            } else {
+                eprintln!(
+                    "asgrep: neural embedder unavailable (set ASGREP_NEURAL_FALLBACK=1 to acknowledge hashed fallback): {err}"
+                );
+            }
             None
         }
     };
@@ -359,6 +463,20 @@ pub fn embed_with_chain(text: &str, preference: EmbedPreference) -> EmbedResult 
             };
         }
     }
+    if matches!(preference, EmbedPreference::Neural) && !env_allows_neural_fallback() {
+        eprintln!(
+            "asgrep: neural preference requested but neural embedder unavailable; \
+             refusing silent hashed swap — set ASGREP_NEURAL_FALLBACK=1 to acknowledge"
+        );
+    }
+    if matches!(preference, EmbedPreference::Cloud | EmbedPreference::Ollama)
+        && !env_allows_embed_fallback()
+    {
+        eprintln!(
+            "asgrep: {preference:?} preference unavailable; refusing silent hashed Semantic \
+             — set ASGREP_EMBED_FALLBACK=1 to acknowledge (embed_fallback)"
+        );
+    }
     EmbedResult {
         vector: try_backend(EmbedBackendKind::Semantic, text)
             .expect("local semantic embedder is always available and infallible"),
@@ -380,6 +498,14 @@ pub fn embed_batch_with_chain(texts: &[&str], preference: EmbedPreference) -> Ve
                 .collect();
         }
     }
+    if matches!(preference, EmbedPreference::Cloud | EmbedPreference::Ollama)
+        && !env_allows_embed_fallback()
+    {
+        eprintln!(
+            "asgrep: {preference:?} preference unavailable for batch; refusing silent hashed Semantic \
+             — set ASGREP_EMBED_FALLBACK=1 to acknowledge (embed_fallback)"
+        );
+    }
     try_backend_batch(EmbedBackendKind::Semantic, texts)
         .expect("local semantic embedder is always available and infallible")
         .into_iter()
@@ -390,23 +516,23 @@ pub fn embed_batch_with_chain(texts: &[&str], preference: EmbedPreference) -> Ve
         .collect()
 }
 fn chain_kinds(preference: EmbedPreference) -> Vec<EmbedBackendKind> {
-    let mut kinds = Vec::new();
-    if matches!(preference, EmbedPreference::Cloud | EmbedPreference::Auto) {
-        kinds.push(EmbedBackendKind::Cloud);
+    // Cloud preference must not silently try Ollama (9gfx).
+    match preference {
+        EmbedPreference::Cloud => vec![EmbedBackendKind::Cloud],
+        EmbedPreference::Ollama => vec![EmbedBackendKind::Ollama],
+        EmbedPreference::Neural => vec![EmbedBackendKind::Neural],
+        EmbedPreference::Semantic => vec![],
+        EmbedPreference::Auto => {
+            let mut kinds = vec![EmbedBackendKind::Cloud, EmbedBackendKind::Ollama];
+            if crate::neural::NeuralEmbeddingConfig::from_env().is_some() {
+                kinds.push(EmbedBackendKind::Neural);
+            }
+            kinds
+        }
     }
-    if matches!(
-        preference,
-        EmbedPreference::Cloud | EmbedPreference::Ollama | EmbedPreference::Auto
-    ) {
-        kinds.push(EmbedBackendKind::Ollama);
-    }
-    if matches!(preference, EmbedPreference::Neural)
-        || (matches!(preference, EmbedPreference::Auto)
-            && crate::neural::NeuralEmbeddingConfig::from_env().is_some())
-    {
-        kinds.push(EmbedBackendKind::Neural);
-    }
-    kinds
+}
+fn env_allows_embed_fallback() -> bool {
+    env_flag("ASGREP_EMBED_FALLBACK")
 }
 pub fn embed_query(
     text: &str,
@@ -441,6 +567,21 @@ fn try_backend(kind: EmbedBackendKind, text: &str) -> Option<Vec<f32>> {
 fn try_backend_batch(kind: EmbedBackendKind, texts: &[&str]) -> Option<Vec<Vec<f32>>> {
     embedder_for(kind)?.embed_batch(texts).ok()
 }
+pub fn configured_backend_model_id(kind: EmbedBackendKind, dim: usize) -> Option<String> {
+    match kind {
+        EmbedBackendKind::Semantic => Some(format!("semantic:hashed-v1:{dim}")),
+        EmbedBackendKind::Neural => {
+            Some(format!("neural:{}", crate::neural::configured_model_id()))
+        }
+        EmbedBackendKind::Cloud => {
+            CloudEmbeddingConfig::from_env().map(|config| format!("cloud:{}", config.model))
+        }
+        EmbedBackendKind::Ollama => {
+            OllamaEmbeddingConfig::from_env().map(|config| format!("ollama:{}", config.model))
+        }
+    }
+}
+
 pub fn default_semantic_dim() -> usize {
     SEMANTIC_DIM
 }
@@ -448,6 +589,15 @@ pub fn default_semantic_dim() -> usize {
 #[cfg(test)]
 mod dim_probe_tests {
     use super::*;
+
+    #[test]
+    fn embed_url_allowlist_blocks_ssrf_targets() {
+        assert!(embed_url_is_allowed("https://api.openai.com/v1/embeddings").is_ok());
+        assert!(embed_url_is_allowed("http://127.0.0.1:11434/api/embeddings").is_ok());
+        assert!(embed_url_is_allowed("http://169.254.169.254/latest/meta-data").is_err());
+        assert!(embed_url_is_allowed("https://evil.example/exfil").is_err());
+        assert!(embed_url_is_allowed("file:///etc/passwd").is_err());
+    }
 
     fn stub_ollama(_text: &str, _cfg: &OllamaEmbeddingConfig) -> Result<Vec<f32>, String> {
         Ok(vec![0.25; 384])
@@ -486,5 +636,23 @@ mod dim_probe_tests {
         let vector = Embedder::embed(&embedder, "hello").unwrap();
         assert_eq!(embedder.dim(), vector.len());
         assert_eq!(embedder.dim(), 1536);
+    }
+}
+
+#[cfg(test)]
+mod preference_tests {
+    use super::*;
+    #[test]
+    fn cloud_preference_excludes_ollama() {
+        let kinds = chain_kinds(EmbedPreference::Cloud);
+        assert_eq!(kinds, vec![EmbedBackendKind::Cloud]);
+        assert!(!kinds.contains(&EmbedBackendKind::Ollama));
+        assert!(!kinds.contains(&EmbedBackendKind::Semantic));
+    }
+    #[test]
+    fn auto_may_include_cloud_and_ollama() {
+        let kinds = chain_kinds(EmbedPreference::Auto);
+        assert!(kinds.contains(&EmbedBackendKind::Cloud));
+        assert!(kinds.contains(&EmbedBackendKind::Ollama));
     }
 }

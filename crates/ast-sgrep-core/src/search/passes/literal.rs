@@ -58,6 +58,9 @@ fn literal_trigram(
         }
         let excerpt_text = excerpt_opt(file_map.as_ref(), &path, line_no, &content, options);
         hits.push(asgrep_line_hit(path, language, line_no, excerpt_text, 1.0));
+        if hits.len() >= options.limit.max(100) {
+            break;
+        }
     }
     Ok(hits)
 }
@@ -70,24 +73,37 @@ fn literal_sql(
     // Escape metacharacters so the needle is matched literally.
     // Case-insensitive path uses LIKE ESCAPE; case-sensitive uses GLOB with
     // character-class escaping (GLOB has no ESCAPE clause). Bead ast-sgrep-c2j5.
+    //
+    // iva9.5: apply lang filter in SQL before path ORDER/LIMIT so a lang page
+    // cannot go empty while alphabetically-later matching files exist.
+    let limit = options.limit.max(100);
+    let lang = options.lang_filter.as_deref();
     let (sql, pattern) = if options.case_insensitive {
         let pattern = format!("%{}%", crate::store::sql::escape_like_term(needle));
-        (
+        let sql = if lang.is_some() {
             "SELECT f.path, f.language, l.line_no, l.content
-         FROM lines l JOIN files f ON f.id = l.file_id WHERE l.content LIKE ?1 ESCAPE '\\' ORDER BY f.path, l.line_no LIMIT ?2",
-            pattern,
-        )
+         FROM lines l JOIN files f ON f.id = l.file_id WHERE l.content LIKE ?1 ESCAPE '\\' AND f.language = ?3 ORDER BY f.path, l.line_no LIMIT ?2"
+        } else {
+            "SELECT f.path, f.language, l.line_no, l.content
+         FROM lines l JOIN files f ON f.id = l.file_id WHERE l.content LIKE ?1 ESCAPE '\\' ORDER BY f.path, l.line_no LIMIT ?2"
+        };
+        (sql, pattern)
     } else {
         let pattern = format!("*{}*", crate::store::sql::escape_glob_literal(needle));
-        (
+        let sql = if lang.is_some() {
             "SELECT f.path, f.language, l.line_no, l.content
-         FROM lines l JOIN files f ON f.id = l.file_id WHERE l.content GLOB ?1 ORDER BY f.path, l.line_no LIMIT ?2",
-            pattern,
-        )
+         FROM lines l JOIN files f ON f.id = l.file_id WHERE l.content GLOB ?1 AND f.language = ?3 ORDER BY f.path, l.line_no LIMIT ?2"
+        } else {
+            "SELECT f.path, f.language, l.line_no, l.content
+         FROM lines l JOIN files f ON f.id = l.file_id WHERE l.content GLOB ?1 ORDER BY f.path, l.line_no LIMIT ?2"
+        };
+        (sql, pattern)
     };
-    let limit = options.limit.max(100);
     let mut stmt = store.connection().prepare_cached(sql)?;
-    let rows = stmt.query_map(params![pattern, limit as i64], map_line_row)?;
+    let rows = match lang {
+        Some(lang) => stmt.query_map(params![pattern, limit as i64, lang], map_line_row)?,
+        None => stmt.query_map(params![pattern, limit as i64], map_line_row)?,
+    };
     let word_mode = parsed.mode == QueryMode::Word;
     let needle_lower = (word_mode && options.case_insensitive).then(|| needle.to_lowercase());
     let file_map = if needs_context(options) {

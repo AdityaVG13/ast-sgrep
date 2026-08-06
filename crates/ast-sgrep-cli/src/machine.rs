@@ -13,18 +13,14 @@ fn bounded_error_message(message: &str) -> String {
     }
 }
 
-fn machine_value_with_ok(
-    command: &str,
-    value: impl serde::Serialize,
-    ok: bool,
-) -> anyhow::Result<serde_json::Value> {
+fn machine_value(command: &str, value: impl serde::Serialize) -> anyhow::Result<serde_json::Value> {
     let mut value = serde_json::to_value(value)?;
     let object = match &mut value {
         serde_json::Value::Object(o) => o,
         _ => {
             return Ok(serde_json::json!({
                 "schema_version": MACHINE_SCHEMA_VERSION, "tool": "asgrep",
-                "command": command, "ok": ok, "data": value
+                "command": command, "ok": true, "exit_code": 0, "data": value
             }));
         }
     };
@@ -37,12 +33,8 @@ fn machine_value_with_ok(
     object.insert("schema_version".into(), MACHINE_SCHEMA_VERSION.into());
     object.insert("tool".into(), "asgrep".into());
     object.insert("command".into(), command.into());
-    object.insert("ok".into(), ok.into());
-    if !ok {
-        object
-            .entry("exit_code".to_string())
-            .or_insert(serde_json::json!(2));
-    }
+    object.insert("ok".into(), true.into());
+    object.insert("exit_code".into(), 0.into());
     Ok(value)
 }
 
@@ -50,18 +42,36 @@ pub(crate) fn print_machine_json(
     command: &str,
     value: impl serde::Serialize,
 ) -> anyhow::Result<()> {
-    print_machine_json_with_ok(command, value, true)
+    print_machine_json_with_style(command, value, false, true, 0)
 }
 
-pub(crate) fn print_machine_json_with_ok(
+/// Machine envelope with explicit ok/exit_code (doctor unhealthy path).
+pub(crate) fn print_machine_json_status(
     command: &str,
     value: impl serde::Serialize,
     ok: bool,
+    exit_code: i32,
 ) -> anyhow::Result<()> {
-    println!(
-        "{}",
-        serde_json::to_string_pretty(&machine_value_with_ok(command, value, ok)?)?
-    );
+    print_machine_json_with_style(command, value, false, ok, exit_code)
+}
+
+pub(crate) fn print_machine_json_with_style(
+    command: &str,
+    value: impl serde::Serialize,
+    compact: bool,
+    ok: bool,
+    exit_code: i32,
+) -> anyhow::Result<()> {
+    let mut value = machine_value(command, value)?;
+    if let Some(object) = value.as_object_mut() {
+        object.insert("ok".into(), ok.into());
+        object.insert("exit_code".into(), exit_code.into());
+    }
+    if compact {
+        println!("{}", serde_json::to_string(&value)?);
+    } else {
+        println!("{}", serde_json::to_string_pretty(&value)?);
+    }
     Ok(())
 }
 
@@ -78,7 +88,12 @@ pub(crate) fn print_machine_failure(command: &str, kind: &str, exit_code: i32, m
 }
 
 pub(crate) fn raw_machine_output_requested(args: &[std::ffi::OsString]) -> bool {
-    args.iter().any(|a| a == "--json" || a == "--robot-triage")
+    args.iter().any(|a| {
+        a == "--json"
+            || a == "--robot-triage"
+            || a == "--format"
+            || a.to_str().is_some_and(|raw| raw.starts_with("--format="))
+    }) || args.iter().any(|a| a == "capabilities" || a == "doctor")
 }
 
 pub(crate) fn raw_command_name(args: &[std::ffi::OsString]) -> &'static str {
@@ -86,8 +101,10 @@ pub(crate) fn raw_command_name(args: &[std::ffi::OsString]) -> &'static str {
         "index",
         "status",
         "reindex",
+        "search",
         "bench",
         "watch",
+        "keyword",
         "semantic",
         "chain",
         "capabilities",

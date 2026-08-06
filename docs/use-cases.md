@@ -6,7 +6,7 @@ ast-sgrep is built for **navigation**, **intent queries**, and **machine-readabl
 
 ### Why agents use ast-sgrep
 
-Agents need **ranked, structured hits** with enough context to choose the next tool call, not 500 raw grep lines. ast-sgrep returns symbol names, excerpts, caller/callee hints, and semantic scores in one JSON payload.
+Agents need **ranked, structured hits** with enough context to choose the next tool call, not 500 raw grep lines. ast-sgrep returns symbol names, excerpts, caller/callee hints, immutable signal provenance, and within-signal score margins in one JSON payload.
 
 ### Quick start
 
@@ -33,6 +33,8 @@ asgrep semantic "credential renewal" --json
   ],
   "hits": [{
     "kind": "embed",
+    "signal": "semantic",
+    "margin": 0.18,
     "semantic": true,
     "score": 3.42,
     "file": "src/main.rs",
@@ -44,7 +46,7 @@ asgrep semantic "credential renewal" --json
 }
 ```
 
-Each hit includes `follow_up_queries` so agents can drill into defs/callers without guessing prefix syntax.
+Each hit includes `follow_up_queries` so agents can drill into defs/callers without guessing prefix syntax. `signal` distinguishes exact, structural, and semantic evidence; `margin` measures separation from the next lower candidate in that same signal only. See [signal provenance and margins](signal-provenance.md).
 
 ### Recommended agent loop
 
@@ -143,10 +145,12 @@ Settings may be nested under `"asgrep"` or at the top level of `initializationOp
 {
   "name": "auth_refresh",
   "kind": 15,
-  "detail": "semantic · score 3.42",
+  "detail": "semantic · score 3.42 · margin 0.18",
   "containerName": "src/main.rs",
   "data": {
     "asgrepKind": "embed",
+    "signal": "semantic",
+    "margin": 0.18,
     "score": 3.42,
     "excerpt": "fn auth_refresh() { ... }",
     "semantic": true

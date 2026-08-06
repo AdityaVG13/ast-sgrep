@@ -31,3 +31,36 @@ fn index_store_applies_wal_and_busy_timeout() {
     assert!(store.db_path().starts_with(root.join(".asgrep")));
     assert!(Path::new(&store.db_path()).exists());
 }
+
+#[test]
+fn file_tx_restores_synchronous_normal_after_commit_and_rollback() {
+    let temp = TempDir::new().expect("tempdir");
+    let store = IndexStore::open(temp.path(), None).expect("open index");
+    let sync = |s: &IndexStore| -> i64 {
+        s.connection()
+            .query_row("PRAGMA synchronous", [], |row| row.get(0))
+            .expect("synchronous")
+    };
+    assert_eq!(sync(&store), 1, "open defaults to NORMAL");
+
+    store.begin_file_tx().expect("begin");
+    store.commit_file_tx().expect("commit");
+    assert_eq!(sync(&store), 1, "commit restores NORMAL");
+
+    store.begin_file_tx().expect("begin2");
+    store.rollback_file_tx().expect("rollback");
+    assert_eq!(sync(&store), 1, "rollback restores NORMAL");
+}
+
+#[test]
+fn bulk_tx_rollback_restores_synchronous_normal() {
+    let temp = TempDir::new().expect("tempdir");
+    let store = IndexStore::open(temp.path(), None).expect("open index");
+    store.begin_bulk_tx().expect("begin bulk");
+    store.rollback_bulk_tx().expect("rollback bulk");
+    let synchronous: i64 = store
+        .connection()
+        .query_row("PRAGMA synchronous", [], |row| row.get(0))
+        .expect("synchronous");
+    assert_eq!(synchronous, 1, "bulk rollback restores NORMAL");
+}

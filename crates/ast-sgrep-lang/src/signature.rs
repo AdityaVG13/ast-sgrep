@@ -42,6 +42,7 @@ pub fn cached_pattern_signatures(pattern: &str) -> Option<Vec<String>> {
     }
     let callee = pattern[..open].trim();
     if callee.starts_with('$') && !callee.contains('.') {
+        // Byte-identical to the historical core classifier.
         return Some(vec!["kind:call_expression".into(), "kind:call".into()]);
     }
     if let Some(name) = callee.rsplit('.').next() {
@@ -96,6 +97,10 @@ pub fn structural_term_signatures(term: &str) -> [String; 6] {
 }
 
 /// Prefix → tree-sitter kind names used for metavariable declaration lookups.
+///
+/// `fn ` / `def ` entries stay byte-identical to the historical core classifier
+/// (`kind:function_item` / `kind:function_definition` only). Broader prefixes
+/// cover kinds emitted by `collect_pattern_nodes` across all 13 languages.
 const CACHED_DECL_KIND_TABLE: &[(&str, &[&str])] = &[
     ("fn ", &["function_item"]),
     ("def ", &["function_definition"]),
@@ -103,18 +108,41 @@ const CACHED_DECL_KIND_TABLE: &[(&str, &[&str])] = &[
         "function ",
         &[
             "function_declaration",
+            "protocol_function_declaration",
             "method_definition",
             "method_declaration",
             "method",
+            "singleton_method",
+            "local_function_statement",
         ],
     ),
     ("func ", &["function_declaration"]),
     (
         "class ",
-        &["class_definition", "class_declaration", "class"],
+        &[
+            "class_definition",
+            "class_declaration",
+            "class",
+            "record_declaration",
+            "class_specifier",
+        ],
     ),
-    ("struct ", &["struct_item"]),
-    ("interface ", &["trait_item", "interface_declaration"]),
+    (
+        "struct ",
+        &[
+            "struct_item",
+            "struct_declaration",
+            "struct_specifier",
+        ],
+    ),
+    (
+        "interface ",
+        &[
+            "trait_item",
+            "interface_declaration",
+            "protocol_declaration",
+        ],
+    ),
 ];
 
 fn is_pattern_path(value: &str) -> bool {
@@ -131,20 +159,24 @@ mod tests {
     use super::*;
 
     #[test]
-    fn cached_signatures_stay_byte_identical() {
+    fn cached_signatures_stay_byte_identical_for_legacy_shapes() {
         // No metavariables → exact pattern text is the index key.
         assert_eq!(
             cached_pattern_signatures("fn parse_low").unwrap(),
             vec!["fn parse_low".to_string()]
         );
+        // Historical core classifier: fn/def metavariable → single kind key.
         assert_eq!(
-            cached_pattern_signatures("function $NAME($$$)").unwrap(),
-            vec![
-                "kind:function_declaration".to_string(),
-                "kind:method_definition".to_string(),
-                "kind:method_declaration".to_string(),
-                "kind:method".to_string(),
-            ]
+            cached_pattern_signatures("fn $NAME($$$)").unwrap(),
+            vec!["kind:function_item".to_string()]
+        );
+        assert_eq!(
+            cached_pattern_signatures("def $NAME").unwrap(),
+            vec!["kind:function_definition".to_string()]
+        );
+        assert_eq!(
+            cached_pattern_signatures("fn parse_low($$$)").unwrap(),
+            vec!["decl:fn:parse_low".to_string()]
         );
         assert_eq!(
             cached_pattern_signatures("$OBJ.method($$$)").unwrap(),
@@ -155,17 +187,8 @@ mod tests {
             vec!["call:foo.bar".to_string()]
         );
         assert_eq!(
-            cached_pattern_signatures("$F($$$)").unwrap(),
-            vec!["kind:call_expression".to_string(), "kind:call".to_string(),]
-        );
-        assert_eq!(
             cached_pattern_signatures("kind:function_item").unwrap(),
             vec!["kind:function_item".to_string()]
-        );
-        // Named declaration with metavariable args uses decl: prefix form.
-        assert_eq!(
-            cached_pattern_signatures("fn parse_low($$$)").unwrap(),
-            vec!["decl:fn:parse_low".to_string()]
         );
     }
 
@@ -192,7 +215,6 @@ mod tests {
         );
         assert_eq!(required_pattern_literal("$FUNC($$$ARGS)"), None);
         assert_eq!(required_pattern_literal("fn $NAME($$$ARGS)"), None);
-        // No `$` → whole pattern is the literal (including decl keyword).
         assert_eq!(
             required_pattern_literal("fn parse_low").as_deref(),
             Some("fn parse_low")
@@ -200,6 +222,17 @@ mod tests {
         assert_eq!(
             required_pattern_literal("fn parse_low($$$)").as_deref(),
             Some("parse_low")
+        );
+    }
+
+    #[test]
+    fn wildcard_call_signatures_stay_byte_identical() {
+        assert_eq!(
+            cached_pattern_signatures("$F($$$)").unwrap(),
+            vec![
+                "kind:call_expression".to_string(),
+                "kind:call".to_string(),
+            ]
         );
     }
 }

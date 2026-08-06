@@ -181,62 +181,38 @@ impl Indexer {
     }
     pub fn index_all(&mut self) -> Result<IndexStats> {
         self.ignore.clear();
-        let mut stats = IndexStats::default();
+        let (candidates, mut stats) = self.collect_index_candidates();
         let mut seen_paths = HashSet::new();
         let mut semantic_ivf_dirty = false;
-        let root = self.options.root.clone();
-        let respect_gitignore = self.options.respect_gitignore;
-        let mut candidates: Vec<(PathBuf, String)> = Vec::new();
-        for entry in WalkDir::new(&self.options.root)
-            .follow_links(false)
-            .into_iter()
-            .filter_entry(|e| {
-                if should_skip_dir(e.path()) {
-                    return false;
-                }
-                if respect_gitignore && e.file_type().is_dir() {
-                    if let Ok(rel) = e.path().strip_prefix(&root) {
-                        if !rel.as_os_str().is_empty() && self.ignore.is_dir_ignored(rel) {
-                            return false;
-                        }
-                    }
-                }
-                true
-            })
-        {
-            match entry {
-                Ok(entry) if entry.file_type().is_file() => {
-                    let path = entry.path().to_path_buf();
-                    let Ok(rel) = path.strip_prefix(&self.options.root) else {
-                        continue;
-                    };
-                    let rel_str = rel.to_string_lossy().replace('\\', "/");
-                    if (self.options.respect_gitignore && self.ignore.is_ignored(rel))
-                        || should_skip_file(&path)
-                    {
-                        stats.files_skipped += 1;
-                        continue;
-                    }
-                    candidates.push((path, rel_str));
-                }
-                Ok(_) => {}
-                Err(e) => {
-                    eprintln!("[asgrep] walk error: {e}");
-                    stats.walk_errors = true;
-                }
-            }
-        }
         let force = self.options.force_reindex;
         let lang_filter = self.options.lang_filter.clone();
         let embed_semantic = self.options.embed_semantic;
+        let current_hashes = candidates
+            .iter()
+            .map(|(_, rel)| self.store.file_hash(rel))
+            .collect::<Result<Vec<_>>>()?;
         let prepared: Vec<PrepareOutcome> = candidates
             .par_iter()
-            .map(|(abs, rel)| prepare_file(abs, rel, force, lang_filter.as_deref(), embed_semantic))
+            .zip(current_hashes.par_iter())
+            .map(|((abs, rel), current_hash)| {
+                prepare_file(
+                    abs,
+                    rel,
+                    force,
+                    current_hash.as_deref(),
+                    lang_filter.as_deref(),
+                    embed_semantic,
+                )
+            })
             .collect();
         self.store.begin_bulk_tx()?;
         let write_result = (|| -> Result<()> {
             for (rel_str, outcome) in candidates.iter().map(|(_, r)| r).zip(prepared) {
                 match outcome {
+                    PrepareOutcome::Unchanged => {
+                        seen_paths.insert(rel_str.clone());
+                        stats.files_skipped += 1;
+                    }
                     PrepareOutcome::Filtered => {
                         if self.store.file_hash(rel_str)?.is_some() {
                             self.store.remove_file(rel_str)?;
@@ -248,10 +224,6 @@ impl Indexer {
                     }
                     PrepareOutcome::Ready(prep) => {
                         seen_paths.insert(rel_str.clone());
-                        if self.is_unchanged(rel_str, &prep.hash)? {
-                            stats.files_skipped += 1;
-                            continue;
-                        }
                         self.store.upsert_file(UpsertFileInput {
                             rel_path: rel_str,
                             language: prep.language.as_deref(),
@@ -296,6 +268,53 @@ impl Indexer {
         self.rebuild_dirty_sidecars(&stats, semantic_ivf_dirty)?;
         Ok(stats)
     }
+    /// Walk the project once using the Indexer's IgnoreMatcher for both directory
+    /// pruning and file skips (single ownership story — no second matcher).
+    fn collect_index_candidates(&self) -> (Vec<(PathBuf, String)>, IndexStats) {
+        let mut stats = IndexStats::default();
+        let mut candidates: Vec<(PathBuf, String)> = Vec::new();
+        let root = &self.options.root;
+        let ignore = &self.ignore;
+        let respect_gitignore = self.options.respect_gitignore;
+        for entry in WalkDir::new(root)
+            .follow_links(false)
+            .into_iter()
+            .filter_entry(|e| {
+                if should_skip_dir(e.path()) {
+                    return false;
+                }
+                if respect_gitignore && e.file_type().is_dir() {
+                    if let Ok(rel) = e.path().strip_prefix(root) {
+                        if !rel.as_os_str().is_empty() && ignore.is_dir_ignored(rel) {
+                            return false;
+                        }
+                    }
+                }
+                true
+            })
+        {
+            match entry {
+                Ok(entry) if entry.file_type().is_file() => {
+                    let path = entry.path().to_path_buf();
+                    let Ok(rel) = path.strip_prefix(root) else {
+                        continue;
+                    };
+                    let rel_str = rel.to_string_lossy().replace('\\', "/");
+                    if (respect_gitignore && ignore.is_ignored(rel)) || should_skip_file(&path) {
+                        stats.files_skipped += 1;
+                        continue;
+                    }
+                    candidates.push((path, rel_str));
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    eprintln!("[asgrep] walk error: {e}");
+                    stats.walk_errors = true;
+                }
+            }
+        }
+        (candidates, stats)
+    }
     fn prune_missing_files(
         &self,
         seen_paths: &HashSet<String>,
@@ -314,10 +333,9 @@ impl Indexer {
         }
         Ok(())
     }
-    fn rebuild_dirty_sidecars(&self, stats: &IndexStats, semantic_ivf_dirty: bool) -> Result<()> {
-        if self.options.use_tantivy
-            || crate::tantivy_index::should_use_tantivy(stats.files_indexed, false)
-        {
+    fn rebuild_dirty_sidecars(&self, _stats: &IndexStats, semantic_ivf_dirty: bool) -> Result<()> {
+        let file_count = self.store.status()?.file_count;
+        if crate::tantivy_index::should_use_tantivy(file_count, self.options.use_tantivy) {
             self.rebuild_tantivy_sidecar()?;
         }
         if self.options.embed_semantic && semantic_ivf_dirty {
@@ -339,12 +357,19 @@ impl Indexer {
         )
     }
     fn rebuild_tantivy_sidecar(&self) -> Result<()> {
+        let before = self.store.index_data_version()?;
         let lines = self.store.all_indexed_lines()?;
+        let after = self.store.index_data_version()?;
+        if before != after {
+            return Err(crate::StoreError::Other(
+                "index changed while preparing lexical sidecar; retry the rebuild".into(),
+            ));
+        }
         crate::tantivy_index::TantivySidecar::open_for_index(
             &self.options.root,
             self.options.index_path.as_deref(),
         )?
-        .rebuild_from_lines(&lines)
+        .rebuild_from_lines_with_generation(&lines, after)
     }
     pub fn reindex_all(&mut self) -> Result<IndexStats> {
         self.store.clear_all_data()?;
@@ -357,19 +382,8 @@ impl Indexer {
         }
         let mut stats = WatchUpdateStats::default();
         for input_path in paths {
-            // The root is canonicalized, while watcher paths may retain platform symlink prefixes.
-            let normalized;
-            let abs = if input_path.starts_with(&self.options.root) {
-                input_path.as_path()
-            } else {
-                normalized = input_path.canonicalize().ok().or_else(|| {
-                    let parent = input_path.parent()?.canonicalize().ok()?;
-                    Some(parent.join(input_path.file_name()?))
-                });
-                let Some(path) = normalized.as_deref() else {
-                    continue;
-                };
-                path
+            let Some(abs) = normalize_watch_path(&self.options.root, input_path) else {
+                continue;
             };
             let Ok(rel) = abs.strip_prefix(&self.options.root) else {
                 continue;
@@ -381,18 +395,18 @@ impl Indexer {
             if rel
                 .components()
                 .any(|c| should_skip_dir(Path::new(c.as_os_str())))
-                || should_skip_file(abs)
+                || should_skip_file(&abs)
                 || (self.options.respect_gitignore && self.ignore.is_ignored(rel))
             {
                 stats.files_skipped += 1;
                 continue;
             }
             if abs.is_file() {
-                match self.index_file(abs, &rel_str) {
+                match self.index_file(&abs, &rel_str) {
                     Ok(fs) if fs.skipped => stats.files_skipped += 1,
                     Ok(_) => {
                         stats.files_indexed += 1;
-                        self.mark_sidecars_dirty();
+                        self.mark_sidecars_dirty()?;
                     }
                     Err(e) => {
                         eprintln!("[asgrep] failed to index {rel_str}: {e}");
@@ -402,7 +416,7 @@ impl Indexer {
             } else if self.store.file_hash(&rel_str)?.is_some() {
                 self.store.remove_file(&rel_str)?;
                 stats.files_removed += 1;
-                self.mark_sidecars_dirty();
+                self.mark_sidecars_dirty()?;
             }
         }
         Ok(stats)
@@ -421,25 +435,26 @@ impl Indexer {
     pub fn deferred_rebuilds_pending(&self) -> bool {
         self.sidecars_dirty.tantivy || self.sidecars_dirty.semantic_ivf
     }
-    fn mark_sidecars_dirty(&mut self) {
-        if self.options.use_tantivy {
-            self.sidecars_dirty.tantivy = true;
-        }
+    fn mark_sidecars_dirty(&mut self) -> Result<()> {
+        let lexical_exists = crate::tantivy_index::sidecar_path(
+            &self.options.root,
+            self.options.index_path.as_deref(),
+        )
+        .exists();
+        let file_count = self.store.status()?.file_count;
+        self.sidecars_dirty.tantivy = self.sidecars_dirty.tantivy
+            || lexical_exists
+            || crate::tantivy_index::should_use_tantivy(file_count, self.options.use_tantivy);
         if self.options.embed_semantic {
             self.sidecars_dirty.semantic_ivf = true;
         }
+        Ok(())
     }
     pub fn index_file(&mut self, abs_path: &Path, rel_path: &str) -> Result<FileIndexStats> {
         let metadata = fs::metadata(abs_path)?;
         let mtime = metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH);
         let (mtime_secs, mtime_nanos) = system_time_to_parts(mtime);
-        let content = match fs::read_to_string(abs_path) {
-            Ok(c) => c,
-            Err(e) if e.kind() == std::io::ErrorKind::InvalidData => {
-                return Err(crate::StoreError::Other(format!("binary file: {rel_path}")));
-            }
-            Err(e) => return Err(e.into()),
-        };
+        let content = crate::io_bounds::read_text_capped(abs_path, crate::io_bounds::MAX_INDEX_FILE_BYTES)?;
         self.index_content_at(rel_path, &content, abs_path, mtime_secs, mtime_nanos)
     }
     pub fn index_content(&mut self, rel_path: &str, content: &str) -> Result<FileIndexStats> {
@@ -460,11 +475,7 @@ impl Indexer {
         mtime_secs: i64,
         mtime_nanos: u32,
     ) -> Result<FileIndexStats> {
-        let hash = {
-            let mut h = Hasher::new();
-            h.update(content.as_bytes());
-            h.finalize().to_hex().to_string()
-        };
+        let hash = hash_content(content);
         if self.is_unchanged(rel_path, &hash)? {
             return Ok(FileIndexStats {
                 skipped: true,
@@ -475,62 +486,62 @@ impl Indexer {
         if !self.language_filter_allows(rel_path, language)? {
             return Ok(FileIndexStats::default());
         }
-        let split = split_content_lines(content);
-        let body_hash = body_structure_hash(content);
+        let body_hash = body_structure_hash(content, language);
         let body_key = format!("body:{rel_path}");
-        if let Some(file_id) = self.store.file_id(rel_path)? {
-            if self.store.get_meta(&body_key)?.as_deref() == Some(body_hash.as_str()) {
-                self.store.begin_file_tx()?;
-                match self.store.refresh_lines_only(RefreshLinesInput {
-                    file_id,
-                    language: language.map(|l| l.as_str()),
-                    mtime_secs,
-                    mtime_nanos,
-                    content_hash: &hash,
-                    lines: &split.lines,
-                    eol: split.eol,
-                    rel_path,
-                }) {
-                    Ok(_) => {
-                        self.store.commit_file_tx()?;
-                        return Ok(FileIndexStats::default());
-                    }
-                    Err(e) => {
-                        self.store.rollback_file_tx()?;
-                        return Err(e);
+        if !self.options.embed_semantic {
+            if let Some(file_id) = self.store.file_id(rel_path)? {
+                if self.store.get_meta(&body_key)?.as_deref() == Some(body_hash.as_str()) {
+                    let split = split_content_lines(content);
+                    self.store.begin_file_tx()?;
+                    match self.store.refresh_lines_only(RefreshLinesInput {
+                        file_id,
+                        language: language.map(|l| l.as_str()),
+                        mtime_secs,
+                        mtime_nanos,
+                        content_hash: &hash,
+                        lines: &split.lines,
+                        eol: split.eol,
+                        rel_path,
+                    }) {
+                        Ok(_) => {
+                            self.store.commit_file_tx()?;
+                            return Ok(FileIndexStats::default());
+                        }
+                        Err(e) => {
+                            self.store.rollback_file_tx()?;
+                            return Err(e);
+                        }
                     }
                 }
             }
         }
         let (symbols, callers, imports, pattern_nodes) =
             self.extract_rows(rel_path, content, language)?;
-        let semantic_chunks = if self.options.embed_semantic {
-            crate::semantic_chunk::build_semantic_chunks(
-                &symbols,
-                &callers,
-                &split.lines,
-                language.map(|l| l.as_str()),
-            )
-        } else {
-            vec![]
-        };
+        let material = materialize_upsert(
+            content,
+            language,
+            &symbols,
+            &callers,
+            &pattern_nodes,
+            self.options.embed_semantic,
+        );
         self.store.upsert_file(UpsertFileInput {
             rel_path,
             language: language.map(|l| l.as_str()),
             mtime_secs,
             mtime_nanos,
             content_hash: &hash,
-            lines: &split.lines,
-            eol: split.eol,
+            lines: &material.split.lines,
+            eol: material.split.eol,
             symbols: &symbols,
             callers: &callers,
             imports: &imports,
             pattern_nodes: &pattern_nodes,
-            semantic_chunks: &semantic_chunks,
+            semantic_chunks: &material.semantic_chunks,
             embed_semantic: self.options.embed_semantic,
             embed_backend: self.options.embed_backend.to_preference(),
         })?;
-        let _ = self.store.set_meta(&body_key, &body_hash);
+        let _ = self.store.set_meta(&body_key, &material.body_hash);
         Ok(FileIndexStats {
             symbols: symbols.len(),
             callers: callers.len(),
@@ -552,6 +563,18 @@ impl Indexer {
                 && stored.as_deref() != Some("auto")
                 && active != "auto"
             {
+                return Ok(false);
+            }
+            let dim = self
+                .store
+                .get_meta("embed_dim")?
+                .and_then(|value| value.parse::<usize>().ok())
+                .unwrap_or_else(ast_sgrep_embed::default_semantic_dim);
+            let current_model = stored
+                .as_deref()
+                .and_then(ast_sgrep_embed::EmbedBackendKind::parse)
+                .and_then(|backend| ast_sgrep_embed::configured_backend_model_id(backend, dim));
+            if self.store.get_meta("embed_model")? != current_model {
                 return Ok(false);
             }
         }
@@ -603,12 +626,13 @@ struct PreparedFile {
 }
 #[allow(clippy::large_enum_variant)]
 enum PrepareOutcome {
+    Unchanged,
     Filtered,
     Failed(String),
     Ready(PreparedFile),
 }
 /// Hash with trailing blank/line-comment trivia removed. Equal ⇒ structure unchanged for trailing edits.
-fn body_structure_hash(content: &str) -> String {
+fn body_structure_hash(content: &str, language: Option<Language>) -> String {
     let mut end = content.len();
     let bytes = content.as_bytes();
     while end > 0 {
@@ -620,13 +644,7 @@ fn body_structure_hash(content: &str) -> String {
         }
         let line_start = content[..end].rfind('\n').map(|i| i + 1).unwrap_or(0);
         let line = content[line_start..end].trim();
-        let trivia = line.is_empty()
-            || line.starts_with("//")
-            || line.starts_with('#')
-            || line.starts_with("/*")
-            || line.starts_with('*')
-            || line.starts_with("--");
-        if !trivia {
+        if !is_trailing_trivia_line(line, language) {
             break;
         }
         end = line_start;
@@ -641,10 +659,91 @@ fn body_structure_hash(content: &str) -> String {
     h.update(&bytes[..end]);
     h.finalize().to_hex().to_string()
 }
+
+/// Table-driven trailing trivia: hash-style vs C-family line/block comment prefixes.
+fn is_trailing_trivia_line(line: &str, language: Option<Language>) -> bool {
+    if line.is_empty() {
+        return true;
+    }
+    const HASH_PREFIXES: &[&str] = &["#"];
+    const C_FAMILY_PREFIXES: &[&str] = &["//", "/*", "*"];
+    let prefixes: &[&str] = match language {
+        Some(Language::Python | Language::Ruby) => HASH_PREFIXES,
+        Some(
+            Language::Rust
+            | Language::TypeScript
+            | Language::JavaScript
+            | Language::Go
+            | Language::Java
+            | Language::CSharp
+            | Language::Swift
+            | Language::C
+            | Language::Cpp
+            | Language::Kotlin
+            | Language::Php,
+        ) => C_FAMILY_PREFIXES,
+        None => return false,
+    };
+    prefixes.iter().any(|p| line.starts_with(p))
+}
+
+fn hash_content(content: &str) -> String {
+    let mut h = Hasher::new();
+    h.update(content.as_bytes());
+    h.finalize().to_hex().to_string()
+}
+
+/// Shared prepare→upsert materialization: line split, body hash, optional semantic chunks.
+struct UpsertMaterial {
+    split: SplitLines,
+    body_hash: String,
+    semantic_chunks: Vec<crate::semantic_chunk::SemanticChunkInput>,
+}
+
+fn materialize_upsert(
+    content: &str,
+    language: Option<Language>,
+    symbols: &[SymbolRow],
+    callers: &[CallerRow],
+    pattern_nodes: &[ast_sgrep_lang::PatternNode],
+    embed_semantic: bool,
+) -> UpsertMaterial {
+    let split = split_content_lines(content);
+    let body_hash = body_structure_hash(content, language);
+    let semantic_chunks = if embed_semantic {
+        crate::semantic_chunk::build_semantic_chunks_with_patterns(
+            symbols,
+            callers,
+            pattern_nodes,
+            &split.lines,
+            language.map(|l| l.as_str()),
+        )
+    } else {
+        vec![]
+    };
+    UpsertMaterial {
+        split,
+        body_hash,
+        semantic_chunks,
+    }
+}
+
+/// Normalize a watcher path against a canonicalized index root.
+fn normalize_watch_path(root: &Path, input_path: &Path) -> Option<PathBuf> {
+    if input_path.starts_with(root) {
+        return Some(input_path.to_path_buf());
+    }
+    input_path.canonicalize().ok().or_else(|| {
+        let parent = input_path.parent()?.canonicalize().ok()?;
+        Some(parent.join(input_path.file_name()?))
+    })
+}
+
 fn prepare_file(
     abs: &Path,
     rel: &str,
-    _force: bool,
+    force: bool,
+    current_hash: Option<&str>,
     lang_filter: Option<&str>,
     embed_semantic: bool,
 ) -> PrepareOutcome {
@@ -654,23 +753,21 @@ fn prepare_file(
     };
     let mtime = metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH);
     let (mtime_secs, mtime_nanos) = system_time_to_parts(mtime);
-    let content = match fs::read_to_string(abs) {
+    let content = match crate::io_bounds::read_text_capped(abs, crate::io_bounds::MAX_INDEX_FILE_BYTES)
+    {
         Ok(c) => c,
-        Err(e) if e.kind() == std::io::ErrorKind::InvalidData => {
-            return PrepareOutcome::Failed(format!("binary file: {rel}"));
-        }
         Err(e) => return PrepareOutcome::Failed(e.to_string()),
     };
-    let mut hasher = Hasher::new();
-    hasher.update(content.as_bytes());
-    let hash = hasher.finalize().to_hex().to_string();
+    let hash = hash_content(&content);
     let language = detect_language(abs, Some(&content));
     if let Some(filter) = lang_filter {
         if language.is_none_or(|l| l.as_str() != filter) {
             return PrepareOutcome::Filtered;
         }
     }
-    let split = split_content_lines(&content);
+    if !force && current_hash == Some(hash.as_str()) {
+        return PrepareOutcome::Unchanged;
+    }
     let (symbols, callers, imports, pattern_nodes) = match language {
         Some(lang) => {
             // One ParserRegistry per rayon worker — building all language parsers
@@ -690,29 +787,27 @@ fn prepare_file(
         }
         None => (vec![], vec![], vec![], vec![]),
     };
-    let semantic_chunks = if embed_semantic {
-        crate::semantic_chunk::build_semantic_chunks(
-            &symbols,
-            &callers,
-            &split.lines,
-            language.map(|l| l.as_str()),
-        )
-    } else {
-        vec![]
-    };
+    let material = materialize_upsert(
+        &content,
+        language,
+        &symbols,
+        &callers,
+        &pattern_nodes,
+        embed_semantic,
+    );
     PrepareOutcome::Ready(PreparedFile {
         hash,
-        body_hash: body_structure_hash(&content),
+        body_hash: material.body_hash,
         language: language.map(|l| l.as_str().to_string()),
         mtime_secs,
         mtime_nanos,
-        lines: split.lines,
-        eol: split.eol.to_string(),
+        lines: material.split.lines,
+        eol: material.split.eol.to_string(),
         symbols,
         callers,
         imports,
         pattern_nodes,
-        semantic_chunks,
+        semantic_chunks: material.semantic_chunks,
     })
 }
 fn rows_from_extraction(extraction: &ExtractionResult) -> ExtractedRows {
@@ -772,10 +867,24 @@ mod tests {
 #[cfg(test)]
 mod body_hash_tests {
     use super::body_structure_hash;
+    use ast_sgrep_lang::Language;
+
     #[test]
-    fn trailing_comment_preserves_body_hash() {
+    fn trailing_comment_preserves_body_hash_for_its_language() {
         let a = "export function x() {\n  return 1;\n}\n";
-        let b = format!("{a}\n// sub1ms-bench-marker\n");
-        assert_eq!(body_structure_hash(a), body_structure_hash(&b));
+        let js_comment = format!("{a}\n// sub1ms-bench-marker\n");
+        assert_eq!(
+            body_structure_hash(a, Some(Language::JavaScript)),
+            body_structure_hash(&js_comment, Some(Language::JavaScript))
+        );
+        let hash_line = format!("{a}\n# not-a-javascript-comment\n");
+        assert_ne!(
+            body_structure_hash(a, Some(Language::JavaScript)),
+            body_structure_hash(&hash_line, Some(Language::JavaScript))
+        );
+        assert_eq!(
+            body_structure_hash(a, Some(Language::Python)),
+            body_structure_hash(&hash_line, Some(Language::Python))
+        );
     }
 }

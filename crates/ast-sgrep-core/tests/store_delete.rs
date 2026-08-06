@@ -113,6 +113,8 @@ fn remove_file_clears_all_per_file_tables() {
     input.imports = &imports;
     input.pattern_nodes = &pattern_nodes;
     let file_id = store.upsert_file(input).unwrap();
+    store.set_meta(&format!("body:{path}"), "body").unwrap();
+    assert!(store.get_meta(&format!("struct:{path}")).unwrap().is_some());
     store
         .connection()
         .execute(
@@ -124,6 +126,8 @@ fn remove_file_clears_all_per_file_tables() {
         "INSERT INTO semantic_chunks (file_id, symbol_id, chunk_kind, line_start, line_end, symbol_name, text, vector) VALUES (?1, NULL, 'file', 1, 2, '', 'text', ?2)", rusqlite::params![file_id, vec![0u8; 8]],
     ).unwrap();
     store.remove_file(path).unwrap();
+    assert_eq!(store.get_meta(&format!("body:{path}")).unwrap(), None);
+    assert_eq!(store.get_meta(&format!("struct:{path}")).unwrap(), None);
     for table in [
         "lines",
         "lines_fts",
@@ -273,7 +277,7 @@ fn structure_stable_truncate_drops_trigram_rows() {
 
 #[test]
 fn same_span_body_edit_refreshes_semantic_chunks() {
-    use ast_sgrep_core::semantic_chunk::build_semantic_chunks;
+    use ast_sgrep_core::semantic_chunk::build_semantic_chunks_with_patterns;
     let temp = TempDir::new().unwrap();
     let store = IndexStore::open(temp.path(), None).unwrap();
     let path = "body_edit.py";
@@ -297,8 +301,10 @@ fn same_span_body_edit_refreshes_semantic_chunks() {
         (2, "    return BETA_TOKEN_222".into()),
         (3, "".into()),
     ];
-    let chunks_v1 = build_semantic_chunks(&symbols, &callers, &lines_v1, Some("python"));
-    let chunks_v2 = build_semantic_chunks(&symbols, &callers, &lines_v2, Some("python"));
+    let chunks_v1 =
+        build_semantic_chunks_with_patterns(&symbols, &callers, &[], &lines_v1, Some("python"));
+    let chunks_v2 =
+        build_semantic_chunks_with_patterns(&symbols, &callers, &[], &lines_v2, Some("python"));
     assert!(!chunks_v1.is_empty() && !chunks_v2.is_empty());
     assert_ne!(chunks_v1[0].excerpt, chunks_v2[0].excerpt);
     let pat_v1 = [PatternNode {

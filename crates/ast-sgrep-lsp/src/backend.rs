@@ -87,10 +87,17 @@ impl LspBackend {
     }
 
     fn with_index_lock<T>(&self, f: impl FnOnce() -> anyhow::Result<T>) -> anyhow::Result<T> {
-        let _g = self
-            .index_lock
-            .lock()
-            .map_err(|e| anyhow::anyhow!("index lock poisoned: {e}"))?;
+        let guard = match self.index_lock.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => {
+                // Poison means a prior indexer panic; mark not-ready and clear poison
+                // so subsequent recoveries can rebuild (sxjc / LSP index_ready).
+                self.index_ready.store(false, Ordering::SeqCst);
+                self.index_lock.clear_poison();
+                poisoned.into_inner()
+            }
+        };
+        let _g = guard;
         f()
     }
 

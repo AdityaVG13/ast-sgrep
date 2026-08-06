@@ -1,88 +1,36 @@
+//! Language-specific module path resolution for import graph expansion.
+
 use super::embed_support::normalize_rel;
-use super::sql::optional_row;
-use super::sqlite::IndexStore;
-use crate::Result;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-impl IndexStore {
-    pub fn resolve_module_path(&self, from_file: &str, module: &str) -> Result<Vec<String>> {
-        let module = module.trim().trim_matches(['"', '\'']);
-        if module.is_empty() {
-            return Ok(Vec::new());
-        }
-        let lang = self.file_language(from_file)?;
-        let parent = Path::new(from_file)
-            .parent()
-            .unwrap_or_else(|| Path::new(""));
-        let bases = match lang.as_deref() {
-            Some("python") => resolve_bases_python(parent, module),
-            Some("javascript") | Some("typescript") => resolve_bases_js(parent, module),
-            Some("go") => resolve_bases_go(from_file, parent, module),
-            // Rust (default): :: paths, crate/super/self, /src/ layout.
-            _ => resolve_bases_rust(from_file, parent, module),
-        };
-        let exts: &[&str] = match lang.as_deref() {
-            Some("python") => &["py"],
-            Some("javascript") => &["js", "jsx", "mjs", "cjs"],
-            Some("typescript") => &["ts", "tsx", "js", "jsx"],
-            Some("go") => &["go"],
-            Some("rust") => &["rs"],
-            _ => &[
-                "rs", "ts", "tsx", "js", "jsx", "py", "go", "java", "cs", "rb",
-            ],
-        };
-        let mut cands = BTreeSet::new();
-        for base in bases {
-            let n = normalize_rel(&base);
-            cands.insert(n.clone());
-            if base.extension().is_none() {
-                for e in exts {
-                    cands.insert(format!("{n}.{e}"));
-                }
-                match lang.as_deref() {
-                    Some("python") => {
-                        cands.insert(format!("{n}/__init__.py"));
-                    }
-                    Some("javascript") | Some("typescript") => {
-                        for e in ["ts", "tsx", "js", "jsx"] {
-                            cands.insert(format!("{n}/index.{e}"));
-                        }
-                    }
-                    Some("go") => {
-                        // package dir: any .go file under the package path is matched
-                        // via file_exists on exact candidates; also try package.go.
-                        cands.insert(format!(
-                            "{n}/{}.go",
-                            base.file_name().and_then(|s| s.to_str()).unwrap_or("pkg")
-                        ));
-                    }
-                    _ => {
-                        cands.insert(format!("{n}/mod.rs"));
-                        for e in ["ts", "tsx", "js", "jsx"] {
-                            cands.insert(format!("{n}/index.{e}"));
-                        }
-                    }
-                }
-            }
-        }
-        let mut out = Vec::new();
-        for c in cands {
-            if self.file_exists(&c)? {
-                out.push(c);
-            }
-        }
-        Ok(out)
+/// Collect candidate relative paths for a module import (existence checked by caller).
+pub(crate) fn collect_module_candidates(
+    from_file: &str,
+    module: &str,
+    lang: Option<&str>,
+) -> BTreeSet<String> {
+    let module = module.trim().trim_matches(['"', '\'']);
+    if module.is_empty() {
+        return BTreeSet::new();
     }
-
-    fn file_language(&self, path: &str) -> Result<Option<String>> {
-        optional_row(
-            self.connection(),
-            "SELECT language FROM files WHERE path=?1",
-            &[&path],
-            |r| r.get(0),
-        )
+    let parent = Path::new(from_file)
+        .parent()
+        .unwrap_or_else(|| Path::new(""));
+    let rules = module_resolve_rules(lang);
+    let bases = (rules.bases)(from_file, parent, module);
+    let mut cands = BTreeSet::new();
+    for base in bases {
+        let n = normalize_rel(&base);
+        cands.insert(n.clone());
+        if base.extension().is_none() {
+            for e in rules.exts {
+                cands.insert(format!("{n}.{e}"));
+            }
+            (rules.add_extras)(&mut cands, &n, &base);
+        }
     }
+    cands
 }
 
 fn resolve_bases_rust(from_file: &str, parent: &Path, module: &str) -> Vec<PathBuf> {
@@ -119,7 +67,79 @@ fn resolve_bases_rust(from_file: &str, parent: &Path, module: &str) -> Vec<PathB
     bases
 }
 
-fn resolve_bases_python(parent: &Path, module: &str) -> Vec<PathBuf> {
+/// Language → {extensions, base resolver, package-style extras}. Candidate sets must stay
+/// identical to the prior match arms (BTreeSet order is key-ordered).
+struct ModuleResolveRules {
+    exts: &'static [&'static str],
+    bases: fn(&str, &Path, &str) -> Vec<PathBuf>,
+    add_extras: fn(&mut BTreeSet<String>, &str, &Path),
+}
+
+const JS_INDEX_EXTS: &[&str] = &["ts", "tsx", "js", "jsx"];
+const DEFAULT_MODULE_EXTS: &[&str] = &[
+    "rs", "ts", "tsx", "js", "jsx", "py", "go", "java", "cs", "rb",
+];
+
+fn extras_python(cands: &mut BTreeSet<String>, n: &str, _base: &Path) {
+    cands.insert(format!("{n}/__init__.py"));
+}
+fn extras_js_ts(cands: &mut BTreeSet<String>, n: &str, _base: &Path) {
+    for e in JS_INDEX_EXTS {
+        cands.insert(format!("{n}/index.{e}"));
+    }
+}
+fn extras_go(cands: &mut BTreeSet<String>, n: &str, base: &Path) {
+    // package dir: any .go file under the package path is matched
+    // via file_exists on exact candidates; also try package.go.
+    cands.insert(format!(
+        "{n}/{}.go",
+        base.file_name().and_then(|s| s.to_str()).unwrap_or("pkg")
+    ));
+}
+fn extras_default_rustish(cands: &mut BTreeSet<String>, n: &str, _base: &Path) {
+    cands.insert(format!("{n}/mod.rs"));
+    for e in JS_INDEX_EXTS {
+        cands.insert(format!("{n}/index.{e}"));
+    }
+}
+
+fn module_resolve_rules(lang: Option<&str>) -> ModuleResolveRules {
+    match lang {
+        Some("python") => ModuleResolveRules {
+            exts: &["py"],
+            bases: resolve_bases_python,
+            add_extras: extras_python,
+        },
+        Some("javascript") => ModuleResolveRules {
+            exts: &["js", "jsx", "mjs", "cjs"],
+            bases: resolve_bases_js,
+            add_extras: extras_js_ts,
+        },
+        Some("typescript") => ModuleResolveRules {
+            exts: &["ts", "tsx", "js", "jsx"],
+            bases: resolve_bases_js,
+            add_extras: extras_js_ts,
+        },
+        Some("go") => ModuleResolveRules {
+            exts: &["go"],
+            bases: resolve_bases_go,
+            add_extras: extras_go,
+        },
+        Some("rust") => ModuleResolveRules {
+            exts: &["rs"],
+            bases: resolve_bases_rust,
+            add_extras: extras_default_rustish,
+        },
+        // Unknown / missing language: Rust-shaped bases + broad extension probe.
+        _ => ModuleResolveRules {
+            exts: DEFAULT_MODULE_EXTS,
+            bases: resolve_bases_rust,
+            add_extras: extras_default_rustish,
+        },
+    }
+}
+
+fn resolve_bases_python(_from_file: &str, parent: &Path, module: &str) -> Vec<PathBuf> {
     let mut bases = Vec::new();
     if module.starts_with('.') {
         let dots = module.chars().take_while(|c| *c == '.').count();
@@ -148,7 +168,7 @@ fn resolve_bases_python(parent: &Path, module: &str) -> Vec<PathBuf> {
     bases
 }
 
-fn resolve_bases_js(parent: &Path, module: &str) -> Vec<PathBuf> {
+fn resolve_bases_js(_from_file: &str, parent: &Path, module: &str) -> Vec<PathBuf> {
     let mut bases = Vec::new();
     if module.starts_with('.') {
         bases.push(parent.join(module));
