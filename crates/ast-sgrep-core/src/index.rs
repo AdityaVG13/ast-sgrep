@@ -675,7 +675,12 @@ fn is_trailing_trivia_line(line: &str, language: Option<Language>) -> bool {
             | Language::JavaScript
             | Language::Go
             | Language::Java
-            | Language::CSharp,
+            | Language::CSharp
+            | Language::Swift
+            | Language::C
+            | Language::Cpp
+            | Language::Kotlin
+            | Language::Php,
         ) => C_FAMILY_PREFIXES,
         None => return false,
     };

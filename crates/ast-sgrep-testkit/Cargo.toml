@@ -17,4 +17,5 @@ ast-sgrep-lang = { path = "../ast-sgrep-lang", version = "1.3.2" }
 ast-sgrep-lsp = { path = "../ast-sgrep-lsp", version = "1.3.2" }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
+tree-sitter.workspace = true
 tempfile.workspace = true

@@ -239,7 +239,8 @@ impl Default for HashedEmbedder {
     fn default() -> Self {
         Self {
             inner: SemanticLocalEmbedding,
-            model_id: format!("hashed-{SEMANTIC_DIM}"),
+            // `-xof` marks full-rank feature hashing (not period-32 blake3 tiling).
+            model_id: format!("hashed-{SEMANTIC_DIM}-xof"),
         }
     }
 }

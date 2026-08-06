@@ -2,15 +2,17 @@
 //!
 //! **Why this exists (vs shelling out to ast-grep):**
 //! - Indexed hybrid search needs a fast, in-process structural channel.
-//! - Process spawn + JSON parsing is too heavy for tight loops and offline agents.
-//! - Production search implements declarations, calls, kind predicates, and exact
-//!   indexed signatures natively. Unsupported exotic rule syntax returns no hits.
+//! - External `ast-grep` is excellent for full metavariable rules, but process
+//!   spawn + JSON parse is too heavy for tight loops and offline agents.
+//! - We implement the common ~80% of patterns natively (function/method/class
+//!   decls and calls with `$NAME` / `$$$` holes). Complex rules still fall
+//!   through to external ast-grep when installed.
 
 use crate::extract::{
     byte_to_line, is_ident_kind, is_in_comment_or_string, is_member_expr_kind,
     last_identifier_in_chain, node_lines, node_text,
 };
-use crate::pattern_queries::{queries_for, CLASS_QUERY_TABLE, FUNCTION_QUERY_TABLE};
+use crate::pattern_queries::{class_queries_for, queries_for, FUNCTION_QUERY_TABLE};
 use crate::{Language, PatternNode};
 use tree_sitter::{Node, Parser, Query, QueryCursor, StreamingIterator};
 
@@ -35,30 +37,37 @@ pub const DECL_PATTERN_PREFIXES: &[(&str, bool)] = &[
     ("type ", true),
 ];
 
-/// True when syntax is outside the native structural subset.
+/// True when the pattern needs external ast-grep (we cannot handle it natively).
 ///
-/// Production callers use this for capability reporting only; they never spawn
-/// an external matcher.
+/// Patterns without `$` always run in-process. Patterns with `$`/`$$$` use the
+/// native structural matcher when they fit a known shape; only exotic shapes
+/// still require the external binary.
 pub fn needs_ast_grep_fallback(pattern: &str) -> bool {
     let p = pattern.trim();
     if p.is_empty() || !p.contains('$') {
         return false;
     }
-    // Native shapes we handle: fn/def/function/class $NAME, calls, member calls.
     classify_native(p).is_none()
 }
 
 pub fn tree_sitter_language(lang: Language) -> tree_sitter::Language {
-    // Re-exports each grammar's LANGUAGE constant via `.into()`. CSharp currently
-    // shares the Java grammar as a stand-in (documented limitation; see l115).
     match lang {
         Language::Rust => tree_sitter_rust::LANGUAGE.into(),
         Language::TypeScript => tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
         Language::JavaScript => tree_sitter_typescript::LANGUAGE_TSX.into(),
         Language::Python => tree_sitter_python::LANGUAGE.into(),
         Language::Go => tree_sitter_go::LANGUAGE.into(),
-        Language::Java | Language::CSharp => tree_sitter_java::LANGUAGE.into(),
+        Language::Java => tree_sitter_java::LANGUAGE.into(),
+        // e2hc/difu.5: C# patterns were parsed with the Java grammar, causing
+        // misparses of C#-specific syntax. Use the real C# grammar so the
+        // pattern channel agrees with the extraction channel.
+        Language::CSharp => tree_sitter_c_sharp::LANGUAGE.into(),
         Language::Ruby => tree_sitter_ruby::LANGUAGE.into(),
+        Language::Swift => tree_sitter_swift::LANGUAGE.into(),
+        Language::C => tree_sitter_c::LANGUAGE.into(),
+        Language::Cpp => tree_sitter_cpp::LANGUAGE.into(),
+        Language::Kotlin => tree_sitter_kotlin_ng::LANGUAGE.into(),
+        Language::Php => tree_sitter_php::LANGUAGE_PHP.into(),
     }
 }
 
@@ -77,7 +86,7 @@ pub fn match_pattern(
     }
     match classify_native(pattern) {
         Some(kind) => match_structural(lang, source, &kind),
-        None => Ok(Vec::new()),
+        None => Ok(Vec::new()), // caller may fall back to external ast-grep
     }
 }
 
@@ -104,8 +113,12 @@ pub fn match_literal_pattern(
 pub enum NativeKind {
     /// Function-like declaration; `name == None` means any name (`$NAME`).
     Function { name: Option<String> },
-    /// Class/struct/type declaration.
-    Class { name: Option<String> },
+    /// Class/struct/type declaration. `keyword` is the pattern prefix
+    /// (`class`, `struct`, `interface`, or `type`) so queries stay kind-specific.
+    Class {
+        keyword: &'static str,
+        name: Option<String>,
+    },
     /// Free or method call; method path segments may be `$` wildcards.
     Call {
         /// Exact path like `foo.bar` or single name; segments that were `$X` are None.
@@ -134,7 +147,10 @@ pub fn classify_native(pattern: &str) -> Option<NativeKind> {
                 return None;
             };
             return Some(if is_class {
-                NativeKind::Class { name }
+                NativeKind::Class {
+                    keyword: prefix.trim(),
+                    name,
+                }
             } else {
                 NativeKind::Function { name }
             });
@@ -224,22 +240,33 @@ fn match_structural(
     let language = tree_sitter_language(lang);
     let tree = parse_source(lang, source)?;
     let mut out = Vec::new();
-    let (queries, name) = match kind {
-        NativeKind::Function { name } => (queries_for(FUNCTION_QUERY_TABLE, lang), name.as_deref()),
-        NativeKind::Class { name } => (queries_for(CLASS_QUERY_TABLE, lang), name.as_deref()),
+    match kind {
+        NativeKind::Function { name } => {
+            run_queries(
+                &language,
+                tree.root_node(),
+                source,
+                queries_for(FUNCTION_QUERY_TABLE, lang),
+                name.as_deref(),
+                None,
+                &mut out,
+            )?;
+        }
+        NativeKind::Class { keyword, name } => {
+            run_queries(
+                &language,
+                tree.root_node(),
+                source,
+                class_queries_for(lang, keyword),
+                name.as_deref(),
+                Some((lang, *keyword)),
+                &mut out,
+            )?;
+        }
         NativeKind::Call { path } => {
             walk_calls(tree.root_node(), source, path, &mut out);
-            return Ok(out);
         }
-    };
-    run_queries(
-        &language,
-        tree.root_node(),
-        source,
-        queries,
-        name,
-        &mut out,
-    )?;
+    }
     Ok(out)
 }
 
@@ -249,6 +276,7 @@ fn run_queries(
     source: &str,
     queries: &[&str],
     name_filter: Option<&str>,
+    class_filter: Option<(Language, &str)>,
     out: &mut Vec<PatternMatch>,
 ) -> anyhow::Result<()> {
     for qsrc in queries {
@@ -277,6 +305,11 @@ fn run_queries(
             if is_in_comment_or_string(&node) {
                 continue;
             }
+            if let Some((lang, keyword)) = class_filter {
+                if !class_keyword_matches(lang, &node, source, keyword) {
+                    continue;
+                }
+            }
             if let Some(want) = name_filter {
                 if name_text != Some(want) {
                     continue;
@@ -286,6 +319,38 @@ fn run_queries(
         }
     }
     Ok(())
+}
+
+fn class_keyword_matches(lang: Language, node: &Node, source: &str, keyword: &str) -> bool {
+    if lang != Language::Kotlin {
+        return true;
+    }
+    let kind = kotlin_class_keyword(node, source);
+    match keyword {
+        "class" => kind == "class",
+        "interface" => kind == "interface",
+        "type" => true,
+        _ => false,
+    }
+}
+
+fn kotlin_class_keyword(node: &Node, source: &str) -> &'static str {
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if matches!(child.kind(), "modifiers" | "class_modifier")
+            && kotlin_class_keyword(&child, source) == "enum"
+        {
+            return "enum";
+        }
+        if let Some(text) = node_text(&child, source) {
+            match text.trim() {
+                "enum" => return "enum",
+                "interface" => return "interface",
+                _ => {}
+            }
+        }
+    }
+    "class"
 }
 
 fn walk_calls(node: Node, source: &str, path: &[Option<String>], out: &mut Vec<PatternMatch>) {
@@ -303,7 +368,7 @@ fn call_match_path(node: &Node, source: &str, path: &[Option<String>]) -> Option
     if is_in_comment_or_string(node) || !is_call_kind(node.kind()) {
         return None;
     }
-    let callee = path_from_node(&call_field_node(node)?, source)?;
+    let callee = call_target_path(node, source)?;
     path_matches(&callee, path).then_some(callee)
 }
 
@@ -311,6 +376,18 @@ fn call_field_node<'a>(node: &Node<'a>) -> Option<Node<'a>> {
     ["function", "name"]
         .into_iter()
         .find_map(|f| node.child_by_field_name(f))
+        // Swift/Kotlin call_expression has no function/name fields; callee is the
+        // first named child. Safe for other langs: Ruby uses `call`, C# uses
+        // `invocation_expression`, and field-bearing grammars hit find_map first.
+        .or_else(|| {
+            (node.kind() == "call_expression")
+                .then(|| node.named_child(0))
+                .flatten()
+        })
+}
+
+fn call_target_path(node: &Node, source: &str) -> Option<Vec<String>> {
+    path_from_node(&call_field_node(node)?, source)
 }
 
 fn path_from_node(node: &Node, source: &str) -> Option<Vec<String>> {
@@ -336,10 +413,7 @@ fn path_matches(actual: &[String], pattern: &[Option<String>]) -> bool {
         return actual.iter().zip(pattern.iter()).all(|(a, p)| segment_ok(a, p));
     }
     // Exact length only — except a single-segment pattern matches the last call segment.
-    if pattern.len() != 1 {
-        return false;
-    }
-    actual.last().is_some_and(|last| segment_ok(last, &pattern[0]))
+    pattern.len() == 1 && actual.last().is_some_and(|last| segment_ok(last, &pattern[0]))
 }
 
 fn walk_literal(node: Node, source: &str, pattern: &str, out: &mut Vec<PatternMatch>) {
@@ -396,7 +470,7 @@ fn record_node_signatures(
             push_pattern_node(*node, source, text, out, seen);
         }
     }
-    if let Some(prefix) = declaration_prefix(node.kind()) {
+    if let Some(prefix) = declaration_prefix(node, source) {
         push_pattern_node(*node, source, &format!("kind:{}", node.kind()), out, seen);
         if let Some(name) = node
             .child_by_field_name("name")
@@ -419,31 +493,73 @@ fn record_node_signatures(
     }
 }
 
-/// Map a tree-sitter declaration kind to its indexed `decl:` / display prefix.
-pub(crate) fn declaration_prefix(kind: &str) -> Option<&'static str> {
+/// Map a tree-sitter declaration node to its indexed `decl:` / display prefix.
+///
+/// Most kinds are table-driven; `class_declaration` inspects Swift
+/// `declaration_kind` / Kotlin keyword tokens so singleton forms stay exact.
+pub fn declaration_prefix(node: &Node, source: &str) -> Option<&'static str> {
+    let kind = node.kind();
+    if kind == "class_declaration" {
+        return class_declaration_prefix(node, source);
+    }
     DECL_KIND_PREFIXES
         .iter()
         .find_map(|&(node_kind, prefix)| (node_kind == kind).then_some(prefix))
+}
+
+fn class_declaration_prefix(node: &Node, source: &str) -> Option<&'static str> {
+    match node
+        .child_by_field_name("declaration_kind")
+        .and_then(|kind| node_text(&kind, source))
+    {
+        Some("struct" | "actor") => Some("struct"),
+        Some("enum") => Some("enum"),
+        Some("extension") => Some("type"),
+        // No Swift declaration_kind (or unrecognised) — Kotlin reuses class_declaration.
+        _ => match kotlin_class_keyword(node, source) {
+            "interface" => Some("interface"),
+            "enum" => Some("enum"),
+            _ => Some("class"),
+        },
+    }
 }
 
 /// AST node kind → short declaration prefix used in `decl:{prefix}:{name}` signatures.
 pub const DECL_KIND_PREFIXES: &[(&str, &str)] = &[
     ("function_item", "fn"),
     ("struct_item", "struct"),
+    ("struct_declaration", "struct"),
+    ("struct_specifier", "struct"),
     ("function_definition", "def"),
     ("function_declaration", "function"),
+    ("protocol_function_declaration", "function"),
     ("method_definition", "function"),
     ("method_declaration", "function"),
     ("method", "function"),
+    ("singleton_method", "function"),
+    ("local_function_statement", "function"),
     ("class_definition", "class"),
-    ("class_declaration", "class"),
     ("class", "class"),
+    ("record_declaration", "class"),
+    ("class_specifier", "class"),
     ("trait_item", "interface"),
     ("interface_declaration", "interface"),
+    ("protocol_declaration", "interface"),
     ("enum_item", "enum"),
+    ("enum_declaration", "enum"),
+    ("enum_specifier", "enum"),
 ];
 
-const CALL_KINDS: &[&str] = &["call_expression", "call", "method_invocation"];
+// e2hc/difu.5: invocation_expression is the C# tree-sitter grammar's call node.
+const CALL_KINDS: &[&str] = &[
+    "call_expression",
+    "call",
+    "method_invocation",
+    "invocation_expression",
+    "function_call_expression",
+    "member_call_expression",
+    "scoped_call_expression",
+];
 
 fn is_call_kind(kind: &str) -> bool {
     CALL_KINDS.contains(&kind)

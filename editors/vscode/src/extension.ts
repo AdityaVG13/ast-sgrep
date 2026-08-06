@@ -40,6 +40,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       { scheme: 'file', language: 'java' },
       { scheme: 'file', language: 'ruby' },
       { scheme: 'file', language: 'csharp' },
+      { scheme: 'file', language: 'swift' },
+      { scheme: 'file', language: 'c' },
+      { scheme: 'file', language: 'cpp' },
+      { scheme: 'file', language: 'kotlin' },
+      { scheme: 'file', language: 'php' },
     ],
     initializationOptions: { asgrep: indexPath ? { indexPath } : {} },
   };

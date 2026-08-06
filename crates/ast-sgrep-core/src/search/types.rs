@@ -391,7 +391,15 @@ pub fn format_hit_line(hit: &SearchHit) -> String {
     }
 }
 pub fn matches_lang(language: Option<&str>, filter: Option<&str>) -> bool {
-    filter.is_none_or(|lang| language == Some(lang))
+    filter.is_none_or(|want| {
+        language.is_some_and(|have| {
+            // Compare on Language::as_str forms so Title Case external labels
+            // (e.g. ast-grep "Rust") still match `--lang rust`.
+            let have_n = ast_sgrep_lang::Language::normalize_id(have);
+            let want_n = ast_sgrep_lang::Language::normalize_id(want);
+            have_n == want_n
+        })
+    })
 }
 pub fn assign_signal_margins(hits: &mut [SearchHit]) {
     for hit in hits.iter_mut() {

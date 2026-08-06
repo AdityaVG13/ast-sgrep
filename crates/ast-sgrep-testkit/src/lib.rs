@@ -13,5 +13,8 @@ pub use index::{
     core_search_hit_keys, index_sample, json_hit_keys, reopen_indexer, response_hit_keys,
     searcher_from, HitKey as SurfaceHitKey, IndexedFixture,
 };
-pub use lang::{assert_has_callee, assert_has_symbol, parse};
+pub use lang::{
+    assert_has_callee, assert_has_symbol, assert_language_conformance, parse, ExpectedCall,
+    ExpectedPattern, ExpectedSymbol, LanguageConformanceCase,
+};
 pub use lsp::{lsp_search_hit_keys, sample_backend};

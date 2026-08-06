@@ -220,12 +220,17 @@ const DOC_LOOKBACK_LINES: usize = 8;
 fn comment_markers_for(language: Option<&str>) -> &'static [&'static str] {
     match language {
         Some("python") | Some("ruby") => &["#"],
+        Some("php") => &["#", "//", "/**", "/*", "*/", "*"],
         Some("rust")
         | Some("typescript")
         | Some("javascript")
         | Some("java")
         | Some("go")
-        | Some("csharp") => &["///", "//!", "//", "/**", "/*", "*/", "*"],
+        | Some("csharp")
+        | Some("c")
+        | Some("cpp")
+        | Some("kotlin")
+        | Some("swift") => &["///", "//!", "//", "/**", "/*", "*/", "*"],
         // Unknown: C-style only — never bare `#`.
         _ => &["///", "//!", "//", "/**", "/*", "*/", "*", "--"],
     }
