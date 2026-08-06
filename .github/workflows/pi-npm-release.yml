@@ -220,7 +220,7 @@ jobs:
       ASGREP_NPM_OWNERSHIP_APPROVED: ${{ secrets.NPM_OWNERSHIP_APPROVED }}
       NODE_AUTH_TOKEN: ${{ inputs.bootstrap_token == 'true' && secrets.NPM_TOKEN || '' }}
     permissions:
-      contents: read
+      contents: write
       id-token: write
     steps:
       - uses: actions/checkout@v4
