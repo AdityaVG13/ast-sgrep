@@ -175,6 +175,7 @@
   },
   "surface": {
     "tools": [
+      "asgrep_codemode",
       "asgrep_search",
       "asgrep_index",
       "asgrep_status"
@@ -190,7 +191,7 @@
       "ast-sgrep"
     ],
     "defaultSearchFormat": "agent-capsule",
-    "separation": "Pi tools use ExtensionAPI directly. LSP and MCP remain separate integrations; pi-mcp-adapter is not used."
+    "separation": "Pi tools use ExtensionAPI directly. Primary agent execution is Code Mode (asgrep_codemode JS sandbox). LSP and MCP remain separate integrations and must not be linked to Code Mode; pi-mcp-adapter is not used."
   },
   "config": {
     "precedenceHighToLow": [
@@ -239,7 +240,7 @@
   "updates": {
     "mainBranch": "Pack and test relevant artifacts; never publish a stable npm version.",
     "officialTag": "Every human-approved official version tag prepares and publishes all npm layers at the canonical version in platform, launcher, extension order.",
-    "selection": "Pi/npm update selects the exact matching extension, launcher, platform binary, and protocol version.",
+    "selection": "Pi/npm update selects the exact matching extension, launcher, platform package (CLI + Code Mode NAPI addon), and protocol version.",
     "runtimeDownloads": false,
     "partialPublishRecovery": "Resume only when every live package at the version has registry integrity identical to the preserved release tarball; otherwise move forward with a new immutable version."
   },

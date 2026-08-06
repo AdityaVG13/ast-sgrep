@@ -112,6 +112,8 @@ pub(crate) fn raw_command_name(args: &[std::ffi::OsString]) -> &'static str {
         "robot-docs",
         "doctor",
         "eval",
+        "codemode-batch",
+        "codemode-serve",
     ];
     args.iter()
         .filter_map(|a| a.to_str())

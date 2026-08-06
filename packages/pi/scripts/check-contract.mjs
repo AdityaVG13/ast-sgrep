@@ -66,8 +66,9 @@ report(workspace.scripts?.['check:pi-contract'] === 'node packages/pi/scripts/ch
 report(workspace.scripts?.['check:pi-release'] === 'node packages/pi/scripts/check-native-workflow.mjs' && workspace.scripts?.['pack:pi-release'] === 'node packages/pi/scripts/release-acceptance.mjs pack' && workspace.scripts?.['test:pi-release-gate'] === 'node packages/pi/scripts/release-acceptance.mjs self-test', 'root release acceptance scripts changed');
 report(Object.keys(workspace).every((key) => ['name', 'version', 'private', 'workspaces', 'scripts'].includes(key)), 'root package.json must remain the minimal private workspace');
 
-required(targetMatrix, ['schemaVersion', 'artifactSchemaVersion', 'targets'], 'target matrix');
-report(targetMatrix.schemaVersion === 1 && targetMatrix.artifactSchemaVersion === 1, 'unsupported target matrix schema');
+required(targetMatrix, ['schemaVersion', 'artifactSchemaVersion', 'napiAddon', 'targets'], 'target matrix');
+report(targetMatrix.schemaVersion === 1 && targetMatrix.artifactSchemaVersion === 2, 'unsupported target matrix schema');
+report(targetMatrix.napiAddon === 'ast-sgrep-codemode.node', 'napiAddon must be ast-sgrep-codemode.node');
 report(Array.isArray(targetMatrix.targets) && targetMatrix.targets.length === 5, 'target matrix must contain exactly five supported targets');
 const ids = targetMatrix.targets?.map((target) => target.id) ?? [];
 report(new Set(ids).size === ids.length, 'target matrix IDs must be unique');
@@ -79,6 +80,8 @@ for (const target of targetMatrix.targets ?? []) {
   report(!/musl/.test(target.id + target.rustTarget + (target.libc ?? '')), 'musl targets are unsupported');
   report(!(target.os === 'win32' && target.cpu === 'arm64'), 'Windows arm64 is unsupported');
   report((target.os === 'darwin' && /^macos-/.test(target.runner)) || (target.os === 'linux' && /^ubuntu-/.test(target.runner)) || (target.os === 'win32' && /^windows-/.test(target.runner)), target.id + ' must use a native GitHub runner');
+  const platformManifest = JSON.parse(await readFile(path.join(root, 'packages/pi/platforms', target.id, 'package.json'), 'utf8'));
+  report(equal([...(platformManifest.files ?? [])].sort(), [target.executable, targetMatrix.napiAddon, 'checksum.sha256', 'LICENSE'].sort()), target.id + ' platform package files must ship CLI + NAPI addon');
 }
 const expectedPlatforms = (targetMatrix.targets ?? []).map((target) => [target.package, 'packages/pi/platforms/' + target.id, target.rustTarget, [target.os], [target.cpu], target.libc ? [target.libc] : [], target.executable]);
 report(contract.packages?.extension?.name === 'pi-ast-sgrep', 'unsupported Pi extension package name');
@@ -94,7 +97,7 @@ for (let index = 0; index < expectedPlatforms.length; index += 1) {
   report(platform.optionalDependencyVersion === version, name + ' optional dependency is not pinned to the exact canonical version');
 }
 report(equal(contract.packages?.unsupportedTargets, ['linux-musl', 'win32-arm64']), 'unsupported target policy changed');
-report(equal(contract.surface?.tools, ['asgrep_search', 'asgrep_index', 'asgrep_status']), 'unsupported Pi tool names');
+report(equal(contract.surface?.tools, ['asgrep_codemode', 'asgrep_search', 'asgrep_index', 'asgrep_status']), 'unsupported Pi tool names');
 report(equal(contract.surface?.commands, ['/asgrep-doctor', '/asgrep-status', '/asgrep-index', '/asgrep-reindex']), 'unsupported Pi command names');
 report(equal(contract.surface?.cliCommands, ['asgrep', 'ast-sgrep']) && contract.surface?.defaultSearchFormat === 'agent-capsule', 'unsupported CLI surface or default search format');
 report(contract.compatibility?.node?.range === '>=22.19.0' && contract.compatibility.node.minimum === '22.19.0', 'Node compatibility floor changed');

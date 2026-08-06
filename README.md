@@ -6,7 +6,7 @@
 
 **Hybrid code search that understands intent** -- not only text or syntax.
 
-**v1.3.2** · 13 languages · lexical + AST graph + **semantic symbol search** (on by default, no API key)
+**v1.4.0** · 13 languages · lexical + AST graph + **semantic symbol search** + **Code Mode** (on by default, no API key)
 
 > **ast-grep finds shapes. ripgrep finds strings. ast-sgrep finds intent.**
 
@@ -20,15 +20,9 @@ For Pi, install the native package directly:
 pi install npm:pi-ast-sgrep
 ```
 
-It immediately adds `asgrep_search`, `asgrep_index`, `asgrep_status`, four `/asgrep-*` commands, and the `ast-sgrep` skill. The first search lazily creates `.asgrep/`; no Rust toolchain, PATH setup, MCP adapter, credential, or runtime download is required. See the [complete Pi package guide](docs/pi-package.md) for supported hosts, data/privacy behavior, updates, rollback, troubleshooting, and uninstall.
+It immediately adds **`asgrep_codemode`** (Code Mode), `asgrep_search`, `asgrep_index`, `asgrep_status`, four `/asgrep-*` commands, and the `ast-sgrep` skill. The first search lazily creates `.asgrep/`; no Rust toolchain, PATH setup, MCP adapter, credential, or runtime download is required. See the [complete Pi package guide](docs/pi-package.md) and [Code Mode](docs/codemode.md).
 
-For the standalone CLI, after `1.3.2` is published to crates.io, install with:
-
-```bash
-cargo install ast-sgrep-cli --version 1.3.2 --locked
-```
-
-Until publication, build from source:
+The standalone CLI is not yet published to crates.io; the Pi package is the packaged install path. To build from source:
 
 ```bash
 git clone https://github.com/AdityaVG13/ast-sgrep
@@ -52,14 +46,10 @@ handling are supported, but the duty cycle is not enforced.
 Paste into your agent:
 
 ```text
-1) Discover the contract: `asgrep capabilities --json`
-2) Read the handbook: `asgrep robot-docs guide`
-3) Triage health: `asgrep doctor --robot-triage`
-Then: `asgrep index . --json` and search with `asgrep --json --format compact "your intent" .`
-Bin aliases: `asgrep` and `ast-sgrep`. Sibling binaries: `asgrep-mcp` (MCP stdio), `asgrep-lsp` (LSP).
+Clone https://github.com/AdityaVG13/ast-sgrep, cd into it, run `cargo build --release -p ast-sgrep-cli`.
+Register target/release/asgrep-mcp as a stdio MCP server named "ast-sgrep" (build with: cargo build --release -p ast-sgrep-mcp).
+Verify: run ./target/release/asgrep index . then search for defs: of a symbol in this repo.
 ```
-
-Build from source if needed: `cargo build --release -p ast-sgrep-cli` (and `-p ast-sgrep-mcp` / `-p ast-sgrep-lsp` for siblings).
 
 ---
 
@@ -67,7 +57,7 @@ Build from source if needed: `cargo build --release -p ast-sgrep-cli` (and `-p a
 
 Most code search is either **fast text** (ripgrep) or **pattern matching** (ast-grep). Neither answers questions like *"where does credential renewal happen?"* when the words in your question do not appear in the code.
 
-**ast-sgrep** builds a **persistent index**: symbols, caller/callee edges, imports, lexical FTS, and **symbol-level semantic vectors** enriched with call-graph context. Default queries cascade lexical candidates through AST-derived evidence and semantic reranking; the dedicated `semantic` command handles zero-token-overlap discovery.
+**ast-sgrep** builds a **persistent index**: symbols, caller/callee edges, imports, lexical FTS, and **symbol-level semantic vectors** enriched with call-graph context. Query in natural language or with graph prefixes; get ranked hits with excerpts for humans or agents.
 
 **No API key required.** Offline semantic search works out of the box. Cloud, Ollama, and optional neural embeddings are upgrades.
 
@@ -76,9 +66,10 @@ Most code search is either **fast text** (ripgrep) or **pattern matching** (ast-
 | Where is X defined? | `defs:` + ranked hybrid hits |
 | Who calls this? | `callers:` + call hierarchy (LSP) |
 | How does auth refresh work? | NL → symbols + anchors + semantic similarity |
-| "credential renewal" (no token overlap) | `asgrep semantic "credential renewal"` → `auth_refresh` |
+| "credential renewal" (no token overlap) | Semantic hit on `auth_refresh` |
 | Structured JSON for an agent | `--json --format agent` |
 | Structural rewrite / codemod | `pattern:` (ast-grep when available) |
+| Agent needs search as a tool (not a subprocess) | `asgrep_codemode` — in-process, stateful session (Code Mode) |
 
 [Full comparison →](docs/comparison.md)
 
@@ -139,6 +130,9 @@ These are **checked-in run summaries**, not portable guarantees. Hardware, corpu
 | Structural workloads vs ast-grep | Large speedups in recorded cases | [speed.md](benchmarks/results/speed.md) |
 | Cross-tool bake-off | Mixed; inspect every row | [bakeoff.md](benchmarks/results/bakeoff.md) |
 | Known regressions | Published without suppression | [losses.md](benchmarks/results/losses.md) |
+| 2026-08-05 release run (self corpus) | Structural pattern 31× faster on the quality path; literal ≈ ripgrep; cold index 906 ms p95 | [speed.md](benchmarks/results/speed.md) |
+
+Measured 2026-08-05 on the self corpus (1,107 tracked files; `scripts/run-benchmarks.sh`): cold index **906 ms p95** on the baseline path and **2.1 s** with pr21's semantic embedding (budget breach on the grown corpus — the 285 ms budget was set for 110 files; the original 88.5 s pr21 build was fixed by capping child chunks, `0ba34da`), warm literal **16–21 ms** (≈ ripgrep 15–18 ms), structural pattern **29 ms** with the quality batch vs **987 ms** without (ast-grep: 23–26 ms), semantic NL **16 ms** on the quality path. Full provenance in [speed.md](benchmarks/results/speed.md).
 
 Canonical table: [head-to-head.md](benchmarks/results/head-to-head.md). Index: [benchmarks/README.md](benchmarks/README.md). Methodology: [docs/benchmarks.md](docs/benchmarks.md).
 
@@ -153,9 +147,10 @@ Canonical table: [head-to-head.md](benchmarks/results/head-to-head.md). Index: [
 |-----------|-------|----------|
 | **CLI** | `cargo build --release -p ast-sgrep-cli` | Terminal, scripts |
 | **MCP** | `cargo build --release -p ast-sgrep-mcp` | AI agents (stdio) |
+| **Code Mode** | `ast-sgrep-codemode` | Programmatic tool-calling / multi-step plans |
 | **LSP** | `cargo build --release -p ast-sgrep-lsp` | Editor navigation |
 | **Library** | `ast-sgrep-core` | Embed search in Rust tools |
-| **JSON plugins** | `--format compact\|agent\|agent-capsule\|github\|gitlab` | Agents / CI |
+| **JSON plugins** | `--format agent\|github\|gitlab\|agent-capsule` | Agents / CI |
 
 ---
 
@@ -171,7 +166,7 @@ Canonical table: [head-to-head.md](benchmarks/results/head-to-head.md). Index: [
 | [Semantic search](docs/semantic-search.md) | Chunks, providers, IVF-ANN |
 | [Benchmarks](docs/benchmarks.md) | Methodology, reproduction, losses |
 | [Comparison](docs/comparison.md) | vs ripgrep / ast-grep |
-| [MCP](docs/mcp.md) · [Use cases](docs/use-cases.md) · [Releasing](docs/RELEASING.md) | Agents, LSP, release checklist |
+| [MCP](docs/mcp.md) · [Code Mode](docs/codemode.md) · [Use cases](docs/use-cases.md) · [Releasing](docs/RELEASING.md) | Agents, PTC, LSP, release checklist |
 
 ---
 
@@ -185,6 +180,7 @@ Canonical table: [head-to-head.md](benchmarks/results/head-to-head.md). Index: [
 | `crates/ast-sgrep-embed` | Embedding backends + optional rerank |
 | `crates/ast-sgrep-lsp` | Language server |
 | `crates/ast-sgrep-mcp` | MCP server |
+| `crates/ast-sgrep-codemode` | Code Mode / programmatic tool-calling |
 | `crates/ast-sgrep-plugins` | Output formats |
 | `crates/ast-sgrep-testkit` | Shared test fixtures |
 | `benchmarks/` | Published results (`results/`) and studies (`studies/`) |
@@ -195,7 +191,7 @@ Canonical table: [head-to-head.md](benchmarks/results/head-to-head.md). Index: [
 
 ## Project status and verification
 
-**v1.3.2.** Hybrid search, semantic layer, LSP, MCP, agent JSON, and IVF path are in place.
+**v1.4.0.** Code Mode (in-process tool-calling), 13 languages (5 new: C#, Swift, Kotlin, PHP, JS), fusion-normalized ranking, SIMD/mmap performance, LSP symbol correctness, and the semantic layer are in place.
 
 GitHub Actions workflows are **manual-only** (`workflow_dispatch`) to control Actions minutes. Local quality bar for contributors:
 

@@ -1,0 +1,27 @@
+[package]
+name = "ast-sgrep-codemode-napi"
+description = "Node-API (NAPI) bindings for in-process ast-sgrep Code Mode"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+publish = false
+
+# NAPI requires unsafe FFI into Node's C ABI.
+[lints.rust]
+unsafe_code = "allow"
+
+[lib]
+crate-type = ["cdylib"]
+name = "ast_sgrep_codemode_napi"
+
+[dependencies]
+ast-sgrep-codemode = { path = "../ast-sgrep-codemode", version = "1.3.2" }
+napi = { version = "3", default-features = false, features = ["napi9", "serde-json", "anyhow"] }
+napi-derive = "3"
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[build-dependencies]
+napi-build = "2"

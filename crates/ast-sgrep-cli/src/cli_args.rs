@@ -267,6 +267,16 @@ pub(crate) enum Commands {
     /// Evaluate retrieval against a gold fixture
     #[command(about = "Evaluate retrieval against a gold fixture")]
     Eval(eval::EvalArgs),
+    /// Run many Code Mode tool calls in one warm process (Pi parallel coalescing).
+    #[command(about = "Run many Code Mode tool calls in one warm process")]
+    CodemodeBatch {
+        /// Path to a JSON BatchRequest file, or `-` for stdin.
+        #[arg(long)]
+        requests: PathBuf,
+    },
+    /// Sticky NDJSON Code Mode worker (one warm Searcher for a whole program).
+    #[command(about = "Sticky NDJSON Code Mode worker")]
+    CodemodeServe,
 }
 
 #[derive(Parser)]
@@ -402,6 +412,8 @@ impl Cli {
             Some(Commands::RobotDocs(_)) => "robot-docs",
             Some(Commands::Doctor { .. }) => "doctor",
             Some(Commands::Eval(_)) => "eval",
+            Some(Commands::CodemodeBatch { .. }) => "codemode-batch",
+            Some(Commands::CodemodeServe) => "codemode-serve",
         }
     }
 }

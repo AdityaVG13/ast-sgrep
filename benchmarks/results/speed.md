@@ -16,6 +16,45 @@ elsewhere must trace back to a row here or carry its own reproduce command.
 
 Part of `ast-sgrep-iw8`.
 
+## 2026-08-05 release-state run (self corpus)
+
+> **Reproducible from this tree:** `scripts/run-benchmarks.sh` (added with this
+> run) reproduces every row below; raw hyperfine JSON is written to the run's
+> output directory. This is the first row set in this file that is reproducible
+> from the tree rather than from an external artifact.
+
+| Provenance | value |
+|------------|-------|
+| date | 2026-08-05 |
+| machine | Apple M5 Max, 18 cores (arm64), 48 GiB, macOS 26.5, APFS SSD |
+| corpus | tracked files of this repo at `cea904a` — 1,107 files, 6.3 MiB (`git ls-files` → rsync) |
+| build | `cargo build --profile release-perf -p ast-sgrep-cli` |
+| rustc / python | 1.97.1 / 3.9.6 |
+| tools | ripgrep 15.1.0, ast-grep 0.45.0, hyperfine 1.20.0 |
+| states | baseline `origin/main` `cea904a` · pr21 `test/quality-batch-e2hc-19-oxbj` `5de7eb0` · pr26 `cursor/codemode-crate-scaffold-9228` `137863f` |
+
+| Surface | baseline p95 | pr21 p95 | pr26 p95 | comparator p95 | note |
+|---------|------------:|--------:|--------:|------------:|------|
+| cold index build | 992.0 ms | 2,087 ms | 906.3 ms | — | pr21 embeds chunks at index time; was 88.5 s before the child-chunk cap fix (`0ba34da`) |
+| warm literal query | 20.7 ms | 17.3 ms | 16.4 ms | rg 15.5–17.6 ms | ≈ ripgrep on this corpus |
+| warm semantic NL query | 19.2 ms | 16.2 ms | 18.6 ms | — | pr21's IVF path is fastest after the fix |
+| structural pattern query | 986.9 ms | 29.4 ms | 940.6 ms | ast-grep 22.4–26.3 ms | pr21's SIMD prefilter: 34× faster than the baseline path |
+| index size | 22 MiB | 27 MiB | 22 MiB | — | pr21 embeds 2,592 chunks (was 26,461 before the cap fix) |
+
+**2026-08-05 follow-up fix:** pr21's cold index was 88.5 s / 107 MiB because
+`build_semantic_chunks_with_patterns` created up to 32 chunks per parent
+function (one per AST child node) — 26,461 chunks for 1,403 symbols. The cap
+was lowered to 2 (`0ba34da`): index 88.5 s → 2.1 s p95, 107 → 27 MiB, and
+semantic NL query latency dropped 42 → 16 ms. The ANN recall@10 quality
+budget test still passes.
+
+**Budget status:** the published cold self-index budget (285 ms p95) is
+**breached** on the current self corpus by every state (906–992 ms p95). The
+budget was set against the historical 110-file corpus; the repo has grown to
+1,107 tracked files. Re-baseline before quoting that budget as passing. The
+15 ms fixture surfaces were not re-measured here — the rows above are
+self-corpus queries and are not comparable to the fixture budgets.
+
 ## Scope
 
 - Corpora: **self** (this repo), **ripgrep** 14.1.1, **flask** 3.0.3 -- the

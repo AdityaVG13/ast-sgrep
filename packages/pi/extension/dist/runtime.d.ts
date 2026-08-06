@@ -83,6 +83,11 @@ export interface FreshnessRuntime {
     resolveRoot(context: RuntimeContext): Promise<string>;
     inspectIndexCompatibility?(context: RuntimeContext): Promise<IndexHealth>;
     rebuildIncompatibleIndex?(context: RuntimeContext, options?: RunOptions): Promise<MachineEnvelope>;
+    /**
+     * Optional warm native call (session sticky pool). When present, freshness
+     * prefers this over cold `run` for status/index — same Searcher as Code Mode.
+     */
+    nativeCall?(tool: string, args: Record<string, unknown>, context: RuntimeContext, options?: RunOptions): Promise<MachineEnvelope>;
 }
 export interface FreshnessCoordinatorOptions {
     refreshIntervalMs?: number;
@@ -105,6 +110,14 @@ export declare class AstSgrepRuntime {
     inspectIndexCompatibility(context: RuntimeContext): Promise<IndexHealth>;
     rebuildIncompatibleIndex(context: RuntimeContext, options?: RunOptions): Promise<MachineEnvelope>;
     run(args: readonly string[], context: RuntimeContext, options?: RunOptions): Promise<MachineEnvelope>;
+    /** Absolute path to the native binary (for sticky serve / stdin batch spawn). */
+    resolveBinaryPath(options?: {
+        env?: NodeJS.ProcessEnv;
+    }): string;
+    /** Merged process env for native Code Mode workers. */
+    nativeEnv(options?: {
+        env?: NodeJS.ProcessEnv;
+    }): NodeJS.ProcessEnv;
     checkCompatibility(context: RuntimeContext, options?: RunOptions): Promise<MachineEnvelope>;
 }
 export {};

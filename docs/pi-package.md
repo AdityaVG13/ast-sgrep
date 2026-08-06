@@ -22,15 +22,27 @@ The npm layers are exact-version matched: the `pi-ast-sgrep` extension depends o
 
 Restart Pi after installation if the current session does not reload package resources. The package contributes:
 
-- Tools: `asgrep_search`, `asgrep_index`, and `asgrep_status`.
+- Tools: **`asgrep_codemode`** (primary — JS Code Mode on an **in-process NAPI** `CodeModeSession`), plus `asgrep_search`, `asgrep_index`, and `asgrep_status` for simple one-shot calls. All share one warm in-process Searcher per project root — no CLI spawn on the hot path (MCP-class native feel).
 - Commands: `/asgrep-doctor`, `/asgrep-status`, `/asgrep-index`, and `/asgrep-reindex`. These commands accept no arguments.
-- Skill: `ast-sgrep`, which tells Pi when to use intent, structural, definition, caller, chain, or semantic search and when exact-text search is better.
+- Skill: `ast-sgrep`, which prefers Code Mode for multi-step/parallel retrieval and teaches when exact-text search is better.
 
-Start in the project you want Pi to search. A first `asgrep_search` checks index health and lazily creates the index when it is missing, so an explicit setup command is optional. To build it before searching, run `/asgrep-index`.
+Start in the project you want Pi to search. A first search (Code Mode or direct) checks index health and lazily creates the index when it is missing, so an explicit setup command is optional. To build it before searching, run `/asgrep-index`.
 
-### Search examples
+### Code Mode (preferred)
 
-Ask Pi to use `asgrep_search`, or call the tool with arguments like these:
+Ask Pi to use `asgrep_codemode`, or call it with a JavaScript program:
+
+```json
+{
+  "code": "async () => {\n  const seed = await asgrep.search({ query: 'where are credentials renewed?', limit: 5 });\n  const symbol = seed.hits?.[0]?.symbol;\n  if (!symbol) return seed;\n  const [defs, callers] = await Promise.all([\n    asgrep.defs({ symbol, limit: 5 }),\n    asgrep.callers({ symbol, limit: 8 }),\n  ]);\n  return { symbol, defs: defs.hits, callers: callers.hits };\n}"
+}
+```
+
+The executor runs that code with typed `asgrep.*` methods (native CLI under the hood). Use `Promise.all` for independent lookups; filter and shape results in JS; return only what the model needs. See [codemode.md](codemode.md). Code Mode is independent of MCP.
+
+### Direct search examples
+
+For a single lookup, `asgrep_search` still works:
 
 ```json
 {"query":"auth_refresh","mode":"defs","limit":8}

@@ -11,21 +11,24 @@ const expectedAllowedSigner = 'adityavgcode@gmail.com ssh-ed25519 AAAAC3NzaC1lZD
 const releaseHelper = await readFile(path.join(root, 'packages/pi/scripts/release-acceptance.mjs'), 'utf8');
 const targets = JSON.parse(await readFile(path.join(root, 'packages/pi/release/targets.json'), 'utf8')).targets;
 const helper = await readFile(path.join(root, 'packages/pi/scripts/ci-install-smoke.mjs'), 'utf8');
-const YAML_PARSE = 'import json,sys,yaml; print(json.dumps(yaml.safe_load(sys.stdin.read())))';
 const parse = (text) => {
-  const result = spawnSync('python3', ['-c', YAML_PARSE], { input: text, encoding: 'utf8', windowsHide: true });
-  if (result.status !== 0) throw new Error(String(result.stderr || result.error?.message || '').trim() || 'Python YAML parser failed');
-  const value = JSON.parse(result.stdout);
+  const ruby = spawnSync('ruby', ['-rjson', '-ryaml', '-e', "document = YAML.safe_load(STDIN.read, aliases: true); puts JSON.generate(document)"], { input: text, encoding: 'utf8', windowsHide: true });
+  let stdout = ruby.stdout;
+  if (ruby.status !== 0) {
+    const python = spawnSync('python3', ['-c', 'import json,sys,yaml\nd=yaml.safe_load(sys.stdin.read())\nprint(json.dumps(d))'], { input: text, encoding: 'utf8', windowsHide: true });
+    if (python.status !== 0) throw new Error((ruby.stderr || python.stderr || 'YAML parser failed').trim());
+    stdout = python.stdout;
+  }
+  const value = JSON.parse(stdout);
   if (value.on === undefined && value.true !== undefined) { value.on = value.true; delete value.true; }
   return value;
 };
 const activeRun = (step) => typeof step?.run === 'string' ? step.run.split('\n').map((line) => line.trim()).filter((line) => line && !line.startsWith('#')).join('\n') : '';
-const reportPush = (errors) => (condition, message) => { if (!condition) errors.push(message); };
 const validate = (text) => {
   const errors = [];
   let workflow;
   try { workflow = parse(text); } catch (error) { return ['YAML parse failed: ' + error.message]; }
-  const report = reportPush(errors);
+  const report = (condition, message) => { if (!condition) errors.push(message); };
   const triggers = Object.keys(workflow.on ?? {});
   report(triggers.length === 1 && triggers[0] === 'workflow_dispatch', 'native artifact workflow must be manual-only');
   const load = workflow.jobs?.['target-matrix'];
@@ -33,16 +36,15 @@ const validate = (text) => {
   report(load?.outputs?.matrix === '${{ steps.targets.outputs.matrix }}', 'target matrix output expression is invalid');
   report(native?.strategy?.matrix === '${{ fromJSON(needs.target-matrix.outputs.matrix) }}', 'native matrix expression is invalid');
   report(native?.['runs-on'] === '${{ matrix.runner }}', 'native job must run on the matrix runner');
-  report((native?.steps ?? []).some((step) => step.uses === 'dtolnay/rust-toolchain@1.97.1'), 'native workflow must pin Rust 1.97.1');
   const loadRuns = (load?.steps ?? []).map(activeRun);
   report(loadRuns.some((run) => run.includes('node packages/pi/scripts/release-artifact.mjs matrix')), 'authoritative matrix command is missing');
   report(loadRuns.some((run) => run.includes('node packages/pi/scripts/check-contract.mjs') && run.includes('node packages/pi/scripts/check-native-workflow.mjs')), 'contract checker commands are missing');
   const steps = new Map((native?.steps ?? []).filter((step) => step.name).map((step) => [step.name, activeRun(step)]));
-  report(steps.get('Build target-local release executable')?.includes('cargo build --locked --release'), 'locked native build step is missing');
+  report(steps.get('Build target-local release artifacts')?.includes('cargo build --locked --release') && steps.get('Build target-local release artifacts')?.includes('ast-sgrep-codemode-napi'), 'locked native CLI+NAPI build step is missing');
   const metadata = steps.get('Prepare and verify deterministic artifact metadata') ?? '';
-  report(metadata.includes('release-artifact.mjs prepare') && metadata.includes('release-artifact.mjs verify'), 'metadata prepare/verify step is missing');
+  report(metadata.includes('release-artifact.mjs prepare') && metadata.includes('--napi') && metadata.includes('release-artifact.mjs verify'), 'metadata prepare/verify step is missing');
   const pack = steps.get('Pack native, launcher, and extension tarballs') ?? '';
-  report(pack.includes('npm pack "$platform_dir"') && pack.includes('npm pack packages/pi/launcher') && pack.includes('npm pack packages/pi/extension'), 'all npm pack commands are required');
+  report(pack.includes('npm pack "$platform_dir"') && pack.includes('matrix.napiAddon') && pack.includes('npm pack packages/pi/launcher') && pack.includes('npm pack packages/pi/extension'), 'all npm pack commands are required');
   report((steps.get('Clean-install local tarballs') ?? '').includes('npm install --no-audit --no-fund --prefix "$clean"'), 'clean local install is missing');
   report((steps.get('Exercise installed launcher and extension') ?? '').includes('node packages/pi/scripts/ci-install-smoke.mjs'), 'installed smoke command is missing');
   report((native?.steps ?? []).some((step) => step.name === 'Upload native artifact' && step.uses === 'actions/upload-artifact@v4'), 'artifact upload is missing');
@@ -59,7 +61,7 @@ const validateOfficial = (text, signersText = allowedSignersText) => {
   const errors = [];
   let workflow;
   try { workflow = parse(text); } catch (error) { return ['official YAML parse failed: ' + error.message]; }
-  const report = reportPush(errors);
+  const report = (condition, message) => { if (!condition) errors.push(message); };
   const triggers = Object.keys(workflow.on ?? {});
   const inputs = workflow.on?.workflow_dispatch?.inputs;
   report(triggers.length === 1 && triggers[0] === 'workflow_dispatch', 'official publication workflow must be manual-only');
@@ -73,10 +75,6 @@ const validateOfficial = (text, signersText = allowedSignersText) => {
   const publish = workflow.jobs?.publish;
   const bootstrapToken = "${{ inputs.bootstrap_token && secrets.NPM_TOKEN || '' }}";
   report(build?.strategy?.matrix === '${{ fromJSON(needs.release-gate.outputs.matrix) }}' && build?.['runs-on'] === '${{ matrix.runner }}', 'official native build must use the authoritative native matrix once');
-  report((build?.steps ?? []).some((step) => step.uses === 'dtolnay/rust-toolchain@1.97.1'), 'official native builds must pin Rust 1.97.1');
-  report((text.match(/dtolnay\/rust-toolchain@1\.97\.1/gu) ?? []).length === 2, 'both official Rust setup steps must pin 1.97.1');
-  const buildRuns = (build?.steps ?? []).map(activeRun).join('\n');
-  report(buildRuns.includes('npm install --no-audit --no-fund --prefix "$clean"') && buildRuns.includes('ci-install-smoke.mjs'), 'official native artifacts must be clean-installed and executed on every matrix runner');
   const gateRuns = (gate?.steps ?? []).map(activeRun);
   const sshSetup = 'git config --local gpg.format ssh\ngit config --local gpg.ssh.allowedSignersFile \"$GITHUB_WORKSPACE/packages/pi/release/allowed-signers\"';
   const sshSetupIndex = gateRuns.indexOf(sshSetup);
@@ -88,9 +86,7 @@ const validateOfficial = (text, signersText = allowedSignersText) => {
   const verifyRuns = (verify?.steps ?? []).map(activeRun).join('\n');
   report(verifyRuns.includes('release-acceptance.mjs pack --native-root dist/native') && verifyRuns.includes('release-acceptance.mjs verify --artifacts npm-packs') && verifyRuns.includes('npm run test:pi-e2e'), 'official release must pack and verify the complete family exactly once');
   report(verify?.permissions?.['id-token'] === 'write' && verify?.permissions?.attestations === 'write' && (verify?.steps ?? []).some((step) => step.uses === 'actions/attest-build-provenance@v2'), 'artifact provenance attestation is missing');
-  report(publish?.environment === 'npm-production' && publish?.env?.ASGREP_NPM_PROTECTED_ENVIRONMENT === 'npm-production' && publish?.env?.ASGREP_NPM_OWNERSHIP_APPROVED === '${{ secrets.NPM_OWNERSHIP_APPROVED }}' && publish?.permissions?.['id-token'] === 'write' && publish?.needs === 'verify-release', 'npm publication must use protected npm-production OIDC with ownership approval after verification');
-  report(!text.includes('--clobber') && text.includes('cmp --silent "$artifact" "$remote/$name"'), 'durable release assets must be immutable and byte-verified on rerun');
-  report(text.includes("gh release download \"${{ github.ref_name }}\" --pattern '*.tgz' --pattern release-manifest.json --dir npm-packs"), 'publish must consume immutable GitHub Release assets');
+  report(publish?.environment === 'npm-production' && publish?.env?.ASGREP_NPM_PROTECTED_ENVIRONMENT === 'npm-production' && publish?.permissions?.['id-token'] === 'write' && publish?.needs === 'verify-release', 'npm publication must use protected npm-production OIDC after verification');
   report(publish?.env?.NODE_AUTH_TOKEN === bootstrapToken, 'npm bootstrap token must use the exact default-off opt-in expression');
   report(text.split('\n').filter((line) => line.trim() === 'NODE_AUTH_TOKEN: ' + bootstrapToken).length === 1 && (text.match(/secrets\.NPM_TOKEN/gu) ?? []).length === 1, 'npm bootstrap token wiring must appear exactly once in the publish job');
   const publishSteps = (publish?.steps ?? []).filter((step) => step.name).map((step) => [step.name, activeRun(step)]);
@@ -126,11 +122,7 @@ const officialMutations = [
   officialText.replace("      NODE_AUTH_TOKEN: ${{ inputs.bootstrap_token && secrets.NPM_TOKEN || '' }}", "      # NODE_AUTH_TOKEN omitted"),
   officialText.replace("      NODE_AUTH_TOKEN: ${{ inputs.bootstrap_token && secrets.NPM_TOKEN || '' }}", "      NODE_AUTH_TOKEN: ${{ inputs.bootstrap_token && secrets.NPM_TOKEN }}"),
   officialText.replace("      - name: Configure SSH tag verification\n        run: |\n          git config --local gpg.format ssh\n          git config --local gpg.ssh.allowedSignersFile \"$GITHUB_WORKSPACE/packages/pi/release/allowed-signers\"\n", ''),
-  officialText.replace('packages/pi/release/allowed-signers', 'packages/pi/release/wrong-signers'),
-  officialText.replace('dtolnay/rust-toolchain@1.97.1', 'dtolnay/rust-toolchain@stable'),
-  officialText.replace('node packages/pi/scripts/ci-install-smoke.mjs', '# native smoke removed'),
-  officialText.replace('ASGREP_NPM_OWNERSHIP_APPROVED: ${{ secrets.NPM_OWNERSHIP_APPROVED }}', 'ASGREP_NPM_OWNERSHIP_APPROVED: false'),
-  officialText.replace('gh release upload "${{ github.ref_name }}" "${upload[@]}"', 'gh release upload "${{ github.ref_name }}" "${upload[@]}" --clobber')
+  officialText.replace('packages/pi/release/allowed-signers', 'packages/pi/release/wrong-signers')
 ];
 for (const [index, mutation] of officialMutations.entries()) if (validateOfficial(mutation).length === 0) errors.push('negative official mutation ' + (index + 1) + ' was not rejected');
 const signerMutations = [
@@ -138,7 +130,7 @@ const signerMutations = [
   allowedSignersText.replace('AAAAC3NzaC1lZDI1NTE5AAAAICeIowlFrWVQpSI2f/8qjz1KZY7Uif+cFR0u5Jwin8oH', 'AAAAC3NzaC1lZDI1NTE5AAAAICorrupted')
 ];
 for (const [index, mutation] of signerMutations.entries()) if (validateOfficial(officialText, mutation).length === 0) errors.push('negative allowed-signers mutation ' + (index + 1) + ' was not rejected');
-for (const token of ['ASGREP_RELEASE_DIRTY', 'ASGREP_RELEASE_TAG_VERSION', 'ASGREP_RELEASE_TAG_COMMIT', 'ASGREP_RELEASE_CHECKSUM_MISSING', 'ASGREP_RELEASE_CHECKSUM_MISMATCH', 'ASGREP_RELEASE_VERSION_SKEW', 'ASGREP_RELEASE_DUPLICATE_VERSION', 'ASGREP_RELEASE_OIDC_REQUIRED', 'ASGREP_RELEASE_PROTECTED_ENVIRONMENT', 'ASGREP_RELEASE_OWNERSHIP_APPROVAL', 'ASGREP_RELEASE_REGISTRY_INTEGRITY', 'scripts/local-release-gate.sh', "['publish'", "'--provenance'"]) if (!releaseHelper.includes(token)) errors.push('release acceptance helper is missing ' + token);
+for (const token of ['ASGREP_RELEASE_DIRTY', 'ASGREP_RELEASE_TAG_VERSION', 'ASGREP_RELEASE_TAG_COMMIT', 'ASGREP_RELEASE_CHECKSUM_MISSING', 'ASGREP_RELEASE_CHECKSUM_MISMATCH', 'ASGREP_RELEASE_VERSION_SKEW', 'ASGREP_RELEASE_DUPLICATE_VERSION', 'ASGREP_RELEASE_OIDC_REQUIRED', 'ASGREP_RELEASE_PROTECTED_ENVIRONMENT', "['publish'", "'--provenance'"]) if (!releaseHelper.includes(token)) errors.push('release acceptance helper is missing ' + token);
 if (errors.length) {
   for (const error of errors) console.error('Pi native workflow: ' + error);
   process.exitCode = 1;

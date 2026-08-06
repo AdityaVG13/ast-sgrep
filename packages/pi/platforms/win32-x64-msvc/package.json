@@ -19,6 +19,7 @@
   },
   "files": [
     "asgrep.exe",
+    "ast-sgrep-codemode.node",
     "checksum.sha256",
     "LICENSE"
   ]

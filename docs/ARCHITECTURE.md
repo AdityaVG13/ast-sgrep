@@ -20,7 +20,8 @@ source tree
 | `ast-sgrep-core` | Index orchestration, SQLite storage, query parsing, retrieval passes, ranking, semantic chunks/ANN, and result models |
 | `ast-sgrep-lang` | Language-aware parsing and extraction of symbols, calls, imports, and pattern nodes |
 | `ast-sgrep-embed` | Embedding providers and the always-available offline semantic backend |
-| `ast-sgrep-mcp` | stdio MCP server exposing search to agents |
+| `ast-sgrep-mcp` | stdio MCP server (transport only; never linked to Code Mode) |
+| `ast-sgrep-codemode` | Code Mode catalog/session/plan + host adapters (sibling to MCP; Pi JS sandbox is the agent executor) |
 | `ast-sgrep-lsp` | Language Server Protocol navigation surfaces |
 | `ast-sgrep-plugins` | Platform/output integrations |
 | `ast-sgrep-testkit` | Shared fixtures and helpers for integration tests |
@@ -41,7 +42,7 @@ The default index is `<root>/.asgrep/index.db`. File updates are incremental and
 | `semantic_chunks` and embeddings | Symbol-level semantic documents and their vectors |
 | `embed_cache` | Reusable embedding results, avoiding recomputation for unchanged content |
 
-Large semantic indexes may also persist `.asgrep/semantic.ivf`, an IVF approximate-nearest-neighbor sidecar. The IVF file accelerates vector candidate selection; SQLite remains the source of indexed symbol/chunk metadata. A Tantivy lexical sidecar is optional for larger repositories. Sidecars are derived data and are tied to the index configuration, not independent sources of truth. See [index-consistency.md](index-consistency.md) for the snapshot/generation model, hybrid cache keys under concurrent reindex, and multi-connection durability guarantees.
+Large semantic indexes may also persist `.asgrep/semantic.ivf`, an IVF approximate-nearest-neighbor sidecar. The IVF file accelerates vector candidate selection; SQLite remains the source of indexed symbol/chunk metadata. A Tantivy lexical sidecar is optional for larger repositories. Sidecars are derived data and are tied to the index configuration, not independent sources of truth.
 
 ### Indexing flow
 
@@ -83,8 +84,9 @@ Two self-describing CLI surfaces let an agent discover the live contract instead
 
 - `capabilities --json` emits machine-readable commands, flags, output formats, and exit-code meanings for the current binary.
 - `robot-docs guide` prints the operational guide intended for tool-using agents.
-- Read-side commands accept `--json`; `--format agent`, `--format agent-capsule`, and `--format compact` provide agent-oriented result shapes. Compact mode uses deduplicated paths, short stable IDs, minified JSON, and hard snippet budgets.
-- `ast-sgrep-mcp` exposes search over MCP, while `ast-sgrep-lsp` maps indexed navigation to editor protocol operations.
+- Read-side commands accept `--json`; `--format agent` and `--format agent-capsule` provide agent-oriented result shapes.
+- `ast-sgrep-mcp` exposes search over MCP (transport). `ast-sgrep-lsp` maps indexed navigation to editor protocol operations.
+- Code Mode is a separate execution model: Pi's `asgrep_codemode` JS sandbox (and the `ast-sgrep-codemode` Rust catalog/session) let the model write code that orchestrates parallel search. MCP and Code Mode must not depend on each other. See [codemode.md](codemode.md).
 
 Protocol consumers should discover capabilities first, treat stdout JSON as data, and interpret documented exit codes rather than scraping human-readable lines.
 

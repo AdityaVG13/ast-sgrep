@@ -1,0 +1,22 @@
+{
+  "name": "ast-sgrep-codemode-napi",
+  "version": "1.3.2",
+  "private": true,
+  "description": "Build helper for the in-process Code Mode Node addon",
+  "napi": {
+    "binaryName": "ast-sgrep-codemode",
+    "targets": [
+      "x86_64-unknown-linux-gnu",
+      "aarch64-unknown-linux-gnu",
+      "x86_64-apple-darwin",
+      "aarch64-apple-darwin",
+      "x86_64-pc-windows-msvc"
+    ]
+  },
+  "scripts": {
+    "build": "napi build --platform --release -p ast-sgrep-codemode-napi --cargo-cwd ../.. --dts index.d.ts"
+  },
+  "devDependencies": {
+    "@napi-rs/cli": "^3.0.0"
+  }
+}

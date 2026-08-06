@@ -17,18 +17,11 @@ Canonical entry points for humans and agents. Prefer this list over scavenging t
 |-----|----------|
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Crates, index schema, search pipeline, fusion, agent surfaces |
 | [how-it-works.md](how-it-works.md) | Pipeline narrative and incremental indexing |
-| [index-consistency.md](index-consistency.md) | Snapshot consistency, IVF fingerprint, hybrid multi-connection guarantees |
 | [QUERY_GRAMMAR.md](QUERY_GRAMMAR.md) | Prefixes, composition, routing contract |
-| [structural-patterns.md](structural-patterns.md) | Native pattern subset, metavariables, unsupported syntax |
 | [semantic-search.md](semantic-search.md) | Symbol chunks, provider chain, IVF-ANN, tuning |
-| [cascade-query-planner.md](cascade-query-planner.md) | Literal/trigram, AST, and semantic stage-survivor contract |
-| [fusion-ranking.md](fusion-ranking.md) | Weighted RRF, learned weights, and sensitivity analysis |
-| [signal-provenance.md](signal-provenance.md) | Exact, structural, semantic tiers and margin semantics |
 | [mcp.md](mcp.md) | `asgrep-mcp` setup for agents |
-| [env-trust.md](env-trust.md) | Env allowlists, boolish flags, ast-grep / binary overrides |
-| [panic-poison.md](panic-poison.md) | Cache poison and panic fail-closed matrix |
+| [codemode.md](codemode.md) | Code Mode: JS sandbox execution (Pi primary); Rust catalog/session; MCP is a separate sibling |
 | [use-cases.md](use-cases.md) | Agents, LSP, JSON formats, CI patterns |
-| [../SECURITY.md](../SECURITY.md) | Forbid-soundness, audit ≠ soundness, reporting |
 
 ## Quality and operations
 
@@ -53,6 +46,7 @@ ast-sgrep-embed  → embedding providers (+ optional neural/rerank)
 ast-sgrep-cli    → asgrep / ast-sgrep binaries
 ast-sgrep-lsp    → language server
 ast-sgrep-mcp    → MCP stdio server
+ast-sgrep-codemode → Code Mode / PTC tools + plan runner
 ast-sgrep-plugins→ JSON/output formats
 ast-sgrep-testkit→ shared fixtures for tests
 ```
