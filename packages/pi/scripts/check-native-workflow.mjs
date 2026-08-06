@@ -45,7 +45,12 @@ const validate = (text) => {
   report(metadata.includes('release-artifact.mjs prepare') && metadata.includes('--napi') && metadata.includes('release-artifact.mjs verify'), 'metadata prepare/verify step is missing');
   const pack = steps.get('Pack native, launcher, and extension tarballs') ?? '';
   report(pack.includes('npm pack "$platform_dir"') && pack.includes('matrix.napiAddon') && pack.includes('npm pack packages/pi/launcher') && pack.includes('npm pack packages/pi/extension'), 'all npm pack commands are required');
-  report((steps.get('Clean-install local tarballs') ?? '').includes('npm install --no-audit --no-fund --prefix "$clean"'), 'clean local install is missing');
+  const cleanInstall = steps.get('Clean-install local tarballs') ?? '';
+  report(
+    cleanInstall.includes('npm install --no-audit --no-fund --prefix "$clean"') ||
+      cleanInstall.includes('npm install --force --no-audit --no-fund --prefix "$clean"'),
+    'clean local install is missing'
+  );
   report((steps.get('Exercise installed launcher and extension') ?? '').includes('node packages/pi/scripts/ci-install-smoke.mjs'), 'installed smoke command is missing');
   report((native?.steps ?? []).some((step) => step.name === 'Upload native artifact' && step.uses === 'actions/upload-artifact@v4'), 'artifact upload is missing');
   const acceptance = workflow.jobs?.['release-acceptance'];
