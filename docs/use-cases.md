@@ -25,11 +25,12 @@ asgrep semantic "credential renewal" --json
   "query": "credential renewal",
   "hit_count": 3,
   "has_semantic_hits": true,
-  "stack_hint": "Use ast-sgrep for intent/navigation; ast-grep for patterns; ripgrep for grep.",
+  "stack_hint": "Use asgrep for hybrid search; defs:/callers:/literal: prefixes for graph and exact text; asgrep semantic for embedding-only.",
   "suggested_next": [
     "asgrep semantic \"credential renewal\"",
-    "defs:auth_refresh",
-    "callers:auth_refresh"
+    "asgrep \"defs:auth_refresh\"",
+    "asgrep \"callers:auth_refresh\"",
+    "asgrep --json --format agent \"credential renewal\""
   ],
   "hits": [{
     "kind": "embed",
@@ -52,9 +53,9 @@ Each hit includes `follow_up_queries` so agents can drill into defs/callers with
 
 1. `asgrep index .`, build persistent index (once per repo revision)
 2. `asgrep --json --format agent "<user intent>"`, ranked hits with follow-ups
-3. For each symbol: `defs:` and `callers:` queries
-4. Structural rewrites: `pattern:` → ast-grep
-5. Logs / unindexed files: ripgrep
+3. For each symbol: `asgrep "defs:…"` and `asgrep "callers:…"`
+4. Structural shapes: `asgrep "pattern:…"` (native tree-sitter)
+5. Logs / unindexed files: ripgrep (outside asgrep)
 
 ### Tool stack for LLM pipelines
 
@@ -63,7 +64,7 @@ Each hit includes `follow_up_queries` so agents can drill into defs/callers with
 | Natural language / synonyms | **asgrep** | `asgrep semantic "persist access token"` |
 | Symbol definitions | **asgrep** | `asgrep "defs:process_request"` |
 | Caller graph | **asgrep** | `asgrep "callers:main"` |
-| Structural patterns | **ast-grep** | `asgrep "pattern:fn $NAME($$$)"` |
+| Structural patterns | **asgrep** | `asgrep "pattern:fn $NAME($$$)"` |
 | Raw text / logs | **ripgrep** | `rg "ERROR" logs/` |
 
 ### No API key required

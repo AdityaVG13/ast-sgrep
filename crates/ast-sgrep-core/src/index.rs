@@ -11,6 +11,17 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 use walkdir::WalkDir;
+/// Indexed relative paths must be valid UTF-8. Lossy conversion is forbidden:
+/// two distinct non-UTF8 `OsStr` paths must not collide into one DB key.
+pub fn indexed_rel_path(rel: &Path) -> Result<String> {
+    let raw = rel.to_str().ok_or_else(|| {
+        crate::StoreError::Other(format!(
+            "non-UTF8 path rejected (asgrep-kqhp): {}",
+            rel.display()
+        ))
+    })?;
+    Ok(raw.replace('\\', "/"))
+}
 #[derive(Debug, Clone)]
 pub struct SplitLines {
     pub lines: Vec<(u32, String)>,
@@ -72,7 +83,9 @@ impl EmbedBackend {
             Self::Cloud => "cloud",
             Self::Ollama => "ollama",
             Self::Neural => "neural",
-            Self::Semantic => "semantic",
+            // "semantic" is the legacy v1 marker (needs_semantic_v1_rewrite);
+            // the versioned v2 identity is what gets stored and compared.
+            Self::Semantic => "semantic-v2",
         }
     }
     pub fn parse(s: &str) -> Self {
@@ -80,7 +93,7 @@ impl EmbedBackend {
             "cloud" => Self::Cloud,
             "ollama" => Self::Ollama,
             "neural" | "fastembed" => Self::Neural,
-            "semantic" | "local" => Self::Semantic,
+            "semantic" | "semantic-v2" | "local" => Self::Semantic,
             _ => Self::Auto,
         }
     }
@@ -187,6 +200,10 @@ impl Indexer {
         let force = self.options.force_reindex;
         let lang_filter = self.options.lang_filter.clone();
         let embed_semantic = self.options.embed_semantic;
+        // 28vo: the hash-only fast path must not skip when the stored semantic
+        // identity (backend/model) differs from the active preference.
+        let semantic_identity_ok =
+            !embed_semantic || self.semantic_identity_matches()?;
         let current_hashes = candidates
             .iter()
             .map(|(_, rel)| self.store.file_hash(rel))
@@ -202,6 +219,7 @@ impl Indexer {
                     current_hash.as_deref(),
                     lang_filter.as_deref(),
                     embed_semantic,
+                    semantic_identity_ok,
                 )
             })
             .collect();
@@ -266,6 +284,17 @@ impl Indexer {
             }
         }
         self.rebuild_dirty_sidecars(&stats, semantic_ivf_dirty)?;
+        // e2hc.13: a full index_all rewrites every reachable file, so a legacy
+        // v1 store may now promote to v2 (persist_embed_metadata keeps v1
+        // during partial updates to protect unrewritten siblings).
+        if self.options.embed_semantic && self.store.needs_semantic_v1_rewrite()? {
+            self.store.set_meta("embed_backend", "semantic-v2")?;
+            if self.options.embed_backend == EmbedBackend::Auto {
+                self.store.set_meta("embed_backend_pref", "auto")?;
+            } else {
+                self.store.delete_meta("embed_backend_pref")?;
+            }
+        }
         Ok(stats)
     }
     /// Walk the project once using the Indexer's IgnoreMatcher for both directory
@@ -299,7 +328,11 @@ impl Indexer {
                     let Ok(rel) = path.strip_prefix(root) else {
                         continue;
                     };
-                    let rel_str = rel.to_string_lossy().replace('\\', "/");
+                    // kqhp: non-UTF8 rel paths are rejected, never lossy-collapsed.
+                    let Ok(rel_str) = indexed_rel_path(rel) else {
+                        stats.files_skipped += 1;
+                        continue;
+                    };
                     if (respect_gitignore && ignore.is_ignored(rel)) || should_skip_file(&path) {
                         stats.files_skipped += 1;
                         continue;
@@ -400,7 +433,7 @@ impl Indexer {
             if rel.as_os_str().is_empty() || abs.is_dir() {
                 continue;
             }
-            let rel_str = rel.to_string_lossy().replace('\\', "/");
+            let rel_str = indexed_rel_path(rel)?;
             if rel
                 .components()
                 .any(|c| should_skip_dir(Path::new(c.as_os_str())))
@@ -565,27 +598,53 @@ impl Indexer {
         if self.store.file_hash(rel_path)?.is_none_or(|h| h != hash) {
             return Ok(false);
         }
-        if self.options.embed_semantic {
-            let stored = self.store.get_meta("embed_backend")?;
-            let active = self.options.embed_backend.to_preference_str();
-            if stored.as_deref() != Some(active)
-                && stored.as_deref() != Some("auto")
-                && active != "auto"
-            {
-                return Ok(false);
-            }
-            let dim = self
-                .store
-                .get_meta("embed_dim")?
-                .and_then(|value| value.parse::<usize>().ok())
-                .unwrap_or_else(ast_sgrep_embed::default_semantic_dim);
-            let current_model = stored
-                .as_deref()
-                .and_then(ast_sgrep_embed::EmbedBackendKind::parse)
-                .and_then(|backend| ast_sgrep_embed::configured_backend_model_id(backend, dim));
-            if self.store.get_meta("embed_model")? != current_model {
-                return Ok(false);
-            }
+        if self.options.embed_semantic && !self.semantic_identity_matches()? {
+            return Ok(false);
+        }
+        Ok(true)
+    }
+    /// Full semantic identity check (28vo/e2hc.13): the stored embed backend
+    /// must equal the active preference exactly, no legacy v1 rewrite pending,
+    /// and the configured model must match what was recorded at index time.
+    fn semantic_identity_matches(&self) -> Result<bool> {
+        // Legacy unversioned semantic-v1 (e2hc.13): force rewrite even under
+        // Auto. Without this, Auto skips the backend mismatch check and a
+        // single-file update can flip meta to semantic-v2 while sibling
+        // chunks remain v1.
+        if self.store.needs_semantic_v1_rewrite()? {
+            return Ok(false);
+        }
+        // Exact backend identity only (ast-sgrep-28vo): Auto is not a
+        // wildcard for concrete stored backends, and stored "auto" does not
+        // match a concrete active preference. Builds made under Auto record
+        // "embed_backend_pref=auto", so an Auto reopen over an Auto build
+        // stays a no-op (parity) while an Auto reopen over an explicit build
+        // reindexes.
+        let stored = self.store.get_meta("embed_backend")?;
+        let active = self.options.embed_backend.to_preference_str();
+        let stored_pref = self.store.get_meta("embed_backend_pref")?;
+        // Auto reopen: no-op only over an Auto build (parity idempotency);
+        // over an explicit build it reindexes (ast-sgrep-28vo). Explicit
+        // reopen: exact resolved-kind match (semantic-v2 round-trips).
+        let identity_ok = if active == "auto" {
+            stored_pref.as_deref() == Some("auto")
+        } else {
+            stored.as_deref() == Some(active)
+        };
+        if !identity_ok {
+            return Ok(false);
+        }
+        let dim = self
+            .store
+            .get_meta("embed_dim")?
+            .and_then(|value| value.parse::<usize>().ok())
+            .unwrap_or_else(ast_sgrep_embed::default_semantic_dim);
+        let current_model = stored
+            .as_deref()
+            .and_then(ast_sgrep_embed::EmbedBackendKind::parse)
+            .and_then(|backend| ast_sgrep_embed::configured_backend_model_id(backend, dim));
+        if self.store.get_meta("embed_model")? != current_model {
+            return Ok(false);
         }
         Ok(true)
     }
@@ -755,6 +814,7 @@ fn prepare_file(
     current_hash: Option<&str>,
     lang_filter: Option<&str>,
     embed_semantic: bool,
+    semantic_identity_ok: bool,
 ) -> PrepareOutcome {
     let metadata = match fs::metadata(abs) {
         Ok(m) => m,
@@ -774,7 +834,7 @@ fn prepare_file(
             return PrepareOutcome::Filtered;
         }
     }
-    if !force && current_hash == Some(hash.as_str()) {
+    if !force && current_hash == Some(hash.as_str()) && semantic_identity_ok {
         return PrepareOutcome::Unchanged;
     }
     let (symbols, callers, imports, pattern_nodes) = match language {

@@ -51,7 +51,9 @@ pub use fusion::{
     analyze_weight_sensitivity, learn_fusion_weights, ChannelRanks, FusionCandidate, FusionChannel,
     FusionExample, LearnedFusionModel, WeightSensitivity,
 };
-pub use index::{EmbedBackend, FileIndexStats, IndexOptions, IndexStats, Indexer};
+pub use index::{
+    indexed_rel_path, EmbedBackend, FileIndexStats, IndexOptions, IndexStats, Indexer,
+};
 pub use io_bounds::{read_text_capped, MAX_INDEX_FILE_BYTES};
 pub use limits::{
     clamp_agent_limit, clamp_output_limit, DEFAULT_AGENT_LIMIT, MAX_EXCERPT_LINES,

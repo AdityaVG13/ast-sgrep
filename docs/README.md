@@ -17,7 +17,7 @@ Canonical entry points for humans and agents. Prefer this list over scavenging t
 |-----|----------|
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Crates, index schema, search pipeline, fusion, agent surfaces |
 | [how-it-works.md](how-it-works.md) | Pipeline narrative and incremental indexing |
-| [QUERY_GRAMMAR.md](QUERY_GRAMMAR.md) | Prefixes, composition, routing contract |
+| [QUERY_GRAMMAR.md](QUERY_GRAMMAR.md) | Mode prefixes and routing (no composable AND) |
 | [semantic-search.md](semantic-search.md) | Symbol chunks, provider chain, IVF-ANN, tuning |
 | [mcp.md](mcp.md) | `asgrep-mcp` setup for agents |
 | [codemode.md](codemode.md) | Code Mode: JS sandbox execution (Pi primary); Rust catalog/session; MCP is a separate sibling |
@@ -27,15 +27,15 @@ Canonical entry points for humans and agents. Prefer this list over scavenging t
 
 | Doc | Contents |
 |-----|----------|
-| [benchmarks.md](benchmarks.md) | Methodology, reproduction, quality numbers, known losses |
-| [PERF_INVENTORY.md](PERF_INVENTORY.md) | Performance surface inventory |
+| [benchmarks.md](benchmarks.md) | Methodology reading order + local smoke |
+| [PERF_INVENTORY.md](PERF_INVENTORY.md) | Hot-path cost notes + measurement caveats |
 | [RELEASING.md](RELEASING.md) | Release checklist |
 | [../CONTRIBUTING.md](../CONTRIBUTING.md) | Local verification bar and PR hygiene |
-| [../benchmarks/README.md](../benchmarks/README.md) | Benchmark docs index |
-| [../benchmarks/results/head-to-head.md](../benchmarks/results/head-to-head.md) | Canonical cross-tool table |
-| [../benchmarks/results/losses.md](../benchmarks/results/losses.md) | Published regressions |
-| [../benchmarks/results/speed.md](../benchmarks/results/speed.md) | Lexical/structural speed notes |
-| [../benchmarks/results/bakeoff.md](../benchmarks/results/bakeoff.md) | Offline bake-off narrative |
+| [../benchmarks/README.md](../benchmarks/README.md) | Benchmark folder index and error budgets |
+
+Published result tables (`head-to-head`, `speed`, `bakeoff`, `losses`, `baselines`)
+live under [`../benchmarks/results/`](../benchmarks/results/); start from the
+folder README rather than duplicating that index here.
 
 ## Crate map
 

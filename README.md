@@ -132,7 +132,7 @@ These are **checked-in run summaries**, not portable guarantees. Hardware, corpu
 | Known regressions | Published without suppression | [losses.md](benchmarks/results/losses.md) |
 | 2026-08-05 release run (self corpus) | Structural pattern 31× faster on the quality path; literal ≈ ripgrep; cold index 906 ms p95 | [speed.md](benchmarks/results/speed.md) |
 
-Measured 2026-08-05 on the self corpus (1,107 tracked files; `scripts/run-benchmarks.sh`): cold index **906 ms p95** on the baseline path and **2.1 s** with pr21's semantic embedding (budget breach on the grown corpus — the 285 ms budget was set for 110 files; the original 88.5 s pr21 build was fixed by capping child chunks, `0ba34da`), warm literal **16–21 ms** (≈ ripgrep 15–18 ms), structural pattern **29 ms** with the quality batch vs **987 ms** without (ast-grep: 23–26 ms), semantic NL **16 ms** on the quality path. Full provenance in [speed.md](benchmarks/results/speed.md).
+Measured 2026-08-05 on the self corpus (1,107 tracked files; `scripts/run-benchmarks.sh`) on the **integrated release/1.4.0 tree** (all 7 PRs merged + gated, 66/66 workspace suites green): cold index **2.3 s p95** with semantic embedding (budget breach on the grown corpus — the 285 ms budget was set for 110 files; the original 88.5 s pr21 build was fixed by capping child chunks, `0ba34da`), warm literal **19.5 ms** (≈ ripgrep 15.7 ms), structural pattern **33.1 ms** with the quality batch vs **987 ms** without (ast-grep: 24.2 ms), semantic NL **19.6 ms**. Full provenance in [speed.md](benchmarks/results/speed.md).
 
 Canonical table: [head-to-head.md](benchmarks/results/head-to-head.md). Index: [benchmarks/README.md](benchmarks/README.md). Methodology: [docs/benchmarks.md](docs/benchmarks.md).
 

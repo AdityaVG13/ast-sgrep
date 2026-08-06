@@ -221,6 +221,12 @@ impl IndexStore {
             .and_then(|value| value.parse().ok())
             .unwrap_or(0))
     }
+    /// True when the index was built with the legacy `"semantic"` embed backend.
+    /// Search refuses this meta; indexing must rewrite every chunk before
+    /// promoting to `"semantic-v2"` (semantic_v1_rewrite contract).
+    pub fn needs_semantic_v1_rewrite(&self) -> Result<bool> {
+        Ok(self.get_meta("embed_backend")?.as_deref() == Some("semantic"))
+    }
     fn bump_index_data_version(&self) -> Result<()> {
         self.conn.execute(
             "INSERT INTO meta(key, value) VALUES('index_data_version', '1')              ON CONFLICT(key) DO UPDATE SET value =              CAST(COALESCE(meta.value, '0') AS INTEGER) + 1",
@@ -533,6 +539,7 @@ impl IndexStore {
             &symbol_ids,
             input.semantic_chunks,
             emb,
+            input.embed_backend,
         )?;
         self.insert_callers(file_id, input.callers)?;
         self.insert_imports(file_id, input.imports)?;
@@ -619,6 +626,7 @@ impl IndexStore {
         symbol_ids: &[i64],
         chunks: &[crate::semantic_chunk::SemanticChunkInput],
         emb: &[EmbeddedChunk],
+        preference: ast_sgrep_embed::EmbedPreference,
     ) -> Result<()> {
         if emb.is_empty() {
             // A re-upsert of an EXISTING file reaches here AFTER upsert_file_row's
@@ -659,15 +667,30 @@ impl IndexStore {
             ])?;
         }
         let last = emb.last();
-        self.persist_embed_metadata(last.map(|e| e.dim), last.map(|e| e.backend))
+        self.persist_embed_metadata(last.map(|e| e.dim), last.map(|e| e.backend), preference)
     }
     fn persist_embed_metadata(
         &self,
         dim: Option<usize>,
         kind: Option<ast_sgrep_embed::EmbedBackendKind>,
+        preference: ast_sgrep_embed::EmbedPreference,
     ) -> Result<()> {
         if let Some(k) = kind {
-            self.set_meta("embed_backend", k.as_meta_str())?;
+            // embed_backend always stores the RESOLVED kind (search loads
+            // vectors by it). The build-time preference lives separately so
+            // identity checks can distinguish an Auto build (reopen no-ops
+            // under Auto) from an explicit one (28vo exactness) — parity.
+            // e2hc.13: a partial (single-file) update must not promote a
+            // legacy v1 store (meta == "semantic") to v2 while sibling chunks
+            // remain v1 — only a full index_all rewrite may.
+            if self.get_meta("embed_backend")?.as_deref() != Some("semantic") {
+                self.set_meta("embed_backend", k.as_meta_str())?;
+                if preference == ast_sgrep_embed::EmbedPreference::Auto {
+                    self.set_meta("embed_backend_pref", "auto")?;
+                } else {
+                    self.delete_meta("embed_backend_pref")?;
+                }
+            }
             let model = dim.and_then(|dim| ast_sgrep_embed::configured_backend_model_id(k, dim));
             if let Some(model) = model {
                 self.set_meta("embed_model", &model)?;

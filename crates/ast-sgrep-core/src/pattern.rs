@@ -83,18 +83,20 @@ pub fn search_pattern(
             }
         }
     }
-    match search_pattern_native(pattern, root, lang_filter) {
+    // Unparseable patterns are match-none, not errors (pattern_routing):
+    // the native engine rejecting garbage must not fail the whole search.
+    let native_accepted = match search_pattern_native(pattern, root, lang_filter) {
         Ok(native) => {
             for hit in native {
                 if seen.insert((hit.file.clone(), hit.line_start, hit.line_end)) {
                     hits.push(hit);
                 }
             }
+            true
         }
-        Err(e) if hits.is_empty() => return Err(e),
-        Err(_) => {}
-    }
-    if hits.is_empty() && needs_ast_grep_fallback(pattern) {
+        Err(_) => false,
+    };
+    if native_accepted && hits.is_empty() && needs_ast_grep_fallback(pattern) {
         // Fail-closed (iva9.7): exotic shapes never return silent empty when
         // the structural fallback is disabled or unavailable.
         if !external_ast_grep_allowed() || find_ast_grep_binary().is_none() {

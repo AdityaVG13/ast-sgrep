@@ -146,7 +146,9 @@ fn delete_readd_with_changed_content_serves_fresh_semantic_vectors() {
         .unwrap();
     let old = searcher.search("credential legacy obsolete").unwrap();
     assert!(old.hits.iter().any(|hit| {
-        hit.kind == HitKind::Embed && hit.symbol.as_deref() == Some("legacy_handler")
+        (hit.kind == HitKind::Embed
+            || hit.contributors.iter().any(|k| *k == HitKind::Embed))
+            && hit.symbol.as_deref() == Some("legacy_handler")
     }));
 
     searcher.store().remove_file("a.py").unwrap();
@@ -159,7 +161,9 @@ fn delete_readd_with_changed_content_serves_fresh_semantic_vectors() {
 
     let fresh = searcher.search("payment renewal fresh").unwrap();
     assert!(fresh.hits.iter().any(|hit| {
-        hit.kind == HitKind::Embed && hit.symbol.as_deref() == Some("fresh_handler")
+        (hit.kind == HitKind::Embed
+            || hit.contributors.iter().any(|k| *k == HitKind::Embed))
+            && hit.symbol.as_deref() == Some("fresh_handler")
     }));
     assert!(!fresh
         .hits

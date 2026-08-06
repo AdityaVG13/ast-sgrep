@@ -79,7 +79,10 @@ fn cascade_stops_when_a_stage_has_no_survivors() {
     })
     .unwrap();
 
-    let no_lexical_survivors = searcher.search("phrase_absent_from_every_file").unwrap();
+    // Single token, absent from the fixture: underscore phrases split into
+    // terms (e.g. "from") that can match imports, so the lexical stage would
+    // legitimately have survivors under the ht1h.3 fallback.
+    let no_lexical_survivors = searcher.search("zzzabsentphraseyyy").unwrap();
     assert!(no_lexical_survivors.hits.is_empty());
 
     let lexical_only = searcher.search_literal("processed").unwrap();
@@ -88,9 +91,22 @@ fn cascade_stops_when_a_stage_has_no_survivors() {
         "fixture must reach the structural stage"
     );
     let no_structural_survivors = searcher.search("processed").unwrap();
+    // ht1h.3/parity: no structural survivors must fall back to the lexical
+    // survivors (plain-content files stay findable) and the semantic stage
+    // then runs on those lexical files — NL queries surface semantically
+    // related symbols even without structural signals.
     assert!(
-        no_structural_survivors.hits.is_empty(),
-        "semantic stage ran without structural survivors: {:#?}",
+        !no_structural_survivors.hits.is_empty(),
+        "lexical survivors must be returned when the structural stage is empty: {:#?}",
+        no_structural_survivors.hits
+    );
+    let lexical_files: HashSet<_> = lexical_only.hits.iter().map(|h| h.file.clone()).collect();
+    assert!(
+        no_structural_survivors
+            .hits
+            .iter()
+            .all(|hit| lexical_files.contains(&hit.file)),
+        "later stages leaked outside lexical survivors: {:#?}",
         no_structural_survivors.hits
     );
 }

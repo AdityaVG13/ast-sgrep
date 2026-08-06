@@ -114,6 +114,16 @@ fn graph_oracle_defs_callers_imports_chain_parity() {
         );
 
         for q in sym.queries {
+            // Chain expand_one feeds callee strings into symbols_named; case
+            // variants must resolve to the stored definition.
+            let named = store.symbols_named(q, 32).unwrap();
+            assert!(
+                named.iter().any(|s| s.name == sym.stored),
+                "symbols_named({q}) must resolve stored {}; got {:#?}",
+                sym.stored,
+                named.iter().map(|s| &s.name).collect::<Vec<_>>()
+            );
+
             let defs = searcher.search(&format!("defs:{q}")).unwrap();
             let def_hits: Vec<_> = defs
                 .hits

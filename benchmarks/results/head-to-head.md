@@ -20,7 +20,7 @@ This consolidated GATE table reports only measurements already recorded in repos
 | Structural query | 23,000 files | **18.93 ms** query-median p50 | ast-grep 188.77 ms | **9.97x faster; parity clean** | *(historical machine-readable dump; not in-tree)* |
 | Structural query | 100,000 files | **19.34 ms** query-median p50 | ast-grep 1,347.97 ms | **69.68x faster; parity clean** | *(historical machine-readable dump; not in-tree)* |
 | Structural hand-pattern suite | 29 unchanged patterns | **1,520.6 ms** sum of per-pattern p50s | Semgrep 31,875.3 ms | **20.96x faster** | *(historical machine-readable dump; not in-tree)* |
-| Retrieval quality | ripgrep, 14 gold queries | **0.605 MRR** | Semgrep hand-patterns 0.536 MRR | **+0.069 MRR** | [`losses.md`](losses.md) |
+| Retrieval quality | ripgrep, 14 gold queries | **0.605 MRR** (`rg-neural-rerank-d3eab74`; not default hybrid 0.290) | Semgrep hand-patterns 0.536 MRR | **+0.069 MRR** | [`losses.md`](losses.md) / [`baselines.md`](baselines.md) |
 
 The three speed win classes hold in the artifacts:
 
@@ -42,7 +42,7 @@ Retrieval quality is separate because it is a relevance result, not a speed resu
 | structural `ast_grep_over_asgrep` | `9.970108836018053` | `69.68092647277379` |
 | structural `parity_clean` | `true` | `true` |
 
-The Semgrep artifact stores `asgrep_sum_p50_ms = 1520.555`, `semgrep_sum_p50_ms = 31875.276`, `speedup_x = 20.96`, `patterns = 29`, match totals `51 / 19`, and `semgrep_unique_locations = 0`. The retrieval publication records `0.605 / 0.536` in [`losses.md`](losses.md), alongside all 14 reciprocal-rank rows.
+The Semgrep artifact stores `asgrep_sum_p50_ms = 1520.555`, `semgrep_sum_p50_ms = 31875.276`, `speedup_x = 20.96`, `patterns = 29`, match totals `51 / 19`, and `semgrep_unique_locations = 0`. The neural+rerank retrieval publication records `0.605 / 0.536` in [`losses.md`](losses.md) (fingerprint `rg-neural-rerank-d3eab74`); the canonical **default hybrid** ripgrep MRR remains **0.290** in [`baselines.md`](baselines.md).
 
 ## 2026-08-05 measured (self corpus, 1,107 tracked files)
 
@@ -53,10 +53,10 @@ The Semgrep artifact stores `asgrep_sum_p50_ms = 1520.555`, `semgrep_sum_p50_ms 
 
 | Win class | Scale / suite | asgrep | Comparator | Result | Evidence |
 |---|---:|---:|---:|---:|---|
-| Warm lexical query | self corpus, 1,107 files | 17.3 ms p95 (pr21) | ripgrep 16.4 ms p95 | **parity** (1.05×) | [`speed.md`](speed.md) |
-| Structural pattern | self corpus, 1,107 files | 29.4 ms p95 (pr21) | ast-grep 23.2 ms p95 | 0.79× — ast-grep wins on this small corpus | [`speed.md`](speed.md) |
+| Warm lexical query | self corpus, 1,107 files | 19.5 ms p95 (release/1.4.0) | ripgrep 15.7 ms p95 | **parity** (1.24×) | [`speed.md`](speed.md) |
+| Structural pattern | self corpus, 1,107 files | 33.1 ms p95 (release/1.4.0) | ast-grep 24.2 ms p95 | 0.73× — ast-grep wins on this small corpus | [`speed.md`](speed.md) |
 | Structural pattern, pre-fix path | self corpus, 1,107 files | 986.9 ms p95 (baseline) | ast-grep 26.3 ms p95 | 37.5× slower — the pre-pr21 path | [`speed.md`](speed.md) |
-| Cold index build | self corpus | 992 ms → 2.1 s p95 (baseline → pr21) | — | pr21 embeds chunks at index time (27 MiB); was 88.5 s before the cap fix `0ba34da` | [`speed.md`](speed.md) |
+| Cold index build | self corpus | 992 ms → 2.3 s p95 (baseline → release/1.4.0) | — | pr21 embeds chunks at index time (27 MiB); was 88.5 s before the cap fix `0ba34da` | [`speed.md`](speed.md) |
 
 ## Losses and caveats
 
@@ -94,8 +94,9 @@ jq '.scales | with_entries(.value = .value.aggregate)' \
   --output benchmarks/results-semgrep-patterns.json
 
 # Retrieval bake-off: exact environment from losses.md.
-ASGREP_NEURAL_EMBED=true ASGREP_RERANK=true \
-ASGREP_RERANK_WEIGHT=20 ASGREP_RERANK_BATCH_SIZE=1 \
+# Note: ASGREP_RERANK_WEIGHT does not exist; use ASGREP_RERANK_TOP_K.
+ASGREP_NEURAL_EMBED=1 ASGREP_RERANK=1 \
+ASGREP_RERANK_TOP_K=20 ASGREP_RERANK_BATCH_SIZE=1 \
 RAYON_NUM_THREADS=1 ASGREP_NEURAL_INTRA_THREADS=1 \
 ASGREP_RERANK_INTRA_THREADS=1 \
     --bin target/release-perf/asgrep

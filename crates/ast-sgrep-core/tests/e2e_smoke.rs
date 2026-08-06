@@ -395,15 +395,26 @@ fn parity_embed_backend_and_search_option_wiring() {
         embed_backend: EmbedBackend::Semantic,
         ..IndexOptions::default()
     });
-    let searcher = searcher_from(&indexed, opts);
-    let resp = searcher.search("defs:auth_refresh").unwrap();
+    // Fail-closed contract (parity_search_option_wiring): Searcher::new rejects
+    // the flags when the features are not compiled; with them, the wiring must
+    // still surface defs hits.
+    #[cfg(not(all(feature = "neural-embed", feature = "rerank")))]
     assert!(
-        resp.hits
-            .iter()
-            .any(|h| h.symbol.as_deref() == Some("auth_refresh")),
-        "wired options must still return defs hits; got {:#?}",
-        resp.hits
+        ast_sgrep_core::Searcher::new(opts.clone()).is_err(),
+        "neural/rerank flags must fail closed when features are off"
     );
+    #[cfg(all(feature = "neural-embed", feature = "rerank"))]
+    {
+        let searcher = searcher_from(&indexed, opts.clone());
+        let resp = searcher.search("defs:auth_refresh").unwrap();
+        assert!(
+            resp.hits
+                .iter()
+                .any(|h| h.symbol.as_deref() == Some("auth_refresh")),
+            "wired options must still return defs hits; got {:#?}",
+            resp.hits
+        );
+    }
 }
 #[test]
 fn index_all_preserves_semantic_ivf_on_noop_and_file_failure() {

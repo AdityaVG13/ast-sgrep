@@ -127,17 +127,22 @@ pub fn to_agent_json(response: &SearchResponse) -> serde_json::Value {
     if has_semantic {
         suggested.push(format!("asgrep semantic \"{}\"", response.query));
     }
-    if let Some(sym) = top_symbol {
-        suggested.push(format!("defs:{sym}"));
-        suggested.push(format!("callers:{sym}"));
+    if let Some(sym) = &top_symbol {
+        suggested.push(format!("asgrep \"defs:{sym}\""));
+        suggested.push(format!("asgrep \"callers:{sym}\""));
     }
-    suggested.push("pattern: (delegate to ast-grep for structural search)".into());
-    suggested.push("rg (use ripgrep for raw text scan)".into());
+    suggested.push(format!(
+        "asgrep --json --format agent \"{}\"",
+        response.query
+    ));
+    if let Some(sym) = &top_symbol {
+        suggested.push(format!("asgrep \"literal:{sym}\""));
+    }
     serde_json::json!({
         "provider": "ast-sgrep", "version": env!("CARGO_PKG_VERSION"), "query": response.query, "limit": response.limit, "hit_count": hits.len(),
         "read_bytes_estimate": response.read_bytes_estimate, "returned_excerpt_bytes": response.returned_excerpt_bytes,
         "prevented_read_bytes": response.prevented_read_bytes, "has_semantic_hits": has_semantic,
-        "stack_hint": "Use ast-sgrep for intent/navigation; ast-grep for patterns; ripgrep for grep.", "suggested_next": suggested, "hits": hits,
+        "stack_hint": "Use asgrep for hybrid search; defs:/callers:/literal: prefixes for graph and exact text; asgrep semantic for embedding-only.", "suggested_next": suggested, "hits": hits,
     })
 }
 const PREVIEW_MAX_CHARS: usize = 120;
@@ -297,6 +302,8 @@ fn preview_line(excerpt: &str) -> String {
         )
     }
 }
+
+/// Compatibility module paths retained for downstream format adapters.
 pub mod agent {
     pub use super::{to_agent_capsule_json, to_agent_json, to_compact_json, CompactBudget};
 }

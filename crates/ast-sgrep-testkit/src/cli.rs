@@ -34,8 +34,10 @@ impl CliSession {
         let out = self.run(args).expect("run command");
         assert!(
             out.status.success(),
-            "expected success, stderr: {}",
-            String::from_utf8_lossy(&out.stderr)
+            "expected success (args={args:?} cwd={:?}), stderr: {}, stdout: {}",
+            std::env::current_dir().ok(),
+            String::from_utf8_lossy(&out.stderr),
+            String::from_utf8_lossy(&out.stdout).chars().take(300).collect::<String>()
         );
         out
     }

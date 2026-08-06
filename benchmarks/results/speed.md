@@ -31,15 +31,15 @@ Part of `ast-sgrep-iw8`.
 | build | `cargo build --profile release-perf -p ast-sgrep-cli` |
 | rustc / python | 1.97.1 / 3.9.6 |
 | tools | ripgrep 15.1.0, ast-grep 0.45.0, hyperfine 1.20.0 |
-| states | baseline `origin/main` `cea904a` · pr21 `test/quality-batch-e2hc-19-oxbj` `5de7eb0` · pr26 `cursor/codemode-crate-scaffold-9228` `137863f` |
+| states | baseline `origin/main` `cea904a` · pr21 `test/quality-batch-e2hc-19-oxbj` `5de7eb0` · pr26 `cursor/codemode-crate-scaffold-9228` `137863f` · **release/1.4.0** (all 7 PRs merged + gated, 66/66 workspace suites) |
 
-| Surface | baseline p95 | pr21 p95 | pr26 p95 | comparator p95 | note |
-|---------|------------:|--------:|--------:|------------:|------|
-| cold index build | 992.0 ms | 2,087 ms | 906.3 ms | — | pr21 embeds chunks at index time; was 88.5 s before the child-chunk cap fix (`0ba34da`) |
-| warm literal query | 20.7 ms | 17.3 ms | 16.4 ms | rg 15.5–17.6 ms | ≈ ripgrep on this corpus |
-| warm semantic NL query | 19.2 ms | 16.2 ms | 18.6 ms | — | pr21's IVF path is fastest after the fix |
-| structural pattern query | 986.9 ms | 29.4 ms | 940.6 ms | ast-grep 22.4–26.3 ms | pr21's SIMD prefilter: 34× faster than the baseline path |
-| index size | 22 MiB | 27 MiB | 22 MiB | — | pr21 embeds 2,592 chunks (was 26,461 before the cap fix) |
+| Surface | baseline p95 | pr21 p95 | pr26 p95 | **release/1.4.0 p95** | comparator p95 | note |
+|---------|------------:|--------:|--------:|--------------------:|------------:|------|
+| cold index build | 992.0 ms | 2,087 ms | 906.3 ms | **2,257 ms** | — | pr21 embeds chunks at index time; was 88.5 s before the child-chunk cap fix (`0ba34da`) |
+| warm literal query | 20.7 ms | 17.3 ms | 16.4 ms | **19.5 ms** | rg 15.0–15.7 ms | ≈ ripgrep on this corpus |
+| warm semantic NL query | 19.2 ms | 16.2 ms | 18.6 ms | **19.6 ms** | — | integrated tree keeps the fixed IVF path |
+| structural pattern query | 986.9 ms | 29.4 ms | 940.6 ms | **33.1 ms** | ast-grep 23.1–24.2 ms | pr21's SIMD prefilter: 30× faster than the baseline path |
+| index size | 22 MiB | 27 MiB | 22 MiB | **27 MiB** | — | pr21 embeds 2,592 chunks (was 26,461 before the cap fix) |
 
 **2026-08-05 follow-up fix:** pr21's cold index was 88.5 s / 107 MiB because
 `build_semantic_chunks_with_patterns` created up to 32 chunks per parent

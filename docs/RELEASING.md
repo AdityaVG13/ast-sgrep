@@ -173,3 +173,12 @@ The formula invokes `cargo install --locked` through Homebrew's `std_cargo_args`
 After the formula is validated in this repository, publishing it to a public
 Homebrew tap (and any umbrella formulas that depend on `ast-sgrep`) is a
 separate human release step. This repository does not push external taps.
+
+## Honesty checklist (before tagging / README bumps)
+
+Complete before any release tag, crates.io/npm publish, or README quality/latency GATE:
+
+1. **No unreproducible README GATE.** README and release notes must not present MRR/latency/dimension figures as current product guarantees unless `benchmarks/results/baselines.md` marks them reproducible **or** the text explicitly says historical / `UNREPRODUCIBLE` and links the canonical row.
+2. **Single fingerprint per metric.** Confirm no conflicting canonical values for the same corpus+config (see `baselines.md` “Canonical fingerprint rows”). Superseded numbers stay labeled superseded.
+3. **Negative ledger reviewed.** Failed or withdrawn evals still appear in `benchmarks/results/` (or are linked from baselines); do not ship a release that drops known losses.
+4. **Optional harness job URL.** If a CI workflow regenerated numbers, record the successful job URL next to the baselines provenance table; absence of a URL means the row stays unreproducible from this tree.

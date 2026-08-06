@@ -265,6 +265,19 @@ pub fn apply_weighted_rrf(hits: &mut Vec<SearchHit>, weights: &ChannelWeights) {
             .collect::<Vec<_>>();
         contributors.sort_by_key(|kind| channel_for_kind(*kind).index());
         contributors.dedup();
+        // Enrich identifying fields from members: a merged same-line result
+        // keeps the canonical kind/priority but surfaces the symbol a semantic
+        // chunk carries for that line (semantic_cache_version contract).
+        if result.symbol.is_none() {
+            if let Some(sym) = members
+                .iter()
+                .map(|index| hits[*index].symbol.as_deref())
+                .find(|s| s.is_some())
+                .flatten()
+            {
+                result.symbol = Some(sym.to_string());
+            }
+        }
         result.contributors = contributors;
         result.score = weighted_rrf_score(&ranks_by_result[&key], weights);
         fused.push(result);

@@ -7,8 +7,22 @@ use crate::search::types::{SearchHit, SearchOptions};
 use crate::store::IndexStore;
 use crate::{Result, StoreError};
 use regex::Regex;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
+use std::time::{Duration, Instant};
+/// Default wall-clock budget for `regex:` scans (ReDoS / large-corpus hang guard).
+pub const DEFAULT_REGEX_BUDGET_MS: u64 = 2_000;
+fn regex_budget() -> Duration {
+    std::env::var("ASGREP_REGEX_BUDGET_MS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .map(Duration::from_millis)
+        .unwrap_or(Duration::from_millis(DEFAULT_REGEX_BUDGET_MS))
+}
+fn budget_exhausted(deadline: Instant, timed_out: &AtomicBool) -> bool {
+    timed_out.load(Ordering::Relaxed) || Instant::now() >= deadline
+}
 pub fn regex_pass(
     store: &IndexStore,
     options: &SearchOptions,
@@ -50,6 +64,9 @@ pub fn regex_pass(
     let lang_filter = options.lang_filter.clone();
     let options = options.clone();
     let re = Arc::new(re);
+    let budget = regex_budget();
+    let deadline = Instant::now() + budget;
+    let timed_out = Arc::new(AtomicBool::new(false));
     thread::scope(|scope| {
         let mut handles = Vec::new();
         for chunk in lines.chunks(chunk_size) {
@@ -57,8 +74,17 @@ pub fn regex_pass(
             let file_map = file_map.clone();
             let lang_filter = lang_filter.clone();
             let options = options.clone();
+            let timed_out = Arc::clone(&timed_out);
             handles.push(scope.spawn(move || {
-                scan_regex_chunk(chunk, &re, &lang_filter, &options, file_map.as_deref())
+                scan_regex_chunk(
+                    chunk,
+                    &re,
+                    &lang_filter,
+                    &options,
+                    file_map.as_deref(),
+                    deadline,
+                    &timed_out,
+                )
             }));
         }
         Ok({
@@ -73,6 +99,12 @@ pub fn regex_pass(
                         ));
                     }
                 }
+            }
+            if timed_out.load(Ordering::Relaxed) {
+                return Err(StoreError::Other(format!(
+                    "regex search exceeded wall-clock budget of {}ms (ASGREP_REGEX_BUDGET_MS); partial results discarded",
+                    budget.as_millis()
+                )));
             }
             out
         })
@@ -158,9 +190,17 @@ fn scan_regex_chunk(
     lang_filter: &Option<String>,
     options: &SearchOptions,
     file_map: Option<&FileLinesMap>,
+    deadline: Instant,
+    timed_out: &AtomicBool,
 ) -> Vec<SearchHit> {
     let mut hits = Vec::new();
     for (rank, (path, line_no, content, language)) in chunk.iter().enumerate() {
+        // Between-line deadline check (56w1.3): a zero budget must fail
+        // immediately instead of scanning everything.
+        if budget_exhausted(deadline, timed_out) {
+            timed_out.store(true, Ordering::Relaxed);
+            break;
+        }
         if !matches_lang(language.as_deref(), lang_filter.as_deref()) || !re.is_match(content) {
             continue;
         }

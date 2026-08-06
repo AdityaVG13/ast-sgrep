@@ -14,6 +14,24 @@ repository. Any number quoted in docs, commit messages, or bead close reasons
 must trace back to a row here or carry its own reproduce command. Scores were
 produced by the harness, twice, on the machine below — no hand-edited figures.
 
+## Canonical fingerprint rows
+
+One versioned fingerprint per (corpus × metric × config). Other publications
+must cite these rows; they must not introduce a second “canonical” value.
+
+| fingerprint id | corpus | config | metric | value | status |
+|----------------|--------|--------|--------|------:|--------|
+| `self-hybrid-d3eab74` | self @ d3eab74 (18 gold) | default hybrid / `--no-embed` same | MRR | **0.712** | UNREPRODUCIBLE (gold harness absent) |
+| `self-hybrid-d3eab74` | self @ d3eab74 (18 gold) | default hybrid | Recall@k | **0.889** | UNREPRODUCIBLE |
+| `self-hybrid-d3eab74` | self @ d3eab74 (18 gold) | default hybrid | nDCG@k | **0.751** | UNREPRODUCIBLE |
+| `rg-hybrid-default-d3eab74` | ripgrep 14.1.1 (14 gold) | default hybrid (hashed/local embed path as shipped) | MRR | **0.290** | UNREPRODUCIBLE — **canonical** for default hybrid |
+| `rg-neural-rerank-d3eab74` | ripgrep 14.1.1 (14 gold) | `neural-embed` + cross-encoder rerank (`ASGREP_NEURAL_EMBED=1 ASGREP_RERANK=1`, see losses.md) | MRR | **0.605** | UNREPRODUCIBLE — different config; **not** interchangeable with 0.290 |
+| `self-hist-pre-29129bd` | self (historical unlabeled gold) | historical hybrid | MRR ≈ 0.75 / Recall ≈ 0.94 | — | **SUPERSEDED** by `self-hybrid-d3eab74` (also formerly cited as 0.746); do not quote as current |
+
+**Deprecations:** Do not cite 0.290 and 0.605 as competing “the” ripgrep MRR.
+They are two fingerprint rows. Do not cite dual ~0.75 / 0.746 self-corpus
+figures alongside 0.712 as current.
+
 ## Provenance
 
 | field | value |
@@ -48,7 +66,8 @@ The original run used a `corpora.lock` file that is not shipped in this tree. It
 | asgrep semantic-only | 0.294 | 0.611 | 0.364 |
 | ripgrep (file order) | 0.061 | 0.167 | 0.086 |
 
-Note: 0.712 is lower than the previously published 0.746; the drop landed
+Note: 0.712 is lower than the previously published ~0.75 / 0.746
+(`self-hist-pre-29129bd`, **superseded**); the drop landed
 with the reviewed correctness fixes in `29129bd` (ranking changed for one
 query). The historical run recorded a `retrieval_gold.rs` gate (MRR >= 0.70), but that harness is not present in this tree. This table supersedes the old figure and remains a published record, not a currently reproducible result.
 
@@ -57,6 +76,10 @@ query). The historical run recorded a `retrieval_gold.rs` gate (MRR >= 0.70), bu
 **Reproduction status:** unavailable from this tree. The foreign corpora can be recovered from the pinned SHAs above, but their gold labels and the cross-tool bake-off harness are not checked in. Running `cd benchmarks` alone performs no evaluation.
 
 ### ripgrep 14.1.1 (Rust, 14 queries)
+
+**Canonical default-hybrid fingerprint:** `rg-hybrid-default-d3eab74` → **MRR 0.290**.
+The neural+rerank figure **0.605** is fingerprint `rg-neural-rerank-d3eab74` only
+(see [`losses.md`](losses.md)); it is not the default hybrid row.
 
 | tool | MRR | Recall@k | nDCG@k | wall ms |
 |------|----:|---------:|-------:|--------:|

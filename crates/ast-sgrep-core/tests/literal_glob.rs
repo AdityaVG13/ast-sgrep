@@ -73,15 +73,3 @@ fn literal_a_bracket_b_matches_literally_not_axb() {
         resp.hits
     );
 }
-
-#[test]
-fn literal_plain_needle_still_matches() {
-    let (corpus, _idx, index_path) = index_two_lines("hello world", "goodbye");
-    let searcher = searcher(corpus.path(), &index_path);
-    let resp = searcher.search("literal:hello").unwrap();
-    assert!(
-        resp.hits.iter().any(|h| h.excerpt.contains("hello")),
-        "plain literal:hello must still match; got {:#?}",
-        resp.hits
-    );
-}

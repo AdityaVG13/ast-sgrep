@@ -41,10 +41,18 @@ pub const DECL_PATTERN_PREFIXES: &[(&str, bool)] = &[
 ///
 /// Patterns without `$` always run in-process. Patterns with `$`/`$$$` use the
 /// native structural matcher when they fit a known shape; only exotic shapes
-/// still require the external binary.
+/// still require the external binary. A `$`-pattern with no structural syntax
+/// (no `(`/`{`/`;`/`=`/`:` — e.g. bare `$$$word<<<` garbage) is not a real rule
+/// and never needs the fallback: native match-none is honest for it.
 pub fn needs_ast_grep_fallback(pattern: &str) -> bool {
     let p = pattern.trim();
     if p.is_empty() || !p.contains('$') {
+        return false;
+    }
+    let has_structure = p
+        .chars()
+        .any(|c| matches!(c, '(' | '{' | ';' | '=' | ':' | '['));
+    if !has_structure {
         return false;
     }
     classify_native(p).is_none()

@@ -15,7 +15,7 @@ This report publishes the complete committed `bakeoff` section of *(historical d
 
 Each tool run against the same gold queries across two foreign corpora. ast-grep and semgrep scores cover structurally-expressible queries (count reported). All metrics use k=10.
 
-- **asgrep hybrid**: default hybrid retrieval under the local neural embedding and reranker environment shown below.
+- **asgrep hybrid (this bake-off)**: hybrid retrieval under the **local neural embedding + reranker** environment shown below — fingerprint `rg-neural-rerank-d3eab74` (**0.605 MRR** on ripgrep). This is **not** the default hashed/local hybrid row in [`baselines.md`](baselines.md) (`rg-hybrid-default-d3eab74` = **0.290 MRR**).
 - **asgrep `--no-embed`**: embedding-disabled ablation.
 - **embedding-only (vector baseline)**: asgrep `--semantic-only`; this is an embedding-only ablation, not a hosted vector service.
 - **semgrep**: one hand-authored structural pattern per natural-language intent.
@@ -280,4 +280,10 @@ The corpus restoration script reads `corpora.toml` and checks out its pins; comp
 
 ```bash
 cargo build --profile release-perf -p ast-sgrep-cli --features neural-embed,rerank
-ASGREP_NEURAL_EMBED=true ASGREP_RERANK=true ASGREP_RERANK_WEIGHT=20 ASGREP_RERANK_BATCH_SIZE=1 RAYON_NUM_THREADS=1 ASGREP_NEURAL_INTRA_THREADS=1 ASGREP_RERANK_INTRA_THREADS=1 ```
+# Real knobs only (no ASGREP_RERANK_WEIGHT — that env var does not exist).
+# Boolish env values accepted by clap: true/false/1/0. SearchOptions defaults also honor =1.
+ASGREP_NEURAL_EMBED=1 ASGREP_RERANK=1 ASGREP_RERANK_TOP_K=20 \
+ASGREP_RERANK_BATCH_SIZE=1 RAYON_NUM_THREADS=1 \
+ASGREP_NEURAL_INTRA_THREADS=1 ASGREP_RERANK_INTRA_THREADS=1 \
+  target/release-perf/asgrep …
+```

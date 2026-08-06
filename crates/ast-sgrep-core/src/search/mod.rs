@@ -76,8 +76,34 @@ pub struct Searcher {
     semantic_cache: Arc<Mutex<Option<SemanticCache>>>,
     response_cache: Mutex<ResponseCache>,
 }
+/// Fail closed when callers request optional neural/rerank paths that were
+/// not compiled in (parity contract: silently ignoring the flags would make
+/// searches appear to use neural/rerank when they do not).
+pub fn validate_search_feature_flags(options: &SearchOptions) -> Result<()> {
+    if options.use_neural_embed {
+        #[cfg(not(feature = "neural-embed"))]
+        {
+            return Err(crate::StoreError::Other(
+                "--neural-embed / use_neural_embed requested but this binary was built without the `neural-embed` feature; rebuild with --features neural-embed"
+                    .into(),
+            ));
+        }
+    }
+    if options.use_rerank {
+        #[cfg(not(feature = "rerank"))]
+        {
+            return Err(crate::StoreError::Other(
+                "--rerank / use_rerank requested but this binary was built without the `rerank` feature; rebuild with --features rerank"
+                    .into(),
+            ));
+        }
+    }
+    Ok(())
+}
+
 impl Searcher {
     pub fn new(mut options: SearchOptions) -> Result<Self> {
+        validate_search_feature_flags(&options)?;
         // Match Indexer: canonicalize roots so relative/symlink inputs share identity (0fg6/0f7r).
         options.root = options.root.canonicalize().map_err(|e| {
             crate::StoreError::Other(format!(
@@ -310,14 +336,18 @@ impl Searcher {
             .iter()
             .map(|hit| hit.file.clone())
             .collect::<HashSet<_>>();
-        if structural_files.is_empty() {
-            // No structural signal for the prefetched files: return the literal
-            // prefilter hits alone rather than dropping valid lexical matches
-            // (ht1h.3 / durability_epics: plain-content files must stay findable).
-            return Ok(lexical);
-        }
+        // Precision gate: embed only on structurally-confirmed files when
+        // structural signals exist. When the structural stage is empty, the
+        // lexical survivors ARE the candidate set — the semantic stage must
+        // still run on them (ht1h.3 / parity: NL queries surface semantically
+        // related symbols, and plain-content files stay findable).
+        let working_files = if structural_files.is_empty() {
+            lexical_files
+        } else {
+            structural_files
+        };
 
-        lexical.retain(|hit| structural_files.contains(&hit.file));
+        lexical.retain(|hit| working_files.contains(&hit.file));
         let mut hits = lexical;
         hits.extend(structural);
         if self.options.use_embed {
@@ -325,7 +355,7 @@ impl Searcher {
                 &self.store,
                 &self.options,
                 parsed,
-                &structural_files,
+                &working_files,
             )?);
         }
         Ok(hits)
