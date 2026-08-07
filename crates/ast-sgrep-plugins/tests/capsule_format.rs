@@ -268,3 +268,84 @@ fn gitlab_projection_documents_absent_repository_context() {
         .all(|hit| hit["meta"]["contributors"].is_array()));
     assert!(hits.iter().all(|hit| hit["meta"]["margin"] == 0.0));
 }
+
+/// kxmc: the MCP surface moved from pretty `AgentCapsule` to minified `Compact`.
+/// This pins the saving so a future edit cannot quietly give it back.
+///
+/// Run with `--nocapture` to print the measured byte counts.
+#[test]
+fn compact_minified_is_much_smaller_than_pretty_capsule() {
+    let response = many_file_sample();
+    let old = serde_json::to_string_pretty(&format_response_with(
+        &response,
+        OutputFormat::AgentCapsule,
+        0,
+    ))
+    .expect("capsule serializes");
+    let new = serde_json::to_string(&format_response_with_budget(
+        &response,
+        OutputFormat::Compact,
+        0,
+        CompactBudget::default(),
+    ))
+    .expect("compact serializes");
+
+    let saved = 100 - (new.len() * 100 / old.len());
+    println!("pretty capsule = {} bytes", old.len());
+    println!("minified compact = {} bytes", new.len());
+    println!("saved = {saved}%");
+
+    assert!(
+        new.len() * 2 < old.len(),
+        "compact must be under half of pretty capsule: {} vs {}",
+        new.len(),
+        old.len()
+    );
+    // The full path must appear exactly once per distinct file, in the `p`
+    // table -- never repeated per hit the way `file` plus `ref` used to.
+    let compact: serde_json::Value = serde_json::from_str(&new).expect("compact parses");
+    let paths = compact["p"].as_object().expect("path table");
+    for path in paths.values() {
+        let path = path.as_str().expect("path string");
+        assert_eq!(
+            new.matches(path).count(),
+            1,
+            "path {path} emitted more than once"
+        );
+    }
+}
+
+/// Ten hits over three files: the shape where per-hit key repetition dominates.
+fn many_file_sample() -> SearchResponse {
+    let files = [
+        "crates/ast-sgrep-core/src/search/mod.rs",
+        "crates/ast-sgrep-core/src/search/types.rs",
+        "crates/ast-sgrep-core/src/store/sqlite.rs",
+    ];
+    let hits = (0..10)
+        .map(|index| SearchHit {
+            kind: HitKind::Def,
+            file: files[index % files.len()].into(),
+            line_start: index as u32 * 10 + 1,
+            line_end: index as u32 * 10 + 9,
+            symbol: Some(format!("handler_{index}")),
+            caller: None,
+            callee: None,
+            language: Some("rust".into()),
+            score: 9.0 - index as f64,
+            signal: HitSignal::Exact,
+            contributors: vec![HitKind::Def],
+            margin: 0.1,
+            excerpt: format!("fn handler_{index}(session: &Session) -> Result<Token> {{\n    rotate(session)\n}}"),
+        })
+        .collect();
+    SearchResponse {
+        query: "session rotate".into(),
+        limit: 10,
+        hits,
+        counts: Vec::new(),
+        read_bytes_estimate: 4_000,
+        returned_excerpt_bytes: 800,
+        prevented_read_bytes: 3_200,
+    }
+}

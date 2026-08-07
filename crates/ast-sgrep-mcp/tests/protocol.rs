@@ -21,20 +21,41 @@ fn rpc(payload: Value) -> Value {
     rpc_at(payload, None)
 }
 fn rpc_at(payload: Value, root: Option<&std::path::Path>) -> Value {
+    let mut responses = rpc_session(vec![payload], root);
+    responses.pop().expect("one response")
+}
+/// Drive several requests through ONE server process. Compact path ids (kxmc)
+/// are session state, so search-then-read must share a process to be realistic.
+fn rpc_session(payloads: Vec<Value>, root: Option<&std::path::Path>) -> Vec<Value> {
     let mut command = Command::new(mcp_bin());
     command.stdin(Stdio::piped()).stdout(Stdio::piped());
     if let Some(root) = root {
         command.env("ASGREP_ROOT", root);
     }
     let mut child = command.spawn().expect("spawn MCP");
-    writeln!(child.stdin.take().unwrap(), "{payload}").unwrap();
+    {
+        let mut stdin = child.stdin.take().unwrap();
+        for payload in &payloads {
+            writeln!(stdin, "{payload}").unwrap();
+        }
+    }
     let out = child.wait_with_output().expect("wait MCP");
     assert!(
         out.status.success(),
         "stderr={}",
         String::from_utf8_lossy(&out.stderr)
     );
-    serde_json::from_slice(&out.stdout).expect("JSON-RPC")
+    String::from_utf8(out.stdout)
+        .expect("utf8 stdout")
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| serde_json::from_str(line).expect("JSON-RPC"))
+        .collect()
+}
+/// Parse the text payload of a tools/call result.
+fn tool_body(response: &Value) -> Value {
+    serde_json::from_str(response["result"]["content"][0]["text"].as_str().unwrap())
+        .expect("tool body JSON")
 }
 #[test]
 fn initialize_returns_protocol_and_tools_capability() {
@@ -87,27 +108,82 @@ fn hierarchical_searches_return_snippets_and_ids_without_auto_fusion() {
     .index_all()
     .unwrap();
 
+    // kxmc: compact envelope. Hits are positional tuples
+    // [id, kind, signal, symbol, snippet]; `p` maps path id to project path.
     for (name, query, expected_kind) in [
-        ("keyword_search", "target_symbol", "asgrep"),
-        ("ast_search", "fn $NAME() { $$$BODY }", "pattern"),
-        ("semantic_search", "target symbol", "embed"),
-        ("code_search", "target_symbol", "asgrep"),
+        ("keyword_search", "target_symbol", "x"),
+        ("ast_search", "fn $NAME() { $$$BODY }", "p"),
+        ("semantic_search", "target symbol", "e"),
+        ("code_search", "target_symbol", "x"),
     ] {
         let response = rpc_at(
             json!({"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":name,"arguments":{"query":query,"limit":8}}}),
             Some(temp.path()),
         );
         assert_eq!(response["result"]["isError"], false, "{response:#}");
-        let body: Value =
-            serde_json::from_str(response["result"]["content"][0]["text"].as_str().unwrap())
-                .unwrap();
-        let hits = body["hits"].as_array().unwrap();
+        let body = tool_body(&response);
+        let hits = body["h"].as_array().unwrap();
         assert!(!hits.is_empty(), "{name}: {body:#}");
-        assert!(hits.iter().all(|hit| hit["kind"] == expected_kind));
-        assert!(hits.iter().all(|hit| hit["ref"].is_string()));
-        assert!(hits.iter().all(|hit| hit["preview"].is_string()));
-        assert!(hits.iter().all(|hit| hit.get("excerpt").is_none()));
+        let paths = body["p"].as_object().unwrap();
+        for hit in hits {
+            let tuple = hit.as_array().expect("hit is a positional tuple");
+            assert_eq!(tuple.len(), 5, "{name}: {hit:#}");
+            assert_eq!(tuple[1], expected_kind, "{name}: {hit:#}");
+            assert!(tuple[2].is_string(), "{name}: signal");
+            assert!(tuple[4].is_string(), "{name}: snippet");
+            // Every id resolves to a real path through the `p` table.
+            let id = tuple[0].as_str().expect("id is a string");
+            let (path_id, range) = id.rsplit_once(':').expect("id is <path_id>:<start>-<end>");
+            assert!(paths.contains_key(path_id), "{name}: unresolved {id}");
+            let (start, end) = range.split_once('-').expect("range is start-end");
+            assert!(start.parse::<u32>().is_ok() && end.parse::<u32>().is_ok());
+        }
+        // Object keys must not reappear per hit.
+        assert!(hits.iter().all(|hit| hit.get("file").is_none()));
+        assert!(hits.iter().all(|hit| hit.get("ref").is_none()));
     }
+}
+
+/// kxmc: the compact id handed out by search must expand through code_read in
+/// the same session, with no path reconstruction required from the agent.
+#[test]
+fn compact_search_ids_expand_through_code_read_in_one_session() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("src");
+    std::fs::create_dir(&source).unwrap();
+    std::fs::write(
+        source.join("lib.rs"),
+        "fn target_symbol() { helper(); }\nfn helper() {}\n",
+    )
+    .unwrap();
+    ast_sgrep_core::Indexer::new(ast_sgrep_core::IndexOptions {
+        root: temp.path().to_path_buf(),
+        ..ast_sgrep_core::IndexOptions::default()
+    })
+    .unwrap()
+    .index_all()
+    .unwrap();
+
+    // One process: search, then feed the returned compact id straight back.
+    let search = json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"keyword_search","arguments":{"query":"target_symbol","limit":4}}});
+    let responses = rpc_session(vec![search.clone()], Some(temp.path()));
+    let body = tool_body(&responses[0]);
+    let compact_id = body["h"][0][0].as_str().expect("compact id").to_owned();
+    assert!(!compact_id.contains('/'), "id must be interned: {compact_id}");
+
+    let read = json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"code_read","arguments":{"ids":[compact_id]}}});
+    let responses = rpc_session(vec![search, read], Some(temp.path()));
+    assert_eq!(responses.len(), 2, "{responses:#?}");
+    assert_eq!(responses[1]["result"]["isError"], false, "{:#}", responses[1]);
+    let read_body = tool_body(&responses[1]);
+    assert!(
+        read_body["nodes"][0]["content"]
+            .as_str()
+            .unwrap()
+            .contains("target_symbol"),
+        "{read_body:#}"
+    );
+    assert_eq!(read_body["nodes"][0]["id"], "src/lib.rs#L1-L1");
 }
 
 #[test]

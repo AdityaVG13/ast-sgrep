@@ -8,9 +8,10 @@
 
 use anyhow::Context;
 use ast_sgrep_core::{EmbedBackend, IndexOptions, Indexer, SearchOptions, Searcher};
-use ast_sgrep_plugins::{format_response_with, OutputFormat};
+use ast_sgrep_plugins::{format_response_with_budget, CompactBudget, OutputFormat};
 use serde::Deserialize;
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::{self, BufRead, Read, Write};
 use std::path::{Component, Path, PathBuf};
@@ -27,6 +28,10 @@ const DEFAULT_READ_CHARS: usize = 100_000;
 const MAX_READ_CHARS: usize = 1_000_000;
 const MAX_SCAN_BYTES: u64 = 64 * 1024 * 1024;
 const INDEX_REPO_DEADLINE: Duration = Duration::from_secs(600);
+/// Bound on remembered compact path-id mappings (kxmc). Compact search ids are
+/// `<path_id>:<start>-<end>`; `code_read` resolves `<path_id>` through this map,
+/// so an agent never has to reconstruct a path it was handed by id.
+const MAX_PATH_REGISTRY: usize = 4_096;
 
 #[derive(Clone, Copy)]
 enum AgentSearchMode {
@@ -67,6 +72,9 @@ pub struct McpServer {
     searcher_cache: Mutex<SearcherCache>,
     /// Single-flight lock for index_repo (es7u).
     index_lock: Mutex<()>,
+    /// Compact path-id to project-relative path, learned from emitted search
+    /// envelopes (kxmc). Bounded; cleared when the index changes.
+    path_registry: Mutex<HashMap<String, String>>,
 }
 
 impl McpServer {
@@ -90,6 +98,7 @@ impl McpServer {
             use_embed: !ast_sgrep_core::env_flag::env_flag("ASGREP_NO_EMBED"),
             searcher_cache: Mutex::new(SearcherCache::default()),
             index_lock: Mutex::new(()),
+            path_registry: Mutex::new(HashMap::new()),
         })
     }
 
@@ -162,13 +171,23 @@ impl McpServer {
                 }
             })
         };
+        // kxmc: the compact envelope contract lives in the tool descriptions,
+        // which clients send once and cache, instead of being re-explained in
+        // every search response.
+        const COMPACT_CONTRACT: &str = concat!(
+            " Returns a compact envelope: `p` maps path ids to project paths, and each entry of `h` is",
+            " [id, kind, signal, symbol, snippet] where id is `<path_id>:<start_line>-<end_line>`.",
+            " kind: x=asgrep d=def c=caller g=graph a=anchor i=import p=pattern e=embed.",
+            " signal: x=exact t=structural m=semantic. Pass any id straight to code_read for the full body."
+        );
+        let describe = |summary: &str| format!("{summary}{COMPACT_CONTRACT}");
         json!({"tools": [
-            search_tool("keyword_search", "Lexical-only search (FTS/trigram). Returns abbreviated snippets and stable node IDs. Does not fuse AST or semantic channels.", search_properties.clone()),
-            search_tool("ast_search", "Native AST/pattern search (pattern: semantics). No external ast-grep process. Returns abbreviated snippets and stable node IDs.", search_properties.clone()),
-            search_tool("semantic_search", "Embedding-only search. Requires a non-empty index with semantic chunks. Returns abbreviated snippets and stable node IDs.", search_properties.clone()),
+            search_tool("keyword_search", &describe("Lexical-only search (FTS/trigram). Does not fuse AST or semantic channels."), search_properties.clone()),
+            search_tool("ast_search", &describe("Native AST/pattern search (pattern: semantics). No external ast-grep process."), search_properties.clone()),
+            search_tool("semantic_search", &describe("Embedding-only search. Requires a non-empty index with semantic chunks."), search_properties.clone()),
             // Kept for clients still calling the pre-split name; dispatches as Keyword (see dispatch_tool).
-            search_tool("code_search", "Deprecated compatibility alias for keyword_search; no automatic fusion across channels.", search_properties),
-            {"name": "code_read", "description": "Read full code for result node IDs with optional adjacent-line context. Paths are sandboxed under ASGREP_ROOT.",
+            search_tool("code_search", &describe("Deprecated compatibility alias for keyword_search; no automatic fusion across channels."), search_properties),
+            {"name": "code_read", "description": "Read full code for result node IDs with optional adjacent-line context. Accepts compact search ids (`<path_id>:<start>-<end>`) and explicit `path#Lstart-Lend` refs. Paths are sandboxed under ASGREP_ROOT.",
              "inputSchema": {"type": "object", "properties": {
                 "ids": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": MAX_READ_REFS},
                 "root": {"type": "string", "description": "Project root under the configured workspace"},
@@ -386,11 +405,60 @@ impl McpServer {
         };
         self.restore_searcher(root, limit, generation, searcher);
         let response = response?;
-        Ok(serde_json::to_string_pretty(&format_response_with(
+        // kxmc: compact key-free envelope, minified. Object keys and pretty
+        // whitespace were the bulk of the old AgentCapsule payload, and the
+        // full path was emitted twice per hit (`file` plus `ref`).
+        let envelope = format_response_with_budget(
             &response,
-            OutputFormat::AgentCapsule,
+            OutputFormat::Compact,
             0,
-        ))?)
+            CompactBudget::default(),
+        );
+        self.remember_compact_paths(&envelope);
+        Ok(serde_json::to_string(&envelope)?)
+    }
+
+    /// Record `p` table entries so `code_read` can resolve compact ids later.
+    fn remember_compact_paths(&self, envelope: &Value) {
+        let Some(paths) = envelope.get("p").and_then(Value::as_object) else {
+            return;
+        };
+        let mut registry = Self::lock_or_recover(&self.path_registry, |registry| registry.clear());
+        for (id, path) in paths {
+            let Some(path) = path.as_str() else { continue };
+            if registry.len() >= MAX_PATH_REGISTRY && !registry.contains_key(id) {
+                // Bounded: a hostile or very long session cannot grow this map
+                // without limit. Unknown ids simply fail to resolve and the
+                // agent falls back to the `path#Lstart-Lend` form.
+                break;
+            }
+            registry.insert(id.clone(), path.to_owned());
+        }
+    }
+
+    /// Expand a compact `<path_id>:<start>-<end>` id into the node id form that
+    /// `read_node` understands. Non-compact ids pass through untouched.
+    fn resolve_compact_id(&self, id: &str) -> String {
+        if id.contains("#L") {
+            return id.to_owned();
+        }
+        let Some((path_id, range)) = id.rsplit_once(':') else {
+            return id.to_owned();
+        };
+        let Some((start, end)) = range.split_once('-') else {
+            return id.to_owned();
+        };
+        if start.is_empty() || !start.bytes().all(|b| b.is_ascii_digit()) {
+            return id.to_owned();
+        }
+        if end.is_empty() || !end.bytes().all(|b| b.is_ascii_digit()) {
+            return id.to_owned();
+        }
+        let registry = Self::lock_or_recover(&self.path_registry, |registry| registry.clear());
+        match registry.get(path_id) {
+            Some(path) => format!("{path}#L{start}-L{end}"),
+            None => id.to_owned(),
+        }
     }
 
     fn tool_code_read(&self, args: &Value) -> anyhow::Result<String> {
@@ -422,15 +490,17 @@ impl McpServer {
         for (index, id) in ids.iter().enumerate() {
             let id = id.as_str().context("every node ID must be a string")?;
             let budget = per_ref_chars + usize::from(index < remainder);
-            nodes.push(read_node(&root, id, context_lines, budget)?);
+            // kxmc: accept compact search ids as well as `path#Lstart-Lend`.
+            let resolved = self.resolve_compact_id(id);
+            nodes.push(read_node(&root, &resolved, context_lines, budget)?);
         }
-        Ok(serde_json::to_string_pretty(&json!({"nodes": nodes}))?)
+        Ok(serde_json::to_string(&json!({"nodes": nodes}))?)
     }
 
     fn tool_index_status(&self, args: &Value) -> anyhow::Result<String> {
         Self::validate_fields(args, &["root"])?;
         let indexer = Indexer::new(self.base_index_options(self.root_arg(args)?))?;
-        Ok(serde_json::to_string_pretty(&indexer.store().status()?)?)
+        Ok(serde_json::to_string(&indexer.store().status()?)?)
     }
 
     fn tool_index_repo(&self, args: &Value) -> anyhow::Result<String> {
@@ -468,8 +538,10 @@ impl McpServer {
             INDEX_REPO_DEADLINE.as_secs()
         );
         // Index changed — drop cached Searcher so next search sees fresh data.
+        // Compact path ids are generation-scoped, so drop them too (kxmc).
         self.invalidate_searcher_cache();
-        Ok(serde_json::to_string_pretty(&stats)?)
+        Self::lock_or_recover(&self.path_registry, |registry| registry.clear()).clear();
+        Ok(serde_json::to_string(&stats)?)
     }
 }
 
@@ -649,6 +721,7 @@ mod cache_tests {
             use_embed: false,
             searcher_cache: Mutex::new(SearcherCache::default()),
             index_lock: Mutex::new(()),
+            path_registry: Mutex::new(HashMap::new()),
         };
         let (searcher, generation) = server.searcher_for(root.clone(), 10).unwrap();
         server.invalidate_searcher_cache();
