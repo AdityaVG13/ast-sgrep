@@ -328,13 +328,7 @@ impl Indexer {
                 }
                 Ok(())
             })();
-            match write_result {
-                Ok(()) => self.store.commit_bulk_tx()?,
-                Err(e) => {
-                    let _ = self.store.rollback_bulk_tx();
-                    return Err(e);
-                }
-            }
+            self.store.apply_bulk_write_result(write_result)?;
         }
         self.rebuild_dirty_sidecars(&stats, semantic_ivf_dirty)?;
         // e2hc.13: a full index_all rewrites every reachable file, so a legacy

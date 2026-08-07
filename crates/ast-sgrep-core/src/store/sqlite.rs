@@ -445,6 +445,20 @@ impl IndexStore {
     pub fn rollback_bulk_tx(&self) -> Result<()> {
         self.end_bulk_tx(false)
     }
+    /// Finish a bulk write started with [`begin_bulk_tx`].
+    ///
+    /// On `Ok`, commits. On `Err`, rolls back and **prefers** the rollback/restore
+    /// error so a stuck FastUnsafe `synchronous=OFF` mode cannot hide behind the
+    /// original write failure (d2a1.2 residual / pass9: no `let _ = rollback`).
+    pub fn apply_bulk_write_result(&self, write_result: Result<()>) -> Result<()> {
+        match write_result {
+            Ok(()) => self.commit_bulk_tx(),
+            Err(e) => match self.rollback_bulk_tx() {
+                Ok(()) => Err(e),
+                Err(rb) => Err(rb),
+            },
+        }
+    }
     fn end_bulk_tx(&self, commit: bool) -> Result<()> {
         if self.conn.is_autocommit() {
             return Ok(());
@@ -1359,6 +1373,54 @@ mod restore_synchronous_tests {
             "unexpected error: {err}"
         );
         assert!(store.connection().is_autocommit());
+    }
+
+    /// Pass9 residual of d2a1.2: product `index_all` used `let _ = rollback_bulk_tx()`
+    /// after a write Err. `apply_bulk_write_result` must surface restore failure
+    /// instead of returning only the original write error.
+    #[test]
+    fn apply_bulk_write_result_prefers_restore_failure_over_write_err() {
+        let temp = TempDir::new().unwrap();
+        let store =
+            IndexStore::open_with_durability(temp.path(), None, Durability::FastUnsafe).unwrap();
+        store.begin_bulk_tx().unwrap();
+        let _guard = force_restore_failure();
+        let write_err = crate::StoreError::Other("simulated bulk write failure".into());
+        let err = store
+            .apply_bulk_write_result(Err(write_err))
+            .expect_err("restore failure must win over write Err");
+        assert!(
+            err.to_string().contains("restore_synchronous"),
+            "swallowed restore behind write err: {err}"
+        );
+        assert!(
+            !err.to_string().contains("simulated bulk write"),
+            "must not prefer original write err when restore fails: {err}"
+        );
+        assert!(store.connection().is_autocommit());
+    }
+
+    #[test]
+    fn apply_bulk_write_result_returns_write_err_when_rollback_ok() {
+        let temp = TempDir::new().unwrap();
+        let store =
+            IndexStore::open_with_durability(temp.path(), None, Durability::FastUnsafe).unwrap();
+        store.begin_bulk_tx().unwrap();
+        let write_err = crate::StoreError::Other("simulated bulk write failure".into());
+        let err = store
+            .apply_bulk_write_result(Err(write_err))
+            .expect_err("write Err must surface when rollback succeeds");
+        assert!(
+            err.to_string().contains("simulated bulk write"),
+            "unexpected error: {err}"
+        );
+        assert!(store.connection().is_autocommit());
+        // Steady pragma restored after successful rollback path.
+        let sync: i64 = store
+            .connection()
+            .query_row("PRAGMA synchronous", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(sync, 1, "FastUnsafe steady restores to NORMAL between batches");
     }
 }
 

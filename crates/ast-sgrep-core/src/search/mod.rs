@@ -981,14 +981,23 @@ fn record_ledger_from_env(response: &SearchResponse) {
             eprintln!("[asgrep] ignoring ASGREP_LEDGER_PATH: outside process cwd");
             return;
         }
-        let _ = append_ledger_entry(path, response);
+        try_append_ledger(path, response);
         return;
     };
     if !parent_canon.starts_with(&cwd) {
         eprintln!("[asgrep] ignoring ASGREP_LEDGER_PATH: outside process cwd");
         return;
     }
-    let _ = append_ledger_entry(path, response);
+    try_append_ledger(path, response);
+}
+/// Best-effort ledger append: search must not fail, but write errors are visible.
+fn try_append_ledger(path: &Path, response: &SearchResponse) {
+    if let Err(e) = append_ledger_entry(path, response) {
+        eprintln!(
+            "[asgrep] warning: failed to write ASGREP_LEDGER_PATH {}: {e}",
+            path.display()
+        );
+    }
 }
 fn append_ledger_entry(path: &Path, response: &SearchResponse) -> std::io::Result<()> {
     let ts = SystemTime::now()
@@ -1179,6 +1188,50 @@ mod tests {
             "{err}"
         );
     }
+
+    #[test]
+    fn append_ledger_entry_errors_when_parent_dir_missing() {
+        let temp = tempfile::tempdir().unwrap();
+        let missing_parent = temp.path().join("no_such_dir").join("ledger.jsonl");
+        let response = SearchResponse {
+            query: "q".into(),
+            limit: 16,
+            hits: vec![],
+            counts: vec![],
+            read_bytes_estimate: 0,
+            returned_excerpt_bytes: 0,
+            prevented_read_bytes: 0,
+            snapshot: SnapshotStamp::default(),
+        };
+        let err = append_ledger_entry(&missing_parent, &response).expect_err("missing parent");
+        assert!(
+            err.kind() == std::io::ErrorKind::NotFound
+                || err.to_string().to_lowercase().contains("no such file")
+                || err.raw_os_error().is_some(),
+            "unexpected err: {err}"
+        );
+    }
+
+    #[test]
+    fn append_ledger_entry_writes_json_line() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("ledger.jsonl");
+        let response = SearchResponse {
+            query: "hello".into(),
+            limit: 16,
+            hits: vec![],
+            counts: vec![],
+            read_bytes_estimate: 10,
+            returned_excerpt_bytes: 2,
+            prevented_read_bytes: 8,
+            snapshot: SnapshotStamp::default(),
+        };
+        append_ledger_entry(&path, &response).expect("write");
+        let body = std::fs::read_to_string(&path).unwrap();
+        assert!(body.contains("\"query\":\"hello\""), "{body}");
+        assert!(body.ends_with('\n'), "{body:?}");
+    }
+
     #[test]
     fn excerpt_coverage_respects_term_casing() {
         let mut h = hit("a.rs", 1, 1.0);
