@@ -331,6 +331,14 @@ impl Indexer {
             self.store.apply_bulk_write_result(write_result)?;
         }
         self.rebuild_dirty_sidecars(&stats, semantic_ivf_dirty)?;
+        // ufk7: learn this repository's own vocabulary. Local, incremental with
+        // the index, and cheap enough to stay on by default -- no download.
+        if let Err(error) = self.rebuild_lexicon() {
+            // A lexicon is an enhancement, not a correctness requirement: an
+            // index that cannot learn associations must still serve searches.
+            // Surfaced rather than swallowed silently.
+            eprintln!("asgrep: lexicon rebuild skipped: {error}");
+        }
         // e2hc.13: a full index_all rewrites every reachable file, so a legacy
         // v1 store may now promote to v2 (persist_embed_metadata keeps v1
         // during partial updates to protect unrewritten siblings).
@@ -343,6 +351,37 @@ impl Indexer {
             }
         }
         Ok(stats)
+    }
+
+    /// Rebuild the repository semantic lexicon from indexed symbols (ufk7).
+    ///
+    /// Pairs each symbol's identifier subtokens with the prose terms around it
+    /// (doc comments and the surrounding line text) and with its neighbours,
+    /// then scores the pairs with PPMI under a support floor.
+    fn rebuild_lexicon(&self) -> Result<()> {
+        use crate::lexicon::{prose_terms, subtokens, LexiconBuilder, Observation};
+
+        let mut builder = LexiconBuilder::new();
+        let symbols = self.store.all_symbol_context()?;
+        for (name, context) in symbols {
+            let identifier_terms = subtokens(&name);
+            if identifier_terms.is_empty() {
+                continue;
+            }
+            let mut prose = prose_terms(&context);
+            prose.sort();
+            prose.dedup();
+            // A symbol with no surrounding vocabulary teaches nothing.
+            if prose.is_empty() {
+                continue;
+            }
+            builder.observe(&Observation {
+                identifier_terms,
+                prose_terms: prose,
+            });
+        }
+        let associations = builder.finish();
+        crate::lexicon::store_lexicon(&self.store, &associations)
     }
     /// Walk the project once using the Indexer's IgnoreMatcher for both directory
     /// pruning and file skips (single ownership story — no second matcher).

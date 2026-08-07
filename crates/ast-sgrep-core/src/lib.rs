@@ -61,6 +61,7 @@ pub use limits::{
     MAX_EXCERPT_LINES, MAX_FILE_FILTER_CHARS, MAX_OUTPUT_RESULTS, MAX_QUERY_CHARS,
     MAX_REGEX_PATTERN_CHARS, MAX_STDIN_LINE_BYTES,
 };
+pub mod lexicon;
 pub use search::format_hit_line;
 pub use pattern::search_pattern;
 pub use query::{ParsedQuery, QueryMode};

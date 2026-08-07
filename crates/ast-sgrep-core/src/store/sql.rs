@@ -36,6 +36,8 @@ CREATE INDEX IF NOT EXISTS idx_pattern_nodes_signature ON pattern_nodes(signatur
 CREATE INDEX IF NOT EXISTS idx_pattern_nodes_file ON pattern_nodes(file_id);\
 CREATE VIRTUAL TABLE IF NOT EXISTS lines_fts USING fts5(content, file_id UNINDEXED, line_no UNINDEXED, tokenize = 'porter unicode61');\
 CREATE VIRTUAL TABLE IF NOT EXISTS lines_trigram USING fts5(content, content = 'lines', content_rowid = 'rowid', tokenize = 'trigram');\
+CREATE TABLE IF NOT EXISTS lexicon (term TEXT NOT NULL, related TEXT NOT NULL, ppmi REAL NOT NULL, support INTEGER NOT NULL, PRIMARY KEY (term, related));\
+CREATE INDEX IF NOT EXISTS idx_lexicon_term ON lexicon(term);\
 CREATE VIRTUAL TABLE IF NOT EXISTS lines_code_fts USING fts5(content, file_id UNINDEXED, line_no UNINDEXED, tokenize = \"unicode61 tokenchars '_'\");\
 CREATE TABLE IF NOT EXISTS embeddings (file_id INTEGER NOT NULL, line_no INTEGER NOT NULL, vector BLOB NOT NULL,\
   PRIMARY KEY (file_id, line_no), FOREIGN KEY (file_id) REFERENCES files(id) ON DELETE CASCADE);\
@@ -318,7 +320,7 @@ pub const CLEAR_ALL_META_WHITELIST: &[&str] =
 /// Full wipe of index content tables (schema left intact). Order keeps FTS/content-sync safe.
 /// Meta is cleared except the schema whitelist (bead ast-sgrep-28vo).
 pub const CLEAR_ALL_SQL: &str = "\
-DELETE FROM lines_trigram; DELETE FROM lines_fts; DELETE FROM lines_code_fts; DELETE FROM semantic_chunks; \
+DELETE FROM lines_trigram; DELETE FROM lines_fts; DELETE FROM lines_code_fts; DELETE FROM lexicon; DELETE FROM semantic_chunks; \
 DELETE FROM pattern_nodes; DELETE FROM embeddings; DELETE FROM imports; \
 DELETE FROM callers; DELETE FROM symbols; DELETE FROM lines; DELETE FROM files; \
 DELETE FROM embed_cache; \

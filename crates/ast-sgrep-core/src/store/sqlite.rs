@@ -27,7 +27,7 @@ thread_local! {
 }
 // 6 = symbols_name_lower (main / z47q). 7 = semantic-layout-v2 wipe (this PR).
 // Never reuse a SCHEMA_VERSION for two different migrations.
-const SCHEMA_VERSION: i64 = 8;
+const SCHEMA_VERSION: i64 = 9;
 const IMPORT_SELECT: &str =
     "SELECT f.path, f.language, i.module_path, i.line_no FROM imports i JOIN files f ON f.id = i.file_id";
 const SYM_LOC: &str = "SELECT f.path, s.name, f.language, s.line_start, s.line_end FROM symbols s JOIN files f ON f.id = s.file_id";
@@ -271,6 +271,68 @@ impl IndexStore {
                 |row| row.get::<_, i64>(0),
             )
             .unwrap_or(0))
+    }
+
+    /// Symbol names paired with nearby line text, for lexicon learning (ufk7).
+    ///
+    /// Bounded by construction: a few lines per symbol, not whole files, so
+    /// learning cost stays proportional to the symbol count.
+    pub fn all_symbol_context(&self) -> Result<Vec<(String, String)>> {
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT s.name, COALESCE(GROUP_CONCAT(l.content, ' '), '')
+             FROM symbols s
+             LEFT JOIN lines l
+               ON l.file_id = s.file_id
+              AND l.line_no BETWEEN MAX(1, s.line_start - 2) AND s.line_start + 2
+             GROUP BY s.id",
+        )?;
+        let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
+
+    /// Replace the repository lexicon in one transaction (ufk7).
+    pub fn replace_lexicon(&self, associations: &[crate::lexicon::Association]) -> Result<()> {
+        self.with_file_tx(|| {
+            self.conn.execute("DELETE FROM lexicon", [])?;
+            {
+                let mut stmt = self.conn.prepare_cached(
+                    "INSERT OR REPLACE INTO lexicon(term, related, ppmi, support) VALUES(?1,?2,?3,?4)",
+                )?;
+                for association in associations {
+                    stmt.execute(params![
+                        association.term,
+                        association.related,
+                        association.ppmi,
+                        association.support
+                    ])?;
+                }
+            }
+            Ok(())
+        })
+    }
+
+    /// Read the whole lexicon (ufk7). Ordered so loads are deterministic.
+    pub fn all_lexicon_rows(&self) -> Result<Vec<crate::lexicon::Association>> {
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT term, related, ppmi, support FROM lexicon ORDER BY term, related",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(crate::lexicon::Association {
+                term: row.get(0)?,
+                related: row.get(1)?,
+                ppmi: row.get(2)?,
+                support: row.get::<_, i64>(3)? as u32,
+            })
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
     }
 
     pub fn index_data_version(&self) -> Result<i64> {
