@@ -774,3 +774,131 @@ fn bench_suite_json_is_single_envelope_even_on_failure() {
         assert_eq!(output.status.code(), Some(2));
     }
 }
+
+/// d2a1.9: oversized batch file is rejected before OOM; machine envelope on failure.
+#[test]
+fn codemode_batch_oversized_file_is_machine_failure() {
+    let dir = TempDir::new().expect("tempdir");
+    // MAX_BATCH_REQUEST_BYTES = 4 * MAX_STDIN_LINE_BYTES (1 MiB) = 4 MiB.
+    // Write slightly over the cap so metadata fast-path rejects.
+    let path = dir.path().join("huge.json");
+    {
+        use std::io::Write;
+        let mut f = std::fs::File::create(&path).expect("create");
+        // Sparse-ish: write a header then seek — on macOS write all zeros is fine; 4MiB+1 is ok for CI.
+        let over = (1_048_576u64 * 4) + 1;
+        f.write_all(b"{\"calls\":[").unwrap();
+        // Pad with spaces to exceed cap without needing full 4MiB of unique data in source.
+        let pad = vec![b' '; (over as usize).saturating_sub(16)];
+        f.write_all(&pad).unwrap();
+        f.write_all(b"]}").unwrap();
+    }
+    let bin = asgrep_bin();
+    // No --json: codemode-batch must still emit a machine failure envelope (d2a1.10).
+    let output = Command::new(&bin)
+        .args(["codemode-batch", "--requests", path.to_str().expect("utf8")])
+        .env("NO_COLOR", "1")
+        .output()
+        .expect("run");
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "stderr={} stdout={}",
+        String::from_utf8_lossy(&output.stderr),
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert!(
+        output.stderr.is_empty(),
+        "machine failure must not also print human stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let value = parse_stdout(&output);
+    assert_eq!(value["ok"], false);
+    assert_eq!(value["exit_code"], 2);
+    assert_eq!(value["command"], "codemode-batch");
+    assert_eq!(value["error"]["kind"], "operational");
+    let msg = value["error"]["message"].as_str().unwrap_or("");
+    assert!(
+        msg.contains("exceeds max") || msg.contains("batch requests"),
+        "unexpected message: {msg}"
+    );
+}
+
+/// d2a1.9: stdin path also caps (never fully slurp oversize); d2a1.10 envelope without --json.
+#[test]
+fn codemode_batch_oversized_stdin_is_machine_failure() {
+    use std::io::Write;
+    use std::process::Stdio;
+    let bin = asgrep_bin();
+    let mut child = Command::new(&bin)
+        .args(["codemode-batch", "--requests", "-"])
+        .env("NO_COLOR", "1")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn");
+    {
+        let mut stdin = child.stdin.take().expect("stdin");
+        // Stream more than 4 MiB; take() must stop allocation near the cap.
+        let chunk = vec![b'a'; 64 * 1024];
+        let target = (1_048_576usize * 4) + (128 * 1024);
+        let mut written = 0usize;
+        while written < target {
+            match stdin.write_all(&chunk) {
+                Ok(()) => written += chunk.len(),
+                Err(_) => break, // peer closed after rejecting
+            }
+        }
+        // Drop stdin to close pipe.
+    }
+    let output = child.wait_with_output().expect("wait");
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "stderr={} stdout={}",
+        String::from_utf8_lossy(&output.stderr),
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert!(
+        output.stderr.is_empty(),
+        "unexpected stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let value = parse_stdout(&output);
+    assert_eq!(value["ok"], false);
+    assert_eq!(value["exit_code"], 2);
+    assert_eq!(value["command"], "codemode-batch");
+    let msg = value["error"]["message"].as_str().unwrap_or("");
+    assert!(
+        msg.contains("exceeds max") || msg.contains("stdin") || msg.contains("batch"),
+        "unexpected message: {msg}"
+    );
+}
+
+/// d2a1.10: missing batch file without --json still yields machine operational envelope.
+#[test]
+fn codemode_batch_missing_file_machine_envelope_without_json_flag() {
+    let bin = asgrep_bin();
+    let missing = TempDir::new().expect("temp").path().join("nope.json");
+    let output = Command::new(&bin)
+        .args([
+            "codemode-batch",
+            "--requests",
+            missing.to_str().expect("utf8"),
+        ])
+        .env("NO_COLOR", "1")
+        .output()
+        .expect("run");
+    assert_eq!(output.status.code(), Some(2));
+    assert!(
+        output.stderr.is_empty(),
+        "stderr should be empty in machine mode: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let value = parse_stdout(&output);
+    assert_eq!(value["ok"], false);
+    assert_eq!(value["command"], "codemode-batch");
+    assert_eq!(value["error"]["kind"], "operational");
+}
+

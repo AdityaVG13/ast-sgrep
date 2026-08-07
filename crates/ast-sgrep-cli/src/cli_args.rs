@@ -456,6 +456,8 @@ impl Cli {
             || matches!(self.command.as_ref(), Some(Commands::Capabilities(_)))
             || matches!(self.command.as_ref(), Some(Commands::Version(a)) if a.json)
             || matches!(self.command.as_ref(), Some(Commands::Doctor { .. }))
+            // codemode-batch always emits a JSON envelope on success (no --json gate).
+            || matches!(self.command.as_ref(), Some(Commands::CodemodeBatch { .. }))
     }
 
     pub(crate) fn command_name(&self) -> &'static str {

@@ -229,13 +229,12 @@ fn codemode_session_config(cli: &Cli, root: PathBuf) -> ast_sgrep_codemode::Sess
 }
 
 fn run_codemode_batch(cli: &Cli, requests: &Path) -> anyhow::Result<()> {
-    // Cap batch payload so a huge requests file cannot OOM the process.
-    const MAX_BATCH_REQUEST_BYTES: u64 = (ast_sgrep_core::MAX_STDIN_LINE_BYTES as u64) * 4;
+    // Cap batch payload (file *and* stdin) so a huge pipe cannot OOM the process (d2a1.9).
+    use machine::{read_utf8_capped, MAX_BATCH_REQUEST_BYTES};
     let raw = if requests.as_os_str() == "-" {
-        let mut buf = String::new();
-        std::io::Read::read_to_string(&mut std::io::stdin(), &mut buf)
-            .context("read batch requests from stdin")?;
-        buf
+        read_utf8_capped(std::io::stdin().lock(), MAX_BATCH_REQUEST_BYTES).context(
+            "read batch requests from stdin (payload exceeds max or I/O error)",
+        )?
     } else {
         let meta = std::fs::metadata(requests)
             .with_context(|| format!("stat batch requests {}", requests.display()))?;
@@ -244,14 +243,16 @@ fn run_codemode_batch(cli: &Cli, requests: &Path) -> anyhow::Result<()> {
             "batch requests file exceeds max {} bytes",
             MAX_BATCH_REQUEST_BYTES
         );
-        std::fs::read_to_string(requests)
-            .with_context(|| format!("read batch requests {}", requests.display()))?
+        // Re-cap on the read path: file may grow between stat and open (same as io_bounds).
+        let file = std::fs::File::open(requests)
+            .with_context(|| format!("open batch requests {}", requests.display()))?;
+        read_utf8_capped(file, MAX_BATCH_REQUEST_BYTES).with_context(|| {
+            format!(
+                "read batch requests {} (payload exceeds max or I/O error)",
+                requests.display()
+            )
+        })?
     };
-    anyhow::ensure!(
-        (raw.len() as u64) <= MAX_BATCH_REQUEST_BYTES,
-        "batch requests payload exceeds max {} bytes",
-        MAX_BATCH_REQUEST_BYTES
-    );
     let mut request: ast_sgrep_codemode::BatchRequest =
         serde_json::from_str(&raw).context("parse batch requests JSON")?;
     if request.root.is_none() {
@@ -297,7 +298,8 @@ fn run_codemode_batch(cli: &Cli, requests: &Path) -> anyhow::Result<()> {
         "results": response.results,
     });
     // Compact JSON: Code Mode waves are hot; pretty-print is pure serial waste.
-    println!("{}", serde_json::to_string(&envelope)?);
+    // Broken-pipe safe: agents often pipe batch JSON through head/jq (d2a1.9).
+    machine::write_stdout_line(&serde_json::to_string(&envelope)?)?;
     Ok(())
 }
 
