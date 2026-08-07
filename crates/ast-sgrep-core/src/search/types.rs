@@ -330,6 +330,40 @@ impl SearchOptions {
         )
     }
 }
+/// Identity of the index snapshot a response was built from (d3l5).
+///
+/// The hard invariant: a `SearchResponse` may carry evidence from exactly one
+/// index generation. Without this, a multi-pass search running in autocommit
+/// could take its definition from generation `g`, its callers from `g + 1`, and
+/// its semantic sidecar from `g - 1`, and report the mixture as one coherent
+/// answer.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct SnapshotStamp {
+    /// Monotonic index generation every indexing transaction bumps.
+    pub generation: i64,
+    /// Database schema version the response was read under.
+    pub schema_version: i64,
+    /// Highest indexed file mtime: what the index believes about the worktree.
+    pub worktree_revision: i64,
+    /// Resolved git HEAD, when the root is a git worktree.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub git_head: Option<String>,
+    /// Semantic sidecar fingerprint, when a semantic sidecar was consulted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub semantic_manifest: Option<String>,
+    /// Channels that could not run, or ran against a mismatched sidecar.
+    /// A degraded channel must be visible, never silently dropped.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub degraded_channels: Vec<DegradedChannel>,
+}
+
+/// A channel that failed or was skipped, and why (d3l5).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct DegradedChannel {
+    pub channel: String,
+    pub reason: String,
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SearchResponse {
     pub query: String,
@@ -346,6 +380,9 @@ pub struct SearchResponse {
     pub returned_excerpt_bytes: u64,
     #[serde(default)]
     pub prevented_read_bytes: u64,
+    /// Index snapshot this response was built from (d3l5).
+    #[serde(default)]
+    pub snapshot: SnapshotStamp,
 }
 pub fn format_hit_line(hit: &SearchHit) -> String {
     let f = &hit.file;

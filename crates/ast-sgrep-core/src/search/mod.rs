@@ -21,7 +21,8 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{SystemTime, UNIX_EPOCH};
 use types::{assign_signal_margins, dedup_hits};
 pub use types::{
-    format_hit_line, HitKind, HitSignal, SearchHit, SearchOptions, SearchResponse, SpanHitInput,
+    format_hit_line, DegradedChannel, HitKind, HitSignal, SearchHit, SearchOptions, SearchResponse,
+    SnapshotStamp, SpanHitInput,
 };
 const CASCADE_PREFILTER_FILE_LIMIT: usize = 100;
 const MAX_HITS_PER_FILE: usize = 3;
@@ -158,6 +159,73 @@ impl Searcher {
         // Full SearchOptions identity (nyui).
         format!("{kind}\0{query}\0{}", self.options.cache_identity())
     }
+    /// Run one multi-pass search inside a single read snapshot and stamp the
+    /// resulting response with that snapshot's identity (d3l5).
+    ///
+    /// Every pass shares one connection, and in autocommit each statement is
+    /// its own implicit transaction -- so a writer committing mid-search could
+    /// otherwise let one response mix generations. `BEGIN DEFERRED` pins one
+    /// read snapshot for the whole search; SQLite's WAL snapshot isolation then
+    /// guarantees every pass observes the same committed state.
+    ///
+    /// The generation is re-read before COMMIT and compared. Equality is the
+    /// evidence that the response is single-generation; a mismatch is reported
+    /// rather than returned as if it were coherent.
+    fn fenced(
+        &self,
+        compute: impl FnOnce() -> Result<SearchResponse>,
+    ) -> Result<SearchResponse> {
+        let conn = self.store.connection();
+        // A nested/active transaction means an outer scope already owns the
+        // snapshot; do not open a second one.
+        let owns_snapshot = conn.is_autocommit() && conn.execute_batch("BEGIN DEFERRED").is_ok();
+        let generation_before = self.store.index_generation().unwrap_or_default();
+
+        let computed = compute();
+
+        let generation_after = self.store.index_generation().unwrap_or_default();
+        if owns_snapshot {
+            // A read snapshot is released either way; COMMIT is the cheap path.
+            let _ = conn.execute_batch("COMMIT");
+        }
+        let mut response = computed?;
+
+        if owns_snapshot && generation_after != generation_before {
+            return Err(crate::StoreError::Other(format!(
+                "index generation changed during search ({generation_before} -> {generation_after}); \
+                 retry for a single-generation response"
+            )));
+        }
+
+        response.snapshot = self.snapshot_stamp(generation_before);
+        Ok(response)
+    }
+
+    /// Describe the snapshot a response was read from (d3l5).
+    fn snapshot_stamp(&self, generation: i64) -> SnapshotStamp {
+        let mut degraded_channels = Vec::new();
+        // A semantic sidecar built for another generation must be visible as a
+        // degraded channel, not silently trusted or silently dropped.
+        let semantic_manifest = match self.store.get_meta("semantic_ivf_fingerprint") {
+            Ok(value) => value,
+            Err(_) => {
+                degraded_channels.push(DegradedChannel {
+                    channel: "semantic".to_owned(),
+                    reason: "sidecar_manifest_unreadable".to_owned(),
+                });
+                None
+            }
+        };
+        SnapshotStamp {
+            generation,
+            schema_version: self.store.schema_version(),
+            worktree_revision: self.store.worktree_revision().unwrap_or_default(),
+            git_head: read_git_head(&self.options.root),
+            semantic_manifest,
+            degraded_channels,
+        }
+    }
+
     fn cached(
         &self,
         kind: &str,
@@ -165,7 +233,7 @@ impl Searcher {
         compute: impl FnOnce() -> Result<SearchResponse>,
     ) -> Result<SearchResponse> {
         let Some(gen) = self.index_gen() else {
-            return compute();
+            return self.fenced(compute);
         };
         let key = self.cache_key(kind, query);
         {
@@ -176,7 +244,7 @@ impl Searcher {
                 }
             }
         }
-        let response = compute()?;
+        let response = self.fenced(compute)?;
         // Re-check generation after compute so concurrent reindex cannot poison wrong-gen (hdwh).
         let Some(gen_after) = self.index_gen() else {
             return Ok(response);
@@ -574,6 +642,8 @@ pub(crate) fn finish_response_checked(
             read_bytes_estimate: 0,
             returned_excerpt_bytes: 0,
             prevented_read_bytes: 0,
+            // Stamped by the Searcher, which owns the snapshot (d3l5).
+            snapshot: SnapshotStamp::default(),
         };
         record_ledger_from_env(&response);
         return Ok(response);
@@ -654,6 +724,8 @@ pub(crate) fn finish_response_checked(
         read_bytes_estimate,
         returned_excerpt_bytes,
         prevented_read_bytes,
+        // Stamped by the Searcher, which owns the snapshot (d3l5).
+        snapshot: SnapshotStamp::default(),
     };
     record_ledger_from_env(&response);
     Ok(response)
@@ -1192,5 +1264,39 @@ mod tests {
         let guard = lock_clear_on_poison(&mutex, |v| v.clear());
         assert!(guard.is_empty());
         assert!(!mutex.is_poisoned());
+    }
+}
+
+/// Resolve `.git/HEAD` to a commit id without spawning git (d3l5).
+///
+/// Returns `None` outside a git worktree, or when HEAD cannot be resolved --
+/// an unknown source revision is reported as unknown, never guessed.
+fn read_git_head(root: &std::path::Path) -> Option<String> {
+    let git_dir = root.join(".git");
+    // A worktree or submodule uses a `gitdir:` pointer file instead of a dir.
+    let git_dir = if git_dir.is_file() {
+        let pointer = std::fs::read_to_string(&git_dir).ok()?;
+        let target = pointer.strip_prefix("gitdir:")?.trim();
+        root.join(target)
+    } else {
+        git_dir
+    };
+    let head = std::fs::read_to_string(git_dir.join("HEAD")).ok()?;
+    let head = head.trim();
+    match head.strip_prefix("ref:") {
+        Some(reference) => {
+            let reference = reference.trim();
+            if let Ok(direct) = std::fs::read_to_string(git_dir.join(reference)) {
+                return Some(direct.trim().to_owned());
+            }
+            // Packed refs: the loose file may not exist.
+            let packed = std::fs::read_to_string(git_dir.join("packed-refs")).ok()?;
+            packed.lines().find_map(|line| {
+                let (id, name) = line.split_once(' ')?;
+                (name.trim() == reference).then(|| id.trim().to_owned())
+            })
+        }
+        // Detached HEAD already holds the id.
+        None => (!head.is_empty()).then(|| head.to_owned()),
     }
 }

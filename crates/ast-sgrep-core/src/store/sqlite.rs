@@ -17,6 +17,14 @@ use rusqlite::{params, Connection, ToSql};
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
+#[cfg(test)]
+use std::cell::Cell;
+#[cfg(test)]
+thread_local! {
+    /// Test-only inject for d2a1.2: force restore_synchronous to fail so
+    /// callers prove commit/rollback surfaces the error (no `let _ =`).
+    static FORCE_RESTORE_SYNC_FAILURE: Cell<bool> = const { Cell::new(false) };
+}
 // 6 = symbols_name_lower (main / z47q). 7 = semantic-layout-v2 wipe (this PR).
 // Never reuse a SCHEMA_VERSION for two different migrations.
 const SCHEMA_VERSION: i64 = 7;
@@ -227,6 +235,36 @@ impl IndexStore {
         Ok(())
     }
     /// Monotonic generation for searchable-index mutations on every connection.
+    /// Monotonic index generation (d3l5).
+    ///
+    /// Every indexing transaction bumps `index_data_version`, so it is already
+    /// the generation counter this engine needs; exposing it under the honest
+    /// name avoids maintaining a second counter that could drift from the
+    /// first.
+    pub fn index_generation(&self) -> Result<i64> {
+        self.index_data_version()
+    }
+
+    /// Schema version this database was built with (d3l5).
+    pub fn schema_version(&self) -> i64 {
+        SCHEMA_VERSION
+    }
+
+    /// Highest indexed file mtime, as a worktree revision proxy (d3l5).
+    ///
+    /// This is what the index believes about the worktree, so a response can
+    /// state the source state it actually read rather than the current one.
+    pub fn worktree_revision(&self) -> Result<i64> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT COALESCE(MAX(mtime_secs), 0) FROM files",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap_or(0))
+    }
+
     pub fn index_data_version(&self) -> Result<i64> {
         Ok(self
             .get_meta("index_data_version")?
@@ -302,6 +340,12 @@ impl IndexStore {
         self.end_file_tx(false)
     }
     fn restore_synchronous(&self) -> Result<()> {
+        #[cfg(test)]
+        if FORCE_RESTORE_SYNC_FAILURE.with(|c| c.get()) {
+            return Err(crate::StoreError::Other(
+                "restore_synchronous forced failure (test inject)".into(),
+            ));
+        }
         self.conn.execute_batch(&format!(
             "PRAGMA synchronous = {}; PRAGMA cache_size = -16384",
             self.durability.steady_pragma()
@@ -329,12 +373,18 @@ impl IndexStore {
             } else {
                 let _ = self.conn.execute_batch("ROLLBACK");
             }
-            // Always restore NORMAL after file_tx ends (bead ast-sgrep-j97d.5kj8).
-            let _ = self.restore_synchronous();
         }
+        // Clear bookkeeping before restore so a failed restore cannot leave
+        // stale depth/owns state that confuses the next begin_file_tx.
         self.file_tx_depth.set(0);
         self.file_tx_owns.set(false);
         self.file_tx_poisoned.set(false);
+        // Always restore steady pragma after owning file_tx ends (j97d.5kj8 /
+        // d2a1.2). Propagate errors: a stuck write-batch mode (e.g. OFF under
+        // FastUnsafe) must be fail-visible. Do not re-COMMIT after failure.
+        if owns {
+            self.restore_synchronous()?;
+        }
         if poisoned && commit {
             return Err(crate::StoreError::Other(
                 "file_tx commit refused: nested file_tx rolled back".into(),
@@ -399,11 +449,12 @@ impl IndexStore {
         } else {
             let _ = self.conn.execute_batch("ROLLBACK");
         }
-        // Restore NORMAL after both commit and rollback (bead ast-sgrep-j97d.5kj8).
-        let _ = self.restore_synchronous();
         self.file_tx_depth.set(0);
         self.file_tx_owns.set(false);
         self.file_tx_poisoned.set(false);
+        // Restore steady pragma after both commit and rollback (j97d.5kj8 /
+        // d2a1.2). Propagate errors so OFF cannot stick silently.
+        self.restore_synchronous()?;
         Ok(())
     }
     pub fn clear_all_data(&self) -> Result<()> {
@@ -1205,3 +1256,101 @@ impl IndexStore {
             .exists(params![path])?)
     }
 }
+
+#[cfg(test)]
+mod restore_synchronous_tests {
+    use super::*;
+    use crate::store::Durability;
+    use tempfile::TempDir;
+
+    struct RestoreFailGuard;
+    impl Drop for RestoreFailGuard {
+        fn drop(&mut self) {
+            FORCE_RESTORE_SYNC_FAILURE.with(|c| c.set(false));
+        }
+    }
+
+    fn force_restore_failure() -> RestoreFailGuard {
+        FORCE_RESTORE_SYNC_FAILURE.with(|c| c.set(true));
+        RestoreFailGuard
+    }
+
+    fn sync_mode(store: &IndexStore) -> i64 {
+        store
+            .connection()
+            .query_row("PRAGMA synchronous", [], |row| row.get(0))
+            .expect("PRAGMA synchronous")
+    }
+
+    #[test]
+    fn file_tx_commit_surfaces_restore_synchronous_failure() {
+        let temp = TempDir::new().unwrap();
+        let store =
+            IndexStore::open_with_durability(temp.path(), None, Durability::FastUnsafe).unwrap();
+        store.begin_file_tx().unwrap();
+        assert_eq!(sync_mode(&store), 0, "FastUnsafe write batch uses OFF");
+        let _guard = force_restore_failure();
+        let err = store
+            .commit_file_tx()
+            .expect_err("restore failure must not be swallowed");
+        assert!(
+            err.to_string().contains("restore_synchronous"),
+            "unexpected error: {err}"
+        );
+        // Tx bookkeeping cleared even when restore fails.
+        assert!(store.connection().is_autocommit());
+        assert_eq!(store.file_tx_depth.get(), 0);
+    }
+
+    #[test]
+    fn file_tx_rollback_surfaces_restore_synchronous_failure() {
+        let temp = TempDir::new().unwrap();
+        let store =
+            IndexStore::open_with_durability(temp.path(), None, Durability::FastUnsafe).unwrap();
+        store.begin_file_tx().unwrap();
+        let _guard = force_restore_failure();
+        let err = store
+            .rollback_file_tx()
+            .expect_err("restore failure must not be swallowed on rollback");
+        assert!(
+            err.to_string().contains("restore_synchronous"),
+            "unexpected error: {err}"
+        );
+        assert_eq!(store.file_tx_depth.get(), 0);
+    }
+
+    #[test]
+    fn bulk_tx_commit_surfaces_restore_synchronous_failure() {
+        let temp = TempDir::new().unwrap();
+        let store =
+            IndexStore::open_with_durability(temp.path(), None, Durability::FastUnsafe).unwrap();
+        store.begin_bulk_tx().unwrap();
+        let _guard = force_restore_failure();
+        let err = store
+            .commit_bulk_tx()
+            .expect_err("restore failure must not be swallowed on bulk commit");
+        assert!(
+            err.to_string().contains("restore_synchronous"),
+            "unexpected error: {err}"
+        );
+        assert!(store.connection().is_autocommit());
+    }
+
+    #[test]
+    fn bulk_tx_rollback_surfaces_restore_synchronous_failure() {
+        let temp = TempDir::new().unwrap();
+        let store =
+            IndexStore::open_with_durability(temp.path(), None, Durability::FastUnsafe).unwrap();
+        store.begin_bulk_tx().unwrap();
+        let _guard = force_restore_failure();
+        let err = store
+            .rollback_bulk_tx()
+            .expect_err("restore failure must not be swallowed on bulk rollback");
+        assert!(
+            err.to_string().contains("restore_synchronous"),
+            "unexpected error: {err}"
+        );
+        assert!(store.connection().is_autocommit());
+    }
+}
+
