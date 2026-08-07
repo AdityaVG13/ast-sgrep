@@ -140,9 +140,10 @@ impl McpServer {
             let line = line.context("read stdin")?;
             if line.len() > ast_sgrep_core::MAX_STDIN_LINE_BYTES {
                 // Bound JSON-RPC line memory; oversized lines are parse-error, not silent drop.
+                // JSON-RPC 2.0: parse/invalid-id errors MUST use id: null (not omit id).
                 write_resp(
                     &mut stdout,
-                    None,
+                    Some(Value::Null),
                     None,
                     Some(json!({
                         "code": -32600,
@@ -162,7 +163,7 @@ impl McpServer {
                 Err(e) => {
                     write_resp(
                         &mut stdout,
-                        None,
+                        Some(Value::Null),
                         None,
                         Some(json!({"code": -32700, "message": format!("parse error: {e}")})),
                     )?;
@@ -662,8 +663,15 @@ impl McpServer {
             Some(value) => value.as_bool().context("force must be a boolean")?,
         };
         let root = self.root_arg(args)?;
-        let _flight = Self::lock_or_recover(&self.index_lock, |_| {});
+        // Single-flight wait counts toward the soft deadline (es7u).
         let started = Instant::now();
+        let _flight = Self::lock_or_recover(&self.index_lock, |_| {});
+        // Soft deadline: refuse to start when the prior wait already exhausted the budget.
+        anyhow::ensure!(
+            started.elapsed() < INDEX_REPO_DEADLINE,
+            "index_repo exceeded {}s single-flight deadline before start",
+            INDEX_REPO_DEADLINE.as_secs()
+        );
         let mut indexer = Indexer::new(IndexOptions {
             embed_semantic: self.use_embed,
             embed_backend: if self.use_embed {
@@ -673,28 +681,22 @@ impl McpServer {
             },
             ..self.base_index_options(root)
         })?;
-        // Soft deadline: refuse to start when the prior wait already exhausted the budget.
-        anyhow::ensure!(
-            started.elapsed() < INDEX_REPO_DEADLINE,
-            "index_repo exceeded {}s single-flight deadline before start",
-            INDEX_REPO_DEADLINE.as_secs()
-        );
         let stats = if force {
             indexer.reindex_all()?
         } else {
             indexer.index_all()?
         };
+        // Index mutated on disk — always drop cached Searcher / path ids / elisions
+        // before any post-work deadline check. A soft timeout must not leave a
+        // stale Searcher serving pre-mutation hits (d2a1.13).
+        self.invalidate_searcher_cache();
+        Self::lock_or_recover(&self.path_registry, |registry| registry.clear()).clear();
+        Self::lock_or_recover(&self.emitted_snippets, |seen| seen.clear()).clear();
         anyhow::ensure!(
             started.elapsed() <= INDEX_REPO_DEADLINE,
             "index_repo exceeded {}s deadline",
             INDEX_REPO_DEADLINE.as_secs()
         );
-        // Index changed — drop cached Searcher so next search sees fresh data.
-        // Compact path ids are generation-scoped, so drop them too (kxmc), and
-        // forget emitted snippets so nothing is elided across a reindex (v972).
-        self.invalidate_searcher_cache();
-        Self::lock_or_recover(&self.path_registry, |registry| registry.clear()).clear();
-        Self::lock_or_recover(&self.emitted_snippets, |seen| seen.clear()).clear();
         Ok(serde_json::to_string(&stats)?)
     }
 }
@@ -864,12 +866,9 @@ fn write_resp(
 mod cache_tests {
     use super::*;
 
-    #[test]
-    fn reindex_generation_rejects_in_flight_stale_searcher() {
-        let temp = tempfile::tempdir().unwrap();
-        let root = temp.path().canonicalize().unwrap();
-        let server = McpServer {
-            root: root.clone(),
+    fn test_server(root: PathBuf) -> McpServer {
+        McpServer {
+            root,
             index_path: None,
             limit: 10,
             use_embed: false,
@@ -877,12 +876,62 @@ mod cache_tests {
             index_lock: Mutex::new(()),
             path_registry: Mutex::new(HashMap::new()),
             emitted_snippets: Mutex::new(HashMap::new()),
-        };
+        }
+    }
+
+    #[test]
+    fn reindex_generation_rejects_in_flight_stale_searcher() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        let server = test_server(root.clone());
         let (searcher, generation) = server.searcher_for(root.clone(), 10).unwrap();
         server.invalidate_searcher_cache();
         server.restore_searcher(root, 10, generation, searcher);
         let cache = McpServer::lock_or_recover(&server.searcher_cache, |_| {});
         assert!(cache.entry.is_none(), "stale searcher returned after reindex");
+    }
+
+    #[test]
+    fn index_repo_invalidates_searcher_after_disk_mutation() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        std::fs::write(root.join("lib.rs"), "fn hello() {}\n").unwrap();
+        let server = test_server(root.clone());
+        let (searcher, generation) = server.searcher_for(root.clone(), 10).unwrap();
+        server.restore_searcher(root.clone(), 10, generation, searcher);
+        {
+            let cache = McpServer::lock_or_recover(&server.searcher_cache, |_| {});
+            assert!(cache.entry.is_some());
+            assert_eq!(cache.generation, generation);
+        }
+        // Seed session maps that must not survive reindex.
+        McpServer::lock_or_recover(&server.path_registry, |_| {})
+            .insert("p0".into(), "lib.rs".into());
+        McpServer::lock_or_recover(&server.emitted_snippets, |_| {})
+            .insert("p0:1-1".into(), 42);
+
+        let body = server
+            .tool_index_repo(&json!({}))
+            .expect("index_repo should succeed on tiny fixture");
+        assert!(body.contains("files_indexed") || body.contains("files"), "{body}");
+
+        let cache = McpServer::lock_or_recover(&server.searcher_cache, |_| {});
+        assert!(
+            cache.entry.is_none(),
+            "searcher cache must be empty after index_repo mutation"
+        );
+        assert!(
+            cache.generation != generation,
+            "generation must advance so in-flight restore cannot reinstall stale Searcher"
+        );
+        assert!(
+            McpServer::lock_or_recover(&server.path_registry, |_| {}).is_empty(),
+            "path registry must clear on index mutation"
+        );
+        assert!(
+            McpServer::lock_or_recover(&server.emitted_snippets, |_| {}).is_empty(),
+            "emitted snippets must clear on index mutation"
+        );
     }
 }
 /// FNV-1a over snippet bytes (v972). Content-keyed so an edited file re-sends.

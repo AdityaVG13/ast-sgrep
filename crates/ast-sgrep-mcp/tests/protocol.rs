@@ -278,6 +278,35 @@ fn unknown_tool_remains_a_tool_error_result() {
 }
 
 #[test]
+fn parse_error_uses_jsonrpc_null_id() {
+    // JSON-RPC 2.0: when id cannot be detected, id MUST be null (not omitted).
+    let mut command = Command::new(mcp_bin());
+    command.stdin(Stdio::piped()).stdout(Stdio::piped());
+    let mut child = command.spawn().expect("spawn MCP");
+    {
+        let mut stdin = child.stdin.take().unwrap();
+        writeln!(stdin, "{{not json").unwrap();
+    }
+    let out = child.wait_with_output().expect("wait");
+    assert!(
+        out.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let lines: Vec<Value> = String::from_utf8(out.stdout)
+        .unwrap()
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| serde_json::from_str(l).expect("jsonrpc"))
+        .collect();
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    let r = &lines[0];
+    assert_eq!(r["jsonrpc"], "2.0");
+    assert!(r["id"].is_null(), "parse error id must be null, got {r:#}");
+    assert_eq!(r["error"]["code"], -32700);
+}
+
+#[test]
 fn tool_roots_are_sandboxed_under_configured_workspace() {
     let workspace = tempfile::tempdir().unwrap();
     let outside = tempfile::tempdir().unwrap();
