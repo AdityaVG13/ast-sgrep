@@ -16,8 +16,12 @@ fn main() {
             _ => {}
         }
     }
-    if let Err(e) = LspServer::new().run() {
-        eprintln!("asgrep-lsp error: {e}");
-        std::process::exit(1);
+    let mut server = LspServer::new();
+    match server.run() {
+        Ok(()) => std::process::exit(server.process_exit_code()),
+        Err(e) => {
+            eprintln!("asgrep-lsp error: {e}");
+            std::process::exit(1);
+        }
     }
 }

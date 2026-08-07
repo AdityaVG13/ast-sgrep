@@ -17,7 +17,11 @@ use std::path::PathBuf;
 
 pub struct LspServer {
     backend: Option<LspBackend>,
-    shutdown: bool,
+    /// Set after a successful `shutdown` request. Further requests get
+    /// InvalidRequest until `exit` (LSP lifecycle / d2a1.14).
+    shutdown_received: bool,
+    /// Set by the `exit` notification; leaves the message loop.
+    exit_requested: bool,
 }
 
 type ReqH = fn(&mut LspServer, &Value) -> anyhow::Result<Value>;
@@ -46,7 +50,18 @@ impl LspServer {
     pub fn new() -> Self {
         Self {
             backend: None,
-            shutdown: false,
+            shutdown_received: false,
+            exit_requested: false,
+        }
+    }
+
+    /// Process exit code after `run` returns: 0 if `shutdown` was seen before
+    /// `exit` (or clean EOF), 1 if `exit` arrived without a prior `shutdown`.
+    pub fn process_exit_code(&self) -> i32 {
+        if self.exit_requested && !self.shutdown_received {
+            1
+        } else {
+            0
         }
     }
 
@@ -54,20 +69,40 @@ impl LspServer {
         let stdin = io::stdin();
         let mut stdout = io::stdout();
         let mut reader = BufReader::new(stdin.lock());
-        while let Some(body) = read_message(&mut reader)? {
+        self.run_with(&mut reader, &mut stdout)
+    }
+
+    /// Drive the LSP loop over arbitrary readers (stdio or tests).
+    pub fn run_with(
+        &mut self,
+        reader: &mut impl io::BufRead,
+        stdout: &mut impl Write,
+    ) -> io::Result<()> {
+        while let Some(body) = read_message(reader)? {
             if let Ok(req) = serde_json::from_str::<RequestMessage>(&body) {
-                self.handle_request(&mut stdout, req)?;
-                if self.shutdown {
+                self.handle_request(stdout, req)?;
+            } else if let Ok(notif) = serde_json::from_str::<NotificationMessage>(&body) {
+                self.handle_notification(stdout, notif)?;
+                if self.exit_requested {
                     break;
                 }
-            } else if let Ok(notif) = serde_json::from_str::<NotificationMessage>(&body) {
-                self.handle_notification(&mut stdout, notif)?;
             }
         }
         Ok(())
     }
 
     fn handle_request(&mut self, stdout: &mut impl Write, req: RequestMessage) -> io::Result<()> {
+        // After shutdown, only further messages should be exit (notification).
+        // Any request is InvalidRequest per LSP.
+        if self.shutdown_received {
+            send_error(
+                stdout,
+                &req.id,
+                -32600,
+                "server is shutting down; send exit notification",
+            )?;
+            return Ok(());
+        }
         match self.dispatch(&req.method, &req.params) {
             Ok(v) => send_response(stdout, &req.id, v)?,
             Err(e) => {
@@ -111,7 +146,7 @@ impl LspServer {
                     b.close_document(&p.text_document.uri)
                 })?;
             }
-            "exit" => self.shutdown = true,
+            "exit" => self.exit_requested = true,
             _ => {}
         }
         Ok(())
@@ -169,7 +204,7 @@ impl LspServer {
     }
 
     fn h_shutdown(&mut self, _: &Value) -> anyhow::Result<Value> {
-        self.shutdown = true;
+        self.shutdown_received = true;
         Ok(Value::Null)
     }
 
@@ -263,6 +298,64 @@ mod limit_tests {
         assert_eq!(clamp_lsp_search_limit(32), 32);
         assert_eq!(clamp_lsp_search_limit(500), 500);
         assert_eq!(clamp_lsp_search_limit(10_000), 1000);
+    }
+}
+
+#[cfg(test)]
+mod lifecycle_tests {
+    use super::LspServer;
+    use crate::support::read_message;
+    use std::io::Cursor;
+
+    fn frame(body: &str) -> Vec<u8> {
+        format!("Content-Length: {}\r\n\r\n{body}", body.len()).into_bytes()
+    }
+
+    fn drain_messages(stdout: &[u8]) -> Vec<serde_json::Value> {
+        let mut reader = std::io::BufReader::new(Cursor::new(stdout));
+        let mut out = Vec::new();
+        while let Some(body) = read_message(&mut reader).expect("frame") {
+            out.push(serde_json::from_str(&body).expect("json"));
+        }
+        out
+    }
+
+    #[test]
+    fn exit_without_shutdown_leaves_loop_with_code_1() {
+        let mut server = LspServer::new();
+        let input = frame(r#"{"jsonrpc":"2.0","method":"exit"}"#);
+        let mut reader = Cursor::new(input);
+        let mut stdout = Vec::new();
+        server.run_with(&mut reader, &mut stdout).unwrap();
+        assert!(server.exit_requested);
+        assert!(!server.shutdown_received);
+        assert_eq!(server.process_exit_code(), 1);
+        assert!(stdout.is_empty(), "exit is a notification");
+    }
+
+    #[test]
+    fn shutdown_stays_up_until_exit_and_rejects_later_requests() {
+        let mut server = LspServer::new();
+        let mut input = Vec::new();
+        input.extend(frame(
+            r#"{"jsonrpc":"2.0","id":1,"method":"shutdown","params":{}}"#,
+        ));
+        input.extend(frame(
+            r#"{"jsonrpc":"2.0","id":2,"method":"workspace/symbol","params":{"query":"x"}}"#,
+        ));
+        input.extend(frame(r#"{"jsonrpc":"2.0","method":"exit"}"#));
+        let mut reader = Cursor::new(input);
+        let mut stdout = Vec::new();
+        server.run_with(&mut reader, &mut stdout).unwrap();
+        assert!(server.shutdown_received);
+        assert!(server.exit_requested);
+        assert_eq!(server.process_exit_code(), 0);
+        let messages = drain_messages(&stdout);
+        assert_eq!(messages.len(), 2, "{messages:?}");
+        assert_eq!(messages[0]["id"], 1);
+        assert!(messages[0]["result"].is_null());
+        assert_eq!(messages[1]["id"], 2);
+        assert_eq!(messages[1]["error"]["code"], -32600);
     }
 }
 
