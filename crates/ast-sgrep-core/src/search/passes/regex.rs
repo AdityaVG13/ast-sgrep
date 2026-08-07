@@ -32,6 +32,12 @@ pub fn regex_pass(
         Some(t) if !t.is_empty() => t,
         _ => return Ok(Vec::new()),
     };
+    if pattern.chars().count() > crate::limits::MAX_REGEX_PATTERN_CHARS {
+        return Err(StoreError::Other(format!(
+            "regex pattern exceeds maximum of {} characters",
+            crate::limits::MAX_REGEX_PATTERN_CHARS
+        )));
+    }
     let re = if options.case_insensitive {
         Regex::new(&format!("(?i){pattern}"))
     } else {

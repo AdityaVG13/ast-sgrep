@@ -57,8 +57,9 @@ pub use index::{
 };
 pub use io_bounds::{read_text_capped, MAX_INDEX_FILE_BYTES};
 pub use limits::{
-    clamp_agent_limit, clamp_output_limit, DEFAULT_AGENT_LIMIT, MAX_EXCERPT_LINES,
-    MAX_OUTPUT_RESULTS,
+    clamp_agent_limit, clamp_output_limit, validate_query_len, DEFAULT_AGENT_LIMIT,
+    MAX_EXCERPT_LINES, MAX_FILE_FILTER_CHARS, MAX_OUTPUT_RESULTS, MAX_QUERY_CHARS,
+    MAX_REGEX_PATTERN_CHARS, MAX_STDIN_LINE_BYTES,
 };
 pub use search::format_hit_line;
 pub use pattern::search_pattern;

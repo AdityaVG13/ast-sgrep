@@ -21,8 +21,8 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{SystemTime, UNIX_EPOCH};
 use types::{assign_signal_margins, dedup_hits};
 pub use types::{
-    format_hit_line, DegradedChannel, HitKind, HitSignal, SearchHit, SearchOptions, SearchResponse,
-    SnapshotStamp, SpanHitInput,
+    format_hit_line, hit_why, DegradedChannel, HitKind, HitSignal, SearchHit, SearchOptions,
+    SearchResponse, SnapshotStamp, SpanHitInput,
 };
 const CASCADE_PREFILTER_FILE_LIMIT: usize = 100;
 const MAX_HITS_PER_FILE: usize = 3;
@@ -117,6 +117,23 @@ impl Searcher {
                 "project root is not a directory: {}",
                 options.root.display()
             )));
+        }
+        // Cross-surface input bounds: 0/`ASGREP_LIMIT=0` remaps; oversize clamps (CLI docs + LSP).
+        options.limit = crate::limits::clamp_output_limit(Some(options.limit), 16);
+        options.rerank_top_k = options
+            .rerank_top_k
+            .clamp(1, crate::limits::MAX_OUTPUT_RESULTS);
+        options.context_before = options
+            .context_before
+            .min(crate::limits::MAX_EXCERPT_LINES);
+        options.context_after = options.context_after.min(crate::limits::MAX_EXCERPT_LINES);
+        if let Some(ref filter) = options.file_filter {
+            if filter.chars().count() > crate::limits::MAX_FILE_FILTER_CHARS {
+                return Err(crate::StoreError::Other(format!(
+                    "file_filter exceeds maximum of {} characters",
+                    crate::limits::MAX_FILE_FILTER_CHARS
+                )));
+            }
         }
         Ok(Self::with_store(
             IndexStore::open(&options.root, options.index_path.as_deref())?,
@@ -335,6 +352,7 @@ impl Searcher {
         Ok(response)
     }
     pub fn search_lexical(&self, query_str: &str) -> Result<SearchResponse> {
+        validate_query_arg(query_str)?;
         self.cached("lex", query_str, || {
             let parsed = ParsedQuery::parse(query_str);
             Ok(finish_response_checked(
@@ -346,6 +364,7 @@ impl Searcher {
         })
     }
     pub fn search_symbol_pass(&self, query_str: &str) -> Result<SearchResponse> {
+        validate_query_arg(query_str)?;
         self.cached("sym", query_str, || {
             let parsed = ParsedQuery::parse(query_str);
             let mut hits = symbol_pass(&self.store, &self.options, &parsed)?;
@@ -354,6 +373,7 @@ impl Searcher {
         })
     }
     pub fn search(&self, query_str: &str) -> Result<SearchResponse> {
+        validate_query_arg(query_str)?;
         let _perf_run = crate::perf_profile::Run::start("search_query");
         let _span = crate::perf_profile::Span::start(
             "search_query",
@@ -399,6 +419,7 @@ impl Searcher {
         })
     }
     pub fn search_semantic(&self, query_str: &str) -> Result<SearchResponse> {
+        validate_query_arg(query_str)?;
         self.cached("sem", query_str, || {
             let parsed = ParsedQuery::parse(query_str);
             Ok(finish_response_checked(
@@ -410,6 +431,7 @@ impl Searcher {
         })
     }
     pub fn search_literal(&self, query: &str) -> Result<SearchResponse> {
+        validate_query_arg(query)?;
         self.cached("lit", query, || {
             let parsed = ParsedQuery::literal(query);
             Ok(finish_response_checked(
@@ -421,6 +443,7 @@ impl Searcher {
         })
     }
     pub fn search_regex(&self, query: &str) -> Result<SearchResponse> {
+        validate_query_arg(query)?;
         self.cached("re", query, || {
             let parsed = ParsedQuery::regex(query);
             Ok(finish_response_checked(
@@ -432,6 +455,7 @@ impl Searcher {
         })
     }
     pub fn search_word(&self, query: &str) -> Result<SearchResponse> {
+        validate_query_arg(query)?;
         self.cached("word", query, || {
             let parsed = ParsedQuery::word(query);
             Ok(finish_response_checked(
@@ -999,6 +1023,12 @@ fn compile_glob(pattern: &str) -> std::result::Result<regex::Regex, String> {
     if pattern.is_empty() {
         return Err("file_filter must be non-empty".into());
     }
+    if pattern.chars().count() > crate::limits::MAX_FILE_FILTER_CHARS {
+        return Err(format!(
+            "file_filter exceeds maximum of {} characters",
+            crate::limits::MAX_FILE_FILTER_CHARS
+        ));
+    }
     if pattern
         .chars()
         .any(|c| c == '\0' || (c.is_control() && c != '\t'))
@@ -1060,6 +1090,10 @@ fn strip_wrapping_quotes(raw: &str) -> &str {
         t
     }
 }
+
+fn validate_query_arg(query: &str) -> Result<()> {
+    crate::limits::validate_query_len(query).map_err(crate::StoreError::Other)
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1077,8 +1111,69 @@ mod tests {
             signal: HitSignal::Exact,
             contributors: vec![HitKind::Asgrep],
             margin: 0.0,
+            confidence: 0.0,
             excerpt: String::new(),
         }
+    }
+
+    #[test]
+    fn searcher_remaps_zero_and_oversize_limit() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().to_path_buf();
+        // Minimal empty root is not a valid index; use with_store path via open after index.
+        // Indexer creates the db so Searcher::new can open it.
+        {
+            let mut indexer = crate::Indexer::new(crate::IndexOptions {
+                root: root.clone(),
+                embed_semantic: false,
+                ..crate::IndexOptions::default()
+            })
+            .unwrap();
+            let _ = indexer.index_all();
+        }
+        let zero = Searcher::new(SearchOptions {
+            root: root.clone(),
+            limit: 0,
+            use_embed: false,
+            ..SearchOptions::default()
+        })
+        .unwrap();
+        assert_eq!(zero.options().limit, 16);
+        let huge = Searcher::new(SearchOptions {
+            root: root.clone(),
+            limit: 50_000,
+            use_embed: false,
+            ..SearchOptions::default()
+        })
+        .unwrap();
+        assert_eq!(huge.options().limit, crate::limits::MAX_OUTPUT_RESULTS);
+    }
+
+    #[test]
+    fn rejects_oversize_query() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().to_path_buf();
+        {
+            let mut indexer = crate::Indexer::new(crate::IndexOptions {
+                root: root.clone(),
+                embed_semantic: false,
+                ..crate::IndexOptions::default()
+            })
+            .unwrap();
+            let _ = indexer.index_all();
+        }
+        let searcher = Searcher::new(SearchOptions {
+            root,
+            use_embed: false,
+            ..SearchOptions::default()
+        })
+        .unwrap();
+        let q = "a".repeat(crate::limits::MAX_QUERY_CHARS + 1);
+        let err = searcher.search(&q).unwrap_err();
+        assert!(
+            err.to_string().contains("query exceeds maximum"),
+            "{err}"
+        );
     }
     #[test]
     fn excerpt_coverage_respects_term_casing() {

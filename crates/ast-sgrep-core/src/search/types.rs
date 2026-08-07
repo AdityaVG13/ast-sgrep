@@ -10,6 +10,15 @@ pub enum HitSignal {
 impl HitSignal {
     pub const ALL: [Self; 3] = [Self::Exact, Self::Structural, Self::Semantic];
 
+    /// Evidence strength ordering: exact beats structural beats semantic (vh65).
+    pub fn rank(self) -> u8 {
+        match self {
+            Self::Exact => 2,
+            Self::Structural => 1,
+            Self::Semantic => 0,
+        }
+    }
+
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Exact => "exact",
@@ -74,6 +83,17 @@ pub struct SearchHit {
     pub signal: HitSignal,
     pub contributors: Vec<HitKind>,
     pub margin: f64,
+    /// Calibrated-independent relevance estimate, deliberately separate from
+    /// `score` (vh65).
+    ///
+    /// `score` orders results; `confidence` states how much to trust the top
+    /// one. A single weak lexical hit and a hit confirmed by three channels can
+    /// rank adjacently, and only `confidence` can say they are not equally
+    /// trustworthy. This is a documented heuristic over channel agreement and
+    /// signal strength, NOT a probability calibrated against held-out data --
+    /// calibration is separate work and is not claimed here.
+    #[serde(default)]
+    pub confidence: f64,
     pub excerpt: String,
 }
 #[derive(serde::Deserialize)]
@@ -115,6 +135,7 @@ impl<'de> serde::Deserialize<'de> for SearchHit {
             score: wire.score,
             signal: wire.kind.signal(),
             contributors: vec![wire.kind],
+            confidence: 0.0,
             margin: if wire.margin.is_finite() {
                 wire.margin.max(0.0)
             } else {
@@ -157,6 +178,7 @@ impl SearchHit {
             signal: kind.signal(),
             contributors: vec![kind],
             margin: 0.0,
+            confidence: 0.0,
             excerpt,
         }
     }
@@ -484,8 +506,11 @@ pub fn dedup_hits(hits: Vec<SearchHit>) -> Vec<SearchHit> {
     let mut best: Vec<SearchHit> = Vec::with_capacity(hits.len());
     let mut positions: std::collections::HashMap<_, usize> = std::collections::HashMap::new();
     for hit in hits {
+        // vh65: identity is the LOCATION. Channel kind is evidence about a
+        // location, not part of what a location is -- keying on it let one
+        // physical span survive three times as three near-identical rows with
+        // three opaque scores.
         let key = (
-            hit.kind.as_str(),
             hit.file.clone(),
             hit.line_start,
             hit.line_end,
@@ -494,13 +519,94 @@ pub fn dedup_hits(hits: Vec<SearchHit>) -> Vec<SearchHit> {
             hit.callee.clone(),
         );
         if let Some(&index) = positions.get(&key) {
-            if hit.score > best[index].score {
-                best[index] = hit;
-            }
+            merge_channel_evidence(&mut best[index], hit);
         } else {
             positions.insert(key, best.len());
             best.push(hit);
         }
     }
+    for hit in &mut best {
+        hit.confidence = estimate_confidence(hit);
+    }
     best
+}
+
+/// Fold a duplicate observation of the same location into the kept hit (vh65).
+///
+/// Best score wins the ordering, exactly as before, so ranking behavior is
+/// preserved; what changes is that the losing row's channel is retained as
+/// evidence instead of being dropped or duplicated.
+fn merge_channel_evidence(kept: &mut SearchHit, other: SearchHit) {
+    for contributor in other
+        .contributors
+        .iter()
+        .copied()
+        .chain(std::iter::once(other.kind))
+    {
+        if !kept.contributors.contains(&contributor) {
+            kept.contributors.push(contributor);
+        }
+    }
+    // Strongest signal observed for this location wins.
+    if other.signal.rank() > kept.signal.rank() {
+        kept.signal = other.signal;
+    }
+    if other.score > kept.score {
+        // Preserve the previous best-score semantics: the higher-scoring row
+        // supplies score, kind, and excerpt.
+        kept.score = other.score;
+        kept.kind = other.kind;
+        if !other.excerpt.is_empty() {
+            kept.excerpt = other.excerpt;
+        }
+        kept.margin = other.margin;
+    } else if kept.excerpt.is_empty() && !other.excerpt.is_empty() {
+        kept.excerpt = other.excerpt;
+    }
+    // Fill in identity details the kept row happened to lack.
+    kept.symbol = kept.symbol.take().or(other.symbol);
+    kept.caller = kept.caller.take().or(other.caller);
+    kept.callee = kept.callee.take().or(other.callee);
+    kept.language = kept.language.take().or(other.language);
+}
+
+/// Heuristic confidence from channel agreement and signal strength (vh65).
+///
+/// Deliberately simple and inspectable. Exact signals start high; semantic-only
+/// evidence starts low; each additional independent channel that agrees adds a
+/// bounded increment. This is not a calibrated probability and must not be
+/// reported as one.
+fn estimate_confidence(hit: &SearchHit) -> f64 {
+    let base = match hit.signal {
+        HitSignal::Exact => 0.75,
+        HitSignal::Structural => 0.60,
+        HitSignal::Semantic => 0.35,
+    };
+    let agreement = hit.contributors.len().saturating_sub(1).min(3) as f64 * 0.08;
+    (base + agreement).clamp(0.0, 0.99)
+}
+
+/// Human- and agent-readable reasons this location was returned (vh65).
+///
+/// Derived from the merged evidence, so it cannot drift from the evidence that
+/// actually produced the hit.
+pub fn hit_why(hit: &SearchHit) -> Vec<String> {
+    let mut why = Vec::new();
+    for contributor in &hit.contributors {
+        why.push(match contributor {
+            HitKind::Asgrep => "exact_text".to_owned(),
+            HitKind::Def => "exact_symbol".to_owned(),
+            HitKind::Caller => match &hit.caller {
+                Some(caller) => format!("called_by:{caller}"),
+                None => "caller_edge".to_owned(),
+            },
+            HitKind::Graph => "graph_edge".to_owned(),
+            HitKind::Anchor => "anchor".to_owned(),
+            HitKind::Import => "import_edge".to_owned(),
+            HitKind::Pattern => "structural_pattern".to_owned(),
+            HitKind::Embed => "semantic_similarity".to_owned(),
+        });
+    }
+    why.dedup();
+    why
 }
