@@ -6,6 +6,14 @@ pub const MAX_OUTPUT_RESULTS: usize = 1000;
 pub const MAX_EXCERPT_LINES: usize = 100;
 /// Default agent/MCP soft ceiling (stricter than the hard max).
 pub const DEFAULT_AGENT_LIMIT: usize = 100;
+/// Hard ceiling for search query length (characters). Shared with MCP schema.
+pub const MAX_QUERY_CHARS: usize = 4_096;
+/// Hard ceiling for `regex:` pattern length (characters) before compile.
+pub const MAX_REGEX_PATTERN_CHARS: usize = 4_096;
+/// Hard ceiling for `file_filter` glob patterns.
+pub const MAX_FILE_FILTER_CHARS: usize = 1_024;
+/// Hard ceiling for a single NDJSON / JSON-RPC line on stdio agent surfaces.
+pub const MAX_STDIN_LINE_BYTES: usize = 1_048_576;
 
 /// Clamp a requested limit into `1..=MAX_OUTPUT_RESULTS`, falling back to `default`
 /// when `requested` is `None` or zero.
@@ -20,6 +28,17 @@ pub fn clamp_agent_limit(requested: Option<usize>, default: usize) -> usize {
     base.clamp(1, DEFAULT_AGENT_LIMIT)
 }
 
+/// Reject oversize search queries. Empty is allowed (mode parsers treat it as no hits).
+pub fn validate_query_len(query: &str) -> Result<(), String> {
+    let n = query.chars().count();
+    if n > MAX_QUERY_CHARS {
+        return Err(format!(
+            "query exceeds maximum of {MAX_QUERY_CHARS} characters ({n})"
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -32,4 +51,12 @@ mod tests {
         assert_eq!(clamp_output_limit(Some(10_000), 16), MAX_OUTPUT_RESULTS);
         assert_eq!(clamp_agent_limit(Some(500), 16), DEFAULT_AGENT_LIMIT);
     }
+
+    #[test]
+    fn query_len_boundary() {
+        assert!(validate_query_len("").is_ok());
+        assert!(validate_query_len(&"a".repeat(MAX_QUERY_CHARS)).is_ok());
+        assert!(validate_query_len(&"a".repeat(MAX_QUERY_CHARS + 1)).is_err());
+    }
 }
+

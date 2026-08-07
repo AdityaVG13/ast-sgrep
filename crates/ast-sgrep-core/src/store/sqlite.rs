@@ -7,7 +7,7 @@ use super::try_index_db_path;
 use super::sql::configure_connection_with;
 use super::sql::{
     append_lang_filter, calls_matching, count_star, delete_file_children, delete_file_lines,
-    lang_and_clause, like_terms_filter, optional_row, query_cached_map, query_limit_map,
+    emb_vec, lang_and_clause, like_terms_filter, optional_row, query_cached_map, query_limit_map,
     query_map_rows, read_legacy_emb, read_sem_row, where_clause, CLEAR_ALL_SQL, SCHEMA_DDL,
 };
 use crate::{IndexStatus, Result};
@@ -396,11 +396,16 @@ impl IndexStore {
         self.begin_file_tx()?;
         match f() {
             Ok(v) => {
+                // Nested rollback poisons the write set. Do not return Ok(v) after
+                // rolling back: callers would treat a failed nested write as success
+                // (e.g. file_id that no longer exists). Match commit_file_tx refusal.
                 if self.file_tx_poisoned.get() {
                     self.rollback_file_tx()?;
-                } else {
-                    self.commit_file_tx()?;
+                    return Err(crate::StoreError::Other(
+                        "file_tx commit refused: nested file_tx rolled back".into(),
+                    ));
                 }
+                self.commit_file_tx()?;
                 Ok(v)
             }
             Err(e) => {
@@ -969,16 +974,16 @@ impl IndexStore {
             let mut stmt = self.conn.prepare(&sql)?;
             let rows = stmt.query_map(rusqlite::params_from_iter(batch.iter()), |r| {
                 let id: i64 = r.get(0)?;
+                // Fail closed on corrupt blobs (parity with read_sem_row / emb_vec).
+                // unwrap_or_default() previously dropped corrupt IVF candidates as
+                // empty vectors, silently skewing ANN re-rank results (pass3).
                 let row = (
                     r.get(1)?,
                     r.get(2)?,
                     r.get(3)?,
                     r.get::<_, Option<String>>(4)?.unwrap_or_default(),
                     r.get(5)?,
-                    {
-                        let v: Vec<u8> = r.get(6)?;
-                        ast_sgrep_embed::embed_from_bytes(&v).unwrap_or_default()
-                    },
+                    emb_vec(r, 6)?,
                 );
                 Ok((id, row))
             })?;
@@ -1349,6 +1354,98 @@ mod restore_synchronous_tests {
         assert!(
             err.to_string().contains("restore_synchronous"),
             "unexpected error: {err}"
+        );
+        assert!(store.connection().is_autocommit());
+    }
+}
+
+#[cfg(test)]
+mod pass3_deep_core_tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    fn empty_upsert<'a>(path: &'a str, lines: &'a [(u32, String)], hash: &'a str) -> UpsertFileInput<'a> {
+        UpsertFileInput {
+            rel_path: path,
+            language: Some("python"),
+            mtime_secs: 1,
+            mtime_nanos: 0,
+            content_hash: hash,
+            lines,
+            eol: "\n",
+            symbols: &[],
+            callers: &[],
+            imports: &[],
+            pattern_nodes: &[],
+            semantic_chunks: &[],
+            embed_semantic: false,
+            embed_backend: ast_sgrep_embed::EmbedPreference::Auto,
+        }
+    }
+
+    /// pass3: semantic_chunks_by_ids must fail closed like all_semantic_chunks.
+    #[test]
+    fn semantic_chunks_by_ids_fails_closed_on_corrupt_blob() {
+        let temp = TempDir::new().unwrap();
+        let store = IndexStore::open(temp.path(), None).unwrap();
+        let lines = [(1, "emb".into())];
+        let file_id = store.upsert_file(empty_upsert("c.py", &lines, "h")).unwrap();
+        store
+            .connection()
+            .execute(
+                "INSERT INTO semantic_chunks(file_id, symbol_id, chunk_kind, line_start, line_end, symbol_name, text, vector) \
+                 VALUES(?1, NULL, 'file', 1, 1, '', 't', ?2)",
+                rusqlite::params![file_id, vec![1u8, 2, 3]],
+            )
+            .unwrap();
+        let id: i64 = store
+            .connection()
+            .query_row("SELECT id FROM semantic_chunks LIMIT 1", [], |r| r.get(0))
+            .unwrap();
+        let err = store
+            .semantic_chunks_by_ids(&[id])
+            .expect_err("corrupt vector must not become an empty embedding");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("embedding")
+                || msg.contains("multiple of 4")
+                || msg.contains("database")
+                || msg.contains("InvalidData"),
+            "corrupt blob must error, got: {msg}"
+        );
+    }
+
+    /// pass3: with_file_tx must not Ok after nested poison+rollback.
+    #[test]
+    fn with_file_tx_poisoned_ok_closure_returns_err() {
+        let temp = TempDir::new().unwrap();
+        let store = IndexStore::open(temp.path(), None).unwrap();
+        let lines = [(1, "keep".into())];
+        store
+            .upsert_file(empty_upsert("keep.py", &lines, "h0"))
+            .unwrap();
+
+        let result = store.with_file_tx(|| {
+            // Nested begin + rollback poisons the outer write set.
+            store.begin_file_tx()?;
+            store
+                .connection()
+                .execute(
+                    "INSERT INTO meta(key, value) VALUES('poison_probe', '1')                      ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                    [],
+                )
+                .map_err(crate::StoreError::from)?;
+            store.rollback_file_tx()?;
+            // Closure still returns Ok — with_file_tx must refuse success.
+            Ok(42i64)
+        });
+        assert!(
+            result.is_err(),
+            "poisoned with_file_tx must not return Ok after rollback"
+        );
+        assert!(
+            store.get_meta("poison_probe").unwrap().is_none(),
+            "poisoned writes must not be visible"
         );
         assert!(store.connection().is_autocommit());
     }

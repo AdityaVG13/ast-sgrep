@@ -213,3 +213,84 @@ fn deferred_read_snapshot_hides_a_concurrent_commit() {
         advanced
     );
 }
+
+/// d3l5: a sidecar built for a different generation must be reported, not
+/// silently ignored. `load_semantic_ivf` returns None on mismatch, which makes
+/// a stale sidecar look identical to no sidecar at all.
+#[test]
+fn stale_semantic_sidecar_is_reported_as_a_degraded_channel() {
+    let temp = tempfile::tempdir().unwrap();
+    // Enough chunks, and a low ANN threshold, so an IVF sidecar is actually
+    // built -- otherwise this test would pass without exercising anything.
+    corpus(temp.path(), 40);
+    Indexer::new(IndexOptions {
+        root: temp.path().to_path_buf(),
+        embed_semantic: true,
+        ann_threshold: Some(1),
+        ..IndexOptions::default()
+    })
+    .expect("indexer")
+    .index_all()
+    .expect("index");
+
+    let searcher = Searcher::new(SearchOptions {
+        root: temp.path().to_path_buf(),
+        use_embed: true,
+        ..SearchOptions::default()
+    })
+    .expect("searcher");
+
+    let sidecar =
+        ast_sgrep_core::semantic_ivf::semantic_ivf_path(searcher.store().db_path());
+    assert!(
+        sidecar.exists(),
+        "fixture must build a real IVF sidecar at {}, or this test proves nothing",
+        sidecar.display()
+    );
+
+    let healthy = searcher.search("target_symbol_0").expect("search");
+    assert!(
+        healthy.snapshot.semantic_manifest.is_some(),
+        "sidecar present, so its fingerprint must be reported"
+    );
+    assert!(
+        healthy
+            .snapshot
+            .degraded_channels
+            .iter()
+            .all(|channel| channel.reason != "sidecar_generation_mismatch"),
+        "fresh sidecar must not be reported stale: {:?}",
+        healthy.snapshot
+    );
+
+    // Advance the generation without rebuilding the sidecar.
+    searcher
+        .store()
+        .connection()
+        .execute_batch(
+            "INSERT INTO meta(key, value) VALUES('index_data_version', '1')
+             ON CONFLICT(key) DO UPDATE SET value =
+             CAST(COALESCE(meta.value, '0') AS INTEGER) + 1",
+        )
+        .expect("bump generation");
+
+    let stale = Searcher::new(SearchOptions {
+        root: temp.path().to_path_buf(),
+        use_embed: true,
+        ..SearchOptions::default()
+    })
+    .expect("searcher")
+    .search("target_symbol_0")
+    .expect("search");
+
+    assert!(
+        stale
+            .snapshot
+            .degraded_channels
+            .iter()
+            .any(|channel| channel.channel == "semantic"
+                && channel.reason == "sidecar_generation_mismatch"),
+        "stale sidecar must surface as a degraded channel: {:?}",
+        stale.snapshot
+    );
+}
