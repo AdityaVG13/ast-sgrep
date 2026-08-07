@@ -151,6 +151,8 @@ pub fn to_agent_capsule_json(response: &SearchResponse, excerpt_lines: usize) ->
         let mut capsule = serde_json::json!({
             "file": hit.file, "lines": {"start": hit.line_start, "end": hit.line_end}, "symbol": hit.symbol, "caller": hit.caller, "callee": hit.callee,
             "kind": hit.kind.as_str(), "signal": hit.signal, "contributors": hit.contributors, "score": hit.score, "margin": hit.margin,
+            "confidence": hit.confidence,
+            "why": ast_sgrep_core::search::hit_why(hit),
             "preview": preview_line(&hit.excerpt),
             "ref": format!("{}#L{}-L{}", hit.file, hit.line_start, hit.line_end), });
         if excerpt_lines > 0 {
