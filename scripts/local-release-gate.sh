@@ -13,5 +13,7 @@ if ! command -v cargo-fuzz >/dev/null 2>&1; then
 fi
 (
   cd fuzz
+  bash scripts/sync_seeds.sh
+  cargo +nightly fuzz run query_grammar -- -max_total_time=30 -timeout=5 -dict=dictionaries/query_grammar.dict
   cargo +nightly fuzz run rank -- -max_total_time=30 -timeout=5
 )

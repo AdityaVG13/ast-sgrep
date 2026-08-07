@@ -161,9 +161,13 @@ jobs:
       - name: Install cargo-fuzz
         run: command -v cargo-fuzz >/dev/null || cargo install cargo-fuzz --locked
 
-      - name: Fuzz legacy query parser
+      - name: Sync L1 seed corpora into fuzz corpus
         working-directory: fuzz
-        run: cargo +nightly fuzz run parsed_query -- -max_total_time=30 -timeout=5
+        run: bash scripts/sync_seeds.sh
+
+      - name: Fuzz query grammar parser
+        working-directory: fuzz
+        run: cargo +nightly fuzz run query_grammar -- -max_total_time=30 -timeout=5 -dict=dictionaries/query_grammar.dict
 
       - name: Fuzz ranking invariants
         working-directory: fuzz
