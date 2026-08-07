@@ -502,6 +502,18 @@ pub fn assign_signal_margins(hits: &mut [SearchHit]) {
     }
 }
 
+/// Assign heuristic confidence on every hit (vh65 / pass5).
+///
+/// Call after channel merge and after [`assign_signal_margins`]: margins rewrite
+/// display `signal` from `kind`, but confidence must reflect contributor
+/// agreement and the strongest observed channel, not the post-margin display
+/// field alone.
+pub fn assign_hit_confidence(hits: &mut [SearchHit]) {
+    for hit in hits.iter_mut() {
+        hit.confidence = estimate_confidence(hit);
+    }
+}
+
 pub fn dedup_hits(hits: Vec<SearchHit>) -> Vec<SearchHit> {
     let mut best: Vec<SearchHit> = Vec::with_capacity(hits.len());
     let mut positions: std::collections::HashMap<_, usize> = std::collections::HashMap::new();
@@ -525,9 +537,7 @@ pub fn dedup_hits(hits: Vec<SearchHit>) -> Vec<SearchHit> {
             best.push(hit);
         }
     }
-    for hit in &mut best {
-        hit.confidence = estimate_confidence(hit);
-    }
+    assign_hit_confidence(&mut best);
     best
 }
 
@@ -576,8 +586,20 @@ fn merge_channel_evidence(kept: &mut SearchHit, other: SearchHit) {
 /// evidence starts low; each additional independent channel that agrees adds a
 /// bounded increment. This is not a calibrated probability and must not be
 /// reported as one.
+///
+/// Base strength is the **strongest contributor channel** (and `kind`), not
+/// solely `hit.signal`. `assign_signal_margins` rewrites display `signal` from
+/// `kind` for within-channel margins; confidence must not collapse to that
+/// display field after multi-channel merges (pass5).
 fn estimate_confidence(hit: &SearchHit) -> f64 {
-    let base = match hit.signal {
+    let strongest = hit
+        .contributors
+        .iter()
+        .map(|kind| kind.signal())
+        .chain(std::iter::once(hit.kind.signal()))
+        .max_by_key(|signal| signal.rank())
+        .unwrap_or(hit.signal);
+    let base = match strongest {
         HitSignal::Exact => 0.75,
         HitSignal::Structural => 0.60,
         HitSignal::Semantic => 0.35,
@@ -609,4 +631,71 @@ pub fn hit_why(hit: &SearchHit) -> Vec<String> {
     }
     why.dedup();
     why
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn hit(kind: HitKind, file: &str, line: u32, score: f64) -> SearchHit {
+        SearchHit {
+            kind,
+            file: file.into(),
+            line_start: line,
+            line_end: line,
+            symbol: None,
+            caller: None,
+            callee: None,
+            language: None,
+            score,
+            signal: kind.signal(),
+            contributors: vec![kind],
+            margin: 0.0,
+            confidence: 0.0,
+            excerpt: String::new(),
+        }
+    }
+
+    #[test]
+    fn confidence_uses_strongest_contributor_not_display_signal() {
+        // Higher-scoring Embed wins kind/score; lower-scoring Asgrep still contributes
+        // exact evidence. After margins rewrite display signal to Semantic, confidence
+        // must keep Exact base + one agreement step (0.75 + 0.08).
+        let mut merged = dedup_hits(vec![
+            hit(HitKind::Embed, "a.rs", 1, 0.9),
+            hit(HitKind::Asgrep, "a.rs", 1, 0.4),
+        ]);
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].kind, HitKind::Embed);
+        assert!(merged[0].contributors.contains(&HitKind::Asgrep));
+        assert!(merged[0].contributors.contains(&HitKind::Embed));
+
+        assign_signal_margins(&mut merged);
+        assert_eq!(merged[0].signal, HitSignal::Semantic);
+        // Re-assign as finish_response does after margins (pass5).
+        assign_hit_confidence(&mut merged);
+        let expected = 0.75 + 0.08;
+        assert!(
+            (merged[0].confidence - expected).abs() < 1e-12,
+            "confidence={} expected {expected}",
+            merged[0].confidence
+        );
+    }
+
+    #[test]
+    fn semantic_only_confidence_is_nonzero_without_dedup() {
+        // search_semantic uses dedup=false; confidence must still be populated.
+        let mut hits = vec![hit(HitKind::Embed, "sem.rs", 3, 2.5)];
+        assign_signal_margins(&mut hits);
+        assign_hit_confidence(&mut hits);
+        assert!((hits[0].confidence - 0.35).abs() < 1e-12);
+        assert!(hits[0].confidence > 0.0);
+    }
+
+    #[test]
+    fn empty_hits_confidence_assign_is_noop() {
+        let mut hits: Vec<SearchHit> = vec![];
+        assign_hit_confidence(&mut hits);
+        assert!(hits.is_empty());
+    }
 }

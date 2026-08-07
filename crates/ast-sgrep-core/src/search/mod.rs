@@ -19,10 +19,10 @@ use std::io::Write;
 use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{SystemTime, UNIX_EPOCH};
-use types::{assign_signal_margins, dedup_hits};
+use types::{assign_hit_confidence, assign_signal_margins};
 pub use types::{
-    format_hit_line, hit_why, DegradedChannel, HitKind, HitSignal, SearchHit, SearchOptions,
-    SearchResponse, SnapshotStamp, SpanHitInput,
+    dedup_hits, format_hit_line, hit_why, DegradedChannel, HitKind, HitSignal,
+    SearchHit, SearchOptions, SearchResponse, SnapshotStamp, SpanHitInput,
 };
 const CASCADE_PREFILTER_FILE_LIMIT: usize = 100;
 const MAX_HITS_PER_FILE: usize = 3;
@@ -709,6 +709,10 @@ pub(crate) fn finish_response_checked(
         hits.retain(|h| re.is_match(&h.file));
     }
     assign_signal_margins(&mut hits);
+    // Confidence is independent of ranking order but must run after margins
+    // (which rewrite display `signal` from `kind`) and on every path -- including
+    // `dedup=false` (`search_semantic`) where `dedup_hits` never runs (pass5).
+    assign_hit_confidence(&mut hits);
     if options.count_only {
         let mut counts: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
         for hit in &hits {
@@ -1209,6 +1213,29 @@ mod tests {
             response.hits.iter().any(|h| h.file == "low.rs"),
             "high-coverage lower-score hit must survive pre-truncate"
         );
+    }
+
+    #[test]
+    fn finish_response_assigns_confidence_when_dedup_false() {
+        // Regression for pass5 / ast-sgrep-d2a1.7: search_semantic finishes with
+        // dedup=false and used to leave confidence at 0.0 forever.
+        let parsed = ParsedQuery::parse("credential renewal");
+        let mut embed = hit("auth.rs", 10, 3.2);
+        embed.kind = HitKind::Embed;
+        embed.signal = HitSignal::Semantic;
+        embed.contributors = vec![HitKind::Embed];
+        let options = SearchOptions {
+            limit: 8,
+            use_embed: false,
+            ..SearchOptions::default()
+        };
+        let response = finish_response(&parsed, &options, vec![embed], false);
+        assert_eq!(response.hits.len(), 1);
+        assert!(
+            response.hits[0].confidence > 0.0,
+            "dedup=false path must still assign confidence"
+        );
+        assert!((response.hits[0].confidence - 0.35).abs() < 1e-12);
     }
 
     #[test]
