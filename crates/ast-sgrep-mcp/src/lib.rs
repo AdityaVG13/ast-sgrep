@@ -39,7 +39,12 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
-const PROTOCOL_VERSION: &str = "2024-11-05";
+/// Current MCP revision this server implements (r2lu).
+const PROTOCOL_VERSION: &str = "2026-07-28";
+/// Handshake-era revision kept for existing clients (r2lu).
+const LEGACY_PROTOCOL_VERSION: &str = "2024-11-05";
+/// Revisions this server will negotiate down to, newest first.
+const SUPPORTED_PROTOCOL_VERSIONS: [&str; 2] = [PROTOCOL_VERSION, LEGACY_PROTOCOL_VERSION];
 const SERVER_NAME: &str = "ast-sgrep";
 const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
 const MAX_AGENT_LIMIT: usize = 100;
@@ -186,7 +191,7 @@ impl McpServer {
     fn handle_request(&self, request: &JsonRpcRequest) -> Option<Result<Value, Value>> {
         request.id.as_ref()?;
         Some(match request.method.as_str() {
-            "initialize" => Ok(self.handle_initialize()),
+            "initialize" => Ok(self.handle_initialize(&request.params)),
             "tools/list" => Ok(self.handle_tools_list()),
             "tools/call" => return self.handle_tools_call(&request.params).map(Ok),
             "ping" => Ok(json!({})),
@@ -196,9 +201,19 @@ impl McpServer {
         })
     }
 
-    fn handle_initialize(&self) -> Value {
+    /// Negotiate a protocol revision (r2lu).
+    ///
+    /// A client that asks for a revision we support gets that revision back, so
+    /// handshake-era clients keep working unchanged. Anything else is answered
+    /// with our current revision, which is what the spec asks a server to do
+    /// when it cannot satisfy the request exactly.
+    fn handle_initialize(&self, params: &Value) -> Value {
+        let requested = params.get("protocolVersion").and_then(Value::as_str);
+        let negotiated = requested
+            .filter(|version| SUPPORTED_PROTOCOL_VERSIONS.contains(version))
+            .unwrap_or(PROTOCOL_VERSION);
         json!({
-            "protocolVersion": PROTOCOL_VERSION,
+            "protocolVersion": negotiated,
             "capabilities": { "tools": {} },
             "serverInfo": { "name": SERVER_NAME, "version": SERVER_VERSION },
         })
@@ -212,6 +227,30 @@ impl McpServer {
             "resend_seen": {"type": "boolean", "description": "Send snippets already returned this session instead of the ~ marker. Set true only if you do not keep earlier results."},
             "budget_tokens": {"type": "integer", "minimum": 1, "maximum": MAX_BUDGET_TOKENS, "description": "Whole-response token budget. Each hit gains a trailing detail level (metadata|signature|block|full) and omitted source is marked with a gap marker."}
         });
+        // r2lu: a declared outputSchema lets a client parse results without
+        // reverse-engineering the compact envelope from prose.
+        let search_output_schema = json!({
+            "type": "object",
+            "properties": {
+                "v": {"type": "integer", "description": "Envelope schema version"},
+                "q": {"type": "string", "description": "Echoed query"},
+                "r": {"type": "array", "items": {"type": "string"},
+                       "description": "Shared path roots; present only when folding is smaller"},
+                "p": {"type": "object",
+                       "description": "Path id to project path, or [root_index, suffix] when folded"},
+                "h": {"type": "array", "description": "Hits as [id, kind, signal, symbol, snippet] (plus detail level under budget_tokens)",
+                       "items": {"type": "array"}},
+                "why": {"type": "string", "description": "Miss classification; present only on zero-hit responses"},
+                "tried": {"type": "array", "items": {"type": "string"}},
+                "next": {"type": "string"},
+                "zn": {"type": "integer", "description": "Hit count"},
+                "zb": {"type": "array", "items": {"type": "integer"}},
+                "zt": {"type": "integer"},
+                "ze": {"type": "integer", "description": "Snippets elided as already sent this session"},
+                "zd": {"type": "array", "items": {"type": "integer"}, "description": "[token budget, spent]"}
+            },
+            "required": ["v", "q"]
+        });
         let search_tool = |name: &str, description: &str, props: Value| {
             json!({
                 "name": name,
@@ -221,7 +260,8 @@ impl McpServer {
                     "properties": props,
                     "required": ["query"],
                     "additionalProperties": false
-                }
+                },
+                "outputSchema": search_output_schema.clone()
             })
         };
         // kxmc: the compact envelope contract lives in the tool descriptions,
@@ -262,7 +302,16 @@ impl McpServer {
         let args = params.get("arguments").cloned().unwrap_or(json!({}));
         let result = self.dispatch_tool(name, &args);
         Some(match result {
-            Ok(text) => json!({"content": [{"type": "text", "text": text}], "isError": false}),
+            // r2lu: typed structuredContent for current clients, with the
+            // minified text kept as the fallback older clients still read.
+            Ok(text) => match serde_json::from_str::<Value>(&text) {
+                Ok(structured) => json!({
+                    "content": [{"type": "text", "text": text}],
+                    "structuredContent": structured,
+                    "isError": false
+                }),
+                Err(_) => json!({"content": [{"type": "text", "text": text}], "isError": false}),
+            },
             Err(e) => {
                 json!({"content": [{"type": "text", "text": e.to_string()}], "isError": true})
             }
