@@ -59,12 +59,83 @@ fn tool_body(response: &Value) -> Value {
 }
 #[test]
 fn initialize_returns_protocol_and_tools_capability() {
+    // r2lu: a client that names no revision gets the current one.
     let r = rpc(json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}));
     assert_eq!(r["id"], 1);
-    assert_eq!(r["result"]["protocolVersion"], "2024-11-05");
+    assert_eq!(r["result"]["protocolVersion"], "2026-07-28");
     assert!(r["result"]["capabilities"]["tools"].is_object());
     assert_eq!(r["result"]["serverInfo"]["name"], "ast-sgrep");
     assert!(r.get("error").is_none());
+}
+
+/// r2lu: negotiation, not a hardcoded constant. An existing handshake-era
+/// client must keep the revision it asked for.
+#[test]
+fn initialize_negotiates_the_requested_protocol_revision() {
+    let legacy = rpc(json!({
+        "jsonrpc":"2.0","id":1,"method":"initialize",
+        "params":{"protocolVersion":"2024-11-05"}
+    }));
+    assert_eq!(
+        legacy["result"]["protocolVersion"], "2024-11-05",
+        "legacy clients must not be forced onto a newer revision"
+    );
+
+    let current = rpc(json!({
+        "jsonrpc":"2.0","id":2,"method":"initialize",
+        "params":{"protocolVersion":"2026-07-28"}
+    }));
+    assert_eq!(current["result"]["protocolVersion"], "2026-07-28");
+
+    // An unsupported revision falls back to ours rather than echoing nonsense.
+    let unknown = rpc(json!({
+        "jsonrpc":"2.0","id":3,"method":"initialize",
+        "params":{"protocolVersion":"1999-01-01"}
+    }));
+    assert_eq!(unknown["result"]["protocolVersion"], "2026-07-28");
+}
+
+/// r2lu: every search tool declares an outputSchema, and results carry typed
+/// structuredContent that matches the text fallback exactly.
+#[test]
+fn search_results_carry_structured_content_matching_the_declared_schema() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("src");
+    std::fs::create_dir(&source).unwrap();
+    std::fs::write(source.join("lib.rs"), "fn target_symbol() {}\n").unwrap();
+    ast_sgrep_core::Indexer::new(ast_sgrep_core::IndexOptions {
+        root: temp.path().to_path_buf(),
+        ..ast_sgrep_core::IndexOptions::default()
+    })
+    .unwrap()
+    .index_all()
+    .unwrap();
+
+    let listed = rpc(json!({"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}));
+    for tool in listed["result"]["tools"].as_array().unwrap() {
+        let name = tool["name"].as_str().unwrap();
+        if name.ends_with("_search") || name == "code_search" {
+            let schema = &tool["outputSchema"];
+            assert_eq!(schema["type"], "object", "{name} must declare an outputSchema");
+            assert!(schema["properties"]["h"].is_object(), "{name} schema hits");
+            assert!(schema["properties"]["p"].is_object(), "{name} schema paths");
+        }
+    }
+
+    let response = rpc_at(
+        json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"keyword_search","arguments":{"query":"target_symbol","limit":4}}}),
+        Some(temp.path()),
+    );
+    let structured = &response["result"]["structuredContent"];
+    assert!(structured.is_object(), "structuredContent missing: {response:#}");
+    assert_eq!(structured["v"], 1);
+    assert!(structured["h"].is_array());
+
+    // The text fallback stays, and says exactly the same thing.
+    let text = response["result"]["content"][0]["text"].as_str().unwrap();
+    let parsed: Value = serde_json::from_str(text).expect("text fallback is JSON");
+    assert_eq!(&parsed, structured, "text and structured content must agree");
+    assert!(!text.contains('\n'), "text fallback must stay minified");
 }
 #[test]
 fn tools_list_exposes_search_and_index_tools() {

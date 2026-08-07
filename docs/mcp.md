@@ -132,6 +132,17 @@ The compact payload uses this versioned schema:
   stable head and confines volatile numbers to a trailing block a consumer
   can strip. Repeated identical searches are byte-stable.
 
+### Structured results and protocol revision (r2lu)
+
+Every search tool declares an `outputSchema`, and `tools/call` returns typed
+`structuredContent` alongside the minified text fallback, so a current client
+parses results directly instead of reverse-engineering the compact envelope.
+The two always agree: the text is the same JSON, minified.
+
+`initialize` negotiates. A client asking for `2024-11-05` keeps it, a client
+asking for `2026-07-28` gets it, and an unrecognized revision is answered with
+the server's current revision.
+
 ### Misses
 
 A search that finds nothing returns a diagnostic envelope instead of an empty
