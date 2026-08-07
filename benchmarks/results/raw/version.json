@@ -1,0 +1,9 @@
+{
+  "command": "version",
+  "exit_code": 0,
+  "machine_schema_version": "1.0.0",
+  "ok": true,
+  "schema_version": "1.0.0",
+  "tool": "asgrep",
+  "version": "1.4.0"
+}

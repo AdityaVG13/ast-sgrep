@@ -1,0 +1,168 @@
+    Blocking waiting for file lock on build directory
+   Compiling find-msvc-tools v0.1.9
+   Compiling shlex v2.0.1
+   Compiling cc v1.2.65
+   Compiling tree-sitter-language v0.1.7
+   Compiling libc v0.2.186
+   Compiling proc-macro2 v1.0.106
+   Compiling unicode-ident v1.0.24
+   Compiling quote v1.0.46
+   Compiling cfg-if v1.0.4
+   Compiling syn v2.0.118
+   Compiling zmij v1.0.21
+   Compiling memchr v2.8.2
+   Compiling itoa v1.0.18
+   Compiling serde_core v1.0.228
+   Compiling serde v1.0.228
+   Compiling crossbeam-utils v0.8.21
+   Compiling serde_derive v1.0.228
+   Compiling ring v0.17.14
+   Compiling crossbeam-epoch v0.9.20
+   Compiling zeroize v1.8.1
+   Compiling once_cell v1.21.4
+   Compiling rustls-pki-types v1.14.1
+   Compiling hashbrown v0.17.1
+   Compiling zerocopy v0.8.52
+   Compiling serde_json v1.0.150
+   Compiling equivalent v1.0.2
+   Compiling regex-syntax v0.8.11
+   Compiling indexmap v2.14.0
+   Compiling aho-corasick v1.1.4
+   Compiling zerocopy-derive v0.8.52
+   Compiling getrandom v0.2.17
+   Compiling smallvec v1.15.2
+   Compiling rayon-core v1.13.0
+   Compiling untrusted v0.9.0
+   Compiling bitflags v2.13.0
+   Compiling either v1.16.0
+   Compiling regex-automata v0.4.14
+   Compiling crossbeam-deque v0.8.6
+   Compiling getrandom v0.3.4
+   Compiling vcpkg v0.2.15
+   Compiling percent-encoding v2.3.2
+   Compiling utf8_iter v1.0.4
+   Compiling idna_adapter v1.0.0
+   Compiling anyhow v1.0.103
+   Compiling pkg-config v0.3.33
+   Compiling rustls v0.23.41
+   Compiling libsqlite3-sys v0.38.1
+   Compiling idna v1.0.3
+   Compiling form_urlencoded v1.2.2
+   Compiling regex v1.12.4
+   Compiling rustls-webpki v0.103.13
+   Compiling tree-sitter v0.26.10
+   Compiling webpki-roots v1.0.8
+   Compiling tree-sitter-swift v0.7.3
+   Compiling tree-sitter-javascript v0.25.0
+   Compiling tree-sitter-cpp v0.23.4
+   Compiling tree-sitter-typescript v0.23.2
+   Compiling tree-sitter-go v0.25.0
+   Compiling tree-sitter-python v0.25.0
+   Compiling tree-sitter-c-sharp v0.23.5
+   Compiling tree-sitter-java v0.23.5
+   Compiling tree-sitter-kotlin-ng v1.1.0
+   Compiling tree-sitter-ruby v0.23.1
+   Compiling tree-sitter-rust v0.24.2
+   Compiling tree-sitter-php v0.24.2
+   Compiling simsimd v6.5.16
+   Compiling tree-sitter-c v0.24.2
+   Compiling blake3 v1.5.5
+   Compiling foldhash v0.2.0
+   Compiling rustix v0.38.44
+   Compiling log v0.4.33
+   Compiling autocfg v1.5.1
+   Compiling subtle v2.6.1
+   Compiling num-traits v0.2.19
+   Compiling webpki-roots v0.26.11
+   Compiling rayon v1.12.0
+   Compiling url v2.5.4
+   Compiling errno v0.3.14
+   Compiling arrayvec v0.7.7
+   Compiling thiserror v2.0.18
+   Compiling same-file v1.0.6
+   Compiling streaming-iterator v0.1.9
+   Compiling constant_time_eq v0.3.1
+   Compiling arrayref v0.3.9
+   Compiling base64 v0.22.1
+   Compiling ureq v2.12.1
+   Compiling walkdir v2.5.0
+   Compiling rand_core v0.9.5
+   Compiling hashlink v0.12.0
+   Compiling thiserror-impl v2.0.18
+   Compiling memmap2 v0.9.11
+   Compiling fallible-iterator v0.3.0
+   Compiling fastrand v2.4.1
+   Compiling fallible-streaming-iterator v0.1.9
+   Compiling rusqlite v0.40.1
+   Compiling tempfile v3.14.0
+   Compiling ast-sgrep-mmap v1.4.0 (/Users/aditya/Developer/ast-sgrep/crates/ast-sgrep-mmap)
+   Compiling ast-sgrep-lang v1.4.0 (/Users/aditya/Developer/ast-sgrep/crates/ast-sgrep-lang)
+   Compiling ast-sgrep-embed v1.4.0 (/Users/aditya/Developer/ast-sgrep/crates/ast-sgrep-embed)
+   Compiling half v2.7.1
+   Compiling plotters-backend v0.3.7
+   Compiling anstyle v1.0.14
+   Compiling bytemuck v1.25.2
+   Compiling clap_lex v0.7.7
+   Compiling ciborium-io v0.2.2
+   Compiling ciborium-ll v0.2.2
+   Compiling clap_builder v4.5.23
+   Compiling ast-sgrep-core v1.4.0 (/Users/aditya/Developer/ast-sgrep/crates/ast-sgrep-core)
+   Compiling plotters-svg v0.3.7
+   Compiling ppv-lite86 v0.2.21
+   Compiling itertools v0.10.5
+   Compiling wait-timeout v0.2.1
+   Compiling fnv v1.0.7
+   Compiling cast v0.3.0
+   Compiling quick-error v1.2.3
+   Compiling bit-vec v0.8.0
+   Compiling bit-set v0.8.0
+   Compiling rusty-fork v0.3.1
+   Compiling criterion-plot v0.5.0
+   Compiling rand_chacha v0.9.0
+   Compiling plotters v0.3.7
+   Compiling ast-sgrep-lsp v1.4.0 (/Users/aditya/Developer/ast-sgrep/crates/ast-sgrep-lsp)
+   Compiling clap v4.5.23
+   Compiling ciborium v0.2.2
+   Compiling rand_xorshift v0.4.0
+   Compiling rand v0.9.4
+   Compiling tinytemplate v1.2.1
+   Compiling is-terminal v0.4.17
+   Compiling unarray v0.1.4
+   Compiling anes v0.1.6
+   Compiling oorandom v11.1.5
+   Compiling criterion v0.5.1
+   Compiling proptest v1.11.0
+   Compiling ast-sgrep-testkit v1.4.0 (/Users/aditya/Developer/ast-sgrep/crates/ast-sgrep-testkit)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2m 53s
+     Running tests/generation_swap.rs (target/debug/deps/generation_swap-f55267096e4401ea)
+
+running 4 tests
+test a_destroyed_candidate_build_leaves_the_active_generation_serving ... ok
+test empty_candidate_is_refused_and_active_pointer_survives ... ok
+test reindex_activates_a_new_generation_and_retains_the_previous ... ok
+test corrupt_candidate_sidecar_blocks_activation ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.16s
+
+     Running tests/snapshot_generation.rs (target/debug/deps/snapshot_generation-d1a51eb3237b3eef)
+
+running 5 tests
+test deferred_read_snapshot_hides_a_concurrent_commit ... ok
+test response_carries_the_snapshot_it_was_read_from ... ok
+test generation_increases_with_indexing_and_is_reflected_in_responses ... ok
+test concurrent_reindex_never_yields_a_mixed_generation_response ... ok
+test stale_semantic_sidecar_is_reported_as_a_degraded_channel ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.22s
+
+     Running tests/store_pragmas.rs (target/debug/deps/store_pragmas-93a208eb3a0ead1a)
+
+running 5 tests
+test bulk_tx_rollback_restores_synchronous_normal ... ok
+test file_tx_restores_synchronous_normal_after_commit_and_rollback ... ok
+test default_durability_never_reaches_synchronous_off ... ok
+test index_store_applies_wal_and_busy_timeout ... ok
+test durability_profiles_control_synchronous_pragma ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+

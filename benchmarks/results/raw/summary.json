@@ -1,0 +1,33 @@
+{
+  "commit": "7dd4af042d94887bba0af2adf69b6d2ed2e3636a",
+  "dirty_worktree": true,
+  "corpus": "self",
+  "gold_queries": 12,
+  "retrieval": {
+    "mrr": 0.669,
+    "n_queries": 12,
+    "ndcg": 0.726,
+    "recall_at_1": 0.458,
+    "recall_at_20": 0.917,
+    "recall_at_5": 0.792,
+    "recall_at_k": 0.917
+  },
+  "hybrid_minus_no_embed": {
+    "delta_mrr": 0.0,
+    "delta_ndcg": 0.0,
+    "delta_recall_at_1": 0.0,
+    "delta_recall_at_20": 0.0,
+    "delta_recall_at_5": 0.0,
+    "delta_recall_at_k": 0.0
+  },
+  "token_efficiency": {
+    "native": 57347,
+    "agent": 68855,
+    "agent-capsule": 45272,
+    "compact": 11607,
+    "compact-budget300": 10489,
+    "budget300_vs_agent_capsule_pct": 76.8,
+    "compact_vs_agent_capsule_pct": 74.4,
+    "compact_vs_native_pct": 79.8
+  }
+}
