@@ -387,6 +387,17 @@ pub struct SnapshotStamp {
     pub degraded_channels: Vec<DegradedChannel>,
 }
 
+/// One learned association applied to a query (ufk7).
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct QueryExpansion {
+    pub term: String,
+    pub related: String,
+    /// Co-occurrence count behind the association: the checkable number.
+    pub support: u32,
+    /// Human-readable justification.
+    pub because: String,
+}
+
 /// A channel that failed or was skipped, and why (d3l5).
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct DegradedChannel {
@@ -413,6 +424,13 @@ pub struct SearchResponse {
     /// Index snapshot this response was built from (d3l5).
     #[serde(default)]
     pub snapshot: SnapshotStamp,
+    /// Repository associations that widened this query (ufk7).
+    ///
+    /// Query expansion changes what the user asked for, so the engine states
+    /// which terms it added and on what evidence rather than silently
+    /// broadening the search.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub query_expansions: Vec<QueryExpansion>,
 }
 pub fn format_hit_line(hit: &SearchHit) -> String {
     let f = &hit.file;

@@ -22,9 +22,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use types::{assign_hit_confidence, assign_signal_margins};
 pub use types::{
     dedup_hits, format_hit_line, hit_why, DegradedChannel, HitKind, HitSignal,
-    SearchHit, SearchOptions, SearchResponse, SnapshotStamp, SpanHitInput,
+    SearchHit, SearchOptions, SearchResponse, SnapshotStamp, SpanHitInput, QueryExpansion,
 };
 const CASCADE_PREFILTER_FILE_LIMIT: usize = 100;
+/// Cap on reported query expansions (ufk7).
+const MAX_QUERY_EXPANSIONS: usize = 5;
 const MAX_HITS_PER_FILE: usize = 3;
 
 /// On mutex poison, clear cached state before continuing so a panicked
@@ -231,6 +233,7 @@ impl Searcher {
         }
 
         response.snapshot = self.snapshot_stamp(generation_before);
+        response.query_expansions = self.query_expansions(&response.query);
         Ok(response)
     }
 
@@ -285,6 +288,33 @@ impl Searcher {
             backend.as_deref(),
             generation,
         ))
+    }
+
+
+    /// Repository associations that apply to this query (ufk7).
+    ///
+    /// Reported as evidence. Expansion that cannot be explained is expansion a
+    /// user cannot audit, so the terms and their support counts travel with the
+    /// response.
+    fn query_expansions(&self, query: &str) -> Vec<QueryExpansion> {
+        let lexicon = match crate::lexicon::load_lexicon(&self.store) {
+            Ok(lexicon) if !lexicon.is_empty() => lexicon,
+            _ => return Vec::new(),
+        };
+        let terms: Vec<String> = crate::lexicon::prose_terms(query);
+        if terms.is_empty() {
+            return Vec::new();
+        }
+        lexicon
+            .expand(&terms, MAX_QUERY_EXPANSIONS)
+            .into_iter()
+            .map(|association| QueryExpansion {
+                because: crate::lexicon::explain(&association),
+                term: association.term,
+                related: association.related,
+                support: association.support,
+            })
+            .collect()
     }
 
     /// Describe the snapshot a response was read from (d3l5).
@@ -730,6 +760,7 @@ pub(crate) fn finish_response_checked(
             prevented_read_bytes: 0,
             // Stamped by the Searcher, which owns the snapshot (d3l5).
             snapshot: SnapshotStamp::default(),
+            query_expansions: Vec::new(),
         };
         record_ledger_from_env(&response);
         return Ok(response);
@@ -812,6 +843,7 @@ pub(crate) fn finish_response_checked(
         prevented_read_bytes,
         // Stamped by the Searcher, which owns the snapshot (d3l5).
         snapshot: SnapshotStamp::default(),
+        query_expansions: Vec::new(),
     };
     record_ledger_from_env(&response);
     Ok(response)
