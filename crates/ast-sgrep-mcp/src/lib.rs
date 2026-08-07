@@ -26,7 +26,9 @@
 
 use anyhow::Context;
 use ast_sgrep_core::{EmbedBackend, IndexOptions, Indexer, SearchOptions, Searcher};
-use ast_sgrep_plugins::{format_response_with_budget, CompactBudget, OutputFormat};
+use ast_sgrep_plugins::{
+    format_response_with_budget, to_compact_miss_json, CompactBudget, MissContext, OutputFormat,
+};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -442,8 +444,14 @@ impl McpServer {
             AgentSearchMode::Ast => searcher.search(&format!("pattern: {query}")),
             AgentSearchMode::Semantic => searcher.search_semantic(query),
         };
-        self.restore_searcher(root, limit, generation, searcher);
+        self.restore_searcher(root.clone(), limit, generation, searcher);
         let response = response?;
+        // 6a3i: a miss is the cheapest response we can send, and the one where
+        // a vague answer costs the most in speculative agent retries.
+        if response.hits.is_empty() {
+            let miss = to_compact_miss_json(query, &self.diagnose_miss(&root, mode));
+            return Ok(serde_json::to_string(&miss)?);
+        }
         // kxmc: compact key-free envelope, minified. Object keys and pretty
         // whitespace were the bulk of the old AgentCapsule payload, and the
         // full path was emitted twice per hit (`file` plus `ref`).
@@ -500,6 +508,43 @@ impl McpServer {
         if elided > 0 {
             // Volatile accounting, so it sorts with the `z*` tail (9q0l).
             envelope["ze"] = Value::from(elided);
+        }
+    }
+
+    /// Gather what is known about a zero-hit search (6a3i).
+    ///
+    /// The index count is only consulted here, on the miss path, so a normal
+    /// search never pays for it.
+    fn diagnose_miss(&self, root: &Path, mode: AgentSearchMode) -> MissContext {
+        let indexed_files = Indexer::new(self.base_index_options(root.to_path_buf()))
+            .ok()
+            .and_then(|indexer| indexer.store().status().ok())
+            .map(|status| status.file_count);
+        let channel = match mode {
+            AgentSearchMode::Keyword => "lexical",
+            AgentSearchMode::Ast => "structural",
+            AgentSearchMode::Semantic => "semantic",
+        };
+        // Semantic search over an index with no semantic chunks is a channel
+        // that could not run, not an honest absence of matches.
+        let unavailable = if matches!(mode, AgentSearchMode::Semantic) && !self.use_embed {
+            vec!["semantic".to_owned()]
+        } else {
+            Vec::new()
+        };
+        let mut scope = Vec::new();
+        if root != self.root {
+            if let Some(relative) = root.strip_prefix(&self.root).ok().map(Path::to_path_buf) {
+                if !relative.as_os_str().is_empty() {
+                    scope.push(("root".to_owned(), relative.display().to_string()));
+                }
+            }
+        }
+        MissContext {
+            tried: vec![channel.to_owned()],
+            unavailable,
+            scope,
+            indexed_files,
         }
     }
 

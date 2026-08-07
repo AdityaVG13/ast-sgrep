@@ -411,3 +411,100 @@ fn compact_path_table_skips_folding_when_it_would_not_help() {
     let resolved = ast_sgrep_plugins::resolve_compact_paths(&compact);
     assert_eq!(resolved.len(), response.hits.len().min(10));
 }
+
+/// 6a3i: the four miss classes demand four different next moves, so they must
+/// be distinguishable, and each carries exactly one suggestion.
+#[test]
+fn miss_envelope_classifies_and_suggests_one_next_step() {
+    use ast_sgrep_plugins::{to_compact_miss_json, MissContext, MissReason};
+
+    let empty = MissContext {
+        tried: vec!["lexical".into()],
+        indexed_files: Some(0),
+        ..MissContext::default()
+    };
+    assert_eq!(empty.reason(), MissReason::EmptyIndex);
+
+    let filtered = MissContext {
+        tried: vec!["lexical".into()],
+        scope: vec![("lang".into(), "rust".into())],
+        indexed_files: Some(120),
+        ..MissContext::default()
+    };
+    assert_eq!(filtered.reason(), MissReason::FiltersExcludedAll);
+
+    let down = MissContext {
+        tried: vec!["semantic".into()],
+        unavailable: vec!["semantic".into()],
+        indexed_files: Some(120),
+        ..MissContext::default()
+    };
+    assert_eq!(down.reason(), MissReason::ChannelUnavailable);
+
+    let absent = MissContext {
+        tried: vec!["lexical".into()],
+        indexed_files: Some(120),
+        ..MissContext::default()
+    };
+    assert_eq!(absent.reason(), MissReason::NoMatch);
+
+    // An empty index explains a filtered miss too: the most fundamental cause wins.
+    let both = MissContext {
+        tried: vec!["lexical".into()],
+        scope: vec![("lang".into(), "rust".into())],
+        indexed_files: Some(0),
+        ..MissContext::default()
+    };
+    assert_eq!(both.reason(), MissReason::EmptyIndex);
+
+    let envelope = to_compact_miss_json("nonexistent_symbol", &filtered);
+    assert_eq!(envelope["why"], "filters_excluded_all");
+    assert_eq!(envelope["zn"], 0);
+    assert_eq!(envelope["h"], serde_json::json!([]));
+    assert_eq!(envelope["scope"]["lang"], "rust");
+    assert_eq!(envelope["tried"], serde_json::json!(["lexical"]));
+    // Exactly one actionable step, naming the filter to drop.
+    let next = envelope["next"].as_str().expect("next step");
+    assert_eq!(next, "drop the lang filter");
+    assert!(!next.contains('\n'), "one step, not a menu");
+}
+
+/// 6a3i: a miss must be cheaper than the zero-hit output it replaces.
+#[test]
+fn miss_envelope_is_smaller_than_the_agent_zero_hit_response() {
+    use ast_sgrep_plugins::{to_compact_miss_json, MissContext};
+
+    let empty_response = SearchResponse {
+        query: "nonexistent_symbol".into(),
+        limit: 10,
+        hits: Vec::new(),
+        counts: Vec::new(),
+        read_bytes_estimate: 0,
+        returned_excerpt_bytes: 0,
+        prevented_read_bytes: 0,
+    };
+    let old = serde_json::to_string(&format_response_with(
+        &empty_response,
+        OutputFormat::Agent,
+        0,
+    ))
+    .expect("agent serializes");
+    let miss = serde_json::to_string(&to_compact_miss_json(
+        &empty_response.query,
+        &MissContext {
+            tried: vec!["lexical".into()],
+            indexed_files: Some(120),
+            ..MissContext::default()
+        },
+    ))
+    .expect("miss serializes");
+
+    println!("agent zero-hit = {} bytes", old.len());
+    println!("miss envelope  = {} bytes", miss.len());
+    assert!(
+        miss.len() * 2 < old.len(),
+        "miss envelope must be far cheaper: {} vs {}",
+        miss.len(),
+        old.len()
+    );
+}

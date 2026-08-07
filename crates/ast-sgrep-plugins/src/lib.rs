@@ -439,6 +439,113 @@ fn preview_line(excerpt: &str) -> String {
     }
 }
 
+/// Why a search returned nothing (6a3i).
+///
+/// These four cases demand four different next moves, and a bare empty result
+/// makes them indistinguishable -- which pushes an agent into speculative
+/// retries that cost far more than the search did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MissReason {
+    /// Nothing is indexed yet.
+    EmptyIndex,
+    /// Candidates existed but every one was filtered out.
+    FiltersExcludedAll,
+    /// A channel the query needed could not run.
+    ChannelUnavailable,
+    /// The index is populated and unfiltered: the term simply is not there.
+    NoMatch,
+}
+
+impl MissReason {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::EmptyIndex => "empty_index",
+            Self::FiltersExcludedAll => "filters_excluded_all",
+            Self::ChannelUnavailable => "channel_unavailable",
+            Self::NoMatch => "no_match",
+        }
+    }
+
+    /// One actionable next step. Deliberately one, not a menu.
+    pub fn next_step(self, first_filter: Option<&str>) -> String {
+        match self {
+            Self::EmptyIndex => "index this project, then search again".to_owned(),
+            Self::FiltersExcludedAll => match first_filter {
+                Some(filter) => format!("drop the {filter} filter"),
+                None => "widen the search scope".to_owned(),
+            },
+            Self::ChannelUnavailable => {
+                "retry on another channel, or repair the unavailable one".to_owned()
+            }
+            Self::NoMatch => "try a shorter or more distinctive term".to_owned(),
+        }
+    }
+}
+
+/// Everything known about a zero-hit search (6a3i).
+#[derive(Debug, Default, Clone)]
+pub struct MissContext {
+    /// Channels actually executed.
+    pub tried: Vec<String>,
+    /// Channels that could not run.
+    pub unavailable: Vec<String>,
+    /// Effective filters, so the agent can see what scoped it out.
+    pub scope: Vec<(String, String)>,
+    /// Indexed file count when known; `None` means not consulted.
+    pub indexed_files: Option<usize>,
+}
+
+impl MissContext {
+    /// Classify the miss from the signals available. Order matters: an empty
+    /// index explains everything else, and filters explain a miss before a
+    /// genuine absence does.
+    pub fn reason(&self) -> MissReason {
+        if self.indexed_files == Some(0) {
+            return MissReason::EmptyIndex;
+        }
+        if !self.unavailable.is_empty() {
+            return MissReason::ChannelUnavailable;
+        }
+        if !self.scope.is_empty() {
+            return MissReason::FiltersExcludedAll;
+        }
+        MissReason::NoMatch
+    }
+}
+
+/// Compact diagnostic envelope for a zero-hit search (6a3i).
+///
+/// A miss should be the cheapest response the engine can produce, and still say
+/// enough that the agent's next move is obvious rather than a guess.
+pub fn to_compact_miss_json(query: &str, context: &MissContext) -> serde_json::Value {
+    let reason = context.reason();
+    let first_filter = context.scope.first().map(|(name, _)| name.as_str());
+    let mut envelope = serde_json::json!({
+        "v": 1,
+        "q": query,
+        "h": [],
+        "zn": 0,
+        "why": reason.as_str(),
+        "next": reason.next_step(first_filter),
+    });
+    if !context.tried.is_empty() {
+        envelope["tried"] = serde_json::Value::from(context.tried.clone());
+    }
+    if !context.unavailable.is_empty() {
+        envelope["down"] = serde_json::Value::from(context.unavailable.clone());
+    }
+    if !context.scope.is_empty() {
+        envelope["scope"] = serde_json::Value::Object(
+            context
+                .scope
+                .iter()
+                .map(|(name, value)| (name.clone(), serde_json::Value::String(value.clone())))
+                .collect(),
+        );
+    }
+    envelope
+}
+
 /// Resolve the `p` table of a compact envelope into plain `id -> path` pairs.
 ///
 /// Handles both encodings: a verbatim string entry, and the folded

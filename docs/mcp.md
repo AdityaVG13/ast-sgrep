@@ -132,6 +132,28 @@ The compact payload uses this versioned schema:
   stable head and confines volatile numbers to a trailing block a consumer
   can strip. Repeated identical searches are byte-stable.
 
+### Misses
+
+A search that finds nothing returns a diagnostic envelope instead of an empty
+hit list, because the four causes below need four different next moves:
+
+```json
+{"h":[],"next":"drop the lang filter","q":"absent_symbol","scope":{"lang":"rust"},"tried":["lexical"],"v":1,"why":"filters_excluded_all","zn":0}
+```
+
+- `why` is one of `empty_index`, `filters_excluded_all`, `channel_unavailable`,
+  or `no_match`. An empty index outranks the other explanations, and filters
+  outrank a genuine absence.
+- `tried` lists the channels that actually ran; `down` lists any that could not.
+- `scope` echoes the effective filters, so the agent can see what excluded its
+  candidates.
+- `next` is exactly one actionable step, not a menu.
+
+The miss envelope is far cheaper than the result envelope it replaces (131 vs
+421 bytes against the agent format on a fixed query). The point is not only the
+bytes: an unexplained empty result drives speculative retries that cost more
+than the search did.
+
 A token unit is one UTF-8 byte. This conservative, deterministic ceiling is
 model-independent and cannot underestimate byte-fallback tokenizers. Limits
 are bounded to 4,096 per result and 65,536 per response; zero is valid. The

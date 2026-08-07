@@ -458,3 +458,50 @@ fn resend_seen_disables_snippet_elision() {
     assert_eq!(first, second, "resend_seen must keep responses identical");
     assert!(!second.contains("\"~\""), "no elision expected: {second}");
 }
+
+/// 6a3i: a miss over an unindexed root must say so, not return a bare empty
+/// result the agent has to guess about.
+#[test]
+fn zero_hit_search_returns_a_diagnostic_miss_envelope() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("src");
+    std::fs::create_dir(&source).unwrap();
+    std::fs::write(source.join("lib.rs"), "fn present() {}\n").unwrap();
+
+    // Nothing indexed yet: the miss must name that, not blame the query.
+    let response = rpc_at(
+        json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"keyword_search","arguments":{"query":"absent_symbol","limit":4}}}),
+        Some(temp.path()),
+    );
+    assert_eq!(response["result"]["isError"], false, "{response:#}");
+    let body = tool_body(&response);
+    assert_eq!(body["why"], "empty_index", "{body:#}");
+    assert_eq!(body["zn"], 0);
+    assert_eq!(body["tried"], json!(["lexical"]));
+    assert!(body["next"].as_str().unwrap().contains("index"));
+
+    // Indexed, but the term genuinely is not there: a different diagnosis.
+    ast_sgrep_core::Indexer::new(ast_sgrep_core::IndexOptions {
+        root: temp.path().to_path_buf(),
+        ..ast_sgrep_core::IndexOptions::default()
+    })
+    .unwrap()
+    .index_all()
+    .unwrap();
+    let response = rpc_at(
+        json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"keyword_search","arguments":{"query":"absent_symbol","limit":4}}}),
+        Some(temp.path()),
+    );
+    let body = tool_body(&response);
+    assert_eq!(body["why"], "no_match", "{body:#}");
+    assert!(body.get("p").is_none(), "miss carries no path table");
+
+    // A miss is cheaper than a hit envelope for the same query shape.
+    let hit = rpc_at(
+        json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"keyword_search","arguments":{"query":"present","limit":4}}}),
+        Some(temp.path()),
+    );
+    let miss_bytes = response["result"]["content"][0]["text"].as_str().unwrap().len();
+    let hit_bytes = hit["result"]["content"][0]["text"].as_str().unwrap().len();
+    assert!(miss_bytes < hit_bytes, "{miss_bytes} vs {hit_bytes}");
+}

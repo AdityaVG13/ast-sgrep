@@ -111,15 +111,21 @@ fn print_search_response(
     format: ast_sgrep_plugins::OutputFormat,
     cli: &Cli,
 ) -> anyhow::Result<()> {
-    let value = ast_sgrep_plugins::format_response_with_budget(
-        response,
-        format,
-        cli.active_tuning().excerpt_lines,
-        ast_sgrep_plugins::CompactBudget {
-            per_result_tokens: cli.active_tuning().snippet_tokens,
-            response_tokens: cli.active_tuning().response_snippet_tokens,
-        },
-    );
+    // 6a3i: compact mode answers a miss with a diagnostic envelope instead of
+    // an empty result set the caller has to interpret.
+    let value = if format == ast_sgrep_plugins::OutputFormat::Compact && response.hits.is_empty() {
+        ast_sgrep_plugins::to_compact_miss_json(&response.query, &miss_context(command, cli))
+    } else {
+        ast_sgrep_plugins::format_response_with_budget(
+            response,
+            format,
+            cli.active_tuning().excerpt_lines,
+            ast_sgrep_plugins::CompactBudget {
+                per_result_tokens: cli.active_tuning().snippet_tokens,
+                response_tokens: cli.active_tuning().response_snippet_tokens,
+            },
+        )
+    };
     print_machine_json_with_style(
         command,
         value,
@@ -127,6 +133,24 @@ fn print_search_response(
         true,
         0,
     )
+}
+
+/// Describe a zero-hit CLI search: which channel ran, and what scoped it (6a3i).
+fn miss_context(command: &str, cli: &Cli) -> ast_sgrep_plugins::MissContext {
+    let mut scope = Vec::new();
+    if let Some(lang) = &cli.lang {
+        scope.push(("lang".to_owned(), lang.clone()));
+    }
+    ast_sgrep_plugins::MissContext {
+        tried: vec![match command {
+            "keyword" => "lexical".to_owned(),
+            "semantic" => "semantic".to_owned(),
+            other => other.to_owned(),
+        }],
+        unavailable: Vec::new(),
+        scope,
+        indexed_files: None,
+    }
 }
 
 fn resolve_output_format(
