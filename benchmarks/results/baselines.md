@@ -32,6 +32,73 @@ must cite these rows; they must not introduce a second “canonical” value.
 They are two fingerprint rows. Do not cite dual ~0.75 / 0.746 self-corpus
 figures alongside 0.712 as current.
 
+## Reproducible rows (d2dv)
+
+These rows regenerate from a clean checkout with **one command and no network
+access**, against a gold fixture and harness that ship in this tree:
+
+```bash
+./benchmarks/run_eval.sh
+```
+
+Raw artifacts are checked in under `benchmarks/results/raw/`, so a later run can
+be diffed against the recorded one rather than compared to a summary.
+
+| fingerprint id | corpus | config | metric | value | status |
+|----------------|--------|--------|--------|------:|--------|
+| `self-gold12-reproducible` | self @ `benchmarks/gold/self.json` (12 gold queries) | default hybrid | MRR | **0.676** | REPRODUCIBLE |
+| `self-gold12-reproducible` | self (12 gold queries) | default hybrid | nDCG | **0.751** | REPRODUCIBLE |
+| `self-gold12-reproducible` | self (12 gold queries) | default hybrid | Recall@1 | **0.458** | REPRODUCIBLE |
+| `self-gold12-reproducible` | self (12 gold queries) | default hybrid | Recall@5 | **0.792** | REPRODUCIBLE |
+| `self-gold12-reproducible` | self (12 gold queries) | default hybrid | Recall@20 | **1.000** | REPRODUCIBLE |
+| `self-tokens-gold12` | self (12 gold queries, `--limit 10`) | compact vs agent-capsule | emitted bytes | **9,709 vs 35,858 (-72.9%)** | REPRODUCIBLE |
+| `self-tokens-gold12` | self (12 gold queries, `--limit 10`) | compact vs native | emitted bytes | **9,709 vs 45,916 (-78.9%)** | REPRODUCIBLE |
+
+These are **not** comparable to the historical unreproducible rows below: a
+different corpus definition, a different gold set, and a different commit.
+They do not supersede those rows; they are the first rows in this file that a
+reader can actually regenerate.
+
+### Negative result: default embeddings add nothing measurable here
+
+The A/B in the same harness (`--ab no-embed`) reports **every delta as exactly
+0.000** -- MRR, nDCG, and Recall at 1, 5, 20 are identical with and without the
+default embedding channel on this corpus:
+
+| comparison | delta MRR | delta nDCG | delta Recall@5 |
+|------------|----------:|-----------:|---------------:|
+| hybrid minus `--no-embed` (self, 12 gold) | 0.000 | 0.000 | 0.000 |
+
+This reproduces the warning already recorded for the historical rows, now with
+a runnable command behind it. It is recorded here rather than dropped, per the
+negative-ledger rule. It does **not** prove embeddings are worthless in
+general: this corpus is small, self-referential, and its queries are answerable
+by exact and structural channels. It does mean **no claim of semantic lift may
+cite this corpus**, and that a foreign held-out corpus is required before the
+default embedding path can be called valuable.
+
+### Coverage and what is still missing
+
+Implemented and reproducible: MRR, nDCG, Recall@1/@5/@20, the hybrid vs
+no-embed A/B, emitted-byte token efficiency per output format, and the
+reliability invariants as executable tests (single-generation responses,
+crash-safe generation activation, durability pragmas).
+
+Not implemented, and deliberately not faked with placeholder numbers:
+
+- **Foreign corpora** (ripgrep, Flask, and other held-out repositories). These
+  need pinned external checkouts that this harness cannot fetch offline, so no
+  foreign-corpus row is claimed.
+- **Calibration error** (Brier / ECE). `confidence` currently comes from an
+  inspectable agreement heuristic, not a fitted model, so a calibration number
+  would measure an arbitrary constant rather than a trained predictor.
+- **Definition/reference resolution accuracy and graph-edge precision by
+  resolution tier.** These require the `SymbolId` / `Resolution` tiers, which
+  are separate open work; there are no resolution tiers to report against yet.
+- **Agent-level token metrics** (tokens read before the correct edit site, tool
+  calls to correct file and symbol). These need an agent-in-the-loop harness,
+  not a retrieval harness.
+
 ## Provenance
 
 | field | value |
