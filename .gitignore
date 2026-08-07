@@ -110,6 +110,8 @@ editors/**/*.vsix
 
 # Tests
 tests/artifacts/perf/
+# Golden mismatch dumps (assert_golden writes these on failure; never commit)
+*.actual
 
 # Local bench history ratchet (written by `asgrep bench`)
 .bench-history.json
