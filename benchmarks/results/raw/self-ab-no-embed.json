@@ -10,7 +10,7 @@
       "recall_at_k": 0.917
     },
     "config": {
-      "index_path": "/var/folders/tw/wpjfrh5s60j_yldw1nv2k4300000gn/T/.tmpqNLKzZ/index.db",
+      "index_path": "/var/folders/tw/wpjfrh5s60j_yldw1nv2k4300000gn/T/.tmpJTXvCK/index.db",
       "no_embed": false,
       "root": ".",
       "semantic_only": false
@@ -211,7 +211,7 @@
       "recall_at_k": 0.917
     },
     "config": {
-      "index_path": "/var/folders/tw/wpjfrh5s60j_yldw1nv2k4300000gn/T/.tmpqNLKzZ/index.db",
+      "index_path": "/var/folders/tw/wpjfrh5s60j_yldw1nv2k4300000gn/T/.tmpJTXvCK/index.db",
       "no_embed": true,
       "root": ".",
       "semantic_only": false

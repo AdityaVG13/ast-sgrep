@@ -49,7 +49,14 @@ fn response_carries_the_snapshot_it_was_read_from() {
 
     let stamp = &response.snapshot;
     assert!(stamp.generation > 0, "generation must be recorded: {stamp:?}");
-    assert_eq!(stamp.schema_version, 7, "schema version recorded");
+    // Assert against the store's own view rather than a literal, so a future
+    // schema bump does not look like a snapshot regression.
+    assert_eq!(
+        stamp.schema_version,
+        searcher.store().schema_version(),
+        "schema version recorded"
+    );
+    assert!(stamp.schema_version > 0);
     assert!(stamp.worktree_revision > 0, "worktree revision recorded");
     assert!(
         stamp.degraded_channels.is_empty(),

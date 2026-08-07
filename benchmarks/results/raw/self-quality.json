@@ -10,7 +10,7 @@
   },
   "command": "eval",
   "config": {
-    "index_path": "/var/folders/tw/wpjfrh5s60j_yldw1nv2k4300000gn/T/.tmpnsOt4g/index.db",
+    "index_path": "/var/folders/tw/wpjfrh5s60j_yldw1nv2k4300000gn/T/.tmpqquCKS/index.db",
     "no_embed": false,
     "root": ".",
     "semantic_only": false

@@ -52,12 +52,12 @@ would drift the byte totals by a digit at a time.
 
 | fingerprint id | corpus | config | metric | value | status |
 |----------------|--------|--------|--------|------:|--------|
-| `self-gold12-reproducible` | self @ `benchmarks/gold/self.json` (12 gold queries) | default hybrid | MRR | **0.676** | REPRODUCIBLE |
-| `self-gold12-reproducible` | self (12 gold queries) | default hybrid | nDCG | **0.751** | REPRODUCIBLE |
+| `self-gold12-reproducible` | self @ `benchmarks/gold/self.json` (12 gold queries) | default hybrid | MRR | **0.669** | REPRODUCIBLE |
+| `self-gold12-reproducible` | self (12 gold queries) | default hybrid | nDCG | **0.726** | REPRODUCIBLE |
 | `self-gold12-reproducible` | self (12 gold queries) | default hybrid | Recall@1 | **0.458** | REPRODUCIBLE |
 | `self-gold12-reproducible` | self (12 gold queries) | default hybrid | Recall@5 | **0.792** | REPRODUCIBLE |
-| `self-gold12-reproducible` | self (12 gold queries) | default hybrid | Recall@20 | **1.000** | REPRODUCIBLE |
-| `self-tokens-gold12` | self (12 gold queries, `--limit 10`) | compact vs agent-capsule | emitted bytes | **11,428 vs 44,622 (-74.4%)** | REPRODUCIBLE |
+| `self-gold12-reproducible` | self (12 gold queries) | default hybrid | Recall@20 | **0.917** | REPRODUCIBLE |
+| `self-tokens-gold12` | self (12 gold queries, `--limit 10`) | compact vs agent-capsule | emitted bytes | **11,607 vs 45,272 (-74.4%)** | REPRODUCIBLE |
 | `self-tokens-gold12` | self (12 gold queries, `--limit 10`) | compact vs native | emitted bytes | **11,428 vs 56,868 (-79.9%)** | REPRODUCIBLE |
 | `self-budget300-gold12` | self (12 gold queries, `--limit 10`) | `--budget-tokens 300` vs agent-capsule | emitted bytes | **10,395 vs 44,622 (-76.7%)** | REPRODUCIBLE |
 
@@ -102,6 +102,25 @@ Recall@1/@5/@20 are unchanged by construction.
 Absolute byte totals move as this repository changes, because the `self` corpus
 IS the working tree. Rows above were produced at commit `007b255`. Percentages
 are the stable figures; treat absolute bytes as corpus-dated.
+
+### Corpus drift is a property of the `self` corpus (vvpk)
+
+The `self` corpus IS this working tree, so **quality metrics drift as the
+repository changes**, not only byte totals. Adding source files adds competing
+matches, and a conceptual query whose gold answer sat inside a truncated
+candidate pool can fall out of it without any engine change.
+
+Observed concretely: Recall@20 moved 1.000 -> 0.917 and MRR 0.676 ->
+0.669 between commit `abfe102` and `51b6a57`. That is **not** an engine
+regression. It was isolated by disabling the code/prose field split entirely
+and re-running: the numbers were identical with the split on and off, so the
+split is quality-neutral on this gold set and the delta is corpus drift from
+files added to the tree in between.
+
+The lesson for anyone reading these rows: the self corpus is adequate for
+token-efficiency and determinism work, and **weak for retrieval-quality
+regression detection**. A frozen or foreign corpus is required before any
+quality delta on this corpus should be believed.
 
 ### Coverage and what is still missing
 
