@@ -437,20 +437,19 @@ impl McpServer {
     }
 
     /// Record `p` table entries so `code_read` can resolve compact ids later.
+    ///
+    /// Uses the shared resolver so root-folded tables (am4a) are understood
+    /// exactly the way an agent would read them.
     fn remember_compact_paths(&self, envelope: &Value) {
-        let Some(paths) = envelope.get("p").and_then(Value::as_object) else {
-            return;
-        };
         let mut registry = Self::lock_or_recover(&self.path_registry, |registry| registry.clear());
-        for (id, path) in paths {
-            let Some(path) = path.as_str() else { continue };
-            if registry.len() >= MAX_PATH_REGISTRY && !registry.contains_key(id) {
+        for (id, path) in ast_sgrep_plugins::resolve_compact_paths(envelope) {
+            if registry.len() >= MAX_PATH_REGISTRY && !registry.contains_key(&id) {
                 // Bounded: a hostile or very long session cannot grow this map
                 // without limit. Unknown ids simply fail to resolve and the
                 // agent falls back to the `path#Lstart-Lend` form.
                 break;
             }
-            registry.insert(id.clone(), path.to_owned());
+            registry.insert(id, path);
         }
     }
 

@@ -301,17 +301,17 @@ fn compact_minified_is_much_smaller_than_pretty_capsule() {
         new.len(),
         old.len()
     );
-    // The full path must appear exactly once per distinct file, in the `p`
-    // table -- never repeated per hit the way `file` plus `ref` used to.
+    // No path may be repeated per hit the way `file` plus `ref` used to be.
+    // With root folding (am4a) a path is stored as root plus suffix, so assert
+    // on the resolved paths rather than raw substrings.
     let compact: serde_json::Value = serde_json::from_str(&new).expect("compact parses");
-    let paths = compact["p"].as_object().expect("path table");
-    for path in paths.values() {
-        let path = path.as_str().expect("path string");
-        assert_eq!(
-            new.matches(path).count(),
-            1,
+    for (_, path) in ast_sgrep_plugins::resolve_compact_paths(&compact) {
+        assert!(
+            new.matches(&path).count() <= 1,
             "path {path} emitted more than once"
         );
+        let name = path.rsplit('/').next().expect("file name");
+        assert_eq!(new.matches(name).count(), 1, "{name} emitted more than once");
     }
 }
 
@@ -348,4 +348,66 @@ fn many_file_sample() -> SearchResponse {
         returned_excerpt_bytes: 800,
         prevented_read_bytes: 3_200,
     }
+}
+
+/// am4a: shared directory prefixes are emitted once in `r`, and every folded
+/// entry reconstructs its original path exactly.
+#[test]
+fn compact_path_table_folds_shared_roots_and_round_trips() {
+    let response = many_file_sample();
+    let compact = format_response_with_budget(
+        &response,
+        OutputFormat::Compact,
+        0,
+        CompactBudget::default(),
+    );
+    let text = serde_json::to_string(&compact).expect("compact serializes");
+
+    let roots = compact["r"].as_array().expect("root table present");
+    assert_eq!(
+        roots.len(),
+        1,
+        "the byte-optimal root set is the single shared prefix: {roots:?}"
+    );
+    assert_eq!(roots[0], "crates/ast-sgrep-core/src/");
+    // The shared prefix now appears once for the whole envelope.
+    assert_eq!(text.matches("crates/ast-sgrep-core/src/").count(), 1);
+
+    let resolved: std::collections::BTreeMap<_, _> =
+        ast_sgrep_plugins::resolve_compact_paths(&compact)
+            .into_iter()
+            .collect();
+    let expected: std::collections::BTreeSet<_> =
+        response.hits.iter().map(|hit| hit.file.clone()).collect();
+    let actual: std::collections::BTreeSet<_> = resolved.values().cloned().collect();
+    assert_eq!(actual, expected, "round trip lost or altered a path");
+
+    // Every hit id still resolves through the table.
+    for hit in compact["h"].as_array().expect("hits") {
+        let id = hit[0].as_str().expect("id");
+        let (path_id, _) = id.rsplit_once(':').expect("id shape");
+        assert!(resolved.contains_key(path_id), "unresolved id {id}");
+    }
+}
+
+/// am4a: folding must never inflate. Paths with nothing in common stay
+/// verbatim and no root table is emitted.
+#[test]
+fn compact_path_table_skips_folding_when_it_would_not_help() {
+    let mut response = many_file_sample();
+    for (index, hit) in response.hits.iter_mut().enumerate() {
+        hit.file = format!("{index}.rs");
+    }
+    let compact = format_response_with_budget(
+        &response,
+        OutputFormat::Compact,
+        0,
+        CompactBudget::default(),
+    );
+    assert!(compact.get("r").is_none(), "no root table expected");
+    for entry in compact["p"].as_object().expect("path table").values() {
+        assert!(entry.is_string(), "unfolded entries stay plain strings");
+    }
+    let resolved = ast_sgrep_plugins::resolve_compact_paths(&compact);
+    assert_eq!(resolved.len(), response.hits.len().min(10));
 }

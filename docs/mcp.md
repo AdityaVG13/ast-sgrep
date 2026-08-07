@@ -99,6 +99,17 @@ The compact payload uses this versioned schema:
 ```
 
 - `p` maps stable base-36 path hashes to paths. Repeated paths occur once.
+- A `p` entry is either a plain path string or, when a shared directory prefix
+  is worth folding, `[root_index, suffix]` into the optional `r` root table:
+
+  ```json
+  {"r":["crates/ast-sgrep-core/src/"],"p":{"2jl...":[0,"search/mod.rs"]}}
+  ```
+
+  `r` is present only when folding is strictly smaller than the verbatim table,
+  measured on serialized bytes, so the encoding can never inflate a result set
+  with no shared structure. Both forms can appear in one table. Use
+  `ast_sgrep_plugins::resolve_compact_paths` rather than decoding by hand.
 - Each `h` row is `[id, kind, signal, symbol, snippet]` in rank order.
 - `id` is `<path-id>:<start>-<end>`. Pass it straight to the MCP `code_read`
   tool, which resolves path ids from the same session. Outside a session,

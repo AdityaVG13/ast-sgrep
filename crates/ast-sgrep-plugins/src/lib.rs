@@ -220,16 +220,20 @@ pub fn to_compact_json(response: &SearchResponse, budget: CompactBudget) -> serd
         })
         .collect();
 
+    // am4a: fold shared directory prefixes out of the path table when doing so
+    // is actually smaller on the wire.
+    let (roots, paths) = fold_path_roots(&paths);
+
     // 9q0l: serde_json orders object keys alphabetically (its Map is a
     // BTreeMap unless `preserve_order` is enabled), so key NAMES decide wire
     // order. Per-call accounting is therefore named `z*` to sort after the
     // content keys, giving every envelope a stable head and a volatile tail:
     //
-    //   h (hits) . p (paths) . q (query) . v (schema) . zb . zn . zt
+    //   h (hits) . p (paths) . q (query) . r (roots) . v (schema) . zb . zn . zt
     //
     // A consumer can drop the `z*` tail without touching the content, and
     // repeated identical calls differ only in that tail.
-    serde_json::json!({
+    let mut envelope = serde_json::json!({
         "v": 1,
         "q": response.query,
         "p": paths,
@@ -237,7 +241,130 @@ pub fn to_compact_json(response: &SearchResponse, budget: CompactBudget) -> serd
         "zn": hits.len(),
         "zb": [budget.per_result_tokens, budget.response_tokens, used],
         "zt": truncated,
-    })
+    });
+    if !roots.is_empty() {
+        envelope["r"] = serde_json::Value::from(roots);
+    }
+    envelope
+}
+
+/// Fold shared directory prefixes out of a path table (am4a).
+///
+/// Returns the root list and the rewritten table. A folded entry is
+/// `[root_index, suffix]`; an unfolded entry stays a plain string, so mixed
+/// results never pay for a root they cannot use.
+///
+/// The encoding is only applied when it is strictly smaller than the verbatim
+/// table, measured on the serialized bytes rather than estimated. A result set
+/// with no shared structure is returned untouched.
+fn fold_path_roots(
+    paths: &std::collections::BTreeMap<String, String>,
+) -> (Vec<String>, serde_json::Value) {
+    let verbatim = serde_json::to_value(paths).unwrap_or(serde_json::Value::Null);
+    if paths.len() < 2 {
+        return (Vec::new(), verbatim);
+    }
+
+    // Candidate roots are the directory prefixes shared by at least two paths.
+    // BTreeMap iteration keeps this deterministic for a given hit set.
+    let mut usage = std::collections::BTreeMap::<&str, usize>::new();
+    for path in paths.values() {
+        for (index, _) in path.match_indices('/') {
+            *usage.entry(&path[..=index]).or_default() += 1;
+        }
+    }
+    let candidates: Vec<&str> = usage
+        .iter()
+        .filter(|(_, count)| **count > 1)
+        .map(|(root, _)| *root)
+        .collect();
+    if candidates.is_empty() {
+        return (Vec::new(), verbatim);
+    }
+
+    // Choosing the longest shared prefix per path is NOT optimal: a deeper root
+    // re-emits its own parent, which can cost more than it saves. Add roots
+    // greedily, and only while the measured payload actually shrinks.
+    let verbatim_bytes = serde_json::to_string(&verbatim)
+        .map(|text| text.len())
+        .unwrap_or(0);
+    let mut chosen: Vec<&str> = Vec::new();
+    let mut best_bytes = verbatim_bytes;
+    loop {
+        let mut improvement: Option<(&str, usize)> = None;
+        for candidate in &candidates {
+            if chosen.contains(candidate) {
+                continue;
+            }
+            let mut trial = chosen.clone();
+            trial.push(candidate);
+            let bytes = encoded_len(paths, &trial);
+            let better = improvement.is_none_or(|(_, best)| bytes < best);
+            if bytes < best_bytes && better {
+                improvement = Some((candidate, bytes));
+            }
+        }
+        match improvement {
+            Some((candidate, bytes)) => {
+                chosen.push(candidate);
+                best_bytes = bytes;
+            }
+            None => break,
+        }
+    }
+
+    if chosen.is_empty() {
+        return (Vec::new(), verbatim);
+    }
+    let (roots, folded) = encode_with_roots(paths, &chosen);
+    (roots, folded)
+}
+
+/// Serialized size of the path table plus root table under a root set (am4a).
+/// `+ 4` covers the `"r":` key and its separator in the envelope.
+fn encoded_len(
+    paths: &std::collections::BTreeMap<String, String>,
+    roots: &[&str],
+) -> usize {
+    let (roots, folded) = encode_with_roots(paths, roots);
+    let folded = serde_json::to_string(&folded)
+        .map(|text| text.len())
+        .unwrap_or(usize::MAX);
+    let roots = serde_json::to_string(&roots)
+        .map(|text| text.len())
+        .unwrap_or(usize::MAX);
+    folded.saturating_add(roots).saturating_add(4)
+}
+
+/// Encode a path table against a root set, longest matching root per path.
+/// Roots that end up unused are dropped so the table never carries dead weight.
+fn encode_with_roots(
+    paths: &std::collections::BTreeMap<String, String>,
+    roots: &[&str],
+) -> (Vec<String>, serde_json::Value) {
+    let mut ordered: Vec<&str> = roots.to_vec();
+    ordered.sort_by(|left, right| right.len().cmp(&left.len()).then(left.cmp(right)));
+
+    let mut used: Vec<String> = Vec::new();
+    let mut folded = serde_json::Map::new();
+    for (id, path) in paths {
+        match ordered.iter().find(|root| path.starts_with(**root)) {
+            Some(root) => {
+                let index = match used.iter().position(|existing| existing == *root) {
+                    Some(index) => index,
+                    None => {
+                        used.push((*root).to_owned());
+                        used.len() - 1
+                    }
+                };
+                folded.insert(id.clone(), serde_json::json!([index, &path[root.len()..]]));
+            }
+            None => {
+                folded.insert(id.clone(), serde_json::Value::String(path.clone()));
+            }
+        }
+    }
+    (used, serde_json::Value::Object(folded))
 }
 
 fn compact_kind(kind: HitKind) -> &'static str {
@@ -310,6 +437,36 @@ fn preview_line(excerpt: &str) -> String {
             line.chars().take(PREVIEW_MAX_CHARS).collect::<String>()
         )
     }
+}
+
+/// Resolve the `p` table of a compact envelope into plain `id -> path` pairs.
+///
+/// Handles both encodings: a verbatim string entry, and the folded
+/// `[root_index, suffix]` form introduced with the `r` root table (am4a).
+/// Entries that reference an unknown root are skipped rather than guessed.
+pub fn resolve_compact_paths(envelope: &serde_json::Value) -> Vec<(String, String)> {
+    let roots: Vec<&str> = envelope
+        .get("r")
+        .and_then(serde_json::Value::as_array)
+        .map(|roots| roots.iter().filter_map(serde_json::Value::as_str).collect())
+        .unwrap_or_default();
+    let Some(paths) = envelope.get("p").and_then(serde_json::Value::as_object) else {
+        return Vec::new();
+    };
+    paths
+        .iter()
+        .filter_map(|(id, entry)| {
+            let path = match entry {
+                serde_json::Value::String(path) => path.clone(),
+                serde_json::Value::Array(parts) => {
+                    let index = usize::try_from(parts.first()?.as_u64()?).ok()?;
+                    format!("{}{}", roots.get(index)?, parts.get(1)?.as_str()?)
+                }
+                _ => return None,
+            };
+            Some((id.clone(), path))
+        })
+        .collect()
 }
 
 /// Compatibility module paths retained for downstream format adapters.
