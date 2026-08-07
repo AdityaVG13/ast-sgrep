@@ -25,6 +25,7 @@ fn sample() -> SearchResponse {
                 contributors: vec![HitKind::Def, HitKind::Embed],
                 margin: 0.0,
                 confidence: 0.0,
+                resolution: None,
                 excerpt: "fn auth_refresh() {\n    renew_token();\n    log();\n}".into(),
             },
             SearchHit {
@@ -41,6 +42,7 @@ fn sample() -> SearchResponse {
                 contributors: vec![HitKind::Caller],
                 margin: 0.0,
                 confidence: 0.0,
+                resolution: None,
                 excerpt: format!("   \n{long}"),
             },
         ],
@@ -48,6 +50,8 @@ fn sample() -> SearchResponse {
         read_bytes_estimate: 1_000,
         returned_excerpt_bytes: 350,
         prevented_read_bytes: 650,
+        snapshot: Default::default(),
+        query_expansions: Vec::new(),
     }
 }
 #[test]
@@ -339,6 +343,7 @@ fn many_file_sample() -> SearchResponse {
             contributors: vec![HitKind::Def],
             margin: 0.1,
             confidence: 0.0,
+            resolution: None,
             excerpt: format!("fn handler_{index}(session: &Session) -> Result<Token> {{\n    rotate(session)\n}}"),
         })
         .collect();
@@ -350,6 +355,8 @@ fn many_file_sample() -> SearchResponse {
         read_bytes_estimate: 4_000,
         returned_excerpt_bytes: 800,
         prevented_read_bytes: 3_200,
+        snapshot: Default::default(),
+        query_expansions: Vec::new(),
     }
 }
 
@@ -485,6 +492,8 @@ fn miss_envelope_is_smaller_than_the_agent_zero_hit_response() {
         read_bytes_estimate: 0,
         returned_excerpt_bytes: 0,
         prevented_read_bytes: 0,
+        snapshot: Default::default(),
+        query_expansions: Vec::new(),
     };
     let old = serde_json::to_string(&format_response_with(
         &empty_response,

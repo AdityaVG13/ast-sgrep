@@ -32,6 +32,7 @@ fn hit(name: &str, score: f64) -> SearchHit {
         contributors: vec![HitKind::Def],
         margin: 0.0,
         confidence: 0.8,
+        resolution: None,
         excerpt: long_function(name),
     }
 }

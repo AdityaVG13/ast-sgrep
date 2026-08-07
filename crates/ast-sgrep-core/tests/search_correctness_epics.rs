@@ -64,6 +64,7 @@ fn cbnw_asgrep_ceiling_is_single_list_rrf() {
         contributors: Vec::new(),
         margin: 0.0,
         confidence: 0.0,
+        resolution: None,
         excerpt: "alpha beta gamma".into(),
     };
     let mut one = vec![hit.clone()];

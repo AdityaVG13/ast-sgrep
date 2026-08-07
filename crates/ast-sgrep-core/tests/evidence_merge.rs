@@ -17,6 +17,7 @@ fn hit(kind: HitKind, score: f64, excerpt: &str) -> SearchHit {
         contributors: vec![kind],
         margin: 0.0,
         confidence: 0.0,
+        resolution: None,
         excerpt: excerpt.into(),
     }
 }
