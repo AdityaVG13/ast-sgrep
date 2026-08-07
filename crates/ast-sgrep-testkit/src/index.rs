@@ -98,17 +98,23 @@ pub fn json_hit_keys(response: &Value) -> Vec<HitKey> {
         })
         .collect()
 }
+/// Core search → surface hit keys.
+///
+/// `use_embed` must match the CLI/LSP surface under comparison. Default
+/// production is embed-on (hashed offline); pass `false` only for explicit
+/// `--no-embed` parity (lbx1.13: embed-on parity must use `true`).
 pub fn core_search_hit_keys(
     root: &Path,
     index_path: &Path,
     query: &str,
     limit: usize,
+    use_embed: bool,
 ) -> Vec<HitKey> {
     let searcher = Searcher::new(SearchOptions {
         root: root.to_path_buf(),
         index_path: Some(index_path.to_path_buf()),
         limit,
-        use_embed: false,
+        use_embed,
         ..SearchOptions::default()
     })
     .expect("core searcher");
