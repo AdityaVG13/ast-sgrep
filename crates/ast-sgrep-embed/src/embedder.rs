@@ -92,11 +92,22 @@ pub fn embed_url_is_allowed(url: &str) -> Result<(), String> {
 }
 
 // ---- remote cloud/ollama ----
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct CloudEmbeddingConfig {
     pub api_url: String,
     pub api_key: String,
     pub model: String,
+}
+
+impl std::fmt::Debug for CloudEmbeddingConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Never print the raw key -- Debug is used in logs and panic hooks.
+        f.debug_struct("CloudEmbeddingConfig")
+            .field("api_url", &self.api_url)
+            .field("api_key", &"<redacted>")
+            .field("model", &self.model)
+            .finish()
+    }
 }
 impl CloudEmbeddingConfig {
     pub fn from_env() -> Option<Self> {
@@ -636,6 +647,25 @@ mod dim_probe_tests {
         let vector = Embedder::embed(&embedder, "hello").unwrap();
         assert_eq!(embedder.dim(), vector.len());
         assert_eq!(embedder.dim(), 1536);
+    }
+
+    #[test]
+    fn cloud_config_debug_redacts_api_key() {
+        let cfg = CloudEmbeddingConfig {
+            api_url: "https://api.openai.com/v1/embeddings".into(),
+            api_key: "sk-live-super-secret-value".into(),
+            model: "text-embedding-3-small".into(),
+        };
+        let rendered = format!("{cfg:?}");
+        assert!(
+            rendered.contains("<redacted>"),
+            "expected redaction marker: {rendered}"
+        );
+        assert!(
+            !rendered.contains("sk-live-super-secret-value"),
+            "api_key must not appear in Debug: {rendered}"
+        );
+        assert!(rendered.contains("text-embedding-3-small"));
     }
 }
 

@@ -13,13 +13,42 @@ use std::time::SystemTime;
 use walkdir::WalkDir;
 /// Indexed relative paths must be valid UTF-8. Lossy conversion is forbidden:
 /// two distinct non-UTF8 `OsStr` paths must not collide into one DB key.
+///
+/// Also rejects absolute paths and `..` / root / prefix components so an
+/// untrusted relative key cannot escape the project root when later joined
+/// (defense-in-depth alongside MCP `parse_node_id` and search 89er).
 pub fn indexed_rel_path(rel: &Path) -> Result<String> {
+    use std::path::Component;
+    if rel.as_os_str().is_empty() {
+        return Err(crate::StoreError::Other(
+            "empty relative path rejected (asgrep-kqhp)".into(),
+        ));
+    }
+    if rel.is_absolute()
+        || rel.components().any(|c| {
+            matches!(
+                c,
+                Component::ParentDir | Component::RootDir | Component::Prefix(_)
+            )
+        })
+    {
+        return Err(crate::StoreError::Other(format!(
+            "path traversal rejected (asgrep-kqhp): {}",
+            rel.display()
+        )));
+    }
     let raw = rel.to_str().ok_or_else(|| {
         crate::StoreError::Other(format!(
             "non-UTF8 path rejected (asgrep-kqhp): {}",
             rel.display()
         ))
     })?;
+    if raw.contains('\0') {
+        return Err(crate::StoreError::Other(format!(
+            "NUL in path rejected (asgrep-kqhp): {}",
+            rel.display()
+        )));
+    }
     Ok(raw.replace('\\', "/"))
 }
 #[derive(Debug, Clone)]
@@ -649,18 +678,20 @@ impl Indexer {
         Ok(())
     }
     pub fn index_file(&mut self, abs_path: &Path, rel_path: &str) -> Result<FileIndexStats> {
+        let rel_path = indexed_rel_path(Path::new(rel_path))?;
         let metadata = fs::metadata(abs_path)?;
         let mtime = metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH);
         let (mtime_secs, mtime_nanos) = system_time_to_parts(mtime);
         let content = crate::io_bounds::read_text_capped(abs_path, crate::io_bounds::MAX_INDEX_FILE_BYTES)?;
-        self.index_content_at(rel_path, &content, abs_path, mtime_secs, mtime_nanos)
+        self.index_content_at(&rel_path, &content, abs_path, mtime_secs, mtime_nanos)
     }
     pub fn index_content(&mut self, rel_path: &str, content: &str) -> Result<FileIndexStats> {
+        let rel_path = indexed_rel_path(Path::new(rel_path))?;
         let (mtime_secs, mtime_nanos) = system_time_to_parts(SystemTime::now());
         self.index_content_at(
-            rel_path,
+            &rel_path,
             content,
-            Path::new(rel_path),
+            Path::new(&rel_path),
             mtime_secs,
             mtime_nanos,
         )
@@ -673,6 +704,10 @@ impl Indexer {
         mtime_secs: i64,
         mtime_nanos: u32,
     ) -> Result<FileIndexStats> {
+        // Callers (`index_file` / `index_content` / walk) already validated; re-check
+        // so internal paths cannot skip the fence.
+        let rel_path = indexed_rel_path(Path::new(rel_path))?;
+        let rel_path = rel_path.as_str();
         let hash = hash_content(content);
         if self.is_unchanged(rel_path, &hash)? {
             return Ok(FileIndexStats {
