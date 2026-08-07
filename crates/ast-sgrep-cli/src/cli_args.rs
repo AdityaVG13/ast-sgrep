@@ -319,11 +319,56 @@ fn parse_excerpt_lines(raw: &str) -> Result<usize, String> {
 }
 
 fn parse_output_format(raw: &str) -> Result<String, String> {
-    ast_sgrep_plugins::OutputFormat::parse(raw)
-        .map(|_| raw.to_ascii_lowercase())
-        .ok_or_else(|| {
-            "format must be one of: native, agent, agent-capsule, compact, github, gitlab".into()
-        })
+    const FORMATS: &[&str] = &[
+        "native",
+        "agent",
+        "agent-capsule",
+        "compact",
+        "github",
+        "gitlab",
+    ];
+    let lower = raw.to_ascii_lowercase();
+    if ast_sgrep_plugins::OutputFormat::parse(&lower).is_some() {
+        return Ok(lower);
+    }
+    // Common agent mistakes: think format is "json" / typo "jason" — prefer compact for LLM use.
+    let suggestion = match lower.as_str() {
+        "json" | "jsno" | "josn" | "jason" | "ndjson" => Some("compact"),
+        "gh" | "github-actions" => Some("github"),
+        "gl" => Some("gitlab"),
+        "capsule" | "agent_capsule" | "agentcapsule" => Some("agent-capsule"),
+        _ => FORMATS
+            .iter()
+            .copied()
+            .filter(|cand| edit_distance(&lower, cand) <= 2)
+            .min_by_key(|cand| edit_distance(&lower, cand)),
+    };
+    let list = FORMATS.join(", ");
+    Err(match suggestion {
+        Some(s) => format!(
+            "invalid --format '{raw}' (did you mean '{s}'?). Try: asgrep --json --format {s} \"query\" .\nAllowed: {list}"
+        ),
+        None => format!(
+            "invalid --format '{raw}'. Try: asgrep --json --format compact \"query\" .\nAllowed: {list}"
+        ),
+    })
+}
+
+fn edit_distance(a: &str, b: &str) -> usize {
+    let (a, b) = (a.as_bytes(), b.as_bytes());
+    let mut prev: Vec<usize> = (0..=b.len()).collect();
+    let mut cur = vec![0; b.len() + 1];
+    for (i, &ca) in a.iter().enumerate() {
+        cur[0] = i + 1;
+        for (j, &cb) in b.iter().enumerate() {
+            let cost = usize::from(ca != cb);
+            cur[j + 1] = (prev[j + 1] + 1)
+                .min(cur[j] + 1)
+                .min(prev[j] + cost);
+        }
+        std::mem::swap(&mut prev, &mut cur);
+    }
+    prev[b.len()]
 }
 
 fn parse_snippet_tokens(raw: &str) -> Result<usize, String> {

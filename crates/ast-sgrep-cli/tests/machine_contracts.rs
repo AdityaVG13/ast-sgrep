@@ -348,6 +348,23 @@ fn agent_discovery_defaults_and_boolish_envs_are_round_trip_free() {
     let output = run(&bin, &["--robot-help"]);
     assert_eq!(output.status.code(), Some(0));
     assert!(String::from_utf8_lossy(&output.stdout).contains("agent handbook"));
+    // --json must wrap the handbook (agents parse stdout as JSON).
+    let json_help = run(&bin, &["--json", "--robot-help"]);
+    assert_eq!(json_help.status.code(), Some(0), "robot-help --json exit");
+    let help_v: Value = serde_json::from_slice(&json_help.stdout).expect("robot-help --json envelope");
+    assert_eq!(help_v["ok"], true);
+    assert_eq!(help_v["command"], "robot-docs");
+    assert_eq!(help_v["format"], "markdown");
+    assert_eq!(help_v["topic"], "guide");
+    assert!(
+        help_v["body"].as_str().unwrap_or("").contains("agent handbook"),
+        "body should carry markdown handbook"
+    );
+    let json_docs = run(&bin, &["robot-docs", "--json"]);
+    assert_eq!(json_docs.status.code(), Some(0), "robot-docs --json exit");
+    let docs_v: Value = serde_json::from_slice(&json_docs.stdout).expect("robot-docs --json envelope");
+    assert_eq!(docs_v["command"], "robot-docs");
+    assert!(docs_v["body"].as_str().unwrap_or("").contains("agent handbook"));
     let missing = TempDir::new().expect("tempdir").path().join("missing");
     let doctor = assert_doctor_unhealthy(&run(
         &bin,

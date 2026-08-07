@@ -1,6 +1,6 @@
 //! Search / keyword / semantic / chain command helpers.
 
-use crate::machine::{print_machine_json, print_machine_json_with_style};
+use crate::machine::{print_machine_json, print_machine_json_with_style, write_stdout_line};
 use crate::{
     ensure_existing_root, ensure_nonempty_index, open_searcher, resolve_root_index, usage_error, Cli,
 };
@@ -25,26 +25,27 @@ pub(crate) fn run_chain(root: &Path, cli: &Cli, query: &str) -> anyhow::Result<(
     if cli.json {
         return print_machine_json("chain", &r);
     }
-    println!(
+    // Human output: agents often pipe through head; never panic on broken pipe.
+    write_stdout_line(&format!(
         "chain {:?}: {} nodes, {} edges (max depth {})",
         r.query, r.node_count, r.edge_count, r.max_depth
-    );
-    println!("nodes:");
+    ))?;
+    write_stdout_line("nodes:")?;
     for n in &r.nodes {
         let sym = n.symbol.as_deref().unwrap_or("<file>");
-        println!(
+        write_stdout_line(&format!(
             "  depth {} score {:.4} {}:{}-{} {sym}",
             n.depth, n.score, n.file, n.line_start, n.line_end
-        );
+        ))?;
     }
-    println!("edges:");
+    write_stdout_line("edges:")?;
     for e in &r.edges {
         let from = e.from_symbol.as_deref().unwrap_or("<file>");
         let to = e.to_symbol.as_deref().unwrap_or("<file>");
-        println!(
+        write_stdout_line(&format!(
             "  depth {} {:?}: {}::{from} -> {}::{to}",
             e.depth, e.label, e.from_file, e.to_file
-        );
+        ))?;
     }
     Ok(())
 }
@@ -55,7 +56,7 @@ pub(crate) fn run_keyword_search(root: &Path, cli: &Cli, query: &str) -> anyhow:
         .context("keyword search failed")?;
     if !cli.search_machine_output() {
         for hit in &response.hits {
-            println!("{}", format_hit_line(hit));
+            write_stdout_line(&format_hit_line(hit))?;
         }
         return Ok(());
     }
@@ -81,7 +82,7 @@ pub(crate) fn run_search(
         do_search_with_cli(&open_searcher(root, cli)?, query, semantic, cli).context(ctx)?;
     if !cli.search_machine_output() {
         for hit in &response.hits {
-            println!("{}", format_hit_line(hit));
+            write_stdout_line(&format_hit_line(hit))?;
         }
         return Ok(());
     }

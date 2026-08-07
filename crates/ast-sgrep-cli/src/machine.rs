@@ -1,7 +1,20 @@
 //! Machine JSON envelopes and pre-parse failure helpers.
 
+use std::io::{self, Write};
+
 pub(crate) const MACHINE_SCHEMA_VERSION: &str = "1.0.0";
 const MAX_ERROR_MESSAGE_CHARS: usize = 4_096;
+
+/// Write a line to stdout. Agents often pipe through `head`/`jq` and close early;
+/// treat broken pipe as success so the process does not panic.
+pub(crate) fn write_stdout_line(line: &str) -> io::Result<()> {
+    let mut out = io::stdout().lock();
+    match out.write_all(line.as_bytes()).and_then(|_| out.write_all(b"\n")) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == io::ErrorKind::BrokenPipe => Ok(()),
+        Err(e) => Err(e),
+    }
+}
 
 fn bounded_error_message(message: &str) -> String {
     let mut chars = message.chars();
@@ -67,11 +80,12 @@ pub(crate) fn print_machine_json_with_style(
         object.insert("ok".into(), ok.into());
         object.insert("exit_code".into(), exit_code.into());
     }
-    if compact {
-        println!("{}", serde_json::to_string(&value)?);
+    let payload = if compact {
+        serde_json::to_string(&value)?
     } else {
-        println!("{}", serde_json::to_string_pretty(&value)?);
-    }
+        serde_json::to_string_pretty(&value)?
+    };
+    write_stdout_line(&payload)?;
     Ok(())
 }
 
@@ -81,10 +95,10 @@ pub(crate) fn print_machine_failure(command: &str, kind: &str, exit_code: i32, m
         "ok": false, "exit_code": exit_code,
         "error": {"kind": kind, "message": bounded_error_message(message)}
     });
-    println!(
-        "{}",
-        serde_json::to_string_pretty(&value).expect("failure envelope serializes")
-    );
+    let payload =
+        serde_json::to_string_pretty(&value).expect("failure envelope serializes");
+    // Ignore broken pipe: agents piping JSON may close early.
+    let _ = write_stdout_line(&payload);
 }
 
 pub(crate) fn raw_machine_output_requested(args: &[std::ffi::OsString]) -> bool {

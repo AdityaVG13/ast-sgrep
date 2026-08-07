@@ -55,13 +55,34 @@ fn run_process() -> ! {
         Ok(cli) => cli,
         Err(error) => {
             let exit_code = if error.use_stderr() { 1 } else { 0 };
-            if exit_code == 1 && raw_machine_output_requested(&raw_args) {
-                print_machine_failure(
-                    raw_command_name(&raw_args),
-                    "usage",
-                    exit_code,
-                    &error.to_string(),
+            let mut msg = error.to_string();
+            // Intent recovery: common agent mistakes clap does not map well.
+            if msg.contains("'--colour'") || msg.contains("\"--colour\"") {
+                msg.push_str(
+                    "\nTip: asgrep has no --colour; use NO_COLOR=1 or default monochrome. Machine data: asgrep --json …",
                 );
+            }
+            if msg.contains("'--color'") || msg.contains("\"--color\"") {
+                msg.push_str(
+                    "\nTip: asgrep has no --color flag; set NO_COLOR=1 to force plain text. Machine data: asgrep --json …",
+                );
+            }
+            let command = raw_command_name(&raw_args);
+            msg = agent::augment_clap_usage_message(&msg, command);
+            let augmented = msg != error.to_string();
+            if exit_code == 1 && raw_machine_output_requested(&raw_args) {
+                print_machine_failure(command, "usage", exit_code, &msg);
+            } else if exit_code == 1 {
+                // Always teach: triad footer on every usage error (not only when we rewrote the body).
+                if augmented {
+                    eprint!("{msg}");
+                    if !msg.ends_with('\n') {
+                        eprintln!();
+                    }
+                } else {
+                    let _ = error.print();
+                }
+                agent::print_agent_help_footer();
             } else {
                 let _ = error.print();
             }
@@ -95,8 +116,7 @@ pub fn run() -> anyhow::Result<()> {
 
 fn run_cli(cli: &Cli) -> anyhow::Result<()> {
     if cli.robot_help {
-        agent::print_robot_guide();
-        return Ok(());
+        return agent::emit_robot_guide(cli);
     }
     if cli.active_tuning().format.is_some()
         && !matches!(

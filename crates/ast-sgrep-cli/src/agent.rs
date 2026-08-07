@@ -32,12 +32,9 @@ pub(crate) fn run_capabilities(cli: &Cli, args: &CapabilitiesArgs) -> anyhow::Re
     let _ = (cli.json, args.json);
     crate::print_machine_json("capabilities", capabilities_json(cli)?)
 }
-pub(crate) fn run_robot_docs(_cli: &Cli, args: &RobotDocsArgs) -> anyhow::Result<()> {
+pub(crate) fn run_robot_docs(cli: &Cli, args: &RobotDocsArgs) -> anyhow::Result<()> {
     match args.command.as_ref().unwrap_or(&RobotDocsCommand::Guide) {
-        RobotDocsCommand::Guide => {
-            print_robot_guide();
-            Ok(())
-        }
+        RobotDocsCommand::Guide => emit_robot_guide(cli),
     }
 }
 pub(crate) fn run_doctor(cli: &Cli, root: &Path, args: &DoctorArgs) -> anyhow::Result<()> {
@@ -98,11 +95,16 @@ pub(crate) fn capabilities_json(_cli: &Cli) -> anyhow::Result<Value> {
             "notes": "ok:true only on successful operations; doctor uses ok:false when healthy:false; operational faults use exit_code 2"
         },
         "search_formats": ["native", "agent", "agent-capsule", "compact", "github", "gitlab"],
-        "exit_codes": [{"code": 0, "meaning": "success"}, {"code": 1, "meaning": "user input / usage error"}, {"code": 2, "meaning": "index or search operation failed"}],
+        "exit_codes": [
+            {"code": 0, "meaning": "success"},
+            {"code": 1, "meaning": "usage error (missing required args, unknown flags, invalid --format, conflicting roots)"},
+            {"code": 2, "meaning": "operational failure (index/search/IO) or doctor healthy:false"}
+        ],
         "canonical_tasks": ["asgrep capabilities --json", "asgrep robot-docs guide", "asgrep doctor --robot-triage", "asgrep index . && asgrep --json --format compact \"where is auth refreshed\" ."],
         "notes": {
             "default_search": "Bare QUERY without a subcommand runs hybrid search; the word 'search' is not a required verb — use the `search`/`find`/`query` subcommand only when you want an explicit search command.",
-            "format_implies_json": true
+            "format_implies_json": true,
+            "safe_mutating": "index is incremental (build-then-swap). reindex clears and rebuilds -- always prefer `asgrep reindex --dry-run <ROOT> --json` before a full reindex."
         }
     }))
 }
@@ -156,6 +158,25 @@ fn clap_catalog(command: &clap::Command) -> (Vec<Value>, Vec<String>, Vec<String
         }
         if matches!(name.as_str(), "search" | "keyword" | "semantic") {
             entry["robot_output"] = json!("--format implies --json; formats: native|agent|agent-capsule|compact|github|gitlab");
+            entry["example"] = json!(match name.as_str() {
+                "keyword" => r#"asgrep keyword --json "auth refresh" ."#,
+                "semantic" => r#"asgrep semantic --json "where is auth refreshed" ."#,
+                _ => r#"asgrep search --json --format compact "auth refresh" ."#,
+            });
+        }
+        if name == "reindex" {
+            entry["safe_mutating"] = json!({
+                "kind": "destructive_rebuild",
+                "prefer_first": "asgrep reindex --dry-run <ROOT> --json",
+                "note": "clears and rebuilds the index; dry-run reports plan without writing"
+            });
+        }
+        if name == "index" {
+            entry["safe_mutating"] = json!({
+                "kind": "incremental",
+                "prefer_first": "asgrep index <ROOT> --json",
+                "note": "incremental refresh; build-then-swap so incomplete writes are not promoted"
+            });
         }
         commands.push(entry);
     }
@@ -212,11 +233,11 @@ fn doctor_triage_json(cli: &Cli, root: &Path) -> anyhow::Result<Value> {
         json!({"robot_triage": true, "root": root, "index_path": cli.index_path, "status": status, "issues": issues, "suggested_commands": next, "healthy": issues.is_empty(), "tty": io::stdout().is_terminal()}),
     )
 }
-pub(crate) fn print_robot_guide() {
+/// Agent handbook body (markdown). Single source for human stdout and --json envelope.
+pub(crate) fn robot_guide_markdown() -> &'static str {
     // Handbook text is kept in sync with clap/capabilities (hceb): prefer capabilities --json
     // for the authoritative command/flag catalog derived from Cli::command().
-    print!(
-        r#"# asgrep — agent handbook (robot-docs guide)
+    r#"# asgrep — agent handbook (robot-docs guide)
 ## Agent triad (start here)
 1. `asgrep capabilities --json` — authoritative command/flag/env contract (derived from clap).
 2. `asgrep robot-docs guide` — this handbook.
@@ -246,8 +267,30 @@ See `capabilities --json` → `environment`. Common: `ASGREP_INDEX_PATH`, `ASGRE
 ## Common mistakes
 - Missing or empty index: run `asgrep index <root> --json` before searching.
 - Missing ROOT is an operational error; it is never reported as an empty result.
+- Destructive rebuild: prefer `asgrep reindex --dry-run <root> --json` before a full `reindex`.
+- Output format is not `json`: use `--json` and optionally `--format compact` (not `--format json`).
+- Piping: `asgrep --json … | head` is safe (broken pipe exits cleanly); always put data flags on asgrep, not the pipe consumer.
 "#
-    );
+}
+
+pub(crate) fn print_robot_guide() {
+    print!("{}", robot_guide_markdown());
+}
+
+/// Emit handbook: markdown on stdout, or machine JSON envelope when `--json`.
+pub(crate) fn emit_robot_guide(cli: &Cli) -> anyhow::Result<()> {
+    if cli.json {
+        return crate::print_machine_json(
+            "robot-docs",
+            serde_json::json!({
+                "topic": "guide",
+                "format": "markdown",
+                "body": robot_guide_markdown(),
+            }),
+        );
+    }
+    print_robot_guide();
+    Ok(())
 }
 pub(crate) fn query_looks_like_subcommand_typo(query: &str) -> Option<&'static str> {
     let q = query.trim();
@@ -337,6 +380,27 @@ fn edit_distance(left: &str, right: &str) -> usize {
     }
     previous[right.len()]
 }
+
+/// Teach missing-QUERY and other clap usage gaps with an exact recoverable command.
+pub(crate) fn augment_clap_usage_message(msg: &str, command: &str) -> String {
+    let mut msg = msg.to_string();
+    let missing_query = msg.contains("required arguments were not provided")
+        && (msg.contains("<QUERY>") || msg.contains("QUERY"));
+    if missing_query {
+        let example = match command {
+            "keyword" => r#"Example: asgrep keyword --json "auth refresh" ."#,
+            "semantic" => r#"Example: asgrep semantic --json "where is auth refreshed" ."#,
+            "search" => r#"Example: asgrep search --json --format compact "auth refresh" ."#,
+            "chain" => r#"Example: asgrep chain "callers:process_request" ."#,
+            _ => r#"Example: asgrep --json --format compact "auth refresh" ."#,
+        };
+        msg.push('\n');
+        msg.push_str(example);
+        msg.push_str("\nTip: QUERY is required; optional ROOT defaults to `.`.");
+    }
+    msg
+}
+
 pub(crate) fn print_agent_help_footer() {
     eprintln!("\nAgent surfaces: {TOOL} capabilities --json | {TOOL} robot-docs guide | {TOOL} doctor --robot-triage");
     eprintln!(
