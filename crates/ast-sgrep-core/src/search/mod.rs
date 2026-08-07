@@ -217,21 +217,63 @@ impl Searcher {
         Ok(response)
     }
 
+    /// Fingerprint of the semantic sidecar, and whether it matches this
+    /// generation (d3l5).
+    ///
+    /// `load_semantic_ivf` returns `Ok(None)` on a fingerprint mismatch, which
+    /// makes a stale sidecar indistinguishable from no sidecar at all: search
+    /// quietly falls back to brute force and the response looks healthy. Peek
+    /// at the stored fingerprint so the mismatch is reported instead.
+    fn semantic_manifest(
+        &self,
+        generation: i64,
+        degraded: &mut Vec<DegradedChannel>,
+    ) -> Option<String> {
+        let path = crate::semantic_ivf::semantic_ivf_path(self.store.db_path());
+        if !path.exists() {
+            return None;
+        }
+        let Some(stored) = crate::semantic_ivf::peek_semantic_ivf_fingerprint(&path) else {
+            degraded.push(DegradedChannel {
+                channel: "semantic".to_owned(),
+                reason: "sidecar_unreadable".to_owned(),
+            });
+            return None;
+        };
+        let expected = self.expected_semantic_fingerprint(generation);
+        if expected.is_some_and(|expected| expected != stored) {
+            degraded.push(DegradedChannel {
+                channel: "semantic".to_owned(),
+                reason: "sidecar_generation_mismatch".to_owned(),
+            });
+        }
+        Some(hex32(&stored))
+    }
+
+    /// Fingerprint the sidecar should carry for the current snapshot (d3l5).
+    /// `None` when the inputs cannot be read, so an unknown state is never
+    /// reported as a mismatch.
+    fn expected_semantic_fingerprint(&self, generation: i64) -> Option<[u8; 32]> {
+        // The sidecar is built over the whole corpus, so compare against
+        // unfiltered stats regardless of any per-query language filter.
+        let stats = self.store.semantic_chunk_stats(None).ok()?;
+        if stats.count == 0 || stats.dim == 0 {
+            return None;
+        }
+        let backend = self.store.get_meta("embed_backend").ok()?;
+        Some(crate::semantic_ivf::compute_ann_fingerprint(
+            stats.count,
+            stats.max_id,
+            stats.dim,
+            backend.as_deref(),
+            generation,
+        ))
+    }
+
     /// Describe the snapshot a response was read from (d3l5).
     fn snapshot_stamp(&self, generation: i64) -> SnapshotStamp {
         let mut degraded_channels = Vec::new();
-        // A semantic sidecar built for another generation must be visible as a
-        // degraded channel, not silently trusted or silently dropped.
-        let semantic_manifest = match self.store.get_meta("semantic_ivf_fingerprint") {
-            Ok(value) => value,
-            Err(_) => {
-                degraded_channels.push(DegradedChannel {
-                    channel: "semantic".to_owned(),
-                    reason: "sidecar_manifest_unreadable".to_owned(),
-                });
-                None
-            }
-        };
+        let semantic_manifest = self.semantic_manifest(generation, &mut degraded_channels);
         SnapshotStamp {
             generation,
             schema_version: self.store.schema_version(),
@@ -1315,4 +1357,14 @@ fn read_git_head(root: &std::path::Path) -> Option<String> {
         // Detached HEAD already holds the id.
         None => (!head.is_empty()).then(|| head.to_owned()),
     }
+}
+
+/// Lowercase hex for a 32-byte digest (d3l5).
+fn hex32(bytes: &[u8; 32]) -> String {
+    let mut out = String::with_capacity(64);
+    for byte in bytes {
+        use std::fmt::Write;
+        let _ = write!(out, "{byte:02x}");
+    }
+    out
 }
