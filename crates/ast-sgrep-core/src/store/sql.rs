@@ -2,6 +2,9 @@ use crate::Result;
 use rusqlite::{params, Connection, ToSql};
 use std::time::Duration;
 // Full DDL for the current schema; init_schema applies when user_version is lower.
+// IMPORTANT: this string is line-continued without embedded newlines. Never use SQL `--`
+// comments inside it -- they run to end-of-input and drop the rest of the batch (vvpk / lines_code_fts).
+// lines_code_fts: no porter stemming; `_` is a token character so `refresh_token` stays one term.
 pub(crate) const SCHEMA_DDL: &str = "\
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);\
 CREATE TABLE IF NOT EXISTS files (id INTEGER PRIMARY KEY, path TEXT NOT NULL UNIQUE, language TEXT,\
@@ -33,8 +36,6 @@ CREATE INDEX IF NOT EXISTS idx_pattern_nodes_signature ON pattern_nodes(signatur
 CREATE INDEX IF NOT EXISTS idx_pattern_nodes_file ON pattern_nodes(file_id);\
 CREATE VIRTUAL TABLE IF NOT EXISTS lines_fts USING fts5(content, file_id UNINDEXED, line_no UNINDEXED, tokenize = 'porter unicode61');\
 CREATE VIRTUAL TABLE IF NOT EXISTS lines_trigram USING fts5(content, content = 'lines', content_rowid = 'rowid', tokenize = 'trigram');\
--- vvpk: code field. No porter stemming, and `_` is a token character, so\
--- `refresh_token` stays one term and `indexing` never collapses to `index`.\
 CREATE VIRTUAL TABLE IF NOT EXISTS lines_code_fts USING fts5(content, file_id UNINDEXED, line_no UNINDEXED, tokenize = \"unicode61 tokenchars '_'\");\
 CREATE TABLE IF NOT EXISTS embeddings (file_id INTEGER NOT NULL, line_no INTEGER NOT NULL, vector BLOB NOT NULL,\
   PRIMARY KEY (file_id, line_no), FOREIGN KEY (file_id) REFERENCES files(id) ON DELETE CASCADE);\
@@ -336,7 +337,7 @@ fn clear_all_meta_whitelist_matches_sql() {
 
 pub(crate) fn emb_vec(r: &rusqlite::Row<'_>, idx: usize) -> rusqlite::Result<Vec<f32>> {
     let v: Vec<u8> = r.get(idx)?;
-    // Fail closed on corrupt blobs (bead ast-sgrep-j97d.5qpa) — never default to zeros.
+    // Fail closed on corrupt blobs (bead ast-sgrep-j97d.5qpa) -- never default to zeros.
     ast_sgrep_embed::embed_from_bytes(&v).map_err(|msg| {
         rusqlite::Error::FromSqlConversionFailure(
             idx,
