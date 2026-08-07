@@ -4,7 +4,7 @@ use super::embed_support::{
     touch_embed_cache_entries, EmbeddedChunk, EmbeddedChunks,
 };
 use super::try_index_db_path;
-use super::sql::configure_connection;
+use super::sql::configure_connection_with;
 use super::sql::{
     append_lang_filter, calls_matching, count_star, delete_file_children, delete_file_lines,
     lang_and_clause, like_terms_filter, optional_row, query_cached_map, query_limit_map,
@@ -103,9 +103,20 @@ pub struct IndexStore {
     file_tx_owns: std::cell::Cell<bool>,
     file_tx_poisoned: std::cell::Cell<bool>,
     cache_seq: std::cell::Cell<i64>,
+    /// Write-durability profile for this connection (0obi).
+    durability: crate::store::Durability,
 }
 impl IndexStore {
     pub fn open(root: &Path, index_path: Option<&Path>) -> Result<Self> {
+        Self::open_with_durability(root, index_path, crate::store::Durability::from_env())
+    }
+
+    /// Open with an explicit durability profile (0obi).
+    pub fn open_with_durability(
+        root: &Path,
+        index_path: Option<&Path>,
+        durability: crate::store::Durability,
+    ) -> Result<Self> {
         let db_path = try_index_db_path(root, index_path).map_err(|e| {
             crate::StoreError::Other(format!(
                 "failed to resolve index path for root {}: {e}",
@@ -128,7 +139,7 @@ impl IndexStore {
                 root.display()
             ))
         })?;
-        configure_connection(&conn)?;
+        configure_connection_with(&conn, durability)?;
         let store = Self {
             conn,
             root: root.to_path_buf(),
@@ -137,6 +148,7 @@ impl IndexStore {
             file_tx_owns: std::cell::Cell::new(false),
             file_tx_poisoned: std::cell::Cell::new(false),
             cache_seq: std::cell::Cell::new(0),
+            durability,
         };
         store.init_schema()?;
         init_cache_seq(&store.conn, &store.cache_seq)?;
@@ -259,13 +271,21 @@ impl IndexStore {
     /// File-tx stays OFF until bulk commit (no re-NORMAL after each file).
     /// Nested begins only increment depth; only the owning outermost end commits
     /// or rolls back (bead ast-sgrep-j97d.37er).
+    /// Active write-durability profile (0obi).
+    pub fn durability(&self) -> crate::store::Durability {
+        self.durability
+    }
+
     pub fn begin_file_tx(&self) -> Result<()> {
         let depth = self.file_tx_depth.get();
         if depth == 0 {
             self.file_tx_poisoned.set(false);
             if self.conn.is_autocommit() {
-                self.conn
-                    .execute_batch("PRAGMA synchronous = OFF; BEGIN IMMEDIATE")?;
+                // 0obi: was unconditionally OFF; now the profile decides.
+                self.conn.execute_batch(&format!(
+                    "PRAGMA synchronous = {}; BEGIN IMMEDIATE",
+                    self.durability.write_pragma()
+                ))?;
                 self.file_tx_owns.set(true);
             } else {
                 // Bulk (or other) transaction owns the write set.
@@ -282,8 +302,10 @@ impl IndexStore {
         self.end_file_tx(false)
     }
     fn restore_synchronous(&self) -> Result<()> {
-        self.conn
-            .execute_batch("PRAGMA synchronous = NORMAL; PRAGMA cache_size = -16384")?;
+        self.conn.execute_batch(&format!(
+            "PRAGMA synchronous = {}; PRAGMA cache_size = -16384",
+            self.durability.steady_pragma()
+        ))?;
         Ok(())
     }
     fn end_file_tx(&self, commit: bool) -> Result<()> {
@@ -354,10 +376,12 @@ impl IndexStore {
         if !self.conn.is_autocommit() {
             return Ok(());
         }
-        self.conn.execute_batch(
+        // 0obi: was unconditionally OFF; now the profile decides.
+        self.conn.execute_batch(&format!(
             "PRAGMA temp_store = MEMORY; PRAGMA cache_size = -131072; PRAGMA mmap_size = 536870912; \
-             PRAGMA synchronous = OFF; BEGIN IMMEDIATE",
-        )?;
+             PRAGMA synchronous = {}; BEGIN IMMEDIATE",
+            self.durability.write_pragma()
+        ))?;
         Ok(())
     }
     pub fn commit_bulk_tx(&self) -> Result<()> {
@@ -545,7 +569,7 @@ impl IndexStore {
         self.insert_imports(file_id, input.imports)?;
         self.insert_pattern_nodes(file_id, input.pattern_nodes)?;
         self.set_meta(struct_key, struct_fp)?;
-        crate::semantic_ann::mark_semantic_ivf_stale(self);
+        crate::semantic_ann::mark_semantic_ivf_stale(self)?;
         self.bump_index_data_version()?;
         Ok(file_id)
     }
@@ -760,7 +784,7 @@ impl IndexStore {
             self.delete_meta(&format!("eol:{rel_path}"))?;
             self.delete_meta(&format!("body:{rel_path}"))?;
             self.delete_meta(&format!("struct:{rel_path}"))?;
-            crate::semantic_ann::mark_semantic_ivf_stale(self);
+            crate::semantic_ann::mark_semantic_ivf_stale(self)?;
             self.bump_index_data_version()?;
             self.bump_semantic_data_version()?;
             Ok(())
@@ -803,6 +827,7 @@ impl IndexStore {
             embed_cache_hits: self.meta_u64("embed_cache_hits")?,
             embed_cache_misses: self.meta_u64("embed_cache_misses")?,
             semantic_ivf_present: crate::semantic_ivf::semantic_ivf_path(&self.db_path).exists(),
+            durability: self.durability.as_str().to_owned(),
         })
     }
     pub fn indexed_line_count(&self) -> Result<usize> {

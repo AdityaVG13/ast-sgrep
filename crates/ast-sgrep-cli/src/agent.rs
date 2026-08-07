@@ -67,7 +67,7 @@ pub(crate) fn capabilities_json(_cli: &Cli) -> anyhow::Result<Value> {
             "precedence": "conflicting --root and positional ROOT is a usage error; effective_root prefers --root when set",
             "bin_aliases": ["asgrep", "ast-sgrep"]
         },
-        "environment": ["ASGREP_LIMIT", "ASGREP_INDEX_PATH", "ASGREP_NO_EMBED", "ASGREP_CLOUD_EMBED", "ASGREP_OLLAMA_EMBED", "ASGREP_NEURAL_EMBED", "ASGREP_NEURAL_FALLBACK", "ASGREP_EMBED_FALLBACK", "ASGREP_SEMANTIC_ONLY", "ASGREP_TANTIVY", "ASGREP_ANN_THRESHOLD", "ASGREP_ANN_PROBES", "ASGREP_RERANK", "ASGREP_RERANK_TOP_K", "ASGREP_EMBED_URL_ALLOWLIST", "ASGREP_ALLOW_AST_GREP", "ASGREP_AST_GREP", "ASGREP_LEDGER_PATH", "ASGREP_USE_CACHE", "XDG_CACHE_HOME", "NO_COLOR", "CI"],
+        "environment": ["ASGREP_LIMIT", "ASGREP_INDEX_PATH", "ASGREP_DURABILITY", "ASGREP_NO_EMBED", "ASGREP_CLOUD_EMBED", "ASGREP_OLLAMA_EMBED", "ASGREP_NEURAL_EMBED", "ASGREP_NEURAL_FALLBACK", "ASGREP_EMBED_FALLBACK", "ASGREP_SEMANTIC_ONLY", "ASGREP_TANTIVY", "ASGREP_ANN_THRESHOLD", "ASGREP_ANN_PROBES", "ASGREP_RERANK", "ASGREP_RERANK_TOP_K", "ASGREP_EMBED_URL_ALLOWLIST", "ASGREP_ALLOW_AST_GREP", "ASGREP_AST_GREP", "ASGREP_LEDGER_PATH", "ASGREP_USE_CACHE", "XDG_CACHE_HOME", "NO_COLOR", "CI"],
         "environment_bool_values": ["1", "0", "true", "false", "yes", "no", "on", "off"],
         "sibling_binaries": [
             {"name":"asgrep-mcp","purpose":"MCP stdio server","launch":"asgrep-mcp (stdio JSON-RPC)"},

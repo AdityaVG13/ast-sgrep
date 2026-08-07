@@ -68,3 +68,80 @@ fn bulk_tx_rollback_restores_synchronous_normal() {
         .expect("synchronous");
     assert_eq!(synchronous, 1, "bulk rollback restores NORMAL");
 }
+
+/// 0obi: each durability profile must hold its documented pragma both at rest
+/// and inside a write batch. `fast-unsafe` is the only path to OFF.
+#[test]
+fn durability_profiles_control_synchronous_pragma() {
+    use ast_sgrep_core::store::Durability;
+
+    let sync = |store: &IndexStore| -> i64 {
+        store
+            .connection()
+            .query_row("PRAGMA synchronous", [], |row| row.get(0))
+            .expect("synchronous")
+    };
+
+    for (profile, steady, in_write) in [
+        (Durability::Strict, 2_i64, 2_i64),
+        (Durability::Balanced, 1, 1),
+        (Durability::FastUnsafe, 1, 0),
+    ] {
+        let session = isolated_index_session();
+        let store = session.open_store_with_durability(profile);
+        assert_eq!(store.durability(), profile);
+        assert_eq!(sync(&store), steady, "{profile:?} at rest");
+
+        // Bulk write batch.
+        store.begin_bulk_tx().expect("begin bulk");
+        assert_eq!(sync(&store), in_write, "{profile:?} inside bulk tx");
+        store.commit_bulk_tx().expect("commit bulk");
+        assert_eq!(sync(&store), steady, "{profile:?} after bulk commit");
+
+        // Per-file write batch.
+        store.begin_file_tx().expect("begin file");
+        assert_eq!(sync(&store), in_write, "{profile:?} inside file tx");
+        store.rollback_file_tx().expect("rollback file");
+        assert_eq!(sync(&store), steady, "{profile:?} after file rollback");
+
+        // WAL is required by every profile.
+        let journal: String = store
+            .connection()
+            .query_row("PRAGMA journal_mode", [], |row| row.get(0))
+            .expect("journal_mode");
+        assert_eq!(journal.to_ascii_lowercase(), "wal", "{profile:?} journal");
+
+        // The active profile is visible to operators.
+        assert_eq!(store.status().expect("status").durability, profile.as_str());
+    }
+}
+
+/// 0obi: the default must be `balanced`, and nothing may reach OFF implicitly.
+#[test]
+fn default_durability_never_reaches_synchronous_off() {
+    use ast_sgrep_core::store::Durability;
+
+    assert_eq!(Durability::default(), Durability::Balanced);
+    assert_eq!(Durability::default().write_pragma(), "NORMAL");
+    assert_ne!(Durability::Strict.write_pragma(), "OFF");
+    assert_eq!(Durability::FastUnsafe.write_pragma(), "OFF");
+
+    // Only the explicit opt-in spelling selects the unsafe profile.
+    assert_eq!(Durability::parse("fast-unsafe"), Some(Durability::FastUnsafe));
+    assert_eq!(Durability::parse("balanced"), Some(Durability::Balanced));
+    assert_eq!(Durability::parse("strict"), Some(Durability::Strict));
+    // An unknown value must not silently downgrade durability.
+    assert_eq!(Durability::parse("off"), None);
+    assert_eq!(Durability::parse(""), None);
+
+    let session = isolated_index_session();
+    let store = session.open_store();
+    assert_eq!(store.durability(), Durability::Balanced);
+    store.begin_bulk_tx().expect("begin bulk");
+    let during: i64 = store
+        .connection()
+        .query_row("PRAGMA synchronous", [], |row| row.get(0))
+        .expect("synchronous");
+    store.commit_bulk_tx().expect("commit bulk");
+    assert_ne!(during, 0, "default indexing must never run with synchronous=OFF");
+}

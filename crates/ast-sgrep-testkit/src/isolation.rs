@@ -86,6 +86,15 @@ impl IsolatedIndexSession {
             .expect("open isolated on-disk IndexStore")
     }
 
+    /// Open the private store under an explicit durability profile (0obi).
+    pub fn open_store_with_durability(
+        &self,
+        durability: ast_sgrep_core::store::Durability,
+    ) -> IndexStore {
+        IndexStore::open_with_durability(&self.corpus_root, Some(&self.index_path), durability)
+            .expect("open isolated on-disk IndexStore")
+    }
+
     /// Build an [`Indexer`] with isolation-safe paths, without indexing yet.
     pub fn indexer(&self, mut opts: IndexOptions) -> Indexer {
         opts.root = self.corpus_root.clone();

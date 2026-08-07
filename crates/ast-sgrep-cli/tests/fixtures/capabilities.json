@@ -248,6 +248,7 @@
   "environment": [
     "ASGREP_LIMIT",
     "ASGREP_INDEX_PATH",
+    "ASGREP_DURABILITY",
     "ASGREP_NO_EMBED",
     "ASGREP_CLOUD_EMBED",
     "ASGREP_OLLAMA_EMBED",
@@ -295,6 +296,7 @@
     }
   ],
   "global_flags": [
+    "--durability",
     "--index-path",
     "--json",
     "--lang",
@@ -319,7 +321,7 @@
     "schema_version": "1.0.0"
   },
   "notes": {
-    "default_search": "Bare QUERY without a subcommand runs hybrid search; the word 'search' is not a required verb — use the `search`/`find`/`query` subcommand only when you want an explicit search command.",
+    "default_search": "Bare QUERY without a subcommand runs hybrid search; the word 'search' is not a required verb \u2014 use the `search`/`find`/`query` subcommand only when you want an explicit search command.",
     "format_implies_json": true,
     "safe_mutating": "index is incremental (build-then-swap). reindex clears and rebuilds -- always prefer `asgrep reindex --dry-run <ROOT> --json` before a full reindex."
   },

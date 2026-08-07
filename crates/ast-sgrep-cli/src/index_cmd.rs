@@ -83,6 +83,8 @@ pub(crate) fn index_options(root: &Path, cli: &Cli) -> IndexOptions {
         ),
         force_reindex: false,
         ann_threshold: t.ann_threshold,
+        // 0obi: explicit flag wins; otherwise the safe default.
+        durability: cli.durability.unwrap_or_default(),
     }
 }
 

@@ -366,15 +366,24 @@ pub fn lang_and_clause(lang: Option<&str>) -> &'static str {
     }
 }
 pub fn configure_connection(conn: &Connection) -> Result<()> {
+    configure_connection_with(conn, crate::store::Durability::default())
+}
+
+/// Configure a connection under an explicit durability profile (0obi).
+pub fn configure_connection_with(
+    conn: &Connection,
+    durability: crate::store::Durability,
+) -> Result<()> {
     conn.busy_timeout(Duration::from_secs(5))?;
     conn.set_prepared_statement_cache_capacity(128);
     let journal_mode: String = conn.query_row("PRAGMA journal_mode", [], |row| row.get(0))?;
     if !journal_mode.eq_ignore_ascii_case("wal") {
         let _: String = conn.query_row("PRAGMA journal_mode = WAL", [], |row| row.get(0))?;
     }
-    conn.execute_batch(
-        "PRAGMA foreign_keys = ON; PRAGMA synchronous = NORMAL; PRAGMA wal_autocheckpoint = 1000;",
-    )?;
+    conn.execute_batch(&format!(
+        "PRAGMA foreign_keys = ON; PRAGMA synchronous = {}; PRAGMA wal_autocheckpoint = 1000;",
+        durability.steady_pragma()
+    ))?;
     if std::env::var_os("ASGREP_SQLITE_DEFAULTS").is_none() {
         conn.execute_batch("PRAGMA mmap_size = 268435456; PRAGMA cache_size = -16384;")?;
     }

@@ -14,7 +14,13 @@ use std::path::Path;
 pub(crate) fn run_chain(root: &Path, cli: &Cli, query: &str) -> anyhow::Result<()> {
     let root = ensure_existing_root(root, cli)?;
     let (_, index_path) = resolve_root_index(cli, &root);
-    let store = IndexStore::open(&root, index_path.as_deref()).context("failed to open index")?;
+    // 0obi: honor the requested durability profile on the read path too.
+    let store = IndexStore::open_with_durability(
+        &root,
+        index_path.as_deref(),
+        cli.durability.unwrap_or_default(),
+    )
+    .context("failed to open index")?;
     ensure_nonempty_index(&root, store.status()?.file_count)?;
     let config = ChainConfig {
         limit: cli.limit.unwrap_or(ChainConfig::default().limit),

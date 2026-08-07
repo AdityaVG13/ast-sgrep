@@ -189,6 +189,16 @@ pub(crate) struct Cli {
     pub(crate) index_path: Option<PathBuf>,
     #[arg(long, global = true, help = "Language filter")]
     pub(crate) lang: Option<String>,
+    /// 0obi: `fast-unsafe` can corrupt the index on power loss, so it must be
+    /// asked for by name; it is never reached by default.
+    #[arg(
+        long,
+        global = true,
+        env = "ASGREP_DURABILITY",
+        value_parser = parse_durability,
+        help = "Index write durability: strict|balanced|fast-unsafe (default balanced)"
+    )]
+    pub(crate) durability: Option<ast_sgrep_core::store::Durability>,
     /// Search-tuning for bare (no-subcommand) search only — not inherited by capabilities/doctor (vdqo).
     #[command(flatten)]
     pub(crate) tuning: SearchTuning,
@@ -308,6 +318,14 @@ fn parse_bounded_usize(raw: &str, maximum: usize, name: &str) -> Result<usize, S
         return Err(format!("{name} must not exceed {maximum}"));
     }
     Ok(value)
+}
+
+/// 0obi: an unrecognized durability value is a hard error, never a silent
+/// downgrade to a weaker profile.
+fn parse_durability(raw: &str) -> Result<ast_sgrep_core::store::Durability, String> {
+    ast_sgrep_core::store::Durability::parse(raw).ok_or_else(|| {
+        format!("unknown durability '{raw}' (expected strict, balanced, or fast-unsafe)")
+    })
 }
 
 fn parse_output_limit(raw: &str) -> Result<usize, String> {

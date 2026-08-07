@@ -122,6 +122,8 @@ pub struct IndexOptions {
     pub embed_backend: EmbedBackend,
     pub force_reindex: bool,
     pub ann_threshold: Option<usize>,
+    /// Write-durability profile for the index database (0obi).
+    pub durability: crate::store::Durability,
 }
 impl Default for IndexOptions {
     fn default() -> Self {
@@ -135,6 +137,7 @@ impl Default for IndexOptions {
             embed_backend: EmbedBackend::Auto,
             force_reindex: false,
             ann_threshold: None,
+            durability: crate::store::Durability::from_env(),
         }
     }
 }
@@ -178,7 +181,11 @@ pub struct WatchUpdateStats {
 impl Indexer {
     pub fn new(mut options: IndexOptions) -> Result<Self> {
         options.root = options.root.canonicalize().unwrap_or(options.root.clone());
-        let store = IndexStore::open(&options.root, options.index_path.as_deref())?;
+        let store = IndexStore::open_with_durability(
+            &options.root,
+            options.index_path.as_deref(),
+            options.durability,
+        )?;
         store.set_meta("root", &options.root.display().to_string())?;
         let ignore = crate::gitignore::IgnoreMatcher::new(&options.root);
         Ok(Self {
@@ -273,9 +280,10 @@ impl Indexer {
                                 embed_semantic: self.options.embed_semantic,
                                 embed_backend: self.options.embed_backend.to_preference(),
                             })?;
-                            let _ = self
-                                .store
-                                .set_meta(&format!("body:{rel_str}"), &prep.body_hash);
+                            // Same bulk_tx as upsert: fail + rollback if body meta cannot land
+                            // (structure-skip must not use a stale body fingerprint).
+                            self.store
+                                .set_meta(&format!("body:{rel_str}"), &prep.body_hash)?;
                             stats.files_indexed += 1;
                             stats.symbols_extracted += prep.symbols.len();
                             stats.callers_extracted += prep.callers.len();
@@ -404,7 +412,7 @@ impl Indexer {
     fn rebuild_semantic_ivf_sidecar(&self) -> Result<()> {
         let stats = self.store.semantic_chunk_stats(None)?;
         if !crate::semantic_ann::should_use_ann(stats.count, self.options.ann_threshold) {
-            let _ = crate::semantic_ivf::invalidate_semantic_ivf(self.store.db_path());
+            crate::semantic_ivf::invalidate_semantic_ivf(self.store.db_path())?;
             return Ok(());
         }
         let chunks = self.store.all_semantic_chunks(None)?;
@@ -583,23 +591,29 @@ impl Indexer {
             &pattern_nodes,
             self.options.embed_semantic,
         );
-        self.store.upsert_file(UpsertFileInput {
-            rel_path,
-            language: language.map(|l| l.as_str()),
-            mtime_secs,
-            mtime_nanos,
-            content_hash: &hash,
-            lines: &material.split.lines,
-            eol: material.split.eol,
-            symbols: &symbols,
-            callers: &callers,
-            imports: &imports,
-            pattern_nodes: &pattern_nodes,
-            semantic_chunks: &material.semantic_chunks,
-            embed_semantic: self.options.embed_semantic,
-            embed_backend: self.options.embed_backend.to_preference(),
+        // Nest under with_file_tx so body meta and upsert commit or roll back together.
+        // Without this, a post-upsert set_meta failure leaves content_hash advanced and
+        // body: meta stale → next structure-skip can keep wrong graph rows.
+        self.store.with_file_tx(|| {
+            self.store.upsert_file(UpsertFileInput {
+                rel_path,
+                language: language.map(|l| l.as_str()),
+                mtime_secs,
+                mtime_nanos,
+                content_hash: &hash,
+                lines: &material.split.lines,
+                eol: material.split.eol,
+                symbols: &symbols,
+                callers: &callers,
+                imports: &imports,
+                pattern_nodes: &pattern_nodes,
+                semantic_chunks: &material.semantic_chunks,
+                embed_semantic: self.options.embed_semantic,
+                embed_backend: self.options.embed_backend.to_preference(),
+            })?;
+            self.store.set_meta(&body_key, &material.body_hash)?;
+            Ok(())
         })?;
-        let _ = self.store.set_meta(&body_key, &material.body_hash);
         Ok(FileIndexStats {
             symbols: symbols.len(),
             callers: callers.len(),
