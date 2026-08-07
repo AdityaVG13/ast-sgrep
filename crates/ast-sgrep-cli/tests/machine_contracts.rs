@@ -194,10 +194,115 @@ fn agent_search_modes_are_stable_and_bounded() {
     assert_shape(&compact, &shapes["compact"]);
     assert!(compact["h"].as_array().expect("compact hits").len() <= 2);
     assert!(compact["p"].is_object());
-    assert_eq!(compact["b"][0], 12);
-    assert_eq!(compact["b"][1], 16);
-    assert!(compact["b"][2].as_u64().expect("used budget") <= 16);
+    assert_eq!(compact["zb"][0], 12);
+    assert_eq!(compact["zb"][1], 16);
+    assert!(compact["zb"][2].as_u64().expect("used budget") <= 16);
 }
+/// Embed-default-ON machine contract (mock-free e2e gap lbx1.4).
+///
+/// Production default is embed-on; most CLI tests pass `--no-embed`. This
+/// contract indexes the sample fixture with hashed semantic (CLI default) and
+/// searches **without** `--no-embed`, asserting:
+/// - index status exposes embed backend + semantic chunks
+/// - agent hybrid search surfaces semantic/embed signal
+/// - `asgrep semantic` returns embed-kind hits
+///
+/// A suite that only runs with `--no-embed` must not satisfy this bead.
+#[test]
+fn agent_search_embed_default_on_surfaces_semantic_hits() {
+    let session = CliSession::sample(asgrep_bin());
+    let index = session.index_path.to_str().expect("index utf8");
+    let root = session.root.to_str().expect("root utf8");
+
+    // Status after default index (no --no-embed on index path).
+    let status = assert_success(
+        &run(
+            &session.bin,
+            &["--json", "--index-path", index, "status", root],
+        ),
+        "status",
+    );
+    let chunk_count = status["semantic_chunk_count"].as_u64().unwrap_or(0);
+    assert!(
+        chunk_count > 0,
+        "embed-on index must store semantic chunks; status={status}"
+    );
+    let backend = status["embed_backend"].as_str().unwrap_or("");
+    assert!(
+        !backend.is_empty(),
+        "status.embed_backend must be set after semantic index; status={status}"
+    );
+
+    // Hybrid agent search WITHOUT --no-embed (production default channel).
+    let agent = session.search_json(
+        "credential renewal",
+        &["--limit", "16", "--format", "agent"],
+    );
+    assert_eq!(agent["ok"], true);
+    assert_eq!(agent["command"], "search");
+    assert_eq!(agent["provider"], "ast-sgrep");
+    let hits = agent["hits"].as_array().expect("agent hits");
+    assert!(
+        !hits.is_empty(),
+        "embed-on hybrid agent search must return hits; agent={agent}"
+    );
+    let has_semantic_flag = agent["has_semantic_hits"].as_bool().unwrap_or(false);
+    let has_embed_kind = hits
+        .iter()
+        .any(|h| h["kind"].as_str() == Some("embed"));
+    let has_semantic_contrib = hits.iter().any(|h| h.get("semantic") == Some(&Value::Bool(true)));
+    assert!(
+        has_semantic_flag || has_embed_kind || has_semantic_contrib,
+        "embed-on agent JSON must surface semantic/embed path          (has_semantic_hits / kind=embed / hit.semantic);          has_semantic_hits={has_semantic_flag} hits={hits:?}"
+    );
+
+    // Pure semantic subcommand path — all hits must be embed-kind.
+    let semantic_out = session.run_success(&[
+        "--index-path",
+        index,
+        "--json",
+        "--format",
+        "agent",
+        "--limit",
+        "16",
+        "semantic",
+        "--",
+        "credential renewal",
+        root,
+    ]);
+    let semantic: Value =
+        serde_json::from_slice(&semantic_out.stdout).expect("semantic agent json");
+    assert_eq!(semantic["ok"], true);
+    assert_eq!(semantic["command"], "semantic");
+    let semantic_hits = semantic["hits"].as_array().expect("semantic hits");
+    assert!(
+        !semantic_hits.is_empty(),
+        "semantic CLI must return embed hits after hashed index; semantic={semantic}"
+    );
+    assert!(
+        semantic_hits
+            .iter()
+            .any(|h| h["kind"].as_str() == Some("embed")),
+        "semantic CLI hits must include kind=embed; hits={semantic_hits:?}"
+    );
+    // Soft-skip empty embed is forbidden: hard-require auth_refresh relevance.
+    assert!(
+        semantic_hits.iter().any(|h| {
+            h["symbol"].as_str() == Some("auth_refresh")
+                || h["preview"]
+                    .as_str()
+                    .map(|p| p.contains("auth_refresh"))
+                    .unwrap_or(false)
+                || h.get("excerpt")
+                    .and_then(|e| e.as_str())
+                    .map(|e| e.contains("auth_refresh"))
+                    .unwrap_or(false)
+        }),
+        "semantic embed path must surface auth_refresh; hits={semantic_hits:?}"
+    );
+}
+
+
 #[test]
 fn chain_eval_and_bench_successes_use_machine_envelope() {
     let session = CliSession::sample(asgrep_bin());

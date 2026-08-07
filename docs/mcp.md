@@ -95,20 +95,25 @@ asgrep --json --format compact \
 The compact payload uses this versioned schema:
 
 ```json
-{"v":1,"q":"query","n":1,"p":{"2jl...":"src/auth.rs"},"h":[["2jl...:10-42","d","t","refresh","fn refresh()"]],"b":[96,768,12],"t":0}
+{"h":[["2jl...:10-42","d","t","refresh","fn refresh()"]],"p":{"2jl...":"src/auth.rs"},"q":"query","v":1,"zb":[96,768,12],"zn":1,"zt":0}
 ```
 
 - `p` maps stable base-36 path hashes to paths. Repeated paths occur once.
 - Each `h` row is `[id, kind, signal, symbol, snippet]` in rank order.
-- `id` is `<path-id>:<start>-<end>`. To call `code_read`, expand it to
-  `p[path-id]#L<start>-L<end>`; `code_read` retains its canonical path and
-  containment validation.
+- `id` is `<path-id>:<start>-<end>`. Pass it straight to the MCP `code_read`
+  tool, which resolves path ids from the same session. Outside a session,
+  expand it to `p[path-id]#L<start>-L<end>`; `code_read` retains its canonical
+  path and containment validation either way.
 - Kind codes are `x` exact, `d` definition, `c` caller, `g` graph, `a`
   anchor, `i` import, `p` pattern, and `e` embedding. Signal codes are `x`
   exact, `t` structural, and `m` semantic.
-- `b` is `[per-result ceiling, response ceiling, used]`; `t` counts snippets
-  cut by either ceiling. Metadata is never dropped when snippet budget is
-  exhausted.
+- `zb` is `[per-result ceiling, response ceiling, used]`, `zn` is the hit
+  count, and `zt` counts snippets cut by either ceiling. Metadata is never
+  dropped when snippet budget is exhausted.
+- Per-call accounting is named `z*` on purpose. `serde_json` orders object
+  keys alphabetically, so this keeps content keys (`h`, `p`, `q`, `v`) in a
+  stable head and confines volatile numbers to a trailing block a consumer
+  can strip. Repeated identical searches are byte-stable.
 
 A token unit is one UTF-8 byte. This conservative, deterministic ceiling is
 model-independent and cannot underestimate byte-fallback tokenizers. Limits

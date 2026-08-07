@@ -220,14 +220,23 @@ pub fn to_compact_json(response: &SearchResponse, budget: CompactBudget) -> serd
         })
         .collect();
 
+    // 9q0l: serde_json orders object keys alphabetically (its Map is a
+    // BTreeMap unless `preserve_order` is enabled), so key NAMES decide wire
+    // order. Per-call accounting is therefore named `z*` to sort after the
+    // content keys, giving every envelope a stable head and a volatile tail:
+    //
+    //   h (hits) . p (paths) . q (query) . v (schema) . zb . zn . zt
+    //
+    // A consumer can drop the `z*` tail without touching the content, and
+    // repeated identical calls differ only in that tail.
     serde_json::json!({
         "v": 1,
         "q": response.query,
-        "n": hits.len(),
         "p": paths,
         "h": hits,
-        "b": [budget.per_result_tokens, budget.response_tokens, used],
-        "t": truncated,
+        "zn": hits.len(),
+        "zb": [budget.per_result_tokens, budget.response_tokens, used],
+        "zt": truncated,
     })
 }
 

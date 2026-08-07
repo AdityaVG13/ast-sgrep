@@ -138,8 +138,8 @@ fn compact_hits_preserve_ranked_identity_and_enforce_budgets() {
         response_identities(&response)
     );
     assert_eq!(compact["p"].as_object().expect("paths").len(), 2);
-    assert_eq!(compact["b"], serde_json::json!([7, 10, 10]));
-    assert_eq!(compact["t"], 2);
+    assert_eq!(compact["zb"], serde_json::json!([7, 10, 10]));
+    assert_eq!(compact["zt"], 2);
     for row in compact["h"].as_array().expect("hits") {
         assert!(row[4].as_str().expect("snippet").len() <= 7);
         assert!(!row[0].as_str().expect("id").contains("src/"));
@@ -172,8 +172,8 @@ fn compact_utf8_budgets_never_split_codepoints() {
         },
     );
     assert_eq!(compact["h"][0][4], "");
-    assert_eq!(compact["b"][2], 0);
-    assert_eq!(compact["t"], 1);
+    assert_eq!(compact["zb"][2], 0);
+    assert_eq!(compact["zt"], 1);
 }
 
 #[test]

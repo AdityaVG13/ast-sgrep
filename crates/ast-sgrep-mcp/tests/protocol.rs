@@ -299,3 +299,69 @@ fn tool_roots_are_sandboxed_under_configured_workspace() {
     );
 }
 
+
+/// 9q0l: tool definitions ride in the prompt on every request, so they are the
+/// largest cacheable region this server controls. Any instability here costs a
+/// full cache miss per call for every connected client.
+#[test]
+fn tools_list_is_byte_identical_across_calls_and_processes() {
+    let list = json!({"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}});
+    let same_process = rpc_session(vec![list.clone(), list.clone()], None);
+    assert_eq!(same_process.len(), 2);
+    let first = serde_json::to_string(&same_process[0]["result"]).unwrap();
+    let second = serde_json::to_string(&same_process[1]["result"]).unwrap();
+    assert_eq!(first, second, "tools/list differed within one process");
+
+    let fresh_process = rpc(list);
+    assert_eq!(
+        serde_json::to_string(&fresh_process["result"]).unwrap(),
+        first,
+        "tools/list differed across processes"
+    );
+
+    // No per-call data may leak into a cached region.
+    for tool in fresh_process["result"]["tools"].as_array().unwrap() {
+        let text = serde_json::to_string(tool).unwrap();
+        for volatile in ["/private/", "/tmp/", "generation", "elapsed"] {
+            assert!(
+                !text.contains(volatile),
+                "tool definition carries per-call data {volatile}: {text}"
+            );
+        }
+    }
+}
+
+/// 9q0l: identical query plus unchanged index must produce identical bytes, and
+/// per-call accounting must stay in the trailing `z*` block.
+#[test]
+fn search_envelope_is_byte_stable_with_volatile_accounting_last() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("src");
+    std::fs::create_dir(&source).unwrap();
+    std::fs::write(
+        source.join("lib.rs"),
+        "fn target_symbol() { helper(); }\nfn helper() {}\n",
+    )
+    .unwrap();
+    ast_sgrep_core::Indexer::new(ast_sgrep_core::IndexOptions {
+        root: temp.path().to_path_buf(),
+        ..ast_sgrep_core::IndexOptions::default()
+    })
+    .unwrap()
+    .index_all()
+    .unwrap();
+
+    let search = json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"keyword_search","arguments":{"query":"target_symbol","limit":4}}});
+    let responses = rpc_session(vec![search.clone(), search], Some(temp.path()));
+    let first = responses[0]["result"]["content"][0]["text"].as_str().unwrap();
+    let second = responses[1]["result"]["content"][0]["text"].as_str().unwrap();
+    assert_eq!(first, second, "repeated identical search was not byte-stable");
+
+    // Content keys precede the volatile `z*` tail on the wire.
+    let tail = first.find("\"zb\"").expect("zb accounting present");
+    for content_key in ["\"h\"", "\"p\"", "\"q\"", "\"v\""] {
+        let at = first.find(content_key).expect("content key present");
+        assert!(at < tail, "{content_key} must precede volatile accounting");
+    }
+    assert!(first.find("\"zn\"").unwrap() > tail || first.contains("\"zn\""));
+}

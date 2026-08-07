@@ -2,6 +2,24 @@
 //!
 //! Warm path: a single process reuses one `Searcher` across search-channel calls
 //! (invalidated on `index_repo`) so AI agents avoid per-request SQLite open cost.
+//!
+//! # Byte-stability contract (9q0l)
+//!
+//! Tool definitions enter the model prompt on every request and are the largest
+//! genuinely cacheable region this server controls. `tools/list` must therefore
+//! be byte-identical across calls and across processes for a given build:
+//!
+//! * emit tools in a fixed literal order -- never from a `HashMap` or any other
+//!   unordered collection;
+//! * keep descriptions and schemas free of per-call data (no paths, counts,
+//!   timestamps, or generation numbers);
+//! * treat any change here as a cache invalidation for every connected client.
+//!
+//! Search envelopes are deterministic for the same query and index generation.
+//! `serde_json` sorts object keys alphabetically, so key names decide wire
+//! order; per-call accounting is named `z*` to keep it in a trailing block.
+//!
+//! `tools_list_is_byte_identical_across_calls` enforces the first rule.
 
 
 #![forbid(unsafe_code)]
