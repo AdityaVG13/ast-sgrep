@@ -142,10 +142,12 @@ fn miss_context(command: &str, cli: &Cli) -> ast_sgrep_plugins::MissContext {
         scope.push(("lang".to_owned(), lang.clone()));
     }
     ast_sgrep_plugins::MissContext {
+        // Report the CHANNEL that ran, not the command name the user typed.
         tried: vec![match command {
             "keyword" => "lexical".to_owned(),
             "semantic" => "semantic".to_owned(),
-            other => other.to_owned(),
+            // The default path fuses channels rather than running just one.
+            _ => "hybrid".to_owned(),
         }],
         unavailable: Vec::new(),
         scope,
