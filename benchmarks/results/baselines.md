@@ -44,6 +44,12 @@ access**, against a gold fixture and harness that ship in this tree:
 Raw artifacts are checked in under `benchmarks/results/raw/`, so a later run can
 be diffed against the recorded one rather than compared to a summary.
 
+Determinism is a property of the harness, not an aspiration: two consecutive
+runs reproduce every retrieval, A/B, and token figure exactly. The token step
+builds its own pinned index because the native and agent envelopes embed the
+snapshot generation, and reusing an index whose generation keeps incrementing
+would drift the byte totals by a digit at a time.
+
 | fingerprint id | corpus | config | metric | value | status |
 |----------------|--------|--------|--------|------:|--------|
 | `self-gold12-reproducible` | self @ `benchmarks/gold/self.json` (12 gold queries) | default hybrid | MRR | **0.676** | REPRODUCIBLE |
@@ -51,8 +57,8 @@ be diffed against the recorded one rather than compared to a summary.
 | `self-gold12-reproducible` | self (12 gold queries) | default hybrid | Recall@1 | **0.458** | REPRODUCIBLE |
 | `self-gold12-reproducible` | self (12 gold queries) | default hybrid | Recall@5 | **0.792** | REPRODUCIBLE |
 | `self-gold12-reproducible` | self (12 gold queries) | default hybrid | Recall@20 | **1.000** | REPRODUCIBLE |
-| `self-tokens-gold12` | self (12 gold queries, `--limit 10`) | compact vs agent-capsule | emitted bytes | **9,709 vs 35,858 (-72.9%)** | REPRODUCIBLE |
-| `self-tokens-gold12` | self (12 gold queries, `--limit 10`) | compact vs native | emitted bytes | **9,709 vs 45,916 (-78.9%)** | REPRODUCIBLE |
+| `self-tokens-gold12` | self (12 gold queries, `--limit 10`) | compact vs agent-capsule | emitted bytes | **11,269 vs 43,483 (-74.1%)** | REPRODUCIBLE |
+| `self-tokens-gold12` | self (12 gold queries, `--limit 10`) | compact vs native | emitted bytes | **11,269 vs 56,069 (-79.9%)** | REPRODUCIBLE |
 
 These are **not** comparable to the historical unreproducible rows below: a
 different corpus definition, a different gold set, and a different commit.
