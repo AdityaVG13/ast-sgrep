@@ -783,15 +783,18 @@ fn codemode_batch_oversized_file_is_machine_failure() {
     // Write slightly over the cap so metadata fast-path rejects.
     let path = dir.path().join("huge.json");
     {
-        use std::io::Write;
+        use std::io::{Seek, SeekFrom, Write};
         let mut f = std::fs::File::create(&path).expect("create");
-        // Sparse-ish: write a header then seek — on macOS write all zeros is fine; 4MiB+1 is ok for CI.
+        // MAX_BATCH_REQUEST_BYTES = 4 * 1_048_576. One byte past the cap.
         let over = (1_048_576u64 * 4) + 1;
-        f.write_all(b"{\"calls\":[").unwrap();
-        // Pad with spaces to exceed cap without needing full 4MiB of unique data in source.
-        let pad = vec![b' '; (over as usize).saturating_sub(16)];
-        f.write_all(&pad).unwrap();
-        f.write_all(b"]}").unwrap();
+        f.write_all(b"{").unwrap();
+        f.seek(SeekFrom::Start(over - 1)).unwrap();
+        f.write_all(b"}").unwrap();
+        f.sync_all().unwrap();
+        assert!(
+            std::fs::metadata(&path).unwrap().len() >= over,
+            "fixture must exceed batch cap"
+        );
     }
     let bin = asgrep_bin();
     // No --json: codemode-batch must still emit a machine failure envelope (d2a1.10).
