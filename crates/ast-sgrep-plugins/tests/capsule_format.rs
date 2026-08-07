@@ -24,6 +24,7 @@ fn sample() -> SearchResponse {
                 signal: HitSignal::Structural,
                 contributors: vec![HitKind::Def, HitKind::Embed],
                 margin: 0.0,
+                confidence: 0.0,
                 excerpt: "fn auth_refresh() {\n    renew_token();\n    log();\n}".into(),
             },
             SearchHit {
@@ -39,6 +40,7 @@ fn sample() -> SearchResponse {
                 signal: HitSignal::Structural,
                 contributors: vec![HitKind::Caller],
                 margin: 0.0,
+                confidence: 0.0,
                 excerpt: format!("   \n{long}"),
             },
         ],
@@ -336,6 +338,7 @@ fn many_file_sample() -> SearchResponse {
             signal: HitSignal::Exact,
             contributors: vec![HitKind::Def],
             margin: 0.1,
+            confidence: 0.0,
             excerpt: format!("fn handler_{index}(session: &Session) -> Result<Token> {{\n    rotate(session)\n}}"),
         })
         .collect();
