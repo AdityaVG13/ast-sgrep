@@ -176,9 +176,22 @@ impl Searcher {
         compute: impl FnOnce() -> Result<SearchResponse>,
     ) -> Result<SearchResponse> {
         let conn = self.store.connection();
-        // A nested/active transaction means an outer scope already owns the
-        // snapshot; do not open a second one.
-        let owns_snapshot = conn.is_autocommit() && conn.execute_batch("BEGIN DEFERRED").is_ok();
+        // Pin one read snapshot for multi-pass search under concurrent reindex.
+        // Nested/active transactions mean an outer scope already owns the snapshot.
+        // When we *should* own one (autocommit) but BEGIN fails (busy/IO), fail
+        // closed rather than run unfenced and risk a silently mixed generation.
+        let owns_snapshot = if conn.is_autocommit() {
+            match conn.execute_batch("BEGIN DEFERRED") {
+                Ok(()) => true,
+                Err(e) => {
+                    return Err(crate::StoreError::Other(format!(
+                        "failed to open read snapshot for search: {e}"
+                    )));
+                }
+            }
+        } else {
+            false
+        };
         let generation_before = self.store.index_generation().unwrap_or_default();
 
         let computed = compute();
@@ -186,7 +199,10 @@ impl Searcher {
         let generation_after = self.store.index_generation().unwrap_or_default();
         if owns_snapshot {
             // A read snapshot is released either way; COMMIT is the cheap path.
-            let _ = conn.execute_batch("COMMIT");
+            // If COMMIT fails, ROLLBACK unsticks the connection for later searches.
+            if conn.execute_batch("COMMIT").is_err() {
+                let _ = conn.execute_batch("ROLLBACK");
+            }
         }
         let mut response = computed?;
 

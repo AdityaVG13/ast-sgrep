@@ -187,8 +187,15 @@ impl LspBackend {
         let lock = Arc::clone(&self.index_lock);
         let dirty = Arc::clone(&self.dirty_buffers);
         std::thread::spawn(move || {
-            let Ok(_g) = lock.lock() else {
-                return;
+            // Match `with_index_lock` poison recovery: a prior panic must not
+            // permanently stall background reindex (ready stays false forever).
+            let _g = match lock.lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => {
+                    ready.store(false, Ordering::SeqCst);
+                    lock.clear_poison();
+                    poisoned.into_inner()
+                }
             };
             let ok = Self::run_full_index(opts, dirty.as_ref()).is_ok();
             ready.store(ok, Ordering::SeqCst);
