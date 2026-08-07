@@ -538,6 +538,39 @@ impl Indexer {
                 "candidate generation indexed zero files; refusing to activate".into(),
             ));
         }
+
+        // Sidecar checksum: a present IVF sidecar must parse and carry the
+        // fingerprint this generation expects. A sidecar that cannot be read is
+        // a corrupt build, not something to activate and discover later.
+        let sidecar = crate::semantic_ivf::semantic_ivf_path(store.db_path());
+        if sidecar.exists()
+            && crate::semantic_ivf::peek_semantic_ivf_fingerprint(&sidecar).is_none()
+        {
+            return Err(crate::StoreError::Other(
+                "candidate generation has an unreadable semantic sidecar; refusing to activate"
+                    .into(),
+            ));
+        }
+
+        // Model provenance: chunks embedded without a recorded backend cannot
+        // be validated against a future search, so refuse the ambiguity.
+        if status.semantic_chunk_count > 0 && store.get_meta("embed_backend")?.is_none() {
+            return Err(crate::StoreError::Other(
+                "candidate generation has semantic chunks but no recorded embed backend; \
+                 refusing to activate".into(),
+            ));
+        }
+
+        // A deterministic smoke query must succeed against the candidate.
+        let probe = crate::search::Searcher::new(crate::search::SearchOptions {
+            root: store.root().to_path_buf(),
+            index_path: Some(candidate_db.to_path_buf()),
+            use_embed: false,
+            ..crate::search::SearchOptions::default()
+        })?;
+        probe.search("defs:__asgrep_activation_probe__").map_err(|e| {
+            crate::StoreError::Other(format!("candidate generation failed smoke query: {e}"))
+        })?;
         Ok(())
     }
     pub fn update_paths(&mut self, paths: &[PathBuf]) -> Result<WatchUpdateStats> {
