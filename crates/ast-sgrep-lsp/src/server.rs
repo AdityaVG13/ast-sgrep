@@ -86,6 +86,11 @@ impl LspServer {
                 if self.exit_requested {
                     break;
                 }
+            } else {
+                // JSON-RPC: a message with an id that is not a valid Request must
+                // not be silent-dropped -- the client is waiting on that id.
+                // Notifications (no id / null id) stay fire-and-forget.
+                reply_invalid_request_if_id(stdout, &body)?;
             }
         }
         Ok(())
@@ -356,6 +361,59 @@ mod lifecycle_tests {
         assert!(messages[0]["result"].is_null());
         assert_eq!(messages[1]["id"], 2);
         assert_eq!(messages[1]["error"]["code"], -32600);
+    }
+
+    #[test]
+    fn unparseable_message_with_id_gets_invalid_request() {
+        // Missing method + present id must not hang the client (silent drop).
+        let mut server = LspServer::new();
+        let mut input = Vec::new();
+        input.extend(frame(r#"{"jsonrpc":"2.0","id":42,"params":{}}"#));
+        input.extend(frame(r#"{"jsonrpc":"2.0","method":"exit"}"#));
+        let mut reader = Cursor::new(input);
+        let mut stdout = Vec::new();
+        server.run_with(&mut reader, &mut stdout).unwrap();
+        let messages = drain_messages(&stdout);
+        assert_eq!(messages.len(), 1, "{messages:?}");
+        assert_eq!(messages[0]["id"], 42);
+        assert_eq!(messages[0]["error"]["code"], -32600);
+        assert!(
+            messages[0]["error"]["message"]
+                .as_str()
+                .unwrap_or("")
+                .contains("Invalid Request"),
+            "{messages:?}"
+        );
+    }
+
+    #[test]
+    fn unparseable_message_without_id_is_dropped() {
+        let mut server = LspServer::new();
+        let mut input = Vec::new();
+        input.extend(frame(r#"{"jsonrpc":"2.0","params":{}}"#));
+        input.extend(frame(r#"{"jsonrpc":"2.0","method":"exit"}"#));
+        let mut reader = Cursor::new(input);
+        let mut stdout = Vec::new();
+        server.run_with(&mut reader, &mut stdout).unwrap();
+        assert!(stdout.is_empty(), "no id → no response: {stdout:?}");
+        assert!(server.exit_requested);
+    }
+}
+
+/// If `body` is JSON with a non-null `id`, reply Invalid Request (-32600).
+/// Used when the frame is neither a Request nor a Notification (missing
+/// method, wrong types, …) so clients do not hang waiting forever.
+fn reply_invalid_request_if_id(stdout: &mut impl Write, body: &str) -> io::Result<()> {
+    let Ok(value) = serde_json::from_str::<Value>(body) else {
+        // Unparseable JSON with no recoverable id: LSP has nowhere to address
+        // a response; drop (same as most servers). Frame framing already ran.
+        return Ok(());
+    };
+    match value.get("id") {
+        Some(id) if !id.is_null() => {
+            send_error(stdout, id, -32600, "Invalid Request")
+        }
+        _ => Ok(()),
     }
 }
 
