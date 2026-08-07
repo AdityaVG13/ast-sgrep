@@ -27,7 +27,8 @@
 use anyhow::Context;
 use ast_sgrep_core::{EmbedBackend, IndexOptions, Indexer, SearchOptions, Searcher};
 use ast_sgrep_plugins::{
-    format_response_with_budget, to_compact_miss_json, CompactBudget, MissContext, OutputFormat,
+    format_response_with_budget, to_budgeted_compact_json, to_compact_miss_json, CompactBudget,
+    DetailLevel, MissContext, OutputBudget, OutputFormat,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -52,6 +53,8 @@ const INDEX_REPO_DEADLINE: Duration = Duration::from_secs(600);
 /// `<path_id>:<start>-<end>`; `code_read` resolves `<path_id>` through this map,
 /// so an agent never has to reconstruct a path it was handed by id.
 const MAX_PATH_REGISTRY: usize = 4_096;
+/// Upper bound on a client-requested response token budget (m38g).
+const MAX_BUDGET_TOKENS: usize = 65_536;
 /// Bound on remembered emitted snippets (v972).
 const MAX_EMITTED_SNIPPETS: usize = 4_096;
 /// Marker replacing a snippet this session already sent for the same id and
@@ -206,7 +209,8 @@ impl McpServer {
             "query": {"type": "string", "minLength": 1, "maxLength": ast_sgrep_core::MAX_QUERY_CHARS},
             "root": {"type": "string", "description": "Project root (defaults to ASGREP_ROOT or cwd)"},
             "limit": {"type": "integer", "minimum": 1, "maximum": MAX_AGENT_LIMIT},
-            "resend_seen": {"type": "boolean", "description": "Send snippets already returned this session instead of the ~ marker. Set true only if you do not keep earlier results."}
+            "resend_seen": {"type": "boolean", "description": "Send snippets already returned this session instead of the ~ marker. Set true only if you do not keep earlier results."},
+            "budget_tokens": {"type": "integer", "minimum": 1, "maximum": MAX_BUDGET_TOKENS, "description": "Whole-response token budget. Each hit gains a trailing detail level (metadata|signature|block|full) and omitted source is marked with a gap marker."}
         });
         let search_tool = |name: &str, description: &str, props: Value| {
             json!({
@@ -439,7 +443,19 @@ impl McpServer {
     }
 
     fn tool_agent_search(&self, args: &Value, mode: AgentSearchMode) -> anyhow::Result<String> {
-        Self::validate_fields(args, &["query", "root", "limit", "resend_seen"])?;
+        Self::validate_fields(
+            args,
+            &["query", "root", "limit", "resend_seen", "budget_tokens"],
+        )?;
+        // m38g: one response-wide token budget that picks per-result detail.
+        let budget_tokens = match args.get("budget_tokens") {
+            None => None,
+            Some(value) => Some(Self::integer_arg(args, "budget_tokens", 0, 1, MAX_BUDGET_TOKENS)
+                .map(|tokens| {
+                    let _ = value;
+                    tokens
+                })?),
+        };
         // v972: transcript-less clients set resend_seen to keep full snippets.
         let resend_seen = match args.get("resend_seen") {
             None => false,
@@ -479,12 +495,21 @@ impl McpServer {
         // kxmc: compact key-free envelope, minified. Object keys and pretty
         // whitespace were the bulk of the old AgentCapsule payload, and the
         // full path was emitted twice per hit (`file` plus `ref`).
-        let mut envelope = format_response_with_budget(
-            &response,
-            OutputFormat::Compact,
-            0,
-            CompactBudget::default(),
-        );
+        let mut envelope = match budget_tokens {
+            Some(max_tokens) => to_budgeted_compact_json(
+                &response,
+                OutputBudget {
+                    max_tokens,
+                    default_detail: DetailLevel::Full,
+                },
+            ),
+            None => format_response_with_budget(
+                &response,
+                OutputFormat::Compact,
+                0,
+                CompactBudget::default(),
+            ),
+        };
         self.remember_compact_paths(&envelope);
         if !resend_seen {
             self.elide_seen_snippets(&mut envelope);

@@ -122,8 +122,20 @@ fn print_search_response(
 ) -> anyhow::Result<()> {
     // 6a3i: compact mode answers a miss with a diagnostic envelope instead of
     // an empty result set the caller has to interpret.
+    let tuning = cli.active_tuning();
     let value = if format == ast_sgrep_plugins::OutputFormat::Compact && response.hits.is_empty() {
         ast_sgrep_plugins::to_compact_miss_json(&response.query, &miss_context(command, cli))
+    } else if let (ast_sgrep_plugins::OutputFormat::Compact, Some(max_tokens)) =
+        (format, tuning.budget_tokens)
+    {
+        // m38g: budget mode picks per-result detail under one response ceiling.
+        ast_sgrep_plugins::to_budgeted_compact_json(
+            response,
+            ast_sgrep_plugins::OutputBudget {
+                max_tokens,
+                default_detail: ast_sgrep_plugins::DetailLevel::Full,
+            },
+        )
     } else {
         ast_sgrep_plugins::format_response_with_budget(
             response,

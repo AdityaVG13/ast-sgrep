@@ -133,6 +133,14 @@ pub(crate) struct SearchTuning {
         help = "Response-wide compact snippet token budget"
     )]
     pub(crate) response_snippet_tokens: usize,
+    /// m38g: a whole-response token budget that picks per-result detail,
+    /// instead of truncating every excerpt to the same ceiling.
+    #[arg(
+        long,
+        value_parser = parse_budget_tokens,
+        help = "Whole-response token budget; picks per-result detail (compact format)"
+    )]
+    pub(crate) budget_tokens: Option<usize>,
 }
 
 #[derive(Args, Clone, Debug)]
@@ -326,6 +334,12 @@ fn parse_durability(raw: &str) -> Result<ast_sgrep_core::store::Durability, Stri
     ast_sgrep_core::store::Durability::parse(raw).ok_or_else(|| {
         format!("unknown durability '{raw}' (expected strict, balanced, or fast-unsafe)")
     })
+}
+
+/// m38g: bounded like the other token knobs so a hostile value cannot make the
+/// renderer allocate without limit.
+fn parse_budget_tokens(raw: &str) -> Result<usize, String> {
+    parse_bounded_usize(raw, MAX_RESPONSE_SNIPPET_TOKENS, "--budget-tokens")
 }
 
 fn parse_output_limit(raw: &str) -> Result<usize, String> {
