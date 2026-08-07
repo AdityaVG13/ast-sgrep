@@ -8,6 +8,7 @@ mod index;
 mod isolation;
 mod lang;
 mod lsp;
+mod test_log;
 pub use cli::CliSession;
 pub use factory::{
     count_files_under, factory_corpus_basic_graph, factory_corpus_credential_theme,
@@ -27,3 +28,4 @@ pub use lang::{
     ExpectedPattern, ExpectedSymbol, LanguageConformanceCase,
 };
 pub use lsp::{lsp_search_hit_keys, sample_backend};
+pub use test_log::{with_test_logging, IndexSnapshot, TestLogger, TestPhase};

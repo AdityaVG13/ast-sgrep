@@ -547,14 +547,22 @@ mod tests {
 
     #[test]
     fn basic_graph_indexes_with_nonzero_symbol_and_file_counts() {
+        // Diagnostic JSON lines to stderr (not asserted -- see test_log unit tests).
+        let mut log = crate::with_test_logging("factory");
+        log.test_start("basic_graph_indexes_with_nonzero_symbol_and_file_counts");
+        // phase=setup from test_start; write corpus under private isolation.
         let session = isolated_index_session();
         factory_corpus_basic_graph(&session);
+
+        log.phase(crate::TestPhase::Act);
         let bundle = factory_index_and_searcher(
             &session,
             factory_default_index_options(&session),
             factory_default_search_options(&session),
         );
+        log.index_snapshot(&bundle.stats);
 
+        log.phase(crate::TestPhase::Assert);
         assert!(
             bundle.stats.files_indexed > 0,
             "files_indexed={}",
@@ -572,6 +580,7 @@ mod tests {
         );
 
         let status = bundle.indexer.store().status().expect("status");
+        log.index_snapshot(&status);
         assert!(status.file_count > 0, "file_count={}", status.file_count);
         assert!(
             status.symbol_count > 0,
@@ -589,14 +598,25 @@ mod tests {
             .searcher
             .search("handle_request")
             .expect("search handle_request");
+        let matched = resp.hits.iter().any(|h| {
+            h.excerpt.contains("handle_request") || h.symbol.as_deref() == Some("handle_request")
+        });
+        log.assert_match(
+            "assert_match",
+            serde_json::json!({
+                "query": "handle_request",
+                "hit_count": resp.hits.len(),
+                "matched": matched,
+            }),
+        );
         assert!(
-            resp.hits
-                .iter()
-                .any(|h| h.excerpt.contains("handle_request")
-                    || h.symbol.as_deref() == Some("handle_request")),
+            matched,
             "expected hit for handle_request: {:?}",
             resp.hits
         );
+
+        log.phase(crate::TestPhase::Teardown);
+        log.test_end(true);
     }
 
     #[test]
