@@ -463,12 +463,15 @@ impl IndexStore {
         Ok(())
     }
     pub fn clear_all_data(&self) -> Result<()> {
+        // Bump both generations inside the same file_tx as the wipe so a crash
+        // between COMMIT and a post-tx bump cannot leave empty tables with a
+        // stale semantic_data_version (pass3).
         self.with_file_tx(|| {
             self.conn.execute_batch(CLEAR_ALL_SQL)?;
-            self.bump_index_data_version()
+            self.bump_index_data_version()?;
+            self.bump_semantic_data_version()
         })?;
         let _ = self.conn.execute_batch("VACUUM");
-        self.bump_semantic_data_version()?;
         Ok(())
     }
     pub fn upsert_file(&self, input: UpsertFileInput<'_>) -> Result<i64> {
