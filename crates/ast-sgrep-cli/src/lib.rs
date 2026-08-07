@@ -219,24 +219,39 @@ fn codemode_session_config(cli: &Cli, root: PathBuf) -> ast_sgrep_codemode::Sess
     ast_sgrep_codemode::SessionConfig {
         root,
         index_path: cli.index_path.clone(),
-        limit: cli
-            .limit
-            .unwrap_or_else(ast_sgrep_core::SearchOptions::default_limit),
+        limit: ast_sgrep_core::clamp_output_limit(
+            cli.limit,
+            ast_sgrep_core::SearchOptions::default_limit(),
+        ),
         use_embed: !cli.active_tuning().no_embed,
         ..ast_sgrep_codemode::SessionConfig::default()
     }
 }
 
 fn run_codemode_batch(cli: &Cli, requests: &Path) -> anyhow::Result<()> {
+    // Cap batch payload so a huge requests file cannot OOM the process.
+    const MAX_BATCH_REQUEST_BYTES: u64 = (ast_sgrep_core::MAX_STDIN_LINE_BYTES as u64) * 4;
     let raw = if requests.as_os_str() == "-" {
         let mut buf = String::new();
         std::io::Read::read_to_string(&mut std::io::stdin(), &mut buf)
             .context("read batch requests from stdin")?;
         buf
     } else {
+        let meta = std::fs::metadata(requests)
+            .with_context(|| format!("stat batch requests {}", requests.display()))?;
+        anyhow::ensure!(
+            meta.len() <= MAX_BATCH_REQUEST_BYTES,
+            "batch requests file exceeds max {} bytes",
+            MAX_BATCH_REQUEST_BYTES
+        );
         std::fs::read_to_string(requests)
             .with_context(|| format!("read batch requests {}", requests.display()))?
     };
+    anyhow::ensure!(
+        (raw.len() as u64) <= MAX_BATCH_REQUEST_BYTES,
+        "batch requests payload exceeds max {} bytes",
+        MAX_BATCH_REQUEST_BYTES
+    );
     let mut request: ast_sgrep_codemode::BatchRequest =
         serde_json::from_str(&raw).context("parse batch requests JSON")?;
     if request.root.is_none() {
@@ -257,9 +272,10 @@ fn run_codemode_batch(cli: &Cli, requests: &Path) -> anyhow::Result<()> {
             .clone()
             .unwrap_or_else(|| PathBuf::from(".")),
         index_path: request.index_path.clone(),
-        limit: request
-            .limit
-            .unwrap_or_else(ast_sgrep_core::SearchOptions::default_limit),
+        limit: ast_sgrep_core::clamp_output_limit(
+            request.limit,
+            ast_sgrep_core::SearchOptions::default_limit(),
+        ),
         use_embed: request.use_embed.unwrap_or(true),
         ..ast_sgrep_codemode::SessionConfig::default()
     };

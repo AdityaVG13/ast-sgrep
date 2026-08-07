@@ -27,10 +27,12 @@ impl Default for SessionConfig {
                 .map(PathBuf::from)
                 .unwrap_or_else(|_| std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))),
             index_path: std::env::var("ASGREP_INDEX_PATH").ok().map(PathBuf::from),
-            limit: std::env::var("ASGREP_LIMIT")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or_else(SearchOptions::default_limit),
+            limit: ast_sgrep_core::clamp_output_limit(
+                std::env::var("ASGREP_LIMIT")
+                    .ok()
+                    .and_then(|v| v.parse().ok()),
+                SearchOptions::default_limit(),
+            ),
             use_embed: std::env::var("ASGREP_NO_EMBED").ok().as_deref() != Some("1"),
             default_format: OutputFormat::AgentCapsule,
         }
@@ -164,6 +166,7 @@ impl CodeModeSession {
             .get("query")
             .and_then(|v| v.as_str())
             .context("query is required")?;
+        ast_sgrep_core::validate_query_len(query).map_err(|e| anyhow::anyhow!(e))?;
         let limit = args
             .get("limit")
             .and_then(|v| v.as_u64())
@@ -201,6 +204,7 @@ impl CodeModeSession {
             .get("query")
             .and_then(|v| v.as_str())
             .context("query is required")?;
+        ast_sgrep_core::validate_query_len(query).map_err(|e| anyhow::anyhow!(e))?;
         let max_depth = args
             .get("max_depth")
             .and_then(|v| v.as_u64())

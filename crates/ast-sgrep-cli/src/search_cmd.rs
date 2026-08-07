@@ -23,7 +23,10 @@ pub(crate) fn run_chain(root: &Path, cli: &Cli, query: &str) -> anyhow::Result<(
     .context("failed to open index")?;
     ensure_nonempty_index(&root, store.status()?.file_count)?;
     let config = ChainConfig {
-        limit: cli.limit.unwrap_or(ChainConfig::default().limit),
+        limit: ast_sgrep_core::clamp_output_limit(
+            cli.limit,
+            ChainConfig::default().limit,
+        ),
         top_n: 1,
         ..ChainConfig::default()
     };

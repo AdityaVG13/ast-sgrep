@@ -138,6 +138,22 @@ impl McpServer {
         let mut stdout = io::stdout();
         for line in stdin.lock().lines() {
             let line = line.context("read stdin")?;
+            if line.len() > ast_sgrep_core::MAX_STDIN_LINE_BYTES {
+                // Bound JSON-RPC line memory; oversized lines are parse-error, not silent drop.
+                write_resp(
+                    &mut stdout,
+                    None,
+                    None,
+                    Some(json!({
+                        "code": -32600,
+                        "message": format!(
+                            "request line exceeds max {} bytes",
+                            ast_sgrep_core::MAX_STDIN_LINE_BYTES
+                        )
+                    })),
+                )?;
+                continue;
+            }
             if line.trim().is_empty() {
                 continue;
             }
@@ -186,7 +202,7 @@ impl McpServer {
 
     fn handle_tools_list(&self) -> Value {
         let search_properties = json!({
-            "query": {"type": "string", "minLength": 1, "maxLength": 4096},
+            "query": {"type": "string", "minLength": 1, "maxLength": ast_sgrep_core::MAX_QUERY_CHARS},
             "root": {"type": "string", "description": "Project root (defaults to ASGREP_ROOT or cwd)"},
             "limit": {"type": "integer", "minimum": 1, "maximum": MAX_AGENT_LIMIT},
             "resend_seen": {"type": "boolean", "description": "Send snippets already returned this session instead of the ~ marker. Set true only if you do not keep earlier results."}
@@ -434,8 +450,15 @@ impl McpServer {
             .get("query")
             .and_then(Value::as_str)
             .map(str::trim)
-            .filter(|query| !query.is_empty() && query.chars().count() <= 4_096)
-            .context("query must contain 1 to 4096 characters")?;
+            .filter(|query| {
+                !query.is_empty() && query.chars().count() <= ast_sgrep_core::MAX_QUERY_CHARS
+            })
+            .with_context(|| {
+                format!(
+                    "query must contain 1 to {} characters",
+                    ast_sgrep_core::MAX_QUERY_CHARS
+                )
+            })?;
         let limit = Self::integer_arg(args, "limit", self.limit, 1, MAX_AGENT_LIMIT)?;
         let root = self.root_arg(args)?;
         let (searcher, generation) = self.searcher_for(root.clone(), limit)?;

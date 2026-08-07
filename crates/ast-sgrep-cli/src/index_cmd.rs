@@ -240,7 +240,8 @@ pub(crate) fn search_options(root: &Path, cli: &Cli) -> SearchOptions {
     SearchOptions {
         root,
         index_path,
-        limit: cli.limit.unwrap_or_else(SearchOptions::default_limit),
+        // Remap 0 / oversize here so CLI envelope `limit` matches Searcher (docs: 0 → default).
+        limit: ast_sgrep_core::clamp_output_limit(cli.limit, SearchOptions::default_limit()),
         lang_filter: cli.lang.clone(),
         use_embed: !t.no_embed,
         use_tantivy: t.tantivy,
@@ -251,7 +252,7 @@ pub(crate) fn search_options(root: &Path, cli: &Cli) -> SearchOptions {
         ann_threshold: t.ann_threshold,
         ann_probes: t.ann_probes,
         use_rerank: t.rerank,
-        rerank_top_k: t.rerank_top_k,
+        rerank_top_k: t.rerank_top_k.clamp(1, ast_sgrep_core::MAX_OUTPUT_RESULTS),
         ..SearchOptions::default()
     }
 }
