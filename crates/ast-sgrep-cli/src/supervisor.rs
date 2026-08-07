@@ -59,27 +59,41 @@ pub fn supervise() -> anyhow::Result<()> {
     unix_impl::supervise()
 }
 #[cfg(unix)]
+fn fill_nonce_fallback(bytes: &mut [u8; 16]) {
+    // Fallback mix if urandom is unavailable or incomplete (extremely rare).
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let mut hasher = DefaultHasher::new();
+    std::process::id().hash(&mut hasher);
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0)
+        .hash(&mut hasher);
+    nix::unistd::getpid().as_raw().hash(&mut hasher);
+    // Mix a second round so a failed urandom path is not a fixed all-zero token.
+    hasher.write_u64(hasher.finish().wrapping_mul(0x9E37_79B9_7F4A_7C15));
+    let a = hasher.finish().to_le_bytes();
+    let mut hasher2 = DefaultHasher::new();
+    a.hash(&mut hasher2);
+    std::thread::current().id().hash(&mut hasher2);
+    let b = hasher2.finish().to_le_bytes();
+    bytes[..8].copy_from_slice(&a);
+    bytes[8..].copy_from_slice(&b);
+}
+
+#[cfg(unix)]
 fn generate_worker_nonce() -> String {
     use std::io::Read;
     let mut bytes = [0u8; 16];
-    if let Ok(mut f) = std::fs::File::open("/dev/urandom") {
-        let _ = f.read_exact(&mut bytes);
-    } else {
-        // Fallback mix if urandom is unavailable (extremely rare).
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
-        use std::time::{SystemTime, UNIX_EPOCH};
-        let mut hasher = DefaultHasher::new();
-        std::process::id().hash(&mut hasher);
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0)
-            .hash(&mut hasher);
-        nix::unistd::getpid().as_raw().hash(&mut hasher);
-        let a = hasher.finish().to_le_bytes();
-        bytes[..8].copy_from_slice(&a);
-        bytes[8..].copy_from_slice(&a);
+    // Must not ignore a failed/partial read: an all-zero buffer is still 32 hex
+    // digits and would pass worker_authenticate's shape check.
+    let urandom_ok = std::fs::File::open("/dev/urandom")
+        .and_then(|mut f| f.read_exact(&mut bytes))
+        .is_ok();
+    if !urandom_ok || bytes.iter().all(|&b| b == 0) {
+        fill_nonce_fallback(&mut bytes);
     }
     let mut out = String::with_capacity(32);
     for b in bytes {
@@ -425,5 +439,19 @@ mod childguard_tests {
     fn kill_and_reap_tolerates_missing_pid() {
         // Pid 1<<22 is extremely unlikely to exist; must not panic (732x).
         kill_and_reap(Pid::from_raw(1 << 22));
+    }
+
+    #[test]
+    fn worker_nonce_is_32_hex_and_not_all_zero() {
+        let a = super::generate_worker_nonce();
+        let b = super::generate_worker_nonce();
+        assert_eq!(a.len(), 32, "nonce length");
+        assert_eq!(b.len(), 32, "nonce length");
+        assert!(a.bytes().all(|c| c.is_ascii_hexdigit()), "hex: {a}");
+        assert!(b.bytes().all(|c| c.is_ascii_hexdigit()), "hex: {b}");
+        assert_ne!(a, "0".repeat(32), "must not emit constant zero nonce");
+        assert_ne!(b, "0".repeat(32), "must not emit constant zero nonce");
+        // Two draws must differ under /dev/urandom (or mixed fallback entropy).
+        assert_ne!(a, b, "successive nonces must not collide");
     }
 }
