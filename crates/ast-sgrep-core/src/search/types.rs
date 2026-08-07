@@ -113,6 +113,10 @@ struct SearchHitWire {
     contributors: Vec<HitKind>,
     #[serde(default)]
     margin: f64,
+    /// Preserved on JSON round-trip so agents that cache/re-parse hits keep trust.
+    /// Non-finite wire values sanitize to 0.0 (same policy as `margin`).
+    #[serde(default)]
+    confidence: f64,
     excerpt: String,
 }
 impl<'de> serde::Deserialize<'de> for SearchHit {
@@ -135,7 +139,11 @@ impl<'de> serde::Deserialize<'de> for SearchHit {
             score: wire.score,
             signal: wire.kind.signal(),
             contributors: vec![wire.kind],
-            confidence: 0.0,
+            confidence: if wire.confidence.is_finite() {
+                wire.confidence
+            } else {
+                0.0
+            },
             margin: if wire.margin.is_finite() {
                 wire.margin.max(0.0)
             } else {
@@ -697,5 +705,45 @@ mod tests {
         let mut hits: Vec<SearchHit> = vec![];
         assign_hit_confidence(&mut hits);
         assert!(hits.is_empty());
+    }
+
+    #[test]
+    fn search_hit_json_round_trip_preserves_confidence() {
+        // d2a1.8: custom Deserialize used SearchHitWire without confidence, so
+        // round-trip always forced 0.0 even when finish_response had assigned it.
+        let mut original = hit(HitKind::Asgrep, "lib.rs", 10, 1.0);
+        original.confidence = 0.83;
+        original.excerpt = "fn foo() {}".into();
+        original.symbol = Some("foo".into());
+
+        let json = serde_json::to_string(&original).expect("serialize");
+        assert!(
+            json.contains("\"confidence\""),
+            "serialized JSON must emit confidence: {json}"
+        );
+        let back: SearchHit = serde_json::from_str(&json).expect("deserialize");
+        assert!(
+            (back.confidence - 0.83).abs() < 1e-12,
+            "round-trip confidence={} expected 0.83",
+            back.confidence
+        );
+        assert_eq!(back.file, "lib.rs");
+        assert_eq!(back.kind, HitKind::Asgrep);
+        assert_eq!(back.symbol.as_deref(), Some("foo"));
+    }
+
+    #[test]
+    fn search_hit_json_missing_confidence_defaults_zero() {
+        let json = r#"{
+            "kind": "embed",
+            "file": "a.rs",
+            "line_start": 1,
+            "line_end": 1,
+            "score": 0.5,
+            "excerpt": "x"
+        }"#;
+        let hit: SearchHit = serde_json::from_str(json).expect("deserialize without confidence");
+        assert_eq!(hit.confidence, 0.0);
+        assert_eq!(hit.kind, HitKind::Embed);
     }
 }

@@ -72,18 +72,32 @@ fn lexical_from_fts(
     let fts_query = crate::fts::escape_fts_query(&parsed.terms);
     let limit = lexical_pool_limit(options);
     // Apply lang filter in SQL before LIMIT so path order cannot drop matching langs (iva9.5 sibling).
-    let (sql, lang_bind): (&str, Option<&str>) = match options.lang_filter.as_deref() {
+    // vvpk: pick the analyzer that matches the query. `lines_fts` is porter
+    // stemmed, which is right for prose and wrong for identifiers -- it folds
+    // `indexing` into `index` and splits `refresh_token`. `lines_code_fts` is
+    // unstemmed with `_` as a token character.
+    let field = if query_is_code_like(parsed) {
+        "lines_code_fts"
+    } else {
+        "lines_fts"
+    };
+    let (sql, lang_bind): (String, Option<&str>) = match options.lang_filter.as_deref() {
         Some(lang) => (
-            "SELECT f.path, f.language, l.line_no, l.content
-         FROM lines_fts JOIN files f ON f.id = lines_fts.file_id JOIN lines l ON l.file_id = lines_fts.file_id AND l.line_no = lines_fts.line_no WHERE lines_fts MATCH ?1 AND f.language = ?3 ORDER BY bm25(lines_fts), f.path, l.line_no LIMIT ?2",
+            format!(
+                "SELECT f.path, f.language, l.line_no, l.content
+         FROM {field} JOIN files f ON f.id = {field}.file_id JOIN lines l ON l.file_id = {field}.file_id AND l.line_no = {field}.line_no WHERE {field} MATCH ?1 AND f.language = ?3 ORDER BY bm25({field}), f.path, l.line_no LIMIT ?2"
+            ),
             Some(lang),
         ),
         None => (
-            "SELECT f.path, f.language, l.line_no, l.content
-         FROM lines_fts JOIN files f ON f.id = lines_fts.file_id JOIN lines l ON l.file_id = lines_fts.file_id AND l.line_no = lines_fts.line_no WHERE lines_fts MATCH ?1 ORDER BY bm25(lines_fts), f.path, l.line_no LIMIT ?2",
+            format!(
+                "SELECT f.path, f.language, l.line_no, l.content
+         FROM {field} JOIN files f ON f.id = {field}.file_id JOIN lines l ON l.file_id = {field}.file_id AND l.line_no = {field}.line_no WHERE {field} MATCH ?1 ORDER BY bm25({field}), f.path, l.line_no LIMIT ?2"
+            ),
             None,
         ),
     };
+    let sql = sql.as_str();
     let mut stmt = store.connection().prepare_cached(sql)?;
     let rows = match lang_bind {
         Some(lang) => stmt.query_map(params![fts_query, limit as i64, lang], map_line_row)?,
@@ -132,4 +146,45 @@ fn hits_from_ranks(line_ranks: LineRanks, mut line_meta: LineMeta) -> Vec<Search
             asgrep_line_hit(path, language, line_no, content, score_lexical_rrf(&ranks))
         })
         .collect()
+}
+
+/// Does this query look like code rather than prose (vvpk)?
+///
+/// Identifier shapes must not be stemmed: `refresh_token`, `HTTPStatus`, and
+/// `Store::open` mean exactly themselves. Natural-language questions benefit
+/// from stemming, so they keep the porter field.
+///
+/// Deliberately conservative: anything that is not clearly identifier-shaped
+/// stays on the prose analyzer, because wrongly skipping stemming on prose
+/// costs recall.
+pub(crate) fn query_is_code_like(parsed: &ParsedQuery) -> bool {
+    let raw = parsed.raw.trim();
+    if raw.is_empty() {
+        return false;
+    }
+    // Explicit code-ish modes always use the code field.
+    if !matches!(parsed.mode, crate::query::QueryMode::Hybrid) {
+        return true;
+    }
+    let words: Vec<&str> = raw.split_whitespace().collect();
+    // A multi-word natural-language question is prose.
+    if words.len() > 3 {
+        return false;
+    }
+    words.iter().any(|word| {
+        let trimmed = word.trim_matches(|c: char| !c.is_alphanumeric() && c != '_' && c != ':');
+        if trimmed.len() < 2 {
+            return false;
+        }
+        let has_underscore = trimmed.contains('_');
+        let has_path = trimmed.contains("::") || trimmed.contains('.');
+        // camelCase / PascalCase: an interior uppercase after a lowercase.
+        let camel = trimmed
+            .chars()
+            .zip(trimmed.chars().skip(1))
+            .any(|(a, b)| a.is_lowercase() && b.is_uppercase());
+        let shouty = trimmed.chars().filter(|c| c.is_uppercase()).count() >= 2
+            && trimmed.chars().any(|c| c.is_lowercase());
+        has_underscore || has_path || camel || shouty
+    })
 }

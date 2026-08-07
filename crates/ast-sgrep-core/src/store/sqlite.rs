@@ -27,7 +27,7 @@ thread_local! {
 }
 // 6 = symbols_name_lower (main / z47q). 7 = semantic-layout-v2 wipe (this PR).
 // Never reuse a SCHEMA_VERSION for two different migrations.
-const SCHEMA_VERSION: i64 = 7;
+const SCHEMA_VERSION: i64 = 8;
 const IMPORT_SELECT: &str =
     "SELECT f.path, f.language, i.module_path, i.line_no FROM imports i JOIN files f ON f.id = i.file_id";
 const SYM_LOC: &str = "SELECT f.path, s.name, f.language, s.line_start, s.line_end FROM symbols s JOIN files f ON f.id = s.file_id";
@@ -182,6 +182,14 @@ impl IndexStore {
         if version < 3 {
             self.conn.execute_batch(
                 "INSERT INTO lines_trigram(rowid, content) SELECT rowid, content FROM lines;",
+            )?;
+        }
+        // Schema 8 (vvpk): backfill the unstemmed code field for older indexes.
+        if version < 8 {
+            self.conn.execute_batch(
+                "DELETE FROM lines_code_fts;
+                 INSERT INTO lines_code_fts(rowid, content, file_id, line_no)
+                   SELECT rowid, content, file_id, line_no FROM lines;",
             )?;
         }
         // Schema 6 (main): idx_symbols_name_lower arrives via SCHEMA_DDL above.
@@ -686,6 +694,10 @@ impl IndexStore {
         let mut fts = self.conn.prepare_cached(
             "INSERT INTO lines_fts(rowid, content, file_id, line_no) VALUES(?1,?2,?3,?4)",
         )?;
+        // vvpk: the same line also lands in the unstemmed code field.
+        let mut code_fts = self.conn.prepare_cached(
+            "INSERT INTO lines_code_fts(rowid, content, file_id, line_no) VALUES(?1,?2,?3,?4)",
+        )?;
         let mut tri = self
             .conn
             .prepare_cached("INSERT INTO lines_trigram(rowid, content) VALUES(?1,?2)")?;
@@ -693,6 +705,7 @@ impl IndexStore {
             ls.execute(params![file_id, no, content])?;
             let rid = self.conn.last_insert_rowid();
             fts.execute(params![rid, content, file_id, no])?;
+            code_fts.execute(params![rid, content, file_id, no])?;
             tri.execute(params![rid, content])?;
         }
         Ok(())
