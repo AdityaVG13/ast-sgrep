@@ -61,11 +61,19 @@ for query in gold["queries"]:
             capture_output=True, text=True,
         )
         row[fmt] = len(proc.stdout.strip())
+    # m38g: budgeted compact picks per-result detail under one ceiling.
+    proc = subprocess.run(
+        [binary, "--index-path", index_path, "--json", "--format", "compact",
+         "--budget-tokens", "300", "--limit", "10", query["query"], "."],
+        capture_output=True, text=True,
+    )
+    row["compact-budget300"] = len(proc.stdout.strip())
     rows.append(row)
-totals = {
-    fmt: sum(row[fmt] for row in rows)
-    for fmt in ("native", "agent", "agent-capsule", "compact")
-}
+formats = ("native", "agent", "agent-capsule", "compact", "compact-budget300")
+totals = {fmt: sum(row[fmt] for row in rows) for fmt in formats}
+totals["budget300_vs_agent_capsule_pct"] = round(
+    100 - (totals["compact-budget300"] * 100 / totals["agent-capsule"]), 1
+)
 totals["compact_vs_agent_capsule_pct"] = round(
     100 - (totals["compact"] * 100 / totals["agent-capsule"]), 1
 )
@@ -77,6 +85,46 @@ print(json.dumps(totals, indent=2))
 PY
 
 # 3. Reliability invariants, as executable gates rather than prose claims.
+echo "== budget non-inferiority (m38g) =="
+python3 - "$bin" "$gold" "$out" "$token_index" <<'BUDGETPY'
+import json, subprocess, sys
+binary, gold_path, out_dir, index_path = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+gold = json.load(open(gold_path))
+
+
+def result_ids(query_text, extra):
+    proc = subprocess.run(
+        [binary, "--index-path", index_path, "--json", "--format", "compact",
+         "--limit", "10", *extra, query_text, "."],
+        capture_output=True, text=True,
+    )
+    body = json.loads(proc.stdout)
+    return [row[0] for row in body.get("h", [])]
+
+
+mismatches = []
+for query in gold["queries"]:
+    plain = result_ids(query["query"], [])
+    budgeted = result_ids(query["query"], ["--budget-tokens", "300"])
+    if plain != budgeted:
+        mismatches.append({"query": query["name"], "plain": plain, "budgeted": budgeted})
+
+report = {
+    "queries": len(gold["queries"]),
+    "identical_result_sets": not mismatches,
+    "mismatches": mismatches,
+    "note": (
+        "A token budget selects per-result DETAIL. It must never change which "
+        "results are returned, so recall at any cutoff is unchanged by "
+        "construction. This check falsifies that claim rather than assuming it."
+    ),
+}
+json.dump(report, open(f"{out_dir}/self-budget-non-inferiority.json", "w"), indent=2)
+print(json.dumps({k: report[k] for k in ("queries", "identical_result_sets")}, indent=2))
+if mismatches:
+    sys.exit("budget changed result sets; the recall claim would be false")
+BUDGETPY
+
 echo "== reliability invariants =="
 cargo test -p ast-sgrep-core --test snapshot_generation --test generation_swap \
   --test store_pragmas 2>&1 | tee "$out/reliability-tests.txt" | tail -5

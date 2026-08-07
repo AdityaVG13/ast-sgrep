@@ -114,6 +114,8 @@ fn clap_catalog(command: &clap::Command) -> (Vec<Value>, Vec<String>, Vec<String
         "--no-embed", "--cloud-embed", "--ollama-embed", "--neural-embed", "--semantic-only",
         "--tantivy", "--ann-threshold", "--ann-probes", "--rerank", "--rerank-top-k",
         "--format", "--excerpt-lines", "--snippet-tokens", "--response-snippet-tokens", "--dry-run",
+        // m38g: whole-response token budget that picks per-result detail.
+        "--budget-tokens",
     ];
     let mut global_flags = Vec::new();
     let mut search_tuning_flags = Vec::new();

@@ -57,8 +57,9 @@ would drift the byte totals by a digit at a time.
 | `self-gold12-reproducible` | self (12 gold queries) | default hybrid | Recall@1 | **0.458** | REPRODUCIBLE |
 | `self-gold12-reproducible` | self (12 gold queries) | default hybrid | Recall@5 | **0.792** | REPRODUCIBLE |
 | `self-gold12-reproducible` | self (12 gold queries) | default hybrid | Recall@20 | **1.000** | REPRODUCIBLE |
-| `self-tokens-gold12` | self (12 gold queries, `--limit 10`) | compact vs agent-capsule | emitted bytes | **11,269 vs 43,483 (-74.1%)** | REPRODUCIBLE |
-| `self-tokens-gold12` | self (12 gold queries, `--limit 10`) | compact vs native | emitted bytes | **11,269 vs 56,069 (-79.9%)** | REPRODUCIBLE |
+| `self-tokens-gold12` | self (12 gold queries, `--limit 10`) | compact vs agent-capsule | emitted bytes | **11,428 vs 44,622 (-74.4%)** | REPRODUCIBLE |
+| `self-tokens-gold12` | self (12 gold queries, `--limit 10`) | compact vs native | emitted bytes | **11,428 vs 56,868 (-79.9%)** | REPRODUCIBLE |
+| `self-budget300-gold12` | self (12 gold queries, `--limit 10`) | `--budget-tokens 300` vs agent-capsule | emitted bytes | **10,395 vs 44,622 (-76.7%)** | REPRODUCIBLE |
 
 These are **not** comparable to the historical unreproducible rows below: a
 different corpus definition, a different gold set, and a different commit.
@@ -83,6 +84,25 @@ by exact and structural channels. It does mean **no claim of semantic lift may
 cite this corpus**, and that a foreign held-out corpus is required before the
 default embedding path can be called valuable.
 
+### Token budget: measured reduction at unchanged recall (m38g)
+
+`--budget-tokens` assigns a detail level per result (metadata / signature /
+block / full) under one response-wide ceiling, rather than truncating every
+excerpt to the same size. At a 300-unit budget it emits
+**76.7% fewer bytes than the agent-capsule envelope**, clearing the 50%
+acceptance gate.
+
+Recall is unchanged, and the harness proves it rather than assuming it: a
+budget selects DETAIL, never which results are returned, so
+`self-budget-non-inferiority.json` compares the returned result-id lists with
+and without the budget across all 12 gold queries and fails the run if any
+differ. Current status: **identical result sets on 12/12 queries**, so
+Recall@1/@5/@20 are unchanged by construction.
+
+Absolute byte totals move as this repository changes, because the `self` corpus
+IS the working tree. Rows above were produced at commit `007b255`. Percentages
+are the stable figures; treat absolute bytes as corpus-dated.
+
 ### Coverage and what is still missing
 
 Implemented and reproducible: MRR, nDCG, Recall@1/@5/@20, the hybrid vs
@@ -101,6 +121,8 @@ Not implemented, and deliberately not faked with placeholder numbers:
 - **Definition/reference resolution accuracy and graph-edge precision by
   resolution tier.** These require the `SymbolId` / `Resolution` tiers, which
   are separate open work; there are no resolution tiers to report against yet.
+- **Foreign-corpus token efficiency.** The reduction above is measured on
+  the self corpus only.
 - **Agent-level token metrics** (tokens read before the correct edit site, tool
   calls to correct file and symbol). These need an agent-in-the-loop harness,
   not a retrieval harness.

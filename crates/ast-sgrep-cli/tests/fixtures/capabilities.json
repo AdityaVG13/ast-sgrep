@@ -20,6 +20,7 @@
       "flags": [
         "--ann-probes",
         "--ann-threshold",
+        "--budget-tokens",
         "--cloud-embed",
         "--excerpt-lines",
         "--fixture",
@@ -93,6 +94,7 @@
       "flags": [
         "--ann-probes",
         "--ann-threshold",
+        "--budget-tokens",
         "--cloud-embed",
         "--dry-run",
         "--excerpt-lines",
@@ -121,6 +123,7 @@
       "flags": [
         "--ann-probes",
         "--ann-threshold",
+        "--budget-tokens",
         "--cloud-embed",
         "--excerpt-lines",
         "--format",
@@ -143,6 +146,7 @@
       "flags": [
         "--ann-probes",
         "--ann-threshold",
+        "--budget-tokens",
         "--cloud-embed",
         "--dry-run",
         "--excerpt-lines",
@@ -181,6 +185,7 @@
       "flags": [
         "--ann-probes",
         "--ann-threshold",
+        "--budget-tokens",
         "--cloud-embed",
         "--excerpt-lines",
         "--format",
@@ -204,6 +209,7 @@
       "flags": [
         "--ann-probes",
         "--ann-threshold",
+        "--budget-tokens",
         "--cloud-embed",
         "--excerpt-lines",
         "--format",
@@ -365,6 +371,7 @@
   "search_tuning_flags": [
     "--ann-probes",
     "--ann-threshold",
+    "--budget-tokens",
     "--cloud-embed",
     "--excerpt-lines",
     "--format",
