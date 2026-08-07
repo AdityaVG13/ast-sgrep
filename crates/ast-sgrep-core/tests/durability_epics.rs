@@ -447,3 +447,78 @@ fn remove_file_clears_graph_rows() {
         0
     );
 }
+
+/// ubs-body-hash-set-meta-1vrm: structure-skip path must only fire when body meta
+/// matches; a deliberate mismatch forces a full re-upsert (not refresh_lines_only).
+#[test]
+fn body_hash_mismatch_prevents_structure_skip() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    write_src(
+        root,
+        "skip.py",
+        "def original():\n    return 1\n",
+    );
+    let mut indexer = Indexer::new(IndexOptions {
+        root: root.to_path_buf(),
+        embed_semantic: false,
+        ..IndexOptions::default()
+    })
+    .unwrap();
+    indexer.index_all().unwrap();
+    let body = indexer
+        .store()
+        .get_meta("body:skip.py")
+        .unwrap()
+        .expect("body meta after first index");
+    // Corrupt body fingerprint so the next index cannot structure-skip.
+    indexer.store().set_meta("body:skip.py", "stale-body-fp").unwrap();
+    // Trailing trivia only -- real body hash is unchanged.
+    write_src(
+        root,
+        "skip.py",
+        "def original():\n    return 1\n# trailing\n",
+    );
+    indexer.index_all().unwrap();
+    let after = indexer
+        .store()
+        .get_meta("body:skip.py")
+        .unwrap()
+        .expect("body meta after reindex");
+    assert_ne!(
+        after.as_str(),
+        "stale-body-fp",
+        "reindex must rewrite body meta when prior value was wrong"
+    );
+    assert_eq!(
+        after, body,
+        "trailing trivia must restore the original body fingerprint"
+    );
+}
+
+/// ubs-semantic-ivf-stale-swallow-skif: mark_semantic_ivf_stale must set the gate
+/// bit and remove an on-disk sidecar (Result, not fire-and-forget).
+#[test]
+fn mark_semantic_ivf_stale_sets_flag_and_invalidates_sidecar() {
+    let temp = TempDir::new().unwrap();
+    let store = IndexStore::open(temp.path(), None).unwrap();
+    let sidecar = ast_sgrep_core::semantic_ivf::semantic_ivf_path(store.db_path());
+    std::fs::write(&sidecar, b"stale-ivf-bytes").unwrap();
+    assert!(sidecar.is_file());
+    ast_sgrep_core::semantic_ann::mark_semantic_ivf_stale(&store).unwrap();
+    assert_eq!(
+        store.get_meta("semantic_ivf_stale").unwrap().as_deref(),
+        Some("1"),
+        "stale flag must be durable so rebuild gate cannot miss it"
+    );
+    assert!(
+        !sidecar.exists(),
+        "IVF sidecar must be invalidated when mark succeeds"
+    );
+    // Idempotent second mark still Ok and keeps the flag.
+    ast_sgrep_core::semantic_ann::mark_semantic_ivf_stale(&store).unwrap();
+    assert_eq!(
+        store.get_meta("semantic_ivf_stale").unwrap().as_deref(),
+        Some("1")
+    );
+}
