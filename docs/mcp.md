@@ -63,6 +63,22 @@ Index statistics: file/symbol/chunk counts, embed backend, IVF sidecar presence.
 
 Build or incrementally update the index. Pass `force: true` for full reindex.
 
+**Concurrency and cancel (intentional limits for trusted local agents):**
+
+- stdio MCP handles `tools/call` **sequentially** on one thread. A long
+  `index_repo` blocks other tool calls until it returns.
+- Concurrent `index_repo` calls share a process-wide single-flight lock; wait
+  time counts toward a **soft wall deadline** (600s). The deadline is checked
+  before start and after index work finishes -- it is **not** cooperative
+  mid-build cancellation.
+- There is **no** `$/cancel` / `notifications/cancelled` path and no cancel
+  token into `Indexer::{index_all,reindex_all}`. Clients cannot abort an
+  in-flight index over the wire.
+- Acceptable for single-tenant local agents (Cursor, Claude Desktop, Pi).
+  Multi-tenant hosts that need preemptive cancel require a product change:
+  multiplexed request read, request-scoped cancel flag, and cooperative
+  checkpoints in the indexer (tracked as `ast-sgrep-d2a1.16`).
+
 ## Recommended agent loop
 
 1. `index_repo` on first open (or rely on prior `asgrep index .`).

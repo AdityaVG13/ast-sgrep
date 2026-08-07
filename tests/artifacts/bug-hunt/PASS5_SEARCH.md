@@ -17,19 +17,28 @@
 - `estimate_confidence` bases strength on strongest contributor (and `kind`), not display `signal` alone.
 - New `assign_hit_confidence`; always run after `assign_signal_margins` in `finish_response_checked`.
 
-### P3 -- JSON deserialize zeros confidence (open) -- `ast-sgrep-d2a1.8`
+### P3 -- JSON deserialize zeros confidence (fixed) -- `ast-sgrep-d2a1.8`
 
-`SearchHit` serializes `confidence` but custom `Deserialize` via `SearchHitWire` omits the field, so JSON round-trip always yields `0.0`. In-process paths use `Clone` (response cache OK). Left open; lower priority.
+`SearchHit` serializes `confidence` but custom `Deserialize` via `SearchHitWire`
+previously omitted the field, so JSON round-trip always yielded `0.0`.
+
+**Fix:** `SearchHitWire` carries `#[serde(default)] confidence: f64`; deserialize
+maps it and sanitizes non-finite values to `0.0` (same policy as `margin`).
+Missing field still defaults to `0.0`.
 
 ## Regression evidence
 
 ```text
-cargo test -p ast-sgrep-core --lib confidence
-# 4 passed:
+cargo test -p ast-sgrep-core --lib search::types::tests
+# 5 passed:
 #   confidence_uses_strongest_contributor_not_display_signal
 #   semantic_only_confidence_is_nonzero_without_dedup
 #   empty_hits_confidence_assign_is_noop
-#   finish_response_assigns_confidence_when_dedup_false
+#   search_hit_json_round_trip_preserves_confidence
+#   search_hit_json_missing_confidence_defaults_zero
+
+cargo test -p ast-sgrep-core --lib confidence
+# also: finish_response_assigns_confidence_when_dedup_false
 
 # Also green (prebuilt lib test bin):
 fusion::tests::* (5)
@@ -68,4 +77,4 @@ No commit (per mission).
 | ID | Status | Labels |
 |---|---|---|
 | `ast-sgrep-d2a1.7` | closed (fixed) | `bug-hunt`, `pass5-search` |
-| `ast-sgrep-d2a1.8` | open P3 | `bug-hunt`, `pass5-search` |
+| `ast-sgrep-d2a1.8` | closed (fixed) | `bug-hunt`, `pass5-search` |
