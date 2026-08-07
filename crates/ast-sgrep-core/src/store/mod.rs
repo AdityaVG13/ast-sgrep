@@ -123,11 +123,21 @@ pub fn read_active_manifest(index_dir: &Path) -> Option<ActiveManifest> {
     serde_json::from_str(&raw).ok()
 }
 
-/// Replace the active-generation pointer atomically (jpbq).
+/// Replace the active-generation pointer atomically and durably (jpbq).
 ///
-/// Written to a temp file in the same directory and renamed over the target, so
-/// a reader either sees the old pointer or the new one -- never a partial file.
+/// Protocol matches `semantic_ivf` publish: write a unique temp inode → fsync
+/// data → rename over the target → fsync the parent directory. A bare
+/// `write` + `rename` only makes the directory entry atomic; without fsync the
+/// bytes may still be in the page cache when the pointer moves, so a power
+/// loss can leave `active.json` empty or torn -- undoing the crash-safety
+/// property of generation swaps.
 pub fn write_active_manifest(index_dir: &Path, manifest: &ActiveManifest) -> crate::Result<()> {
+    use std::fs::{File, OpenOptions};
+    use std::io::Write;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
     let path = active_manifest_path(index_dir);
     let parent = path.parent().expect("manifest path has a parent");
     std::fs::create_dir_all(parent).map_err(|e| {
@@ -135,13 +145,48 @@ pub fn write_active_manifest(index_dir: &Path, manifest: &ActiveManifest) -> cra
     })?;
     let body = serde_json::to_string_pretty(manifest)
         .map_err(|e| crate::StoreError::Other(format!("serialize active manifest: {e}")))?;
-    let temp = path.with_extension("json.tmp");
-    std::fs::write(&temp, body.as_bytes())
-        .map_err(|e| crate::StoreError::Other(format!("write {}: {e}", temp.display())))?;
-    std::fs::rename(&temp, &path).map_err(|e| {
-        crate::StoreError::Other(format!("activate {}: {e}", path.display()))
-    })?;
-    Ok(())
+    let sequence = TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    let temp = parent.join(format!(
+        ".active.{}.{}.tmp",
+        std::process::id(),
+        sequence
+    ));
+    let result = (|| -> crate::Result<()> {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp)
+            .map_err(|e| {
+                crate::StoreError::Other(format!("create {}: {e}", temp.display()))
+            })?;
+        file.write_all(body.as_bytes()).map_err(|e| {
+            crate::StoreError::Other(format!("write {}: {e}", temp.display()))
+        })?;
+        file.sync_all().map_err(|e| {
+            crate::StoreError::Other(format!("fsync {}: {e}", temp.display()))
+        })?;
+        // Close before rename so Windows can replace if the target is open.
+        drop(file);
+        std::fs::rename(&temp, &path).map_err(|e| {
+            crate::StoreError::Other(format!("activate {}: {e}", path.display()))
+        })?;
+        #[cfg(unix)]
+        {
+            File::open(parent)
+                .and_then(|dir| dir.sync_all())
+                .map_err(|e| {
+                    crate::StoreError::Other(format!(
+                        "fsync parent {}: {e}",
+                        parent.display()
+                    ))
+                })?;
+        }
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temp);
+    }
+    result
 }
 
 /// Database path for a named generation (jpbq).

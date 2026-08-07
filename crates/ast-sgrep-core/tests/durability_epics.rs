@@ -5,8 +5,8 @@ use ast_sgrep_core::semantic_ivf::{
     save_semantic_ivf, vectors_content_digest,
 };
 use ast_sgrep_core::store::{
-    assert_sql_ident, CallerRow, ImportRow, SymbolRow, UpsertFileInput, CALLER_COLUMN_ALLOWLIST,
-    COUNT_TABLE_ALLOWLIST,
+    assert_sql_ident, read_active_manifest, write_active_manifest, ActiveManifest, CallerRow,
+    ImportRow, SymbolRow, UpsertFileInput, CALLER_COLUMN_ALLOWLIST, COUNT_TABLE_ALLOWLIST,
 };
 use ast_sgrep_core::tantivy_index::{TantivySidecar, LEXICAL_DB};
 use ast_sgrep_core::{IndexOptions, IndexStore, Indexer, SearchOptions, Searcher};
@@ -37,6 +37,57 @@ fn write_src(root: &std::path::Path, rel: &str, body: &str) {
         std::fs::create_dir_all(parent).unwrap();
     }
     std::fs::write(path, body).unwrap();
+}
+
+/// jpbq / resource-leak pass — active generation pointer uses durable publish
+/// (tmp + fsync + rename + parent fsync), not bare write+rename.
+#[test]
+fn active_manifest_publish_is_durable_tmp_fsync_rename() {
+    let dir = TempDir::new().unwrap();
+    let index_dir = dir.path();
+    let first = ActiveManifest {
+        generation: "000001".into(),
+        schema_version: 7,
+        previous: None,
+        activated_at: 1,
+    };
+    write_active_manifest(index_dir, &first).unwrap();
+    let path = ast_sgrep_core::store::active_manifest_path(index_dir);
+    assert!(path.is_file());
+    let read = read_active_manifest(index_dir).expect("roundtrip");
+    assert_eq!(read, first);
+    // No leftover temp inodes after a successful publish.
+    let leftovers: Vec<_> = std::fs::read_dir(path.parent().unwrap())
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .filter(|e| {
+            e.file_name()
+                .to_string_lossy()
+                .starts_with(".active.")
+                && e.file_name().to_string_lossy().ends_with(".tmp")
+        })
+        .collect();
+    assert!(
+        leftovers.is_empty(),
+        "successful publish must not leave .active.*.tmp: {leftovers:?}"
+    );
+
+    // Second publish replaces the pointer; previous bytes must not remain as
+    // a partial intermediate under the final name.
+    let second = ActiveManifest {
+        generation: "000002".into(),
+        schema_version: 7,
+        previous: Some("000001".into()),
+        activated_at: 2,
+    };
+    write_active_manifest(index_dir, &second).unwrap();
+    assert_eq!(
+        read_active_manifest(index_dir).expect("second").generation,
+        "000002"
+    );
+    let body = std::fs::read_to_string(&path).unwrap();
+    assert!(body.contains("000002"));
+    assert!(!body.contains("\"generation\": \"000001\""));
 }
 
 /// y1oy.3 — semantic.ivf is published via tmp + fsync + rename (no torn final file).
