@@ -1,11 +1,11 @@
 use ast_sgrep_core::IndexStore;
-use std::path::Path;
-use tempfile::TempDir;
+use ast_sgrep_testkit::isolated_index_session;
+
 #[test]
 fn index_store_applies_wal_and_busy_timeout() {
-    let temp = TempDir::new().expect("tempdir");
-    let root = temp.path();
-    let store = IndexStore::open(root, None).expect("open index");
+    // Private on-disk SQLite; explicit index_path (ignores ASGREP_INDEX_PATH).
+    let session = isolated_index_session();
+    let store = session.open_store();
     let journal_mode: String = store
         .connection()
         .query_row("PRAGMA journal_mode", [], |row| row.get(0))
@@ -28,14 +28,18 @@ fn index_store_applies_wal_and_busy_timeout() {
     assert_eq!(busy_ms, 5_000);
     let integrity = ast_sgrep_core::store::integrity_check(store.connection()).expect("check");
     assert_eq!(integrity, "ok");
-    assert!(store.db_path().starts_with(root.join(".asgrep")));
-    assert!(Path::new(&store.db_path()).exists());
+    assert_eq!(store.db_path(), session.index_path);
+    assert!(
+        session.index_path.is_file(),
+        "real on-disk db must exist at {}",
+        session.index_path.display()
+    );
 }
 
 #[test]
 fn file_tx_restores_synchronous_normal_after_commit_and_rollback() {
-    let temp = TempDir::new().expect("tempdir");
-    let store = IndexStore::open(temp.path(), None).expect("open index");
+    let session = isolated_index_session();
+    let store = session.open_store();
     let sync = |s: &IndexStore| -> i64 {
         s.connection()
             .query_row("PRAGMA synchronous", [], |row| row.get(0))
@@ -54,8 +58,8 @@ fn file_tx_restores_synchronous_normal_after_commit_and_rollback() {
 
 #[test]
 fn bulk_tx_rollback_restores_synchronous_normal() {
-    let temp = TempDir::new().expect("tempdir");
-    let store = IndexStore::open(temp.path(), None).expect("open index");
+    let session = isolated_index_session();
+    let store = session.open_store();
     store.begin_bulk_tx().expect("begin bulk");
     store.rollback_bulk_tx().expect("rollback bulk");
     let synchronous: i64 = store

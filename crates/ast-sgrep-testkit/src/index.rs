@@ -3,10 +3,19 @@ use ast_sgrep_core::{IndexOptions, Indexer, SearchOptions, SearchResponse, Searc
 use serde_json::Value;
 use std::path::Path;
 use tempfile::TempDir;
+
+/// Sample-fixture index with a **private on-disk SQLite** (`TempDir` / `index.db`).
+///
+/// Isolation: `index_path` is always set under `_temp`, so `ASGREP_INDEX_PATH` /
+/// XDG cache cannot share state across tests. The corpus defaults to the
+/// read-only shared [`sample_root`] (immutable fixture files). For a private
+/// **writable** corpus + DB, use [`crate::IsolatedIndexSession`].
 pub struct IndexedFixture {
+    /// Keeps the private DB directory alive for the test lifetime.
     pub _temp: TempDir,
     pub indexer: Indexer,
 }
+
 pub fn reopen_indexer(indexed: &IndexedFixture, overrides: IndexOptions) -> Indexer {
     Indexer::new(IndexOptions {
         root: indexed.indexer.store().root().to_path_buf(),
@@ -15,8 +24,12 @@ pub fn reopen_indexer(indexed: &IndexedFixture, overrides: IndexOptions) -> Inde
     })
     .expect("indexer")
 }
+
+/// Index the shared sample fixture into a **fresh real SQLite** file under a
+/// private [`TempDir`]. Always sets an explicit `index_path` (never env/cache).
 pub fn index_sample(mut opts: IndexOptions) -> IndexedFixture {
     let temp = TempDir::new().expect("tempdir");
+    // Explicit path: never fall through to ASGREP_INDEX_PATH / shared cache.
     opts.index_path = Some(temp.path().join("index.db"));
     if opts.root.as_os_str() == "." {
         opts.root = sample_root();

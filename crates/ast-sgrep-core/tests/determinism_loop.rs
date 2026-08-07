@@ -1,36 +1,25 @@
 //! Determinism regression (6ulo): identical no-embed searches must be stable.
-use ast_sgrep_core::{IndexOptions, Indexer, SearchOptions, Searcher};
-use std::fs;
-use tempfile::TempDir;
+use ast_sgrep_core::{IndexOptions, SearchOptions};
+use ast_sgrep_testkit::isolated_index_session;
 
 #[test]
 fn fifty_identical_searches_are_byte_stable() {
-    let corpus = TempDir::new().unwrap();
-    fs::write(
-        corpus.path().join("stable.rs"),
+    let session = isolated_index_session();
+    session.write(
+        "stable.rs",
         "fn auth_refresh() { renew_credentials(); }\nfn renew_credentials() {}\n",
-    )
-    .unwrap();
-    let index_dir = TempDir::new().unwrap();
-    let index_path = index_dir.path().join("index.db");
-    let mut indexer = Indexer::new(IndexOptions {
-        root: corpus.path().to_path_buf(),
-        index_path: Some(index_path.clone()),
+    );
+    session.index_all(IndexOptions {
         embed_semantic: false,
         force_reindex: true,
-        ..IndexOptions::default()
-    })
-    .unwrap();
-    indexer.index_all().unwrap();
+        ..session.index_options()
+    });
 
-    let searcher = Searcher::new(SearchOptions {
-        root: corpus.path().to_path_buf(),
-        index_path: Some(index_path),
+    let searcher = session.searcher(SearchOptions {
         use_embed: false,
         limit: 16,
-        ..SearchOptions::default()
-    })
-    .unwrap();
+        ..session.search_options()
+    });
 
     let first = searcher.search("auth_refresh").unwrap();
     assert!(
