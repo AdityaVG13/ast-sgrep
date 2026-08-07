@@ -133,6 +133,14 @@ pub(crate) struct SearchTuning {
         help = "Response-wide compact snippet token budget"
     )]
     pub(crate) response_snippet_tokens: usize,
+    /// m38g: a whole-response token budget that picks per-result detail,
+    /// instead of truncating every excerpt to the same ceiling.
+    #[arg(
+        long,
+        value_parser = parse_budget_tokens,
+        help = "Whole-response token budget; picks per-result detail (compact format)"
+    )]
+    pub(crate) budget_tokens: Option<usize>,
 }
 
 #[derive(Args, Clone, Debug)]
@@ -189,6 +197,16 @@ pub(crate) struct Cli {
     pub(crate) index_path: Option<PathBuf>,
     #[arg(long, global = true, help = "Language filter")]
     pub(crate) lang: Option<String>,
+    /// 0obi: `fast-unsafe` can corrupt the index on power loss, so it must be
+    /// asked for by name; it is never reached by default.
+    #[arg(
+        long,
+        global = true,
+        env = "ASGREP_DURABILITY",
+        value_parser = parse_durability,
+        help = "Index write durability: strict|balanced|fast-unsafe (default balanced)"
+    )]
+    pub(crate) durability: Option<ast_sgrep_core::store::Durability>,
     /// Search-tuning for bare (no-subcommand) search only — not inherited by capabilities/doctor (vdqo).
     #[command(flatten)]
     pub(crate) tuning: SearchTuning,
@@ -310,6 +328,20 @@ fn parse_bounded_usize(raw: &str, maximum: usize, name: &str) -> Result<usize, S
     Ok(value)
 }
 
+/// 0obi: an unrecognized durability value is a hard error, never a silent
+/// downgrade to a weaker profile.
+fn parse_durability(raw: &str) -> Result<ast_sgrep_core::store::Durability, String> {
+    ast_sgrep_core::store::Durability::parse(raw).ok_or_else(|| {
+        format!("unknown durability '{raw}' (expected strict, balanced, or fast-unsafe)")
+    })
+}
+
+/// m38g: bounded like the other token knobs so a hostile value cannot make the
+/// renderer allocate without limit.
+fn parse_budget_tokens(raw: &str) -> Result<usize, String> {
+    parse_bounded_usize(raw, MAX_RESPONSE_SNIPPET_TOKENS, "--budget-tokens")
+}
+
 fn parse_output_limit(raw: &str) -> Result<usize, String> {
     parse_bounded_usize(raw, MAX_OUTPUT_RESULTS, "--limit")
 }
@@ -319,11 +351,56 @@ fn parse_excerpt_lines(raw: &str) -> Result<usize, String> {
 }
 
 fn parse_output_format(raw: &str) -> Result<String, String> {
-    ast_sgrep_plugins::OutputFormat::parse(raw)
-        .map(|_| raw.to_ascii_lowercase())
-        .ok_or_else(|| {
-            "format must be one of: native, agent, agent-capsule, compact, github, gitlab".into()
-        })
+    const FORMATS: &[&str] = &[
+        "native",
+        "agent",
+        "agent-capsule",
+        "compact",
+        "github",
+        "gitlab",
+    ];
+    let lower = raw.to_ascii_lowercase();
+    if ast_sgrep_plugins::OutputFormat::parse(&lower).is_some() {
+        return Ok(lower);
+    }
+    // Common agent mistakes: think format is "json" / typo "jason" — prefer compact for LLM use.
+    let suggestion = match lower.as_str() {
+        "json" | "jsno" | "josn" | "jason" | "ndjson" => Some("compact"),
+        "gh" | "github-actions" => Some("github"),
+        "gl" => Some("gitlab"),
+        "capsule" | "agent_capsule" | "agentcapsule" => Some("agent-capsule"),
+        _ => FORMATS
+            .iter()
+            .copied()
+            .filter(|cand| edit_distance(&lower, cand) <= 2)
+            .min_by_key(|cand| edit_distance(&lower, cand)),
+    };
+    let list = FORMATS.join(", ");
+    Err(match suggestion {
+        Some(s) => format!(
+            "invalid --format '{raw}' (did you mean '{s}'?). Try: asgrep --json --format {s} \"query\" .\nAllowed: {list}"
+        ),
+        None => format!(
+            "invalid --format '{raw}'. Try: asgrep --json --format compact \"query\" .\nAllowed: {list}"
+        ),
+    })
+}
+
+fn edit_distance(a: &str, b: &str) -> usize {
+    let (a, b) = (a.as_bytes(), b.as_bytes());
+    let mut prev: Vec<usize> = (0..=b.len()).collect();
+    let mut cur = vec![0; b.len() + 1];
+    for (i, &ca) in a.iter().enumerate() {
+        cur[0] = i + 1;
+        for (j, &cb) in b.iter().enumerate() {
+            let cost = usize::from(ca != cb);
+            cur[j + 1] = (prev[j + 1] + 1)
+                .min(cur[j] + 1)
+                .min(prev[j] + cost);
+        }
+        std::mem::swap(&mut prev, &mut cur);
+    }
+    prev[b.len()]
 }
 
 fn parse_snippet_tokens(raw: &str) -> Result<usize, String> {
@@ -393,6 +470,8 @@ impl Cli {
             || matches!(self.command.as_ref(), Some(Commands::Capabilities(_)))
             || matches!(self.command.as_ref(), Some(Commands::Version(a)) if a.json)
             || matches!(self.command.as_ref(), Some(Commands::Doctor { .. }))
+            // codemode-batch always emits a JSON envelope on success (no --json gate).
+            || matches!(self.command.as_ref(), Some(Commands::CodemodeBatch { .. }))
     }
 
     pub(crate) fn command_name(&self) -> &'static str {

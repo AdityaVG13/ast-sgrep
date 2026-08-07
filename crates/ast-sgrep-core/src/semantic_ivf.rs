@@ -277,6 +277,15 @@ pub fn load_semantic_ivf(
     load_semantic_ivf_inner(path, Some(expected_fingerprint))
 }
 
+/// Read only the sidecar's stored fingerprint, without loading vectors (d3l5).
+///
+/// Used to report a generation-mismatched sidecar as a degraded channel instead
+/// of silently falling back to brute force as if nothing were wrong.
+pub fn peek_semantic_ivf_fingerprint(path: &Path) -> Option<[u8; 32]> {
+    let mapped = map_and_parse(path, None).ok()??;
+    Some(mapped.header.fingerprint)
+}
+
 pub fn load_semantic_ivf_unchecked(path: &Path) -> Result<Option<PersistedSemanticIvf>> {
     load_semantic_ivf_inner(path, None)
 }

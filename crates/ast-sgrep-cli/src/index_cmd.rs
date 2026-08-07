@@ -83,6 +83,8 @@ pub(crate) fn index_options(root: &Path, cli: &Cli) -> IndexOptions {
         ),
         force_reindex: false,
         ann_threshold: t.ann_threshold,
+        // 0obi: explicit flag wins; otherwise the safe default.
+        durability: cli.durability.unwrap_or_default(),
     }
 }
 
@@ -102,24 +104,40 @@ pub(crate) fn run_index_dry_run(command: &str, root: &Path, cli: &Cli) -> anyhow
     let root = ensure_existing_root(root, cli)?;
     let mut files = 0usize;
     let mut skipped = 0usize;
+    let mut walk_errors = false;
     // Intentional product set for dry-run "source-like" counts — broader than
     // INDEXABLE_EXTENSIONS (which also indexes md/json/toml/yml). Do not silently
     // unify without affirming dry-run semantics in machine_contracts / agent docs.
-    fn walk(dir: &Path, files: &mut usize, skipped: &mut usize) {
-        let Ok(rd) = std::fs::read_dir(dir) else {
-            return;
+    fn walk(dir: &Path, files: &mut usize, skipped: &mut usize, walk_errors: &mut bool) {
+        let rd = match std::fs::read_dir(dir) {
+            Ok(rd) => rd,
+            Err(_) => {
+                *walk_errors = true;
+                return;
+            }
         };
-        for entry in rd.flatten() {
+        for entry in rd {
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(_) => {
+                    *walk_errors = true;
+                    continue;
+                }
+            };
             let path = entry.path();
-            let Ok(ft) = entry.file_type() else {
-                continue;
+            let ft = match entry.file_type() {
+                Ok(ft) => ft,
+                Err(_) => {
+                    *walk_errors = true;
+                    continue;
+                }
             };
             if ft.is_dir() {
                 let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
                 if matches!(name, ".git" | "node_modules" | "target" | ".asgrep") {
                     continue;
                 }
-                walk(&path, files, skipped);
+                walk(&path, files, skipped, walk_errors);
             } else if ft.is_file() {
                 let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("");
                 if matches!(
@@ -134,18 +152,25 @@ pub(crate) fn run_index_dry_run(command: &str, root: &Path, cli: &Cli) -> anyhow
             }
         }
     }
-    walk(&root, &mut files, &mut skipped);
+    walk(&root, &mut files, &mut skipped, &mut walk_errors);
     if !cli.json {
         eprintln!(
             "asgrep: dry-run scanned {files} candidate files under {}",
             root.display()
         );
+        if walk_errors {
+            // Parity with print_index_stats; machine JSON carries walk_errors (d2a1.11).
+            eprintln!(
+                "Warning: directory walk errors left the dry-run count incomplete; permission or IO failures may hide files"
+            );
+        }
     }
     let payload = serde_json::json!({
         "dry_run": true,
         "root": root,
         "files_would_index": files,
         "files_skipped": skipped,
+        "walk_errors": walk_errors,
         "mutates_index": false,
         "cancel_semantics": "SIGINT during a real index leaves the previous index if build-then-swap succeeds; dry-run never writes"
     });
@@ -238,7 +263,8 @@ pub(crate) fn search_options(root: &Path, cli: &Cli) -> SearchOptions {
     SearchOptions {
         root,
         index_path,
-        limit: cli.limit.unwrap_or_else(SearchOptions::default_limit),
+        // Remap 0 / oversize here so CLI envelope `limit` matches Searcher (docs: 0 → default).
+        limit: ast_sgrep_core::clamp_output_limit(cli.limit, SearchOptions::default_limit()),
         lang_filter: cli.lang.clone(),
         use_embed: !t.no_embed,
         use_tantivy: t.tantivy,
@@ -249,7 +275,7 @@ pub(crate) fn search_options(root: &Path, cli: &Cli) -> SearchOptions {
         ann_threshold: t.ann_threshold,
         ann_probes: t.ann_probes,
         use_rerank: t.rerank,
-        rerank_top_k: t.rerank_top_k,
+        rerank_top_k: t.rerank_top_k.clamp(1, ast_sgrep_core::MAX_OUTPUT_RESULTS),
         ..SearchOptions::default()
     }
 }

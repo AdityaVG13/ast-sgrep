@@ -11,8 +11,197 @@ pub use sqlite::{
     SymbolRow, UpsertFileInput,
 };
 use std::path::{Path, PathBuf};
+
+/// Write-durability profile for the index database (0obi).
+///
+/// Indexing used to force `PRAGMA synchronous = OFF` for every bulk and
+/// per-file transaction. SQLite documents that this permits write reordering
+/// and can corrupt the database after a power failure or hard reset. A search
+/// index is rebuildable, but corruption still produces failed searches, silent
+/// stale results, broken editor navigation, and forced full rebuilds -- so the
+/// unsafe mode is now an explicit opt-in rather than the default.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Durability {
+    /// `WAL` + `synchronous = FULL`. Survives power loss; slowest to index.
+    Strict,
+    /// `WAL` + `synchronous = NORMAL`. Survives process crash. Default.
+    #[default]
+    Balanced,
+    /// `synchronous = OFF`. Fastest, and can corrupt the index on power loss.
+    FastUnsafe,
+}
+
+impl Durability {
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "strict" => Some(Self::Strict),
+            "balanced" | "default" => Some(Self::Balanced),
+            "fast-unsafe" | "fast_unsafe" | "unsafe" => Some(Self::FastUnsafe),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Strict => "strict",
+            Self::Balanced => "balanced",
+            Self::FastUnsafe => "fast-unsafe",
+        }
+    }
+
+    /// `PRAGMA synchronous` value held outside write transactions.
+    pub fn steady_pragma(self) -> &'static str {
+        match self {
+            Self::Strict => "FULL",
+            // A crashed process must not leave `OFF` behind, so even the unsafe
+            // profile returns to NORMAL between write batches.
+            Self::Balanced | Self::FastUnsafe => "NORMAL",
+        }
+    }
+
+    /// `PRAGMA synchronous` value used inside bulk and per-file write batches.
+    pub fn write_pragma(self) -> &'static str {
+        match self {
+            Self::Strict => "FULL",
+            Self::Balanced => "NORMAL",
+            Self::FastUnsafe => "OFF",
+        }
+    }
+
+    /// Resolve from `ASGREP_DURABILITY`, falling back to the safe default.
+    /// An unrecognized value must not silently downgrade durability.
+    pub fn from_env() -> Self {
+        std::env::var("ASGREP_DURABILITY")
+            .ok()
+            .and_then(|value| Self::parse(&value))
+            .unwrap_or_default()
+    }
+}
+
 pub const INDEX_DIR: &str = ".asgrep";
 pub const INDEX_DB: &str = "index.db";
+/// Directory holding candidate and retained index generations (jpbq).
+pub const GENERATIONS_DIR: &str = "generations";
+/// Directory holding the active-generation pointer (jpbq).
+pub const MANIFESTS_DIR: &str = "manifests";
+/// Atomically replaced pointer to the active generation (jpbq).
+pub const ACTIVE_MANIFEST: &str = "active.json";
+
+/// Pointer to the generation currently serving queries (jpbq).
+///
+/// A full rebuild used to clear and reconstruct the live database in place, so
+/// a crash mid-rebuild destroyed the only good index. A rebuild now lands in a
+/// new generation directory and becomes active only by replacing this pointer,
+/// which is a single atomic rename.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ActiveManifest {
+    /// Generation directory name, e.g. `000184`.
+    pub generation: String,
+    /// Schema version the generation was built with.
+    pub schema_version: i64,
+    /// Previous generation, retained for rollback until this one is proven.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous: Option<String>,
+    /// Unix seconds when this generation was activated.
+    pub activated_at: i64,
+}
+
+/// Root of the generation layout for an index directory (jpbq).
+pub fn generations_root(index_dir: &Path) -> PathBuf {
+    index_dir.join(GENERATIONS_DIR)
+}
+
+/// Path of the active-generation manifest (jpbq).
+pub fn active_manifest_path(index_dir: &Path) -> PathBuf {
+    index_dir.join(MANIFESTS_DIR).join(ACTIVE_MANIFEST)
+}
+
+/// Read the active manifest, if this index uses the generation layout (jpbq).
+pub fn read_active_manifest(index_dir: &Path) -> Option<ActiveManifest> {
+    let raw = std::fs::read_to_string(active_manifest_path(index_dir)).ok()?;
+    serde_json::from_str(&raw).ok()
+}
+
+/// Replace the active-generation pointer atomically and durably (jpbq).
+///
+/// Protocol matches `semantic_ivf` publish: write a unique temp inode → fsync
+/// data → rename over the target → fsync the parent directory. A bare
+/// `write` + `rename` only makes the directory entry atomic; without fsync the
+/// bytes may still be in the page cache when the pointer moves, so a power
+/// loss can leave `active.json` empty or torn -- undoing the crash-safety
+/// property of generation swaps.
+pub fn write_active_manifest(index_dir: &Path, manifest: &ActiveManifest) -> crate::Result<()> {
+    use std::fs::{File, OpenOptions};
+    use std::io::Write;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+    let path = active_manifest_path(index_dir);
+    let parent = path.parent().expect("manifest path has a parent");
+    std::fs::create_dir_all(parent).map_err(|e| {
+        crate::StoreError::Other(format!("create manifest dir {}: {e}", parent.display()))
+    })?;
+    let body = serde_json::to_string_pretty(manifest)
+        .map_err(|e| crate::StoreError::Other(format!("serialize active manifest: {e}")))?;
+    let sequence = TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    let temp = parent.join(format!(
+        ".active.{}.{}.tmp",
+        std::process::id(),
+        sequence
+    ));
+    let result = (|| -> crate::Result<()> {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp)
+            .map_err(|e| {
+                crate::StoreError::Other(format!("create {}: {e}", temp.display()))
+            })?;
+        file.write_all(body.as_bytes()).map_err(|e| {
+            crate::StoreError::Other(format!("write {}: {e}", temp.display()))
+        })?;
+        file.sync_all().map_err(|e| {
+            crate::StoreError::Other(format!("fsync {}: {e}", temp.display()))
+        })?;
+        // Close before rename so Windows can replace if the target is open.
+        drop(file);
+        std::fs::rename(&temp, &path).map_err(|e| {
+            crate::StoreError::Other(format!("activate {}: {e}", path.display()))
+        })?;
+        #[cfg(unix)]
+        {
+            File::open(parent)
+                .and_then(|dir| dir.sync_all())
+                .map_err(|e| {
+                    crate::StoreError::Other(format!(
+                        "fsync parent {}: {e}",
+                        parent.display()
+                    ))
+                })?;
+        }
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temp);
+    }
+    result
+}
+
+/// Database path for a named generation (jpbq).
+pub fn generation_db_path(index_dir: &Path, generation: &str) -> PathBuf {
+    generations_root(index_dir).join(generation).join(INDEX_DB)
+}
+
+/// Next generation directory name after the current one (jpbq).
+pub fn next_generation_name(current: Option<&str>) -> String {
+    let next = current
+        .and_then(|name| name.parse::<u64>().ok())
+        .unwrap_or(0)
+        .saturating_add(1);
+    format!("{next:06}")
+}
 fn as_db_path(path: PathBuf) -> PathBuf {
     if path.extension().is_some_and(|e| e == "db") {
         path
@@ -32,7 +221,17 @@ pub fn try_index_db_path(root: &Path, index_path: Option<&Path>) -> crate::Resul
     if let Ok(env_path) = std::env::var("ASGREP_INDEX_PATH") {
         return Ok(as_db_path(PathBuf::from(env_path)));
     }
-    let local = root.join(INDEX_DIR).join(INDEX_DB);
+    let index_dir = root.join(INDEX_DIR);
+    // jpbq: an active-generation pointer wins over the legacy flat layout.
+    if let Some(manifest) = read_active_manifest(&index_dir) {
+        let candidate = generation_db_path(&index_dir, &manifest.generation);
+        if candidate.exists() {
+            return Ok(candidate);
+        }
+        // A pointer to a missing generation is a corrupt activation; fall
+        // through to the legacy path rather than failing every command.
+    }
+    let local = index_dir.join(INDEX_DB);
     if local.exists() {
         return Ok(local);
     }
@@ -89,4 +288,6 @@ pub struct IndexStatus {
     pub embed_cache_hits: u64,
     pub embed_cache_misses: u64,
     pub semantic_ivf_present: bool,
+    /// Active write-durability profile (0obi).
+    pub durability: String,
 }

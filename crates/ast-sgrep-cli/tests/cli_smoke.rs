@@ -64,9 +64,9 @@ fn cli_smoke() {
         "compact output has no pretty-print decoration"
     );
     let compact: serde_json::Value = serde_json::from_slice(&compact.stdout).unwrap();
-    assert_eq!(compact["b"][0], 8);
-    assert_eq!(compact["b"][1], 10);
-    assert!(compact["b"][2].as_u64().unwrap() <= 10);
+    assert_eq!(compact["zb"][0], 8);
+    assert_eq!(compact["zb"][1], 10);
+    assert!(compact["zb"][2].as_u64().unwrap() <= 10);
     assert!(!compact["h"].as_array().unwrap().is_empty());
     assert!(compact["p"].is_object());
 

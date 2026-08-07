@@ -10,6 +10,15 @@ pub enum HitSignal {
 impl HitSignal {
     pub const ALL: [Self; 3] = [Self::Exact, Self::Structural, Self::Semantic];
 
+    /// Evidence strength ordering: exact beats structural beats semantic (vh65).
+    pub fn rank(self) -> u8 {
+        match self {
+            Self::Exact => 2,
+            Self::Structural => 1,
+            Self::Semantic => 0,
+        }
+    }
+
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Exact => "exact",
@@ -74,6 +83,23 @@ pub struct SearchHit {
     pub signal: HitSignal,
     pub contributors: Vec<HitKind>,
     pub margin: f64,
+    /// Calibrated-independent relevance estimate, deliberately separate from
+    /// `score` (vh65).
+    ///
+    /// `score` orders results; `confidence` states how much to trust the top
+    /// one. A single weak lexical hit and a hit confirmed by three channels can
+    /// rank adjacently, and only `confidence` can say they are not equally
+    /// trustworthy. This is a documented heuristic over channel agreement and
+    /// signal strength, NOT a probability calibrated against held-out data --
+    /// calibration is separate work and is not claimed here.
+    #[serde(default)]
+    pub confidence: f64,
+    /// How a graph edge was resolved, when this hit came from one (dvc4).
+    ///
+    /// `None` for non-graph hits. A hit whose resolution is not precise must
+    /// never be rendered as an exact call edge.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolution: Option<crate::resolution::Resolution>,
     pub excerpt: String,
 }
 #[derive(serde::Deserialize)]
@@ -93,6 +119,10 @@ struct SearchHitWire {
     contributors: Vec<HitKind>,
     #[serde(default)]
     margin: f64,
+    /// Preserved on JSON round-trip so agents that cache/re-parse hits keep trust.
+    /// Non-finite wire values sanitize to 0.0 (same policy as `margin`).
+    #[serde(default)]
+    confidence: f64,
     excerpt: String,
 }
 impl<'de> serde::Deserialize<'de> for SearchHit {
@@ -115,11 +145,18 @@ impl<'de> serde::Deserialize<'de> for SearchHit {
             score: wire.score,
             signal: wire.kind.signal(),
             contributors: vec![wire.kind],
+            confidence: if wire.confidence.is_finite() {
+                wire.confidence
+            } else {
+                0.0
+            },
             margin: if wire.margin.is_finite() {
                 wire.margin.max(0.0)
             } else {
                 0.0
             },
+            // dvc4: resolution is engine-derived, never trusted from the wire.
+            resolution: None,
             excerpt: wire.excerpt,
         })
     }
@@ -157,6 +194,8 @@ impl SearchHit {
             signal: kind.signal(),
             contributors: vec![kind],
             margin: 0.0,
+            confidence: 0.0,
+            resolution: None,
             excerpt,
         }
     }
@@ -330,6 +369,68 @@ impl SearchOptions {
         )
     }
 }
+/// Identity of the index snapshot a response was built from (d3l5).
+///
+/// The hard invariant: a `SearchResponse` may carry evidence from exactly one
+/// index generation. Without this, a multi-pass search running in autocommit
+/// could take its definition from generation `g`, its callers from `g + 1`, and
+/// its semantic sidecar from `g - 1`, and report the mixture as one coherent
+/// answer.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct SnapshotStamp {
+    /// Monotonic index generation every indexing transaction bumps.
+    pub generation: i64,
+    /// Database schema version the response was read under.
+    pub schema_version: i64,
+    /// Highest indexed file mtime: what the index believes about the worktree.
+    pub worktree_revision: i64,
+    /// Resolved git HEAD, when the root is a git worktree.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub git_head: Option<String>,
+    /// Semantic sidecar fingerprint, when a semantic sidecar was consulted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub semantic_manifest: Option<String>,
+    /// Channels that could not run, or ran against a mismatched sidecar.
+    /// A degraded channel must be visible, never silently dropped.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub degraded_channels: Vec<DegradedChannel>,
+}
+
+/// One learned association applied to a query (ufk7).
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct QueryExpansion {
+    pub term: String,
+    pub related: String,
+    /// Co-occurrence count behind the association: the checkable number.
+    pub support: u32,
+    /// Human-readable justification.
+    pub because: String,
+}
+
+/// A channel that failed or was skipped, and why (d3l5).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct DegradedChannel {
+    pub channel: String,
+    pub reason: String,
+}
+
+/// What the planner decided to run, and where it stopped (ocx8).
+///
+/// A staged planner that silently skips work is indistinguishable from a buggy
+/// one. Recording the executed stages and the stop condition makes the
+/// decision auditable, and makes "why was this query slow" answerable.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct PlanTrace {
+    /// Stages actually executed, in order.
+    pub stages: Vec<String>,
+    /// Why the planner stopped before the remaining stages, if it did.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stopped_because: Option<String>,
+    /// Stages deliberately not run.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub skipped: Vec<String>,
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SearchResponse {
     pub query: String,
@@ -346,6 +447,19 @@ pub struct SearchResponse {
     pub returned_excerpt_bytes: u64,
     #[serde(default)]
     pub prevented_read_bytes: u64,
+    /// Index snapshot this response was built from (d3l5).
+    #[serde(default)]
+    pub snapshot: SnapshotStamp,
+    /// What the planner ran and why it stopped (ocx8).
+    #[serde(default)]
+    pub plan: PlanTrace,
+    /// Repository associations that widened this query (ufk7).
+    ///
+    /// Query expansion changes what the user asked for, so the engine states
+    /// which terms it added and on what evidence rather than silently
+    /// broadening the search.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub query_expansions: Vec<QueryExpansion>,
 }
 pub fn format_hit_line(hit: &SearchHit) -> String {
     let f = &hit.file;
@@ -443,12 +557,27 @@ pub fn assign_signal_margins(hits: &mut [SearchHit]) {
     }
 }
 
+/// Assign heuristic confidence on every hit (vh65 / pass5).
+///
+/// Call after channel merge and after [`assign_signal_margins`]: margins rewrite
+/// display `signal` from `kind`, but confidence must reflect contributor
+/// agreement and the strongest observed channel, not the post-margin display
+/// field alone.
+pub fn assign_hit_confidence(hits: &mut [SearchHit]) {
+    for hit in hits.iter_mut() {
+        hit.confidence = estimate_confidence(hit);
+    }
+}
+
 pub fn dedup_hits(hits: Vec<SearchHit>) -> Vec<SearchHit> {
     let mut best: Vec<SearchHit> = Vec::with_capacity(hits.len());
     let mut positions: std::collections::HashMap<_, usize> = std::collections::HashMap::new();
     for hit in hits {
+        // vh65: identity is the LOCATION. Channel kind is evidence about a
+        // location, not part of what a location is -- keying on it let one
+        // physical span survive three times as three near-identical rows with
+        // three opaque scores.
         let key = (
-            hit.kind.as_str(),
             hit.file.clone(),
             hit.line_start,
             hit.line_end,
@@ -457,13 +586,211 @@ pub fn dedup_hits(hits: Vec<SearchHit>) -> Vec<SearchHit> {
             hit.callee.clone(),
         );
         if let Some(&index) = positions.get(&key) {
-            if hit.score > best[index].score {
-                best[index] = hit;
-            }
+            merge_channel_evidence(&mut best[index], hit);
         } else {
             positions.insert(key, best.len());
             best.push(hit);
         }
     }
+    assign_hit_confidence(&mut best);
     best
+}
+
+/// Fold a duplicate observation of the same location into the kept hit (vh65).
+///
+/// Best score wins the ordering, exactly as before, so ranking behavior is
+/// preserved; what changes is that the losing row's channel is retained as
+/// evidence instead of being dropped or duplicated.
+fn merge_channel_evidence(kept: &mut SearchHit, other: SearchHit) {
+    for contributor in other
+        .contributors
+        .iter()
+        .copied()
+        .chain(std::iter::once(other.kind))
+    {
+        if !kept.contributors.contains(&contributor) {
+            kept.contributors.push(contributor);
+        }
+    }
+    // Strongest signal observed for this location wins.
+    if other.signal.rank() > kept.signal.rank() {
+        kept.signal = other.signal;
+    }
+    if other.score > kept.score {
+        // Preserve the previous best-score semantics: the higher-scoring row
+        // supplies score, kind, and excerpt.
+        kept.score = other.score;
+        kept.kind = other.kind;
+        if !other.excerpt.is_empty() {
+            kept.excerpt = other.excerpt;
+        }
+        kept.margin = other.margin;
+    } else if kept.excerpt.is_empty() && !other.excerpt.is_empty() {
+        kept.excerpt = other.excerpt;
+    }
+    // Fill in identity details the kept row happened to lack.
+    kept.symbol = kept.symbol.take().or(other.symbol);
+    kept.caller = kept.caller.take().or(other.caller);
+    kept.callee = kept.callee.take().or(other.callee);
+    kept.language = kept.language.take().or(other.language);
+}
+
+/// Heuristic confidence from channel agreement and signal strength (vh65).
+///
+/// Deliberately simple and inspectable. Exact signals start high; semantic-only
+/// evidence starts low; each additional independent channel that agrees adds a
+/// bounded increment. This is not a calibrated probability and must not be
+/// reported as one.
+///
+/// Base strength is the **strongest contributor channel** (and `kind`), not
+/// solely `hit.signal`. `assign_signal_margins` rewrites display `signal` from
+/// `kind` for within-channel margins; confidence must not collapse to that
+/// display field after multi-channel merges (pass5).
+fn estimate_confidence(hit: &SearchHit) -> f64 {
+    let strongest = hit
+        .contributors
+        .iter()
+        .map(|kind| kind.signal())
+        .chain(std::iter::once(hit.kind.signal()))
+        .max_by_key(|signal| signal.rank())
+        .unwrap_or(hit.signal);
+    let base = match strongest {
+        HitSignal::Exact => 0.75,
+        HitSignal::Structural => 0.60,
+        HitSignal::Semantic => 0.35,
+    };
+    let agreement = hit.contributors.len().saturating_sub(1).min(3) as f64 * 0.08;
+    (base + agreement).clamp(0.0, 0.99)
+}
+
+/// Human- and agent-readable reasons this location was returned (vh65).
+///
+/// Derived from the merged evidence, so it cannot drift from the evidence that
+/// actually produced the hit.
+pub fn hit_why(hit: &SearchHit) -> Vec<String> {
+    let mut why = Vec::new();
+    for contributor in &hit.contributors {
+        why.push(match contributor {
+            HitKind::Asgrep => "exact_text".to_owned(),
+            HitKind::Def => "exact_symbol".to_owned(),
+            HitKind::Caller => match &hit.caller {
+                Some(caller) => format!("called_by:{caller}"),
+                None => "caller_edge".to_owned(),
+            },
+            HitKind::Graph => "graph_edge".to_owned(),
+            HitKind::Anchor => "anchor".to_owned(),
+            HitKind::Import => "import_edge".to_owned(),
+            HitKind::Pattern => "structural_pattern".to_owned(),
+            HitKind::Embed => "semantic_similarity".to_owned(),
+        });
+    }
+    why.dedup();
+    why
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn hit(kind: HitKind, file: &str, line: u32, score: f64) -> SearchHit {
+        SearchHit {
+            kind,
+            file: file.into(),
+            line_start: line,
+            line_end: line,
+            symbol: None,
+            caller: None,
+            callee: None,
+            language: None,
+            score,
+            signal: kind.signal(),
+            contributors: vec![kind],
+            margin: 0.0,
+            confidence: 0.0,
+            excerpt: String::new(),
+        }
+    }
+
+    #[test]
+    fn confidence_uses_strongest_contributor_not_display_signal() {
+        // Higher-scoring Embed wins kind/score; lower-scoring Asgrep still contributes
+        // exact evidence. After margins rewrite display signal to Semantic, confidence
+        // must keep Exact base + one agreement step (0.75 + 0.08).
+        let mut merged = dedup_hits(vec![
+            hit(HitKind::Embed, "a.rs", 1, 0.9),
+            hit(HitKind::Asgrep, "a.rs", 1, 0.4),
+        ]);
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].kind, HitKind::Embed);
+        assert!(merged[0].contributors.contains(&HitKind::Asgrep));
+        assert!(merged[0].contributors.contains(&HitKind::Embed));
+
+        assign_signal_margins(&mut merged);
+        assert_eq!(merged[0].signal, HitSignal::Semantic);
+        // Re-assign as finish_response does after margins (pass5).
+        assign_hit_confidence(&mut merged);
+        let expected = 0.75 + 0.08;
+        assert!(
+            (merged[0].confidence - expected).abs() < 1e-12,
+            "confidence={} expected {expected}",
+            merged[0].confidence
+        );
+    }
+
+    #[test]
+    fn semantic_only_confidence_is_nonzero_without_dedup() {
+        // search_semantic uses dedup=false; confidence must still be populated.
+        let mut hits = vec![hit(HitKind::Embed, "sem.rs", 3, 2.5)];
+        assign_signal_margins(&mut hits);
+        assign_hit_confidence(&mut hits);
+        assert!((hits[0].confidence - 0.35).abs() < 1e-12);
+        assert!(hits[0].confidence > 0.0);
+    }
+
+    #[test]
+    fn empty_hits_confidence_assign_is_noop() {
+        let mut hits: Vec<SearchHit> = vec![];
+        assign_hit_confidence(&mut hits);
+        assert!(hits.is_empty());
+    }
+
+    #[test]
+    fn search_hit_json_round_trip_preserves_confidence() {
+        // d2a1.8: custom Deserialize used SearchHitWire without confidence, so
+        // round-trip always forced 0.0 even when finish_response had assigned it.
+        let mut original = hit(HitKind::Asgrep, "lib.rs", 10, 1.0);
+        original.confidence = 0.83;
+        original.excerpt = "fn foo() {}".into();
+        original.symbol = Some("foo".into());
+
+        let json = serde_json::to_string(&original).expect("serialize");
+        assert!(
+            json.contains("\"confidence\""),
+            "serialized JSON must emit confidence: {json}"
+        );
+        let back: SearchHit = serde_json::from_str(&json).expect("deserialize");
+        assert!(
+            (back.confidence - 0.83).abs() < 1e-12,
+            "round-trip confidence={} expected 0.83",
+            back.confidence
+        );
+        assert_eq!(back.file, "lib.rs");
+        assert_eq!(back.kind, HitKind::Asgrep);
+        assert_eq!(back.symbol.as_deref(), Some("foo"));
+    }
+
+    #[test]
+    fn search_hit_json_missing_confidence_defaults_zero() {
+        let json = r#"{
+            "kind": "embed",
+            "file": "a.rs",
+            "line_start": 1,
+            "line_end": 1,
+            "score": 0.5,
+            "excerpt": "x"
+        }"#;
+        let hit: SearchHit = serde_json::from_str(json).expect("deserialize without confidence");
+        assert_eq!(hit.confidence, 0.0);
+        assert_eq!(hit.kind, HitKind::Embed);
+    }
 }

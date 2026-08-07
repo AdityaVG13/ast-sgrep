@@ -55,13 +55,34 @@ fn run_process() -> ! {
         Ok(cli) => cli,
         Err(error) => {
             let exit_code = if error.use_stderr() { 1 } else { 0 };
-            if exit_code == 1 && raw_machine_output_requested(&raw_args) {
-                print_machine_failure(
-                    raw_command_name(&raw_args),
-                    "usage",
-                    exit_code,
-                    &error.to_string(),
+            let mut msg = error.to_string();
+            // Intent recovery: common agent mistakes clap does not map well.
+            if msg.contains("'--colour'") || msg.contains("\"--colour\"") {
+                msg.push_str(
+                    "\nTip: asgrep has no --colour; use NO_COLOR=1 or default monochrome. Machine data: asgrep --json …",
                 );
+            }
+            if msg.contains("'--color'") || msg.contains("\"--color\"") {
+                msg.push_str(
+                    "\nTip: asgrep has no --color flag; set NO_COLOR=1 to force plain text. Machine data: asgrep --json …",
+                );
+            }
+            let command = raw_command_name(&raw_args);
+            msg = agent::augment_clap_usage_message(&msg, command);
+            let augmented = msg != error.to_string();
+            if exit_code == 1 && raw_machine_output_requested(&raw_args) {
+                print_machine_failure(command, "usage", exit_code, &msg);
+            } else if exit_code == 1 {
+                // Always teach: triad footer on every usage error (not only when we rewrote the body).
+                if augmented {
+                    eprint!("{msg}");
+                    if !msg.ends_with('\n') {
+                        eprintln!();
+                    }
+                } else {
+                    let _ = error.print();
+                }
+                agent::print_agent_help_footer();
             } else {
                 let _ = error.print();
             }
@@ -95,20 +116,17 @@ pub fn run() -> anyhow::Result<()> {
 
 fn run_cli(cli: &Cli) -> anyhow::Result<()> {
     if cli.robot_help {
-        agent::print_robot_guide();
-        return Ok(());
+        return agent::emit_robot_guide(cli);
     }
+    // --format is search-only (implies machine JSON for search envelopes).
+    // Index/reindex/bench accept --json for machine output; do not accept and
+    // silently ignore --format (d2a1.12).
     if cli.active_tuning().format.is_some()
         && !matches!(
             cli.command.as_ref(),
             None
                 | Some(
-                    Commands::Search(_)
-                        | Commands::Keyword(_)
-                        | Commands::Semantic(_)
-                        | Commands::Index(_)
-                        | Commands::Reindex(_)
-                        | Commands::Bench { .. }
+                    Commands::Search(_) | Commands::Keyword(_) | Commands::Semantic(_)
                 )
         )
     {
@@ -199,23 +217,39 @@ fn codemode_session_config(cli: &Cli, root: PathBuf) -> ast_sgrep_codemode::Sess
     ast_sgrep_codemode::SessionConfig {
         root,
         index_path: cli.index_path.clone(),
-        limit: cli
-            .limit
-            .unwrap_or_else(ast_sgrep_core::SearchOptions::default_limit),
+        limit: ast_sgrep_core::clamp_output_limit(
+            cli.limit,
+            ast_sgrep_core::SearchOptions::default_limit(),
+        ),
         use_embed: !cli.active_tuning().no_embed,
         ..ast_sgrep_codemode::SessionConfig::default()
     }
 }
 
 fn run_codemode_batch(cli: &Cli, requests: &Path) -> anyhow::Result<()> {
+    // Cap batch payload (file *and* stdin) so a huge pipe cannot OOM the process (d2a1.9).
+    use machine::{read_utf8_capped, MAX_BATCH_REQUEST_BYTES};
     let raw = if requests.as_os_str() == "-" {
-        let mut buf = String::new();
-        std::io::Read::read_to_string(&mut std::io::stdin(), &mut buf)
-            .context("read batch requests from stdin")?;
-        buf
+        read_utf8_capped(std::io::stdin().lock(), MAX_BATCH_REQUEST_BYTES).context(
+            "read batch requests from stdin (payload exceeds max or I/O error)",
+        )?
     } else {
-        std::fs::read_to_string(requests)
-            .with_context(|| format!("read batch requests {}", requests.display()))?
+        let meta = std::fs::metadata(requests)
+            .with_context(|| format!("stat batch requests {}", requests.display()))?;
+        anyhow::ensure!(
+            meta.len() <= MAX_BATCH_REQUEST_BYTES,
+            "batch requests file exceeds max {} bytes",
+            MAX_BATCH_REQUEST_BYTES
+        );
+        // Re-cap on the read path: file may grow between stat and open (same as io_bounds).
+        let file = std::fs::File::open(requests)
+            .with_context(|| format!("open batch requests {}", requests.display()))?;
+        read_utf8_capped(file, MAX_BATCH_REQUEST_BYTES).with_context(|| {
+            format!(
+                "read batch requests {} (payload exceeds max or I/O error)",
+                requests.display()
+            )
+        })?
     };
     let mut request: ast_sgrep_codemode::BatchRequest =
         serde_json::from_str(&raw).context("parse batch requests JSON")?;
@@ -237,9 +271,10 @@ fn run_codemode_batch(cli: &Cli, requests: &Path) -> anyhow::Result<()> {
             .clone()
             .unwrap_or_else(|| PathBuf::from(".")),
         index_path: request.index_path.clone(),
-        limit: request
-            .limit
-            .unwrap_or_else(ast_sgrep_core::SearchOptions::default_limit),
+        limit: ast_sgrep_core::clamp_output_limit(
+            request.limit,
+            ast_sgrep_core::SearchOptions::default_limit(),
+        ),
         use_embed: request.use_embed.unwrap_or(true),
         ..ast_sgrep_codemode::SessionConfig::default()
     };
@@ -261,7 +296,8 @@ fn run_codemode_batch(cli: &Cli, requests: &Path) -> anyhow::Result<()> {
         "results": response.results,
     });
     // Compact JSON: Code Mode waves are hot; pretty-print is pure serial waste.
-    println!("{}", serde_json::to_string(&envelope)?);
+    // Broken-pipe safe: agents often pipe batch JSON through head/jq (d2a1.9).
+    machine::write_stdout_line(&serde_json::to_string(&envelope)?)?;
     Ok(())
 }
 

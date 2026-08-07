@@ -24,6 +24,8 @@ fn sample() -> SearchResponse {
                 signal: HitSignal::Structural,
                 contributors: vec![HitKind::Def, HitKind::Embed],
                 margin: 0.0,
+                confidence: 0.0,
+                resolution: None,
                 excerpt: "fn auth_refresh() {\n    renew_token();\n    log();\n}".into(),
             },
             SearchHit {
@@ -39,6 +41,8 @@ fn sample() -> SearchResponse {
                 signal: HitSignal::Structural,
                 contributors: vec![HitKind::Caller],
                 margin: 0.0,
+                confidence: 0.0,
+                resolution: None,
                 excerpt: format!("   \n{long}"),
             },
         ],
@@ -46,6 +50,9 @@ fn sample() -> SearchResponse {
         read_bytes_estimate: 1_000,
         returned_excerpt_bytes: 350,
         prevented_read_bytes: 650,
+        snapshot: Default::default(),
+        plan: Default::default(),
+        query_expansions: Vec::new(),
     }
 }
 #[test]
@@ -138,8 +145,8 @@ fn compact_hits_preserve_ranked_identity_and_enforce_budgets() {
         response_identities(&response)
     );
     assert_eq!(compact["p"].as_object().expect("paths").len(), 2);
-    assert_eq!(compact["b"], serde_json::json!([7, 10, 10]));
-    assert_eq!(compact["t"], 2);
+    assert_eq!(compact["zb"], serde_json::json!([7, 10, 10]));
+    assert_eq!(compact["zt"], 2);
     for row in compact["h"].as_array().expect("hits") {
         assert!(row[4].as_str().expect("snippet").len() <= 7);
         assert!(!row[0].as_str().expect("id").contains("src/"));
@@ -172,8 +179,8 @@ fn compact_utf8_budgets_never_split_codepoints() {
         },
     );
     assert_eq!(compact["h"][0][4], "");
-    assert_eq!(compact["b"][2], 0);
-    assert_eq!(compact["t"], 1);
+    assert_eq!(compact["zb"][2], 0);
+    assert_eq!(compact["zt"], 1);
 }
 
 #[test]
@@ -267,4 +274,252 @@ fn gitlab_projection_documents_absent_repository_context() {
         .iter()
         .all(|hit| hit["meta"]["contributors"].is_array()));
     assert!(hits.iter().all(|hit| hit["meta"]["margin"] == 0.0));
+}
+
+/// kxmc: the MCP surface moved from pretty `AgentCapsule` to minified `Compact`.
+/// This pins the saving so a future edit cannot quietly give it back.
+///
+/// Run with `--nocapture` to print the measured byte counts.
+#[test]
+fn compact_minified_is_much_smaller_than_pretty_capsule() {
+    let response = many_file_sample();
+    let old = serde_json::to_string_pretty(&format_response_with(
+        &response,
+        OutputFormat::AgentCapsule,
+        0,
+    ))
+    .expect("capsule serializes");
+    let new = serde_json::to_string(&format_response_with_budget(
+        &response,
+        OutputFormat::Compact,
+        0,
+        CompactBudget::default(),
+    ))
+    .expect("compact serializes");
+
+    let saved = 100 - (new.len() * 100 / old.len());
+    println!("pretty capsule = {} bytes", old.len());
+    println!("minified compact = {} bytes", new.len());
+    println!("saved = {saved}%");
+
+    assert!(
+        new.len() * 2 < old.len(),
+        "compact must be under half of pretty capsule: {} vs {}",
+        new.len(),
+        old.len()
+    );
+    // No path may be repeated per hit the way `file` plus `ref` used to be.
+    // With root folding (am4a) a path is stored as root plus suffix, so assert
+    // on the resolved paths rather than raw substrings.
+    let compact: serde_json::Value = serde_json::from_str(&new).expect("compact parses");
+    for (_, path) in ast_sgrep_plugins::resolve_compact_paths(&compact) {
+        assert!(
+            new.matches(&path).count() <= 1,
+            "path {path} emitted more than once"
+        );
+        let name = path.rsplit('/').next().expect("file name");
+        assert_eq!(new.matches(name).count(), 1, "{name} emitted more than once");
+    }
+}
+
+/// Ten hits over three files: the shape where per-hit key repetition dominates.
+fn many_file_sample() -> SearchResponse {
+    let files = [
+        "crates/ast-sgrep-core/src/search/mod.rs",
+        "crates/ast-sgrep-core/src/search/types.rs",
+        "crates/ast-sgrep-core/src/store/sqlite.rs",
+    ];
+    let hits = (0..10)
+        .map(|index| SearchHit {
+            kind: HitKind::Def,
+            file: files[index % files.len()].into(),
+            line_start: index as u32 * 10 + 1,
+            line_end: index as u32 * 10 + 9,
+            symbol: Some(format!("handler_{index}")),
+            caller: None,
+            callee: None,
+            language: Some("rust".into()),
+            score: 9.0 - index as f64,
+            signal: HitSignal::Exact,
+            contributors: vec![HitKind::Def],
+            margin: 0.1,
+            confidence: 0.0,
+            resolution: None,
+            excerpt: format!("fn handler_{index}(session: &Session) -> Result<Token> {{\n    rotate(session)\n}}"),
+        })
+        .collect();
+    SearchResponse {
+        query: "session rotate".into(),
+        limit: 10,
+        hits,
+        counts: Vec::new(),
+        read_bytes_estimate: 4_000,
+        returned_excerpt_bytes: 800,
+        prevented_read_bytes: 3_200,
+        snapshot: Default::default(),
+        plan: Default::default(),
+        query_expansions: Vec::new(),
+    }
+}
+
+/// am4a: shared directory prefixes are emitted once in `r`, and every folded
+/// entry reconstructs its original path exactly.
+#[test]
+fn compact_path_table_folds_shared_roots_and_round_trips() {
+    let response = many_file_sample();
+    let compact = format_response_with_budget(
+        &response,
+        OutputFormat::Compact,
+        0,
+        CompactBudget::default(),
+    );
+    let text = serde_json::to_string(&compact).expect("compact serializes");
+
+    let roots = compact["r"].as_array().expect("root table present");
+    assert_eq!(
+        roots.len(),
+        1,
+        "the byte-optimal root set is the single shared prefix: {roots:?}"
+    );
+    assert_eq!(roots[0], "crates/ast-sgrep-core/src/");
+    // The shared prefix now appears once for the whole envelope.
+    assert_eq!(text.matches("crates/ast-sgrep-core/src/").count(), 1);
+
+    let resolved: std::collections::BTreeMap<_, _> =
+        ast_sgrep_plugins::resolve_compact_paths(&compact)
+            .into_iter()
+            .collect();
+    let expected: std::collections::BTreeSet<_> =
+        response.hits.iter().map(|hit| hit.file.clone()).collect();
+    let actual: std::collections::BTreeSet<_> = resolved.values().cloned().collect();
+    assert_eq!(actual, expected, "round trip lost or altered a path");
+
+    // Every hit id still resolves through the table.
+    for hit in compact["h"].as_array().expect("hits") {
+        let id = hit[0].as_str().expect("id");
+        let (path_id, _) = id.rsplit_once(':').expect("id shape");
+        assert!(resolved.contains_key(path_id), "unresolved id {id}");
+    }
+}
+
+/// am4a: folding must never inflate. Paths with nothing in common stay
+/// verbatim and no root table is emitted.
+#[test]
+fn compact_path_table_skips_folding_when_it_would_not_help() {
+    let mut response = many_file_sample();
+    for (index, hit) in response.hits.iter_mut().enumerate() {
+        hit.file = format!("{index}.rs");
+    }
+    let compact = format_response_with_budget(
+        &response,
+        OutputFormat::Compact,
+        0,
+        CompactBudget::default(),
+    );
+    assert!(compact.get("r").is_none(), "no root table expected");
+    for entry in compact["p"].as_object().expect("path table").values() {
+        assert!(entry.is_string(), "unfolded entries stay plain strings");
+    }
+    let resolved = ast_sgrep_plugins::resolve_compact_paths(&compact);
+    assert_eq!(resolved.len(), response.hits.len().min(10));
+}
+
+/// 6a3i: the four miss classes demand four different next moves, so they must
+/// be distinguishable, and each carries exactly one suggestion.
+#[test]
+fn miss_envelope_classifies_and_suggests_one_next_step() {
+    use ast_sgrep_plugins::{to_compact_miss_json, MissContext, MissReason};
+
+    let empty = MissContext {
+        tried: vec!["lexical".into()],
+        indexed_files: Some(0),
+        ..MissContext::default()
+    };
+    assert_eq!(empty.reason(), MissReason::EmptyIndex);
+
+    let filtered = MissContext {
+        tried: vec!["lexical".into()],
+        scope: vec![("lang".into(), "rust".into())],
+        indexed_files: Some(120),
+        ..MissContext::default()
+    };
+    assert_eq!(filtered.reason(), MissReason::FiltersExcludedAll);
+
+    let down = MissContext {
+        tried: vec!["semantic".into()],
+        unavailable: vec!["semantic".into()],
+        indexed_files: Some(120),
+        ..MissContext::default()
+    };
+    assert_eq!(down.reason(), MissReason::ChannelUnavailable);
+
+    let absent = MissContext {
+        tried: vec!["lexical".into()],
+        indexed_files: Some(120),
+        ..MissContext::default()
+    };
+    assert_eq!(absent.reason(), MissReason::NoMatch);
+
+    // An empty index explains a filtered miss too: the most fundamental cause wins.
+    let both = MissContext {
+        tried: vec!["lexical".into()],
+        scope: vec![("lang".into(), "rust".into())],
+        indexed_files: Some(0),
+        ..MissContext::default()
+    };
+    assert_eq!(both.reason(), MissReason::EmptyIndex);
+
+    let envelope = to_compact_miss_json("nonexistent_symbol", &filtered);
+    assert_eq!(envelope["why"], "filters_excluded_all");
+    assert_eq!(envelope["zn"], 0);
+    assert_eq!(envelope["h"], serde_json::json!([]));
+    assert_eq!(envelope["scope"]["lang"], "rust");
+    assert_eq!(envelope["tried"], serde_json::json!(["lexical"]));
+    // Exactly one actionable step, naming the filter to drop.
+    let next = envelope["next"].as_str().expect("next step");
+    assert_eq!(next, "drop the lang filter");
+    assert!(!next.contains('\n'), "one step, not a menu");
+}
+
+/// 6a3i: a miss must be cheaper than the zero-hit output it replaces.
+#[test]
+fn miss_envelope_is_smaller_than_the_agent_zero_hit_response() {
+    use ast_sgrep_plugins::{to_compact_miss_json, MissContext};
+
+    let empty_response = SearchResponse {
+        query: "nonexistent_symbol".into(),
+        limit: 10,
+        hits: Vec::new(),
+        counts: Vec::new(),
+        read_bytes_estimate: 0,
+        returned_excerpt_bytes: 0,
+        prevented_read_bytes: 0,
+        snapshot: Default::default(),
+        plan: Default::default(),
+        query_expansions: Vec::new(),
+    };
+    let old = serde_json::to_string(&format_response_with(
+        &empty_response,
+        OutputFormat::Agent,
+        0,
+    ))
+    .expect("agent serializes");
+    let miss = serde_json::to_string(&to_compact_miss_json(
+        &empty_response.query,
+        &MissContext {
+            tried: vec!["lexical".into()],
+            indexed_files: Some(120),
+            ..MissContext::default()
+        },
+    ))
+    .expect("miss serializes");
+
+    println!("agent zero-hit = {} bytes", old.len());
+    println!("miss envelope  = {} bytes", miss.len());
+    assert!(
+        miss.len() * 2 < old.len(),
+        "miss envelope must be far cheaper: {} vs {}",
+        miss.len(),
+        old.len()
+    );
 }

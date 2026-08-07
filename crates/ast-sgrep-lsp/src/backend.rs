@@ -139,23 +139,44 @@ impl LspBackend {
         self.hit_locations(s, &format!("{prefix}{symbol}"))
     }
 
-    fn dirty_map(
-        &self,
-    ) -> anyhow::Result<std::sync::MutexGuard<'_, HashMap<String, String>>> {
-        self.dirty_buffers
-            .lock()
-            .map_err(|e| anyhow::anyhow!("dirty buffer lock poisoned: {e}"))
+    /// Recover like `index_lock`: poison must not permanently brick document
+    /// sync for the rest of the process (d2a1.15). Fail closed by clearing the
+    /// untrusted dirty set rather than reusing half-mutated entries.
+    fn dirty_map(&self) -> std::sync::MutexGuard<'_, HashMap<String, String>> {
+        match self.dirty_buffers.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => {
+                self.dirty_buffers.clear_poison();
+                let mut guard = poisoned.into_inner();
+                guard.clear();
+                guard
+            }
+        }
     }
 
     fn remember_dirty(&self, rel: &str, content: &str) -> anyhow::Result<()> {
-        self.dirty_map()?
+        self.dirty_map()
             .insert(rel.to_string(), content.to_string());
         Ok(())
     }
 
     fn forget_dirty(&self, rel: &str) -> anyhow::Result<()> {
-        self.dirty_map()?.remove(rel);
+        self.dirty_map().remove(rel);
         Ok(())
+    }
+
+    fn lock_dirty(
+        dirty: &Mutex<HashMap<String, String>>,
+    ) -> std::sync::MutexGuard<'_, HashMap<String, String>> {
+        match dirty.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => {
+                dirty.clear_poison();
+                let mut guard = poisoned.into_inner();
+                guard.clear();
+                guard
+            }
+        }
     }
 
     fn run_full_index(
@@ -164,9 +185,7 @@ impl LspBackend {
     ) -> anyhow::Result<()> {
         let mut indexer = Indexer::new(opts)?;
         indexer.index_all()?;
-        let snapshot: Vec<(String, String)> = dirty
-            .lock()
-            .map_err(|e| anyhow::anyhow!("dirty buffer lock poisoned: {e}"))?
+        let snapshot: Vec<(String, String)> = Self::lock_dirty(dirty)
             .iter()
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
@@ -187,8 +206,15 @@ impl LspBackend {
         let lock = Arc::clone(&self.index_lock);
         let dirty = Arc::clone(&self.dirty_buffers);
         std::thread::spawn(move || {
-            let Ok(_g) = lock.lock() else {
-                return;
+            // Match `with_index_lock` poison recovery: a prior panic must not
+            // permanently stall background reindex (ready stays false forever).
+            let _g = match lock.lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => {
+                    ready.store(false, Ordering::SeqCst);
+                    lock.clear_poison();
+                    poisoned.into_inner()
+                }
             };
             let ok = Self::run_full_index(opts, dirty.as_ref()).is_ok();
             ready.store(ok, Ordering::SeqCst);
@@ -458,5 +484,38 @@ impl LspBackend {
             }
             Err(anyhow::anyhow!("no symbol at cursor"))
         })
+    }
+}
+
+#[cfg(test)]
+mod dirty_lock_tests {
+    use super::LspBackend;
+    use std::panic::{catch_unwind, AssertUnwindSafe};
+    use std::sync::Arc;
+
+    #[test]
+    fn dirty_buffers_poison_recovers_fail_closed() {
+        let temp = tempfile::tempdir().unwrap();
+        let backend = LspBackend::new(temp.path().to_path_buf());
+        let dirty = Arc::clone(&backend.dirty_buffers);
+        let _ = catch_unwind(AssertUnwindSafe(|| {
+            let _guard = dirty.lock().unwrap();
+            panic!("intentional dirty lock poison");
+        }));
+        assert!(
+            backend.dirty_buffers.is_poisoned(),
+            "setup: lock should be poisoned"
+        );
+        backend
+            .remember_dirty("src/a.rs", "fn a() {}\n")
+            .expect("poison must not permanently brick dirty map");
+        assert!(
+            !backend.dirty_buffers.is_poisoned(),
+            "clear_poison after recover"
+        );
+        assert_eq!(
+            backend.dirty_map().get("src/a.rs").map(String::as_str),
+            Some("fn a() {}\n")
+        );
     }
 }

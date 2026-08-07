@@ -2,22 +2,49 @@
 //!
 //! Warm path: a single process reuses one `Searcher` across search-channel calls
 //! (invalidated on `index_repo`) so AI agents avoid per-request SQLite open cost.
+//!
+//! # Byte-stability contract (9q0l)
+//!
+//! Tool definitions enter the model prompt on every request and are the largest
+//! genuinely cacheable region this server controls. `tools/list` must therefore
+//! be byte-identical across calls and across processes for a given build:
+//!
+//! * emit tools in a fixed literal order -- never from a `HashMap` or any other
+//!   unordered collection;
+//! * keep descriptions and schemas free of per-call data (no paths, counts,
+//!   timestamps, or generation numbers);
+//! * treat any change here as a cache invalidation for every connected client.
+//!
+//! Search envelopes are deterministic for the same query and index generation.
+//! `serde_json` sorts object keys alphabetically, so key names decide wire
+//! order; per-call accounting is named `z*` to keep it in a trailing block.
+//!
+//! `tools_list_is_byte_identical_across_calls` enforces the first rule.
 
 
 #![forbid(unsafe_code)]
 
 use anyhow::Context;
 use ast_sgrep_core::{EmbedBackend, IndexOptions, Indexer, SearchOptions, Searcher};
-use ast_sgrep_plugins::{format_response_with, OutputFormat};
+use ast_sgrep_plugins::{
+    format_response_with_budget, to_budgeted_compact_json, to_compact_miss_json, CompactBudget,
+    DetailLevel, MissContext, OutputBudget, OutputFormat,
+};
 use serde::Deserialize;
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::{self, BufRead, Read, Write};
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
-const PROTOCOL_VERSION: &str = "2024-11-05";
+/// Current MCP revision this server implements (r2lu).
+const PROTOCOL_VERSION: &str = "2026-07-28";
+/// Handshake-era revision kept for existing clients (r2lu).
+const LEGACY_PROTOCOL_VERSION: &str = "2024-11-05";
+/// Revisions this server will negotiate down to, newest first.
+const SUPPORTED_PROTOCOL_VERSIONS: [&str; 2] = [PROTOCOL_VERSION, LEGACY_PROTOCOL_VERSION];
 const SERVER_NAME: &str = "ast-sgrep";
 const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
 const MAX_AGENT_LIMIT: usize = 100;
@@ -27,6 +54,18 @@ const DEFAULT_READ_CHARS: usize = 100_000;
 const MAX_READ_CHARS: usize = 1_000_000;
 const MAX_SCAN_BYTES: u64 = 64 * 1024 * 1024;
 const INDEX_REPO_DEADLINE: Duration = Duration::from_secs(600);
+/// Bound on remembered compact path-id mappings (kxmc). Compact search ids are
+/// `<path_id>:<start>-<end>`; `code_read` resolves `<path_id>` through this map,
+/// so an agent never has to reconstruct a path it was handed by id.
+const MAX_PATH_REGISTRY: usize = 4_096;
+/// Upper bound on a client-requested response token budget (m38g).
+const MAX_BUDGET_TOKENS: usize = 65_536;
+/// Bound on remembered emitted snippets (v972).
+const MAX_EMITTED_SNIPPETS: usize = 4_096;
+/// Marker replacing a snippet this session already sent for the same id and
+/// unchanged content (v972). The agent already has the body in its transcript;
+/// `code_read` returns it again if not.
+const ELIDED_SNIPPET: &str = "~";
 
 #[derive(Clone, Copy)]
 enum AgentSearchMode {
@@ -67,6 +106,13 @@ pub struct McpServer {
     searcher_cache: Mutex<SearcherCache>,
     /// Single-flight lock for index_repo (es7u).
     index_lock: Mutex<()>,
+    /// Compact path-id to project-relative path, learned from emitted search
+    /// envelopes (kxmc). Bounded; cleared when the index changes.
+    path_registry: Mutex<HashMap<String, String>>,
+    /// Hit id to hash of the snippet already sent this session (v972).
+    /// Bounded; cleared when the index changes, so an elision can never point
+    /// at content from a previous index generation.
+    emitted_snippets: Mutex<HashMap<String, u64>>,
 }
 
 impl McpServer {
@@ -90,6 +136,8 @@ impl McpServer {
             use_embed: !ast_sgrep_core::env_flag::env_flag("ASGREP_NO_EMBED"),
             searcher_cache: Mutex::new(SearcherCache::default()),
             index_lock: Mutex::new(()),
+            path_registry: Mutex::new(HashMap::new()),
+            emitted_snippets: Mutex::new(HashMap::new()),
         })
     }
 
@@ -98,6 +146,23 @@ impl McpServer {
         let mut stdout = io::stdout();
         for line in stdin.lock().lines() {
             let line = line.context("read stdin")?;
+            if line.len() > ast_sgrep_core::MAX_STDIN_LINE_BYTES {
+                // Bound JSON-RPC line memory; oversized lines are parse-error, not silent drop.
+                // JSON-RPC 2.0: parse/invalid-id errors MUST use id: null (not omit id).
+                write_resp(
+                    &mut stdout,
+                    Some(Value::Null),
+                    None,
+                    Some(json!({
+                        "code": -32600,
+                        "message": format!(
+                            "request line exceeds max {} bytes",
+                            ast_sgrep_core::MAX_STDIN_LINE_BYTES
+                        )
+                    })),
+                )?;
+                continue;
+            }
             if line.trim().is_empty() {
                 continue;
             }
@@ -106,7 +171,7 @@ impl McpServer {
                 Err(e) => {
                     write_resp(
                         &mut stdout,
-                        None,
+                        Some(Value::Null),
                         None,
                         Some(json!({"code": -32700, "message": format!("parse error: {e}")})),
                     )?;
@@ -126,7 +191,7 @@ impl McpServer {
     fn handle_request(&self, request: &JsonRpcRequest) -> Option<Result<Value, Value>> {
         request.id.as_ref()?;
         Some(match request.method.as_str() {
-            "initialize" => Ok(self.handle_initialize()),
+            "initialize" => Ok(self.handle_initialize(&request.params)),
             "tools/list" => Ok(self.handle_tools_list()),
             "tools/call" => return self.handle_tools_call(&request.params).map(Ok),
             "ping" => Ok(json!({})),
@@ -136,9 +201,19 @@ impl McpServer {
         })
     }
 
-    fn handle_initialize(&self) -> Value {
+    /// Negotiate a protocol revision (r2lu).
+    ///
+    /// A client that asks for a revision we support gets that revision back, so
+    /// handshake-era clients keep working unchanged. Anything else is answered
+    /// with our current revision, which is what the spec asks a server to do
+    /// when it cannot satisfy the request exactly.
+    fn handle_initialize(&self, params: &Value) -> Value {
+        let requested = params.get("protocolVersion").and_then(Value::as_str);
+        let negotiated = requested
+            .filter(|version| SUPPORTED_PROTOCOL_VERSIONS.contains(version))
+            .unwrap_or(PROTOCOL_VERSION);
         json!({
-            "protocolVersion": PROTOCOL_VERSION,
+            "protocolVersion": negotiated,
             "capabilities": { "tools": {} },
             "serverInfo": { "name": SERVER_NAME, "version": SERVER_VERSION },
         })
@@ -146,9 +221,35 @@ impl McpServer {
 
     fn handle_tools_list(&self) -> Value {
         let search_properties = json!({
-            "query": {"type": "string", "minLength": 1, "maxLength": 4096},
+            "query": {"type": "string", "minLength": 1, "maxLength": ast_sgrep_core::MAX_QUERY_CHARS},
             "root": {"type": "string", "description": "Project root (defaults to ASGREP_ROOT or cwd)"},
-            "limit": {"type": "integer", "minimum": 1, "maximum": MAX_AGENT_LIMIT}
+            "limit": {"type": "integer", "minimum": 1, "maximum": MAX_AGENT_LIMIT},
+            "resend_seen": {"type": "boolean", "description": "Send snippets already returned this session instead of the ~ marker. Set true only if you do not keep earlier results."},
+            "budget_tokens": {"type": "integer", "minimum": 1, "maximum": MAX_BUDGET_TOKENS, "description": "Whole-response token budget. Each hit gains a trailing detail level (metadata|signature|block|full) and omitted source is marked with a gap marker."}
+        });
+        // r2lu: a declared outputSchema lets a client parse results without
+        // reverse-engineering the compact envelope from prose.
+        let search_output_schema = json!({
+            "type": "object",
+            "properties": {
+                "v": {"type": "integer", "description": "Envelope schema version"},
+                "q": {"type": "string", "description": "Echoed query"},
+                "r": {"type": "array", "items": {"type": "string"},
+                       "description": "Shared path roots; present only when folding is smaller"},
+                "p": {"type": "object",
+                       "description": "Path id to project path, or [root_index, suffix] when folded"},
+                "h": {"type": "array", "description": "Hits as [id, kind, signal, symbol, snippet] (plus detail level under budget_tokens)",
+                       "items": {"type": "array"}},
+                "why": {"type": "string", "description": "Miss classification; present only on zero-hit responses"},
+                "tried": {"type": "array", "items": {"type": "string"}},
+                "next": {"type": "string"},
+                "zn": {"type": "integer", "description": "Hit count"},
+                "zb": {"type": "array", "items": {"type": "integer"}},
+                "zt": {"type": "integer"},
+                "ze": {"type": "integer", "description": "Snippets elided as already sent this session"},
+                "zd": {"type": "array", "items": {"type": "integer"}, "description": "[token budget, spent]"}
+            },
+            "required": ["v", "q"]
         });
         let search_tool = |name: &str, description: &str, props: Value| {
             json!({
@@ -159,16 +260,29 @@ impl McpServer {
                     "properties": props,
                     "required": ["query"],
                     "additionalProperties": false
-                }
+                },
+                "outputSchema": search_output_schema.clone()
             })
         };
+        // kxmc: the compact envelope contract lives in the tool descriptions,
+        // which clients send once and cache, instead of being re-explained in
+        // every search response.
+        const COMPACT_CONTRACT: &str = concat!(
+            " Returns a compact envelope: `p` maps path ids to project paths, and each entry of `h` is",
+            " [id, kind, signal, symbol, snippet] where id is `<path_id>:<start_line>-<end_line>`.",
+            " kind: x=asgrep d=def c=caller g=graph a=anchor i=import p=pattern e=embed.",
+            " signal: x=exact t=structural m=semantic. Pass any id straight to code_read for the full body.",
+            " A snippet of `~` means this session already sent that exact body for that id:",
+            " reuse the earlier result, or call code_read. Pass resend_seen=true to disable."
+        );
+        let describe = |summary: &str| format!("{summary}{COMPACT_CONTRACT}");
         json!({"tools": [
-            search_tool("keyword_search", "Lexical-only search (FTS/trigram). Returns abbreviated snippets and stable node IDs. Does not fuse AST or semantic channels.", search_properties.clone()),
-            search_tool("ast_search", "Native AST/pattern search (pattern: semantics). No external ast-grep process. Returns abbreviated snippets and stable node IDs.", search_properties.clone()),
-            search_tool("semantic_search", "Embedding-only search. Requires a non-empty index with semantic chunks. Returns abbreviated snippets and stable node IDs.", search_properties.clone()),
+            search_tool("keyword_search", &describe("Lexical-only search (FTS/trigram). Does not fuse AST or semantic channels."), search_properties.clone()),
+            search_tool("ast_search", &describe("Native AST/pattern search (pattern: semantics). No external ast-grep process."), search_properties.clone()),
+            search_tool("semantic_search", &describe("Embedding-only search. Requires a non-empty index with semantic chunks."), search_properties.clone()),
             // Kept for clients still calling the pre-split name; dispatches as Keyword (see dispatch_tool).
-            search_tool("code_search", "Deprecated compatibility alias for keyword_search; no automatic fusion across channels.", search_properties),
-            {"name": "code_read", "description": "Read full code for result node IDs with optional adjacent-line context. Paths are sandboxed under ASGREP_ROOT.",
+            search_tool("code_search", &describe("Deprecated compatibility alias for keyword_search; no automatic fusion across channels."), search_properties),
+            {"name": "code_read", "description": "Read full code for result node IDs with optional adjacent-line context. Accepts compact search ids (`<path_id>:<start>-<end>`) and explicit `path#Lstart-Lend` refs. Paths are sandboxed under ASGREP_ROOT.",
              "inputSchema": {"type": "object", "properties": {
                 "ids": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": MAX_READ_REFS},
                 "root": {"type": "string", "description": "Project root under the configured workspace"},
@@ -188,7 +302,16 @@ impl McpServer {
         let args = params.get("arguments").cloned().unwrap_or(json!({}));
         let result = self.dispatch_tool(name, &args);
         Some(match result {
-            Ok(text) => json!({"content": [{"type": "text", "text": text}], "isError": false}),
+            // r2lu: typed structuredContent for current clients, with the
+            // minified text kept as the fallback older clients still read.
+            Ok(text) => match serde_json::from_str::<Value>(&text) {
+                Ok(structured) => json!({
+                    "content": [{"type": "text", "text": text}],
+                    "structuredContent": structured,
+                    "isError": false
+                }),
+                Err(_) => json!({"content": [{"type": "text", "text": text}], "isError": false}),
+            },
             Err(e) => {
                 json!({"content": [{"type": "text", "text": e.to_string()}], "isError": true})
             }
@@ -369,13 +492,39 @@ impl McpServer {
     }
 
     fn tool_agent_search(&self, args: &Value, mode: AgentSearchMode) -> anyhow::Result<String> {
-        Self::validate_fields(args, &["query", "root", "limit"])?;
+        Self::validate_fields(
+            args,
+            &["query", "root", "limit", "resend_seen", "budget_tokens"],
+        )?;
+        // m38g: one response-wide token budget that picks per-result detail.
+        let budget_tokens = match args.get("budget_tokens") {
+            None => None,
+            Some(value) => Some(Self::integer_arg(args, "budget_tokens", 0, 1, MAX_BUDGET_TOKENS)
+                .map(|tokens| {
+                    let _ = value;
+                    tokens
+                })?),
+        };
+        // v972: transcript-less clients set resend_seen to keep full snippets.
+        let resend_seen = match args.get("resend_seen") {
+            None => false,
+            Some(value) => value
+                .as_bool()
+                .context("resend_seen must be a boolean")?,
+        };
         let query = args
             .get("query")
             .and_then(Value::as_str)
             .map(str::trim)
-            .filter(|query| !query.is_empty() && query.chars().count() <= 4_096)
-            .context("query must contain 1 to 4096 characters")?;
+            .filter(|query| {
+                !query.is_empty() && query.chars().count() <= ast_sgrep_core::MAX_QUERY_CHARS
+            })
+            .with_context(|| {
+                format!(
+                    "query must contain 1 to {} characters",
+                    ast_sgrep_core::MAX_QUERY_CHARS
+                )
+            })?;
         let limit = Self::integer_arg(args, "limit", self.limit, 1, MAX_AGENT_LIMIT)?;
         let root = self.root_arg(args)?;
         let (searcher, generation) = self.searcher_for(root.clone(), limit)?;
@@ -384,13 +533,159 @@ impl McpServer {
             AgentSearchMode::Ast => searcher.search(&format!("pattern: {query}")),
             AgentSearchMode::Semantic => searcher.search_semantic(query),
         };
-        self.restore_searcher(root, limit, generation, searcher);
+        self.restore_searcher(root.clone(), limit, generation, searcher);
         let response = response?;
-        Ok(serde_json::to_string_pretty(&format_response_with(
-            &response,
-            OutputFormat::AgentCapsule,
-            0,
-        ))?)
+        // 6a3i: a miss is the cheapest response we can send, and the one where
+        // a vague answer costs the most in speculative agent retries.
+        if response.hits.is_empty() {
+            let miss = to_compact_miss_json(query, &self.diagnose_miss(&root, mode));
+            return Ok(serde_json::to_string(&miss)?);
+        }
+        // kxmc: compact key-free envelope, minified. Object keys and pretty
+        // whitespace were the bulk of the old AgentCapsule payload, and the
+        // full path was emitted twice per hit (`file` plus `ref`).
+        let mut envelope = match budget_tokens {
+            Some(max_tokens) => to_budgeted_compact_json(
+                &response,
+                OutputBudget {
+                    max_tokens,
+                    default_detail: DetailLevel::Full,
+                },
+            ),
+            None => format_response_with_budget(
+                &response,
+                OutputFormat::Compact,
+                0,
+                CompactBudget::default(),
+            ),
+        };
+        self.remember_compact_paths(&envelope);
+        if !resend_seen {
+            self.elide_seen_snippets(&mut envelope);
+        }
+        Ok(serde_json::to_string(&envelope)?)
+    }
+
+    /// Replace snippets this session already sent for the same id and unchanged
+    /// content (v972).
+    ///
+    /// Iterative agent search re-runs overlapping queries constantly, and the
+    /// model pays again for bytes it already has. Keying on a content hash (not
+    /// just the id) means an edited file re-sends in full, and the map is
+    /// cleared on `index_repo` so an elision never spans index generations.
+    fn elide_seen_snippets(&self, envelope: &mut Value) {
+        let Some(hits) = envelope.get_mut("h").and_then(Value::as_array_mut) else {
+            return;
+        };
+        let mut seen = Self::lock_or_recover(&self.emitted_snippets, |seen| seen.clear());
+        let mut elided = 0_usize;
+        for hit in hits {
+            let Some(row) = hit.as_array_mut() else {
+                continue;
+            };
+            let (Some(id), Some(snippet)) = (
+                row.first().and_then(Value::as_str).map(str::to_owned),
+                row.get(4).and_then(Value::as_str).map(str::to_owned),
+            ) else {
+                continue;
+            };
+            if snippet.is_empty() || snippet == ELIDED_SNIPPET {
+                continue;
+            }
+            let digest = fnv1a64(snippet.as_bytes());
+            if seen.get(&id) == Some(&digest) {
+                row[4] = Value::String(ELIDED_SNIPPET.to_owned());
+                elided += 1;
+                continue;
+            }
+            if seen.len() >= MAX_EMITTED_SNIPPETS && !seen.contains_key(&id) {
+                continue;
+            }
+            seen.insert(id, digest);
+        }
+        if elided > 0 {
+            // Volatile accounting, so it sorts with the `z*` tail (9q0l).
+            envelope["ze"] = Value::from(elided);
+        }
+    }
+
+    /// Gather what is known about a zero-hit search (6a3i).
+    ///
+    /// The index count is only consulted here, on the miss path, so a normal
+    /// search never pays for it.
+    fn diagnose_miss(&self, root: &Path, mode: AgentSearchMode) -> MissContext {
+        let indexed_files = Indexer::new(self.base_index_options(root.to_path_buf()))
+            .ok()
+            .and_then(|indexer| indexer.store().status().ok())
+            .map(|status| status.file_count);
+        let channel = match mode {
+            AgentSearchMode::Keyword => "lexical",
+            AgentSearchMode::Ast => "structural",
+            AgentSearchMode::Semantic => "semantic",
+        };
+        // Semantic search over an index with no semantic chunks is a channel
+        // that could not run, not an honest absence of matches.
+        let unavailable = if matches!(mode, AgentSearchMode::Semantic) && !self.use_embed {
+            vec!["semantic".to_owned()]
+        } else {
+            Vec::new()
+        };
+        let mut scope = Vec::new();
+        if root != self.root {
+            if let Some(relative) = root.strip_prefix(&self.root).ok().map(Path::to_path_buf) {
+                if !relative.as_os_str().is_empty() {
+                    scope.push(("root".to_owned(), relative.display().to_string()));
+                }
+            }
+        }
+        MissContext {
+            tried: vec![channel.to_owned()],
+            unavailable,
+            scope,
+            indexed_files,
+        }
+    }
+
+    /// Record `p` table entries so `code_read` can resolve compact ids later.
+    ///
+    /// Uses the shared resolver so root-folded tables (am4a) are understood
+    /// exactly the way an agent would read them.
+    fn remember_compact_paths(&self, envelope: &Value) {
+        let mut registry = Self::lock_or_recover(&self.path_registry, |registry| registry.clear());
+        for (id, path) in ast_sgrep_plugins::resolve_compact_paths(envelope) {
+            if registry.len() >= MAX_PATH_REGISTRY && !registry.contains_key(&id) {
+                // Bounded: a hostile or very long session cannot grow this map
+                // without limit. Unknown ids simply fail to resolve and the
+                // agent falls back to the `path#Lstart-Lend` form.
+                break;
+            }
+            registry.insert(id, path);
+        }
+    }
+
+    /// Expand a compact `<path_id>:<start>-<end>` id into the node id form that
+    /// `read_node` understands. Non-compact ids pass through untouched.
+    fn resolve_compact_id(&self, id: &str) -> String {
+        if id.contains("#L") {
+            return id.to_owned();
+        }
+        let Some((path_id, range)) = id.rsplit_once(':') else {
+            return id.to_owned();
+        };
+        let Some((start, end)) = range.split_once('-') else {
+            return id.to_owned();
+        };
+        if start.is_empty() || !start.bytes().all(|b| b.is_ascii_digit()) {
+            return id.to_owned();
+        }
+        if end.is_empty() || !end.bytes().all(|b| b.is_ascii_digit()) {
+            return id.to_owned();
+        }
+        let registry = Self::lock_or_recover(&self.path_registry, |registry| registry.clear());
+        match registry.get(path_id) {
+            Some(path) => format!("{path}#L{start}-L{end}"),
+            None => id.to_owned(),
+        }
     }
 
     fn tool_code_read(&self, args: &Value) -> anyhow::Result<String> {
@@ -422,15 +717,17 @@ impl McpServer {
         for (index, id) in ids.iter().enumerate() {
             let id = id.as_str().context("every node ID must be a string")?;
             let budget = per_ref_chars + usize::from(index < remainder);
-            nodes.push(read_node(&root, id, context_lines, budget)?);
+            // kxmc: accept compact search ids as well as `path#Lstart-Lend`.
+            let resolved = self.resolve_compact_id(id);
+            nodes.push(read_node(&root, &resolved, context_lines, budget)?);
         }
-        Ok(serde_json::to_string_pretty(&json!({"nodes": nodes}))?)
+        Ok(serde_json::to_string(&json!({"nodes": nodes}))?)
     }
 
     fn tool_index_status(&self, args: &Value) -> anyhow::Result<String> {
         Self::validate_fields(args, &["root"])?;
         let indexer = Indexer::new(self.base_index_options(self.root_arg(args)?))?;
-        Ok(serde_json::to_string_pretty(&indexer.store().status()?)?)
+        Ok(serde_json::to_string(&indexer.store().status()?)?)
     }
 
     fn tool_index_repo(&self, args: &Value) -> anyhow::Result<String> {
@@ -440,8 +737,15 @@ impl McpServer {
             Some(value) => value.as_bool().context("force must be a boolean")?,
         };
         let root = self.root_arg(args)?;
-        let _flight = Self::lock_or_recover(&self.index_lock, |_| {});
+        // Single-flight wait counts toward the soft deadline (es7u).
         let started = Instant::now();
+        let _flight = Self::lock_or_recover(&self.index_lock, |_| {});
+        // Soft deadline: refuse to start when the prior wait already exhausted the budget.
+        anyhow::ensure!(
+            started.elapsed() < INDEX_REPO_DEADLINE,
+            "index_repo exceeded {}s single-flight deadline before start",
+            INDEX_REPO_DEADLINE.as_secs()
+        );
         let mut indexer = Indexer::new(IndexOptions {
             embed_semantic: self.use_embed,
             embed_backend: if self.use_embed {
@@ -451,25 +755,23 @@ impl McpServer {
             },
             ..self.base_index_options(root)
         })?;
-        // Soft deadline: refuse to start when the prior wait already exhausted the budget.
-        anyhow::ensure!(
-            started.elapsed() < INDEX_REPO_DEADLINE,
-            "index_repo exceeded {}s single-flight deadline before start",
-            INDEX_REPO_DEADLINE.as_secs()
-        );
         let stats = if force {
             indexer.reindex_all()?
         } else {
             indexer.index_all()?
         };
+        // Index mutated on disk — always drop cached Searcher / path ids / elisions
+        // before any post-work deadline check. A soft timeout must not leave a
+        // stale Searcher serving pre-mutation hits (d2a1.13).
+        self.invalidate_searcher_cache();
+        Self::lock_or_recover(&self.path_registry, |registry| registry.clear()).clear();
+        Self::lock_or_recover(&self.emitted_snippets, |seen| seen.clear()).clear();
         anyhow::ensure!(
             started.elapsed() <= INDEX_REPO_DEADLINE,
             "index_repo exceeded {}s deadline",
             INDEX_REPO_DEADLINE.as_secs()
         );
-        // Index changed — drop cached Searcher so next search sees fresh data.
-        self.invalidate_searcher_cache();
-        Ok(serde_json::to_string_pretty(&stats)?)
+        Ok(serde_json::to_string(&stats)?)
     }
 }
 
@@ -630,30 +932,139 @@ fn write_resp(
     if let Some(error) = error {
         body["error"] = error;
     }
-    writeln!(stdout, "{body}")
+    // NDJSON over a pipe is block-buffered; without flush a long-lived MCP host
+    // (Cursor/Claude/etc.) never sees the response until the process exits.
+    writeln!(stdout, "{body}")?;
+    stdout.flush()
 }
 
+
+#[cfg(test)]
+mod write_resp_tests {
+    use super::*;
+    use std::io::{self, Write};
+
+    /// Captures writes and whether `flush` was called (pipe hosts require it).
+    struct FlushProbe {
+        buf: Vec<u8>,
+        flushed: bool,
+    }
+
+    impl Write for FlushProbe {
+        fn write(&mut self, data: &[u8]) -> io::Result<usize> {
+            self.buf.extend_from_slice(data);
+            Ok(data.len())
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            self.flushed = true;
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn write_resp_flushes_after_each_envelope() {
+        let mut probe = FlushProbe {
+            buf: Vec::new(),
+            flushed: false,
+        };
+        write_resp(
+            &mut probe,
+            Some(Value::from(1)),
+            Some(json!({"ok": true})),
+            None,
+        )
+        .expect("write");
+        assert!(
+            probe.flushed,
+            "MCP NDJSON over a pipe must flush or clients hang"
+        );
+        let line = std::str::from_utf8(&probe.buf).expect("utf8");
+        assert!(line.ends_with('\n'), "NDJSON line terminator required");
+        let value: Value = serde_json::from_str(line.trim_end()).expect("json");
+        assert_eq!(value["jsonrpc"], "2.0");
+        assert_eq!(value["id"], 1);
+        assert_eq!(value["result"]["ok"], true);
+    }
+}
 
 #[cfg(test)]
 mod cache_tests {
     use super::*;
 
-    #[test]
-    fn reindex_generation_rejects_in_flight_stale_searcher() {
-        let temp = tempfile::tempdir().unwrap();
-        let root = temp.path().canonicalize().unwrap();
-        let server = McpServer {
-            root: root.clone(),
+    fn test_server(root: PathBuf) -> McpServer {
+        McpServer {
+            root,
             index_path: None,
             limit: 10,
             use_embed: false,
             searcher_cache: Mutex::new(SearcherCache::default()),
             index_lock: Mutex::new(()),
-        };
+            path_registry: Mutex::new(HashMap::new()),
+            emitted_snippets: Mutex::new(HashMap::new()),
+        }
+    }
+
+    #[test]
+    fn reindex_generation_rejects_in_flight_stale_searcher() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        let server = test_server(root.clone());
         let (searcher, generation) = server.searcher_for(root.clone(), 10).unwrap();
         server.invalidate_searcher_cache();
         server.restore_searcher(root, 10, generation, searcher);
         let cache = McpServer::lock_or_recover(&server.searcher_cache, |_| {});
         assert!(cache.entry.is_none(), "stale searcher returned after reindex");
     }
+
+    #[test]
+    fn index_repo_invalidates_searcher_after_disk_mutation() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        std::fs::write(root.join("lib.rs"), "fn hello() {}\n").unwrap();
+        let server = test_server(root.clone());
+        let (searcher, generation) = server.searcher_for(root.clone(), 10).unwrap();
+        server.restore_searcher(root.clone(), 10, generation, searcher);
+        {
+            let cache = McpServer::lock_or_recover(&server.searcher_cache, |_| {});
+            assert!(cache.entry.is_some());
+            assert_eq!(cache.generation, generation);
+        }
+        // Seed session maps that must not survive reindex.
+        McpServer::lock_or_recover(&server.path_registry, |_| {})
+            .insert("p0".into(), "lib.rs".into());
+        McpServer::lock_or_recover(&server.emitted_snippets, |_| {})
+            .insert("p0:1-1".into(), 42);
+
+        let body = server
+            .tool_index_repo(&json!({}))
+            .expect("index_repo should succeed on tiny fixture");
+        assert!(body.contains("files_indexed") || body.contains("files"), "{body}");
+
+        let cache = McpServer::lock_or_recover(&server.searcher_cache, |_| {});
+        assert!(
+            cache.entry.is_none(),
+            "searcher cache must be empty after index_repo mutation"
+        );
+        assert!(
+            cache.generation != generation,
+            "generation must advance so in-flight restore cannot reinstall stale Searcher"
+        );
+        assert!(
+            McpServer::lock_or_recover(&server.path_registry, |_| {}).is_empty(),
+            "path registry must clear on index mutation"
+        );
+        assert!(
+            McpServer::lock_or_recover(&server.emitted_snippets, |_| {}).is_empty(),
+            "emitted snippets must clear on index mutation"
+        );
+    }
+}
+/// FNV-1a over snippet bytes (v972). Content-keyed so an edited file re-sends.
+fn fnv1a64(bytes: &[u8]) -> u64 {
+    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash
 }

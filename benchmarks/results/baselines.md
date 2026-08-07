@@ -32,6 +32,146 @@ must cite these rows; they must not introduce a second “canonical” value.
 They are two fingerprint rows. Do not cite dual ~0.75 / 0.746 self-corpus
 figures alongside 0.712 as current.
 
+## Reproducible rows (d2dv)
+
+These rows regenerate from a clean checkout with **one command and no network
+access**, against a gold fixture and harness that ship in this tree:
+
+```bash
+./benchmarks/run_eval.sh
+```
+
+Raw artifacts are checked in under `benchmarks/results/raw/`, so a later run can
+be diffed against the recorded one rather than compared to a summary.
+
+Determinism is a property of the harness, not an aspiration: two consecutive
+runs reproduce every retrieval, A/B, and token figure exactly. The token step
+builds its own pinned index because the native and agent envelopes embed the
+snapshot generation, and reusing an index whose generation keeps incrementing
+would drift the byte totals by a digit at a time.
+
+| fingerprint id | corpus | config | metric | value | status |
+|----------------|--------|--------|--------|------:|--------|
+| `self-gold12-reproducible` | self @ `benchmarks/gold/self.json` (12 gold queries) | default hybrid | MRR | **0.669** | REPRODUCIBLE |
+| `self-gold12-reproducible` | self (12 gold queries) | default hybrid | nDCG | **0.726** | REPRODUCIBLE |
+| `self-gold12-reproducible` | self (12 gold queries) | default hybrid | Recall@1 | **0.458** | REPRODUCIBLE |
+| `self-gold12-reproducible` | self (12 gold queries) | default hybrid | Recall@5 | **0.792** | REPRODUCIBLE |
+| `self-gold12-reproducible` | self (12 gold queries) | default hybrid | Recall@20 | **0.917** | REPRODUCIBLE |
+| `self-tokens-gold12` | self (12 gold queries, `--limit 10`) | compact vs agent-capsule | emitted bytes | **11,607 vs 45,272 (-74.4%)** | REPRODUCIBLE |
+| `self-tokens-gold12` | self (12 gold queries, `--limit 10`) | compact vs native | emitted bytes | **11,428 vs 56,868 (-79.9%)** | REPRODUCIBLE |
+| `self-budget300-gold12` | self (12 gold queries, `--limit 10`) | `--budget-tokens 300` vs agent-capsule | emitted bytes | **10,395 vs 44,622 (-76.7%)** | REPRODUCIBLE |
+
+These are **not** comparable to the historical unreproducible rows below: a
+different corpus definition, a different gold set, and a different commit.
+They do not supersede those rows; they are the first rows in this file that a
+reader can actually regenerate.
+
+### Negative result: default embeddings add nothing measurable here
+
+The A/B in the same harness (`--ab no-embed`) reports **every delta as exactly
+0.000** -- MRR, nDCG, and Recall at 1, 5, 20 are identical with and without the
+default embedding channel on this corpus:
+
+| comparison | delta MRR | delta nDCG | delta Recall@5 |
+|------------|----------:|-----------:|---------------:|
+| hybrid minus `--no-embed` (self, 12 gold) | 0.000 | 0.000 | 0.000 |
+
+This reproduces the warning already recorded for the historical rows, now with
+a runnable command behind it. It is recorded here rather than dropped, per the
+negative-ledger rule. It does **not** prove embeddings are worthless in
+general: this corpus is small, self-referential, and its queries are answerable
+by exact and structural channels. It does mean **no claim of semantic lift may
+cite this corpus**, and that a foreign held-out corpus is required before the
+default embedding path can be called valuable.
+
+### Token budget: measured reduction at unchanged recall (m38g)
+
+`--budget-tokens` assigns a detail level per result (metadata / signature /
+block / full) under one response-wide ceiling, rather than truncating every
+excerpt to the same size. At a 300-unit budget it emits
+**76.7% fewer bytes than the agent-capsule envelope**, clearing the 50%
+acceptance gate.
+
+Recall is unchanged, and the harness proves it rather than assuming it: a
+budget selects DETAIL, never which results are returned, so
+`self-budget-non-inferiority.json` compares the returned result-id lists with
+and without the budget across all 12 gold queries and fails the run if any
+differ. Current status: **identical result sets on 12/12 queries**, so
+Recall@1/@5/@20 are unchanged by construction.
+
+Absolute byte totals move as this repository changes, because the `self` corpus
+IS the working tree. Rows above were produced at commit `007b255`. Percentages
+are the stable figures; treat absolute bytes as corpus-dated.
+
+### Corpus drift is a property of the `self` corpus (vvpk)
+
+The `self` corpus IS this working tree, so **quality metrics drift as the
+repository changes**, not only byte totals. Adding source files adds competing
+matches, and a conceptual query whose gold answer sat inside a truncated
+candidate pool can fall out of it without any engine change.
+
+Observed concretely: Recall@20 moved 1.000 -> 0.917 and MRR 0.676 ->
+0.669 between commit `abfe102` and `51b6a57`. That is **not** an engine
+regression. It was isolated by disabling the code/prose field split entirely
+and re-running: the numbers were identical with the split on and off, so the
+split is quality-neutral on this gold set and the delta is corpus drift from
+files added to the tree in between.
+
+The lesson for anyone reading these rows: the self corpus is adequate for
+token-efficiency and determinism work, and **weak for retrieval-quality
+regression detection**. A frozen or foreign corpus is required before any
+quality delta on this corpus should be believed.
+
+### Repository lexicon: learned, explainable, not yet fed into ranking (ufk7)
+
+Indexing now learns this repository's own vocabulary with PPMI over identifier
+subtokens and the prose around them -- fully local, no download. On this repo it
+learns **2,202 associations**, including `semantic → ivf`, `call → tool`, and
+`hit → kind`, which no hand-written global concept list would contain.
+
+Every association carries a support count, and any query expansion is reported
+in `query_expansions` with a checkable justification, because expansion changes
+what the user asked for.
+
+**No retrieval lift is claimed.** The lexicon is currently reported as evidence
+and is deliberately NOT wired into channel scoring, for the reason the corpus
+drift section above already establishes: the self corpus cannot detect a quality
+regression, so wiring query expansion into ranking here would be an unmeasurable
+change. Retrieval metrics are unchanged by this work, as expected.
+
+A property worth recording, because it surprised the fixtures: PPMI scores
+co-occurrence *above chance*, so a corpus with one uniform vocabulary yields no
+associations at all -- two terms that always co-occur and appear nowhere else
+have PMI exactly 0. Contrast is required, which is why the learning tests supply
+background vocabulary.
+
+### Coverage and what is still missing
+
+Implemented and reproducible: MRR, nDCG, Recall@1/@5/@20, the hybrid vs
+no-embed A/B, emitted-byte token efficiency per output format, and the
+reliability invariants as executable tests (single-generation responses,
+crash-safe generation activation, durability pragmas).
+
+Not implemented, and deliberately not faked with placeholder numbers:
+
+- **Foreign corpora** (ripgrep, Flask, and other held-out repositories). These
+  need pinned external checkouts that this harness cannot fetch offline, so no
+  foreign-corpus row is claimed.
+- **Calibration error** (Brier / ECE). `confidence` currently comes from an
+  inspectable agreement heuristic, not a fitted model, so a calibration number
+  would measure an arbitrary constant rather than a trained predictor.
+- **Definition/reference resolution accuracy and graph-edge precision by
+  resolution tier.** These require the `SymbolId` / `Resolution` tiers, which
+  are separate open work; there are no resolution tiers to report against yet.
+- **Multi-field semantic vectors.** `semantic_chunks` still stores one vector
+  per chunk, so per-field (name / docs / body / graph) similarity is not yet
+  reportable. Tracked separately; not claimed here.
+- **Foreign-corpus token efficiency.** The reduction above is measured on
+  the self corpus only.
+- **Agent-level token metrics** (tokens read before the correct edit site, tool
+  calls to correct file and symbol). These need an agent-in-the-loop harness,
+  not a retrieval harness.
+
 ## Provenance
 
 | field | value |

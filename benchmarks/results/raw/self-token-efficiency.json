@@ -1,0 +1,122 @@
+{
+  "per_query": [
+    {
+      "name": "defs-dedup-hits",
+      "query": "defs:dedup_hits",
+      "native": 2779,
+      "agent": 2224,
+      "agent-capsule": 1029,
+      "compact": 361,
+      "compact-budget300": 516
+    },
+    {
+      "name": "defs-compute-ann-fingerprint",
+      "query": "defs:compute_ann_fingerprint",
+      "native": 2550,
+      "agent": 2059,
+      "agent-capsule": 1023,
+      "compact": 388,
+      "compact-budget300": 375
+    },
+    {
+      "name": "defs-begin-bulk-tx",
+      "query": "defs:begin_bulk_tx",
+      "native": 2277,
+      "agent": 1720,
+      "agent-capsule": 1019,
+      "compact": 368,
+      "compact-budget300": 378
+    },
+    {
+      "name": "defs-write-active-manifest",
+      "query": "defs:write_active_manifest",
+      "native": 4000,
+      "agent": 3503,
+      "agent-capsule": 1081,
+      "compact": 381,
+      "compact-budget300": 445
+    },
+    {
+      "name": "defs-to-compact-json",
+      "query": "defs:to_compact_json",
+      "native": 4602,
+      "agent": 4067,
+      "agent-capsule": 1063,
+      "compact": 367,
+      "compact-budget300": 464
+    },
+    {
+      "name": "literal-pragma-synchronous",
+      "query": "literal:PRAGMA synchronous",
+      "native": 5416,
+      "agent": 5710,
+      "agent-capsule": 6018,
+      "compact": 1324,
+      "compact-budget300": 1127
+    },
+    {
+      "name": "literal-begin-deferred",
+      "query": "literal:BEGIN DEFERRED",
+      "native": 4299,
+      "agent": 4339,
+      "agent-capsule": 4514,
+      "compact": 1240,
+      "compact-budget300": 1058
+    },
+    {
+      "name": "callers-integrity-check",
+      "query": "callers:integrity_check",
+      "native": 2569,
+      "agent": 3300,
+      "agent-capsule": 3014,
+      "compact": 760,
+      "compact-budget300": 815
+    },
+    {
+      "name": "word-snapshotstamp",
+      "query": "word:SnapshotStamp",
+      "native": 4996,
+      "agent": 5492,
+      "agent-capsule": 5831,
+      "compact": 1111,
+      "compact-budget300": 1113
+    },
+    {
+      "name": "conceptual-index-durability",
+      "query": "index write durability profile",
+      "native": 9011,
+      "agent": 9608,
+      "agent-capsule": 6477,
+      "compact": 1637,
+      "compact-budget300": 1300
+    },
+    {
+      "name": "conceptual-path-interning",
+      "query": "compact output path interning",
+      "native": 8906,
+      "agent": 9827,
+      "agent-capsule": 6789,
+      "compact": 1799,
+      "compact-budget300": 1438
+    },
+    {
+      "name": "conceptual-generation-swap",
+      "query": "atomic generation activation rollback",
+      "native": 15848,
+      "agent": 17022,
+      "agent-capsule": 7430,
+      "compact": 1887,
+      "compact-budget300": 1459
+    }
+  ],
+  "totals": {
+    "native": 67253,
+    "agent": 68871,
+    "agent-capsule": 45288,
+    "compact": 11623,
+    "compact-budget300": 10488,
+    "budget300_vs_agent_capsule_pct": 76.8,
+    "compact_vs_agent_capsule_pct": 74.3,
+    "compact_vs_native_pct": 82.7
+  }
+}

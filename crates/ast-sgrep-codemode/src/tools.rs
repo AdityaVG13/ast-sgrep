@@ -158,7 +158,8 @@ fn filter_hits(args: &Value) -> Result<Value, CallError> {
         .get("limit")
         .and_then(|v| v.as_u64())
         .map(|n| n as usize)
-        .unwrap_or(usize::MAX);
+        .map(|n| n.clamp(1, ast_sgrep_core::MAX_OUTPUT_RESULTS))
+        .unwrap_or(ast_sgrep_core::MAX_OUTPUT_RESULTS);
 
     let out: Vec<Value> = hit_array(hits_val)?
         .into_iter()

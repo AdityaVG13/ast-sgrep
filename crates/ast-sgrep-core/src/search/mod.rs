@@ -19,11 +19,16 @@ use std::io::Write;
 use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{SystemTime, UNIX_EPOCH};
-use types::{assign_signal_margins, dedup_hits};
+use types::{assign_hit_confidence, assign_signal_margins};
 pub use types::{
-    format_hit_line, HitKind, HitSignal, SearchHit, SearchOptions, SearchResponse, SpanHitInput,
+    dedup_hits, format_hit_line, hit_why, DegradedChannel, HitKind, HitSignal,
+    SearchHit, SearchOptions, SearchResponse, SnapshotStamp, SpanHitInput, QueryExpansion, PlanTrace,
 };
 const CASCADE_PREFILTER_FILE_LIMIT: usize = 100;
+/// Exact hits after which the semantic stage cannot change the answer (ocx8).
+const EARLY_EXIT_EXACT_HITS: usize = 5;
+/// Cap on reported query expansions (ufk7).
+const MAX_QUERY_EXPANSIONS: usize = 5;
 const MAX_HITS_PER_FILE: usize = 3;
 
 /// On mutex poison, clear cached state before continuing so a panicked
@@ -75,6 +80,8 @@ pub struct Searcher {
     options: SearchOptions,
     semantic_cache: Arc<Mutex<Option<SemanticCache>>>,
     response_cache: Mutex<ResponseCache>,
+    /// Planner decision from the most recent hybrid search (ocx8).
+    last_plan: Mutex<PlanTrace>,
 }
 /// Fail closed when callers request optional neural/rerank paths that were
 /// not compiled in (parity contract: silently ignoring the flags would make
@@ -117,6 +124,23 @@ impl Searcher {
                 options.root.display()
             )));
         }
+        // Cross-surface input bounds: 0/`ASGREP_LIMIT=0` remaps; oversize clamps (CLI docs + LSP).
+        options.limit = crate::limits::clamp_output_limit(Some(options.limit), 16);
+        options.rerank_top_k = options
+            .rerank_top_k
+            .clamp(1, crate::limits::MAX_OUTPUT_RESULTS);
+        options.context_before = options
+            .context_before
+            .min(crate::limits::MAX_EXCERPT_LINES);
+        options.context_after = options.context_after.min(crate::limits::MAX_EXCERPT_LINES);
+        if let Some(ref filter) = options.file_filter {
+            if filter.chars().count() > crate::limits::MAX_FILE_FILTER_CHARS {
+                return Err(crate::StoreError::Other(format!(
+                    "file_filter exceeds maximum of {} characters",
+                    crate::limits::MAX_FILE_FILTER_CHARS
+                )));
+            }
+        }
         Ok(Self::with_store(
             IndexStore::open(&options.root, options.index_path.as_deref())?,
             options,
@@ -136,6 +160,7 @@ impl Searcher {
                 order: std::collections::VecDeque::new(),
                 enabled: true,
             }),
+            last_plan: Mutex::new(PlanTrace::default()),
         }
     }
     pub fn store(&self) -> &IndexStore {
@@ -158,6 +183,160 @@ impl Searcher {
         // Full SearchOptions identity (nyui).
         format!("{kind}\0{query}\0{}", self.options.cache_identity())
     }
+    /// Run one multi-pass search inside a single read snapshot and stamp the
+    /// resulting response with that snapshot's identity (d3l5).
+    ///
+    /// Every pass shares one connection, and in autocommit each statement is
+    /// its own implicit transaction -- so a writer committing mid-search could
+    /// otherwise let one response mix generations. `BEGIN DEFERRED` pins one
+    /// read snapshot for the whole search; SQLite's WAL snapshot isolation then
+    /// guarantees every pass observes the same committed state.
+    ///
+    /// The generation is re-read before COMMIT and compared. Equality is the
+    /// evidence that the response is single-generation; a mismatch is reported
+    /// rather than returned as if it were coherent.
+    fn fenced(
+        &self,
+        compute: impl FnOnce() -> Result<SearchResponse>,
+    ) -> Result<SearchResponse> {
+        let conn = self.store.connection();
+        // Pin one read snapshot for multi-pass search under concurrent reindex.
+        // Nested/active transactions mean an outer scope already owns the snapshot.
+        // When we *should* own one (autocommit) but BEGIN fails (busy/IO), fail
+        // closed rather than run unfenced and risk a silently mixed generation.
+        let owns_snapshot = if conn.is_autocommit() {
+            match conn.execute_batch("BEGIN DEFERRED") {
+                Ok(()) => true,
+                Err(e) => {
+                    return Err(crate::StoreError::Other(format!(
+                        "failed to open read snapshot for search: {e}"
+                    )));
+                }
+            }
+        } else {
+            false
+        };
+        let generation_before = self.store.index_generation().unwrap_or_default();
+
+        let computed = compute();
+
+        let generation_after = self.store.index_generation().unwrap_or_default();
+        if owns_snapshot {
+            // A read snapshot is released either way; COMMIT is the cheap path.
+            // If COMMIT fails, ROLLBACK unsticks the connection for later searches.
+            if conn.execute_batch("COMMIT").is_err() {
+                let _ = conn.execute_batch("ROLLBACK");
+            }
+        }
+        let mut response = computed?;
+
+        if owns_snapshot && generation_after != generation_before {
+            return Err(crate::StoreError::Other(format!(
+                "index generation changed during search ({generation_before} -> {generation_after}); \
+                 retry for a single-generation response"
+            )));
+        }
+
+        response.snapshot = self.snapshot_stamp(generation_before);
+        response.query_expansions = self.query_expansions(&response.query);
+        response.plan = self.take_plan();
+        Ok(response)
+    }
+
+    /// Fingerprint of the semantic sidecar, and whether it matches this
+    /// generation (d3l5).
+    ///
+    /// `load_semantic_ivf` returns `Ok(None)` on a fingerprint mismatch, which
+    /// makes a stale sidecar indistinguishable from no sidecar at all: search
+    /// quietly falls back to brute force and the response looks healthy. Peek
+    /// at the stored fingerprint so the mismatch is reported instead.
+    fn semantic_manifest(
+        &self,
+        generation: i64,
+        degraded: &mut Vec<DegradedChannel>,
+    ) -> Option<String> {
+        let path = crate::semantic_ivf::semantic_ivf_path(self.store.db_path());
+        if !path.exists() {
+            return None;
+        }
+        let Some(stored) = crate::semantic_ivf::peek_semantic_ivf_fingerprint(&path) else {
+            degraded.push(DegradedChannel {
+                channel: "semantic".to_owned(),
+                reason: "sidecar_unreadable".to_owned(),
+            });
+            return None;
+        };
+        let expected = self.expected_semantic_fingerprint(generation);
+        if expected.is_some_and(|expected| expected != stored) {
+            degraded.push(DegradedChannel {
+                channel: "semantic".to_owned(),
+                reason: "sidecar_generation_mismatch".to_owned(),
+            });
+        }
+        Some(hex32(&stored))
+    }
+
+    /// Fingerprint the sidecar should carry for the current snapshot (d3l5).
+    /// `None` when the inputs cannot be read, so an unknown state is never
+    /// reported as a mismatch.
+    fn expected_semantic_fingerprint(&self, generation: i64) -> Option<[u8; 32]> {
+        // The sidecar is built over the whole corpus, so compare against
+        // unfiltered stats regardless of any per-query language filter.
+        let stats = self.store.semantic_chunk_stats(None).ok()?;
+        if stats.count == 0 || stats.dim == 0 {
+            return None;
+        }
+        let backend = self.store.get_meta("embed_backend").ok()?;
+        Some(crate::semantic_ivf::compute_ann_fingerprint(
+            stats.count,
+            stats.max_id,
+            stats.dim,
+            backend.as_deref(),
+            generation,
+        ))
+    }
+
+
+    /// Repository associations that apply to this query (ufk7).
+    ///
+    /// Reported as evidence. Expansion that cannot be explained is expansion a
+    /// user cannot audit, so the terms and their support counts travel with the
+    /// response.
+    fn query_expansions(&self, query: &str) -> Vec<QueryExpansion> {
+        let lexicon = match crate::lexicon::load_lexicon(&self.store) {
+            Ok(lexicon) if !lexicon.is_empty() => lexicon,
+            _ => return Vec::new(),
+        };
+        let terms: Vec<String> = crate::lexicon::prose_terms(query);
+        if terms.is_empty() {
+            return Vec::new();
+        }
+        lexicon
+            .expand(&terms, MAX_QUERY_EXPANSIONS)
+            .into_iter()
+            .map(|association| QueryExpansion {
+                because: crate::lexicon::explain(&association),
+                term: association.term,
+                related: association.related,
+                support: association.support,
+            })
+            .collect()
+    }
+
+    /// Describe the snapshot a response was read from (d3l5).
+    fn snapshot_stamp(&self, generation: i64) -> SnapshotStamp {
+        let mut degraded_channels = Vec::new();
+        let semantic_manifest = self.semantic_manifest(generation, &mut degraded_channels);
+        SnapshotStamp {
+            generation,
+            schema_version: self.store.schema_version(),
+            worktree_revision: self.store.worktree_revision().unwrap_or_default(),
+            git_head: read_git_head(&self.options.root),
+            semantic_manifest,
+            degraded_channels,
+        }
+    }
+
     fn cached(
         &self,
         kind: &str,
@@ -165,7 +344,7 @@ impl Searcher {
         compute: impl FnOnce() -> Result<SearchResponse>,
     ) -> Result<SearchResponse> {
         let Some(gen) = self.index_gen() else {
-            return compute();
+            return self.fenced(compute);
         };
         let key = self.cache_key(kind, query);
         {
@@ -176,7 +355,7 @@ impl Searcher {
                 }
             }
         }
-        let response = compute()?;
+        let response = self.fenced(compute)?;
         // Re-check generation after compute so concurrent reindex cannot poison wrong-gen (hdwh).
         let Some(gen_after) = self.index_gen() else {
             return Ok(response);
@@ -209,6 +388,7 @@ impl Searcher {
         Ok(response)
     }
     pub fn search_lexical(&self, query_str: &str) -> Result<SearchResponse> {
+        validate_query_arg(query_str)?;
         self.cached("lex", query_str, || {
             let parsed = ParsedQuery::parse(query_str);
             Ok(finish_response_checked(
@@ -220,6 +400,7 @@ impl Searcher {
         })
     }
     pub fn search_symbol_pass(&self, query_str: &str) -> Result<SearchResponse> {
+        validate_query_arg(query_str)?;
         self.cached("sym", query_str, || {
             let parsed = ParsedQuery::parse(query_str);
             let mut hits = symbol_pass(&self.store, &self.options, &parsed)?;
@@ -228,6 +409,13 @@ impl Searcher {
         })
     }
     pub fn search(&self, query_str: &str) -> Result<SearchResponse> {
+        validate_query_arg(query_str)?;
+        let _perf_run = crate::perf_profile::Run::start("search_query");
+        let _span = crate::perf_profile::Span::start(
+            "search_query",
+            "search",
+            "Searcher::search (mode dispatch + finish)",
+        );
         self.cached("search", query_str, || {
             let parsed = ParsedQuery::parse(query_str);
             let hits = match parsed.mode {
@@ -267,6 +455,7 @@ impl Searcher {
         })
     }
     pub fn search_semantic(&self, query_str: &str) -> Result<SearchResponse> {
+        validate_query_arg(query_str)?;
         self.cached("sem", query_str, || {
             let parsed = ParsedQuery::parse(query_str);
             Ok(finish_response_checked(
@@ -278,6 +467,7 @@ impl Searcher {
         })
     }
     pub fn search_literal(&self, query: &str) -> Result<SearchResponse> {
+        validate_query_arg(query)?;
         self.cached("lit", query, || {
             let parsed = ParsedQuery::literal(query);
             Ok(finish_response_checked(
@@ -289,6 +479,7 @@ impl Searcher {
         })
     }
     pub fn search_regex(&self, query: &str) -> Result<SearchResponse> {
+        validate_query_arg(query)?;
         self.cached("re", query, || {
             let parsed = ParsedQuery::regex(query);
             Ok(finish_response_checked(
@@ -300,6 +491,7 @@ impl Searcher {
         })
     }
     pub fn search_word(&self, query: &str) -> Result<SearchResponse> {
+        validate_query_arg(query)?;
         self.cached("word", query, || {
             let parsed = ParsedQuery::word(query);
             Ok(finish_response_checked(
@@ -350,7 +542,16 @@ impl Searcher {
         lexical.retain(|hit| working_files.contains(&hit.file));
         let mut hits = lexical;
         hits.extend(structural);
-        if self.options.use_embed {
+        // ocx8: stage D is the expensive one. Run it only when the cheap
+        // deterministic evidence has NOT already answered the query.
+        //
+        // The stop condition is exact-match strength: when several structurally
+        // confirmed exact hits already exist, embedding the query and scanning
+        // vectors cannot change the answer, only its cost. `defs:refresh_token`
+        // must never pay for semantic retrieval; "where do expired sessions
+        // become valid again?" still needs it.
+        let stop = early_exit_reason(&hits);
+        if self.options.use_embed && stop.is_none() {
             hits.extend(embed_pass_for_files(
                 &self.store,
                 &self.options,
@@ -358,7 +559,36 @@ impl Searcher {
                 &working_files,
             )?);
         }
+        self.record_plan(&stop);
         Ok(hits)
+    }
+
+    /// Read and reset the planner decision (ocx8).
+    fn take_plan(&self) -> PlanTrace {
+        let mut guard = lock_clear_on_poison(&self.last_plan, |slot| *slot = PlanTrace::default());
+        std::mem::take(&mut *guard)
+    }
+
+    /// Record the planner's decision for the response (ocx8).
+    fn record_plan(&self, stop: &Option<String>) {
+        let mut plan = PlanTrace {
+            stages: vec![
+                "lexical".to_owned(),
+                "structural".to_owned(),
+                "symbol".to_owned(),
+            ],
+            stopped_because: stop.clone(),
+            skipped: Vec::new(),
+        };
+        if !self.options.use_embed {
+            plan.skipped.push("semantic".to_owned());
+        } else if stop.is_some() {
+            plan.skipped.push("semantic".to_owned());
+        } else {
+            plan.stages.push("semantic".to_owned());
+        }
+        let mut guard = lock_clear_on_poison(&self.last_plan, |slot| *slot = PlanTrace::default());
+        *guard = plan;
     }
 }
 fn literal_prefilter_pass(
@@ -553,6 +783,10 @@ pub(crate) fn finish_response_checked(
         hits.retain(|h| re.is_match(&h.file));
     }
     assign_signal_margins(&mut hits);
+    // Confidence is independent of ranking order but must run after margins
+    // (which rewrite display `signal` from `kind`) and on every path -- including
+    // `dedup=false` (`search_semantic`) where `dedup_hits` never runs (pass5).
+    assign_hit_confidence(&mut hits);
     if options.count_only {
         let mut counts: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
         for hit in &hits {
@@ -568,6 +802,10 @@ pub(crate) fn finish_response_checked(
             read_bytes_estimate: 0,
             returned_excerpt_bytes: 0,
             prevented_read_bytes: 0,
+            // Stamped by the Searcher, which owns the snapshot (d3l5).
+            snapshot: SnapshotStamp::default(),
+            plan: PlanTrace::default(),
+            query_expansions: Vec::new(),
         };
         record_ledger_from_env(&response);
         return Ok(response);
@@ -648,6 +886,10 @@ pub(crate) fn finish_response_checked(
         read_bytes_estimate,
         returned_excerpt_bytes,
         prevented_read_bytes,
+        // Stamped by the Searcher, which owns the snapshot (d3l5).
+        snapshot: SnapshotStamp::default(),
+        plan: PlanTrace::default(),
+        query_expansions: Vec::new(),
     };
     record_ledger_from_env(&response);
     Ok(response)
@@ -817,14 +1059,23 @@ fn record_ledger_from_env(response: &SearchResponse) {
             eprintln!("[asgrep] ignoring ASGREP_LEDGER_PATH: outside process cwd");
             return;
         }
-        let _ = append_ledger_entry(path, response);
+        try_append_ledger(path, response);
         return;
     };
     if !parent_canon.starts_with(&cwd) {
         eprintln!("[asgrep] ignoring ASGREP_LEDGER_PATH: outside process cwd");
         return;
     }
-    let _ = append_ledger_entry(path, response);
+    try_append_ledger(path, response);
+}
+/// Best-effort ledger append: search must not fail, but write errors are visible.
+fn try_append_ledger(path: &Path, response: &SearchResponse) {
+    if let Err(e) = append_ledger_entry(path, response) {
+        eprintln!(
+            "[asgrep] warning: failed to write ASGREP_LEDGER_PATH {}: {e}",
+            path.display()
+        );
+    }
 }
 fn append_ledger_entry(path: &Path, response: &SearchResponse) -> std::io::Result<()> {
     let ts = SystemTime::now()
@@ -862,6 +1113,12 @@ fn cap_per_file(hits: Vec<SearchHit>) -> Vec<SearchHit> {
 fn compile_glob(pattern: &str) -> std::result::Result<regex::Regex, String> {
     if pattern.is_empty() {
         return Err("file_filter must be non-empty".into());
+    }
+    if pattern.chars().count() > crate::limits::MAX_FILE_FILTER_CHARS {
+        return Err(format!(
+            "file_filter exceeds maximum of {} characters",
+            crate::limits::MAX_FILE_FILTER_CHARS
+        ));
     }
     if pattern
         .chars()
@@ -924,6 +1181,10 @@ fn strip_wrapping_quotes(raw: &str) -> &str {
         t
     }
 }
+
+fn validate_query_arg(query: &str) -> Result<()> {
+    crate::limits::validate_query_len(query).map_err(crate::StoreError::Other)
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -941,9 +1202,114 @@ mod tests {
             signal: HitSignal::Exact,
             contributors: vec![HitKind::Asgrep],
             margin: 0.0,
+            confidence: 0.0,
             excerpt: String::new(),
         }
     }
+
+    #[test]
+    fn searcher_remaps_zero_and_oversize_limit() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().to_path_buf();
+        // Minimal empty root is not a valid index; use with_store path via open after index.
+        // Indexer creates the db so Searcher::new can open it.
+        {
+            let mut indexer = crate::Indexer::new(crate::IndexOptions {
+                root: root.clone(),
+                embed_semantic: false,
+                ..crate::IndexOptions::default()
+            })
+            .unwrap();
+            let _ = indexer.index_all();
+        }
+        let zero = Searcher::new(SearchOptions {
+            root: root.clone(),
+            limit: 0,
+            use_embed: false,
+            ..SearchOptions::default()
+        })
+        .unwrap();
+        assert_eq!(zero.options().limit, 16);
+        let huge = Searcher::new(SearchOptions {
+            root: root.clone(),
+            limit: 50_000,
+            use_embed: false,
+            ..SearchOptions::default()
+        })
+        .unwrap();
+        assert_eq!(huge.options().limit, crate::limits::MAX_OUTPUT_RESULTS);
+    }
+
+    #[test]
+    fn rejects_oversize_query() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().to_path_buf();
+        {
+            let mut indexer = crate::Indexer::new(crate::IndexOptions {
+                root: root.clone(),
+                embed_semantic: false,
+                ..crate::IndexOptions::default()
+            })
+            .unwrap();
+            let _ = indexer.index_all();
+        }
+        let searcher = Searcher::new(SearchOptions {
+            root,
+            use_embed: false,
+            ..SearchOptions::default()
+        })
+        .unwrap();
+        let q = "a".repeat(crate::limits::MAX_QUERY_CHARS + 1);
+        let err = searcher.search(&q).unwrap_err();
+        assert!(
+            err.to_string().contains("query exceeds maximum"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn append_ledger_entry_errors_when_parent_dir_missing() {
+        let temp = tempfile::tempdir().unwrap();
+        let missing_parent = temp.path().join("no_such_dir").join("ledger.jsonl");
+        let response = SearchResponse {
+            query: "q".into(),
+            limit: 16,
+            hits: vec![],
+            counts: vec![],
+            read_bytes_estimate: 0,
+            returned_excerpt_bytes: 0,
+            prevented_read_bytes: 0,
+            snapshot: SnapshotStamp::default(),
+        };
+        let err = append_ledger_entry(&missing_parent, &response).expect_err("missing parent");
+        assert!(
+            err.kind() == std::io::ErrorKind::NotFound
+                || err.to_string().to_lowercase().contains("no such file")
+                || err.raw_os_error().is_some(),
+            "unexpected err: {err}"
+        );
+    }
+
+    #[test]
+    fn append_ledger_entry_writes_json_line() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("ledger.jsonl");
+        let response = SearchResponse {
+            query: "hello".into(),
+            limit: 16,
+            hits: vec![],
+            counts: vec![],
+            read_bytes_estimate: 10,
+            returned_excerpt_bytes: 2,
+            prevented_read_bytes: 8,
+            snapshot: SnapshotStamp::default(),
+        };
+        append_ledger_entry(&path, &response).expect("write");
+        let body = std::fs::read_to_string(&path).unwrap();
+        assert!(body.contains("\"query\":\"hello\""), "{body}");
+        assert!(body.ends_with('\n'), "{body:?}");
+    }
+
     #[test]
     fn excerpt_coverage_respects_term_casing() {
         let mut h = hit("a.rs", 1, 1.0);
@@ -978,6 +1344,29 @@ mod tests {
             response.hits.iter().any(|h| h.file == "low.rs"),
             "high-coverage lower-score hit must survive pre-truncate"
         );
+    }
+
+    #[test]
+    fn finish_response_assigns_confidence_when_dedup_false() {
+        // Regression for pass5 / ast-sgrep-d2a1.7: search_semantic finishes with
+        // dedup=false and used to leave confidence at 0.0 forever.
+        let parsed = ParsedQuery::parse("credential renewal");
+        let mut embed = hit("auth.rs", 10, 3.2);
+        embed.kind = HitKind::Embed;
+        embed.signal = HitSignal::Semantic;
+        embed.contributors = vec![HitKind::Embed];
+        let options = SearchOptions {
+            limit: 8,
+            use_embed: false,
+            ..SearchOptions::default()
+        };
+        let response = finish_response(&parsed, &options, vec![embed], false);
+        assert_eq!(response.hits.len(), 1);
+        assert!(
+            response.hits[0].confidence > 0.0,
+            "dedup=false path must still assign confidence"
+        );
+        assert!((response.hits[0].confidence - 0.35).abs() < 1e-12);
     }
 
     #[test]
@@ -1187,4 +1576,66 @@ mod tests {
         assert!(guard.is_empty());
         assert!(!mutex.is_poisoned());
     }
+}
+
+/// Resolve `.git/HEAD` to a commit id without spawning git (d3l5).
+///
+/// Returns `None` outside a git worktree, or when HEAD cannot be resolved --
+/// an unknown source revision is reported as unknown, never guessed.
+fn read_git_head(root: &std::path::Path) -> Option<String> {
+    let git_dir = root.join(".git");
+    // A worktree or submodule uses a `gitdir:` pointer file instead of a dir.
+    let git_dir = if git_dir.is_file() {
+        let pointer = std::fs::read_to_string(&git_dir).ok()?;
+        let target = pointer.strip_prefix("gitdir:")?.trim();
+        root.join(target)
+    } else {
+        git_dir
+    };
+    let head = std::fs::read_to_string(git_dir.join("HEAD")).ok()?;
+    let head = head.trim();
+    match head.strip_prefix("ref:") {
+        Some(reference) => {
+            let reference = reference.trim();
+            if let Ok(direct) = std::fs::read_to_string(git_dir.join(reference)) {
+                return Some(direct.trim().to_owned());
+            }
+            // Packed refs: the loose file may not exist.
+            let packed = std::fs::read_to_string(git_dir.join("packed-refs")).ok()?;
+            packed.lines().find_map(|line| {
+                let (id, name) = line.split_once(' ')?;
+                (name.trim() == reference).then(|| id.trim().to_owned())
+            })
+        }
+        // Detached HEAD already holds the id.
+        None => (!head.is_empty()).then(|| head.to_owned()),
+    }
+}
+
+/// Lowercase hex for a 32-byte digest (d3l5).
+fn hex32(bytes: &[u8; 32]) -> String {
+    let mut out = String::with_capacity(64);
+    for byte in bytes {
+        use std::fmt::Write;
+        let _ = write!(out, "{byte:02x}");
+    }
+    out
+}
+
+/// Should the planner stop before the expensive semantic stage (ocx8)?
+///
+/// Returns the reason when the cheap channels have already produced enough
+/// exact evidence that a semantic pass cannot change the outcome. Deliberately
+/// conservative: it fires only on genuinely exact signals, because stopping too
+/// eagerly trades recall for latency, and recall is the harder thing to notice
+/// missing.
+fn early_exit_reason(hits: &[SearchHit]) -> Option<String> {
+    let exact = hits
+        .iter()
+        .filter(|hit| hit.signal == HitSignal::Exact)
+        .count();
+    if exact >= EARLY_EXIT_EXACT_HITS {
+        return Some(format!("{exact} exact matches already satisfy the query"));
+    }
+    None
 }

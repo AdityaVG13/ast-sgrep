@@ -260,6 +260,19 @@ pub fn run_serve(config: SessionConfig, stdin: impl BufRead, mut stdout: impl Wr
     session.max_calls = 10_000;
     for line in stdin.lines() {
         let line = line.map_err(|e| CallError::InvalidArgs(format!("stdin read: {e}")))?;
+        if line.len() > ast_sgrep_core::MAX_STDIN_LINE_BYTES {
+            write_line(
+                &mut stdout,
+                &ServeResponse::Error {
+                    id: None,
+                    error: format!(
+                        "serve request line exceeds max {} bytes",
+                        ast_sgrep_core::MAX_STDIN_LINE_BYTES
+                    ),
+                },
+            )?;
+            continue;
+        }
         let line = line.trim();
         if line.is_empty() {
             continue;

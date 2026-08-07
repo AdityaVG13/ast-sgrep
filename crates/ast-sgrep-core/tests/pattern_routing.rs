@@ -1,35 +1,25 @@
 //! Pattern routing tests (e9qc) — native union / prefix routing without external ast-grep.
-use ast_sgrep_core::{IndexOptions, Indexer, SearchOptions, Searcher};
-use std::fs;
-use tempfile::TempDir;
+use ast_sgrep_core::{IndexOptions, SearchOptions};
+use ast_sgrep_testkit::{isolated_index_session, IsolatedIndexSession};
 
-fn indexed_rs(body: &str) -> (tempfile::TempDir, tempfile::TempDir, std::path::PathBuf) {
-    let corpus = TempDir::new().unwrap();
-    fs::write(corpus.path().join("mod.rs"), body).unwrap();
-    let index_dir = TempDir::new().unwrap();
-    let index_path = index_dir.path().join("index.db");
-    let mut indexer = Indexer::new(IndexOptions {
-        root: corpus.path().to_path_buf(),
-        index_path: Some(index_path.clone()),
+fn indexed_rs(body: &str) -> IsolatedIndexSession {
+    let session = isolated_index_session();
+    session.write("mod.rs", body);
+    session.index_all(IndexOptions {
         embed_semantic: false,
-        ..IndexOptions::default()
-    })
-    .unwrap();
-    indexer.index_all().unwrap();
-    (corpus, index_dir, index_path)
+        ..session.index_options()
+    });
+    session
 }
 
 #[test]
 fn pattern_prefix_routes_to_native_or_index_hits() {
-    let (corpus, _idx, index_path) = indexed_rs("fn greet_user() {}\nfn other() { greet_user(); }\n");
-    let searcher = Searcher::new(SearchOptions {
-        root: corpus.path().to_path_buf(),
-        index_path: Some(index_path),
+    let session = indexed_rs("fn greet_user() {}\nfn other() { greet_user(); }\n");
+    let searcher = session.searcher(SearchOptions {
         use_embed: false,
         limit: 32,
-        ..SearchOptions::default()
-    })
-    .unwrap();
+        ..session.search_options()
+    });
     let response = searcher.search("pattern: greet_user").unwrap();
     assert!(
         !response.hits.is_empty(),
@@ -39,15 +29,12 @@ fn pattern_prefix_routes_to_native_or_index_hits() {
 
 #[test]
 fn exotic_pattern_without_ast_grep_is_structured_empty_not_panic() {
-    let (corpus, _idx, index_path) = indexed_rs("fn alpha() {}\n");
-    let searcher = Searcher::new(SearchOptions {
-        root: corpus.path().to_path_buf(),
-        index_path: Some(index_path),
+    let session = indexed_rs("fn alpha() {}\n");
+    let searcher = session.searcher(SearchOptions {
         use_embed: false,
         limit: 8,
-        ..SearchOptions::default()
-    })
-    .unwrap();
+        ..session.search_options()
+    });
     // Deliberately exotic rule syntax — must not panic; empty or structured error via Result.
     let result = searcher.search("pattern: $$$UNLIKELY_EXOTIC_RULE<<<");
     assert!(result.is_ok(), "exotic pattern must not panic: {result:?}");
@@ -55,16 +42,13 @@ fn exotic_pattern_without_ast_grep_is_structured_empty_not_panic() {
 
 #[test]
 fn hybrid_quoted_literal_intent_hits_phrase_line() {
-    let (corpus, _idx, index_path) =
+    let session =
         indexed_rs("fn main() {\n    let msg = \"foo bar unique_phrase\";\n}\n");
-    let searcher = Searcher::new(SearchOptions {
-        root: corpus.path().to_path_buf(),
-        index_path: Some(index_path),
+    let searcher = session.searcher(SearchOptions {
         use_embed: false,
         limit: 16,
-        ..SearchOptions::default()
-    })
-    .unwrap();
+        ..session.search_options()
+    });
     let hybrid = searcher.search("\"foo bar unique_phrase\"").unwrap();
     let literal = searcher.search("literal:foo bar unique_phrase").unwrap();
     assert!(

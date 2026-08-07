@@ -568,6 +568,7 @@ mod tests {
                 signal: kind.signal(),
                 contributors: vec![kind],
                 margin: 0.0,
+                confidence: 0.0,
                 excerpt: String::new(),
             }
         }
@@ -613,6 +614,7 @@ mod tests {
                 signal: HitKind::Asgrep.signal(),
                 contributors: vec![HitKind::Asgrep],
                 margin: 0.0,
+                confidence: 0.0,
                 excerpt: symbol.unwrap_or_default().into(),
             }
         }

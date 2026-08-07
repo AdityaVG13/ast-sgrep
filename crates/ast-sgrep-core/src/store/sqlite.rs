@@ -4,10 +4,10 @@ use super::embed_support::{
     touch_embed_cache_entries, EmbeddedChunk, EmbeddedChunks,
 };
 use super::try_index_db_path;
-use super::sql::configure_connection;
+use super::sql::configure_connection_with;
 use super::sql::{
     append_lang_filter, calls_matching, count_star, delete_file_children, delete_file_lines,
-    lang_and_clause, like_terms_filter, optional_row, query_cached_map, query_limit_map,
+    emb_vec, lang_and_clause, like_terms_filter, optional_row, query_cached_map, query_limit_map,
     query_map_rows, read_legacy_emb, read_sem_row, where_clause, CLEAR_ALL_SQL, SCHEMA_DDL,
 };
 use crate::{IndexStatus, Result};
@@ -17,9 +17,17 @@ use rusqlite::{params, Connection, ToSql};
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
+#[cfg(test)]
+use std::cell::Cell;
+#[cfg(test)]
+thread_local! {
+    /// Test-only inject for d2a1.2: force restore_synchronous to fail so
+    /// callers prove commit/rollback surfaces the error (no `let _ =`).
+    static FORCE_RESTORE_SYNC_FAILURE: Cell<bool> = const { Cell::new(false) };
+}
 // 6 = symbols_name_lower (main / z47q). 7 = semantic-layout-v2 wipe (this PR).
 // Never reuse a SCHEMA_VERSION for two different migrations.
-const SCHEMA_VERSION: i64 = 7;
+const SCHEMA_VERSION: i64 = 9;
 const IMPORT_SELECT: &str =
     "SELECT f.path, f.language, i.module_path, i.line_no FROM imports i JOIN files f ON f.id = i.file_id";
 const SYM_LOC: &str = "SELECT f.path, s.name, f.language, s.line_start, s.line_end FROM symbols s JOIN files f ON f.id = s.file_id";
@@ -103,9 +111,20 @@ pub struct IndexStore {
     file_tx_owns: std::cell::Cell<bool>,
     file_tx_poisoned: std::cell::Cell<bool>,
     cache_seq: std::cell::Cell<i64>,
+    /// Write-durability profile for this connection (0obi).
+    durability: crate::store::Durability,
 }
 impl IndexStore {
     pub fn open(root: &Path, index_path: Option<&Path>) -> Result<Self> {
+        Self::open_with_durability(root, index_path, crate::store::Durability::from_env())
+    }
+
+    /// Open with an explicit durability profile (0obi).
+    pub fn open_with_durability(
+        root: &Path,
+        index_path: Option<&Path>,
+        durability: crate::store::Durability,
+    ) -> Result<Self> {
         let db_path = try_index_db_path(root, index_path).map_err(|e| {
             crate::StoreError::Other(format!(
                 "failed to resolve index path for root {}: {e}",
@@ -128,7 +147,7 @@ impl IndexStore {
                 root.display()
             ))
         })?;
-        configure_connection(&conn)?;
+        configure_connection_with(&conn, durability)?;
         let store = Self {
             conn,
             root: root.to_path_buf(),
@@ -137,6 +156,7 @@ impl IndexStore {
             file_tx_owns: std::cell::Cell::new(false),
             file_tx_poisoned: std::cell::Cell::new(false),
             cache_seq: std::cell::Cell::new(0),
+            durability,
         };
         store.init_schema()?;
         init_cache_seq(&store.conn, &store.cache_seq)?;
@@ -162,6 +182,14 @@ impl IndexStore {
         if version < 3 {
             self.conn.execute_batch(
                 "INSERT INTO lines_trigram(rowid, content) SELECT rowid, content FROM lines;",
+            )?;
+        }
+        // Schema 8 (vvpk): backfill the unstemmed code field for older indexes.
+        if version < 8 {
+            self.conn.execute_batch(
+                "DELETE FROM lines_code_fts;
+                 INSERT INTO lines_code_fts(rowid, content, file_id, line_no)
+                   SELECT rowid, content, file_id, line_no FROM lines;",
             )?;
         }
         // Schema 6 (main): idx_symbols_name_lower arrives via SCHEMA_DDL above.
@@ -215,6 +243,115 @@ impl IndexStore {
         Ok(())
     }
     /// Monotonic generation for searchable-index mutations on every connection.
+    /// Monotonic index generation (d3l5).
+    ///
+    /// Every indexing transaction bumps `index_data_version`, so it is already
+    /// the generation counter this engine needs; exposing it under the honest
+    /// name avoids maintaining a second counter that could drift from the
+    /// first.
+    pub fn index_generation(&self) -> Result<i64> {
+        self.index_data_version()
+    }
+
+    /// Schema version this database was built with (d3l5).
+    pub fn schema_version(&self) -> i64 {
+        SCHEMA_VERSION
+    }
+
+    /// Highest indexed file mtime, as a worktree revision proxy (d3l5).
+    ///
+    /// This is what the index believes about the worktree, so a response can
+    /// state the source state it actually read rather than the current one.
+    pub fn worktree_revision(&self) -> Result<i64> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT COALESCE(MAX(mtime_secs), 0) FROM files",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap_or(0))
+    }
+
+    /// Count definitions carrying a name, repository-wide and inside one file
+    /// (dvc4). Used to classify how confidently a name match resolved.
+    pub fn symbol_name_candidates(&self, name: &str, file: &str) -> Result<(usize, usize)> {
+        let repo: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM symbols WHERE name = ?1",
+            params![name],
+            |row| row.get(0),
+        )?;
+        let same_file: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM symbols s JOIN files f ON f.id = s.file_id
+             WHERE s.name = ?1 AND f.path = ?2",
+            params![name, file],
+            |row| row.get(0),
+        )?;
+        Ok((same_file as usize, repo as usize))
+    }
+
+    /// Symbol names paired with nearby line text, for lexicon learning (ufk7).
+    ///
+    /// Bounded by construction: a few lines per symbol, not whole files, so
+    /// learning cost stays proportional to the symbol count.
+    pub fn all_symbol_context(&self) -> Result<Vec<(String, String)>> {
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT s.name, COALESCE(GROUP_CONCAT(l.content, ' '), '')
+             FROM symbols s
+             LEFT JOIN lines l
+               ON l.file_id = s.file_id
+              AND l.line_no BETWEEN MAX(1, s.line_start - 2) AND s.line_start + 2
+             GROUP BY s.id",
+        )?;
+        let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
+
+    /// Replace the repository lexicon in one transaction (ufk7).
+    pub fn replace_lexicon(&self, associations: &[crate::lexicon::Association]) -> Result<()> {
+        self.with_file_tx(|| {
+            self.conn.execute("DELETE FROM lexicon", [])?;
+            {
+                let mut stmt = self.conn.prepare_cached(
+                    "INSERT OR REPLACE INTO lexicon(term, related, ppmi, support) VALUES(?1,?2,?3,?4)",
+                )?;
+                for association in associations {
+                    stmt.execute(params![
+                        association.term,
+                        association.related,
+                        association.ppmi,
+                        association.support
+                    ])?;
+                }
+            }
+            Ok(())
+        })
+    }
+
+    /// Read the whole lexicon (ufk7). Ordered so loads are deterministic.
+    pub fn all_lexicon_rows(&self) -> Result<Vec<crate::lexicon::Association>> {
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT term, related, ppmi, support FROM lexicon ORDER BY term, related",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(crate::lexicon::Association {
+                term: row.get(0)?,
+                related: row.get(1)?,
+                ppmi: row.get(2)?,
+                support: row.get::<_, i64>(3)? as u32,
+            })
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
+
     pub fn index_data_version(&self) -> Result<i64> {
         Ok(self
             .get_meta("index_data_version")?
@@ -259,13 +396,21 @@ impl IndexStore {
     /// File-tx stays OFF until bulk commit (no re-NORMAL after each file).
     /// Nested begins only increment depth; only the owning outermost end commits
     /// or rolls back (bead ast-sgrep-j97d.37er).
+    /// Active write-durability profile (0obi).
+    pub fn durability(&self) -> crate::store::Durability {
+        self.durability
+    }
+
     pub fn begin_file_tx(&self) -> Result<()> {
         let depth = self.file_tx_depth.get();
         if depth == 0 {
             self.file_tx_poisoned.set(false);
             if self.conn.is_autocommit() {
-                self.conn
-                    .execute_batch("PRAGMA synchronous = OFF; BEGIN IMMEDIATE")?;
+                // 0obi: was unconditionally OFF; now the profile decides.
+                self.conn.execute_batch(&format!(
+                    "PRAGMA synchronous = {}; BEGIN IMMEDIATE",
+                    self.durability.write_pragma()
+                ))?;
                 self.file_tx_owns.set(true);
             } else {
                 // Bulk (or other) transaction owns the write set.
@@ -282,8 +427,16 @@ impl IndexStore {
         self.end_file_tx(false)
     }
     fn restore_synchronous(&self) -> Result<()> {
-        self.conn
-            .execute_batch("PRAGMA synchronous = NORMAL; PRAGMA cache_size = -16384")?;
+        #[cfg(test)]
+        if FORCE_RESTORE_SYNC_FAILURE.with(|c| c.get()) {
+            return Err(crate::StoreError::Other(
+                "restore_synchronous forced failure (test inject)".into(),
+            ));
+        }
+        self.conn.execute_batch(&format!(
+            "PRAGMA synchronous = {}; PRAGMA cache_size = -16384",
+            self.durability.steady_pragma()
+        ))?;
         Ok(())
     }
     fn end_file_tx(&self, commit: bool) -> Result<()> {
@@ -307,12 +460,18 @@ impl IndexStore {
             } else {
                 let _ = self.conn.execute_batch("ROLLBACK");
             }
-            // Always restore NORMAL after file_tx ends (bead ast-sgrep-j97d.5kj8).
-            let _ = self.restore_synchronous();
         }
+        // Clear bookkeeping before restore so a failed restore cannot leave
+        // stale depth/owns state that confuses the next begin_file_tx.
         self.file_tx_depth.set(0);
         self.file_tx_owns.set(false);
         self.file_tx_poisoned.set(false);
+        // Always restore steady pragma after owning file_tx ends (j97d.5kj8 /
+        // d2a1.2). Propagate errors: a stuck write-batch mode (e.g. OFF under
+        // FastUnsafe) must be fail-visible. Do not re-COMMIT after failure.
+        if owns {
+            self.restore_synchronous()?;
+        }
         if poisoned && commit {
             return Err(crate::StoreError::Other(
                 "file_tx commit refused: nested file_tx rolled back".into(),
@@ -324,11 +483,16 @@ impl IndexStore {
         self.begin_file_tx()?;
         match f() {
             Ok(v) => {
+                // Nested rollback poisons the write set. Do not return Ok(v) after
+                // rolling back: callers would treat a failed nested write as success
+                // (e.g. file_id that no longer exists). Match commit_file_tx refusal.
                 if self.file_tx_poisoned.get() {
                     self.rollback_file_tx()?;
-                } else {
-                    self.commit_file_tx()?;
+                    return Err(crate::StoreError::Other(
+                        "file_tx commit refused: nested file_tx rolled back".into(),
+                    ));
                 }
+                self.commit_file_tx()?;
                 Ok(v)
             }
             Err(e) => {
@@ -354,10 +518,12 @@ impl IndexStore {
         if !self.conn.is_autocommit() {
             return Ok(());
         }
-        self.conn.execute_batch(
+        // 0obi: was unconditionally OFF; now the profile decides.
+        self.conn.execute_batch(&format!(
             "PRAGMA temp_store = MEMORY; PRAGMA cache_size = -131072; PRAGMA mmap_size = 536870912; \
-             PRAGMA synchronous = OFF; BEGIN IMMEDIATE",
-        )?;
+             PRAGMA synchronous = {}; BEGIN IMMEDIATE",
+            self.durability.write_pragma()
+        ))?;
         Ok(())
     }
     pub fn commit_bulk_tx(&self) -> Result<()> {
@@ -365,6 +531,20 @@ impl IndexStore {
     }
     pub fn rollback_bulk_tx(&self) -> Result<()> {
         self.end_bulk_tx(false)
+    }
+    /// Finish a bulk write started with [`begin_bulk_tx`].
+    ///
+    /// On `Ok`, commits. On `Err`, rolls back and **prefers** the rollback/restore
+    /// error so a stuck FastUnsafe `synchronous=OFF` mode cannot hide behind the
+    /// original write failure (d2a1.2 residual / pass9: no `let _ = rollback`).
+    pub fn apply_bulk_write_result(&self, write_result: Result<()>) -> Result<()> {
+        match write_result {
+            Ok(()) => self.commit_bulk_tx(),
+            Err(e) => match self.rollback_bulk_tx() {
+                Ok(()) => Err(e),
+                Err(rb) => Err(rb),
+            },
+        }
     }
     fn end_bulk_tx(&self, commit: bool) -> Result<()> {
         if self.conn.is_autocommit() {
@@ -375,20 +555,24 @@ impl IndexStore {
         } else {
             let _ = self.conn.execute_batch("ROLLBACK");
         }
-        // Restore NORMAL after both commit and rollback (bead ast-sgrep-j97d.5kj8).
-        let _ = self.restore_synchronous();
         self.file_tx_depth.set(0);
         self.file_tx_owns.set(false);
         self.file_tx_poisoned.set(false);
+        // Restore steady pragma after both commit and rollback (j97d.5kj8 /
+        // d2a1.2). Propagate errors so OFF cannot stick silently.
+        self.restore_synchronous()?;
         Ok(())
     }
     pub fn clear_all_data(&self) -> Result<()> {
+        // Bump both generations inside the same file_tx as the wipe so a crash
+        // between COMMIT and a post-tx bump cannot leave empty tables with a
+        // stale semantic_data_version (pass3).
         self.with_file_tx(|| {
             self.conn.execute_batch(CLEAR_ALL_SQL)?;
-            self.bump_index_data_version()
+            self.bump_index_data_version()?;
+            self.bump_semantic_data_version()
         })?;
         let _ = self.conn.execute_batch("VACUUM");
-        self.bump_semantic_data_version()?;
         Ok(())
     }
     pub fn upsert_file(&self, input: UpsertFileInput<'_>) -> Result<i64> {
@@ -545,7 +729,7 @@ impl IndexStore {
         self.insert_imports(file_id, input.imports)?;
         self.insert_pattern_nodes(file_id, input.pattern_nodes)?;
         self.set_meta(struct_key, struct_fp)?;
-        crate::semantic_ann::mark_semantic_ivf_stale(self);
+        crate::semantic_ann::mark_semantic_ivf_stale(self)?;
         self.bump_index_data_version()?;
         Ok(file_id)
     }
@@ -589,6 +773,10 @@ impl IndexStore {
         let mut fts = self.conn.prepare_cached(
             "INSERT INTO lines_fts(rowid, content, file_id, line_no) VALUES(?1,?2,?3,?4)",
         )?;
+        // vvpk: the same line also lands in the unstemmed code field.
+        let mut code_fts = self.conn.prepare_cached(
+            "INSERT INTO lines_code_fts(rowid, content, file_id, line_no) VALUES(?1,?2,?3,?4)",
+        )?;
         let mut tri = self
             .conn
             .prepare_cached("INSERT INTO lines_trigram(rowid, content) VALUES(?1,?2)")?;
@@ -596,6 +784,7 @@ impl IndexStore {
             ls.execute(params![file_id, no, content])?;
             let rid = self.conn.last_insert_rowid();
             fts.execute(params![rid, content, file_id, no])?;
+            code_fts.execute(params![rid, content, file_id, no])?;
             tri.execute(params![rid, content])?;
         }
         Ok(())
@@ -760,7 +949,7 @@ impl IndexStore {
             self.delete_meta(&format!("eol:{rel_path}"))?;
             self.delete_meta(&format!("body:{rel_path}"))?;
             self.delete_meta(&format!("struct:{rel_path}"))?;
-            crate::semantic_ann::mark_semantic_ivf_stale(self);
+            crate::semantic_ann::mark_semantic_ivf_stale(self)?;
             self.bump_index_data_version()?;
             self.bump_semantic_data_version()?;
             Ok(())
@@ -803,6 +992,7 @@ impl IndexStore {
             embed_cache_hits: self.meta_u64("embed_cache_hits")?,
             embed_cache_misses: self.meta_u64("embed_cache_misses")?,
             semantic_ivf_present: crate::semantic_ivf::semantic_ivf_path(&self.db_path).exists(),
+            durability: self.durability.as_str().to_owned(),
         })
     }
     pub fn indexed_line_count(&self) -> Result<usize> {
@@ -893,16 +1083,16 @@ impl IndexStore {
             let mut stmt = self.conn.prepare(&sql)?;
             let rows = stmt.query_map(rusqlite::params_from_iter(batch.iter()), |r| {
                 let id: i64 = r.get(0)?;
+                // Fail closed on corrupt blobs (parity with read_sem_row / emb_vec).
+                // unwrap_or_default() previously dropped corrupt IVF candidates as
+                // empty vectors, silently skewing ANN re-rank results (pass3).
                 let row = (
                     r.get(1)?,
                     r.get(2)?,
                     r.get(3)?,
                     r.get::<_, Option<String>>(4)?.unwrap_or_default(),
                     r.get(5)?,
-                    {
-                        let v: Vec<u8> = r.get(6)?;
-                        ast_sgrep_embed::embed_from_bytes(&v).unwrap_or_default()
-                    },
+                    emb_vec(r, 6)?,
                 );
                 Ok((id, row))
             })?;
@@ -1180,3 +1370,241 @@ impl IndexStore {
             .exists(params![path])?)
     }
 }
+
+#[cfg(test)]
+mod restore_synchronous_tests {
+    use super::*;
+    use crate::store::Durability;
+    use tempfile::TempDir;
+
+    struct RestoreFailGuard;
+    impl Drop for RestoreFailGuard {
+        fn drop(&mut self) {
+            FORCE_RESTORE_SYNC_FAILURE.with(|c| c.set(false));
+        }
+    }
+
+    fn force_restore_failure() -> RestoreFailGuard {
+        FORCE_RESTORE_SYNC_FAILURE.with(|c| c.set(true));
+        RestoreFailGuard
+    }
+
+    fn sync_mode(store: &IndexStore) -> i64 {
+        store
+            .connection()
+            .query_row("PRAGMA synchronous", [], |row| row.get(0))
+            .expect("PRAGMA synchronous")
+    }
+
+    #[test]
+    fn file_tx_commit_surfaces_restore_synchronous_failure() {
+        let temp = TempDir::new().unwrap();
+        let store =
+            IndexStore::open_with_durability(temp.path(), None, Durability::FastUnsafe).unwrap();
+        store.begin_file_tx().unwrap();
+        assert_eq!(sync_mode(&store), 0, "FastUnsafe write batch uses OFF");
+        let _guard = force_restore_failure();
+        let err = store
+            .commit_file_tx()
+            .expect_err("restore failure must not be swallowed");
+        assert!(
+            err.to_string().contains("restore_synchronous"),
+            "unexpected error: {err}"
+        );
+        // Tx bookkeeping cleared even when restore fails.
+        assert!(store.connection().is_autocommit());
+        assert_eq!(store.file_tx_depth.get(), 0);
+    }
+
+    #[test]
+    fn file_tx_rollback_surfaces_restore_synchronous_failure() {
+        let temp = TempDir::new().unwrap();
+        let store =
+            IndexStore::open_with_durability(temp.path(), None, Durability::FastUnsafe).unwrap();
+        store.begin_file_tx().unwrap();
+        let _guard = force_restore_failure();
+        let err = store
+            .rollback_file_tx()
+            .expect_err("restore failure must not be swallowed on rollback");
+        assert!(
+            err.to_string().contains("restore_synchronous"),
+            "unexpected error: {err}"
+        );
+        assert_eq!(store.file_tx_depth.get(), 0);
+    }
+
+    #[test]
+    fn bulk_tx_commit_surfaces_restore_synchronous_failure() {
+        let temp = TempDir::new().unwrap();
+        let store =
+            IndexStore::open_with_durability(temp.path(), None, Durability::FastUnsafe).unwrap();
+        store.begin_bulk_tx().unwrap();
+        let _guard = force_restore_failure();
+        let err = store
+            .commit_bulk_tx()
+            .expect_err("restore failure must not be swallowed on bulk commit");
+        assert!(
+            err.to_string().contains("restore_synchronous"),
+            "unexpected error: {err}"
+        );
+        assert!(store.connection().is_autocommit());
+    }
+
+    #[test]
+    fn bulk_tx_rollback_surfaces_restore_synchronous_failure() {
+        let temp = TempDir::new().unwrap();
+        let store =
+            IndexStore::open_with_durability(temp.path(), None, Durability::FastUnsafe).unwrap();
+        store.begin_bulk_tx().unwrap();
+        let _guard = force_restore_failure();
+        let err = store
+            .rollback_bulk_tx()
+            .expect_err("restore failure must not be swallowed on bulk rollback");
+        assert!(
+            err.to_string().contains("restore_synchronous"),
+            "unexpected error: {err}"
+        );
+        assert!(store.connection().is_autocommit());
+    }
+
+    /// Pass9 residual of d2a1.2: product `index_all` used `let _ = rollback_bulk_tx()`
+    /// after a write Err. `apply_bulk_write_result` must surface restore failure
+    /// instead of returning only the original write error.
+    #[test]
+    fn apply_bulk_write_result_prefers_restore_failure_over_write_err() {
+        let temp = TempDir::new().unwrap();
+        let store =
+            IndexStore::open_with_durability(temp.path(), None, Durability::FastUnsafe).unwrap();
+        store.begin_bulk_tx().unwrap();
+        let _guard = force_restore_failure();
+        let write_err = crate::StoreError::Other("simulated bulk write failure".into());
+        let err = store
+            .apply_bulk_write_result(Err(write_err))
+            .expect_err("restore failure must win over write Err");
+        assert!(
+            err.to_string().contains("restore_synchronous"),
+            "swallowed restore behind write err: {err}"
+        );
+        assert!(
+            !err.to_string().contains("simulated bulk write"),
+            "must not prefer original write err when restore fails: {err}"
+        );
+        assert!(store.connection().is_autocommit());
+    }
+
+    #[test]
+    fn apply_bulk_write_result_returns_write_err_when_rollback_ok() {
+        let temp = TempDir::new().unwrap();
+        let store =
+            IndexStore::open_with_durability(temp.path(), None, Durability::FastUnsafe).unwrap();
+        store.begin_bulk_tx().unwrap();
+        let write_err = crate::StoreError::Other("simulated bulk write failure".into());
+        let err = store
+            .apply_bulk_write_result(Err(write_err))
+            .expect_err("write Err must surface when rollback succeeds");
+        assert!(
+            err.to_string().contains("simulated bulk write"),
+            "unexpected error: {err}"
+        );
+        assert!(store.connection().is_autocommit());
+        // Steady pragma restored after successful rollback path.
+        let sync: i64 = store
+            .connection()
+            .query_row("PRAGMA synchronous", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(sync, 1, "FastUnsafe steady restores to NORMAL between batches");
+    }
+}
+
+#[cfg(test)]
+mod pass3_deep_core_tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    fn empty_upsert<'a>(path: &'a str, lines: &'a [(u32, String)], hash: &'a str) -> UpsertFileInput<'a> {
+        UpsertFileInput {
+            rel_path: path,
+            language: Some("python"),
+            mtime_secs: 1,
+            mtime_nanos: 0,
+            content_hash: hash,
+            lines,
+            eol: "\n",
+            symbols: &[],
+            callers: &[],
+            imports: &[],
+            pattern_nodes: &[],
+            semantic_chunks: &[],
+            embed_semantic: false,
+            embed_backend: ast_sgrep_embed::EmbedPreference::Auto,
+        }
+    }
+
+    /// pass3: semantic_chunks_by_ids must fail closed like all_semantic_chunks.
+    #[test]
+    fn semantic_chunks_by_ids_fails_closed_on_corrupt_blob() {
+        let temp = TempDir::new().unwrap();
+        let store = IndexStore::open(temp.path(), None).unwrap();
+        let lines = [(1, "emb".into())];
+        let file_id = store.upsert_file(empty_upsert("c.py", &lines, "h")).unwrap();
+        store
+            .connection()
+            .execute(
+                "INSERT INTO semantic_chunks(file_id, symbol_id, chunk_kind, line_start, line_end, symbol_name, text, vector) \
+                 VALUES(?1, NULL, 'file', 1, 1, '', 't', ?2)",
+                rusqlite::params![file_id, vec![1u8, 2, 3]],
+            )
+            .unwrap();
+        let id: i64 = store
+            .connection()
+            .query_row("SELECT id FROM semantic_chunks LIMIT 1", [], |r| r.get(0))
+            .unwrap();
+        let err = store
+            .semantic_chunks_by_ids(&[id])
+            .expect_err("corrupt vector must not become an empty embedding");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("embedding")
+                || msg.contains("multiple of 4")
+                || msg.contains("database")
+                || msg.contains("InvalidData"),
+            "corrupt blob must error, got: {msg}"
+        );
+    }
+
+    /// pass3: with_file_tx must not Ok after nested poison+rollback.
+    #[test]
+    fn with_file_tx_poisoned_ok_closure_returns_err() {
+        let temp = TempDir::new().unwrap();
+        let store = IndexStore::open(temp.path(), None).unwrap();
+        let lines = [(1, "keep".into())];
+        store
+            .upsert_file(empty_upsert("keep.py", &lines, "h0"))
+            .unwrap();
+
+        let result = store.with_file_tx(|| {
+            // Nested begin + rollback poisons the outer write set.
+            store.begin_file_tx()?;
+            store
+                .connection()
+                .execute(
+                    "INSERT INTO meta(key, value) VALUES('poison_probe', '1')                      ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                    [],
+                )
+                .map_err(crate::StoreError::from)?;
+            store.rollback_file_tx()?;
+            // Closure still returns Ok — with_file_tx must refuse success.
+            Ok(42i64)
+        });
+        assert!(
+            result.is_err(),
+            "poisoned with_file_tx must not return Ok after rollback"
+        );
+        assert!(
+            store.get_meta("poison_probe").unwrap().is_none(),
+            "poisoned writes must not be visible"
+        );
+        assert!(store.connection().is_autocommit());
+    }
+}
+

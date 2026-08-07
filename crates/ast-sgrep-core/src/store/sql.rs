@@ -2,6 +2,9 @@ use crate::Result;
 use rusqlite::{params, Connection, ToSql};
 use std::time::Duration;
 // Full DDL for the current schema; init_schema applies when user_version is lower.
+// IMPORTANT: this string is line-continued without embedded newlines. Never use SQL `--`
+// comments inside it -- they run to end-of-input and drop the rest of the batch (vvpk / lines_code_fts).
+// lines_code_fts: no porter stemming; `_` is a token character so `refresh_token` stays one term.
 pub(crate) const SCHEMA_DDL: &str = "\
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);\
 CREATE TABLE IF NOT EXISTS files (id INTEGER PRIMARY KEY, path TEXT NOT NULL UNIQUE, language TEXT,\
@@ -33,6 +36,9 @@ CREATE INDEX IF NOT EXISTS idx_pattern_nodes_signature ON pattern_nodes(signatur
 CREATE INDEX IF NOT EXISTS idx_pattern_nodes_file ON pattern_nodes(file_id);\
 CREATE VIRTUAL TABLE IF NOT EXISTS lines_fts USING fts5(content, file_id UNINDEXED, line_no UNINDEXED, tokenize = 'porter unicode61');\
 CREATE VIRTUAL TABLE IF NOT EXISTS lines_trigram USING fts5(content, content = 'lines', content_rowid = 'rowid', tokenize = 'trigram');\
+CREATE TABLE IF NOT EXISTS lexicon (term TEXT NOT NULL, related TEXT NOT NULL, ppmi REAL NOT NULL, support INTEGER NOT NULL, PRIMARY KEY (term, related));\
+CREATE INDEX IF NOT EXISTS idx_lexicon_term ON lexicon(term);\
+CREATE VIRTUAL TABLE IF NOT EXISTS lines_code_fts USING fts5(content, file_id UNINDEXED, line_no UNINDEXED, tokenize = \"unicode61 tokenchars '_'\");\
 CREATE TABLE IF NOT EXISTS embeddings (file_id INTEGER NOT NULL, line_no INTEGER NOT NULL, vector BLOB NOT NULL,\
   PRIMARY KEY (file_id, line_no), FOREIGN KEY (file_id) REFERENCES files(id) ON DELETE CASCADE);\
 CREATE TABLE IF NOT EXISTS semantic_chunks (id INTEGER PRIMARY KEY, file_id INTEGER NOT NULL, symbol_id INTEGER,\
@@ -272,11 +278,18 @@ pub fn delete_file_lines(conn: &Connection, file_id: i64, from_line: Option<u32>
             .execute(params![file_id, first])?;
             conn.prepare_cached("DELETE FROM lines_fts WHERE file_id = ?1 AND line_no >= ?2")?
                 .execute(params![file_id, first])?;
+            // vvpk: the code field must stay in lockstep or it serves stale rows.
+            conn.prepare_cached(
+                "DELETE FROM lines_code_fts WHERE file_id = ?1 AND line_no >= ?2",
+            )?
+            .execute(params![file_id, first])?;
             conn.prepare_cached("DELETE FROM lines WHERE file_id = ?1 AND line_no >= ?2")?
                 .execute(params![file_id, first])?;
         }
         None => {
             conn.prepare_cached("DELETE FROM lines_fts WHERE file_id = ?1")?
+                .execute(params![file_id])?;
+            conn.prepare_cached("DELETE FROM lines_code_fts WHERE file_id = ?1")?
                 .execute(params![file_id])?;
             conn.prepare_cached(
                 "DELETE FROM lines_trigram WHERE rowid IN (SELECT rowid FROM lines WHERE file_id = ?1)",
@@ -307,7 +320,7 @@ pub const CLEAR_ALL_META_WHITELIST: &[&str] =
 /// Full wipe of index content tables (schema left intact). Order keeps FTS/content-sync safe.
 /// Meta is cleared except the schema whitelist (bead ast-sgrep-28vo).
 pub const CLEAR_ALL_SQL: &str = "\
-DELETE FROM lines_trigram; DELETE FROM lines_fts; DELETE FROM semantic_chunks; \
+DELETE FROM lines_trigram; DELETE FROM lines_fts; DELETE FROM lines_code_fts; DELETE FROM lexicon; DELETE FROM semantic_chunks; \
 DELETE FROM pattern_nodes; DELETE FROM embeddings; DELETE FROM imports; \
 DELETE FROM callers; DELETE FROM symbols; DELETE FROM lines; DELETE FROM files; \
 DELETE FROM embed_cache; \
@@ -326,7 +339,7 @@ fn clear_all_meta_whitelist_matches_sql() {
 
 pub(crate) fn emb_vec(r: &rusqlite::Row<'_>, idx: usize) -> rusqlite::Result<Vec<f32>> {
     let v: Vec<u8> = r.get(idx)?;
-    // Fail closed on corrupt blobs (bead ast-sgrep-j97d.5qpa) — never default to zeros.
+    // Fail closed on corrupt blobs (bead ast-sgrep-j97d.5qpa) -- never default to zeros.
     ast_sgrep_embed::embed_from_bytes(&v).map_err(|msg| {
         rusqlite::Error::FromSqlConversionFailure(
             idx,
@@ -366,15 +379,24 @@ pub fn lang_and_clause(lang: Option<&str>) -> &'static str {
     }
 }
 pub fn configure_connection(conn: &Connection) -> Result<()> {
+    configure_connection_with(conn, crate::store::Durability::default())
+}
+
+/// Configure a connection under an explicit durability profile (0obi).
+pub fn configure_connection_with(
+    conn: &Connection,
+    durability: crate::store::Durability,
+) -> Result<()> {
     conn.busy_timeout(Duration::from_secs(5))?;
     conn.set_prepared_statement_cache_capacity(128);
     let journal_mode: String = conn.query_row("PRAGMA journal_mode", [], |row| row.get(0))?;
     if !journal_mode.eq_ignore_ascii_case("wal") {
         let _: String = conn.query_row("PRAGMA journal_mode = WAL", [], |row| row.get(0))?;
     }
-    conn.execute_batch(
-        "PRAGMA foreign_keys = ON; PRAGMA synchronous = NORMAL; PRAGMA wal_autocheckpoint = 1000;",
-    )?;
+    conn.execute_batch(&format!(
+        "PRAGMA foreign_keys = ON; PRAGMA synchronous = {}; PRAGMA wal_autocheckpoint = 1000;",
+        durability.steady_pragma()
+    ))?;
     if std::env::var_os("ASGREP_SQLITE_DEFAULTS").is_none() {
         conn.execute_batch("PRAGMA mmap_size = 268435456; PRAGMA cache_size = -16384;")?;
     }

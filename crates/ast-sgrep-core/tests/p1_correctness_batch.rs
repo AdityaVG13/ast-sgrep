@@ -126,6 +126,53 @@ fn indexed_rel_path_rejects_non_utf8() {
     assert!(indexed_rel_path(b).is_err());
 }
 
+/// Path-traversal / absolute keys must not enter the index (ubs security pass).
+#[test]
+fn indexed_rel_path_rejects_traversal_and_absolute() {
+    for bad in [
+        Path::new("../secret.rs"),
+        Path::new("src/../../etc/passwd"),
+        Path::new("/etc/passwd"),
+        Path::new(""),
+        Path::new("a\0b.rs"),
+    ] {
+        let err = indexed_rel_path(bad).expect_err("must reject unsafe rel");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("asgrep-kqhp"),
+            "policy tag missing for {}: {msg}",
+            bad.display()
+        );
+    }
+    assert_eq!(
+        indexed_rel_path(Path::new("src/main.rs")).unwrap(),
+        "src/main.rs"
+    );
+    assert_eq!(
+        indexed_rel_path(Path::new("./src/lib.rs")).unwrap(),
+        "./src/lib.rs"
+    );
+}
+
+#[test]
+fn index_content_rejects_parent_dir_keys() {
+    let temp = TempDir::new().unwrap();
+    let mut indexer = Indexer::new(IndexOptions {
+        root: temp.path().to_path_buf(),
+        embed_semantic: false,
+        ..IndexOptions::default()
+    })
+    .unwrap();
+    let err = indexer
+        .index_content("../escape.rs", "fn evil() {}")
+        .expect_err("parent-dir key must fail closed");
+    assert!(
+        err.to_string().contains("path traversal") || err.to_string().contains("asgrep-kqhp"),
+        "got {}",
+        err
+    );
+}
+
 /// Prior durability: ResponseCache still invalidates on same-connection generation bump.
 #[test]
 fn prior_response_cache_invalidation_still_green() {

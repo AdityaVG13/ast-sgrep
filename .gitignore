@@ -90,6 +90,11 @@ benchmarks/**/__pycache__/
 benchmarks/corpora/
 benchmarks/results/*
 !benchmarks/results/*.md
+# d2dv: the reproducible evaluation pack's raw artifacts ARE tracked, so a
+# later run can be diffed against the recorded one instead of trusted.
+!benchmarks/results/raw/
+!benchmarks/results/raw/*.json
+!benchmarks/results/raw/*.txt
 benchmarks/tmp-idx/
 benchmarks/cold-start-work/
 benchmarks/query-path-work/
@@ -110,6 +115,8 @@ editors/**/*.vsix
 
 # Tests
 tests/artifacts/perf/
+# Golden mismatch dumps (assert_golden writes these on failure; never commit)
+*.actual
 
 # Local bench history ratchet (written by `asgrep bench`)
 .bench-history.json
@@ -138,3 +145,7 @@ fuzz/corpus/
 
 # CLI benchmark-history state (regenerated on runs)
 **/.bench-history.json
+
+# Local tool/audit state (not product)
+.house-odds/**/.fszero/
+/beads_compliance_audit/

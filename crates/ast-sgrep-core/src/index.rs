@@ -13,13 +13,42 @@ use std::time::SystemTime;
 use walkdir::WalkDir;
 /// Indexed relative paths must be valid UTF-8. Lossy conversion is forbidden:
 /// two distinct non-UTF8 `OsStr` paths must not collide into one DB key.
+///
+/// Also rejects absolute paths and `..` / root / prefix components so an
+/// untrusted relative key cannot escape the project root when later joined
+/// (defense-in-depth alongside MCP `parse_node_id` and search 89er).
 pub fn indexed_rel_path(rel: &Path) -> Result<String> {
+    use std::path::Component;
+    if rel.as_os_str().is_empty() {
+        return Err(crate::StoreError::Other(
+            "empty relative path rejected (asgrep-kqhp)".into(),
+        ));
+    }
+    if rel.is_absolute()
+        || rel.components().any(|c| {
+            matches!(
+                c,
+                Component::ParentDir | Component::RootDir | Component::Prefix(_)
+            )
+        })
+    {
+        return Err(crate::StoreError::Other(format!(
+            "path traversal rejected (asgrep-kqhp): {}",
+            rel.display()
+        )));
+    }
     let raw = rel.to_str().ok_or_else(|| {
         crate::StoreError::Other(format!(
             "non-UTF8 path rejected (asgrep-kqhp): {}",
             rel.display()
         ))
     })?;
+    if raw.contains('\0') {
+        return Err(crate::StoreError::Other(format!(
+            "NUL in path rejected (asgrep-kqhp): {}",
+            rel.display()
+        )));
+    }
     Ok(raw.replace('\\', "/"))
 }
 #[derive(Debug, Clone)]
@@ -122,6 +151,8 @@ pub struct IndexOptions {
     pub embed_backend: EmbedBackend,
     pub force_reindex: bool,
     pub ann_threshold: Option<usize>,
+    /// Write-durability profile for the index database (0obi).
+    pub durability: crate::store::Durability,
 }
 impl Default for IndexOptions {
     fn default() -> Self {
@@ -135,6 +166,7 @@ impl Default for IndexOptions {
             embed_backend: EmbedBackend::Auto,
             force_reindex: false,
             ann_threshold: None,
+            durability: crate::store::Durability::from_env(),
         }
     }
 }
@@ -178,7 +210,11 @@ pub struct WatchUpdateStats {
 impl Indexer {
     pub fn new(mut options: IndexOptions) -> Result<Self> {
         options.root = options.root.canonicalize().unwrap_or(options.root.clone());
-        let store = IndexStore::open(&options.root, options.index_path.as_deref())?;
+        let store = IndexStore::open_with_durability(
+            &options.root,
+            options.index_path.as_deref(),
+            options.durability,
+        )?;
         store.set_meta("root", &options.root.display().to_string())?;
         let ignore = crate::gitignore::IgnoreMatcher::new(&options.root);
         Ok(Self {
@@ -193,97 +229,116 @@ impl Indexer {
         &self.store
     }
     pub fn index_all(&mut self) -> Result<IndexStats> {
+        let _perf_run = crate::perf_profile::Run::start("index_all");
         self.ignore.clear();
-        let (candidates, mut stats) = self.collect_index_candidates();
+        let (candidates, mut stats, prepared) = {
+            let _span = crate::perf_profile::Span::start(
+                "index_walk_parse",
+                "index",
+                "WalkDir + prepare_file (read/hash/tree-sitter extract)",
+            );
+            let (candidates, stats) = self.collect_index_candidates();
+            let force = self.options.force_reindex;
+            let lang_filter = self.options.lang_filter.clone();
+            let embed_semantic = self.options.embed_semantic;
+            // 28vo: the hash-only fast path must not skip when the stored semantic
+            // identity (backend/model) differs from the active preference.
+            let semantic_identity_ok =
+                !embed_semantic || self.semantic_identity_matches()?;
+            let current_hashes = candidates
+                .iter()
+                .map(|(_, rel)| self.store.file_hash(rel))
+                .collect::<Result<Vec<_>>>()?;
+            let prepared: Vec<PrepareOutcome> = candidates
+                .par_iter()
+                .zip(current_hashes.par_iter())
+                .map(|((abs, rel), current_hash)| {
+                    prepare_file(
+                        abs,
+                        rel,
+                        force,
+                        current_hash.as_deref(),
+                        lang_filter.as_deref(),
+                        embed_semantic,
+                        semantic_identity_ok,
+                    )
+                })
+                .collect();
+            (candidates, stats, prepared)
+        };
         let mut seen_paths = HashSet::new();
         let mut semantic_ivf_dirty = false;
-        let force = self.options.force_reindex;
-        let lang_filter = self.options.lang_filter.clone();
-        let embed_semantic = self.options.embed_semantic;
-        // 28vo: the hash-only fast path must not skip when the stored semantic
-        // identity (backend/model) differs from the active preference.
-        let semantic_identity_ok =
-            !embed_semantic || self.semantic_identity_matches()?;
-        let current_hashes = candidates
-            .iter()
-            .map(|(_, rel)| self.store.file_hash(rel))
-            .collect::<Result<Vec<_>>>()?;
-        let prepared: Vec<PrepareOutcome> = candidates
-            .par_iter()
-            .zip(current_hashes.par_iter())
-            .map(|((abs, rel), current_hash)| {
-                prepare_file(
-                    abs,
-                    rel,
-                    force,
-                    current_hash.as_deref(),
-                    lang_filter.as_deref(),
-                    embed_semantic,
-                    semantic_identity_ok,
-                )
-            })
-            .collect();
-        self.store.begin_bulk_tx()?;
-        let write_result = (|| -> Result<()> {
-            for (rel_str, outcome) in candidates.iter().map(|(_, r)| r).zip(prepared) {
-                match outcome {
-                    PrepareOutcome::Unchanged => {
-                        seen_paths.insert(rel_str.clone());
-                        stats.files_skipped += 1;
-                    }
-                    PrepareOutcome::Filtered => {
-                        // --lang must not destructively wipe other languages (y1oy.8):
-                        // filtered paths are skipped here; prune_missing_files also
-                        // respects lang_filter when removing absent files.
-                    }
-                    PrepareOutcome::Failed(msg) => {
-                        eprintln!("[asgrep] failed to index {rel_str}: {msg}");
-                        stats.files_failed += 1;
-                    }
-                    PrepareOutcome::Ready(prep) => {
-                        seen_paths.insert(rel_str.clone());
-                        self.store.upsert_file(UpsertFileInput {
-                            rel_path: rel_str,
-                            language: prep.language.as_deref(),
-                            mtime_secs: prep.mtime_secs,
-                            mtime_nanos: prep.mtime_nanos,
-                            content_hash: &prep.hash,
-                            lines: &prep.lines,
-                            eol: &prep.eol,
-                            symbols: &prep.symbols,
-                            callers: &prep.callers,
-                            imports: &prep.imports,
-                            pattern_nodes: &prep.pattern_nodes,
-                            semantic_chunks: &prep.semantic_chunks,
-                            embed_semantic: self.options.embed_semantic,
-                            embed_backend: self.options.embed_backend.to_preference(),
-                        })?;
-                        let _ = self
-                            .store
-                            .set_meta(&format!("body:{rel_str}"), &prep.body_hash);
-                        stats.files_indexed += 1;
-                        stats.symbols_extracted += prep.symbols.len();
-                        stats.callers_extracted += prep.callers.len();
-                        stats.imports_extracted += prep.imports.len();
-                        if self.options.embed_semantic {
-                            semantic_ivf_dirty = true;
+        {
+            let _span = crate::perf_profile::Span::start(
+                "sqlite_upsert",
+                "index",
+                "bulk upsert_file transaction",
+            );
+            self.store.begin_bulk_tx()?;
+            let write_result = (|| -> Result<()> {
+                for (rel_str, outcome) in candidates.iter().map(|(_, r)| r).zip(prepared) {
+                    match outcome {
+                        PrepareOutcome::Unchanged => {
+                            seen_paths.insert(rel_str.clone());
+                            stats.files_skipped += 1;
+                        }
+                        PrepareOutcome::Filtered => {
+                            // --lang must not destructively wipe other languages (y1oy.8):
+                            // filtered paths are skipped here; prune_missing_files also
+                            // respects lang_filter when removing absent files.
+                        }
+                        PrepareOutcome::Failed(msg) => {
+                            eprintln!("[asgrep] failed to index {rel_str}: {msg}");
+                            stats.files_failed += 1;
+                        }
+                        PrepareOutcome::Ready(prep) => {
+                            seen_paths.insert(rel_str.clone());
+                            self.store.upsert_file(UpsertFileInput {
+                                rel_path: rel_str,
+                                language: prep.language.as_deref(),
+                                mtime_secs: prep.mtime_secs,
+                                mtime_nanos: prep.mtime_nanos,
+                                content_hash: &prep.hash,
+                                lines: &prep.lines,
+                                eol: &prep.eol,
+                                symbols: &prep.symbols,
+                                callers: &prep.callers,
+                                imports: &prep.imports,
+                                pattern_nodes: &prep.pattern_nodes,
+                                semantic_chunks: &prep.semantic_chunks,
+                                embed_semantic: self.options.embed_semantic,
+                                embed_backend: self.options.embed_backend.to_preference(),
+                            })?;
+                            // Same bulk_tx as upsert: fail + rollback if body meta cannot land
+                            // (structure-skip must not use a stale body fingerprint).
+                            self.store
+                                .set_meta(&format!("body:{rel_str}"), &prep.body_hash)?;
+                            stats.files_indexed += 1;
+                            stats.symbols_extracted += prep.symbols.len();
+                            stats.callers_extracted += prep.callers.len();
+                            stats.imports_extracted += prep.imports.len();
+                            if self.options.embed_semantic {
+                                semantic_ivf_dirty = true;
+                            }
                         }
                     }
                 }
-            }
-            if should_prune_missing_files(stats.walk_errors) {
-                self.prune_missing_files(&seen_paths, &mut stats, &mut semantic_ivf_dirty)?;
-            }
-            Ok(())
-        })();
-        match write_result {
-            Ok(()) => self.store.commit_bulk_tx()?,
-            Err(e) => {
-                let _ = self.store.rollback_bulk_tx();
-                return Err(e);
-            }
+                if should_prune_missing_files(stats.walk_errors) {
+                    self.prune_missing_files(&seen_paths, &mut stats, &mut semantic_ivf_dirty)?;
+                }
+                Ok(())
+            })();
+            self.store.apply_bulk_write_result(write_result)?;
         }
         self.rebuild_dirty_sidecars(&stats, semantic_ivf_dirty)?;
+        // ufk7: learn this repository's own vocabulary. Local, incremental with
+        // the index, and cheap enough to stay on by default -- no download.
+        if let Err(error) = self.rebuild_lexicon() {
+            // A lexicon is an enhancement, not a correctness requirement: an
+            // index that cannot learn associations must still serve searches.
+            // Surfaced rather than swallowed silently.
+            eprintln!("asgrep: lexicon rebuild skipped: {error}");
+        }
         // e2hc.13: a full index_all rewrites every reachable file, so a legacy
         // v1 store may now promote to v2 (persist_embed_metadata keeps v1
         // during partial updates to protect unrewritten siblings).
@@ -296,6 +351,37 @@ impl Indexer {
             }
         }
         Ok(stats)
+    }
+
+    /// Rebuild the repository semantic lexicon from indexed symbols (ufk7).
+    ///
+    /// Pairs each symbol's identifier subtokens with the prose terms around it
+    /// (doc comments and the surrounding line text) and with its neighbours,
+    /// then scores the pairs with PPMI under a support floor.
+    fn rebuild_lexicon(&self) -> Result<()> {
+        use crate::lexicon::{prose_terms, subtokens, LexiconBuilder, Observation};
+
+        let mut builder = LexiconBuilder::new();
+        let symbols = self.store.all_symbol_context()?;
+        for (name, context) in symbols {
+            let identifier_terms = subtokens(&name);
+            if identifier_terms.is_empty() {
+                continue;
+            }
+            let mut prose = prose_terms(&context);
+            prose.sort();
+            prose.dedup();
+            // A symbol with no surrounding vocabulary teaches nothing.
+            if prose.is_empty() {
+                continue;
+            }
+            builder.observe(&Observation {
+                identifier_terms,
+                prose_terms: prose,
+            });
+        }
+        let associations = builder.finish();
+        crate::lexicon::store_lexicon(&self.store, &associations)
     }
     /// Walk the project once using the Indexer's IgnoreMatcher for both directory
     /// pruning and file skips (single ownership story — no second matcher).
@@ -388,7 +474,7 @@ impl Indexer {
     fn rebuild_semantic_ivf_sidecar(&self) -> Result<()> {
         let stats = self.store.semantic_chunk_stats(None)?;
         if !crate::semantic_ann::should_use_ann(stats.count, self.options.ann_threshold) {
-            let _ = crate::semantic_ivf::invalidate_semantic_ivf(self.store.db_path());
+            crate::semantic_ivf::invalidate_semantic_ivf(self.store.db_path())?;
             return Ok(());
         }
         let chunks = self.store.all_semantic_chunks(None)?;
@@ -413,9 +499,141 @@ impl Indexer {
         )?
         .rebuild_from_lines_with_generation(&lines, after)
     }
+    /// Rebuild into a new generation and activate it atomically (jpbq).
+    ///
+    /// The previous behavior cleared and rebuilt the live database in place, so
+    /// a crash or a failed rebuild destroyed the only good index. The rebuild
+    /// now lands in its own generation directory and becomes active only after
+    /// it passes integrity and smoke gates; the previous generation is retained
+    /// for rollback. If anything fails, the active index is untouched.
+    ///
+    /// Callers with an explicit `index_path` (or `ASGREP_INDEX_PATH`) keep the
+    /// legacy in-place behavior, because they pinned a specific file.
     pub fn reindex_all(&mut self) -> Result<IndexStats> {
-        self.store.clear_all_data()?;
-        self.index_all()
+        match self.generation_layout_root() {
+            Some(index_dir) => self.reindex_into_new_generation(&index_dir),
+            None => {
+                self.store.clear_all_data()?;
+                self.index_all()
+            }
+        }
+    }
+
+    /// The `.asgrep` directory to manage generations in, or `None` when the
+    /// caller pinned an explicit database path (jpbq).
+    fn generation_layout_root(&self) -> Option<PathBuf> {
+        if self.options.index_path.is_some() || std::env::var_os("ASGREP_INDEX_PATH").is_some() {
+            return None;
+        }
+        Some(self.options.root.join(crate::store::INDEX_DIR))
+    }
+
+    fn reindex_into_new_generation(&mut self, index_dir: &Path) -> Result<IndexStats> {
+        let active = crate::store::read_active_manifest(index_dir);
+        let previous = active.as_ref().map(|manifest| manifest.generation.clone());
+        let candidate = crate::store::next_generation_name(previous.as_deref());
+        let candidate_db = crate::store::generation_db_path(index_dir, &candidate);
+        if let Some(parent) = candidate_db.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| {
+                crate::StoreError::Other(format!(
+                    "create generation dir {}: {e}",
+                    parent.display()
+                ))
+            })?;
+        }
+
+        // Build the candidate through its own Indexer, so the active store is
+        // never opened for writing during the rebuild.
+        let mut options = self.options.clone();
+        options.index_path = Some(candidate_db.clone());
+        options.force_reindex = false;
+        let stats = {
+            let mut builder = Indexer::new(options)?;
+            builder.index_all()?
+        };
+
+        // Gate the candidate before it can serve a single query.
+        Self::verify_candidate_generation(&candidate_db)?;
+
+        crate::store::write_active_manifest(
+            index_dir,
+            &crate::store::ActiveManifest {
+                generation: candidate,
+                schema_version: self.store.schema_version(),
+                // Retained for rollback; not deleted here.
+                previous,
+                activated_at: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs() as i64)
+                    .unwrap_or_default(),
+            },
+        )?;
+
+        // Re-open against the newly activated generation.
+        self.store = IndexStore::open_with_durability(
+            &self.options.root,
+            self.options.index_path.as_deref(),
+            self.options.durability,
+        )?;
+        Ok(stats)
+    }
+
+    /// Refuse to activate a generation that cannot answer for itself (jpbq).
+    ///
+    /// Runs SQLite integrity checking and a deterministic smoke query. A
+    /// candidate that fails leaves the active pointer untouched.
+    fn verify_candidate_generation(candidate_db: &Path) -> Result<()> {
+        let store = IndexStore::open(
+            candidate_db.parent().unwrap_or(candidate_db),
+            Some(candidate_db),
+        )?;
+        let integrity = crate::store::integrity_check(store.connection())?;
+        if integrity != "ok" {
+            return Err(crate::StoreError::Other(format!(
+                "candidate generation failed integrity_check: {integrity}"
+            )));
+        }
+        // Smoke: the status query must succeed and report a populated index.
+        let status = store.status()?;
+        if status.file_count == 0 {
+            return Err(crate::StoreError::Other(
+                "candidate generation indexed zero files; refusing to activate".into(),
+            ));
+        }
+
+        // Sidecar checksum: a present IVF sidecar must parse and carry the
+        // fingerprint this generation expects. A sidecar that cannot be read is
+        // a corrupt build, not something to activate and discover later.
+        let sidecar = crate::semantic_ivf::semantic_ivf_path(store.db_path());
+        if sidecar.exists()
+            && crate::semantic_ivf::peek_semantic_ivf_fingerprint(&sidecar).is_none()
+        {
+            return Err(crate::StoreError::Other(
+                "candidate generation has an unreadable semantic sidecar; refusing to activate"
+                    .into(),
+            ));
+        }
+
+        // Model provenance: chunks embedded without a recorded backend cannot
+        // be validated against a future search, so refuse the ambiguity.
+        if status.semantic_chunk_count > 0 && store.get_meta("embed_backend")?.is_none() {
+            return Err(crate::StoreError::Other(
+                "candidate generation has semantic chunks but no recorded embed backend; \
+                 refusing to activate".into(),
+            ));
+        }
+
+        // A deterministic smoke query must succeed against the candidate.
+        let probe = crate::search::Searcher::new(crate::search::SearchOptions {
+            root: store.root().to_path_buf(),
+            index_path: Some(candidate_db.to_path_buf()),
+            use_embed: false,
+            ..crate::search::SearchOptions::default()
+        })?;
+        probe.search("defs:__asgrep_activation_probe__").map_err(|e| {
+            crate::StoreError::Other(format!("candidate generation failed smoke query: {e}"))
+        })?;
+        Ok(())
     }
     pub fn update_paths(&mut self, paths: &[PathBuf]) -> Result<WatchUpdateStats> {
         // Single-file updates reuse the existing gitignore matcher.
@@ -493,18 +711,20 @@ impl Indexer {
         Ok(())
     }
     pub fn index_file(&mut self, abs_path: &Path, rel_path: &str) -> Result<FileIndexStats> {
+        let rel_path = indexed_rel_path(Path::new(rel_path))?;
         let metadata = fs::metadata(abs_path)?;
         let mtime = metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH);
         let (mtime_secs, mtime_nanos) = system_time_to_parts(mtime);
         let content = crate::io_bounds::read_text_capped(abs_path, crate::io_bounds::MAX_INDEX_FILE_BYTES)?;
-        self.index_content_at(rel_path, &content, abs_path, mtime_secs, mtime_nanos)
+        self.index_content_at(&rel_path, &content, abs_path, mtime_secs, mtime_nanos)
     }
     pub fn index_content(&mut self, rel_path: &str, content: &str) -> Result<FileIndexStats> {
+        let rel_path = indexed_rel_path(Path::new(rel_path))?;
         let (mtime_secs, mtime_nanos) = system_time_to_parts(SystemTime::now());
         self.index_content_at(
-            rel_path,
+            &rel_path,
             content,
-            Path::new(rel_path),
+            Path::new(&rel_path),
             mtime_secs,
             mtime_nanos,
         )
@@ -517,6 +737,10 @@ impl Indexer {
         mtime_secs: i64,
         mtime_nanos: u32,
     ) -> Result<FileIndexStats> {
+        // Callers (`index_file` / `index_content` / walk) already validated; re-check
+        // so internal paths cannot skip the fence.
+        let rel_path = indexed_rel_path(Path::new(rel_path))?;
+        let rel_path = rel_path.as_str();
         let hash = hash_content(content);
         if self.is_unchanged(rel_path, &hash)? {
             return Ok(FileIndexStats {
@@ -567,23 +791,29 @@ impl Indexer {
             &pattern_nodes,
             self.options.embed_semantic,
         );
-        self.store.upsert_file(UpsertFileInput {
-            rel_path,
-            language: language.map(|l| l.as_str()),
-            mtime_secs,
-            mtime_nanos,
-            content_hash: &hash,
-            lines: &material.split.lines,
-            eol: material.split.eol,
-            symbols: &symbols,
-            callers: &callers,
-            imports: &imports,
-            pattern_nodes: &pattern_nodes,
-            semantic_chunks: &material.semantic_chunks,
-            embed_semantic: self.options.embed_semantic,
-            embed_backend: self.options.embed_backend.to_preference(),
+        // Nest under with_file_tx so body meta and upsert commit or roll back together.
+        // Without this, a post-upsert set_meta failure leaves content_hash advanced and
+        // body: meta stale → next structure-skip can keep wrong graph rows.
+        self.store.with_file_tx(|| {
+            self.store.upsert_file(UpsertFileInput {
+                rel_path,
+                language: language.map(|l| l.as_str()),
+                mtime_secs,
+                mtime_nanos,
+                content_hash: &hash,
+                lines: &material.split.lines,
+                eol: material.split.eol,
+                symbols: &symbols,
+                callers: &callers,
+                imports: &imports,
+                pattern_nodes: &pattern_nodes,
+                semantic_chunks: &material.semantic_chunks,
+                embed_semantic: self.options.embed_semantic,
+                embed_backend: self.options.embed_backend.to_preference(),
+            })?;
+            self.store.set_meta(&body_key, &material.body_hash)?;
+            Ok(())
         })?;
-        let _ = self.store.set_meta(&body_key, &material.body_hash);
         Ok(FileIndexStats {
             symbols: symbols.len(),
             callers: callers.len(),
@@ -827,7 +1057,20 @@ fn prepare_file(
         Ok(c) => c,
         Err(e) => return PrepareOutcome::Failed(e.to_string()),
     };
-    let hash = hash_content(&content);
+    let hash = {
+        let t0 = std::time::Instant::now();
+        let h = hash_content(&content);
+        if crate::perf_profile::enabled() {
+            crate::perf_profile::record_sample(
+                "embed_hash",
+                "index",
+                "blake3 hash_content per file",
+                t0.elapsed().as_micros() as u64,
+                false,
+            );
+        }
+        h
+    };
     let language = detect_language(abs, Some(&content));
     if let Some(filter) = lang_filter {
         if language.is_none_or(|l| l.as_str() != filter) {
