@@ -11,6 +11,7 @@ pub mod intent;
 pub mod io_bounds;
 pub mod limits;
 pub mod pattern;
+pub mod perf_profile;
 pub mod pipeline_parts;
 pub mod query;
 pub mod rank;

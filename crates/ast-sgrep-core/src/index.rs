@@ -193,94 +193,110 @@ impl Indexer {
         &self.store
     }
     pub fn index_all(&mut self) -> Result<IndexStats> {
+        let _perf_run = crate::perf_profile::Run::start("index_all");
         self.ignore.clear();
-        let (candidates, mut stats) = self.collect_index_candidates();
+        let (candidates, mut stats, prepared) = {
+            let _span = crate::perf_profile::Span::start(
+                "index_walk_parse",
+                "index",
+                "WalkDir + prepare_file (read/hash/tree-sitter extract)",
+            );
+            let (candidates, stats) = self.collect_index_candidates();
+            let force = self.options.force_reindex;
+            let lang_filter = self.options.lang_filter.clone();
+            let embed_semantic = self.options.embed_semantic;
+            // 28vo: the hash-only fast path must not skip when the stored semantic
+            // identity (backend/model) differs from the active preference.
+            let semantic_identity_ok =
+                !embed_semantic || self.semantic_identity_matches()?;
+            let current_hashes = candidates
+                .iter()
+                .map(|(_, rel)| self.store.file_hash(rel))
+                .collect::<Result<Vec<_>>>()?;
+            let prepared: Vec<PrepareOutcome> = candidates
+                .par_iter()
+                .zip(current_hashes.par_iter())
+                .map(|((abs, rel), current_hash)| {
+                    prepare_file(
+                        abs,
+                        rel,
+                        force,
+                        current_hash.as_deref(),
+                        lang_filter.as_deref(),
+                        embed_semantic,
+                        semantic_identity_ok,
+                    )
+                })
+                .collect();
+            (candidates, stats, prepared)
+        };
         let mut seen_paths = HashSet::new();
         let mut semantic_ivf_dirty = false;
-        let force = self.options.force_reindex;
-        let lang_filter = self.options.lang_filter.clone();
-        let embed_semantic = self.options.embed_semantic;
-        // 28vo: the hash-only fast path must not skip when the stored semantic
-        // identity (backend/model) differs from the active preference.
-        let semantic_identity_ok =
-            !embed_semantic || self.semantic_identity_matches()?;
-        let current_hashes = candidates
-            .iter()
-            .map(|(_, rel)| self.store.file_hash(rel))
-            .collect::<Result<Vec<_>>>()?;
-        let prepared: Vec<PrepareOutcome> = candidates
-            .par_iter()
-            .zip(current_hashes.par_iter())
-            .map(|((abs, rel), current_hash)| {
-                prepare_file(
-                    abs,
-                    rel,
-                    force,
-                    current_hash.as_deref(),
-                    lang_filter.as_deref(),
-                    embed_semantic,
-                    semantic_identity_ok,
-                )
-            })
-            .collect();
-        self.store.begin_bulk_tx()?;
-        let write_result = (|| -> Result<()> {
-            for (rel_str, outcome) in candidates.iter().map(|(_, r)| r).zip(prepared) {
-                match outcome {
-                    PrepareOutcome::Unchanged => {
-                        seen_paths.insert(rel_str.clone());
-                        stats.files_skipped += 1;
-                    }
-                    PrepareOutcome::Filtered => {
-                        // --lang must not destructively wipe other languages (y1oy.8):
-                        // filtered paths are skipped here; prune_missing_files also
-                        // respects lang_filter when removing absent files.
-                    }
-                    PrepareOutcome::Failed(msg) => {
-                        eprintln!("[asgrep] failed to index {rel_str}: {msg}");
-                        stats.files_failed += 1;
-                    }
-                    PrepareOutcome::Ready(prep) => {
-                        seen_paths.insert(rel_str.clone());
-                        self.store.upsert_file(UpsertFileInput {
-                            rel_path: rel_str,
-                            language: prep.language.as_deref(),
-                            mtime_secs: prep.mtime_secs,
-                            mtime_nanos: prep.mtime_nanos,
-                            content_hash: &prep.hash,
-                            lines: &prep.lines,
-                            eol: &prep.eol,
-                            symbols: &prep.symbols,
-                            callers: &prep.callers,
-                            imports: &prep.imports,
-                            pattern_nodes: &prep.pattern_nodes,
-                            semantic_chunks: &prep.semantic_chunks,
-                            embed_semantic: self.options.embed_semantic,
-                            embed_backend: self.options.embed_backend.to_preference(),
-                        })?;
-                        let _ = self
-                            .store
-                            .set_meta(&format!("body:{rel_str}"), &prep.body_hash);
-                        stats.files_indexed += 1;
-                        stats.symbols_extracted += prep.symbols.len();
-                        stats.callers_extracted += prep.callers.len();
-                        stats.imports_extracted += prep.imports.len();
-                        if self.options.embed_semantic {
-                            semantic_ivf_dirty = true;
+        {
+            let _span = crate::perf_profile::Span::start(
+                "sqlite_upsert",
+                "index",
+                "bulk upsert_file transaction",
+            );
+            self.store.begin_bulk_tx()?;
+            let write_result = (|| -> Result<()> {
+                for (rel_str, outcome) in candidates.iter().map(|(_, r)| r).zip(prepared) {
+                    match outcome {
+                        PrepareOutcome::Unchanged => {
+                            seen_paths.insert(rel_str.clone());
+                            stats.files_skipped += 1;
+                        }
+                        PrepareOutcome::Filtered => {
+                            // --lang must not destructively wipe other languages (y1oy.8):
+                            // filtered paths are skipped here; prune_missing_files also
+                            // respects lang_filter when removing absent files.
+                        }
+                        PrepareOutcome::Failed(msg) => {
+                            eprintln!("[asgrep] failed to index {rel_str}: {msg}");
+                            stats.files_failed += 1;
+                        }
+                        PrepareOutcome::Ready(prep) => {
+                            seen_paths.insert(rel_str.clone());
+                            self.store.upsert_file(UpsertFileInput {
+                                rel_path: rel_str,
+                                language: prep.language.as_deref(),
+                                mtime_secs: prep.mtime_secs,
+                                mtime_nanos: prep.mtime_nanos,
+                                content_hash: &prep.hash,
+                                lines: &prep.lines,
+                                eol: &prep.eol,
+                                symbols: &prep.symbols,
+                                callers: &prep.callers,
+                                imports: &prep.imports,
+                                pattern_nodes: &prep.pattern_nodes,
+                                semantic_chunks: &prep.semantic_chunks,
+                                embed_semantic: self.options.embed_semantic,
+                                embed_backend: self.options.embed_backend.to_preference(),
+                            })?;
+                            let _ = self
+                                .store
+                                .set_meta(&format!("body:{rel_str}"), &prep.body_hash);
+                            stats.files_indexed += 1;
+                            stats.symbols_extracted += prep.symbols.len();
+                            stats.callers_extracted += prep.callers.len();
+                            stats.imports_extracted += prep.imports.len();
+                            if self.options.embed_semantic {
+                                semantic_ivf_dirty = true;
+                            }
                         }
                     }
                 }
-            }
-            if should_prune_missing_files(stats.walk_errors) {
-                self.prune_missing_files(&seen_paths, &mut stats, &mut semantic_ivf_dirty)?;
-            }
-            Ok(())
-        })();
-        match write_result {
-            Ok(()) => self.store.commit_bulk_tx()?,
-            Err(e) => {
-                let _ = self.store.rollback_bulk_tx();
-                return Err(e);
+                if should_prune_missing_files(stats.walk_errors) {
+                    self.prune_missing_files(&seen_paths, &mut stats, &mut semantic_ivf_dirty)?;
+                }
+                Ok(())
+            })();
+            match write_result {
+                Ok(()) => self.store.commit_bulk_tx()?,
+                Err(e) => {
+                    let _ = self.store.rollback_bulk_tx();
+                    return Err(e);
+                }
             }
         }
         self.rebuild_dirty_sidecars(&stats, semantic_ivf_dirty)?;
@@ -827,7 +843,20 @@ fn prepare_file(
         Ok(c) => c,
         Err(e) => return PrepareOutcome::Failed(e.to_string()),
     };
-    let hash = hash_content(&content);
+    let hash = {
+        let t0 = std::time::Instant::now();
+        let h = hash_content(&content);
+        if crate::perf_profile::enabled() {
+            crate::perf_profile::record_sample(
+                "embed_hash",
+                "index",
+                "blake3 hash_content per file",
+                t0.elapsed().as_micros() as u64,
+                false,
+            );
+        }
+        h
+    };
     let language = detect_language(abs, Some(&content));
     if let Some(filter) = lang_filter {
         if language.is_none_or(|l| l.as_str() != filter) {

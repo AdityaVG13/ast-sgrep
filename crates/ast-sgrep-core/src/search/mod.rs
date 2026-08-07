@@ -228,6 +228,12 @@ impl Searcher {
         })
     }
     pub fn search(&self, query_str: &str) -> Result<SearchResponse> {
+        let _perf_run = crate::perf_profile::Run::start("search_query");
+        let _span = crate::perf_profile::Span::start(
+            "search_query",
+            "search",
+            "Searcher::search (mode dispatch + finish)",
+        );
         self.cached("search", query_str, || {
             let parsed = ParsedQuery::parse(query_str);
             let hits = match parsed.mode {
