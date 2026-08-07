@@ -1,5 +1,5 @@
 {
-  "commit": "51b6a57c35dfacf5f208e7fe42a1a62d40bf9d92",
+  "commit": "87c4ff2eb8a4b8a02934c22116f97fe6562a9f65",
   "dirty_worktree": true,
   "corpus": "self",
   "gold_queries": 12,
@@ -21,13 +21,13 @@
     "delta_recall_at_k": 0.0
   },
   "token_efficiency": {
-    "native": 57347,
-    "agent": 68855,
-    "agent-capsule": 45272,
-    "compact": 11607,
-    "compact-budget300": 10489,
+    "native": 67253,
+    "agent": 68871,
+    "agent-capsule": 45288,
+    "compact": 11623,
+    "compact-budget300": 10488,
     "budget300_vs_agent_capsule_pct": 76.8,
-    "compact_vs_agent_capsule_pct": 74.4,
-    "compact_vs_native_pct": 79.8
+    "compact_vs_agent_capsule_pct": 74.3,
+    "compact_vs_native_pct": 82.7
   }
 }

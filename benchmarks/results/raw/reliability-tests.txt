@@ -1,7 +1,5 @@
    Compiling ast-sgrep-core v1.4.0 (/Users/aditya/Developer/ast-sgrep/crates/ast-sgrep-core)
-   Compiling ast-sgrep-lsp v1.4.0 (/Users/aditya/Developer/ast-sgrep/crates/ast-sgrep-lsp)
-   Compiling ast-sgrep-testkit v1.4.0 (/Users/aditya/Developer/ast-sgrep/crates/ast-sgrep-testkit)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.17s
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.61s
      Running tests/generation_swap.rs (target/debug/deps/generation_swap-f55267096e4401ea)
 
 running 4 tests
@@ -10,7 +8,7 @@ test empty_candidate_is_refused_and_active_pointer_survives ... ok
 test reindex_activates_a_new_generation_and_retains_the_previous ... ok
 test corrupt_candidate_sidecar_blocks_activation ... ok
 
-test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.17s
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.15s
 
      Running tests/snapshot_generation.rs (target/debug/deps/snapshot_generation-d1a51eb3237b3eef)
 
@@ -21,14 +19,14 @@ test generation_increases_with_indexing_and_is_reflected_in_responses ... ok
 test concurrent_reindex_never_yields_a_mixed_generation_response ... ok
 test stale_semantic_sidecar_is_reported_as_a_degraded_channel ... ok
 
-test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.22s
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.21s
 
      Running tests/store_pragmas.rs (target/debug/deps/store_pragmas-93a208eb3a0ead1a)
 
 running 5 tests
-test bulk_tx_rollback_restores_synchronous_normal ... ok
-test file_tx_restores_synchronous_normal_after_commit_and_rollback ... ok
 test default_durability_never_reaches_synchronous_off ... ok
+test file_tx_restores_synchronous_normal_after_commit_and_rollback ... ok
+test bulk_tx_rollback_restores_synchronous_normal ... ok
 test index_store_applies_wal_and_busy_timeout ... ok
 test durability_profiles_control_synchronous_pragma ... ok
 

@@ -122,6 +122,29 @@ token-efficiency and determinism work, and **weak for retrieval-quality
 regression detection**. A frozen or foreign corpus is required before any
 quality delta on this corpus should be believed.
 
+### Repository lexicon: learned, explainable, not yet fed into ranking (ufk7)
+
+Indexing now learns this repository's own vocabulary with PPMI over identifier
+subtokens and the prose around them -- fully local, no download. On this repo it
+learns **2,202 associations**, including `semantic → ivf`, `call → tool`, and
+`hit → kind`, which no hand-written global concept list would contain.
+
+Every association carries a support count, and any query expansion is reported
+in `query_expansions` with a checkable justification, because expansion changes
+what the user asked for.
+
+**No retrieval lift is claimed.** The lexicon is currently reported as evidence
+and is deliberately NOT wired into channel scoring, for the reason the corpus
+drift section above already establishes: the self corpus cannot detect a quality
+regression, so wiring query expansion into ranking here would be an unmeasurable
+change. Retrieval metrics are unchanged by this work, as expected.
+
+A property worth recording, because it surprised the fixtures: PPMI scores
+co-occurrence *above chance*, so a corpus with one uniform vocabulary yields no
+associations at all -- two terms that always co-occur and appear nowhere else
+have PMI exactly 0. Contrast is required, which is why the learning tests supply
+background vocabulary.
+
 ### Coverage and what is still missing
 
 Implemented and reproducible: MRR, nDCG, Recall@1/@5/@20, the hybrid vs
@@ -140,6 +163,9 @@ Not implemented, and deliberately not faked with placeholder numbers:
 - **Definition/reference resolution accuracy and graph-edge precision by
   resolution tier.** These require the `SymbolId` / `Resolution` tiers, which
   are separate open work; there are no resolution tiers to report against yet.
+- **Multi-field semantic vectors.** `semantic_chunks` still stores one vector
+  per chunk, so per-field (name / docs / body / graph) similarity is not yet
+  reportable. Tracked separately; not claimed here.
 - **Foreign-corpus token efficiency.** The reduction above is measured on
   the self corpus only.
 - **Agent-level token metrics** (tokens read before the correct edit site, tool
