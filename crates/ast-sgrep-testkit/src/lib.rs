@@ -8,6 +8,7 @@ mod index;
 mod isolation;
 mod lang;
 mod lsp;
+mod safety;
 mod test_log;
 pub use cli::CliSession;
 pub use factory::{
@@ -28,4 +29,11 @@ pub use lang::{
     ExpectedPattern, ExpectedSymbol, LanguageConformanceCase,
 };
 pub use lsp::{lsp_search_hit_keys, sample_backend};
+pub use safety::{
+    assert_api_key_not_live, assert_real_network_env_safe, assert_test_url_allowed,
+    check_test_url, classify_real_env_gate, classify_real_gate, classify_real_network_gate,
+    guard_live_embed_config, host_from_url, is_loopback_host, is_production_blocked_host,
+    real_network_flag_from, real_network_tests_enabled, require_real_ready, RealGateStatus,
+    SafetyError, PRODUCTION_HOST_BLOCKLIST, REAL_NETWORK_TESTS_ENV,
+};
 pub use test_log::{with_test_logging, IndexSnapshot, TestLogger, TestPhase};
