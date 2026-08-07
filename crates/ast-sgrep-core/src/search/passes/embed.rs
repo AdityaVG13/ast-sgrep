@@ -6,7 +6,7 @@ use crate::store::IndexStore;
 use crate::Result;
 use ast_sgrep_embed::{embed_query, SemanticChunkRow};
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 const EMBED_HIT_LIMIT: usize = 50;
 pub struct EmbedContext {
     pub chunks: Arc<Vec<SemanticChunkRow>>,
@@ -242,14 +242,21 @@ pub fn embed_pass_with_context(
         rank_chunk_indices_flat(store, &query_vec, chunks, flat, chunks.len(), ann_threshold)?;
     Ok(embed_similarity_hits(chunks, indices))
 }
+/// Process-wide query embedding cache (query|backend|model|dim|pref → vector).
+/// Poison fails closed: clear the map before reuse (sxjc / pass11).
+static QUERY_EMBED_CACHE: OnceLock<Mutex<HashMap<String, Vec<f32>>>> = OnceLock::new();
+const QUERY_EMBED_CACHE_CAP: usize = 64;
+
+fn query_embed_cache() -> &'static Mutex<HashMap<String, Vec<f32>>> {
+    QUERY_EMBED_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
 fn embed_query_vector(
     store: &IndexStore,
     options: &SearchOptions,
     query: &str,
     stored_dim: Option<usize>,
 ) -> Result<Vec<f32>> {
-    use std::sync::{Mutex, OnceLock};
-    static QCACHE: OnceLock<Mutex<HashMap<String, Vec<f32>>>> = OnceLock::new();
     let stored_backend = store.get_meta("embed_backend")?;
     let stored_model = store.get_meta("embed_model")?;
     let dim = stored_dim.unwrap_or(ast_sgrep_embed::default_semantic_dim());
@@ -283,11 +290,9 @@ fn embed_query_vector(
         options.embed_preference()
     );
     {
-        let cache = QCACHE.get_or_init(|| Mutex::new(HashMap::new()));
-        if let Ok(guard) = cache.lock() {
-            if let Some(v) = guard.get(&cache_key) {
-                return Ok(v.clone());
-            }
+        let guard = lock_clear_on_poison(query_embed_cache(), |map| map.clear());
+        if let Some(v) = guard.get(&cache_key) {
+            return Ok(v.clone());
         }
     }
     let vector = embed_query(
@@ -298,8 +303,9 @@ fn embed_query_vector(
     )
     .map_err(crate::StoreError::Other)?
     .vector;
-    if let Ok(mut guard) = QCACHE.get_or_init(|| Mutex::new(HashMap::new())).lock() {
-        if guard.len() < 64 {
+    {
+        let mut guard = lock_clear_on_poison(query_embed_cache(), |map| map.clear());
+        if guard.len() < QUERY_EMBED_CACHE_CAP {
             guard.insert(cache_key, vector.clone());
         }
     }
@@ -387,6 +393,32 @@ fn embed_legacy_hits(
         &chunks,
         ast_sgrep_embed::rank_chunk_indices_by_vector(&query_vec, &chunks, chunks.len()),
     ))
+}
+
+#[cfg(test)]
+mod query_embed_cache_tests {
+    use super::{lock_clear_on_poison, query_embed_cache};
+    use std::panic::{catch_unwind, AssertUnwindSafe};
+
+    #[test]
+    fn query_embed_cache_poison_recovers_fail_closed() {
+        let cache = query_embed_cache();
+        {
+            let mut guard = lock_clear_on_poison(cache, |map| map.clear());
+            guard.insert("probe".into(), vec![1.0]);
+        }
+        let _ = catch_unwind(AssertUnwindSafe(|| {
+            let _guard = cache.lock().unwrap();
+            panic!("intentional query-embed cache poison");
+        }));
+        assert!(cache.is_poisoned(), "setup: lock should be poisoned");
+        let guard = lock_clear_on_poison(cache, |map| map.clear());
+        assert!(!cache.is_poisoned(), "clear_poison after recover");
+        assert!(
+            guard.is_empty(),
+            "poison must clear untrusted entries before reuse"
+        );
+    }
 }
 
 #[cfg(test)]
