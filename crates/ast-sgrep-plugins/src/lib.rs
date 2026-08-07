@@ -1,5 +1,8 @@
 #![forbid(unsafe_code)]
 
+pub mod budget;
+pub use budget::{DetailLevel, OutputBudget, RenderedHit};
+
 use ast_sgrep_core::search::HitKind;
 use ast_sgrep_core::SearchResponse;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -177,6 +180,30 @@ pub fn to_agent_capsule_json(response: &SearchResponse, excerpt_lines: usize) ->
         "expand_hint": "re-run with --excerpt-lines N for bodies, or read each ref span with your file reader (path + line window)", "hits": hits,
     })
 }
+/// Compact envelope whose per-result detail is chosen under a token budget
+/// (m38g), instead of truncating every excerpt to the same ceiling.
+pub fn to_budgeted_compact_json(
+    response: &SearchResponse,
+    budget: budget::OutputBudget,
+) -> serde_json::Value {
+    let rendered = budget::select(&response.hits, budget);
+    let mut envelope = to_compact_json(response, CompactBudget::default());
+    if let Some(hits) = envelope.get_mut("h").and_then(serde_json::Value::as_array_mut) {
+        for (row, plan) in hits.iter_mut().zip(rendered.iter()) {
+            let Some(row) = row.as_array_mut() else {
+                continue;
+            };
+            if row.len() >= 5 {
+                row[4] = serde_json::Value::String(plan.body.clone());
+            }
+            // Detail level is per-result, so it has to travel with the result.
+            row.push(serde_json::Value::String(plan.detail.as_str().to_owned()));
+        }
+    }
+    envelope["zd"] = serde_json::json!([budget.max_tokens, budget::plan_cost(&rendered)]);
+    envelope
+}
+
 pub fn to_compact_json(response: &SearchResponse, budget: CompactBudget) -> serde_json::Value {
     let mut paths = std::collections::BTreeMap::<String, String>::new();
     let mut path_ids = std::collections::BTreeMap::<String, String>::new();
