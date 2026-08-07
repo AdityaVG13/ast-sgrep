@@ -420,6 +420,7 @@ fn bounded_arguments_are_json_usage_errors() {
     let golden = &fixture("envelopes")["usage"];
     for args in [
         ["--json", "--limit", "1001", "query", "."],
+        ["--json", "--limit", "-1", "query", "."],
         ["--json", "--excerpt-lines", "101", "query", "."],
     ] {
         let output = run(&bin, &args);

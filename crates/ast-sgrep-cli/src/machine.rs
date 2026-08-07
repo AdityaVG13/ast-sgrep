@@ -5,15 +5,20 @@ use std::io::{self, Read, Write};
 pub(crate) const MACHINE_SCHEMA_VERSION: &str = "1.0.0";
 const MAX_ERROR_MESSAGE_CHARS: usize = 4_096;
 
-/// Write a line to stdout. Agents often pipe through `head`/`jq` and close early;
+/// Write a line. Agents often pipe through `head`/`jq` and close early;
 /// treat broken pipe as success so the process does not panic.
-pub(crate) fn write_stdout_line(line: &str) -> io::Result<()> {
-    let mut out = io::stdout().lock();
+pub(crate) fn write_line(out: &mut impl Write, line: &str) -> io::Result<()> {
     match out.write_all(line.as_bytes()).and_then(|_| out.write_all(b"\n")) {
         Ok(()) => Ok(()),
         Err(e) if e.kind() == io::ErrorKind::BrokenPipe => Ok(()),
         Err(e) => Err(e),
     }
+}
+
+/// Write a line to stdout (see [`write_line`]).
+pub(crate) fn write_stdout_line(line: &str) -> io::Result<()> {
+    let mut out = io::stdout().lock();
+    write_line(&mut out, line)
 }
 
 fn bounded_error_message(message: &str) -> String {
@@ -197,6 +202,35 @@ mod tests {
             .map(std::ffi::OsString::from)
             .collect::<Vec<_>>();
         assert!(!raw_machine_output_requested(&args));
+    }
+
+    #[test]
+    fn write_line_treats_broken_pipe_as_success() {
+        struct Broken;
+        impl Write for Broken {
+            fn write(&mut self, _buf: &[u8]) -> io::Result<usize> {
+                Err(io::Error::new(io::ErrorKind::BrokenPipe, "pipe closed"))
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+        write_line(&mut Broken, "payload").expect("BrokenPipe must not fail agents");
+    }
+
+    #[test]
+    fn write_line_propagates_other_io_errors() {
+        struct Fail;
+        impl Write for Fail {
+            fn write(&mut self, _buf: &[u8]) -> io::Result<usize> {
+                Err(io::Error::new(io::ErrorKind::PermissionDenied, "nope"))
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+        let err = write_line(&mut Fail, "x").expect_err("other errors must propagate");
+        assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
     }
 }
 

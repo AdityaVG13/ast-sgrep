@@ -279,6 +279,14 @@ pub fn flatten_vectors_for_search(chunks: &[SemanticChunkRow], dim: usize) -> Re
             ))
         };
     }
+    // Reject before allocating or validating rows so hostile dim×len cannot OOM.
+    let total = chunks.len().checked_mul(dim).ok_or_else(|| {
+        crate::StoreError::Other(format!(
+            "semantic flatten overflow: {} chunks × dim {} exceeds addressable size",
+            chunks.len(),
+            dim
+        ))
+    })?;
     for (i, chunk) in chunks.iter().enumerate() {
         if chunk.5.len() != dim {
             return Err(crate::StoreError::Other(format!(
@@ -286,7 +294,7 @@ pub fn flatten_vectors_for_search(chunks: &[SemanticChunkRow], dim: usize) -> Re
             )));
         }
     }
-    let mut flat = vec![0.0f32; chunks.len() * dim];
+    let mut flat = vec![0.0f32; total];
     if chunks.len() >= PARALLEL_CHUNK_THRESHOLD {
         flat.par_chunks_mut(dim)
             .zip(chunks.par_iter())
@@ -622,10 +630,16 @@ pub fn rank_chunk_indices_flat(
     limit: usize,
     override_threshold: Option<usize>,
 ) -> Result<Vec<(usize, f32)>> {
-    if chunks.is_empty() {
+    if chunks.is_empty() || limit == 0 {
         return Ok(vec![]);
     }
     let dim = chunks[0].5.len();
+    // Zero-dim embeddings are corrupt/unset; never divide or rank them.
+    if dim == 0 {
+        return Err(crate::StoreError::Other(
+            "semantic embedding dimension is 0 (corrupt store or unset backend; reindex)".into(),
+        ));
+    }
     if let Some(ivf) = cached_semantic_ivf(store, chunks, override_threshold)? {
         return Ok(ivf.search(query_vec, limit));
     }
@@ -849,6 +863,22 @@ mod flatten_bounds_tests {
         let out = flatten_vectors_for_search(&[], 0).expect("empty ok");
         assert!(out.is_empty());
     }
+
+    #[test]
+    fn flatten_rejects_len_times_dim_overflow() {
+        // Overflow is checked before row-length validation / allocation, so empty
+        // vectors are enough to exercise the edge without multi-GB allocs.
+        let dim = usize::MAX / 2 + 1;
+        let chunks: Vec<SemanticChunkRow> = vec![
+            ("a.rs".into(), 1u32, 1u32, "s".into(), "x".into(), vec![]),
+            ("b.rs".into(), 1u32, 1u32, "s".into(), "x".into(), vec![]),
+        ];
+        let err = flatten_vectors_for_search(&chunks, dim).expect_err("overflow");
+        assert!(
+            err.to_string().contains("overflow"),
+            "unexpected: {err}"
+        );
+    }
 }
 
 #[cfg(test)]
@@ -895,6 +925,39 @@ mod kmeans_flat_tests {
         assert!(empty.candidate_indices(&[1.0; 8], Some(1)).is_empty());
         let zero_dim = SemanticAnnIndex::build_from_flat(&[1.0, 2.0], 0);
         assert!(zero_dim.candidate_indices(&[1.0], Some(1)).is_empty());
+    }
+
+    #[test]
+    fn search_flat_edge_paths_empty_zero_dim_limit() {
+        let dim = 4usize;
+        let flat = synthetic_flat(8, dim);
+        let empty_idx = SemanticAnnIndex::build_from_flat(&[], dim);
+        let q = &flat[..dim];
+        // empty corpus (n=0) → no hits
+        assert!(empty_idx.search_flat(&[], dim, q, 5).is_empty());
+        // zero dim → checked_div path, no panic
+        let built = SemanticAnnIndex::build_from_flat(&flat, dim);
+        assert!(built.search_flat(&flat, 0, q, 5).is_empty());
+        // limit 0 → empty
+        assert!(built.search_flat(&flat, dim, q, 0).is_empty());
+        // max limit caps to corpus size via top-k
+        let hits = built.search_flat(&flat, dim, q, usize::MAX);
+        assert!(!hits.is_empty());
+        assert!(hits.len() <= 8);
+    }
+
+    #[test]
+    fn ann_result_is_sufficient_edges() {
+        use super::ann_result_is_sufficient;
+        // empty / under-filled must not short-circuit flat
+        assert!(!ann_result_is_sufficient(0, 100, 50));
+        assert!(!ann_result_is_sufficient(10, 100, 50));
+        assert!(ann_result_is_sufficient(50, 100, 50));
+        // total smaller than limit
+        assert!(ann_result_is_sufficient(10, 10, 50));
+        // limit 0: vacuously sufficient (product clamps limit ≥ 1)
+        assert!(ann_result_is_sufficient(0, 0, 0));
+        assert!(ann_result_is_sufficient(0, 5, 0));
     }
 
     #[test]
