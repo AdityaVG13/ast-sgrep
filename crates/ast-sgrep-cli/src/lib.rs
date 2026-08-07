@@ -118,17 +118,15 @@ fn run_cli(cli: &Cli) -> anyhow::Result<()> {
     if cli.robot_help {
         return agent::emit_robot_guide(cli);
     }
+    // --format is search-only (implies machine JSON for search envelopes).
+    // Index/reindex/bench accept --json for machine output; do not accept and
+    // silently ignore --format (d2a1.12).
     if cli.active_tuning().format.is_some()
         && !matches!(
             cli.command.as_ref(),
             None
                 | Some(
-                    Commands::Search(_)
-                        | Commands::Keyword(_)
-                        | Commands::Semantic(_)
-                        | Commands::Index(_)
-                        | Commands::Reindex(_)
-                        | Commands::Bench { .. }
+                    Commands::Search(_) | Commands::Keyword(_) | Commands::Semantic(_)
                 )
         )
     {

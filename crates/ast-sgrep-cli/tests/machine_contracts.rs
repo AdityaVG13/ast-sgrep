@@ -506,6 +506,10 @@ fn format_aliases_typos_and_root_failures_are_unambiguous() {
         vec!["--json", "evall"],
         vec!["--format", "invalid", "query", "/definitely/missing"],
         vec!["--format", "compact", "status", root],
+        // d2a1.12: --format must not be silently accepted on index/reindex/bench
+        vec!["--format", "compact", "index", root],
+        vec!["--format", "compact", "reindex", root],
+        vec!["--format", "compact", "bench", root, "--query", "x"],
         vec!["--json", "--root", root, "status", root],
     ] {
         let output = run(&session.bin, &args);
@@ -698,7 +702,55 @@ fn index_dry_run_does_not_mutate() {
     let value = assert_success(&out, "index");
     assert_eq!(value["dry_run"], true);
     assert_eq!(value["mutates_index"], false);
+    assert_eq!(value["walk_errors"], false);
     assert!(!root.join(".asgrep").exists() || !root.join(".asgrep/index.db").exists());
+}
+
+#[test]
+fn index_dry_run_reports_walk_errors_when_read_dir_fails() {
+    // d2a1.11: unreadable subdirs must not silently under-count as files_would_index: 0.
+    let tmp = TempDir::new().expect("tempdir");
+    let root = tmp.path().join("proj");
+    let blocked = root.join("blocked");
+    std::fs::create_dir_all(&blocked).unwrap();
+    std::fs::write(blocked.join("hidden.rs"), "fn hidden() {}\n").unwrap();
+    std::fs::write(root.join("visible.rs"), "fn visible() {}\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&blocked).unwrap().permissions();
+        perms.set_mode(0o000);
+        std::fs::set_permissions(&blocked, perms).unwrap();
+    }
+    #[cfg(not(unix))]
+    {
+        // Non-unix: still assert the field exists on a clean walk.
+        let bin = asgrep_bin();
+        let out = run(
+            &bin,
+            &["--json", "index", "--dry-run", root.to_str().expect("utf8")],
+        );
+        let value = assert_success(&out, "index");
+        assert!(value.get("walk_errors").is_some());
+        return;
+    }
+    let bin = asgrep_bin();
+    let out = run(
+        &bin,
+        &["--json", "index", "--dry-run", root.to_str().expect("utf8")],
+    );
+    // Restore perms so TempDir cleanup can remove blocked/.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&blocked).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&blocked, perms).unwrap();
+    }
+    let value = assert_success(&out, "index");
+    assert_eq!(value["walk_errors"], true, "{value:#}");
+    // Visible file still counted; blocked subtree is incomplete, not total zero.
+    assert_eq!(value["files_would_index"], 1, "{value:#}");
 }
 
 #[test]
