@@ -155,6 +155,8 @@ impl<'de> serde::Deserialize<'de> for SearchHit {
             } else {
                 0.0
             },
+            // dvc4: resolution is engine-derived, never trusted from the wire.
+            resolution: None,
             excerpt: wire.excerpt,
         })
     }
