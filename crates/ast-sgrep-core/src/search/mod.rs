@@ -22,9 +22,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use types::{assign_hit_confidence, assign_signal_margins};
 pub use types::{
     dedup_hits, format_hit_line, hit_why, DegradedChannel, HitKind, HitSignal,
-    SearchHit, SearchOptions, SearchResponse, SnapshotStamp, SpanHitInput, QueryExpansion,
+    SearchHit, SearchOptions, SearchResponse, SnapshotStamp, SpanHitInput, QueryExpansion, PlanTrace,
 };
 const CASCADE_PREFILTER_FILE_LIMIT: usize = 100;
+/// Exact hits after which the semantic stage cannot change the answer (ocx8).
+const EARLY_EXIT_EXACT_HITS: usize = 5;
 /// Cap on reported query expansions (ufk7).
 const MAX_QUERY_EXPANSIONS: usize = 5;
 const MAX_HITS_PER_FILE: usize = 3;
@@ -78,6 +80,8 @@ pub struct Searcher {
     options: SearchOptions,
     semantic_cache: Arc<Mutex<Option<SemanticCache>>>,
     response_cache: Mutex<ResponseCache>,
+    /// Planner decision from the most recent hybrid search (ocx8).
+    last_plan: Mutex<PlanTrace>,
 }
 /// Fail closed when callers request optional neural/rerank paths that were
 /// not compiled in (parity contract: silently ignoring the flags would make
@@ -156,6 +160,7 @@ impl Searcher {
                 order: std::collections::VecDeque::new(),
                 enabled: true,
             }),
+            last_plan: Mutex::new(PlanTrace::default()),
         }
     }
     pub fn store(&self) -> &IndexStore {
@@ -234,6 +239,7 @@ impl Searcher {
 
         response.snapshot = self.snapshot_stamp(generation_before);
         response.query_expansions = self.query_expansions(&response.query);
+        response.plan = self.take_plan();
         Ok(response)
     }
 
@@ -536,7 +542,16 @@ impl Searcher {
         lexical.retain(|hit| working_files.contains(&hit.file));
         let mut hits = lexical;
         hits.extend(structural);
-        if self.options.use_embed {
+        // ocx8: stage D is the expensive one. Run it only when the cheap
+        // deterministic evidence has NOT already answered the query.
+        //
+        // The stop condition is exact-match strength: when several structurally
+        // confirmed exact hits already exist, embedding the query and scanning
+        // vectors cannot change the answer, only its cost. `defs:refresh_token`
+        // must never pay for semantic retrieval; "where do expired sessions
+        // become valid again?" still needs it.
+        let stop = early_exit_reason(&hits);
+        if self.options.use_embed && stop.is_none() {
             hits.extend(embed_pass_for_files(
                 &self.store,
                 &self.options,
@@ -544,7 +559,36 @@ impl Searcher {
                 &working_files,
             )?);
         }
+        self.record_plan(&stop);
         Ok(hits)
+    }
+
+    /// Read and reset the planner decision (ocx8).
+    fn take_plan(&self) -> PlanTrace {
+        let mut guard = lock_clear_on_poison(&self.last_plan, |slot| *slot = PlanTrace::default());
+        std::mem::take(&mut *guard)
+    }
+
+    /// Record the planner's decision for the response (ocx8).
+    fn record_plan(&self, stop: &Option<String>) {
+        let mut plan = PlanTrace {
+            stages: vec![
+                "lexical".to_owned(),
+                "structural".to_owned(),
+                "symbol".to_owned(),
+            ],
+            stopped_because: stop.clone(),
+            skipped: Vec::new(),
+        };
+        if !self.options.use_embed {
+            plan.skipped.push("semantic".to_owned());
+        } else if stop.is_some() {
+            plan.skipped.push("semantic".to_owned());
+        } else {
+            plan.stages.push("semantic".to_owned());
+        }
+        let mut guard = lock_clear_on_poison(&self.last_plan, |slot| *slot = PlanTrace::default());
+        *guard = plan;
     }
 }
 fn literal_prefilter_pass(
@@ -760,6 +804,7 @@ pub(crate) fn finish_response_checked(
             prevented_read_bytes: 0,
             // Stamped by the Searcher, which owns the snapshot (d3l5).
             snapshot: SnapshotStamp::default(),
+            plan: PlanTrace::default(),
             query_expansions: Vec::new(),
         };
         record_ledger_from_env(&response);
@@ -843,6 +888,7 @@ pub(crate) fn finish_response_checked(
         prevented_read_bytes,
         // Stamped by the Searcher, which owns the snapshot (d3l5).
         snapshot: SnapshotStamp::default(),
+        plan: PlanTrace::default(),
         query_expansions: Vec::new(),
     };
     record_ledger_from_env(&response);
@@ -1574,4 +1620,22 @@ fn hex32(bytes: &[u8; 32]) -> String {
         let _ = write!(out, "{byte:02x}");
     }
     out
+}
+
+/// Should the planner stop before the expensive semantic stage (ocx8)?
+///
+/// Returns the reason when the cheap channels have already produced enough
+/// exact evidence that a semantic pass cannot change the outcome. Deliberately
+/// conservative: it fires only on genuinely exact signals, because stopping too
+/// eagerly trades recall for latency, and recall is the harder thing to notice
+/// missing.
+fn early_exit_reason(hits: &[SearchHit]) -> Option<String> {
+    let exact = hits
+        .iter()
+        .filter(|hit| hit.signal == HitSignal::Exact)
+        .count();
+    if exact >= EARLY_EXIT_EXACT_HITS {
+        return Some(format!("{exact} exact matches already satisfy the query"));
+    }
+    None
 }

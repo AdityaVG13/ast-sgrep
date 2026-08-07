@@ -414,6 +414,23 @@ pub struct DegradedChannel {
     pub reason: String,
 }
 
+/// What the planner decided to run, and where it stopped (ocx8).
+///
+/// A staged planner that silently skips work is indistinguishable from a buggy
+/// one. Recording the executed stages and the stop condition makes the
+/// decision auditable, and makes "why was this query slow" answerable.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct PlanTrace {
+    /// Stages actually executed, in order.
+    pub stages: Vec<String>,
+    /// Why the planner stopped before the remaining stages, if it did.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stopped_because: Option<String>,
+    /// Stages deliberately not run.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub skipped: Vec<String>,
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SearchResponse {
     pub query: String,
@@ -433,6 +450,9 @@ pub struct SearchResponse {
     /// Index snapshot this response was built from (d3l5).
     #[serde(default)]
     pub snapshot: SnapshotStamp,
+    /// What the planner ran and why it stopped (ocx8).
+    #[serde(default)]
+    pub plan: PlanTrace,
     /// Repository associations that widened this query (ufk7).
     ///
     /// Query expansion changes what the user asked for, so the engine states
