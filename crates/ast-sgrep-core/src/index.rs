@@ -437,9 +437,108 @@ impl Indexer {
         )?
         .rebuild_from_lines_with_generation(&lines, after)
     }
+    /// Rebuild into a new generation and activate it atomically (jpbq).
+    ///
+    /// The previous behavior cleared and rebuilt the live database in place, so
+    /// a crash or a failed rebuild destroyed the only good index. The rebuild
+    /// now lands in its own generation directory and becomes active only after
+    /// it passes integrity and smoke gates; the previous generation is retained
+    /// for rollback. If anything fails, the active index is untouched.
+    ///
+    /// Callers with an explicit `index_path` (or `ASGREP_INDEX_PATH`) keep the
+    /// legacy in-place behavior, because they pinned a specific file.
     pub fn reindex_all(&mut self) -> Result<IndexStats> {
-        self.store.clear_all_data()?;
-        self.index_all()
+        match self.generation_layout_root() {
+            Some(index_dir) => self.reindex_into_new_generation(&index_dir),
+            None => {
+                self.store.clear_all_data()?;
+                self.index_all()
+            }
+        }
+    }
+
+    /// The `.asgrep` directory to manage generations in, or `None` when the
+    /// caller pinned an explicit database path (jpbq).
+    fn generation_layout_root(&self) -> Option<PathBuf> {
+        if self.options.index_path.is_some() || std::env::var_os("ASGREP_INDEX_PATH").is_some() {
+            return None;
+        }
+        Some(self.options.root.join(crate::store::INDEX_DIR))
+    }
+
+    fn reindex_into_new_generation(&mut self, index_dir: &Path) -> Result<IndexStats> {
+        let active = crate::store::read_active_manifest(index_dir);
+        let previous = active.as_ref().map(|manifest| manifest.generation.clone());
+        let candidate = crate::store::next_generation_name(previous.as_deref());
+        let candidate_db = crate::store::generation_db_path(index_dir, &candidate);
+        if let Some(parent) = candidate_db.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| {
+                crate::StoreError::Other(format!(
+                    "create generation dir {}: {e}",
+                    parent.display()
+                ))
+            })?;
+        }
+
+        // Build the candidate through its own Indexer, so the active store is
+        // never opened for writing during the rebuild.
+        let mut options = self.options.clone();
+        options.index_path = Some(candidate_db.clone());
+        options.force_reindex = false;
+        let stats = {
+            let mut builder = Indexer::new(options)?;
+            builder.index_all()?
+        };
+
+        // Gate the candidate before it can serve a single query.
+        Self::verify_candidate_generation(&candidate_db)?;
+
+        crate::store::write_active_manifest(
+            index_dir,
+            &crate::store::ActiveManifest {
+                generation: candidate,
+                schema_version: self.store.schema_version(),
+                // Retained for rollback; not deleted here.
+                previous,
+                activated_at: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs() as i64)
+                    .unwrap_or_default(),
+            },
+        )?;
+
+        // Re-open against the newly activated generation.
+        self.store = IndexStore::open_with_durability(
+            &self.options.root,
+            self.options.index_path.as_deref(),
+            self.options.durability,
+        )?;
+        Ok(stats)
+    }
+
+    /// Refuse to activate a generation that cannot answer for itself (jpbq).
+    ///
+    /// Runs SQLite integrity checking and a deterministic smoke query. A
+    /// candidate that fails leaves the active pointer untouched.
+    fn verify_candidate_generation(candidate_db: &Path) -> Result<()> {
+        let store = IndexStore::open(
+            candidate_db.parent().unwrap_or(candidate_db),
+            Some(candidate_db),
+        )?;
+        let integrity = crate::store::integrity_check(store.connection())?;
+        if integrity != "ok" {
+            return Err(crate::StoreError::Other(format!(
+                "candidate generation failed integrity_check: {integrity}"
+            )));
+        }
+        // Smoke: the status query must succeed and report a populated index.
+        let status = store.status()?;
+        if status.file_count == 0 {
+            return Err(crate::StoreError::Other(
+                "candidate generation indexed zero files; refusing to activate".into(),
+            ));
+        }
+        Ok(())
     }
     pub fn update_paths(&mut self, paths: &[PathBuf]) -> Result<WatchUpdateStats> {
         // Single-file updates reuse the existing gitignore matcher.

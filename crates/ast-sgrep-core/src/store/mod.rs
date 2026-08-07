@@ -81,6 +81,82 @@ impl Durability {
 
 pub const INDEX_DIR: &str = ".asgrep";
 pub const INDEX_DB: &str = "index.db";
+/// Directory holding candidate and retained index generations (jpbq).
+pub const GENERATIONS_DIR: &str = "generations";
+/// Directory holding the active-generation pointer (jpbq).
+pub const MANIFESTS_DIR: &str = "manifests";
+/// Atomically replaced pointer to the active generation (jpbq).
+pub const ACTIVE_MANIFEST: &str = "active.json";
+
+/// Pointer to the generation currently serving queries (jpbq).
+///
+/// A full rebuild used to clear and reconstruct the live database in place, so
+/// a crash mid-rebuild destroyed the only good index. A rebuild now lands in a
+/// new generation directory and becomes active only by replacing this pointer,
+/// which is a single atomic rename.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ActiveManifest {
+    /// Generation directory name, e.g. `000184`.
+    pub generation: String,
+    /// Schema version the generation was built with.
+    pub schema_version: i64,
+    /// Previous generation, retained for rollback until this one is proven.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous: Option<String>,
+    /// Unix seconds when this generation was activated.
+    pub activated_at: i64,
+}
+
+/// Root of the generation layout for an index directory (jpbq).
+pub fn generations_root(index_dir: &Path) -> PathBuf {
+    index_dir.join(GENERATIONS_DIR)
+}
+
+/// Path of the active-generation manifest (jpbq).
+pub fn active_manifest_path(index_dir: &Path) -> PathBuf {
+    index_dir.join(MANIFESTS_DIR).join(ACTIVE_MANIFEST)
+}
+
+/// Read the active manifest, if this index uses the generation layout (jpbq).
+pub fn read_active_manifest(index_dir: &Path) -> Option<ActiveManifest> {
+    let raw = std::fs::read_to_string(active_manifest_path(index_dir)).ok()?;
+    serde_json::from_str(&raw).ok()
+}
+
+/// Replace the active-generation pointer atomically (jpbq).
+///
+/// Written to a temp file in the same directory and renamed over the target, so
+/// a reader either sees the old pointer or the new one -- never a partial file.
+pub fn write_active_manifest(index_dir: &Path, manifest: &ActiveManifest) -> crate::Result<()> {
+    let path = active_manifest_path(index_dir);
+    let parent = path.parent().expect("manifest path has a parent");
+    std::fs::create_dir_all(parent).map_err(|e| {
+        crate::StoreError::Other(format!("create manifest dir {}: {e}", parent.display()))
+    })?;
+    let body = serde_json::to_string_pretty(manifest)
+        .map_err(|e| crate::StoreError::Other(format!("serialize active manifest: {e}")))?;
+    let temp = path.with_extension("json.tmp");
+    std::fs::write(&temp, body.as_bytes())
+        .map_err(|e| crate::StoreError::Other(format!("write {}: {e}", temp.display())))?;
+    std::fs::rename(&temp, &path).map_err(|e| {
+        crate::StoreError::Other(format!("activate {}: {e}", path.display()))
+    })?;
+    Ok(())
+}
+
+/// Database path for a named generation (jpbq).
+pub fn generation_db_path(index_dir: &Path, generation: &str) -> PathBuf {
+    generations_root(index_dir).join(generation).join(INDEX_DB)
+}
+
+/// Next generation directory name after the current one (jpbq).
+pub fn next_generation_name(current: Option<&str>) -> String {
+    let next = current
+        .and_then(|name| name.parse::<u64>().ok())
+        .unwrap_or(0)
+        .saturating_add(1);
+    format!("{next:06}")
+}
 fn as_db_path(path: PathBuf) -> PathBuf {
     if path.extension().is_some_and(|e| e == "db") {
         path
@@ -100,7 +176,17 @@ pub fn try_index_db_path(root: &Path, index_path: Option<&Path>) -> crate::Resul
     if let Ok(env_path) = std::env::var("ASGREP_INDEX_PATH") {
         return Ok(as_db_path(PathBuf::from(env_path)));
     }
-    let local = root.join(INDEX_DIR).join(INDEX_DB);
+    let index_dir = root.join(INDEX_DIR);
+    // jpbq: an active-generation pointer wins over the legacy flat layout.
+    if let Some(manifest) = read_active_manifest(&index_dir) {
+        let candidate = generation_db_path(&index_dir, &manifest.generation);
+        if candidate.exists() {
+            return Ok(candidate);
+        }
+        // A pointer to a missing generation is a corrupt activation; fall
+        // through to the legacy path rather than failing every command.
+    }
+    let local = index_dir.join(INDEX_DB);
     if local.exists() {
         return Ok(local);
     }
