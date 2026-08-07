@@ -121,6 +121,12 @@ The compact payload uses this versioned schema:
 - `zb` is `[per-result ceiling, response ceiling, used]`, `zn` is the hit
   count, and `zt` counts snippets cut by either ceiling. Metadata is never
   dropped when snippet budget is exhausted.
+- A snippet of `~` means this MCP session already sent that exact body for
+  that id, so it was not sent again; `ze` counts how many were elided. Reuse
+  the earlier result or call `code_read`. Elision is keyed on a content hash,
+  so an edited file re-sends in full, and it is cleared by `index_repo` so it
+  never spans index generations. Pass `resend_seen: true` if your client does
+  not retain earlier results. `ze` appears on the MCP surface only.
 - Per-call accounting is named `z*` on purpose. `serde_json` orders object
   keys alphabetically, so this keeps content keys (`h`, `p`, `q`, `v`) in a
   stable head and confines volatile numbers to a trailing block a consumer

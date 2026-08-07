@@ -333,6 +333,9 @@ fn tools_list_is_byte_identical_across_calls_and_processes() {
 
 /// 9q0l: identical query plus unchanged index must produce identical bytes, and
 /// per-call accounting must stay in the trailing `z*` block.
+///
+/// Uses `resend_seen` so this measures the stateless encoding. Snippet elision
+/// (v972) is deliberate session state and is covered by its own test.
 #[test]
 fn search_envelope_is_byte_stable_with_volatile_accounting_last() {
     let temp = tempfile::tempdir().unwrap();
@@ -351,7 +354,7 @@ fn search_envelope_is_byte_stable_with_volatile_accounting_last() {
     .index_all()
     .unwrap();
 
-    let search = json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"keyword_search","arguments":{"query":"target_symbol","limit":4}}});
+    let search = json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"keyword_search","arguments":{"query":"target_symbol","limit":4,"resend_seen":true}}});
     let responses = rpc_session(vec![search.clone(), search], Some(temp.path()));
     let first = responses[0]["result"]["content"][0]["text"].as_str().unwrap();
     let second = responses[1]["result"]["content"][0]["text"].as_str().unwrap();
@@ -364,4 +367,94 @@ fn search_envelope_is_byte_stable_with_volatile_accounting_last() {
         assert!(at < tail, "{content_key} must precede volatile accounting");
     }
     assert!(first.find("\"zn\"").unwrap() > tail || first.contains("\"zn\""));
+}
+
+/// v972: a repeated search must not resend bodies the session already sent,
+/// but a reindex must invalidate that memory.
+#[test]
+fn repeated_search_elides_already_sent_snippets_until_reindex() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("src");
+    std::fs::create_dir(&source).unwrap();
+    std::fs::write(
+        source.join("lib.rs"),
+        "fn target_symbol() { helper(); }\nfn helper() {}\n",
+    )
+    .unwrap();
+    ast_sgrep_core::Indexer::new(ast_sgrep_core::IndexOptions {
+        root: temp.path().to_path_buf(),
+        ..ast_sgrep_core::IndexOptions::default()
+    })
+    .unwrap()
+    .index_all()
+    .unwrap();
+
+    let search = json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"keyword_search","arguments":{"query":"target_symbol","limit":4}}});
+    let reindex = json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"index_repo","arguments":{}}});
+    let responses = rpc_session(
+        vec![search.clone(), search.clone(), reindex, search.clone()],
+        Some(temp.path()),
+    );
+    assert_eq!(responses.len(), 4, "{responses:#?}");
+
+    let first = responses[0]["result"]["content"][0]["text"].as_str().unwrap();
+    let second = responses[1]["result"]["content"][0]["text"].as_str().unwrap();
+    let after_reindex = responses[3]["result"]["content"][0]["text"].as_str().unwrap();
+
+    // Second identical call carries markers instead of bodies, and is smaller.
+    let body = tool_body(&responses[1]);
+    assert!(
+        body["h"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|hit| hit[4] == "~"),
+        "expected every snippet elided: {body:#}"
+    );
+    assert!(body["ze"].as_u64().unwrap() > 0, "elision count missing");
+    assert!(
+        second.len() < first.len(),
+        "elided response must be smaller: {} vs {}",
+        second.len(),
+        first.len()
+    );
+
+    // A reindex clears the memory: bodies come back in full.
+    let refreshed = tool_body(&responses[3]);
+    assert!(
+        refreshed["h"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|hit| hit[4] != "~"),
+        "reindex must invalidate elision: {refreshed:#}"
+    );
+    assert_eq!(after_reindex.len(), first.len());
+}
+
+/// v972: clients that do not retain earlier results can opt out.
+#[test]
+fn resend_seen_disables_snippet_elision() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("src");
+    std::fs::create_dir(&source).unwrap();
+    std::fs::write(
+        source.join("lib.rs"),
+        "fn target_symbol() { helper(); }\nfn helper() {}\n",
+    )
+    .unwrap();
+    ast_sgrep_core::Indexer::new(ast_sgrep_core::IndexOptions {
+        root: temp.path().to_path_buf(),
+        ..ast_sgrep_core::IndexOptions::default()
+    })
+    .unwrap()
+    .index_all()
+    .unwrap();
+
+    let search = json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"keyword_search","arguments":{"query":"target_symbol","limit":4,"resend_seen":true}}});
+    let responses = rpc_session(vec![search.clone(), search], Some(temp.path()));
+    let first = responses[0]["result"]["content"][0]["text"].as_str().unwrap();
+    let second = responses[1]["result"]["content"][0]["text"].as_str().unwrap();
+    assert_eq!(first, second, "resend_seen must keep responses identical");
+    assert!(!second.contains("\"~\""), "no elision expected: {second}");
 }

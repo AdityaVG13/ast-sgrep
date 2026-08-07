@@ -50,6 +50,12 @@ const INDEX_REPO_DEADLINE: Duration = Duration::from_secs(600);
 /// `<path_id>:<start>-<end>`; `code_read` resolves `<path_id>` through this map,
 /// so an agent never has to reconstruct a path it was handed by id.
 const MAX_PATH_REGISTRY: usize = 4_096;
+/// Bound on remembered emitted snippets (v972).
+const MAX_EMITTED_SNIPPETS: usize = 4_096;
+/// Marker replacing a snippet this session already sent for the same id and
+/// unchanged content (v972). The agent already has the body in its transcript;
+/// `code_read` returns it again if not.
+const ELIDED_SNIPPET: &str = "~";
 
 #[derive(Clone, Copy)]
 enum AgentSearchMode {
@@ -93,6 +99,10 @@ pub struct McpServer {
     /// Compact path-id to project-relative path, learned from emitted search
     /// envelopes (kxmc). Bounded; cleared when the index changes.
     path_registry: Mutex<HashMap<String, String>>,
+    /// Hit id to hash of the snippet already sent this session (v972).
+    /// Bounded; cleared when the index changes, so an elision can never point
+    /// at content from a previous index generation.
+    emitted_snippets: Mutex<HashMap<String, u64>>,
 }
 
 impl McpServer {
@@ -117,6 +127,7 @@ impl McpServer {
             searcher_cache: Mutex::new(SearcherCache::default()),
             index_lock: Mutex::new(()),
             path_registry: Mutex::new(HashMap::new()),
+            emitted_snippets: Mutex::new(HashMap::new()),
         })
     }
 
@@ -175,7 +186,8 @@ impl McpServer {
         let search_properties = json!({
             "query": {"type": "string", "minLength": 1, "maxLength": 4096},
             "root": {"type": "string", "description": "Project root (defaults to ASGREP_ROOT or cwd)"},
-            "limit": {"type": "integer", "minimum": 1, "maximum": MAX_AGENT_LIMIT}
+            "limit": {"type": "integer", "minimum": 1, "maximum": MAX_AGENT_LIMIT},
+            "resend_seen": {"type": "boolean", "description": "Send snippets already returned this session instead of the ~ marker. Set true only if you do not keep earlier results."}
         });
         let search_tool = |name: &str, description: &str, props: Value| {
             json!({
@@ -196,7 +208,9 @@ impl McpServer {
             " Returns a compact envelope: `p` maps path ids to project paths, and each entry of `h` is",
             " [id, kind, signal, symbol, snippet] where id is `<path_id>:<start_line>-<end_line>`.",
             " kind: x=asgrep d=def c=caller g=graph a=anchor i=import p=pattern e=embed.",
-            " signal: x=exact t=structural m=semantic. Pass any id straight to code_read for the full body."
+            " signal: x=exact t=structural m=semantic. Pass any id straight to code_read for the full body.",
+            " A snippet of `~` means this session already sent that exact body for that id:",
+            " reuse the earlier result, or call code_read. Pass resend_seen=true to disable."
         );
         let describe = |summary: &str| format!("{summary}{COMPACT_CONTRACT}");
         json!({"tools": [
@@ -406,7 +420,14 @@ impl McpServer {
     }
 
     fn tool_agent_search(&self, args: &Value, mode: AgentSearchMode) -> anyhow::Result<String> {
-        Self::validate_fields(args, &["query", "root", "limit"])?;
+        Self::validate_fields(args, &["query", "root", "limit", "resend_seen"])?;
+        // v972: transcript-less clients set resend_seen to keep full snippets.
+        let resend_seen = match args.get("resend_seen") {
+            None => false,
+            Some(value) => value
+                .as_bool()
+                .context("resend_seen must be a boolean")?,
+        };
         let query = args
             .get("query")
             .and_then(Value::as_str)
@@ -426,14 +447,60 @@ impl McpServer {
         // kxmc: compact key-free envelope, minified. Object keys and pretty
         // whitespace were the bulk of the old AgentCapsule payload, and the
         // full path was emitted twice per hit (`file` plus `ref`).
-        let envelope = format_response_with_budget(
+        let mut envelope = format_response_with_budget(
             &response,
             OutputFormat::Compact,
             0,
             CompactBudget::default(),
         );
         self.remember_compact_paths(&envelope);
+        if !resend_seen {
+            self.elide_seen_snippets(&mut envelope);
+        }
         Ok(serde_json::to_string(&envelope)?)
+    }
+
+    /// Replace snippets this session already sent for the same id and unchanged
+    /// content (v972).
+    ///
+    /// Iterative agent search re-runs overlapping queries constantly, and the
+    /// model pays again for bytes it already has. Keying on a content hash (not
+    /// just the id) means an edited file re-sends in full, and the map is
+    /// cleared on `index_repo` so an elision never spans index generations.
+    fn elide_seen_snippets(&self, envelope: &mut Value) {
+        let Some(hits) = envelope.get_mut("h").and_then(Value::as_array_mut) else {
+            return;
+        };
+        let mut seen = Self::lock_or_recover(&self.emitted_snippets, |seen| seen.clear());
+        let mut elided = 0_usize;
+        for hit in hits {
+            let Some(row) = hit.as_array_mut() else {
+                continue;
+            };
+            let (Some(id), Some(snippet)) = (
+                row.first().and_then(Value::as_str).map(str::to_owned),
+                row.get(4).and_then(Value::as_str).map(str::to_owned),
+            ) else {
+                continue;
+            };
+            if snippet.is_empty() || snippet == ELIDED_SNIPPET {
+                continue;
+            }
+            let digest = fnv1a64(snippet.as_bytes());
+            if seen.get(&id) == Some(&digest) {
+                row[4] = Value::String(ELIDED_SNIPPET.to_owned());
+                elided += 1;
+                continue;
+            }
+            if seen.len() >= MAX_EMITTED_SNIPPETS && !seen.contains_key(&id) {
+                continue;
+            }
+            seen.insert(id, digest);
+        }
+        if elided > 0 {
+            // Volatile accounting, so it sorts with the `z*` tail (9q0l).
+            envelope["ze"] = Value::from(elided);
+        }
     }
 
     /// Record `p` table entries so `code_read` can resolve compact ids later.
@@ -555,9 +622,11 @@ impl McpServer {
             INDEX_REPO_DEADLINE.as_secs()
         );
         // Index changed — drop cached Searcher so next search sees fresh data.
-        // Compact path ids are generation-scoped, so drop them too (kxmc).
+        // Compact path ids are generation-scoped, so drop them too (kxmc), and
+        // forget emitted snippets so nothing is elided across a reindex (v972).
         self.invalidate_searcher_cache();
         Self::lock_or_recover(&self.path_registry, |registry| registry.clear()).clear();
+        Self::lock_or_recover(&self.emitted_snippets, |seen| seen.clear()).clear();
         Ok(serde_json::to_string(&stats)?)
     }
 }
@@ -739,6 +808,7 @@ mod cache_tests {
             searcher_cache: Mutex::new(SearcherCache::default()),
             index_lock: Mutex::new(()),
             path_registry: Mutex::new(HashMap::new()),
+            emitted_snippets: Mutex::new(HashMap::new()),
         };
         let (searcher, generation) = server.searcher_for(root.clone(), 10).unwrap();
         server.invalidate_searcher_cache();
@@ -746,4 +816,13 @@ mod cache_tests {
         let cache = McpServer::lock_or_recover(&server.searcher_cache, |_| {});
         assert!(cache.entry.is_none(), "stale searcher returned after reindex");
     }
+}
+/// FNV-1a over snippet bytes (v972). Content-keyed so an edited file re-sends.
+fn fnv1a64(bytes: &[u8]) -> u64 {
+    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash
 }
