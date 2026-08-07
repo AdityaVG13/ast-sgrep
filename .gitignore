@@ -138,3 +138,7 @@ fuzz/corpus/
 
 # CLI benchmark-history state (regenerated on runs)
 **/.bench-history.json
+
+# Local tool/audit state (not product)
+.house-odds/**/.fszero/
+/beads_compliance_audit/
