@@ -62,6 +62,7 @@ pub use limits::{
     MAX_REGEX_PATTERN_CHARS, MAX_STDIN_LINE_BYTES,
 };
 pub mod lexicon;
+pub mod resolution;
 pub use search::format_hit_line;
 pub use pattern::search_pattern;
 pub use query::{ParsedQuery, QueryMode};

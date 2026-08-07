@@ -94,6 +94,12 @@ pub struct SearchHit {
     /// calibration is separate work and is not claimed here.
     #[serde(default)]
     pub confidence: f64,
+    /// How a graph edge was resolved, when this hit came from one (dvc4).
+    ///
+    /// `None` for non-graph hits. A hit whose resolution is not precise must
+    /// never be rendered as an exact call edge.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolution: Option<crate::resolution::Resolution>,
     pub excerpt: String,
 }
 #[derive(serde::Deserialize)]
@@ -187,6 +193,7 @@ impl SearchHit {
             contributors: vec![kind],
             margin: 0.0,
             confidence: 0.0,
+            resolution: None,
             excerpt,
         }
     }
