@@ -2,7 +2,7 @@
 use ast_sgrep_core::chain::{expand_chain, ChainConfig};
 use ast_sgrep_core::query::{ParsedQuery, QueryMode};
 use ast_sgrep_core::search::{SearchOptions, Searcher};
-use ast_sgrep_core::semantic_ann::SemanticAnnIndex;
+use ast_sgrep_core::semantic_ann::{SemanticAnnIndex, DEFAULT_ANN_THRESHOLD};
 use ast_sgrep_core::store::{CallerRow, SymbolRow, UpsertFileInput};
 use ast_sgrep_core::tantivy_index::{should_use_tantivy, TANTIVY_AUTO_THRESHOLD};
 use ast_sgrep_core::{IndexOptions, IndexStore, Indexer};
@@ -241,10 +241,19 @@ fn bead_ql1u_chain_seed_skips_first_symbol_invention() {
 }
 
 /// firi — IVF (all probes) and flat share MIN_SIMILARITY via exceeds_threshold.
+///
+/// Uses n >= DEFAULT_ANN_THRESHOLD to match production-scale IVF builds.
+/// Historical n=256 left the old query-time DEFAULT gate vacuous (both arms
+/// brute-forced). Predicate unity is now via score_members → top_k_similarity
+/// Some(MIN_SIMILARITY); mid-size override path is covered in unit tests.
 #[test]
 fn bead_firi_ivf_and_flat_min_similarity_agree() {
     let dim = 16usize;
-    let n = 256usize;
+    let n = DEFAULT_ANN_THRESHOLD.max(2048);
+    assert!(
+        n >= DEFAULT_ANN_THRESHOLD,
+        "firi must exercise IVF score_members, not brute-force early return"
+    );
     let mut flat = Vec::with_capacity(n * dim);
     let mut state = 0x00F1_0091_u64;
     for _ in 0..n {
@@ -266,7 +275,7 @@ fn bead_firi_ivf_and_flat_min_similarity_agree() {
     }
     let index = SemanticAnnIndex::build_from_flat(&flat, dim);
     let limit = 16usize;
-    for &qi in &[0usize, 41, 128, 200, 255] {
+    for &qi in &[0usize, 41, 128, 200, 255, 1024, 2000] {
         let query = flat[qi * dim..(qi + 1) * dim].to_vec();
         let mut qn = query.clone();
         let qnorm: f32 = qn.iter().map(|x| x * x).sum::<f32>().sqrt();
