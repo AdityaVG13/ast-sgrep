@@ -42,16 +42,22 @@ echo "== retrieval quality (self corpus) =="
 # 2. Token efficiency: bytes a model would actually receive, per format,
 #    over the same gold queries. Compact is the agent-facing envelope.
 echo "== token efficiency (self corpus) =="
-python3 - "$bin" "$gold" "$out" <<'PY'
+# A dedicated, freshly built index keeps the measurement deterministic: the
+# native/agent envelopes embed the snapshot generation, so reusing a repo index
+# whose generation keeps incrementing would change the byte totals run to run.
+token_index="$(mktemp -d)/index.db"
+"$bin" --index-path "$token_index" index . >/dev/null
+python3 - "$bin" "$gold" "$out" "$token_index" <<'PY'
 import json, subprocess, sys
-binary, gold_path, out_dir = sys.argv[1], sys.argv[2], sys.argv[3]
+binary, gold_path, out_dir, index_path = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 gold = json.load(open(gold_path))
 rows = []
 for query in gold["queries"]:
     row = {"name": query["name"], "query": query["query"]}
     for fmt in ("native", "agent", "agent-capsule", "compact"):
         proc = subprocess.run(
-            [binary, "--json", "--format", fmt, "--limit", "10", query["query"], "."],
+            [binary, "--index-path", index_path, "--json", "--format", fmt,
+             "--limit", "10", query["query"], "."],
             capture_output=True, text=True,
         )
         row[fmt] = len(proc.stdout.strip())
