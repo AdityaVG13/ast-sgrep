@@ -322,6 +322,7 @@ mod tests {
             embed_cache_hits: 0,
             embed_cache_misses: 0,
             semantic_ivf_present: false,
+            durability: "balanced".into(),
         };
         log.index_snapshot(&status);
 

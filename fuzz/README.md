@@ -16,6 +16,12 @@ pull `libfuzzer-sys` / fuzz-only deps into normal builds.
 | `lsp_frame` | `read_message` over `Cursor` | panic-free framing (≤64 KiB) |
 | `codemode_serve` | `ServeRequest` / `BatchRequest` serde | panic-free JSON parse |
 
+**Wire follow-ups (bead `.4`):** MCP parse-only JSON-RPC envelope seam is
+**deferred** (full `handle_request` is I/O-bound; CodeMode serde + LSP framing
+cover the wire class for now). URI confinement harness (`uri_to_rel_path` under
+a fixed synthetic root) is an explicit **follow-up** — not shipped in this
+campaign.
+
 Security motivation: tree-sitter C + dual pattern×source (native targets);
 binary OOB/magic/length (ANN/embed); URI escape + framing DoS (wire).
 
