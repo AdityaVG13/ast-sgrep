@@ -273,6 +273,23 @@ impl IndexStore {
             .unwrap_or(0))
     }
 
+    /// Count definitions carrying a name, repository-wide and inside one file
+    /// (dvc4). Used to classify how confidently a name match resolved.
+    pub fn symbol_name_candidates(&self, name: &str, file: &str) -> Result<(usize, usize)> {
+        let repo: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM symbols WHERE name = ?1",
+            params![name],
+            |row| row.get(0),
+        )?;
+        let same_file: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM symbols s JOIN files f ON f.id = s.file_id
+             WHERE s.name = ?1 AND f.path = ?2",
+            params![name, file],
+            |row| row.get(0),
+        )?;
+        Ok((same_file as usize, repo as usize))
+    }
+
     /// Symbol names paired with nearby line text, for lexicon learning (ufk7).
     ///
     /// Bounded by construction: a few lines per symbol, not whole files, so

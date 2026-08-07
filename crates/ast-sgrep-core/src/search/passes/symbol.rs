@@ -73,6 +73,18 @@ fn caller_rows_to_hits(
     parsed: &ParsedQuery,
     mode: CallerMatchMode,
 ) -> Result<Vec<SearchHit>> {
+    caller_rows_to_hits_resolved(rows, options, parsed, mode, None)
+}
+
+/// dvc4: same as above, but classifies how each name match resolved when a
+/// store is available to count candidates.
+fn caller_rows_to_hits_resolved(
+    rows: Vec<CallerQueryRow>,
+    options: &SearchOptions,
+    parsed: &ParsedQuery,
+    mode: CallerMatchMode,
+    store: Option<&IndexStore>,
+) -> Result<Vec<SearchHit>> {
     let primary_lower = parsed.primary_symbol().map(|s| s.to_lowercase());
     // am6l: normalize query terms once per query, not once per scored row.
     let norm_terms = normalize_query_terms(&parsed.terms);
@@ -91,7 +103,22 @@ fn caller_rows_to_hits(
         if !matched {
             continue;
         }
-        hits.push(SearchHit::caller(
+        // dvc4: a name match is a guess until something disambiguates it.
+        // Counting candidates is what separates "the only definition in this
+        // file" from "one of eleven same-named methods".
+        let resolution = store.and_then(|store| {
+            store
+                .symbol_name_candidates(&callee, &path)
+                .ok()
+                .map(|(same_file, repo)| {
+                    crate::resolution::Resolution::from_candidates(
+                        same_file,
+                        repo,
+                        std::iter::empty(),
+                    )
+                })
+        });
+        let mut caller_hit = SearchHit::caller(
             path.clone(),
             language.clone(),
             caller.clone(),
@@ -99,7 +126,9 @@ fn caller_rows_to_hits(
             line_no,
             text,
             score_caller_normalized(&norm_terms, &callee),
-        ));
+        );
+        caller_hit.resolution = resolution.clone();
+        hits.push(caller_hit);
         let graph = match mode {
             CallerMatchMode::CalleeOnly => Some(SCORE_GRAPH),
             CallerMatchMode::Hybrid => {
@@ -375,7 +404,7 @@ pub fn search_callers(
         MODE_SQL_LIMIT,
         map_caller_row,
     )?;
-    caller_rows_to_hits(rows, options, &q, CallerMatchMode::CalleeOnly)
+    caller_rows_to_hits_resolved(rows, options, &q, CallerMatchMode::CalleeOnly, Some(store))
 }
 pub fn search_defs(
     store: &IndexStore,
