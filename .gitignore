@@ -152,3 +152,6 @@ fuzz/corpus/
 
 # state-space-collapse skill artifacts
 .state-space-collapse/
+
+# module-coupling-topology skill artifacts (local books)
+.module-coupling-topology/
