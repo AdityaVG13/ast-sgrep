@@ -149,3 +149,6 @@ fuzz/corpus/
 # Local tool/audit state (not product)
 .house-odds/**/.fszero/
 /beads_compliance_audit/
+
+# state-space-collapse skill artifacts
+.state-space-collapse/
