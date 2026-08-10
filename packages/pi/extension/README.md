@@ -4,7 +4,7 @@ Native Code Mode, structural, graph, and semantic code search for [Pi](https://g
 
 [![pi-ast-sgrep: native code search inside Pi](https://cdn.jsdelivr.net/npm/pi-ast-sgrep/assets/preview.png)](https://pi.dev/packages/pi-ast-sgrep?name=pi-ast-sgrep)
 
-`pi-ast-sgrep` gives Pi a warm, project-aware search engine for understanding code. It finds behavior by intent, resolves definitions and callers, traces relationships, matches syntax-aware patterns, and searches local semantic embeddings. The primary `asgrep_codemode` tool lets Pi compose several searches in one JavaScript program instead of spending one model round trip per lookup.
+`pi-ast-sgrep` gives Pi a warm, project-aware search engine for understanding code. It finds behavior by intent, resolves definitions and callers, traces relationships, matches syntax-aware patterns, and searches local semantic embeddings. The primary `asgrep` tool lets Pi compose several searches in one JavaScript program instead of spending one model round trip per lookup.
 
 ## Install
 
@@ -24,7 +24,7 @@ No Rust toolchain or separate MCP server is required. The npm package selects th
 
 | Resource | Purpose |
 |---|---|
-| `asgrep_codemode` | Primary tool. Run a bounded JavaScript program that composes typed `asgrep.*` calls. |
+| `asgrep` | Primary tool. Run a bounded JavaScript program that composes typed `asgrep.*` calls. |
 | `asgrep_search` | Run one natural, structural, symbol, graph, semantic, word, literal, or regex lookup. |
 | `asgrep_index` | Create, refresh, or explicitly rebuild the current project index. |
 | `asgrep_status` | Inspect the selected root, index, backend, counts, and capabilities. |
@@ -38,7 +38,7 @@ Ask Pi:
 
 > Use ast-sgrep Code Mode to find where access tokens are refreshed, trace the top result's callers, and return only the relevant files, symbols, and lines.
 
-Pi can make one `asgrep_codemode` call like this:
+Pi can make one `asgrep` call like this:
 
 ```json
 {

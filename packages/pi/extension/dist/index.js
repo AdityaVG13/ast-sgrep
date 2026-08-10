@@ -1,6 +1,7 @@
 import { Type } from "typebox";
 import { createAsgrepConnector, runCodemode, runNativeBatch, runBatchViaStdin, CODEMODE_TYPES_FOR_MODEL, NativeSessionPool, argvFor, asEnvelope, } from "./codemode/index.js";
 import { AstSgrepRuntime, FreshnessCoordinator, RuntimeError } from "./runtime.js";
+import { applyEdit, planEdit } from "./edit.js";
 const DEFAULT_LIMIT = 8;
 const MAX_LIMIT = 100;
 const MAX_EXCERPT_LINES = 100;
@@ -33,6 +34,13 @@ const codemodeParameters = Type.Object({
         maxLength: 32_000,
         description: "JavaScript async body that calls asgrep.* methods. Prefer Promise.all for independent lookups. Return only the shaped final value.",
     }),
+}, { additionalProperties: false });
+const editParameters = Type.Object({
+    path: Type.String({ minLength: 1, maxLength: 4_096, description: "File path relative to the project root (or absolute under root)" }),
+    old_string: Type.Optional(Type.String({ description: "Exact text to replace (requires new_string)" })),
+    new_string: Type.Optional(Type.String({ description: "Replacement text (requires old_string)" })),
+    contents: Type.Optional(Type.String({ description: "Full file contents for write/create (mutually exclusive with old_string/new_string)" })),
+    replace_all: Type.Optional(Type.Boolean({ default: false, description: "Replace every old_string occurrence (default: exactly one match required)" })),
 }, { additionalProperties: false });
 function bounded(text) {
     return text.length <= MAX_CONTENT_CHARS ? text : `${text.slice(0, MAX_CONTENT_CHARS - 1)}…`;
@@ -130,6 +138,40 @@ export function registerAstSgrepTools(pi, runtime = new AstSgrepRuntime(pi), fre
         }
     };
     const resolveRoot = async (cwd) => runtime.resolveRoot ? await runtime.resolveRoot({ cwd }) : cwd;
+    const probeCli = (options = {}) => {
+        // Test fixtures inject `run` without a resolver; production always has resolveBinaryPath.
+        if (typeof runtime.resolveBinaryPath !== "function")
+            return { ok: true };
+        try {
+            const base = runtime.nativeEnv?.() ?? {};
+            if (options.env) {
+                runtime.resolveBinaryPath({ env: { ...base, ...options.env } });
+            }
+            else {
+                runtime.resolveBinaryPath({ env: base });
+            }
+            return { ok: true };
+        }
+        catch (cause) {
+            return { ok: false, cause: cause instanceof Error ? cause.message : String(cause) };
+        }
+    };
+    const requireBackend = (probe, context, cause) => {
+        if (probe.napi || probe.cli)
+            return;
+        throw new RuntimeError("BACKEND_UNAVAILABLE", "ast-sgrep backend unavailable (no NAPI session and no CLI binary)", {
+            napi: false,
+            cli: false,
+            cwd: context.cwd,
+            hint: "Install @ast-sgrep/<platform> or run npm run build:native in packages/pi/extension",
+            ...(cause ? { cause } : {}),
+        });
+    };
+    const runCli = async (args, context, options = {}) => {
+        const cli = probeCli(options);
+        requireBackend({ napi: false, cli: cli.ok }, context, cli.ok ? undefined : cli.cause);
+        return runtime.run(args, context, options);
+    };
     const nativeCall = async (tool, args, context, options = {}) => {
         ensurePool();
         const root = await resolveRoot(context.cwd);
@@ -137,8 +179,8 @@ export function registerAstSgrepTools(pi, runtime = new AstSgrepRuntime(pi), fre
         if (worker) {
             return asEnvelope(await worker.call(tool, args, options.signal ? { signal: options.signal } : {}));
         }
-        // Last resort: cold CLI argv (tests without NAPI / missing addon).
-        return runtime.run(argvFor(tool, args), context, options);
+        // Cold CLI only when a real binary resolves — never remap missing natives to BINARY_RESOLUTION_FAILED.
+        return runCli(argvFor(tool, args), context, options);
     };
     // Freshness + tools share the same warm in-process Searcher as Code Mode.
     const warmRuntime = {
@@ -153,7 +195,9 @@ export function registerAstSgrepTools(pi, runtime = new AstSgrepRuntime(pi), fre
         warmRuntime.rebuildIncompatibleIndex = (context, options) => runtime.rebuildIncompatibleIndex(context, options);
     }
     pi.on("tool_result", (event, ctx) => {
-        if (event.isError || (event.toolName !== "write" && event.toolName !== "edit"))
+        if (event.isError)
+            return;
+        if (event.toolName !== "write" && event.toolName !== "edit" && event.toolName !== "asgrep_edit")
             return;
         const path = event.input.path;
         if (typeof path === "string")
@@ -162,7 +206,7 @@ export function registerAstSgrepTools(pi, runtime = new AstSgrepRuntime(pi), fre
     // Primary surface: Code Mode — in-process NAPI (MCP-class), compose in JS.
     // Sibling to MCP: pick one surface; both link core, never each other.
     pi.registerTool({
-        name: "asgrep_codemode",
+        name: "asgrep",
         label: "ast-sgrep Code Mode",
         description: [
             "Primary ast-sgrep tool. Write JavaScript that calls typed asgrep.* methods.",
@@ -263,12 +307,12 @@ export function registerAstSgrepTools(pi, runtime = new AstSgrepRuntime(pi), fre
             }
         },
     });
-    // Escape hatches: one-shot tools for simple lookups. Prefer asgrep_codemode.
+    // Escape hatches: one-shot tools for simple lookups. Prefer asgrep.
     // They ride the same session sticky pool when available (no cold spawn).
     pi.registerTool({
         name: "asgrep_search",
         label: "ast-sgrep search",
-        description: "One-shot search. Prefer asgrep_codemode for anything multi-step, parallel, or filtered.",
+        description: "One-shot search. Prefer asgrep for anything multi-step, parallel, or filtered.",
         parameters: searchParameters,
         async execute(_toolCallId, params, signal, onUpdate, ctx) {
             const options = signal ? { signal } : {};
@@ -280,7 +324,7 @@ export function registerAstSgrepTools(pi, runtime = new AstSgrepRuntime(pi), fre
                 const sticky = await pool.acquire(root);
                 const response = sticky
                     ? await sticky.call(...searchToolCall(params), options)
-                    : await runtime.run(searchArgs(params), { cwd: ctx.cwd }, options);
+                    : await runCli(searchArgs(params), { cwd: ctx.cwd }, options);
                 report(onUpdate, "search", "completed");
                 return success("search", response);
             }
@@ -292,7 +336,7 @@ export function registerAstSgrepTools(pi, runtime = new AstSgrepRuntime(pi), fre
     pi.registerTool({
         name: "asgrep_index",
         label: "ast-sgrep index",
-        description: "Build or rebuild the index. Prefer asgrep.indexRepo inside asgrep_codemode.",
+        description: "Build or rebuild the index. Prefer asgrep.indexRepo inside asgrep.",
         parameters: indexParameters,
         async execute(_toolCallId, params, signal, onUpdate, ctx) {
             const force = params.force === true;
@@ -304,7 +348,7 @@ export function registerAstSgrepTools(pi, runtime = new AstSgrepRuntime(pi), fre
                 const sticky = await pool.acquire(root);
                 const response = sticky
                     ? await sticky.call("index_repo", { force }, signal ? { signal } : {})
-                    : await runtime.run([command, ".", "--json"], { cwd: ctx.cwd }, signal ? { signal } : {});
+                    : await runCli([command, ".", "--json"], { cwd: ctx.cwd }, signal ? { signal } : {});
                 report(onUpdate, command, "completed");
                 return success(command, response);
             }
@@ -316,7 +360,7 @@ export function registerAstSgrepTools(pi, runtime = new AstSgrepRuntime(pi), fre
     pi.registerTool({
         name: "asgrep_status",
         label: "ast-sgrep status",
-        description: "Index/runtime status. Prefer asgrep.indexStatus inside asgrep_codemode.",
+        description: "Index/runtime status. Prefer asgrep.indexStatus inside asgrep.",
         parameters: statusParameters,
         async execute(_toolCallId, _params, signal, onUpdate, ctx) {
             report(onUpdate, "status", "started");
@@ -326,12 +370,40 @@ export function registerAstSgrepTools(pi, runtime = new AstSgrepRuntime(pi), fre
                 const sticky = await pool.acquire(root);
                 const response = sticky
                     ? await sticky.call("index_status", {}, signal ? { signal } : {})
-                    : await runtime.run(["status", ".", "--json"], { cwd: ctx.cwd }, signal ? { signal } : {});
+                    : await runCli(["status", ".", "--json"], { cwd: ctx.cwd }, signal ? { signal } : {});
                 report(onUpdate, "status", "completed");
                 return success("status", response);
             }
             catch (cause) {
                 return failure("status", cause);
+            }
+        },
+    });
+    pi.registerTool({
+        name: "asgrep_edit",
+        label: "ast-sgrep edit",
+        description: "Edit a project file (exact string replace or full-file write). Marks the index dirty for the next asgrep search. Prefer this over native write/edit when already using asgrep.",
+        parameters: editParameters,
+        async execute(_toolCallId, params, signal, onUpdate, ctx) {
+            report(onUpdate, "edit", "started");
+            try {
+                if (signal?.aborted)
+                    throw new RuntimeError("CANCELLED", "edit cancelled");
+                const root = await resolveRoot(ctx.cwd);
+                const plan = planEdit(params, root);
+                const outcome = await applyEdit(plan);
+                freshness.markAffectedPath(plan.absolutePath, ctx.cwd);
+                report(onUpdate, "edit", "completed");
+                const summary = outcome.mode === "write"
+                    ? `edit completed: wrote ${outcome.path}${outcome.created ? " (created)" : ""}`
+                    : `edit completed: ${outcome.replacements ?? 0} replacement${(outcome.replacements ?? 0) === 1 ? "" : "s"} in ${outcome.path}`;
+                return {
+                    content: [{ type: "text", text: bounded(summary) }],
+                    details: { ok: true, command: "edit", ...outcome },
+                };
+            }
+            catch (cause) {
+                return failure("edit", cause, signal);
             }
         },
     });

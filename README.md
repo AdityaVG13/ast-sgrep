@@ -20,7 +20,7 @@ For Pi, install the native package directly:
 pi install npm:pi-ast-sgrep
 ```
 
-It immediately adds **`asgrep_codemode`** (Code Mode), `asgrep_search`, `asgrep_index`, `asgrep_status`, four `/asgrep-*` commands, and the `ast-sgrep` skill. The first search lazily creates `.asgrep/`; no Rust toolchain, PATH setup, MCP adapter, credential, or runtime download is required. See the [complete Pi package guide](docs/pi-package.md) and [Code Mode](docs/codemode.md).
+It immediately adds **`asgrep`** (Code Mode), `asgrep_search`, `asgrep_index`, `asgrep_status`, four `/asgrep-*` commands, and the `ast-sgrep` skill. The first search lazily creates `.asgrep/`; no Rust toolchain, PATH setup, MCP adapter, credential, or runtime download is required. See the [complete Pi package guide](docs/pi-package.md) and [Code Mode](docs/codemode.md).
 
 The standalone CLI is not yet published to crates.io; the Pi package is the packaged install path. To build from source:
 
@@ -69,7 +69,7 @@ Most code search is either **fast text** (ripgrep) or **pattern matching** (ast-
 | "credential renewal" (no token overlap) | Semantic hit on `auth_refresh` |
 | Structured JSON for an agent | `--json --format agent` |
 | Structural rewrite / codemod | `pattern:` (ast-grep when available) |
-| Agent needs search as a tool (not a subprocess) | `asgrep_codemode` — in-process, stateful session (Code Mode) |
+| Agent needs search as a tool (not a subprocess) | `asgrep` — in-process, stateful session (Code Mode) |
 
 [Full comparison →](docs/comparison.md)
 

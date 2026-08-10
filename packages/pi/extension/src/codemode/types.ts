@@ -14,7 +14,7 @@ export type ChainArgs = {
 };
 
 /**
- * Compact TypeScript declarations for the `asgrep_codemode` tool description.
+ * Compact TypeScript declarations for the `asgrep` tool description.
  * Keep short — every token here is paid on every turn (schema landfill lesson
  * from pi-codex-conversion: compose inside Code Mode, don't dump 17 schemas).
  */

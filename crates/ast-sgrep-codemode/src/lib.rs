@@ -8,7 +8,7 @@
 //! this crate. Both sit on `ast-sgrep-core` only.
 //!
 //! Pi's primary agent surface is the **JS sandbox** in
-//! `packages/pi/extension/src/codemode/` (`asgrep_codemode` tool). This Rust
+//! `packages/pi/extension/src/codemode/` (`asgrep` tool). This Rust
 //! crate serves Rust hosts and emits Anthropic/OpenAI/Cloudflare-shaped tool
 //! definitions for hosts that already provide a code-execution sandbox.
 //!

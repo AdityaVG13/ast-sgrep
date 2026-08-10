@@ -49,10 +49,10 @@ Both share the same retrieval base. They are sibling front ends.
 
 ## Pi: built on Code Mode
 
-`pi-ast-sgrep` exposes **`asgrep_codemode`** as the primary tool:
+`pi-ast-sgrep` exposes **`asgrep`** as the primary tool:
 
 ```text
-Model ──► asgrep_codemode({ code }) ──► Node capability sandbox
+Model ──► asgrep({ code }) ──► Node capability sandbox
                                               │
                                               │  asgrep.search / chain / defs / …
                                               │  Promise.all → same-tick coalesce
@@ -140,7 +140,7 @@ cargo test -p ast-sgrep-codemode
 |------|------|
 | `crates/ast-sgrep-codemode` | Rust catalog + session + plan + host adapters |
 | `packages/pi/extension/src/codemode/` | JS connector + sandbox executor |
-| `packages/pi/extension` tool `asgrep_codemode` | Pi primary Code Mode entry |
+| `packages/pi/extension` tool `asgrep` | Pi primary Code Mode entry |
 | `crates/ast-sgrep-mcp` | Unrelated MCP transport |
 
 ## Non-goals

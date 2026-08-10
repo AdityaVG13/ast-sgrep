@@ -204,10 +204,10 @@ try {
   const runner = new pi.ExtensionRunner(loaded.extensions, runtime, project, {}, {});
   const toolNames = runner.getAllRegisteredTools().map(({ definition }) => definition.name).sort();
   const commandNames = runner.getRegisteredCommands().map(({ invocationName }) => invocationName).sort();
-  assert.deepEqual(toolNames, ['asgrep_codemode', 'asgrep_index', 'asgrep_search', 'asgrep_status']);
+  assert.deepEqual(toolNames, ['asgrep', 'asgrep_edit', 'asgrep_index', 'asgrep_search', 'asgrep_status']);
   assert.deepEqual(commandNames, ['asgrep-doctor', 'asgrep-index', 'asgrep-reindex', 'asgrep-status']);
   const context = runner.createContext();
-  const codemodeTool = runner.getToolDefinition('asgrep_codemode');
+  const codemodeTool = runner.getToolDefinition('asgrep');
   const searchTool = runner.getToolDefinition('asgrep_search');
   const indexTool = runner.getToolDefinition('asgrep_index');
   const statusTool = runner.getToolDefinition('asgrep_status');

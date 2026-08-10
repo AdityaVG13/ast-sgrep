@@ -86,7 +86,7 @@ Two self-describing CLI surfaces let an agent discover the live contract instead
 - `robot-docs guide` prints the operational guide intended for tool-using agents.
 - Read-side commands accept `--json`; `--format agent` and `--format agent-capsule` provide agent-oriented result shapes.
 - `ast-sgrep-mcp` exposes search over MCP (transport). `ast-sgrep-lsp` maps indexed navigation to editor protocol operations.
-- Code Mode is a separate execution model: Pi's `asgrep_codemode` JS sandbox (and the `ast-sgrep-codemode` Rust catalog/session) let the model write code that orchestrates parallel search. MCP and Code Mode must not depend on each other. See [codemode.md](codemode.md).
+- Code Mode is a separate execution model: Pi's `asgrep` JS sandbox (and the `ast-sgrep-codemode` Rust catalog/session) let the model write code that orchestrates parallel search. MCP and Code Mode must not depend on each other. See [codemode.md](codemode.md).
 
 Protocol consumers should discover capabilities first, treat stdout JSON as data, and interpret documented exit codes rather than scraping human-readable lines.
 

@@ -22,7 +22,7 @@ The npm layers are exact-version matched: the `pi-ast-sgrep` extension depends o
 
 Restart Pi after installation if the current session does not reload package resources. The package contributes:
 
-- Tools: **`asgrep_codemode`** (primary — JS Code Mode on an **in-process NAPI** `CodeModeSession`), plus `asgrep_search`, `asgrep_index`, and `asgrep_status` for simple one-shot calls. All share one warm in-process Searcher per project root — no CLI spawn on the hot path (MCP-class native feel).
+- Tools: **`asgrep`** (primary — JS Code Mode on an **in-process NAPI** `CodeModeSession`), plus `asgrep_search`, `asgrep_index`, and `asgrep_status` for simple one-shot calls. All share one warm in-process Searcher per project root — no CLI spawn on the hot path (MCP-class native feel).
 - Commands: `/asgrep-doctor`, `/asgrep-status`, `/asgrep-index`, and `/asgrep-reindex`. These commands accept no arguments.
 - Skill: `ast-sgrep`, which prefers Code Mode for multi-step/parallel retrieval and teaches when exact-text search is better.
 
@@ -30,7 +30,7 @@ Start in the project you want Pi to search. A first search (Code Mode or direct)
 
 ### Code Mode (preferred)
 
-Ask Pi to use `asgrep_codemode`, or call it with a JavaScript program:
+Ask Pi to use `asgrep`, or call it with a JavaScript program:
 
 ```json
 {

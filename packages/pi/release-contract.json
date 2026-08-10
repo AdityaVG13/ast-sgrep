@@ -175,10 +175,11 @@
   },
   "surface": {
     "tools": [
-      "asgrep_codemode",
+      "asgrep",
       "asgrep_search",
       "asgrep_index",
-      "asgrep_status"
+      "asgrep_status",
+      "asgrep_edit"
     ],
     "commands": [
       "/asgrep-doctor",
@@ -191,7 +192,7 @@
       "ast-sgrep"
     ],
     "defaultSearchFormat": "agent-capsule",
-    "separation": "Pi tools use ExtensionAPI directly. Primary agent execution is Code Mode (asgrep_codemode JS sandbox). LSP and MCP remain separate integrations and must not be linked to Code Mode; pi-mcp-adapter is not used."
+    "separation": "Pi tools use ExtensionAPI directly. Primary agent execution is Code Mode (asgrep JS sandbox). LSP and MCP remain separate integrations and must not be linked to Code Mode; pi-mcp-adapter is not used."
   },
   "config": {
     "precedenceHighToLow": [
