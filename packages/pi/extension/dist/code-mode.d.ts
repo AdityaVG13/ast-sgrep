@@ -45,6 +45,10 @@ export interface SgrepReadResult {
     };
     content: string;
     truncated: boolean;
+    /** Present when truncated: 1-indexed line to resume from (on the last shown line). */
+    resumeOffset?: number;
+    /** Named recovery hint for the model (empty/past-EOF/truncation). */
+    note?: string;
 }
 export interface SgrepApi {
     keywordSearch(query: string, options?: SgrepSearchOptions): Promise<SgrepSearchResponse>;

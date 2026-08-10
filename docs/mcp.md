@@ -218,3 +218,7 @@ asgrep --json --format agent-capsule 'auth refresh' .
 
 This keeps the search step capsule-cheap and defers content bytes to the
 reader, which can apply its own caching and token budgets.
+
+## Agent Plugins package
+
+Portable skills + MCP wiring live in [`packages/agent-plugin`](../packages/agent-plugin) ([Agent Plugins 1.0](https://agent-plugins.org/)). Clients that load Agent Plugins use that directory as the plugin root; `mcp.json` launches `asgrep-mcp` on stdio.

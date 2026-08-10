@@ -84,8 +84,6 @@ pub struct Searcher {
     last_plan: Mutex<PlanTrace>,
 }
 /// Fail closed when callers request optional neural/rerank paths that were
-/// not compiled in (parity contract: silently ignoring the flags would make
-/// searches appear to use neural/rerank when they do not).
 pub fn validate_search_feature_flags(options: &SearchOptions) -> Result<()> {
     if options.use_neural_embed {
         #[cfg(not(feature = "neural-embed"))]
@@ -184,17 +182,6 @@ impl Searcher {
         format!("{kind}\0{query}\0{}", self.options.cache_identity())
     }
     /// Run one multi-pass search inside a single read snapshot and stamp the
-    /// resulting response with that snapshot's identity (d3l5).
-    ///
-    /// Every pass shares one connection, and in autocommit each statement is
-    /// its own implicit transaction -- so a writer committing mid-search could
-    /// otherwise let one response mix generations. `BEGIN DEFERRED` pins one
-    /// read snapshot for the whole search; SQLite's WAL snapshot isolation then
-    /// guarantees every pass observes the same committed state.
-    ///
-    /// The generation is re-read before COMMIT and compared. Equality is the
-    /// evidence that the response is single-generation; a mismatch is reported
-    /// rather than returned as if it were coherent.
     fn fenced(
         &self,
         compute: impl FnOnce() -> Result<SearchResponse>,
@@ -244,12 +231,6 @@ impl Searcher {
     }
 
     /// Fingerprint of the semantic sidecar, and whether it matches this
-    /// generation (d3l5).
-    ///
-    /// `load_semantic_ivf` returns `Ok(None)` on a fingerprint mismatch, which
-    /// makes a stale sidecar indistinguishable from no sidecar at all: search
-    /// quietly falls back to brute force and the response looks healthy. Peek
-    /// at the stored fingerprint so the mismatch is reported instead.
     fn semantic_manifest(
         &self,
         generation: i64,
@@ -277,8 +258,6 @@ impl Searcher {
     }
 
     /// Fingerprint the sidecar should carry for the current snapshot (d3l5).
-    /// `None` when the inputs cannot be read, so an unknown state is never
-    /// reported as a mismatch.
     fn expected_semantic_fingerprint(&self, generation: i64) -> Option<[u8; 32]> {
         // The sidecar is built over the whole corpus, so compare against
         // unfiltered stats regardless of any per-query language filter.
@@ -298,10 +277,6 @@ impl Searcher {
 
 
     /// Repository associations that apply to this query (ufk7).
-    ///
-    /// Reported as evidence. Expansion that cannot be explained is expansion a
-    /// user cannot audit, so the terms and their support counts travel with the
-    /// response.
     fn query_expansions(&self, query: &str) -> Vec<QueryExpansion> {
         let lexicon = match crate::lexicon::load_lexicon(&self.store) {
             Ok(lexicon) if !lexicon.is_empty() => lexicon,
@@ -1579,9 +1554,6 @@ mod tests {
 }
 
 /// Resolve `.git/HEAD` to a commit id without spawning git (d3l5).
-///
-/// Returns `None` outside a git worktree, or when HEAD cannot be resolved --
-/// an unknown source revision is reported as unknown, never guessed.
 fn read_git_head(root: &std::path::Path) -> Option<String> {
     let git_dir = root.join(".git");
     // A worktree or submodule uses a `gitdir:` pointer file instead of a dir.
@@ -1623,12 +1595,6 @@ fn hex32(bytes: &[u8; 32]) -> String {
 }
 
 /// Should the planner stop before the expensive semantic stage (ocx8)?
-///
-/// Returns the reason when the cheap channels have already produced enough
-/// exact evidence that a semantic pass cannot change the outcome. Deliberately
-/// conservative: it fires only on genuinely exact signals, because stopping too
-/// eagerly trades recall for latency, and recall is the harder thing to notice
-/// missing.
 fn early_exit_reason(hits: &[SearchHit]) -> Option<String> {
     let exact = hits
         .iter()

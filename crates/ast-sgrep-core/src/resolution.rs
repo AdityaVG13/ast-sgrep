@@ -1,22 +1,11 @@
-//! Symbol identity and edge resolution tiers (bead ast-sgrep-tef-symbol-identity-dvc4).
+//! Symbol identity + resolution tiers (dvc4).
 //!
-//! Call extraction keeps the last identifier in a call chain and pairs it with
-//! the nearest enclosing function name. That means `client.send()` becomes
-//! `send`, same-named methods on unrelated receivers collide, overloads
-//! collapse, and aliases lose identity.
-//!
-//! Making that resolution genuinely precise needs compiler-grade indexes. What
-//! this module fixes is the part that is a correctness bug regardless: the
-//! engine used to present a name-only guess with the same confidence as an
-//! exact match. An edge now carries HOW it was resolved, and a name-only edge
-//! must never be serialized as precise.
+//! Call edges keep the last chain id + nearest enclosing fn, so name-only
+//! collisions are common. This module records *how* an edge was resolved so
+//! name-only guesses are never serialized as precise.
 
-/// Stable identity for a symbol (dvc4).
-///
-/// `name` alone is not identity: two `send` methods on unrelated types are
-/// different symbols. The extra components are what separate them, and each is
-/// `Option` because this engine resolves them opportunistically rather than
-/// pretending to have compiler knowledge it lacks.
+/// Stable symbol identity (dvc4). `name` alone is not identity; optional
+/// fields fill in when known without pretending to be compiler-grade.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct SymbolId {
     /// Source language, when known.
@@ -64,10 +53,7 @@ impl SymbolId {
     }
 }
 
-/// How confidently an edge or symbol reference was resolved (dvc4).
-///
-/// Ordered from strongest to weakest. The ordering is meaningful: callers use
-/// it to decide what may be presented as precise.
+/// Resolution confidence (dvc4), strongest → weakest. Callers gate precision on this.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Resolution {
@@ -90,11 +76,7 @@ pub enum Resolution {
 }
 
 impl Resolution {
-    /// May this resolution be presented to a consumer as an exact edge?
-    ///
-    /// This is the honesty gate. `NameOnly` and `Ambiguous` are guesses, and a
-    /// guess rendered as a fact is worse than no answer, because the reader
-    /// cannot tell it needs checking.
+    /// Honesty gate: only precise tiers may be presented as exact edges.
     pub fn is_precise(&self) -> bool {
         matches!(
             self,

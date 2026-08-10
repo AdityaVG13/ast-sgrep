@@ -284,3 +284,42 @@ test("missing backend surfaces BACKEND_UNAVAILABLE from asgrep ensureFresh path"
   assert.equal(out.details.ok, false);
   assert.equal((out.details.error as { code: string }).code, "BACKEND_UNAVAILABLE");
 });
+
+
+test("asgrep_edit repairs quoted paths before writing", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "asgrep-edit-quote-"));
+  const file = join(dir, "sample.ts");
+  await writeFile(file, "const a = 1;\n", "utf8");
+  const f = fixture();
+  const out = await f.byName("asgrep_edit").execute("e1", {
+    path: "'sample.ts'",
+    old_string: "const a = 1;",
+    new_string: "const a = 2;",
+  }, new AbortController().signal, () => {}, { cwd: dir });
+  assert.equal(out.details.ok, true);
+  assert.equal(await readFile(file, "utf8"), "const a = 2;\n");
+});
+
+test("asgrep_edit rejects device paths", async () => {
+  const f = fixture();
+  const out = await f.byName("asgrep_edit").execute("e1", {
+    path: "/dev/null",
+    contents: "x",
+  }, new AbortController().signal, () => {}, { cwd: process.cwd() });
+  assert.equal(out.details.ok, false);
+  assert.equal((out.details.error as { code: string }).code, "EDIT_FORBIDDEN_PATH");
+});
+
+test("asgrep_edit repairs curly-quoted paths", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "asgrep-edit-curly-"));
+  const file = join(dir, "sample.ts");
+  await writeFile(file, "const a = 1;\n", "utf8");
+  const f = fixture();
+  const out = await f.byName("asgrep_edit").execute("e1", {
+    path: "\u2018sample.ts\u2019",
+    old_string: "const a = 1;",
+    new_string: "const a = 2;",
+  }, new AbortController().signal, () => {}, { cwd: dir });
+  assert.equal(out.details.ok, true);
+  assert.equal(await readFile(file, "utf8"), "const a = 2;\n");
+});

@@ -8,6 +8,16 @@ pi install npm:pi-ast-sgrep
 
 This is the canonical package-user guide for the `1.4.0` contract. npm availability is established only by an authorized release, not by this repository documentation. For a project-local Pi installation, add `-l` to Pi package-management commands.
 
+
+## Pi packages.md compliance
+
+This package follows [Pi packages](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/packages.md):
+
+- `keywords` includes `pi-package`
+- `pi.extensions` / `pi.skills` / `pi.image` declared in `packages/pi/extension/package.json`
+- Bundled Pi peer packages (`@earendil-works/pi-coding-agent`, `typebox`) are `peerDependencies` with `"*"` only — not duplicated under `dependencies`
+- Runtime deps that are not Pi core (`ast-sgrep`) stay in `dependencies`
+
 ## Requirements and packaged platforms
 
 - Node.js `>=22.19.0`.
@@ -22,7 +32,7 @@ The npm layers are exact-version matched: the `pi-ast-sgrep` extension depends o
 
 Restart Pi after installation if the current session does not reload package resources. The package contributes:
 
-- Tools: **`asgrep`** (primary — JS Code Mode on an **in-process NAPI** `CodeModeSession`), plus `asgrep_search`, `asgrep_index`, and `asgrep_status` for simple one-shot calls. All share one warm in-process Searcher per project root — no CLI spawn on the hot path (MCP-class native feel).
+- Tools: **`asgrep`** (primary — JS Code Mode on an **in-process NAPI** `CodeModeSession`), plus `asgrep_search`, `asgrep_edit`, `asgrep_index`, and `asgrep_status` for one-shot search/edit/index/status. Search tools share one warm in-process Searcher per project root — no CLI spawn on the hot path (MCP-class native feel). Prefer `asgrep_edit` over native write/edit when already on the asgrep spine.
 - Commands: `/asgrep-doctor`, `/asgrep-status`, `/asgrep-index`, and `/asgrep-reindex`. These commands accept no arguments.
 - Skill: `ast-sgrep`, which prefers Code Mode for multi-step/parallel retrieval and teaches when exact-text search is better.
 
@@ -62,7 +72,7 @@ The first index or search that needs an index creates `<project-root>/.asgrep/`.
 .asgrep/
 ```
 
-After a successful Pi `write` or `edit` tool call, the extension marks the affected path dirty and refreshes it before the next search. After the configured interval (30 seconds by default) without edits, the package rechecks index health via `status` and only rebuilds when the index is missing or incompatible—not on a pure wall-clock lease alone. Concurrent searches for the same root share one in-flight refresh and wait for it rather than starting duplicate index work. Wall-clock freshness is best-effort: large clock skew or a backward jump can delay expiry detection; prefer write/edit dirtying for correctness-critical workflows. Use `/asgrep-status` to inspect the root, index, backend, counts, IVF state, and capabilities; use `/asgrep-reindex` only for an explicit full rebuild or recovery.
+After a successful Pi `write`/`edit` or `asgrep_edit` tool call, the extension marks the affected path dirty and refreshes it before the next search. After the configured interval (30 seconds by default) without edits, the package rechecks index health via `status` and only rebuilds when the index is missing or incompatible—not on a pure wall-clock lease alone. Concurrent searches for the same root share one in-flight refresh and wait for it rather than starting duplicate index work. Wall-clock freshness is best-effort: large clock skew or a backward jump can delay expiry detection; prefer write/edit dirtying for correctness-critical workflows. Use `/asgrep-status` to inspect the root, index, backend, counts, IVF state, and capabilities; use `/asgrep-reindex` only for an explicit full rebuild or recovery.
 
 ## Configuration and project boundary
 

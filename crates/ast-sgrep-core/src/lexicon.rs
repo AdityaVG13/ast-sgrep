@@ -1,22 +1,4 @@
 //! Repository-derived semantic lexicon (bead ast-sgrep-tef-semantic-lexicon-ufk7).
-//!
-//! The shipped semantic fallback expands queries through a handful of
-//! hand-written concept groups (auth, refresh, ...). Those generalize badly:
-//! they know nothing about the vocabulary of the repository actually being
-//! searched, where `hydrator` may mean deserialize and `lease` may mean
-//! distributed lock.
-//!
-//! This module learns those associations from the corpus itself, during
-//! indexing, with no network and no model download. It pairs identifier
-//! subtokens with the prose terms that co-occur with them (doc comments, test
-//! names, and other identifiers in the same symbol) and scores each pair with
-//! positive pointwise mutual information under a minimum-support floor.
-//!
-//! PPMI is used because raw co-occurrence is dominated by frequent, useless
-//! terms: `the`, `self`, `value` co-occur with everything. PPMI divides out
-//! that background rate and keeps only pairs that occur together *more than
-//! chance*, which is precisely the "this repository uses these two words to
-//! mean the same thing" signal we want.
 
 use crate::Result;
 use std::collections::HashMap;
@@ -34,9 +16,6 @@ pub struct Association {
 }
 
 /// Minimum co-occurrence count before a pair is allowed into the lexicon.
-///
-/// Without a floor, PPMI is maximized by pairs that appear exactly once
-/// together and nowhere else -- the noisiest possible evidence.
 pub const MIN_SUPPORT: u32 = 3;
 
 /// Cap on stored associations per term, keeping the strongest.
@@ -106,8 +85,6 @@ impl LexiconBuilder {
     }
 
     /// Record one symbol's vocabulary. Pairs are directed identifier -> prose,
-    /// and also identifier -> identifier, so `rotate_session` can learn from
-    /// both its doc comment and its neighbours.
     pub fn observe(&mut self, observation: &Observation) {
         let mut seen_terms: Vec<&String> = Vec::new();
         seen_terms.extend(observation.identifier_terms.iter());
@@ -221,10 +198,6 @@ impl Lexicon {
     }
 
     /// Expand a query with repository-learned terms, returning the added terms
-    /// paired with the evidence that justified them.
-    ///
-    /// Evidence travels with the expansion so the engine can say *why* it
-    /// widened a query instead of silently changing what the user asked for.
     pub fn expand(&self, query_terms: &[String], max_added: usize) -> Vec<Association> {
         let mut added: Vec<Association> = Vec::new();
         for term in query_terms {

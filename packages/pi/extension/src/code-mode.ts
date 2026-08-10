@@ -48,6 +48,10 @@ export interface SgrepReadResult {
   lines: { start: number; end: number };
   content: string;
   truncated: boolean;
+  /** Present when truncated: 1-indexed line to resume from (on the last shown line). */
+  resumeOffset?: number;
+  /** Named recovery hint for the model (empty/past-EOF/truncation). */
+  note?: string;
 }
 
 export interface SgrepApi {
@@ -82,6 +86,23 @@ const DEFAULT_MAX_READ_CHARS = 100_000;
 const MAX_READ_CHARS = 1_000_000;
 const MAX_READ_REFS = 20;
 const MAX_SCAN_BYTES = 64 * 1024 * 1024;
+const MAX_LINE_CHARS = 2_000;
+const DEVICE_PATHS = new Set([
+  "/dev/zero", "/dev/urandom", "/dev/random", "/dev/stdin",
+  "/dev/stdout", "/dev/stderr", "/dev/null", "/dev/fd/0", "/dev/fd/1", "/dev/fd/2",
+]);
+
+function assertSafeReadPath(absolutePath: string): void {
+  const normalized = absolutePath.replace(/\\/g, "/");
+  if (DEVICE_PATHS.has(normalized) || /^\/proc\/\d+\/fd\//.test(normalized)) {
+    throw new RuntimeError(
+      "READ_FORBIDDEN_PATH",
+      `${absolutePath} is a device or process fd path and cannot be read`,
+      { path: absolutePath },
+    );
+  }
+}
+
 const MAX_LINE_NUMBER = 0xffff_ffff;
 const REF_PATTERN = /^(.+?)#L([1-9]\d*)-L([1-9]\d*)$/;
 const KINDS = new Set<SgrepKind>(["asgrep", "def", "caller", "graph", "anchor", "import", "pattern", "embed"]);
@@ -230,7 +251,9 @@ async function readLineWindow(
       selectedStart ??= lineNumber;
       selectedEnd = lineNumber;
       if (!truncated) {
-        const addition = `${selectedLines > 0 ? "\n" : ""}${line.endsWith("\r") ? line.slice(0, -1) : line}`;
+        const rawLine = line.endsWith("\r") ? line.slice(0, -1) : line;
+        const clamped = rawLine.length > MAX_LINE_CHARS ? `${rawLine.slice(0, MAX_LINE_CHARS)}…` : rawLine;
+        const addition = `${selectedLines > 0 ? "\n" : ""}${clamped}`;
         const bounded = boundedPrefix(addition, maxChars - contentChars);
         content += bounded.text;
         contentChars += bounded.chars;
@@ -285,14 +308,36 @@ async function readLineWindow(
   }
 
   checkAbort(signal);
-  if (parsed.start >= lineNumber || parsed.end >= lineNumber) {
-    throw new RuntimeError("RANGE_OUT_OF_BOUNDS", `${parsed.file} has fewer than ${parsed.end} lines`);
+  const totalLines = Math.max(0, lineNumber - 1);
+  if (totalLines === 0) {
+    return {
+      file: parsed.file,
+      lines: { start: 1, end: 0 },
+      content: "",
+      truncated: false,
+      note: `${parsed.file} is empty`,
+    };
   }
+  if (parsed.start > totalLines || parsed.end > totalLines) {
+    const resume = Math.max(1, totalLines);
+    throw new RuntimeError(
+      "RANGE_OUT_OF_BOUNDS",
+      `Note: offset ${parsed.start} is beyond the end of ${parsed.file} (${totalLines} lines scanned). Retry with a smaller offset (e.g. start=${resume})`,
+      { file: parsed.file, start: parsed.start, end: parsed.end, totalLines, resumeOffset: resume },
+    );
+  }
+  const endLine = selectedEnd ?? Math.max(wantedStart, totalLines);
   return {
     file: parsed.file,
-    lines: { start: selectedStart ?? wantedStart, end: selectedEnd ?? Math.max(wantedStart, lineNumber - 1) },
+    lines: { start: selectedStart ?? wantedStart, end: endLine },
     content,
     truncated,
+    ...(truncated
+      ? {
+          resumeOffset: endLine,
+          note: `truncated at line ${endLine}; resume with start=${endLine}`,
+        }
+      : {}),
   };
 }
 
@@ -313,6 +358,7 @@ async function resolveReadableFile(
   parsed: { file: string; start: number; end: number },
 ): Promise<{ unresolved: string; filePath: string; expectedStat: Stats }> {
   const unresolved = resolve(root, parsed.file);
+  assertSafeReadPath(unresolved);
   if (!inside(root, unresolved)) throw new RuntimeError("PATH_OUTSIDE_ROOT", `Ref escapes the project root: ${ref}`);
   let filePath: string;
   let expectedStat: Stats;

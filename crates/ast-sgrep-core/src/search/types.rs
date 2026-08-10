@@ -84,20 +84,9 @@ pub struct SearchHit {
     pub contributors: Vec<HitKind>,
     pub margin: f64,
     /// Calibrated-independent relevance estimate, deliberately separate from
-    /// `score` (vh65).
-    ///
-    /// `score` orders results; `confidence` states how much to trust the top
-    /// one. A single weak lexical hit and a hit confirmed by three channels can
-    /// rank adjacently, and only `confidence` can say they are not equally
-    /// trustworthy. This is a documented heuristic over channel agreement and
-    /// signal strength, NOT a probability calibrated against held-out data --
-    /// calibration is separate work and is not claimed here.
     #[serde(default)]
     pub confidence: f64,
     /// How a graph edge was resolved, when this hit came from one (dvc4).
-    ///
-    /// `None` for non-graph hits. A hit whose resolution is not precise must
-    /// never be rendered as an exact call edge.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resolution: Option<crate::resolution::Resolution>,
     pub excerpt: String,
@@ -370,12 +359,6 @@ impl SearchOptions {
     }
 }
 /// Identity of the index snapshot a response was built from (d3l5).
-///
-/// The hard invariant: a `SearchResponse` may carry evidence from exactly one
-/// index generation. Without this, a multi-pass search running in autocommit
-/// could take its definition from generation `g`, its callers from `g + 1`, and
-/// its semantic sidecar from `g - 1`, and report the mixture as one coherent
-/// answer.
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct SnapshotStamp {
     /// Monotonic index generation every indexing transaction bumps.
@@ -415,10 +398,6 @@ pub struct DegradedChannel {
 }
 
 /// What the planner decided to run, and where it stopped (ocx8).
-///
-/// A staged planner that silently skips work is indistinguishable from a buggy
-/// one. Recording the executed stages and the stop condition makes the
-/// decision auditable, and makes "why was this query slow" answerable.
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct PlanTrace {
     /// Stages actually executed, in order.
@@ -436,8 +415,6 @@ pub struct SearchResponse {
     pub query: String,
     pub limit: usize,
     /// Ranked results after result gates. Hybrid search promotes at most three hits per
-    /// file ahead of overflow before applying `limit`, so this is a diversity-aware
-    /// ranking rather than a pure global score top-k.
     pub hits: Vec<SearchHit>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub counts: Vec<(String, u32)>,
@@ -454,10 +431,6 @@ pub struct SearchResponse {
     #[serde(default)]
     pub plan: PlanTrace,
     /// Repository associations that widened this query (ufk7).
-    ///
-    /// Query expansion changes what the user asked for, so the engine states
-    /// which terms it added and on what evidence rather than silently
-    /// broadening the search.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub query_expansions: Vec<QueryExpansion>,
 }
@@ -558,11 +531,6 @@ pub fn assign_signal_margins(hits: &mut [SearchHit]) {
 }
 
 /// Assign heuristic confidence on every hit (vh65 / pass5).
-///
-/// Call after channel merge and after [`assign_signal_margins`]: margins rewrite
-/// display `signal` from `kind`, but confidence must reflect contributor
-/// agreement and the strongest observed channel, not the post-margin display
-/// field alone.
 pub fn assign_hit_confidence(hits: &mut [SearchHit]) {
     for hit in hits.iter_mut() {
         hit.confidence = estimate_confidence(hit);
@@ -597,10 +565,6 @@ pub fn dedup_hits(hits: Vec<SearchHit>) -> Vec<SearchHit> {
 }
 
 /// Fold a duplicate observation of the same location into the kept hit (vh65).
-///
-/// Best score wins the ordering, exactly as before, so ranking behavior is
-/// preserved; what changes is that the losing row's channel is retained as
-/// evidence instead of being dropped or duplicated.
 fn merge_channel_evidence(kept: &mut SearchHit, other: SearchHit) {
     for contributor in other
         .contributors
@@ -636,16 +600,6 @@ fn merge_channel_evidence(kept: &mut SearchHit, other: SearchHit) {
 }
 
 /// Heuristic confidence from channel agreement and signal strength (vh65).
-///
-/// Deliberately simple and inspectable. Exact signals start high; semantic-only
-/// evidence starts low; each additional independent channel that agrees adds a
-/// bounded increment. This is not a calibrated probability and must not be
-/// reported as one.
-///
-/// Base strength is the **strongest contributor channel** (and `kind`), not
-/// solely `hit.signal`. `assign_signal_margins` rewrites display `signal` from
-/// `kind` for within-channel margins; confidence must not collapse to that
-/// display field after multi-channel merges (pass5).
 fn estimate_confidence(hit: &SearchHit) -> f64 {
     let strongest = hit
         .contributors
@@ -664,9 +618,6 @@ fn estimate_confidence(hit: &SearchHit) -> f64 {
 }
 
 /// Human- and agent-readable reasons this location was returned (vh65).
-///
-/// Derived from the merged evidence, so it cannot drift from the evidence that
-/// actually produced the hit.
 pub fn hit_why(hit: &SearchHit) -> Vec<String> {
     let mut why = Vec::new();
     for contributor in &hit.contributors {

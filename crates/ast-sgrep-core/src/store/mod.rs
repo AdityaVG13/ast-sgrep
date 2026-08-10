@@ -13,13 +13,6 @@ pub use sqlite::{
 use std::path::{Path, PathBuf};
 
 /// Write-durability profile for the index database (0obi).
-///
-/// Indexing used to force `PRAGMA synchronous = OFF` for every bulk and
-/// per-file transaction. SQLite documents that this permits write reordering
-/// and can corrupt the database after a power failure or hard reset. A search
-/// index is rebuildable, but corruption still produces failed searches, silent
-/// stale results, broken editor navigation, and forced full rebuilds -- so the
-/// unsafe mode is now an explicit opt-in rather than the default.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Durability {
@@ -89,11 +82,6 @@ pub const MANIFESTS_DIR: &str = "manifests";
 pub const ACTIVE_MANIFEST: &str = "active.json";
 
 /// Pointer to the generation currently serving queries (jpbq).
-///
-/// A full rebuild used to clear and reconstruct the live database in place, so
-/// a crash mid-rebuild destroyed the only good index. A rebuild now lands in a
-/// new generation directory and becomes active only by replacing this pointer,
-/// which is a single atomic rename.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ActiveManifest {
     /// Generation directory name, e.g. `000184`.
@@ -124,13 +112,6 @@ pub fn read_active_manifest(index_dir: &Path) -> Option<ActiveManifest> {
 }
 
 /// Replace the active-generation pointer atomically and durably (jpbq).
-///
-/// Protocol matches `semantic_ivf` publish: write a unique temp inode → fsync
-/// data → rename over the target → fsync the parent directory. A bare
-/// `write` + `rename` only makes the directory entry atomic; without fsync the
-/// bytes may still be in the page cache when the pointer moves, so a power
-/// loss can leave `active.json` empty or torn -- undoing the crash-safety
-/// property of generation swaps.
 pub fn write_active_manifest(index_dir: &Path, manifest: &ActiveManifest) -> crate::Result<()> {
     use std::fs::{File, OpenOptions};
     use std::io::Write;

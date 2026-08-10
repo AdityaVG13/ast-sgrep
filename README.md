@@ -41,6 +41,12 @@ handling are supported, but the duty cycle is not enforced.
 
 ---
 
+
+### Agent Plugins (portable skills + MCP)
+
+For non-Pi clients, use the [Agent Plugins](https://agent-plugins.org/) package at [`packages/agent-plugin`](packages/agent-plugin): `plugin.json` + `skills/ast-sgrep` + `mcp.json` (stdio `asgrep-mcp`). Pi users should still prefer `pi install npm:pi-ast-sgrep` for Code Mode + native tools.
+
+
 ## Easy start (agents)
 
 Paste into your agent:

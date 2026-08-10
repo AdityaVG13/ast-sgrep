@@ -410,13 +410,6 @@ fn nearest_centroid(vector: &[f32], centroids: &[Vec<f32>]) -> usize {
         .unwrap_or(0)
 }
 /// Deterministic k-means over a row-major flat matrix (`n * dim` floats).
-/// Farthest-point init from row 0 (serial), parallel per-row assignment
-/// (lowest index wins ties), serial mean + renorm update in ascending row
-/// order, early exit when assignments stop changing. Similarity for init and
-/// assign is [`dot_similarity`] on L2-normalized rows/centroids (T1-R; cosine
-/// equals dot for unit vectors). Parallel assign + ordered reduce is
-/// bit-identical to fully serial assign/update under the same metric.
-/// Operates on slices so callers need not materialize per-row `Vec`s.
 fn kmeans(flat: &[f32], dim: usize, k: usize, max_iters: usize) -> (Vec<Vec<f32>>, Vec<usize>) {
     let n = if dim == 0 {
         0
@@ -527,10 +520,6 @@ pub fn clear_semantic_ivf_session_cache() {
 }
 
 /// Mark IVF sidecar dirty after semantic-affecting mutations.
-///
-/// Must not swallow durability failures: if the stale bit cannot be written or
-/// the on-disk IVF cannot be invalidated, callers must fail the mutation so the
-/// rebuild gate cannot keep serving a prior generation.
 pub fn mark_semantic_ivf_stale(store: &IndexStore) -> Result<()> {
     if store.get_meta("semantic_ivf_stale")?.as_deref() != Some("1") {
         store.set_meta("semantic_ivf_stale", "1")?;
@@ -993,8 +982,6 @@ mod kmeans_flat_tests {
     }
 
     /// Serial row-layout k-means reference for isomorphism (same metric as
-    /// production: `dot_similarity` on normalized rows; T1-R). Fully serial
-    /// assignment + serial reduce in row order.
     fn kmeans_row_reference(
         vectors: &[Vec<f32>],
         k: usize,
