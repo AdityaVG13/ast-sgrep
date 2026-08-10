@@ -1,119 +1,16 @@
 //! Metamorphic relations for oracle-hard search / index / ANN surfaces.
 //!
-//! # Diagnosis (oracle problem)
+//! These compare outputs under controlled transforms when no absolute oracle
+//! exists. Prefer conventional or differential tests when a closed-form or
+//! reference path exists. Ship only Score >= 2.0 relations (`fn mr_*`).
 //!
-//! Hybrid / keyword search rankings, IVF ANN candidate sets, and index rebuild
-//! self-consistency have **no absolute oracle** for arbitrary corpora: the correct
-//! full ranking is unknown, and approximate ANN has no closed-form gold top-k.
-//! Metamorphic relations compare outputs under controlled input transforms instead
-//! of asserting absolute ranks.
+//! Implemented MRs (names match test ids): reindex_idempotent_hits,
+//! limit_top_k_subset, keyword_file_must_surface, ann_query_scale_invariance(+_proptest),
+//! kmeans_threads_bit_identical, compound_reindex_then_limit, lang_filter_subset,
+//! query_trim_search_equivalence, ann_probe_monotone_candidates(+_proptest),
+//! search_flat_limit_subset(+_proptest), search_flat_limit_prefix_equality(+_proptest),
+//! query_term_order_equivalence.
 //!
-//! Prefer **conventional** unit/property tests when an oracle exists (e.g.
-//! `ParsedQuery::parse` structure, closed-form `rrf_score`, fixed symbol score
-//! tables). Prefer **differential** tests when a reference path exists (e.g.
-//! `probes >= n_clusters` vs `brute_force_flat`). Those are **not** MRs.
-//!
-//! # Strength matrix
-//!
-//! Score = fault-sensitivity (F) x independence (I) / cost (C). **Ship only Score >= 2.0.**
-//! Names match `fn mr_*` test identifiers (underscore style).
-//!
-//! ## Implemented (Score >= 2.0)
-//!
-//! | MR (test) | F | I | C | Score | Category | Catches |
-//! |-----------|---|---|---|-------|----------|---------|
-//! | reindex_idempotent_hits | 4 | 4 | 2 | 8.0 | equivalence | nondeterministic index, drop/rebuild drift |
-//! | limit_top_k_subset | 4 | 3 | 2 | 6.0 | inclusive | limit truncate bugs, unstable top-k |
-//! | keyword_file_must_surface | 3 | 4 | 1 | 12.0 | inclusive (PQS-style) | indexer/search miss on exact token |
-//! | ann_query_scale_invariance | 5 | 4 | 1 | 20.0 | multiplicative/equiv | missing L2 renorm on query |
-//! | ann_query_scale_invariance_proptest | 5 | 4 | 1 | 20.0 | multiplicative/equiv | same MR; random unit-ish corpora + positive scales |
-//! | kmeans_threads_bit_identical | 4 | 5 | 2 | 10.0 | equivalence | Rayon race / nondeterministic reduce |
-//! | compound_reindex_then_limit | 3 | 3 | 3 | 3.0 | composition | interaction bugs across reindex then limit |
-//! | lang_filter_subset | 4 | 4 | 2 | 8.0 | inclusive | lang filter leaks non-matching langs / filter dropped |
-//! | query_trim_search_equivalence | 3 | 3 | 2 | 4.5 | equivalence | end-to-end trim mismatch vs parse-only trim |
-//! | ann_probe_monotone_candidates | 4 | 4 | 1 | 16.0 | inclusive | probe take order broken / non-prefix cluster selection |
-//! | ann_probe_monotone_candidates_proptest | 4 | 4 | 1 | 16.0 | inclusive | same MR; random flat corpora + random query |
-//! | search_flat_limit_subset | 3 | 3 | 1 | 9.0 | inclusive | top-k truncate/unstable ranking on ANN flat path |
-//! | search_flat_limit_subset_proptest | 3 | 3 | 1 | 9.0 | inclusive | same MR; random unit-ish flat + random k/K |
-//! | search_flat_limit_prefix_equality | 4 | 3 | 1 | 12.0 | inclusive (stronger) | order-corrupt top-k that still preserves key set |
-//! | search_flat_limit_prefix_equality_proptest | 4 | 3 | 1 | 12.0 | inclusive (stronger) | same MR; random unit-ish flat + random k/K |
-//! | query_term_order_equivalence | 3 | 4 | 2 | 6.0 | permutative | bag-of-words hybrid order sensitivity / tokenizer sort drop |
-//! | corpus_add_orthogonal_hit_equality | 4 | 3 | 2 | 6.0 | additive | reindex drops prior hits when unrelated file is added |
-//! | compound_scale_then_probe_proptest | 4 | 3 | 2 | 6.0 | composition | scale-invariance composed with probe monotony on random data |
-//! | compound_lang_filter_then_limit | 4 | 3 | 2 | 6.0 | composition | limit before filter / filter then unstable top-k |
-//! | compound_scale_then_search_flat_limit_proptest | 4 | 3 | 2 | 6.0 | composition | renorm ok on candidates but broken on scored top-k path |
-//!
-//! Fixed fixtures stay for deterministic non-vacuous paths (e.g. IVF threshold).
-//! `*_proptest` variants are mandatory property-based generation of the same relations.
-//!
-//! Intra-response score non-increase is checked inside `mr_limit_top_k_subset`
-//! (not a separate MR; correlated with limit ranking).
-//!
-//! **ANN probe monotony (precise relation):** for a fixed IVF index and query,
-//! with explicit probe counts `1 <= p <= P` (not `None`/`Some(0)` adaptive),
-//! `set(candidate_indices(q, Some(p))) ⊆ set(candidate_indices(q, Some(P)))`.
-//! Rationale: candidates are the union of members of the top-`take` populated
-//! clusters by centroid cosine after L2 renorm of `q`; `take = p.clamp(1, populated)`.
-//! Increasing `p` only extends the prefix of the same sorted cluster list, so
-//! the member set is monotone inclusive. Adaptive probe (`None`/`0`) is a
-//! different policy and is not required to interleave with explicit `p`.
-//!
-//! **ANN `search_flat` prefix equality (precise relation):** for fixed flat corpus,
-//! index, and query, with `1 ≤ k ≤ K`, the ordered index sequence of
-//! `search_flat(..., k)` equals the length-`k` prefix of `search_flat(..., K)`
-//! (scores compared within 1e-5). Holds because `top_k_similarity` /
-//! `top_k_flat_similarity` use a total order (sim desc, idx asc) over a fixed
-//! candidate pool (default probes). **Not** claimed for hybrid keyword search:
-//! `enforce_result_gates` may inject a Def into the head when the pure prefix
-//! lacks one, so ordered prefix can differ while key-set subset still holds.
-//!
-//! ## Validation meta (not an MR; no F x I / C)
-//!
-//! Lightweight **in-memory mutants** (pure set/logic, not product hooks) prove each
-//! shipped MR class is non-placebo. Harness: `mr_suite_mutation_kill_matrix`.
-//!
-//! | Planted mutant class | Violates | Detecting MR check | Killed |
-//! |----------------------|----------|--------------------|--------|
-//! | limit_phantom_key | small limit set contains key absent from large | limit-subset (`keys(top_k) ⊆ keys(top_K)`) | yes |
-//! | probe_set_shrink | higher probe count drops a lower-probe member | probe monotony (`cand(p) ⊆ cand(P)`) | yes |
-//! | scale_candidate_drift | positive query scale changes candidate sequence | scale invariance (`cand(q) = cand(αq)`, α>0) | yes |
-//! | lang_filter_leak | filtered hit key absent from unfiltered set | lang filter subset (`filt ⊆ unfilt`) | yes |
-//! | reindex_hit_drift | reindex changes hit key set | reindex idempotence (`keys₁ = keys₂`) | yes |
-//! | rank_order_swap | top-k index sequence is not a prefix of top-K (set may still match) | search_flat prefix equality | yes |
-//! | term_order_drift | permuting multi-term query tokens changes hit keys | query term-order equivalence | yes |
-//! | corpus_add_drop_old | adding query-orthogonal file drops a prior hit key | corpus-add orthogonal equality | yes |
-//!
-//! **Suite kill-rate: 8/8 = 100%** (skill target ≥ 80%). No residual equivalent mutants.
-//! Healthy fixtures pass every check; each mutant fails ≥ 1 check.
-//!
-//! ## Candidates Score >= 2.0 -- not yet implemented
-//!
-//! | MR candidate | F | I | C | Score | Category | Notes |
-//! |--------------|---|---|---|-------|----------|-------|
-//! | *(none)* | | | | | | Hybrid prefix / reindex score-order re-scored below. |
-//!
-//! ## Dropped / rejected (Score < 2.0, flaky, or wrong technique)
-//!
-//! | Candidate | Score / reason | Disposition |
-//! |-----------|----------------|-------------|
-//! | limit_top_k_prefix_equality (hybrid) | Score 4.0 on paper but **flaky by design**: `enforce_result_gates` injects Def into head when pure prefix lacks Def -- ordered prefix of top-K is not free; subset remains the hybrid contract | KEEP DEFERRED / do not ship (ANN prefix covers the ordered-rank bug class without hybrid Def) |
-//! | reindex_score_order | 3.0 -- F3 I2 C2; ordered scores after reindex highly correlated with `reindex_idempotent_hits` (same rebuild path; key-set already catches drop/swap of loci) | DROP as redundant (effective independence below 3) |
-//! | corpus_file_order_permutation | 1.5 -- F2 I3 C4 high cost, weak control (WalkDir order + FS naming) | DROP |
-//! | empty_query_empty_hits | ~1.0 -- absolute contract `f("")=∅`, not a transform relation; also near-tautology with pass early-returns | DROP (conventional unit if desired) |
-//! | empty_index_empty_hits | ~1.0 -- absolute oracle on empty corpus; no input transform | DROP (conventional / durability tests) |
-//! | parse_whitespace_equivalence | 1.0 -- no relation asserted (panic-only); parse has deterministic oracle | DROP (use properties.rs `parse_never_panics` / unit parse tests) |
-//! | rrf_rank_monotony | N/A -- closed form `1/(k+r+1)` | conventional unit, not MR |
-//! | ann_exact_eq_bruteforce | N/A -- reference path exists | differential / unit |
-//! | ivf_write_read_roundtrip | N/A -- exact bytes oracle | unit (see semantic_ivf_roundtrip); invertive covered there |
-//! | symbol_case_score tables | N/A -- fixed score constants | conventional unit |
-//! | f(x)=f(x) tautologies | 0 | never |
-//!
-//! # Taxonomy coverage (implemented)
-//!
-//! equivalence, inclusive (limit + lang filter + ANN probe/limit/prefix), multiplicative/equiv,
-//! permutative (multi-term query order), additive (orthogonal corpus expansion), composition.
-//! Invertive covered outside this suite (IVF roundtrip units).
-
 use ast_sgrep_core::search::{SearchOptions, Searcher};
 use ast_sgrep_core::semantic_ann::{SemanticAnnIndex, DEFAULT_ANN_THRESHOLD};
 use ast_sgrep_core::{IndexOptions, Indexer};
