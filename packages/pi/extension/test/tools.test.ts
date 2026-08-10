@@ -295,6 +295,7 @@ test("missing CLI backend surfaces BACKEND_UNAVAILABLE from search", async () =>
   const out = await search.execute("c1", { query: "x" }, new AbortController().signal, () => {}, { cwd: "/project" });
   assert.equal(out.details.ok, false);
   assert.equal(out.details.error.code, "BACKEND_UNAVAILABLE");
+  assert.equal(out.details.error.details.backend, "unavailable");
   assert.equal(out.details.error.details.napi, false);
   assert.equal(out.details.error.details.cli, false);
   assert.match(String(out.details.error.details.hint), /@ast-sgrep\//);

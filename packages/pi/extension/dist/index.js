@@ -158,7 +158,7 @@ export function registerAstSgrepTools(pi, runtime = new AstSgrepRuntime(pi), fre
     const probeCli = (options = {}) => {
         // Test fixtures inject `run` without a resolver; production always has resolveBinaryPath.
         if (typeof runtime.resolveBinaryPath !== "function")
-            return { ok: true };
+            return { kind: "cli" };
         try {
             const base = runtime.nativeEnv?.() ?? {};
             if (options.env) {
@@ -167,26 +167,30 @@ export function registerAstSgrepTools(pi, runtime = new AstSgrepRuntime(pi), fre
             else {
                 runtime.resolveBinaryPath({ env: base });
             }
-            return { ok: true };
+            return { kind: "cli" };
         }
         catch (cause) {
-            return { ok: false, cause: cause instanceof Error ? cause.message : String(cause) };
+            return {
+                kind: "unavailable",
+                cause: cause instanceof Error ? cause.message : String(cause),
+            };
         }
     };
-    const requireBackend = (probe, context, cause) => {
-        if (probe.napi || probe.cli)
+    const requireBackend = (availability, context) => {
+        if (availability.kind !== "unavailable")
             return;
         throw new RuntimeError("BACKEND_UNAVAILABLE", "ast-sgrep backend unavailable (no NAPI session and no CLI binary)", {
+            backend: "unavailable",
+            // Agent-facing mirrors of the closed unavailable variant (not an open product).
             napi: false,
             cli: false,
             cwd: context.cwd,
             hint: "Install @ast-sgrep/<platform> or run npm run build:native in packages/pi/extension",
-            ...(cause ? { cause } : {}),
+            ...(availability.cause ? { cause: availability.cause } : {}),
         });
     };
     const runCli = async (args, context, options = {}) => {
-        const cli = probeCli(options);
-        requireBackend({ napi: false, cli: cli.ok }, context, cli.ok ? undefined : cli.cause);
+        requireBackend(probeCli(options), context);
         return runtime.run(args, context, options);
     };
     const nativeCall = async (tool, args, context, options = {}) => {

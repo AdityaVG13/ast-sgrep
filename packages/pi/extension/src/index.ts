@@ -222,12 +222,19 @@ export function registerAstSgrepTools(
   const resolveRoot = async (cwd: string): Promise<string> =>
     runtime.resolveRoot ? await runtime.resolveRoot({ cwd }) : cwd;
 
-  /** Capability snapshot after sticky acquire fails; drives BACKEND_UNAVAILABLE vs cold CLI. */
-  type BackendProbe = { napi: boolean; cli: boolean };
+  /**
+   * Closed backend availability after sticky acquire fails.
+   * Parallel `{napi,cli}` bools made `{napi:true,cli:true}` and both-false+free-cause
+   * separate states; runtime only needs one live backend or a single unavailable variant.
+   */
+  type BackendAvailability =
+    | { kind: "napi" }
+    | { kind: "cli" }
+    | { kind: "unavailable"; cause?: string };
 
-  const probeCli = (options: RunOptions = {}): { ok: true } | { ok: false; cause: string } => {
+  const probeCli = (options: RunOptions = {}): BackendAvailability => {
     // Test fixtures inject `run` without a resolver; production always has resolveBinaryPath.
-    if (typeof runtime.resolveBinaryPath !== "function") return { ok: true };
+    if (typeof runtime.resolveBinaryPath !== "function") return { kind: "cli" };
     try {
       const base = runtime.nativeEnv?.() ?? {};
       if (options.env) {
@@ -235,23 +242,28 @@ export function registerAstSgrepTools(
       } else {
         runtime.resolveBinaryPath({ env: base });
       }
-      return { ok: true };
+      return { kind: "cli" };
     } catch (cause) {
-      return { ok: false, cause: cause instanceof Error ? cause.message : String(cause) };
+      return {
+        kind: "unavailable",
+        cause: cause instanceof Error ? cause.message : String(cause),
+      };
     }
   };
 
-  const requireBackend = (probe: BackendProbe, context: { cwd: string }, cause?: string): void => {
-    if (probe.napi || probe.cli) return;
+  const requireBackend = (availability: BackendAvailability, context: { cwd: string }): void => {
+    if (availability.kind !== "unavailable") return;
     throw new RuntimeError(
       "BACKEND_UNAVAILABLE",
       "ast-sgrep backend unavailable (no NAPI session and no CLI binary)",
       {
+        backend: "unavailable",
+        // Agent-facing mirrors of the closed unavailable variant (not an open product).
         napi: false,
         cli: false,
         cwd: context.cwd,
         hint: "Install @ast-sgrep/<platform> or run npm run build:native in packages/pi/extension",
-        ...(cause ? { cause } : {}),
+        ...(availability.cause ? { cause: availability.cause } : {}),
       },
     );
   };
@@ -261,8 +273,7 @@ export function registerAstSgrepTools(
     context: { cwd: string },
     options: RunOptions = {},
   ): Promise<MachineEnvelope> => {
-    const cli = probeCli(options);
-    requireBackend({ napi: false, cli: cli.ok }, context, cli.ok ? undefined : cli.cause);
+    requireBackend(probeCli(options), context);
     return runtime.run(args, context, options);
   };
 
