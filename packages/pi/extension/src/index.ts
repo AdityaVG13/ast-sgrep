@@ -12,7 +12,7 @@ import {
   type StickyWorker,
 } from "./codemode/index.js";
 import { AstSgrepRuntime, FreshnessCoordinator, RuntimeError, type FreshnessRuntime, type MachineEnvelope, type RunOptions } from "./runtime.js";
-import { applyEdit, planEdit, type EditParams } from "./edit.js";
+import { applyEdit, parseEditParams, planEdit } from "./edit.js";
 
 const DEFAULT_LIMIT = 8;
 const MAX_LIMIT = 100;
@@ -52,13 +52,33 @@ const codemodeParameters = Type.Object({
   }),
 }, { additionalProperties: false });
 
-const editParameters = Type.Object({
-  path: Type.String({ minLength: 1, maxLength: 4_096, description: "File path relative to the project root (or absolute under root)" }),
-  old_string: Type.Optional(Type.String({ description: "Exact text to replace (requires new_string)" })),
-  new_string: Type.Optional(Type.String({ description: "Replacement text (requires old_string)" })),
-  contents: Type.Optional(Type.String({ description: "Full file contents for write/create (mutually exclusive with old_string/new_string)" })),
-  replace_all: Type.Optional(Type.Boolean({ default: false, description: "Replace every old_string occurrence (default: exactly one match required)" })),
+const editPathParameter = Type.String({
+  minLength: 1,
+  maxLength: 4_096,
+  description: "File path relative to the project root (or absolute under root)",
+});
+
+/** Replace arm -- contents / write fields unrepresentable (additionalProperties: false). */
+const editReplaceParameters = Type.Object({
+  path: editPathParameter,
+  old_string: Type.String({ minLength: 1, description: "Exact text to replace" }),
+  new_string: Type.String({ description: "Replacement text" }),
+  replace_all: Type.Optional(Type.Boolean({
+    default: false,
+    description: "Replace every old_string occurrence (default: exactly one match required)",
+  })),
 }, { additionalProperties: false });
+
+/** Write arm -- replace fields unrepresentable (additionalProperties: false). */
+const editWriteParameters = Type.Object({
+  path: editPathParameter,
+  contents: Type.String({ description: "Full file contents for write/create" }),
+}, { additionalProperties: false });
+
+/** Wire oneOf/anyOf aligned with EditPlan modes: replace XOR write. */
+const editParameters = Type.Union([editReplaceParameters, editWriteParameters], {
+  description: "Exactly one mode: replace (old_string+new_string) or write (contents)",
+});
 
 type RuntimeLike = {
   run(args: readonly string[], context: { cwd: string }, options?: RunOptions): Promise<MachineEnvelope>;
@@ -258,7 +278,7 @@ export function registerAstSgrepTools(
     if (worker) {
       return asEnvelope(await worker.call(tool, args, options.signal ? { signal: options.signal } : {}));
     }
-    // Cold CLI only when a real binary resolves — never remap missing natives to BINARY_RESOLUTION_FAILED.
+    // Cold CLI only when a real binary resolves -- never remap missing natives to BINARY_RESOLUTION_FAILED.
     return runCli(argvFor(tool, args), context, options);
   };
 
@@ -282,7 +302,7 @@ export function registerAstSgrepTools(
     if (typeof path === "string") freshness.markAffectedPath(path, ctx.cwd);
   });
 
-  // Primary surface: Code Mode — in-process NAPI (MCP-class), compose in JS.
+  // Primary surface: Code Mode -- in-process NAPI (MCP-class), compose in JS.
   // Sibling to MCP: pick one surface; both link core, never each other.
   pi.registerTool({
     name: "asgrep",
@@ -290,7 +310,7 @@ export function registerAstSgrepTools(
     description: [
       "Primary ast-sgrep tool. Write JavaScript that calls typed asgrep.* methods.",
       "Compose with await / Promise.all, filter in code, return only the shaped final value.",
-      "Runs in-process (native addon) — no CLI spawn; warm Searcher for the Pi session.",
+      "Runs in-process (native addon) -- no CLI spawn; warm Searcher for the Pi session.",
       "",
       CODEMODE_TYPES_FOR_MODEL,
       "",
@@ -482,7 +502,7 @@ export function registerAstSgrepTools(
       try {
         if (signal?.aborted) throw new RuntimeError("CANCELLED", "edit cancelled");
         const root = await resolveRoot(ctx.cwd);
-        const plan = planEdit(params as EditParams, root);
+        const plan = planEdit(parseEditParams(params), root);
         const outcome = await applyEdit(plan);
         freshness.markAffectedPath(plan.absolutePath, ctx.cwd);
         report(onUpdate, "edit", "completed");

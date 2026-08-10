@@ -241,6 +241,42 @@ test("asgrep_edit rejects ambiguous replace without replace_all", async () => {
   assert.equal((out.details.error as { code: string }).code, "EDIT_STRING_AMBIGUOUS");
 });
 
+test("asgrep_edit writes full contents and dirties freshness", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "asgrep-edit-write-"));
+  const file = join(dir, "created.ts");
+  const f = fixture();
+  const out = await f.byName("asgrep_edit").execute("e1", {
+    path: "created.ts",
+    contents: "export const n = 1;\n",
+  }, new AbortController().signal, () => {}, { cwd: dir });
+  assert.equal(out.details.ok, true);
+  assert.equal(out.details.mode, "write");
+  assert.equal(out.details.created, true);
+  assert.equal(await readFile(file, "utf8"), "export const n = 1;\n");
+  assert.ok(f.dirtied.some((d) => d.cwd === dir));
+});
+
+test("asgrep_edit rejects both replace and write fields", async () => {
+  const f = fixture();
+  const out = await f.byName("asgrep_edit").execute("e1", {
+    path: "sample.ts",
+    old_string: "a",
+    new_string: "b",
+    contents: "c",
+  }, new AbortController().signal, () => {}, { cwd: process.cwd() });
+  assert.equal(out.details.ok, false);
+  assert.equal((out.details.error as { code: string }).code, "INVALID_EDIT");
+});
+
+test("asgrep_edit rejects neither replace nor write fields", async () => {
+  const f = fixture();
+  const out = await f.byName("asgrep_edit").execute("e1", {
+    path: "sample.ts",
+  }, new AbortController().signal, () => {}, { cwd: process.cwd() });
+  assert.equal(out.details.ok, false);
+  assert.equal((out.details.error as { code: string }).code, "INVALID_EDIT");
+});
+
 test("missing CLI backend surfaces BACKEND_UNAVAILABLE from search", async () => {
   const tools: Tool[] = [];
   const pi = {

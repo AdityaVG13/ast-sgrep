@@ -13,13 +13,20 @@ export type EditWritePlan = {
     contents: string;
 };
 export type EditPlan = EditReplacePlan | EditWritePlan;
-export type EditParams = {
+/** Wire/tool replace mode: old_string+new_string required; contents unrepresentable. */
+export type EditReplaceParams = {
     path: string;
-    old_string?: string;
-    new_string?: string;
-    contents?: string;
+    old_string: string;
+    new_string: string;
     replace_all?: boolean;
 };
+/** Wire/tool write mode: full contents; replace fields unrepresentable. */
+export type EditWriteParams = {
+    path: string;
+    contents: string;
+};
+/** Replace XOR write -- illegal both/neither cannot be typed after boundary parse. */
+export type EditParams = EditReplaceParams | EditWriteParams;
 export type EditResult = {
     path: string;
     mode: "replace" | "write";
@@ -34,7 +41,12 @@ export declare const MAX_EDIT_REPLACE_BYTES: number;
 export declare function assertSafeEditTarget(absolutePath: string): void;
 /** Repair common model path mistakes before resolve (validate-then-repair). */
 export declare function repairEditPath(raw: string): string;
-/** Parse tool params into a root-bounded EditPlan. */
+/**
+ * Boundary-parse untrusted tool args into EditParams.
+ * Replace XOR write is enforced here so illegal bags never enter planEdit as trusted input.
+ */
+export declare function parseEditParams(params: unknown): EditParams;
+/** Parse tool params into a root-bounded EditPlan (trusted after parseEditParams). */
 export declare function planEdit(params: EditParams, projectRoot: string): EditPlan;
 /** Apply a planned edit; returns structured result for the tool details. */
 export declare function applyEdit(plan: EditPlan): Promise<EditResult>;

@@ -62,7 +62,58 @@ function looksBinary(buf) {
         return true;
     }
 }
-/** Parse tool params into a root-bounded EditPlan. */
+function isRecord(value) {
+    return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+/**
+ * Boundary-parse untrusted tool args into EditParams.
+ * Replace XOR write is enforced here so illegal bags never enter planEdit as trusted input.
+ */
+export function parseEditParams(params) {
+    if (!isRecord(params)) {
+        throw new RuntimeError("INVALID_EDIT", "edit params must be an object");
+    }
+    const path = params.path;
+    if (typeof path !== "string") {
+        throw new RuntimeError("INVALID_EDIT", "path is required");
+    }
+    const hasOld = Object.prototype.hasOwnProperty.call(params, "old_string");
+    const hasNew = Object.prototype.hasOwnProperty.call(params, "new_string");
+    const hasReplace = hasOld || hasNew;
+    const hasWrite = Object.prototype.hasOwnProperty.call(params, "contents");
+    const hasReplaceAll = Object.prototype.hasOwnProperty.call(params, "replace_all");
+    if (hasReplace === hasWrite) {
+        throw new RuntimeError("INVALID_EDIT", "Provide either old_string+new_string (replace) or contents (write), not both or neither");
+    }
+    if (hasWrite) {
+        if (hasReplaceAll) {
+            throw new RuntimeError("INVALID_EDIT", "replace_all is only valid with old_string+new_string (replace mode)");
+        }
+        if (typeof params.contents !== "string") {
+            throw new RuntimeError("INVALID_EDIT", "contents must be a string");
+        }
+        return { path, contents: params.contents };
+    }
+    if (typeof params.old_string !== "string" || typeof params.new_string !== "string") {
+        throw new RuntimeError("INVALID_EDIT", "replace mode requires old_string and new_string strings");
+    }
+    if (params.old_string.length === 0) {
+        throw new RuntimeError("INVALID_EDIT", "old_string must be non-empty");
+    }
+    const replace = {
+        path,
+        old_string: params.old_string,
+        new_string: params.new_string,
+    };
+    if (hasReplaceAll) {
+        if (typeof params.replace_all !== "boolean") {
+            throw new RuntimeError("INVALID_EDIT", "replace_all must be a boolean");
+        }
+        replace.replace_all = params.replace_all;
+    }
+    return replace;
+}
+/** Parse tool params into a root-bounded EditPlan (trusted after parseEditParams). */
 export function planEdit(params, projectRoot) {
     const rawPath = repairEditPath(params.path ?? "");
     if (!rawPath) {
@@ -74,22 +125,8 @@ export function planEdit(params, projectRoot) {
         throw new RuntimeError("EDIT_OUTSIDE_PROJECT", `Edit path resolves outside the project root. Use a path under ${projectRoot}`, { projectRoot, path: rawPath, resolved: absolutePath });
     }
     const displayPath = relative(projectRoot, absolutePath) || rawPath;
-    const hasReplace = params.old_string !== undefined || params.new_string !== undefined;
-    const hasWrite = params.contents !== undefined;
-    if (hasReplace === hasWrite) {
-        throw new RuntimeError("INVALID_EDIT", "Provide either old_string+new_string (replace) or contents (write), not both or neither");
-    }
-    if (hasWrite) {
-        if (typeof params.contents !== "string") {
-            throw new RuntimeError("INVALID_EDIT", "contents must be a string");
-        }
+    if ("contents" in params) {
         return { mode: "write", absolutePath, displayPath, contents: params.contents };
-    }
-    if (typeof params.old_string !== "string" || typeof params.new_string !== "string") {
-        throw new RuntimeError("INVALID_EDIT", "replace mode requires old_string and new_string strings");
-    }
-    if (params.old_string.length === 0) {
-        throw new RuntimeError("INVALID_EDIT", "old_string must be non-empty");
     }
     return {
         mode: "replace",
