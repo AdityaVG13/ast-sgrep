@@ -1,15 +1,27 @@
 import type { AsgrepConnector } from "./connector.js";
 import type { DispatchStats } from "./dispatch.js";
 
-export type CodemodeRunResult = {
-  ok: boolean;
+/** Closed sum: success|failure — `ok:true` with `error` (or `ok:false` without) is unrepresentable. */
+export type CodemodeRunSuccess = {
+  ok: true;
   result: unknown;
   logs: string[];
-  error?: string;
   code: string;
   stats?: DispatchStats;
   wallMs: number;
 };
+
+export type CodemodeRunFailure = {
+  ok: false;
+  result: null;
+  error: string;
+  logs: string[];
+  code: string;
+  stats?: DispatchStats;
+  wallMs: number;
+};
+
+export type CodemodeRunResult = CodemodeRunSuccess | CodemodeRunFailure;
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const MAX_CODE_CHARS = 32_000;
@@ -174,8 +186,8 @@ function resultOk(
   code: string,
   wall0: number,
   statsFn?: () => DispatchStats,
-): CodemodeRunResult {
-  const out: CodemodeRunResult = { ok: true, result, logs, code, wallMs: Date.now() - wall0 };
+): CodemodeRunSuccess {
+  const out: CodemodeRunSuccess = { ok: true, result, logs, code, wallMs: Date.now() - wall0 };
   const stats = statsFn?.();
   if (stats) out.stats = stats;
   return out;
@@ -187,8 +199,8 @@ function resultErr(
   code: string,
   wall0: number,
   statsFn?: () => DispatchStats,
-): CodemodeRunResult {
-  const out: CodemodeRunResult = { ok: false, result: null, logs, error, code, wallMs: Date.now() - wall0 };
+): CodemodeRunFailure {
+  const out: CodemodeRunFailure = { ok: false, result: null, logs, error, code, wallMs: Date.now() - wall0 };
   const stats = statsFn?.();
   if (stats) out.stats = stats;
   return out;

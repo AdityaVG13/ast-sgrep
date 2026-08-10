@@ -101,7 +101,7 @@ test("Code Mode Promise.all stays in-process (no spawn)", async (t) => {
     bundle.asgrep,
     { stats: bundle.stats },
   );
-  assert.equal(outcome.ok, true, outcome.error);
+  assert.equal(outcome.ok, true, outcome.ok ? undefined : outcome.error);
   assert.ok((outcome.result as { n: number }).n >= 1);
   assert.ok(bundle.stats().stickyCalls >= 2);
   assert.equal(bundle.stats().parallelSpawnCalls, 0);

@@ -41,7 +41,7 @@ test("Promise.all overlaps host calls (Amdahl parallel fraction)", async () => {
     { stats: bundle.stats },
   );
   const wall = Date.now() - wall0;
-  assert.equal(outcome.ok, true, outcome.error);
+  assert.equal(outcome.ok, true, outcome.ok ? undefined : outcome.error);
   assert.deepEqual(outcome.result, { n: 3 });
   assert.ok(wall < 140, `expected overlapped wall < 140ms, got ${wall}ms`);
   assert.equal(starts.length, 3);
@@ -82,7 +82,7 @@ test("dispatcher coalesces same-tick calls into one batch wave", async () => {
     bundle.asgrep,
     { stats: bundle.stats },
   );
-  assert.equal(outcome.ok, true, outcome.error);
+  assert.equal(outcome.ok, true, outcome.ok ? undefined : outcome.error);
   assert.deepEqual(outcome.result, { a: "search", b: "defs", batched: true });
   assert.equal(batchCalls, 1);
   assert.equal(runCalls.length, 0);
@@ -123,7 +123,7 @@ test("partial batch failure does not re-run successful siblings via spawn", asyn
     bundle.asgrep,
     { stats: bundle.stats },
   );
-  assert.equal(outcome.ok, true, outcome.error);
+  assert.equal(outcome.ok, true, outcome.ok ? undefined : outcome.error);
   assert.match(String(outcome.result), /symbol|failed/i);
   assert.equal(runCalls.length, 0, "must not fall back to spawn on per-call failure");
   assert.equal(bundle.stats().batchedCalls, 2);
@@ -167,7 +167,7 @@ test("sticky worker handles multi-wave program without batch/spawn", async () =>
     bundle.asgrep,
     { stats: bundle.stats },
   );
-  assert.equal(outcome.ok, true, outcome.error);
+  assert.equal(outcome.ok, true, outcome.ok ? undefined : outcome.error);
   assert.deepEqual(outcome.result, { a: "search", b: "defs", c: "chain" });
   assert.ok(bundle.stats().stickyCalls >= 3);
   assert.equal(bundle.stats().parallelSpawnCalls, 0);
@@ -197,7 +197,7 @@ test("dispatcher falls back to parallel spawn when batch fails", async () => {
     { stats: bundle.stats },
   );
   const wall = Date.now() - wall0;
-  assert.equal(outcome.ok, true, outcome.error);
+  assert.equal(outcome.ok, true, outcome.ok ? undefined : outcome.error);
   assert.equal(outcome.result, true);
   assert.equal(runCalls.length, 2);
   assert.ok(wall < 90, `fallback parallel spawn should overlap, wall=${wall}`);
@@ -214,7 +214,7 @@ test("runner binds asgrep and console without requiring node:vm", async () => {
     `console.log("hi"); const r = await asgrep.search({ query: "x" }); return r.hits?.length ?? 0;`,
     bundle.asgrep,
   );
-  assert.equal(outcome.ok, true, outcome.error);
+  assert.equal(outcome.ok, true, outcome.ok ? undefined : outcome.error);
   assert.equal(outcome.result, 1);
   assert.deepEqual(outcome.logs, ["hi"]);
 });
@@ -232,8 +232,11 @@ test("runner observes cancellation while awaiting asynchronous code", async () =
   });
   setTimeout(() => controller.abort(), 10);
   const outcome = await pending;
-  assert.equal(outcome.ok, false);
-  assert.match(outcome.error ?? "", /aborted/iu);
+  if (outcome.ok) {
+    assert.fail(`expected abort failure, got ${JSON.stringify(outcome.result)}`);
+  } else {
+    assert.match(outcome.error, /aborted/iu);
+  }
 });
 
 test("typed connector preserves defs vs search(query containing defs:)", async () => {

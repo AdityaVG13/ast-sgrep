@@ -1,14 +1,24 @@
 import type { AsgrepConnector } from "./connector.js";
 import type { DispatchStats } from "./dispatch.js";
-export type CodemodeRunResult = {
-    ok: boolean;
+/** Closed sum: success|failure — `ok:true` with `error` (or `ok:false` without) is unrepresentable. */
+export type CodemodeRunSuccess = {
+    ok: true;
     result: unknown;
     logs: string[];
-    error?: string;
     code: string;
     stats?: DispatchStats;
     wallMs: number;
 };
+export type CodemodeRunFailure = {
+    ok: false;
+    result: null;
+    error: string;
+    logs: string[];
+    code: string;
+    stats?: DispatchStats;
+    wallMs: number;
+};
+export type CodemodeRunResult = CodemodeRunSuccess | CodemodeRunFailure;
 /** Strip markdown fences and normalize to an async IIFE expression. */
 export declare function normalizeCode(raw: string): string;
 /**

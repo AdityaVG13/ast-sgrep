@@ -296,11 +296,11 @@ export function registerAstSgrepTools(pi, runtime = new AstSgrepRuntime(pi), fre
                 report(onUpdate, "codemode", "completed");
                 if (!outcome.ok) {
                     return {
-                        content: [{ type: "text", text: bounded(`codemode failed: ${outcome.error ?? "unknown error"}`) }],
+                        content: [{ type: "text", text: bounded(`codemode failed: ${outcome.error}`) }],
                         details: {
                             ok: false,
                             command: "codemode",
-                            error: { code: "CODEMODE_ERROR", message: outcome.error ?? "unknown error", details: { logs: outcome.logs, stats: outcome.stats } },
+                            error: { code: "CODEMODE_ERROR", message: outcome.error, details: { logs: outcome.logs, stats: outcome.stats } },
                             code: outcome.code,
                             stats: outcome.stats,
                             wallMs: outcome.wallMs,

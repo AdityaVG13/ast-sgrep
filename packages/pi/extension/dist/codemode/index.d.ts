@@ -10,7 +10,7 @@
  * client. They never import each other. Do not install both for the same agent.
  */
 export { createAsgrepConnector, type AsgrepConnector, type ConnectorHost, type ConnectorBundle, } from "./connector.js";
-export { runCodemode, normalizeCode, type CodemodeRunResult } from "./runner.js";
+export { runCodemode, normalizeCode, type CodemodeRunResult, type CodemodeRunSuccess, type CodemodeRunFailure } from "./runner.js";
 export { CODEMODE_TYPES_FOR_MODEL, type SearchArgs, type ChainArgs } from "./types.js";
 export { createCodemodeDispatcher, runNativeBatch, argvFor, asEnvelope, type DispatchStats, type BatchCapableHost, type StickyWorker, type BatchResult, } from "./dispatch.js";
 export { startStickyWorker, runBatchViaStdin } from "./worker.js";

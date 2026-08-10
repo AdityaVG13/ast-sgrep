@@ -16,7 +16,7 @@ export {
   type ConnectorHost,
   type ConnectorBundle,
 } from "./connector.js";
-export { runCodemode, normalizeCode, type CodemodeRunResult } from "./runner.js";
+export { runCodemode, normalizeCode, type CodemodeRunResult, type CodemodeRunSuccess, type CodemodeRunFailure } from "./runner.js";
 export { CODEMODE_TYPES_FOR_MODEL, type SearchArgs, type ChainArgs } from "./types.js";
 export {
   createCodemodeDispatcher,
