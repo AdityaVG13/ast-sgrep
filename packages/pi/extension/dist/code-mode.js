@@ -164,6 +164,9 @@ function boundedPrefix(value, maxChars) {
     }
     return { text: value, chars, truncated: false };
 }
+function formatReadRef(file, start, end) {
+    return `${file}#L${start}-L${end}`;
+}
 async function readLineWindow(handle, parsed, contextLines, maxChars, signal) {
     const stat = await handle.stat();
     if (!stat.isFile())
@@ -259,8 +262,7 @@ async function readLineWindow(handle, parsed, contextLines, maxChars, signal) {
     const totalLines = Math.max(0, lineNumber - 1);
     if (totalLines === 0) {
         return {
-            file: parsed.file,
-            lines: { start: 1, end: 0 },
+            window: null,
             content: "",
             truncated: false,
             note: `${parsed.file} is empty`,
@@ -271,9 +273,9 @@ async function readLineWindow(handle, parsed, contextLines, maxChars, signal) {
         throw new RuntimeError("RANGE_OUT_OF_BOUNDS", `Note: offset ${parsed.start} is beyond the end of ${parsed.file} (${totalLines} lines scanned). Retry with a smaller offset (e.g. start=${resume})`, { file: parsed.file, start: parsed.start, end: parsed.end, totalLines, resumeOffset: resume });
     }
     const endLine = selectedEnd ?? Math.max(wantedStart, totalLines);
+    const startLine = selectedStart ?? wantedStart;
     return {
-        file: parsed.file,
-        lines: { start: selectedStart ?? wantedStart, end: endLine },
+        window: { file: parsed.file, start: startLine, end: endLine },
         content,
         truncated,
         ...(truncated
@@ -397,7 +399,17 @@ export class SgrepCodeMode {
             const handle = await openStableHandle(root, ref, parsed.file, unresolved, filePath, expectedStat);
             try {
                 const budget = perRefChars + (index < remainder ? 1 : 0);
-                results.push({ ref, ...await readLineWindow(handle, parsed, contextLines, budget, options.signal) });
+                const payload = await readLineWindow(handle, parsed, contextLines, budget, options.signal);
+                const windowRef = payload.window
+                    ? formatReadRef(payload.window.file, payload.window.start, payload.window.end)
+                    : ref;
+                results.push({
+                    ref: windowRef,
+                    content: payload.content,
+                    truncated: payload.truncated,
+                    ...(payload.resumeOffset === undefined ? {} : { resumeOffset: payload.resumeOffset }),
+                    ...(payload.note === undefined ? {} : { note: payload.note }),
+                });
             }
             finally {
                 await handle.close();

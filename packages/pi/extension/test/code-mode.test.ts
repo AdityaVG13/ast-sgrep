@@ -101,8 +101,12 @@ describe("SgrepCodeMode", () => {
     const mode = createSgrepCodeMode(new FakeRuntime(root), { cwd: root });
     const [read] = await mode.codeRead(hit.ref as SgrepRef, { contextLines: 1, maxChars: 48 });
     assert.ok(read);
-    assert.equal(read.lines.start, 1);
-    assert.ok(read.lines.end <= 5);
+    assert.equal("file" in read, false);
+    assert.equal("lines" in read, false);
+    const loc = parseSgrepRef(read.ref);
+    assert.equal(loc.file, "src/auth.ts");
+    assert.equal(loc.start, 1);
+    assert.ok(loc.end <= 5);
     assert.ok(read.content.length <= 48);
     assert.equal(read.truncated, true);
   });

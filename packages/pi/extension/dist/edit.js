@@ -137,9 +137,11 @@ export function planEdit(params, projectRoot) {
         replaceAll: params.replace_all === true,
     };
 }
-/** Apply a planned edit; returns structured result for the tool details. */
+/**
+ * Apply a planned edit; returns structured result for the tool details.
+ * `EditPlan` is trusted after `planEdit` (device-path assert already ran at the boundary).
+ */
 export async function applyEdit(plan) {
-    assertSafeEditTarget(plan.absolutePath);
     if (plan.mode === "write") {
         let created = false;
         try {

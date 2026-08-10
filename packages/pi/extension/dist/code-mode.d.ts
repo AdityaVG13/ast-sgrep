@@ -35,13 +35,12 @@ export interface SgrepReadOptions {
     maxChars?: number;
     signal?: AbortSignal;
 }
+/**
+ * Trusted read window. Location is solely `ref` (actual lines returned; may expand the
+ * request via contextLines). Derive file/lines with `parseSgrepRef` -- no live twins.
+ */
 export interface SgrepReadResult {
     ref: SgrepRef;
-    file: string;
-    lines: {
-        start: number;
-        end: number;
-    };
     content: string;
     truncated: boolean;
     /** Present when truncated: 1-indexed line to resume from (on the last shown line). */

@@ -44,10 +44,12 @@ export interface SgrepReadOptions {
   signal?: AbortSignal;
 }
 
+/**
+ * Trusted read window. Location is solely `ref` (actual lines returned; may expand the
+ * request via contextLines). Derive file/lines with `parseSgrepRef` -- no live twins.
+ */
 export interface SgrepReadResult {
   ref: SgrepRef;
-  file: string;
-  lines: { start: number; end: number };
   content: string;
   truncated: boolean;
   /** Present when truncated: 1-indexed line to resume from (on the last shown line). */
@@ -259,13 +261,26 @@ function boundedPrefix(value: string, maxChars: number): { text: string; chars: 
   return { text: value, chars, truncated: false };
 }
 
+type ReadWindowPayload = {
+  /** Actual window shown; null for empty file (caller keeps request ref). */
+  window: { file: string; start: number; end: number } | null;
+  content: string;
+  truncated: boolean;
+  resumeOffset?: number;
+  note?: string;
+};
+
+function formatReadRef(file: string, start: number, end: number): SgrepRef {
+  return `${file}#L${start}-L${end}` as SgrepRef;
+}
+
 async function readLineWindow(
   handle: FileHandle,
   parsed: { file: string; start: number; end: number },
   contextLines: number,
   maxChars: number,
   signal: AbortSignal | undefined,
-): Promise<Omit<SgrepReadResult, "ref">> {
+): Promise<ReadWindowPayload> {
   const stat = await handle.stat();
   if (!stat.isFile()) throw new RuntimeError("READ_FAILED", `${parsed.file} is not a regular file`);
   const wantedStart = Math.max(1, parsed.start - contextLines);
@@ -352,8 +367,7 @@ async function readLineWindow(
   const totalLines = Math.max(0, lineNumber - 1);
   if (totalLines === 0) {
     return {
-      file: parsed.file,
-      lines: { start: 1, end: 0 },
+      window: null,
       content: "",
       truncated: false,
       note: `${parsed.file} is empty`,
@@ -368,9 +382,9 @@ async function readLineWindow(
     );
   }
   const endLine = selectedEnd ?? Math.max(wantedStart, totalLines);
+  const startLine = selectedStart ?? wantedStart;
   return {
-    file: parsed.file,
-    lines: { start: selectedStart ?? wantedStart, end: endLine },
+    window: { file: parsed.file, start: startLine, end: endLine },
     content,
     truncated,
     ...(truncated
@@ -516,7 +530,17 @@ export class SgrepCodeMode implements SgrepApi {
       const handle = await openStableHandle(root, ref, parsed.file, unresolved, filePath, expectedStat);
       try {
         const budget = perRefChars + (index < remainder ? 1 : 0);
-        results.push({ ref, ...await readLineWindow(handle, parsed, contextLines, budget, options.signal) });
+        const payload = await readLineWindow(handle, parsed, contextLines, budget, options.signal);
+        const windowRef = payload.window
+          ? formatReadRef(payload.window.file, payload.window.start, payload.window.end)
+          : ref;
+        results.push({
+          ref: windowRef,
+          content: payload.content,
+          truncated: payload.truncated,
+          ...(payload.resumeOffset === undefined ? {} : { resumeOffset: payload.resumeOffset }),
+          ...(payload.note === undefined ? {} : { note: payload.note }),
+        });
       } finally {
         await handle.close();
       }

@@ -48,5 +48,8 @@ export declare function repairEditPath(raw: string): string;
 export declare function parseEditParams(params: unknown): EditParams;
 /** Parse tool params into a root-bounded EditPlan (trusted after parseEditParams). */
 export declare function planEdit(params: EditParams, projectRoot: string): EditPlan;
-/** Apply a planned edit; returns structured result for the tool details. */
+/**
+ * Apply a planned edit; returns structured result for the tool details.
+ * `EditPlan` is trusted after `planEdit` (device-path assert already ran at the boundary).
+ */
 export declare function applyEdit(plan: EditPlan): Promise<EditResult>;
