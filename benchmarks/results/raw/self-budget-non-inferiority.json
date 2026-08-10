@@ -1,6 +1,1 @@
-{
-  "queries": 12,
-  "identical_result_sets": true,
-  "mismatches": [],
-  "note": "A token budget selects per-result DETAIL. It must never change which results are returned, so recall at any cutoff is unchanged by construction. This check falsifies that claim rather than assuming it."
-}
+{"queries":12,"identical_result_sets":true,"mismatches":[],"note":"A token budget selects per-result DETAIL. It must never change which results are returned, so recall at any cutoff is unchanged by construction. This check falsifies that claim rather than assuming it."}
