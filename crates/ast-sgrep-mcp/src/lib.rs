@@ -74,6 +74,80 @@ enum AgentSearchMode {
     Semantic,
 }
 
+/// Wire JSON for keyword / ast / semantic search tools (`deny_unknown_fields`).
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AgentSearchWire {
+    query: String,
+    #[serde(default)]
+    root: Option<String>,
+    #[serde(default)]
+    limit: Option<u64>,
+    #[serde(default)]
+    resend_seen: Option<bool>,
+    #[serde(default)]
+    budget_tokens: Option<u64>,
+}
+
+/// Trusted agent-search args after MCP tools/call boundary parse.
+struct AgentSearchArgs {
+    query: String,
+    root: PathBuf,
+    limit: usize,
+    resend_seen: bool,
+    budget_tokens: Option<usize>,
+}
+
+/// Wire JSON for `code_read`.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CodeReadWire {
+    ids: Vec<String>,
+    #[serde(default)]
+    root: Option<String>,
+    #[serde(default)]
+    context_lines: Option<u64>,
+    #[serde(default)]
+    max_chars: Option<u64>,
+}
+
+/// Trusted `code_read` args after boundary parse.
+struct CodeReadArgs {
+    ids: Vec<String>,
+    root: PathBuf,
+    context_lines: usize,
+    max_chars: usize,
+}
+
+/// Wire JSON for `index_status`.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct IndexStatusWire {
+    #[serde(default)]
+    root: Option<String>,
+}
+
+/// Trusted `index_status` args after boundary parse.
+struct IndexStatusArgs {
+    root: PathBuf,
+}
+
+/// Wire JSON for `index_repo`.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct IndexRepoWire {
+    #[serde(default)]
+    root: Option<String>,
+    #[serde(default)]
+    force: Option<bool>,
+}
+
+/// Trusted `index_repo` args after boundary parse.
+struct IndexRepoArgs {
+    root: PathBuf,
+    force: bool,
+}
+
 #[derive(Debug, Deserialize)]
 struct JsonRpcRequest {
     id: Option<Value>,
@@ -319,61 +393,154 @@ impl McpServer {
     }
 
     /// Tool name → handler. `code_search` remains a keyword alias (compat; protocol tests pin it).
+    /// Argument shapes are parsed once here into trusted structs; handlers never re-validate wire keys.
     fn dispatch_tool(&self, name: &str, args: &Value) -> anyhow::Result<String> {
         match name {
             // keyword_search and deprecated code_search share Keyword mode (compat alias).
             "keyword_search" | "code_search" => {
-                self.tool_agent_search(args, AgentSearchMode::Keyword)
+                let parsed = self.parse_agent_search(args)?;
+                self.tool_agent_search(parsed, AgentSearchMode::Keyword)
             }
-            "ast_search" => self.tool_agent_search(args, AgentSearchMode::Ast),
-            "semantic_search" => self.tool_agent_search(args, AgentSearchMode::Semantic),
-            "code_read" => self.tool_code_read(args),
-            "index_status" => self.tool_index_status(args),
-            "index_repo" => self.tool_index_repo(args),
+            "ast_search" => {
+                let parsed = self.parse_agent_search(args)?;
+                self.tool_agent_search(parsed, AgentSearchMode::Ast)
+            }
+            "semantic_search" => {
+                let parsed = self.parse_agent_search(args)?;
+                self.tool_agent_search(parsed, AgentSearchMode::Semantic)
+            }
+            "code_read" => {
+                let parsed = self.parse_code_read(args)?;
+                self.tool_code_read(parsed)
+            }
+            "index_status" => {
+                let parsed = self.parse_index_status(args)?;
+                self.tool_index_status(parsed)
+            }
+            "index_repo" => {
+                let parsed = self.parse_index_repo(args)?;
+                self.tool_index_repo(parsed)
+            }
             other => Err(anyhow::anyhow!("unknown tool: {other}")),
         }
     }
 
-    fn validate_fields(args: &Value, allowed: &[&str]) -> anyhow::Result<()> {
-        let object = args.as_object().context("arguments must be an object")?;
-        if let Some(field) = object
-            .keys()
-            .find(|field| !allowed.contains(&field.as_str()))
-        {
-            anyhow::bail!("unknown argument: {field}");
+    fn map_wire_error(err: serde_json::Error) -> anyhow::Error {
+        let msg = err.to_string();
+        // Preserve the prior unknown-key phrasing agents already see.
+        if let Some(rest) = msg.strip_prefix("unknown field `") {
+            if let Some(field) = rest.split('`').next() {
+                return anyhow::anyhow!("unknown argument: {field}");
+            }
         }
-        Ok(())
+        anyhow::anyhow!(msg)
     }
 
-    fn integer_arg(
-        args: &Value,
+    fn bounded_usize(
         name: &str,
-        default: usize,
+        value: u64,
         minimum: usize,
         maximum: usize,
     ) -> anyhow::Result<usize> {
-        match args.get(name) {
-            None => Ok(default),
-            Some(value) => {
-                let value = value
-                    .as_u64()
-                    .and_then(|value| usize::try_from(value).ok())
-                    .with_context(|| format!("{name} must be an integer"))?;
-                anyhow::ensure!(
-                    (minimum..=maximum).contains(&value),
-                    "{name} must be between {minimum} and {maximum}"
-                );
-                Ok(value)
-            }
-        }
+        let value = usize::try_from(value).with_context(|| format!("{name} must be an integer"))?;
+        anyhow::ensure!(
+            (minimum..=maximum).contains(&value),
+            "{name} must be between {minimum} and {maximum}"
+        );
+        Ok(value)
     }
 
-    fn root_arg(&self, args: &Value) -> anyhow::Result<PathBuf> {
-        let candidate = match args.get("root") {
+    fn resolve_root(&self, root: Option<String>) -> anyhow::Result<PathBuf> {
+        let candidate = match root {
             None => self.root.clone(),
-            Some(value) => PathBuf::from(value.as_str().context("root must be a string")?),
+            Some(value) => PathBuf::from(value),
         };
         self.sandbox_root(candidate)
+    }
+
+    fn parse_agent_search(&self, args: &Value) -> anyhow::Result<AgentSearchArgs> {
+        anyhow::ensure!(args.is_object(), "arguments must be an object");
+        let wire: AgentSearchWire =
+            serde_json::from_value(args.clone()).map_err(Self::map_wire_error)?;
+        let query = wire.query.trim();
+        anyhow::ensure!(
+            !query.is_empty() && query.chars().count() <= ast_sgrep_core::MAX_QUERY_CHARS,
+            "query must contain 1 to {} characters",
+            ast_sgrep_core::MAX_QUERY_CHARS
+        );
+        let limit = match wire.limit {
+            None => self.limit,
+            Some(value) => Self::bounded_usize("limit", value, 1, MAX_AGENT_LIMIT)?,
+        };
+        // m38g: present budget must be in 1..=MAX; absent means no budget.
+        let budget_tokens = match wire.budget_tokens {
+            None => None,
+            Some(value) => Some(Self::bounded_usize(
+                "budget_tokens",
+                value,
+                1,
+                MAX_BUDGET_TOKENS,
+            )?),
+        };
+        Ok(AgentSearchArgs {
+            query: query.to_owned(),
+            root: self.resolve_root(wire.root)?,
+            limit,
+            resend_seen: wire.resend_seen.unwrap_or(false),
+            budget_tokens,
+        })
+    }
+
+    fn parse_code_read(&self, args: &Value) -> anyhow::Result<CodeReadArgs> {
+        anyhow::ensure!(args.is_object(), "arguments must be an object");
+        let wire: CodeReadWire =
+            serde_json::from_value(args.clone()).map_err(Self::map_wire_error)?;
+        anyhow::ensure!(
+            !wire.ids.is_empty() && wire.ids.len() <= MAX_READ_REFS,
+            "ids must contain 1 to 20 node IDs"
+        );
+        let context_lines = match wire.context_lines {
+            None => 0,
+            Some(value) => Self::bounded_usize("context_lines", value, 0, MAX_CONTEXT_LINES)?,
+        };
+        let max_chars = match wire.max_chars {
+            None => DEFAULT_READ_CHARS,
+            Some(value) => {
+                let value = usize::try_from(value)
+                    .ok()
+                    .context("max_chars must be a positive integer")?;
+                anyhow::ensure!(
+                    (1..=MAX_READ_CHARS).contains(&value),
+                    "max_chars must be between 1 and {MAX_READ_CHARS}"
+                );
+                value
+            }
+        };
+        Ok(CodeReadArgs {
+            ids: wire.ids,
+            root: self.resolve_root(wire.root)?,
+            context_lines,
+            max_chars,
+        })
+    }
+
+    fn parse_index_status(&self, args: &Value) -> anyhow::Result<IndexStatusArgs> {
+        anyhow::ensure!(args.is_object(), "arguments must be an object");
+        let wire: IndexStatusWire =
+            serde_json::from_value(args.clone()).map_err(Self::map_wire_error)?;
+        Ok(IndexStatusArgs {
+            root: self.resolve_root(wire.root)?,
+        })
+    }
+
+    fn parse_index_repo(&self, args: &Value) -> anyhow::Result<IndexRepoArgs> {
+        anyhow::ensure!(args.is_object(), "arguments must be an object");
+        let wire: IndexRepoWire =
+            serde_json::from_value(args.clone()).map_err(Self::map_wire_error)?;
+        Ok(IndexRepoArgs {
+            root: self.resolve_root(wire.root)?,
+            force: wire.force.unwrap_or(false),
+        })
     }
 
     /// Keep MCP tool roots under the configured workspace (v0mg).
@@ -491,54 +658,30 @@ impl McpServer {
         }
     }
 
-    fn tool_agent_search(&self, args: &Value, mode: AgentSearchMode) -> anyhow::Result<String> {
-        Self::validate_fields(
-            args,
-            &["query", "root", "limit", "resend_seen", "budget_tokens"],
-        )?;
-        // m38g: one response-wide token budget that picks per-result detail.
-        let budget_tokens = match args.get("budget_tokens") {
-            None => None,
-            Some(value) => Some(Self::integer_arg(args, "budget_tokens", 0, 1, MAX_BUDGET_TOKENS)
-                .map(|tokens| {
-                    let _ = value;
-                    tokens
-                })?),
-        };
-        // v972: transcript-less clients set resend_seen to keep full snippets.
-        let resend_seen = match args.get("resend_seen") {
-            None => false,
-            Some(value) => value
-                .as_bool()
-                .context("resend_seen must be a boolean")?,
-        };
-        let query = args
-            .get("query")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|query| {
-                !query.is_empty() && query.chars().count() <= ast_sgrep_core::MAX_QUERY_CHARS
-            })
-            .with_context(|| {
-                format!(
-                    "query must contain 1 to {} characters",
-                    ast_sgrep_core::MAX_QUERY_CHARS
-                )
-            })?;
-        let limit = Self::integer_arg(args, "limit", self.limit, 1, MAX_AGENT_LIMIT)?;
-        let root = self.root_arg(args)?;
+    fn tool_agent_search(
+        &self,
+        args: AgentSearchArgs,
+        mode: AgentSearchMode,
+    ) -> anyhow::Result<String> {
+        let AgentSearchArgs {
+            query,
+            root,
+            limit,
+            resend_seen,
+            budget_tokens,
+        } = args;
         let (searcher, generation) = self.searcher_for(root.clone(), limit)?;
         let response = match mode {
-            AgentSearchMode::Keyword => searcher.search_lexical(query),
+            AgentSearchMode::Keyword => searcher.search_lexical(&query),
             AgentSearchMode::Ast => searcher.search(&format!("pattern: {query}")),
-            AgentSearchMode::Semantic => searcher.search_semantic(query),
+            AgentSearchMode::Semantic => searcher.search_semantic(&query),
         };
         self.restore_searcher(root.clone(), limit, generation, searcher);
         let response = response?;
         // 6a3i: a miss is the cheapest response we can send, and the one where
         // a vague answer costs the most in speculative agent retries.
         if response.hits.is_empty() {
-            let miss = to_compact_miss_json(query, &self.diagnose_miss(&root, mode));
+            let miss = to_compact_miss_json(&query, &self.diagnose_miss(&root, mode));
             return Ok(serde_json::to_string(&miss)?);
         }
         // kxmc: compact key-free envelope, minified. Object keys and pretty
@@ -688,34 +831,20 @@ impl McpServer {
         }
     }
 
-    fn tool_code_read(&self, args: &Value) -> anyhow::Result<String> {
-        Self::validate_fields(args, &["ids", "root", "context_lines", "max_chars"])?;
-        let ids = args
-            .get("ids")
-            .and_then(Value::as_array)
-            .filter(|ids| !ids.is_empty() && ids.len() <= MAX_READ_REFS)
-            .context("ids must contain 1 to 20 node IDs")?;
-        let context_lines = Self::integer_arg(args, "context_lines", 0, 0, MAX_CONTEXT_LINES)?;
-        let max_chars = match args.get("max_chars") {
-            None => DEFAULT_READ_CHARS,
-            Some(value) => value
-                .as_u64()
-                .and_then(|value| usize::try_from(value).ok())
-                .context("max_chars must be a positive integer")?,
-        };
-        anyhow::ensure!(
-            (1..=MAX_READ_CHARS).contains(&max_chars),
-            "max_chars must be between 1 and {MAX_READ_CHARS}"
-        );
+    fn tool_code_read(&self, args: CodeReadArgs) -> anyhow::Result<String> {
+        let CodeReadArgs {
+            ids,
+            root,
+            context_lines,
+            max_chars,
+        } = args;
         let per_ref_chars = max_chars / ids.len();
         let remainder = max_chars % ids.len();
-        let root = self
-            .root_arg(args)?
+        let root = root
             .canonicalize()
             .context("canonicalize project root")?;
         let mut nodes = Vec::with_capacity(ids.len());
         for (index, id) in ids.iter().enumerate() {
-            let id = id.as_str().context("every node ID must be a string")?;
             let budget = per_ref_chars + usize::from(index < remainder);
             // kxmc: accept compact search ids as well as `path#Lstart-Lend`.
             let resolved = self.resolve_compact_id(id);
@@ -724,19 +853,13 @@ impl McpServer {
         Ok(serde_json::to_string(&json!({"nodes": nodes}))?)
     }
 
-    fn tool_index_status(&self, args: &Value) -> anyhow::Result<String> {
-        Self::validate_fields(args, &["root"])?;
-        let indexer = Indexer::new(self.base_index_options(self.root_arg(args)?))?;
+    fn tool_index_status(&self, args: IndexStatusArgs) -> anyhow::Result<String> {
+        let indexer = Indexer::new(self.base_index_options(args.root))?;
         Ok(serde_json::to_string(&indexer.store().status()?)?)
     }
 
-    fn tool_index_repo(&self, args: &Value) -> anyhow::Result<String> {
-        Self::validate_fields(args, &["root", "force"])?;
-        let force = match args.get("force") {
-            None => false,
-            Some(value) => value.as_bool().context("force must be a boolean")?,
-        };
-        let root = self.root_arg(args)?;
+    fn tool_index_repo(&self, args: IndexRepoArgs) -> anyhow::Result<String> {
+        let IndexRepoArgs { root, force } = args;
         // Single-flight wait counts toward the soft deadline (es7u).
         let started = Instant::now();
         let _flight = Self::lock_or_recover(&self.index_lock, |_| {});
@@ -1035,8 +1158,11 @@ mod cache_tests {
         McpServer::lock_or_recover(&server.emitted_snippets, |_| {})
             .insert("p0:1-1".into(), 42);
 
+        let args = server
+            .parse_index_repo(&json!({}))
+            .expect("empty index_repo args should parse");
         let body = server
-            .tool_index_repo(&json!({}))
+            .tool_index_repo(args)
             .expect("index_repo should succeed on tiny fixture");
         assert!(body.contains("files_indexed") || body.contains("files"), "{body}");
 
