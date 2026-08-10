@@ -49,6 +49,67 @@ function outputArgs(options) {
         String(boundedInteger(options.excerptLines, 0, 0, MAX_EXCERPT_LINES, "excerptLines")),
     ];
 }
+function optionalTextField(field) {
+    return field === undefined || field === null || typeof field === "string";
+}
+function wireLinesValid(lines) {
+    return !!lines && typeof lines === "object"
+        && Number.isSafeInteger(lines.start)
+        && Number.isSafeInteger(lines.end)
+        && Number(lines.start) > 0
+        && Number(lines.end) >= Number(lines.start);
+}
+/** Parse wire location once: prefer branded `ref`; else derive from structured file/lines. */
+function parseWireHitRef(hit) {
+    if (typeof hit.ref === "string") {
+        parseRef(hit.ref);
+        return hit.ref;
+    }
+    if (typeof hit.file === "string" && hit.file.length > 0 && !isAbsolute(hit.file) && wireLinesValid(hit.lines)) {
+        const start = Number(hit.lines.start);
+        const end = Number(hit.lines.end);
+        if (start > MAX_LINE_NUMBER || end > MAX_LINE_NUMBER) {
+            throw new RuntimeError("PROTOCOL_MISMATCH", "ast-sgrep returned an invalid search hit");
+        }
+        const ref = `${hit.file}#L${start}-L${end}`;
+        parseRef(ref);
+        return ref;
+    }
+    throw new RuntimeError("PROTOCOL_MISMATCH", "ast-sgrep returned an invalid search hit");
+}
+function parseSearchHit(candidate) {
+    if (!candidate || typeof candidate !== "object") {
+        throw new RuntimeError("PROTOCOL_MISMATCH", "ast-sgrep returned an invalid search hit");
+    }
+    const hit = candidate;
+    const valid = typeof hit.kind === "string" && KINDS.has(hit.kind)
+        && typeof hit.signal === "string" && SIGNALS.has(hit.signal)
+        && Array.isArray(hit.contributors) && hit.contributors.length > 0
+        && hit.contributors.every((kind) => typeof kind === "string" && KINDS.has(kind))
+        && typeof hit.score === "number" && Number.isFinite(hit.score)
+        && typeof hit.margin === "number" && Number.isFinite(hit.margin) && hit.margin >= 0
+        && typeof hit.preview === "string"
+        && optionalTextField(hit.symbol) && optionalTextField(hit.caller) && optionalTextField(hit.callee)
+        && optionalTextField(hit.language) && optionalTextField(hit.excerpt);
+    if (!valid)
+        throw new RuntimeError("PROTOCOL_MISMATCH", "ast-sgrep returned an invalid search hit");
+    const ref = parseWireHitRef(hit);
+    const parsed = {
+        kind: hit.kind,
+        signal: hit.signal,
+        contributors: hit.contributors,
+        score: hit.score,
+        margin: hit.margin,
+        ref,
+        preview: hit.preview,
+        ...(hit.symbol === undefined ? {} : { symbol: hit.symbol }),
+        ...(hit.caller === undefined ? {} : { caller: hit.caller }),
+        ...(hit.callee === undefined ? {} : { callee: hit.callee }),
+        ...(hit.language === undefined ? {} : { language: hit.language }),
+        ...(hit.excerpt === undefined ? {} : { excerpt: hit.excerpt }),
+    };
+    return parsed;
+}
 function asSearchResponse(value) {
     if (value.ok !== true || !Array.isArray(value.hits)) {
         throw new RuntimeError("PROTOCOL_MISMATCH", "ast-sgrep search response is missing hits");
@@ -61,42 +122,15 @@ function asSearchResponse(value) {
             || value.hit_count < 0 || value.hit_count !== value.hits.length)) {
         throw new RuntimeError("PROTOCOL_MISMATCH", "ast-sgrep search response has an invalid hit_count");
     }
-    const optionalText = (field) => field === undefined || field === null || typeof field === "string";
-    for (const candidate of value.hits) {
-        if (!candidate || typeof candidate !== "object") {
-            throw new RuntimeError("PROTOCOL_MISMATCH", "ast-sgrep returned an invalid search hit");
-        }
-        const hit = candidate;
-        const lines = hit.lines;
-        const validLines = !!lines && typeof lines === "object"
-            && Number.isSafeInteger(lines.start)
-            && Number.isSafeInteger(lines.end)
-            && Number(lines.start) > 0
-            && Number(lines.end) >= Number(lines.start);
-        const valid = typeof hit.kind === "string" && KINDS.has(hit.kind)
-            && typeof hit.signal === "string" && SIGNALS.has(hit.signal)
-            && Array.isArray(hit.contributors) && hit.contributors.length > 0
-            && hit.contributors.every((kind) => typeof kind === "string" && KINDS.has(kind))
-            && typeof hit.score === "number" && Number.isFinite(hit.score)
-            && typeof hit.margin === "number" && Number.isFinite(hit.margin) && hit.margin >= 0
-            && typeof hit.file === "string" && hit.file.length > 0 && !isAbsolute(hit.file)
-            && validLines
-            && typeof hit.ref === "string"
-            && typeof hit.preview === "string"
-            && optionalText(hit.symbol) && optionalText(hit.caller) && optionalText(hit.callee)
-            && optionalText(hit.language) && optionalText(hit.excerpt);
-        if (!valid)
-            throw new RuntimeError("PROTOCOL_MISMATCH", "ast-sgrep returned an invalid search hit");
-        const parsed = parseRef(hit.ref);
-        const hitLines = lines;
-        if (parsed.file !== hit.file || parsed.start !== hitLines.start || parsed.end !== hitLines.end) {
-            throw new RuntimeError("PROTOCOL_MISMATCH", "ast-sgrep hit ref does not match its file and lines");
-        }
-    }
-    return value;
+    const hits = value.hits.map(parseSearchHit);
+    return { ...value, hits };
 }
 function refValue(value) {
     return typeof value === "string" ? value : value.ref;
+}
+/** Derive file/lines from a branded ref (sole location encoding on SgrepHit). */
+export function parseSgrepRef(ref) {
+    return parseRef(ref);
 }
 function parseRef(ref) {
     const match = REF_PATTERN.exec(ref);

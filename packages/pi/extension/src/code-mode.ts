@@ -7,14 +7,16 @@ export type SgrepKind = "asgrep" | "def" | "caller" | "graph" | "anchor" | "impo
 export type SgrepSignal = "exact" | "structural" | "semantic";
 export type SgrepRef = `${string}#L${number}-L${number}`;
 
+/**
+ * Trusted search hit. Location is solely `ref` (parsed once at the CLI/JSON boundary).
+ * Wire may still dual-encode file/lines; those are not live fields on this type.
+ */
 export interface SgrepHit {
   kind: SgrepKind;
   signal: SgrepSignal;
   contributors: SgrepKind[];
   score: number;
   margin: number;
-  file: string;
-  lines: { start: number; end: number };
   ref: SgrepRef;
   preview: string;
   symbol?: string | null;
@@ -135,6 +137,70 @@ function outputArgs(options: SgrepSearchOptions): string[] {
   ];
 }
 
+function optionalTextField(field: unknown): boolean {
+  return field === undefined || field === null || typeof field === "string";
+}
+
+function wireLinesValid(lines: unknown): lines is { start: number; end: number } {
+  return !!lines && typeof lines === "object"
+    && Number.isSafeInteger((lines as Record<string, unknown>).start)
+    && Number.isSafeInteger((lines as Record<string, unknown>).end)
+    && Number((lines as Record<string, unknown>).start) > 0
+    && Number((lines as Record<string, unknown>).end) >= Number((lines as Record<string, unknown>).start);
+}
+
+/** Parse wire location once: prefer branded `ref`; else derive from structured file/lines. */
+function parseWireHitRef(hit: Record<string, unknown>): SgrepRef {
+  if (typeof hit.ref === "string") {
+    parseRef(hit.ref as SgrepRef);
+    return hit.ref as SgrepRef;
+  }
+  if (typeof hit.file === "string" && hit.file.length > 0 && !isAbsolute(hit.file) && wireLinesValid(hit.lines)) {
+    const start = Number(hit.lines.start);
+    const end = Number(hit.lines.end);
+    if (start > MAX_LINE_NUMBER || end > MAX_LINE_NUMBER) {
+      throw new RuntimeError("PROTOCOL_MISMATCH", "ast-sgrep returned an invalid search hit");
+    }
+    const ref = `${hit.file}#L${start}-L${end}` as SgrepRef;
+    parseRef(ref);
+    return ref;
+  }
+  throw new RuntimeError("PROTOCOL_MISMATCH", "ast-sgrep returned an invalid search hit");
+}
+
+function parseSearchHit(candidate: unknown): SgrepHit {
+  if (!candidate || typeof candidate !== "object") {
+    throw new RuntimeError("PROTOCOL_MISMATCH", "ast-sgrep returned an invalid search hit");
+  }
+  const hit = candidate as Record<string, unknown>;
+  const valid = typeof hit.kind === "string" && KINDS.has(hit.kind as SgrepKind)
+    && typeof hit.signal === "string" && SIGNALS.has(hit.signal as SgrepSignal)
+    && Array.isArray(hit.contributors) && hit.contributors.length > 0
+    && hit.contributors.every((kind) => typeof kind === "string" && KINDS.has(kind as SgrepKind))
+    && typeof hit.score === "number" && Number.isFinite(hit.score)
+    && typeof hit.margin === "number" && Number.isFinite(hit.margin) && hit.margin >= 0
+    && typeof hit.preview === "string"
+    && optionalTextField(hit.symbol) && optionalTextField(hit.caller) && optionalTextField(hit.callee)
+    && optionalTextField(hit.language) && optionalTextField(hit.excerpt);
+  if (!valid) throw new RuntimeError("PROTOCOL_MISMATCH", "ast-sgrep returned an invalid search hit");
+  const ref = parseWireHitRef(hit);
+  const parsed: SgrepHit = {
+    kind: hit.kind as SgrepKind,
+    signal: hit.signal as SgrepSignal,
+    contributors: hit.contributors as SgrepKind[],
+    score: hit.score as number,
+    margin: hit.margin as number,
+    ref,
+    preview: hit.preview as string,
+    ...(hit.symbol === undefined ? {} : { symbol: hit.symbol as string | null }),
+    ...(hit.caller === undefined ? {} : { caller: hit.caller as string | null }),
+    ...(hit.callee === undefined ? {} : { callee: hit.callee as string | null }),
+    ...(hit.language === undefined ? {} : { language: hit.language as string | null }),
+    ...(hit.excerpt === undefined ? {} : { excerpt: hit.excerpt as string }),
+  };
+  return parsed;
+}
+
 function asSearchResponse(value: MachineEnvelope): SgrepSearchResponse {
   if (value.ok !== true || !Array.isArray(value.hits)) {
     throw new RuntimeError("PROTOCOL_MISMATCH", "ast-sgrep search response is missing hits");
@@ -147,42 +213,17 @@ function asSearchResponse(value: MachineEnvelope): SgrepSearchResponse {
       || value.hit_count < 0 || value.hit_count !== value.hits.length)) {
     throw new RuntimeError("PROTOCOL_MISMATCH", "ast-sgrep search response has an invalid hit_count");
   }
-  const optionalText = (field: unknown): boolean => field === undefined || field === null || typeof field === "string";
-  for (const candidate of value.hits) {
-    if (!candidate || typeof candidate !== "object") {
-      throw new RuntimeError("PROTOCOL_MISMATCH", "ast-sgrep returned an invalid search hit");
-    }
-    const hit = candidate as Record<string, unknown>;
-    const lines = hit.lines;
-    const validLines = !!lines && typeof lines === "object"
-      && Number.isSafeInteger((lines as Record<string, unknown>).start)
-      && Number.isSafeInteger((lines as Record<string, unknown>).end)
-      && Number((lines as Record<string, unknown>).start) > 0
-      && Number((lines as Record<string, unknown>).end) >= Number((lines as Record<string, unknown>).start);
-    const valid = typeof hit.kind === "string" && KINDS.has(hit.kind as SgrepKind)
-      && typeof hit.signal === "string" && SIGNALS.has(hit.signal as SgrepSignal)
-      && Array.isArray(hit.contributors) && hit.contributors.length > 0
-      && hit.contributors.every((kind) => typeof kind === "string" && KINDS.has(kind as SgrepKind))
-      && typeof hit.score === "number" && Number.isFinite(hit.score)
-      && typeof hit.margin === "number" && Number.isFinite(hit.margin) && hit.margin >= 0
-      && typeof hit.file === "string" && hit.file.length > 0 && !isAbsolute(hit.file)
-      && validLines
-      && typeof hit.ref === "string"
-      && typeof hit.preview === "string"
-      && optionalText(hit.symbol) && optionalText(hit.caller) && optionalText(hit.callee)
-      && optionalText(hit.language) && optionalText(hit.excerpt);
-    if (!valid) throw new RuntimeError("PROTOCOL_MISMATCH", "ast-sgrep returned an invalid search hit");
-    const parsed = parseRef(hit.ref as SgrepRef);
-    const hitLines = lines as { start: number; end: number };
-    if (parsed.file !== hit.file || parsed.start !== hitLines.start || parsed.end !== hitLines.end) {
-      throw new RuntimeError("PROTOCOL_MISMATCH", "ast-sgrep hit ref does not match its file and lines");
-    }
-  }
-  return value as SgrepSearchResponse;
+  const hits = value.hits.map(parseSearchHit);
+  return { ...value, hits };
 }
 
 function refValue(value: SgrepRef | Pick<SgrepHit, "ref">): SgrepRef {
   return typeof value === "string" ? value : value.ref;
+}
+
+/** Derive file/lines from a branded ref (sole location encoding on SgrepHit). */
+export function parseSgrepRef(ref: SgrepRef): { file: string; start: number; end: number } {
+  return parseRef(ref);
 }
 
 function parseRef(ref: SgrepRef): { file: string; start: number; end: number } {
