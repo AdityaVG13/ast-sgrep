@@ -5,7 +5,7 @@
  * for the whole Code Mode program; batch coalescing kills it per Promise.all wave.
  */
 import type { MachineEnvelope } from "../runtime.js";
-import type { ConnectorHost } from "./connector.js";
+import type { ConnectorHost, DispatchSurface } from "./connector.js";
 export type CodemodeToolCall = {
     tool: string;
     args: Record<string, unknown>;
@@ -61,7 +61,7 @@ export type BatchCapableHost = ConnectorHost & {
  * one microtask wave. Prefers sticky serve → one-shot batch → overlapped spawn.
  */
 export declare function createCodemodeDispatcher(host: BatchCapableHost): {
-    host: ConnectorHost;
+    host: DispatchSurface;
     stats: () => DispatchStats;
     resetStats: () => void;
 };

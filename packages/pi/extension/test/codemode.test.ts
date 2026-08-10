@@ -289,8 +289,8 @@ test("createCodemodeDispatcher exposes wave stats", async () => {
   });
   resetStats();
   await Promise.all([
-    host.run(["--json", "a", "."], { cwd: "/p" }),
-    host.run(["--json", "b", "."], { cwd: "/p" }),
+    host.call("search", { query: "a", limit: 8, format: "capsule" }, { cwd: "/p" }),
+    host.call("search", { query: "b", limit: 8, format: "capsule" }, { cwd: "/p" }),
   ]);
   assert.equal(stats().waves, 1);
   assert.equal(stats().calls, 2);

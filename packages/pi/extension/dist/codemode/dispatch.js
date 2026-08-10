@@ -58,22 +58,6 @@ export function createCodemodeDispatcher(host) {
                 item.options = options;
             return enqueue(item);
         },
-        run(args, context, options) {
-            // Legacy argv: still coalesce, but tool inference is best-effort only.
-            const tool = toolFromArgs(args);
-            const callArgs = argsObjectFromArgv(args);
-            const item = {
-                tool,
-                args: callArgs,
-                argv: args,
-                context,
-                resolve: () => undefined,
-                reject: () => undefined,
-            };
-            if (options)
-                item.options = options;
-            return enqueue(item);
-        },
     };
     return {
         host: dispatchHost,
@@ -91,7 +75,7 @@ async function settleOne(host, item, stats) {
             return;
         }
         // N=1 without sticky: direct CLI (batch-of-1 is tempfile + protocol for no gain).
-        const args = item.argv ?? argvFor(item.tool, item.args);
+        const args = argvFor(item.tool, item.args);
         item.resolve(await host.run(args, item.context, item.options));
     }
     catch (err) {
@@ -136,7 +120,7 @@ async function settleWave(host, wave, stats) {
     stats.parallelSpawnCalls += wave.length;
     await Promise.all(wave.map(async (item) => {
         try {
-            const args = item.argv ?? argvFor(item.tool, item.args);
+            const args = argvFor(item.tool, item.args);
             item.resolve(await host.run(args, item.context, item.options));
         }
         catch (err) {
@@ -204,87 +188,6 @@ function num(value, fallback) {
     if (typeof value === "number" && Number.isFinite(value))
         return Math.trunc(value);
     return fallback;
-}
-function toolFromArgs(args) {
-    if (args[0] === "semantic")
-        return "semantic";
-    if (args[0] === "chain")
-        return "chain";
-    if (args[0] === "status")
-        return "index_status";
-    if (args[0] === "index" || args[0] === "reindex")
-        return "index_repo";
-    if (args[0] === "codemode-batch" || args[0] === "codemode-serve")
-        return "search";
-    const query = args.length >= 2 ? args[args.length - 2] : "";
-    // Only classify prefix forms when the whole query is a navigator, so
-    // search({ query: "defs: auth in login" }) stays search.
-    if (/^defs:\s*\S+$/.test(query))
-        return "defs";
-    if (/^callers:\s*\S+$/.test(query))
-        return "callers";
-    if (/^imports:\s*\S+$/.test(query))
-        return "imports";
-    return "search";
-}
-function argsObjectFromArgv(args) {
-    if (args[0] === "status")
-        return {};
-    if (args[0] === "index")
-        return { force: false };
-    if (args[0] === "reindex")
-        return { force: true };
-    if (args[0] === "semantic" || args[0] === "chain") {
-        const query = args[1] ?? "";
-        const limit = readFlag(args, "--limit");
-        const excerptLines = readFlag(args, "--excerpt-lines");
-        const out = { query };
-        if (limit !== undefined)
-            out.limit = limit;
-        if (excerptLines !== undefined)
-            out.excerpt_lines = excerptLines;
-        return out;
-    }
-    const query = args.length >= 2 ? args[args.length - 2] : "";
-    const limit = readFlag(args, "--limit");
-    const excerptLines = readFlag(args, "--excerpt-lines");
-    if (/^defs:\s*/.test(query)) {
-        const out = { symbol: query.replace(/^defs:\s*/, "").trim() };
-        if (limit !== undefined)
-            out.limit = limit;
-        if (excerptLines !== undefined)
-            out.excerpt_lines = excerptLines;
-        return out;
-    }
-    if (/^callers:\s*/.test(query)) {
-        const out = { symbol: query.replace(/^callers:\s*/, "").trim() };
-        if (limit !== undefined)
-            out.limit = limit;
-        if (excerptLines !== undefined)
-            out.excerpt_lines = excerptLines;
-        return out;
-    }
-    if (/^imports:\s*/.test(query)) {
-        const out = { module: query.replace(/^imports:\s*/, "").trim() };
-        if (limit !== undefined)
-            out.limit = limit;
-        if (excerptLines !== undefined)
-            out.excerpt_lines = excerptLines;
-        return out;
-    }
-    const out = { query, format: "capsule" };
-    if (limit !== undefined)
-        out.limit = limit;
-    if (excerptLines !== undefined)
-        out.excerpt_lines = excerptLines;
-    return out;
-}
-function readFlag(args, flag) {
-    const idx = args.indexOf(flag);
-    if (idx < 0 || idx + 1 >= args.length)
-        return undefined;
-    const n = Number(args[idx + 1]);
-    return Number.isFinite(n) ? n : undefined;
 }
 export function asEnvelope(value, command) {
     if (value &&

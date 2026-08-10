@@ -19,13 +19,7 @@ function clampExcerpt(excerptLines) {
 export function createAsgrepConnector(host, context, options = {}) {
     const dispatcher = createCodemodeDispatcher(host);
     const runOptions = options.signal ? { signal: options.signal } : {};
-    const call = (tool, args) => {
-        if (dispatcher.host.call) {
-            return dispatcher.host.call(tool, args, context, runOptions);
-        }
-        // Should not happen — dispatcher always exposes call.
-        return dispatcher.host.run([], context, runOptions);
-    };
+    const call = (tool, args) => dispatcher.host.call(tool, args, context, runOptions);
     // Bound function properties (not methods) so vm call sites cannot lose `this`.
     const asgrep = {
         search: (input) => call("search", {

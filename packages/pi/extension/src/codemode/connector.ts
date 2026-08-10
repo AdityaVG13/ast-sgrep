@@ -8,16 +8,29 @@ import {
 
 const DEFAULT_LIMIT = 8;
 
+/**
+ * Spawn/CLI transport. Hosts provide argv `run` only — never a typed twin.
+ * Typed entry lives solely on {@link DispatchSurface} (dispatcher output).
+ */
 export type ConnectorHost = {
-  /** Typed tool call (preferred — no argv archaeology). */
-  call?(
+  run(
+    args: readonly string[],
+    context: { cwd: string },
+    options?: { signal?: AbortSignal },
+  ): Promise<MachineEnvelope>;
+};
+
+/**
+ * Trusted typed dispatch after coalescing. `call` is required; no argv peer
+ * that can disagree with tool+args.
+ */
+export type DispatchSurface = {
+  call(
     tool: string,
     args: Record<string, unknown>,
     context: { cwd: string },
     options?: { signal?: AbortSignal },
   ): Promise<MachineEnvelope>;
-  /** Legacy CLI argv (spawn fallback / direct tools). */
-  run(args: readonly string[], context: { cwd: string }, options?: { signal?: AbortSignal }): Promise<MachineEnvelope>;
 };
 
 export type AsgrepConnector = {
@@ -64,13 +77,8 @@ export function createAsgrepConnector(
   const dispatcher = createCodemodeDispatcher(host);
   const runOptions = options.signal ? { signal: options.signal } : {};
 
-  const call = (tool: string, args: Record<string, unknown>) => {
-    if (dispatcher.host.call) {
-      return dispatcher.host.call(tool, args, context, runOptions);
-    }
-    // Should not happen — dispatcher always exposes call.
-    return dispatcher.host.run([], context, runOptions);
-  };
+  const call = (tool: string, args: Record<string, unknown>) =>
+    dispatcher.host.call(tool, args, context, runOptions);
 
   // Bound function properties (not methods) so vm call sites cannot lose `this`.
   const asgrep: AsgrepConnector = {

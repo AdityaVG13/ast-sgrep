@@ -9,7 +9,7 @@ import { mkdtemp, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { MachineEnvelope } from "../runtime.js";
-import type { ConnectorHost } from "./connector.js";
+import type { ConnectorHost, DispatchSurface } from "./connector.js";
 
 export type CodemodeToolCall = {
   tool: string;
@@ -59,8 +59,6 @@ export type BatchCapableHost = ConnectorHost & {
 type Pending = {
   tool: string;
   args: Record<string, unknown>;
-  /** Legacy argv path when typed call is unavailable. */
-  argv?: readonly string[];
   context: { cwd: string };
   options?: { signal?: AbortSignal };
   resolve: (value: MachineEnvelope) => void;
@@ -74,7 +72,7 @@ const MAX_WAVE = 32;
  * one microtask wave. Prefers sticky serve → one-shot batch → overlapped spawn.
  */
 export function createCodemodeDispatcher(host: BatchCapableHost): {
-  host: ConnectorHost;
+  host: DispatchSurface;
   stats: () => DispatchStats;
   resetStats: () => void;
 } {
@@ -121,24 +119,9 @@ export function createCodemodeDispatcher(host: BatchCapableHost): {
       }
     });
 
-  const dispatchHost: ConnectorHost = {
+  const dispatchHost: DispatchSurface = {
     call(tool, args, context, options) {
       const item: Pending = { tool, args, context, resolve: () => undefined, reject: () => undefined };
-      if (options) item.options = options;
-      return enqueue(item);
-    },
-    run(args, context, options) {
-      // Legacy argv: still coalesce, but tool inference is best-effort only.
-      const tool = toolFromArgs(args);
-      const callArgs = argsObjectFromArgv(args);
-      const item: Pending = {
-        tool,
-        args: callArgs,
-        argv: args,
-        context,
-        resolve: () => undefined,
-        reject: () => undefined,
-      };
       if (options) item.options = options;
       return enqueue(item);
     },
@@ -161,7 +144,7 @@ async function settleOne(host: BatchCapableHost, item: Pending, stats: DispatchS
       return;
     }
     // N=1 without sticky: direct CLI (batch-of-1 is tempfile + protocol for no gain).
-    const args = item.argv ?? argvFor(item.tool, item.args);
+    const args = argvFor(item.tool, item.args);
     item.resolve(await host.run(args, item.context, item.options));
   } catch (err) {
     item.reject(err);
@@ -207,7 +190,7 @@ async function settleWave(host: BatchCapableHost, wave: Pending[], stats: Dispat
   await Promise.all(
     wave.map(async (item) => {
       try {
-        const args = item.argv ?? argvFor(item.tool, item.args);
+        const args = argvFor(item.tool, item.args);
         item.resolve(await host.run(args, item.context, item.options));
       } catch (err) {
         item.reject(err);
@@ -280,67 +263,6 @@ function num(value: unknown, fallback: number): number {
   return fallback;
 }
 
-function toolFromArgs(args: readonly string[]): string {
-  if (args[0] === "semantic") return "semantic";
-  if (args[0] === "chain") return "chain";
-  if (args[0] === "status") return "index_status";
-  if (args[0] === "index" || args[0] === "reindex") return "index_repo";
-  if (args[0] === "codemode-batch" || args[0] === "codemode-serve") return "search";
-  const query = args.length >= 2 ? args[args.length - 2]! : "";
-  // Only classify prefix forms when the whole query is a navigator, so
-  // search({ query: "defs: auth in login" }) stays search.
-  if (/^defs:\s*\S+$/.test(query)) return "defs";
-  if (/^callers:\s*\S+$/.test(query)) return "callers";
-  if (/^imports:\s*\S+$/.test(query)) return "imports";
-  return "search";
-}
-
-function argsObjectFromArgv(args: readonly string[]): Record<string, unknown> {
-  if (args[0] === "status") return {};
-  if (args[0] === "index") return { force: false };
-  if (args[0] === "reindex") return { force: true };
-  if (args[0] === "semantic" || args[0] === "chain") {
-    const query = args[1] ?? "";
-    const limit = readFlag(args, "--limit");
-    const excerptLines = readFlag(args, "--excerpt-lines");
-    const out: Record<string, unknown> = { query };
-    if (limit !== undefined) out.limit = limit;
-    if (excerptLines !== undefined) out.excerpt_lines = excerptLines;
-    return out;
-  }
-  const query = args.length >= 2 ? args[args.length - 2]! : "";
-  const limit = readFlag(args, "--limit");
-  const excerptLines = readFlag(args, "--excerpt-lines");
-  if (/^defs:\s*/.test(query)) {
-    const out: Record<string, unknown> = { symbol: query.replace(/^defs:\s*/, "").trim() };
-    if (limit !== undefined) out.limit = limit;
-    if (excerptLines !== undefined) out.excerpt_lines = excerptLines;
-    return out;
-  }
-  if (/^callers:\s*/.test(query)) {
-    const out: Record<string, unknown> = { symbol: query.replace(/^callers:\s*/, "").trim() };
-    if (limit !== undefined) out.limit = limit;
-    if (excerptLines !== undefined) out.excerpt_lines = excerptLines;
-    return out;
-  }
-  if (/^imports:\s*/.test(query)) {
-    const out: Record<string, unknown> = { module: query.replace(/^imports:\s*/, "").trim() };
-    if (limit !== undefined) out.limit = limit;
-    if (excerptLines !== undefined) out.excerpt_lines = excerptLines;
-    return out;
-  }
-  const out: Record<string, unknown> = { query, format: "capsule" };
-  if (limit !== undefined) out.limit = limit;
-  if (excerptLines !== undefined) out.excerpt_lines = excerptLines;
-  return out;
-}
-
-function readFlag(args: readonly string[], flag: string): number | undefined {
-  const idx = args.indexOf(flag);
-  if (idx < 0 || idx + 1 >= args.length) return undefined;
-  const n = Number(args[idx + 1]);
-  return Number.isFinite(n) ? n : undefined;
-}
 
 export function asEnvelope(value: unknown, command?: string): MachineEnvelope {
   if (

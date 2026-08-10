@@ -14,6 +14,7 @@ export {
   createAsgrepConnector,
   type AsgrepConnector,
   type ConnectorHost,
+  type DispatchSurface,
   type ConnectorBundle,
 } from "./connector.js";
 export { runCodemode, normalizeCode, type CodemodeRunResult, type CodemodeRunSuccess, type CodemodeRunFailure } from "./runner.js";

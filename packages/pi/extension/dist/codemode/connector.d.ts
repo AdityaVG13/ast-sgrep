@@ -1,15 +1,23 @@
 import type { MachineEnvelope } from "../runtime.js";
 import type { ChainArgs, SearchArgs } from "./types.js";
 import { type BatchCapableHost, type DispatchStats } from "./dispatch.js";
+/**
+ * Spawn/CLI transport. Hosts provide argv `run` only — never a typed twin.
+ * Typed entry lives solely on {@link DispatchSurface} (dispatcher output).
+ */
 export type ConnectorHost = {
-    /** Typed tool call (preferred — no argv archaeology). */
-    call?(tool: string, args: Record<string, unknown>, context: {
+    run(args: readonly string[], context: {
         cwd: string;
     }, options?: {
         signal?: AbortSignal;
     }): Promise<MachineEnvelope>;
-    /** Legacy CLI argv (spawn fallback / direct tools). */
-    run(args: readonly string[], context: {
+};
+/**
+ * Trusted typed dispatch after coalescing. `call` is required; no argv peer
+ * that can disagree with tool+args.
+ */
+export type DispatchSurface = {
+    call(tool: string, args: Record<string, unknown>, context: {
         cwd: string;
     }, options?: {
         signal?: AbortSignal;
