@@ -2,6 +2,15 @@
 
 `asgrep-mcp` exposes ast-sgrep hybrid code search to AI agents via the [Model Context Protocol](https://modelcontextprotocol.io/) over stdio.
 
+
+## Code Mode XOR MCP
+
+Pick **one** agent surface per client:
+
+- **MCP hosts** → this server (`asgrep-mcp`)
+- **Pi** → Code Mode (`pi install npm:pi-ast-sgrep`) — do **not** also enable this MCP server in that Pi session
+
+They share `ast-sgrep-core` but must not be stacked. See [codemode.md](codemode.md).
 ## Install
 
 ```bash

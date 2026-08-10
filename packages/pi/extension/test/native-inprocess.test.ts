@@ -10,7 +10,7 @@ import {
 } from "../src/codemode/native.js";
 import { NativeSessionPool } from "../src/codemode/session-pool.js";
 import { createAsgrepConnector } from "../src/codemode/connector.js";
-import { runCodemode } from "../src/codemode/sandbox.js";
+import { runCodemode } from "../src/codemode/runner.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const sample = realpathSync(join(here, "../../../../tests/fixtures/sample"));

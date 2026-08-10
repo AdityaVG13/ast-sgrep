@@ -25,3 +25,9 @@ packages/agent-plugin/
 ```
 
 Pi users should prefer `pi install npm:pi-ast-sgrep` for the full Code Mode + tools surface. This plugin is the portable skills+MCP floor for other agent clients.
+
+## Code Mode XOR MCP
+
+This plugin is the **MCP** path for non-Pi clients.
+
+If you use Pi, install `npm:pi-ast-sgrep` (Code Mode) instead and do **not** also load this plugin / `asgrep-mcp` in that same agent. Choose one surface.

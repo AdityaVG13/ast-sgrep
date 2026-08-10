@@ -1,17 +1,16 @@
 /**
  * Code Mode for ast-sgrep in Pi.
  *
- * Pattern (Cloudflare / Anthropic PTC / OpenAI PTC):
- * the model writes JavaScript that calls typed `asgrep.*` methods inside a
- * restricted executor. Intermediate results stay in the sandbox; only the
- * shaped return value re-enters the model context. Parallel calls use
- * `Promise.all` and are coalesced into sticky serve / one warm batch process.
+ * Pattern (Cloudflare / Anthropic PTC / OpenAI PTC / OpenCode):
+ * the model writes JavaScript that calls typed `asgrep.*` methods. Intermediate
+ * results stay in the program; only the shaped return value re-enters the model
+ * context. Parallel calls use `Promise.all` against one warm in-process session.
  *
- * This package is intentionally independent of MCP. Both MCP and Code Mode
- * sit on the native ast-sgrep binary / core; they never import each other.
+ * Code Mode and MCP are sibling front ends on the same core — pick one per
+ * client. They never import each other. Do not install both for the same agent.
  */
 export { createAsgrepConnector, type AsgrepConnector, type ConnectorHost, type ConnectorBundle, } from "./connector.js";
-export { runCodemode, normalizeCode, type CodemodeRunResult } from "./sandbox.js";
+export { runCodemode, normalizeCode, type CodemodeRunResult } from "./runner.js";
 export { CODEMODE_TYPES_FOR_MODEL, type SearchArgs, type ChainArgs } from "./types.js";
 export { createCodemodeDispatcher, runNativeBatch, argvFor, asEnvelope, type DispatchStats, type BatchCapableHost, type StickyWorker, type BatchResult, } from "./dispatch.js";
 export { startStickyWorker, runBatchViaStdin } from "./worker.js";

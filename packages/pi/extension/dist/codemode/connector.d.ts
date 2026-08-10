@@ -52,7 +52,7 @@ export type ConnectorBundle = {
     resetStats: () => void;
 };
 /**
- * Host-side connector: typed methods the sandbox calls.
+ * Host-side connector: typed methods the Code Mode program calls.
  *
  * Same-tick calls (Promise.all) are coalesced by CodemodeDispatcher so N
  * lookups share sticky serve / one warm batch process when available.

@@ -48,7 +48,7 @@ Ask Pi to use `asgrep`, or call it with a JavaScript program:
 }
 ```
 
-The executor runs that code with typed `asgrep.*` methods (native CLI under the hood). Use `Promise.all` for independent lookups; filter and shape results in JS; return only what the model needs. See [codemode.md](codemode.md). Code Mode is independent of MCP.
+The executor runs that code with typed `asgrep.*` methods (native CLI under the hood). Use `Promise.all` for independent lookups; filter and shape results in JS; return only what the model needs. See [codemode.md](codemode.md). Code Mode is independent of MCP — **do not also register `asgrep-mcp` in this Pi session** (Code Mode XOR MCP).
 
 ### Direct search examples
 

@@ -1,4 +1,4 @@
-/** Typed surface the model sees inside the Code Mode sandbox. */
+/** Typed surface the model sees inside a Code Mode program (`asgrep.*`). */
 /**
  * Compact TypeScript declarations for the `asgrep` tool description.
  * Keep short — every token here is paid on every turn (schema landfill lesson

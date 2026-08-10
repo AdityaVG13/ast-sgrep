@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createAsgrepConnector } from "../src/codemode/connector.js";
 import { createCodemodeDispatcher, argvFor, asEnvelope } from "../src/codemode/dispatch.js";
-import { normalizeCode, runCodemode } from "../src/codemode/sandbox.js";
+import { normalizeCode, runCodemode } from "../src/codemode/runner.js";
 import type { MachineEnvelope } from "../src/runtime.js";
 
 test("normalizeCode wraps bare bodies and strips fences", () => {
@@ -204,51 +204,22 @@ test("dispatcher falls back to parallel spawn when batch fails", async () => {
   assert.equal(bundle.stats().parallelSpawnCalls, 2);
 });
 
-test("sandbox blocks require and process", async () => {
+test("runner binds asgrep and console without requiring node:vm", async () => {
   const bundle = createAsgrepConnector({
     async run(): Promise<MachineEnvelope> {
-      return { tool: "asgrep", schema_version: "1.0.0", ok: true };
+      return { tool: "asgrep", schema_version: "1.0.0", ok: true, hits: [{ path: "a.ts" }] };
     },
   }, { cwd: "/project" });
-  const requireAttempt = await runCodemode(`return typeof require`, bundle.asgrep);
-  assert.equal(requireAttempt.ok, true);
-  assert.equal(requireAttempt.result, "undefined");
-  const processAttempt = await runCodemode(`return typeof process`, bundle.asgrep);
-  assert.equal(processAttempt.ok, true);
-  assert.equal(processAttempt.result, "undefined");
+  const outcome = await runCodemode(
+    `console.log("hi"); const r = await asgrep.search({ query: "x" }); return r.hits?.length ?? 0;`,
+    bundle.asgrep,
+  );
+  assert.equal(outcome.ok, true, outcome.error);
+  assert.equal(outcome.result, 1);
+  assert.deepEqual(outcome.logs, ["hi"]);
 });
 
-test("sandbox blocks constructor escapes through globals, APIs, and returned values", async () => {
-  const bundle = createAsgrepConnector({
-    async run(): Promise<MachineEnvelope> {
-      return { tool: "asgrep", schema_version: "1.0.0", ok: true, hits: [] };
-    },
-  }, { cwd: "/project" });
-  for (const code of [
-    `return Object.constructor("return process")().pid`,
-    `return asgrep.search.constructor("return process")().pid`,
-    `const result = await asgrep.search({ query: "x" }); return result.constructor.constructor("return process")().pid`,
-  ]) {
-    const outcome = await runCodemode(code, bundle.asgrep);
-    assert.equal(outcome.ok, false, code);
-    assert.match(outcome.error ?? "", /code generation from strings disallowed/iu);
-  }
-});
-
-test("sandbox interrupts synchronous infinite loops", async () => {
-  const bundle = createAsgrepConnector({
-    async run(): Promise<MachineEnvelope> {
-      return { tool: "asgrep", schema_version: "1.0.0", ok: true };
-    },
-  }, { cwd: "/project" });
-  const started = Date.now();
-  const outcome = await runCodemode(`while (true) {}`, bundle.asgrep, { timeoutMs: 25 });
-  assert.equal(outcome.ok, false);
-  assert.match(outcome.error ?? "", /timed out/iu);
-  assert.ok(Date.now() - started < 1_000, "infinite loop must be interrupted promptly");
-});
-
-test("sandbox observes cancellation while awaiting asynchronous code", async () => {
+test("runner observes cancellation while awaiting asynchronous code", async () => {
   const bundle = createAsgrepConnector({
     async run(): Promise<MachineEnvelope> {
       return { tool: "asgrep", schema_version: "1.0.0", ok: true };

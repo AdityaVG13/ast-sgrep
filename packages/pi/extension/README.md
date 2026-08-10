@@ -50,7 +50,7 @@ This workflow narrows the first result, runs independent follow-up searches toge
 
 ### Code Mode API
 
-The sandbox exposes these asynchronous methods:
+The Code Mode program receives these asynchronous methods on `asgrep`:
 
 | Method | Use |
 |---|---|
@@ -67,7 +67,7 @@ The sandbox exposes these asynchronous methods:
 
 Use `Promise.all` for independent calls. Filter, map, sort, and slice intermediate values in JavaScript. Return only the evidence needed for the next reasoning step.
 
-Code Mode includes `Promise`, `JSON`, arrays, objects, `Map`, `Set`, and `Math`. It does not expose `require`, `process`, `fetch`, or filesystem APIs. This is a capability boundary for generated code, not an OS sandbox for the installed Pi package.
+Code Mode runs as same-realm JavaScript (no `node:vm` isolate). Authority is the explicit `asgrep.*` surface — same idea as OpenCode CodeMode. The installed Pi package already has full OS-user access; do not treat Code Mode as an OS jail. Prefer Code Mode **or** MCP for a client, never both.
 
 ## Direct one-shot search
 

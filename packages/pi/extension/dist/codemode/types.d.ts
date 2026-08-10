@@ -1,4 +1,4 @@
-/** Typed surface the model sees inside the Code Mode sandbox. */
+/** Typed surface the model sees inside a Code Mode program (`asgrep.*`). */
 export type SearchArgs = {
     query: string;
     limit?: number;
