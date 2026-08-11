@@ -1,0 +1,99 @@
+{
+  "path": "/Users/aditya/Developer/ast-sgrep/crates/ast-sgrep-core/src/search/passes/literal.rs",
+  "threshold": 1,
+  "analyzer": "lizard",
+  "summary": {
+    "functions_scanned": 5,
+    "functions_above_threshold": 4,
+    "max_cc": 16,
+    "median_cc": 6,
+    "total_cc": 37,
+    "mean_cc": 7.4,
+    "total_nloc": 119
+  },
+  "functions": [
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/crates/ast-sgrep-core/src/search/passes/literal.rs",
+      "function": "literal_pass",
+      "line": 11,
+      "cc": 6,
+      "nloc": 15,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/crates/ast-sgrep-core/src/search/passes/literal.rs",
+      "function": "literal_trigram",
+      "line": 26,
+      "cc": 12,
+      "nloc": 41,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/crates/ast-sgrep-core/src/search/passes/literal.rs",
+      "function": "literal_sql_template",
+      "line": 88,
+      "cc": 1,
+      "nloc": 3,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/crates/ast-sgrep-core/src/search/passes/literal.rs",
+      "function": "literal_sql",
+      "line": 92,
+      "cc": 16,
+      "nloc": 52,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/crates/ast-sgrep-core/src/search/passes/literal.rs",
+      "function": "has_literal_match",
+      "line": 145,
+      "cc": 2,
+      "nloc": 8,
+      "cognitive": null,
+      "tool": "lizard"
+    }
+  ],
+  "hotspots": [
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/crates/ast-sgrep-core/src/search/passes/literal.rs",
+      "function": "literal_sql",
+      "line": 92,
+      "cc": 16,
+      "nloc": 52,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/crates/ast-sgrep-core/src/search/passes/literal.rs",
+      "function": "literal_trigram",
+      "line": 26,
+      "cc": 12,
+      "nloc": 41,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/crates/ast-sgrep-core/src/search/passes/literal.rs",
+      "function": "literal_pass",
+      "line": 11,
+      "cc": 6,
+      "nloc": 15,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/crates/ast-sgrep-core/src/search/passes/literal.rs",
+      "function": "has_literal_match",
+      "line": 145,
+      "cc": 2,
+      "nloc": 8,
+      "cognitive": null,
+      "tool": "lizard"
+    }
+  ]
+}

@@ -209,32 +209,47 @@ pub fn save_semantic_ivf_with_publication(
     .ok_or_else(|| crate::StoreError::Other("semantic IVF alignment overflow".into()))?;
     reap_stale_temporaries(path);
     let temporary = temporary_path(path);
-    let result = (|| -> Result<bool> {
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temporary)?;
-        write_header(
-            &mut file,
-            IvfHeader {
-                chunk_count,
-                dim,
-                fingerprint,
-                k,
-                index_len: index_bytes.len(),
-                vector_offset,
-            },
-        )?;
-        file.write_all(&index_bytes)?;
-        write_zeros(&mut file, vector_offset - HEADER_SIZE - index_bytes.len())?;
-        file.write_all(bytemuck::cast_slice(vectors))?;
-        file.sync_all()?;
-        Ok(replace_file(&temporary, path)?)
-    })();
+    let result = write_ivf_temporary(
+        &temporary,
+        path,
+        IvfHeader {
+            chunk_count,
+            dim,
+            fingerprint,
+            k,
+            index_len: index_bytes.len(),
+            vector_offset,
+        },
+        &index_bytes,
+        vectors,
+    );
     if result.is_err() {
         let _ = fs::remove_file(&temporary);
     }
     result
+}
+
+/// Write IVF payload to a create-new temporary, fsync, then atomically replace `path`.
+fn write_ivf_temporary(
+    temporary: &Path,
+    path: &Path,
+    header: IvfHeader,
+    index_bytes: &[u8],
+    vectors: &[f32],
+) -> Result<bool> {
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(temporary)?;
+    write_header(&mut file, header)?;
+    file.write_all(index_bytes)?;
+    write_zeros(
+        &mut file,
+        header.vector_offset - HEADER_SIZE - index_bytes.len(),
+    )?;
+    file.write_all(bytemuck::cast_slice(vectors))?;
+    file.sync_all()?;
+    Ok(replace_file(temporary, path)?)
 }
 
 #[derive(Debug, Clone)]

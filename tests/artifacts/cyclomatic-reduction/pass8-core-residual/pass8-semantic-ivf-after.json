@@ -1,0 +1,567 @@
+{
+  "path": "/Users/aditya/Developer/ast-sgrep/crates/ast-sgrep-core/src/semantic_ivf.rs",
+  "threshold": 1,
+  "analyzer": "lizard",
+  "summary": {
+    "functions_scanned": 40,
+    "functions_above_threshold": 21,
+    "max_cc": 25,
+    "median_cc": 2,
+    "total_cc": 137,
+    "mean_cc": 3.42,
+    "total_nloc": 463
+  },
+  "functions": [
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/crates/ast-sgrep-core/src/semantic_ivf.rs",
+      "function": "semantic_ivf_path",
+      "line": 19,
+      "cc": 2,
+      "nloc": 6,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/crates/ast-sgrep-core/src/semantic_ivf.rs",
+      "function": "invalidate_semantic_ivf",
+      "line": 26,
+      "cc": 3,
+      "nloc": 8,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/crates/ast-sgrep-core/src/semantic_ivf.rs",
+      "function": "benign_invalidation_error",
+      "line": 35,
+      "cc": 3,
+      "nloc": 14,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/crates/ast-sgrep-core/src/semantic_ivf.rs",
+      "function": "compute_ann_fingerprint",
+      "line": 50,
+      "cc": 1,
+      "nloc": 16,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/crates/ast-sgrep-core/src/semantic_ivf.rs",
+      "function": "vectors_content_digest",
+      "line": 70,
+      "cc": 2,
+      "nloc": 9,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/crates/ast-sgrep-core/src/semantic_ivf.rs",
+      "function": "compute_ann_fingerprint_with_content",
+      "line": 81,
+      "cc": 1,
+      "nloc": 18,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/crates/ast-sgrep-core/src/semantic_ivf.rs",
+      "function": "as_slice",
+      "line": 107,
+      "cc": 1,
+      "nloc": 4,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/crates/ast-sgrep-core/src/semantic_ivf.rs",
+      "function": "from_owned",
+      "line": 124,
+      "cc": 1,
+      "nloc": 14,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/crates/ast-sgrep-core/src/semantic_ivf.rs",
+      "function": "vectors",
+      "line": 139,
+      "cc": 1,
+      "nloc": 5,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/crates/ast-sgrep-core/src/semantic_ivf.rs",
+      "function": "is_mapped",
+      "line": 145,
+      "cc": 1,
+      "nloc": 3,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/crates/ast-sgrep-core/src/semantic_ivf.rs",
+      "function": "mapped_vector_bytes",
+      "line": 149,
+      "cc": 1,
+      "nloc": 5,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/crates/ast-sgrep-core/src/semantic_ivf.rs",
+      "function": "resident_index_bytes",
+      "line": 155,
+      "cc": 1,
+      "nloc": 3,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/crates/ast-sgrep-core/src/semantic_ivf.rs",
+      "function": "chunk_count",
+      "line": 159,
+      "cc": 1,
+      "nloc": 3,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/crates/ast-sgrep-core/src/semantic_ivf.rs",
+      "function": "search",
+      "line": 163,
+      "cc": 1,
+      "nloc": 4,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/crates/ast-sgrep-core/src/semantic_ivf.rs",
+      "function": "save_semantic_ivf",
+      "line": 169,
+      "cc": 1,
+      "nloc": 9,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/crates/ast-sgrep-core/src/semantic_ivf.rs",
+      "function": "save_semantic_ivf_with_publication",
+      "line": 179,
+      "cc": 17,
+      "nloc": 52,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/crates/ast-sgrep-core/src/semantic_ivf.rs",
+      "function": "write_ivf_temporary",
+      "line": 233,
+      "cc": 8,
+      "nloc": 21,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/crates/ast-sgrep-core/src/semantic_ivf.rs",
+      "function": "candidate_indices",
+      "line": 264,
+      "cc": 1,
+      "nloc": 3,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/crates/ast-sgrep-core/src/semantic_ivf.rs",
+      "function": "chunk_count",
+      "line": 268,
+      "cc": 1,
+      "nloc": 3,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/crates/ast-sgrep-core/src/semantic_ivf.rs",
+      "function": "load_semantic_ivf_index",
+      "line": 273,
+      "cc": 2,
+      "nloc": 14,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/crates/ast-sgrep-core/src/semantic_ivf.rs",
+      "function": "load_semantic_ivf",
+      "line": 288,
+      "cc": 1,
+      "nloc": 6,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/crates/ast-sgrep-core/src/semantic_ivf.rs",
+      "function": "peek_semantic_ivf_fingerprint",
+      "line": 299,
+      "cc": 3,
+      "nloc": 4,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/crates/ast-sgrep-core/src/semantic_ivf.rs",
+      "function": "load_semantic_ivf_unchecked",
+      "line": 304,
+      "cc": 1,
+      "nloc": 3,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/crates/ast-sgrep-core/src/semantic_ivf.rs",
+      "function": "load_semantic_ivf_inner",
+      "line": 325,
+      "cc": 2,
+      "nloc": 21,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/crates/ast-sgrep-core/src/semantic_ivf.rs",
+      "function": "map_and_parse",
+      "line": 347,
+      "cc": 11,
+      "nloc": 61,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/crates/ast-sgrep-core/src/semantic_ivf.rs",
+      "function": "read_header",
+      "line": 412,
+      "cc": 25,
+      "nloc": 34,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/crates/ast-sgrep-core/src/semantic_ivf.rs",
+      "function": "write_header",
+      "line": 447,
+      "cc": 11,
+      "nloc": 13,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/crates/ast-sgrep-core/src/semantic_ivf.rs",
+      "function": "read_u16",
+      "line": 461,
+      "cc": 2,
+      "nloc": 5,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/crates/ast-sgrep-core/src/semantic_ivf.rs",
+      "function": "read_u32",
+      "line": 467,
+      "cc": 2,
+      "nloc": 5,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/crates/ast-sgrep-core/src/semantic_ivf.rs",
+      "function": "read_u64",
+      "line": 473,
+      "cc": 2,
+      "nloc": 5,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/crates/ast-sgrep-core/src/semantic_ivf.rs",
+      "function": "write_zeros",
+      "line": 479,
+      "cc": 3,
+      "nloc": 9,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/crates/ast-sgrep-core/src/semantic_ivf.rs",
+      "function": "align_up",
+      "line": 489,
+      "cc": 2,
+      "nloc": 5,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/crates/ast-sgrep-core/src/semantic_ivf.rs",
+      "function": "reap_stale_temporaries",
+      "line": 495,
+      "cc": 5,
+      "nloc": 29,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/crates/ast-sgrep-core/src/semantic_ivf.rs",
+      "function": "temporary_path",
+      "line": 525,
+      "cc": 1,
+      "nloc": 8,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/crates/ast-sgrep-core/src/semantic_ivf.rs",
+      "function": "open_mappable_file",
+      "line": 535,
+      "cc": 1,
+      "nloc": 8,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/crates/ast-sgrep-core/src/semantic_ivf.rs",
+      "function": "open_mappable_file",
+      "line": 545,
+      "cc": 1,
+      "nloc": 3,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/crates/ast-sgrep-core/src/semantic_ivf.rs",
+      "function": "sync_parent",
+      "line": 550,
+      "cc": 4,
+      "nloc": 6,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/crates/ast-sgrep-core/src/semantic_ivf.rs",
+      "function": "sync_parent",
+      "line": 558,
+      "cc": 1,
+      "nloc": 3,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/crates/ast-sgrep-core/src/semantic_ivf.rs",
+      "function": "replace_file",
+      "line": 563,
+      "cc": 6,
+      "nloc": 16,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/crates/ast-sgrep-core/src/semantic_ivf.rs",
+      "function": "replace_file",
+      "line": 584,
+      "cc": 3,
+      "nloc": 5,
+      "cognitive": null,
+      "tool": "lizard"
+    }
+  ],
+  "hotspots": [
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/crates/ast-sgrep-core/src/semantic_ivf.rs",
+      "function": "read_header",
+      "line": 412,
+      "cc": 25,
+      "nloc": 34,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/crates/ast-sgrep-core/src/semantic_ivf.rs",
+      "function": "save_semantic_ivf_with_publication",
+      "line": 179,
+      "cc": 17,
+      "nloc": 52,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/crates/ast-sgrep-core/src/semantic_ivf.rs",
+      "function": "map_and_parse",
+      "line": 347,
+      "cc": 11,
+      "nloc": 61,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/crates/ast-sgrep-core/src/semantic_ivf.rs",
+      "function": "write_header",
+      "line": 447,
+      "cc": 11,
+      "nloc": 13,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/crates/ast-sgrep-core/src/semantic_ivf.rs",
+      "function": "write_ivf_temporary",
+      "line": 233,
+      "cc": 8,
+      "nloc": 21,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/crates/ast-sgrep-core/src/semantic_ivf.rs",
+      "function": "replace_file",
+      "line": 563,
+      "cc": 6,
+      "nloc": 16,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/crates/ast-sgrep-core/src/semantic_ivf.rs",
+      "function": "reap_stale_temporaries",
+      "line": 495,
+      "cc": 5,
+      "nloc": 29,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/crates/ast-sgrep-core/src/semantic_ivf.rs",
+      "function": "sync_parent",
+      "line": 550,
+      "cc": 4,
+      "nloc": 6,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/crates/ast-sgrep-core/src/semantic_ivf.rs",
+      "function": "invalidate_semantic_ivf",
+      "line": 26,
+      "cc": 3,
+      "nloc": 8,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/crates/ast-sgrep-core/src/semantic_ivf.rs",
+      "function": "benign_invalidation_error",
+      "line": 35,
+      "cc": 3,
+      "nloc": 14,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/crates/ast-sgrep-core/src/semantic_ivf.rs",
+      "function": "peek_semantic_ivf_fingerprint",
+      "line": 299,
+      "cc": 3,
+      "nloc": 4,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/crates/ast-sgrep-core/src/semantic_ivf.rs",
+      "function": "write_zeros",
+      "line": 479,
+      "cc": 3,
+      "nloc": 9,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/crates/ast-sgrep-core/src/semantic_ivf.rs",
+      "function": "replace_file",
+      "line": 584,
+      "cc": 3,
+      "nloc": 5,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/crates/ast-sgrep-core/src/semantic_ivf.rs",
+      "function": "semantic_ivf_path",
+      "line": 19,
+      "cc": 2,
+      "nloc": 6,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/crates/ast-sgrep-core/src/semantic_ivf.rs",
+      "function": "vectors_content_digest",
+      "line": 70,
+      "cc": 2,
+      "nloc": 9,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/crates/ast-sgrep-core/src/semantic_ivf.rs",
+      "function": "load_semantic_ivf_index",
+      "line": 273,
+      "cc": 2,
+      "nloc": 14,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/crates/ast-sgrep-core/src/semantic_ivf.rs",
+      "function": "load_semantic_ivf_inner",
+      "line": 325,
+      "cc": 2,
+      "nloc": 21,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/crates/ast-sgrep-core/src/semantic_ivf.rs",
+      "function": "read_u16",
+      "line": 461,
+      "cc": 2,
+      "nloc": 5,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/crates/ast-sgrep-core/src/semantic_ivf.rs",
+      "function": "read_u32",
+      "line": 467,
+      "cc": 2,
+      "nloc": 5,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/crates/ast-sgrep-core/src/semantic_ivf.rs",
+      "function": "read_u64",
+      "line": 473,
+      "cc": 2,
+      "nloc": 5,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/crates/ast-sgrep-core/src/semantic_ivf.rs",
+      "function": "align_up",
+      "line": 489,
+      "cc": 2,
+      "nloc": 5,
+      "cognitive": null,
+      "tool": "lizard"
+    }
+  ]
+}

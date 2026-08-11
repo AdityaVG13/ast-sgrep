@@ -48,12 +48,7 @@ fn literal_trigram(
         if !matches_lang(language.as_deref(), options.lang_filter.as_deref()) {
             continue;
         }
-        let ok = if let Some(ref nl) = needle_lower {
-            has_literal_match(&content.to_lowercase(), nl, word_mode)
-        } else {
-            has_literal_match(&content, needle, word_mode)
-        };
-        if !ok {
+        if !content_matches_literal(&content, needle, needle_lower.as_deref(), word_mode) {
             continue;
         }
         let excerpt_text = excerpt_opt(file_map.as_ref(), &path, line_no, &content, options);
@@ -110,6 +105,7 @@ fn literal_sql(
         None => stmt.query_map(params![pattern, limit as i64], map_line_row)?,
     };
     let word_mode = parsed.mode == QueryMode::Word;
+    // SQL already matched the literal; word_mode only needs a boundary postfilter.
     let needle_lower = (word_mode && options.case_insensitive).then(|| needle.to_lowercase());
     let file_map = if needs_context(options) {
         Some(build_file_lines_map(&store.all_indexed_lines()?))
@@ -122,15 +118,10 @@ fn literal_sql(
         if !matches_lang(language.as_deref(), options.lang_filter.as_deref()) {
             continue;
         }
-        if word_mode {
-            let ok = if let Some(ref nl) = needle_lower {
-                has_literal_match(&content.to_lowercase(), nl, true)
-            } else {
-                has_literal_match(&content, needle, true)
-            };
-            if !ok {
-                continue;
-            }
+        if word_mode
+            && !content_matches_literal(&content, needle, needle_lower.as_deref(), true)
+        {
+            continue;
         }
         hits.push(asgrep_line_hit(
             path.clone(),
@@ -142,6 +133,21 @@ fn literal_sql(
     }
     Ok(hits)
 }
+
+/// Shared case-fold + word/substring gate used by both trigram and SQL residual paths.
+/// Collapses the duplicated `if let Some(needle_lower)` decision tree (pass 8).
+fn content_matches_literal(
+    content: &str,
+    needle: &str,
+    needle_lower: Option<&str>,
+    word_mode: bool,
+) -> bool {
+    match needle_lower {
+        Some(nl) => has_literal_match(&content.to_lowercase(), nl, word_mode),
+        None => has_literal_match(content, needle, word_mode),
+    }
+}
+
 fn has_literal_match(haystack: &str, needle: &str, word_mode: bool) -> bool {
     if !word_mode {
         return haystack.contains(needle);
