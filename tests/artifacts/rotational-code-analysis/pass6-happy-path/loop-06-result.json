@@ -1,0 +1,95 @@
+{
+  "schema_version": "1.0",
+  "loop_id": 6,
+  "name": "happy-path-control-flow",
+  "status": "COMPLETE",
+  "mode": "audit",
+  "frozen_revision": "fb932aac852f5496c0a7035cc5a0b508e05111cb",
+  "axes": {
+    "representation": "call-trace",
+    "observer": "runtime",
+    "scale": "entrypoint→sink",
+    "time": "normal"
+  },
+  "axes_changed_vs_prior": 4,
+  "braid_resolve": "Continue",
+  "deliverables": [
+    "iterations/06-happy-path/traces.md",
+    "iterations/06-happy-path/invariant-enforcement-map.md",
+    "iterations/06-happy-path/loop-06-result.json",
+    "iterations/06-happy-path/RESULT.md",
+    "tests/artifacts/rotational-code-analysis/pass6-happy-path/*"
+  ],
+  "paths": [
+    {
+      "id": "HP-CLI-SEARCH",
+      "entry": "asgrep bare QUERY / search",
+      "sink": "Searcher::search → hybrid → finish_response"
+    },
+    {
+      "id": "HP-MCP-SEARCH",
+      "entry": "tools/call keyword|ast|semantic",
+      "sink": "channel-split Searcher (no hybrid)"
+    },
+    {
+      "id": "HP-CM-CALL",
+      "entry": "CodeModeSession::call / NAPI Session.call",
+      "sink": "catalog → search → hybrid"
+    },
+    {
+      "id": "HP-PI-ASGREP",
+      "entry": "Pi asgrep / asgrep_search",
+      "sink": "NativeSessionPool → NAPI → HP-CM-CALL"
+    },
+    {
+      "id": "HP-INDEX",
+      "entry": "CLI index|reindex / MCP|CM index_repo",
+      "sink": "Indexer::index_all"
+    },
+    {
+      "id": "HP-CASCADE",
+      "entry": "QueryMode::Hybrid",
+      "sink": "search_hybrid → RRF → finish_response_checked"
+    }
+  ],
+  "counts": {
+    "paths": 6,
+    "invariants_linked": 18,
+    "divergences_named": 7,
+    "new_product_findings": 0
+  },
+  "headline": [
+    "6 E2E success paths; MCP has no hybrid fusion tool",
+    "C1 empty-structural lexical fallback confirmed on cascade happy path",
+    "C2 MCP sandbox vs CM free root on success paths",
+    "Pi/CM index_repo without approval (INV-RO-CATALOG GAP)",
+    "Searcher cache models diverge: MCP generation vs CM Option vs CLI cold"
+  ],
+  "challenge_outcomes": {
+    "C1_cascade_struct_empty": "code B (lexical fallback) on happy hybrid path; docs A still contradicted",
+    "C2_root_parity": "MCP sandbox_root enforced; CM root_arg free; same core sinks"
+  },
+  "residuals": [
+    "Pass7 error/cleanup: jail fail vs free root success, empty index, MCP deadline, call budget, cascade empty lexical, embed fail-closed, Pi fallback, batch partial, parse errors, mid-index cleanup",
+    "Prior GAPs remain: GAP-CM-ROOT, GAP-CM-INV-TEST, GAP-RO-HOST, GAP-XOR-RUNTIME, GAP-INDEX-PATH-DOC",
+    "B-ZS-ENGINES, B-DIRTY-FREEZE, B-SECURITY-NAPI-DOC open"
+  ],
+  "commands": [
+    {
+      "cmd": "rg fn search_hybrid|sandbox_root|root_arg|tool_index_repo|CodeModeSession::call",
+      "exit": 0,
+      "summary": "trace anchors located"
+    },
+    {
+      "cmd": "read cli/lib.rs search_cmd mcp/lib session.rs tools.rs pi/index.ts search/mod.rs index.rs",
+      "exit": 0,
+      "summary": "source call-traces written"
+    },
+    {
+      "cmd": "zs fs compound (failed: fszero-codemode missing)",
+      "exit": "nonzero",
+      "summary": "B-ZS-ENGINES; native path used"
+    }
+  ],
+  "completed_at": "2026-08-11T02:20:24Z"
+}
