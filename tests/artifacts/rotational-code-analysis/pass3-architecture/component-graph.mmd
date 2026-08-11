@@ -1,0 +1,35 @@
+%% Pass3 architecture (normal cargo + key cross-lang)
+flowchart TB
+  ext[pi-ast-sgrep]
+  launch[ast-sgrep launcher]
+  plat["@ast-sgrep/platform"]
+  napi[codemode-napi cdylib]
+  cli[ast-sgrep-cli]
+  mcp[ast-sgrep-mcp]
+  lsp[ast-sgrep-lsp]
+  cm[codemode]
+  plug[plugins]
+  core[ast-sgrep-core]
+  lang[lang]
+  emb[embed]
+  mmap[mmap]
+  agent[agent-plugin]
+  ext --> launch
+  launch --> plat
+  ext -->|BND-NAPI| napi
+  ext -->|BND-CLI-JS| cli
+  launch -->|BND-CLI-JS| cli
+  agent -->|BND-MCP| mcp
+  napi --> cm
+  cli --> cm
+  cli --> core
+  cli --> plug
+  cm --> core
+  cm --> plug
+  mcp --> core
+  mcp --> plug
+  lsp --> core
+  plug --> core
+  core --> lang
+  core --> emb
+  core --> mmap
