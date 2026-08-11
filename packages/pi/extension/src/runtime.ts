@@ -220,6 +220,52 @@ function incompatibleStatusFailure(cause: unknown): boolean {
   return /incompatib|unsupported.{0,24}schema|schema.{0,24}(version|mismatch)/i.test(text);
 }
 
+/**
+ * Incremental index needed for missing / first-run / dirty / lease-expiry.
+ * Incompatible is handled separately (force rebuild). Domain varieties preserved.
+ */
+function needsIncrementalIndex(
+  health: IndexHealth | undefined,
+  wasInitialized: boolean,
+  dirty: boolean,
+  expired: boolean,
+): boolean {
+  return health === "missing" || !wasInitialized || dirty || expired;
+}
+
+/** Probe compatibility hook then status; map incompat operational failures to health. */
+async function probeIndexHealth(
+  runtime: FreshnessRuntime,
+  rootContext: RuntimeContext,
+  options: RunOptions,
+): Promise<IndexHealth | undefined> {
+  const hinted = await runtime.inspectIndexCompatibility?.(rootContext);
+  if (hinted === "incompatible") return hinted;
+  try {
+    const status = runtime.nativeCall
+      ? await runtime.nativeCall("index_status", {}, rootContext, options)
+      : await runtime.run(["status", ".", "--json"], rootContext, options);
+    return indexHealth(status);
+  } catch (cause) {
+    if (!incompatibleStatusFailure(cause)) throw cause;
+    return "incompatible";
+  }
+}
+
+/** Run index_repo via native sticky pool or CLI argv. force=true → reindex. */
+async function runIndex(
+  runtime: FreshnessRuntime,
+  force: boolean,
+  rootContext: RuntimeContext,
+  options: RunOptions,
+): Promise<void> {
+  if (runtime.nativeCall) {
+    await runtime.nativeCall("index_repo", { force }, rootContext, options);
+    return;
+  }
+  await runtime.run([force ? "reindex" : "index", ".", "--json"], rootContext, options);
+}
+
 function canonicalizeAffectedPath(path: string): string {
   const unresolved: string[] = [];
   let existing = resolve(path);
@@ -281,37 +327,23 @@ export class FreshnessCoordinator {
     }
     const now = this.#now();
     const elapsed = now - state.lastRefreshAt;
+    // Lease expiry: initialized and interval elapsed (or clock went backwards).
     const expired = state.initialized && (elapsed < 0 || elapsed >= this.#interval);
     if (state.initialized && state.cleanGeneration === state.dirtyGeneration && !expired) return root;
 
     const refreshGeneration = state.dirtyGeneration;
     const wasInitialized = state.initialized;
     const refresh = (async () => {
-      let health = await runtime.inspectIndexCompatibility?.(rootContext);
-      if (health !== "incompatible") {
-        try {
-          const status = runtime.nativeCall
-            ? await runtime.nativeCall("index_status", {}, rootContext, options)
-            : await runtime.run(["status", ".", "--json"], rootContext, options);
-          health = indexHealth(status);
-        } catch (cause) {
-          if (!incompatibleStatusFailure(cause)) throw cause;
-          health = "incompatible";
-        }
-      }
+      const health = await probeIndexHealth(runtime, rootContext, options);
       const dirty = refreshGeneration > state!.cleanGeneration;
       if (health === "incompatible") {
+        // Requisite variety: force rebuild path (hook or reindex).
         if (runtime.rebuildIncompatibleIndex) await runtime.rebuildIncompatibleIndex(rootContext, options);
-        else if (runtime.nativeCall) await runtime.nativeCall("index_repo", { force: true }, rootContext, options);
-        else await runtime.run(["reindex", ".", "--json"], rootContext, options);
-      } else if (health === "missing" || !wasInitialized || dirty) {
-        if (runtime.nativeCall) await runtime.nativeCall("index_repo", { force: false }, rootContext, options);
-        else await runtime.run(["index", ".", "--json"], rootContext, options);
-      } else if (expired) {
-        // Lease expired without dirty marks: incremental index (not force reindex)
-        // so external create/modify/delete are reconciled without rebuild thrash (5du.9).
-        if (runtime.nativeCall) await runtime.nativeCall("index_repo", { force: false }, rootContext, options);
-        else await runtime.run(["index", ".", "--json"], rootContext, options);
+        else await runIndex(runtime, true, rootContext, options);
+      } else if (needsIncrementalIndex(health, wasInitialized, dirty, expired)) {
+        // missing / first run / dirty / lease expiry: incremental index (not force).
+        // Lease-only path reconciles external create/modify/delete without rebuild thrash (5du.9).
+        await runIndex(runtime, false, rootContext, options);
       }
       state!.initialized = true;
       state!.cleanGeneration = refreshGeneration;
@@ -351,15 +383,12 @@ function byteLength(value: string): number { return Buffer.byteLength(value, "ut
 
 /** Present-field version identity checks. Pass `requireIdentity` for version --json. */
 function assertVersionTriple(envelope: Partial<MachineEnvelope>, requireIdentity = false): void {
-  if (requireIdentity || envelope.version !== undefined) {
-    if (envelope.version !== RUNTIME_VERSION) {
-      throw new RuntimeError("VERSION_MISMATCH", "ast-sgrep binary version does not match the extension", { expected: RUNTIME_VERSION, actual: envelope.version });
-    }
+  // Compound guards (same short-circuit as nested if): check only when required or field present.
+  if ((requireIdentity || envelope.version !== undefined) && envelope.version !== RUNTIME_VERSION) {
+    throw new RuntimeError("VERSION_MISMATCH", "ast-sgrep binary version does not match the extension", { expected: RUNTIME_VERSION, actual: envelope.version });
   }
-  if (requireIdentity || envelope.machine_schema_version !== undefined) {
-    if (envelope.machine_schema_version !== MACHINE_SCHEMA_VERSION) {
-      throw new RuntimeError("PROTOCOL_MISMATCH", "ast-sgrep binary reports an incompatible machine protocol", { expected: MACHINE_SCHEMA_VERSION, actual: envelope.machine_schema_version });
-    }
+  if ((requireIdentity || envelope.machine_schema_version !== undefined) && envelope.machine_schema_version !== MACHINE_SCHEMA_VERSION) {
+    throw new RuntimeError("PROTOCOL_MISMATCH", "ast-sgrep binary reports an incompatible machine protocol", { expected: MACHINE_SCHEMA_VERSION, actual: envelope.machine_schema_version });
   }
 }
 

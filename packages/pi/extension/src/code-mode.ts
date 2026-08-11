@@ -216,10 +216,12 @@ function asSearchResponse(value: MachineEnvelope): SgrepSearchResponse {
   if (value.query !== undefined && typeof value.query !== "string") {
     throw new RuntimeError("PROTOCOL_MISMATCH", "ast-sgrep search response has an invalid query");
   }
-  if (value.hit_count !== undefined
-    && (typeof value.hit_count !== "number" || !Number.isSafeInteger(value.hit_count)
-      || value.hit_count < 0 || value.hit_count !== value.hits.length)) {
-    throw new RuntimeError("PROTOCOL_MISMATCH", "ast-sgrep search response has an invalid hit_count");
+  // Guard form of compound hit_count validity (same checks, less && nesting).
+  if (value.hit_count !== undefined) {
+    if (typeof value.hit_count !== "number" || !Number.isSafeInteger(value.hit_count)
+      || value.hit_count < 0 || value.hit_count !== value.hits.length) {
+      throw new RuntimeError("PROTOCOL_MISMATCH", "ast-sgrep search response has an invalid hit_count");
+    }
   }
   const hits = value.hits.map(parseSearchHit);
   return { ...value, hits };
