@@ -1,0 +1,80 @@
+{
+  "run_id": "2026-08-11Tpass10-bill",
+  "pass": 10,
+  "baseline_run": "2026-08-10T235424Z-baseline",
+  "baseline": {
+    "total_cc": 6022,
+    "max_cc": 31,
+    "median_cc": 2,
+    "functions": 1927,
+    "hotspots_cc_gt_10": 91
+  },
+  "after": {
+    "total_cc": 5994,
+    "max_cc": 26,
+    "median_cc": 2,
+    "mean_cc": 3.07,
+    "functions": 1953,
+    "hotspots_cc_gt_10": 83,
+    "total_nloc": 34192,
+    "files_with_functions": 166
+  },
+  "delta_vs_baseline": {
+    "total_cc": -28,
+    "max_cc": -5,
+    "median_cc": 0,
+    "functions": 26,
+    "hotspots_cc_gt_10": -8
+  },
+  "parts": {
+    "crates": {
+      "functions": 1698,
+      "total_cc": 5090,
+      "max_cc": 25,
+      "median_cc": 2,
+      "hotspots": 70,
+      "total_nloc": 31850,
+      "files": null
+    },
+    "packages/pi/extension/src": {
+      "functions": 241,
+      "total_cc": 802,
+      "max_cc": 25,
+      "median_cc": 2,
+      "hotspots": 10,
+      "total_nloc": 2123,
+      "files": null
+    },
+    "packages/pi/launcher/src": {
+      "functions": 14,
+      "total_cc": 102,
+      "max_cc": 26,
+      "median_cc": 4,
+      "hotspots": 3,
+      "total_nloc": 219,
+      "files": null
+    }
+  },
+  "histogram": {
+    "1-5": 1644,
+    "6-10": 226,
+    "11-15": 59,
+    "16-20": 17,
+    "21-25": 6,
+    "26+": 1
+  },
+  "hotspots_by_area": {
+    "ast-sgrep-core": 42,
+    "ast-sgrep-cli": 10,
+    "packages/pi/extension/src": 10,
+    "ast-sgrep-lang": 8,
+    "ast-sgrep-codemode": 4,
+    "packages/pi/launcher/src": 3,
+    "ast-sgrep-mcp": 2,
+    "ast-sgrep-plugins": 2,
+    "ast-sgrep-testkit": 1,
+    "ast-sgrep-embed": 1
+  },
+  "product_files_changed_this_pass": 0,
+  "displacement_check": "pass"
+}

@@ -1,0 +1,2274 @@
+{
+  "path": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src",
+  "threshold": 10,
+  "analyzer": "lizard",
+  "summary": {
+    "functions_scanned": 241,
+    "functions_above_threshold": 10,
+    "max_cc": 25,
+    "median_cc": 2
+  },
+  "functions": [
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/connector.ts",
+      "function": "clampLimit",
+      "line": 56,
+      "cc": 2,
+      "nloc": 5,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/connector.ts",
+      "function": "clampExcerpt",
+      "line": 61,
+      "cc": 2,
+      "nloc": 5,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/connector.ts",
+      "function": "call",
+      "line": 80,
+      "cc": 1,
+      "nloc": 2,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/connector.ts",
+      "function": "search",
+      "line": 85,
+      "cc": 1,
+      "nloc": 2,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/connector.ts",
+      "function": "createAsgrepConnector",
+      "line": 72,
+      "cc": 3,
+      "nloc": 14,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/connector.ts",
+      "function": "(anonymous)",
+      "line": 93,
+      "cc": 1,
+      "nloc": 1,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/connector.ts",
+      "function": "(anonymous)",
+      "line": 100,
+      "cc": 1,
+      "nloc": 1,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/connector.ts",
+      "function": "(anonymous)",
+      "line": 106,
+      "cc": 1,
+      "nloc": 1,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/connector.ts",
+      "function": "(anonymous)",
+      "line": 112,
+      "cc": 1,
+      "nloc": 1,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/connector.ts",
+      "function": "(anonymous)",
+      "line": 118,
+      "cc": 1,
+      "nloc": 1,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/connector.ts",
+      "function": "(anonymous)",
+      "line": 123,
+      "cc": 1,
+      "nloc": 2,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/connector.ts",
+      "function": "(anonymous)",
+      "line": 124,
+      "cc": 1,
+      "nloc": 2,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/connector.ts",
+      "function": "(anonymous)",
+      "line": 125,
+      "cc": 1,
+      "nloc": 2,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/connector.ts",
+      "function": "(anonymous)",
+      "line": 126,
+      "cc": 1,
+      "nloc": 2,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/native.ts",
+      "function": "platformTriple",
+      "line": 68,
+      "cc": 11,
+      "nloc": 10,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/native.ts",
+      "function": "resolveCodemodeAddon?",
+      "line": 82,
+      "cc": 1,
+      "nloc": 1,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/native.ts",
+      "function": "platformPackageAddon",
+      "line": 78,
+      "cc": 3,
+      "nloc": 14,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/native.ts",
+      "function": "candidatePaths",
+      "line": 93,
+      "cc": 6,
+      "nloc": 28,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/native.ts",
+      "function": "loadCodemodeNative",
+      "line": 125,
+      "cc": 8,
+      "nloc": 22,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/native.ts",
+      "function": "nativeAvailable",
+      "line": 149,
+      "cc": 1,
+      "nloc": 4,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/native.ts",
+      "function": "resetNativeCache",
+      "line": 154,
+      "cc": 1,
+      "nloc": 3,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/dispatch.ts",
+      "function": "flush",
+      "line": 83,
+      "cc": 4,
+      "nloc": 21,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/dispatch.ts",
+      "function": "(anonymous)",
+      "line": 116,
+      "cc": 1,
+      "nloc": 3,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/dispatch.ts",
+      "function": "(anonymous)",
+      "line": 110,
+      "cc": 2,
+      "nloc": 9,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/dispatch.ts",
+      "function": "enqueue",
+      "line": 109,
+      "cc": 1,
+      "nloc": 2,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/dispatch.ts",
+      "function": "resolve",
+      "line": 124,
+      "cc": 1,
+      "nloc": 1,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/dispatch.ts",
+      "function": "call",
+      "line": 123,
+      "cc": 2,
+      "nloc": 5,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/dispatch.ts",
+      "function": "stats",
+      "line": 132,
+      "cc": 1,
+      "nloc": 2,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/dispatch.ts",
+      "function": "resetStats",
+      "line": 133,
+      "cc": 1,
+      "nloc": 3,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/dispatch.ts",
+      "function": "createCodemodeDispatcher",
+      "line": 74,
+      "cc": 1,
+      "nloc": 18,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/dispatch.ts",
+      "function": "settleOne",
+      "line": 139,
+      "cc": 3,
+      "nloc": 13,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/dispatch.ts",
+      "function": "(anonymous)",
+      "line": 157,
+      "cc": 1,
+      "nloc": 5,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/dispatch.ts",
+      "function": "(anonymous)",
+      "line": 174,
+      "cc": 1,
+      "nloc": 5,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/dispatch.ts",
+      "function": "(anonymous)",
+      "line": 191,
+      "cc": 2,
+      "nloc": 8,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/dispatch.ts",
+      "function": "settleWave",
+      "line": 154,
+      "cc": 6,
+      "nloc": 28,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/dispatch.ts",
+      "function": "(anonymous)",
+      "line": 203,
+      "cc": 1,
+      "nloc": 1,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/dispatch.ts",
+      "function": "settleFromBatch",
+      "line": 202,
+      "cc": 6,
+      "nloc": 17,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/dispatch.ts",
+      "function": "emptyStats",
+      "line": 219,
+      "cc": 1,
+      "nloc": 12,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/dispatch.ts",
+      "function": "argStr",
+      "line": 252,
+      "cc": 3,
+      "nloc": 4,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/dispatch.ts",
+      "function": "argvFor",
+      "line": 256,
+      "cc": 11,
+      "nloc": 18,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/dispatch.ts",
+      "function": "num",
+      "line": 277,
+      "cc": 3,
+      "nloc": 5,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/dispatch.ts",
+      "function": "asEnvelope",
+      "line": 283,
+      "cc": 7,
+      "nloc": 19,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/dispatch.ts",
+      "function": "runNativeBatch",
+      "line": 304,
+      "cc": 1,
+      "nloc": 7,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/dispatch.ts",
+      "function": "(anonymous)",
+      "line": 329,
+      "cc": 1,
+      "nloc": 1,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/dispatch.ts",
+      "function": "envelopeToBatch",
+      "line": 333,
+      "cc": 5,
+      "nloc": 10,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/session-pool.ts",
+      "function": "call",
+      "line": 38,
+      "cc": 1,
+      "nloc": 4,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/session-pool.ts",
+      "function": "batch",
+      "line": 42,
+      "cc": 6,
+      "nloc": 23,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/session-pool.ts",
+      "function": "end",
+      "line": 67,
+      "cc": 1,
+      "nloc": 2,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/session-pool.ts",
+      "function": "inProcessWorker",
+      "line": 36,
+      "cc": 1,
+      "nloc": 8,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/session-pool.ts",
+      "function": "constructor",
+      "line": 81,
+      "cc": 1,
+      "nloc": 3,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/session-pool.ts",
+      "function": "configure",
+      "line": 85,
+      "cc": 1,
+      "nloc": 3,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/session-pool.ts",
+      "function": "configured",
+      "line": 89,
+      "cc": 2,
+      "nloc": 3,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/session-pool.ts",
+      "function": "backend",
+      "line": 94,
+      "cc": 1,
+      "nloc": 3,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/session-pool.ts",
+      "function": "acquire",
+      "line": 98,
+      "cc": 4,
+      "nloc": 13,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/session-pool.ts",
+      "function": "call",
+      "line": 114,
+      "cc": 3,
+      "nloc": 11,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/session-pool.ts",
+      "function": "(anonymous)",
+      "line": 131,
+      "cc": 1,
+      "nloc": 1,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/session-pool.ts",
+      "function": "invalidate",
+      "line": 126,
+      "cc": 4,
+      "nloc": 8,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/session-pool.ts",
+      "function": "(anonymous)",
+      "line": 142,
+      "cc": 1,
+      "nloc": 1,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/session-pool.ts",
+      "function": "(anonymous)",
+      "line": 142,
+      "cc": 2,
+      "nloc": 1,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/session-pool.ts",
+      "function": "shutdown",
+      "line": 135,
+      "cc": 2,
+      "nloc": 9,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/session-pool.ts",
+      "function": "#generationFor",
+      "line": 145,
+      "cc": 3,
+      "nloc": 3,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/session-pool.ts",
+      "function": "(anonymous)",
+      "line": 169,
+      "cc": 1,
+      "nloc": 1,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/session-pool.ts",
+      "function": "(anonymous)",
+      "line": 191,
+      "cc": 1,
+      "nloc": 1,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/session-pool.ts",
+      "function": "#start",
+      "line": 149,
+      "cc": 16,
+      "nloc": 47,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/runner.ts",
+      "function": "normalizeCode",
+      "line": 30,
+      "cc": 4,
+      "nloc": 12,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/runner.ts",
+      "function": "runCodemode",
+      "line": 65,
+      "cc": 1,
+      "nloc": 7,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/runner.ts",
+      "function": "formatLog",
+      "line": 84,
+      "cc": 3,
+      "nloc": 8,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/runner.ts",
+      "function": "log",
+      "line": 93,
+      "cc": 1,
+      "nloc": 3,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/runner.ts",
+      "function": "info",
+      "line": 96,
+      "cc": 1,
+      "nloc": 3,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/runner.ts",
+      "function": "warn",
+      "line": 99,
+      "cc": 1,
+      "nloc": 3,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/runner.ts",
+      "function": "error",
+      "line": 102,
+      "cc": 1,
+      "nloc": 3,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/runner.ts",
+      "function": "debug",
+      "line": 105,
+      "cc": 1,
+      "nloc": 3,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/runner.ts",
+      "function": "fn",
+      "line": 124,
+      "cc": 1,
+      "nloc": 1,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/runner.ts",
+      "function": "(anonymous)",
+      "line": 125,
+      "cc": 1,
+      "nloc": 1,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/runner.ts",
+      "function": "(anonymous)",
+      "line": 131,
+      "cc": 1,
+      "nloc": 1,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/runner.ts",
+      "function": "AsyncFunction",
+      "line": 133,
+      "cc": 1,
+      "nloc": 1,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/runner.ts",
+      "function": "run",
+      "line": 135,
+      "cc": 1,
+      "nloc": 1,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/runner.ts",
+      "function": "onAbort",
+      "line": 153,
+      "cc": 1,
+      "nloc": 1,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/runner.ts",
+      "function": "(anonymous)",
+      "line": 158,
+      "cc": 1,
+      "nloc": 1,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/runner.ts",
+      "function": "(anonymous)",
+      "line": 157,
+      "cc": 1,
+      "nloc": 3,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/runner.ts",
+      "function": "onAbort",
+      "line": 163,
+      "cc": 1,
+      "nloc": 1,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/runner.ts",
+      "function": "(anonymous)",
+      "line": 162,
+      "cc": 1,
+      "nloc": 4,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/runner.ts",
+      "function": "resultOk",
+      "line": 183,
+      "cc": 1,
+      "nloc": 7,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/runner.ts",
+      "function": "resultErr",
+      "line": 196,
+      "cc": 1,
+      "nloc": 7,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/runner.ts",
+      "function": "cloneOut",
+      "line": 209,
+      "cc": 4,
+      "nloc": 12,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/worker.ts",
+      "function": "failAll",
+      "line": 49,
+      "cc": 2,
+      "nloc": 4,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/worker.ts",
+      "function": "terminate",
+      "line": 54,
+      "cc": 2,
+      "nloc": 7,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/worker.ts",
+      "function": "(anonymous)",
+      "line": 62,
+      "cc": 7,
+      "nloc": 20,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/worker.ts",
+      "function": "(anonymous)",
+      "line": 83,
+      "cc": 2,
+      "nloc": 4,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/worker.ts",
+      "function": "(anonymous)",
+      "line": 88,
+      "cc": 1,
+      "nloc": 4,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/worker.ts",
+      "function": "(anonymous)",
+      "line": 93,
+      "cc": 2,
+      "nloc": 10,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/worker.ts",
+      "function": "onAbort",
+      "line": 104,
+      "cc": 1,
+      "nloc": 1,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/worker.ts",
+      "function": "(anonymous)",
+      "line": 115,
+      "cc": 2,
+      "nloc": 6,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/worker.ts",
+      "function": "(anonymous)",
+      "line": 113,
+      "cc": 1,
+      "nloc": 4,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/worker.ts",
+      "function": "write",
+      "line": 107,
+      "cc": 4,
+      "nloc": 8,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/worker.ts",
+      "function": "finish",
+      "line": 134,
+      "cc": 1,
+      "nloc": 1,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/worker.ts",
+      "function": "(anonymous)",
+      "line": 131,
+      "cc": 1,
+      "nloc": 4,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/worker.ts",
+      "function": "(anonymous)",
+      "line": 134,
+      "cc": 3,
+      "nloc": 7,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/worker.ts",
+      "function": "(anonymous)",
+      "line": 141,
+      "cc": 1,
+      "nloc": 4,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/worker.ts",
+      "function": "fail",
+      "line": 141,
+      "cc": 1,
+      "nloc": 1,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/worker.ts",
+      "function": "onRequestAbort",
+      "line": 145,
+      "cc": 1,
+      "nloc": 1,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/worker.ts",
+      "function": "(anonymous)",
+      "line": 149,
+      "cc": 1,
+      "nloc": 2,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/worker.ts",
+      "function": "(anonymous)",
+      "line": 154,
+      "cc": 1,
+      "nloc": 1,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/worker.ts",
+      "function": "(anonymous)",
+      "line": 155,
+      "cc": 1,
+      "nloc": 1,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/worker.ts",
+      "function": "(anonymous)",
+      "line": 154,
+      "cc": 1,
+      "nloc": 3,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/worker.ts",
+      "function": "writeWithControls",
+      "line": 124,
+      "cc": 4,
+      "nloc": 19,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/worker.ts",
+      "function": "startStickyWorker",
+      "line": 27,
+      "cc": 2,
+      "nloc": 29,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/worker.ts",
+      "function": "call",
+      "line": 164,
+      "cc": 5,
+      "nloc": 10,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/worker.ts",
+      "function": "batch",
+      "line": 175,
+      "cc": 7,
+      "nloc": 14,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/worker.ts",
+      "function": "end",
+      "line": 190,
+      "cc": 4,
+      "nloc": 14,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/worker.ts",
+      "function": "(anonymous)",
+      "line": 232,
+      "cc": 1,
+      "nloc": 4,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/worker.ts",
+      "function": "onAbort",
+      "line": 238,
+      "cc": 1,
+      "nloc": 4,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/worker.ts",
+      "function": "(anonymous)",
+      "line": 244,
+      "cc": 1,
+      "nloc": 3,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/worker.ts",
+      "function": "(anonymous)",
+      "line": 247,
+      "cc": 1,
+      "nloc": 3,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/worker.ts",
+      "function": "(anonymous)",
+      "line": 250,
+      "cc": 2,
+      "nloc": 5,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/worker.ts",
+      "function": "(anonymous)",
+      "line": 255,
+      "cc": 4,
+      "nloc": 13,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/worker.ts",
+      "function": "(anonymous)",
+      "line": 268,
+      "cc": 2,
+      "nloc": 8,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/worker.ts",
+      "function": "(anonymous)",
+      "line": 218,
+      "cc": 3,
+      "nloc": 24,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/worker.ts",
+      "function": "runBatchViaStdin",
+      "line": 209,
+      "cc": 2,
+      "nloc": 11,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/worker.ts",
+      "function": "(anonymous)",
+      "line": 286,
+      "cc": 4,
+      "nloc": 6,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/worker.ts",
+      "function": "killChild",
+      "line": 279,
+      "cc": 4,
+      "nloc": 8,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/runtime.ts",
+      "function": "constructor",
+      "line": 54,
+      "cc": 1,
+      "nloc": 4,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/runtime.ts",
+      "function": "finitePositive",
+      "line": 60,
+      "cc": 5,
+      "nloc": 8,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/runtime.ts",
+      "function": "sameSetting",
+      "line": 68,
+      "cc": 6,
+      "nloc": 7,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/runtime.ts",
+      "function": "migrateConfig",
+      "line": 82,
+      "cc": 9,
+      "nloc": 19,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/runtime.ts",
+      "function": "rollbackConfig",
+      "line": 102,
+      "cc": 3,
+      "nloc": 11,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/runtime.ts",
+      "function": "envConfig",
+      "line": 113,
+      "cc": 7,
+      "nloc": 11,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/runtime.ts",
+      "function": "resolveConfig",
+      "line": 126,
+      "cc": 1,
+      "nloc": 18,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/runtime.ts",
+      "function": "pathContained",
+      "line": 146,
+      "cc": 3,
+      "nloc": 5,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/runtime.ts",
+      "function": "resolveRuntimeRoot",
+      "line": 151,
+      "cc": 7,
+      "nloc": 14,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/runtime.ts",
+      "function": "record",
+      "line": 200,
+      "cc": 4,
+      "nloc": 3,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/runtime.ts",
+      "function": "indexHealth",
+      "line": 204,
+      "cc": 16,
+      "nloc": 13,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/runtime.ts",
+      "function": "incompatibleStatusFailure",
+      "line": 217,
+      "cc": 4,
+      "nloc": 4,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/runtime.ts",
+      "function": "needsIncrementalIndex",
+      "line": 227,
+      "cc": 4,
+      "nloc": 9,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/runtime.ts",
+      "function": "probeIndexHealth",
+      "line": 237,
+      "cc": 1,
+      "nloc": 6,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/runtime.ts",
+      "function": "runIndex",
+      "line": 256,
+      "cc": 3,
+      "nloc": 12,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/runtime.ts",
+      "function": "canonicalizeAffectedPath",
+      "line": 269,
+      "cc": 6,
+      "nloc": 16,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/runtime.ts",
+      "function": "#now",
+      "line": 289,
+      "cc": 1,
+      "nloc": 1,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/runtime.ts",
+      "function": "constructor",
+      "line": 291,
+      "cc": 3,
+      "nloc": 4,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/runtime.ts",
+      "function": "markAffectedPath",
+      "line": 296,
+      "cc": 4,
+      "nloc": 7,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/runtime.ts",
+      "function": "markRootDirty",
+      "line": 304,
+      "cc": 2,
+      "nloc": 6,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/runtime.ts",
+      "function": "refresh",
+      "line": 336,
+      "cc": 4,
+      "nloc": 13,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/runtime.ts",
+      "function": "ensureFresh",
+      "line": 311,
+      "cc": 10,
+      "nloc": 24,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/runtime.ts",
+      "function": "getBinary",
+      "line": 362,
+      "cc": 7,
+      "nloc": 20,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/runtime.ts",
+      "function": "byteLength",
+      "line": 382,
+      "cc": 1,
+      "nloc": 2,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/runtime.ts",
+      "function": "assertVersionTriple",
+      "line": 385,
+      "cc": 7,
+      "nloc": 9,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/runtime.ts",
+      "function": "throwNonzeroProcessFailure",
+      "line": 399,
+      "cc": 10,
+      "nloc": 18,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/runtime.ts",
+      "function": "rethrowExecFailure",
+      "line": 419,
+      "cc": 7,
+      "nloc": 12,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/runtime.ts",
+      "function": "parseEnvelope",
+      "line": 431,
+      "cc": 17,
+      "nloc": 27,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/runtime.ts",
+      "function": "indexPathFor",
+      "line": 460,
+      "cc": 3,
+      "nloc": 7,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/runtime.ts",
+      "function": "throwIndexRebuildFailed",
+      "line": 468,
+      "cc": 5,
+      "nloc": 21,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/runtime.ts",
+      "function": "inspectIndexFile",
+      "line": 489,
+      "cc": 8,
+      "nloc": 23,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/runtime.ts",
+      "function": "constructor",
+      "line": 517,
+      "cc": 5,
+      "nloc": 5,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/runtime.ts",
+      "function": "resolveRoot",
+      "line": 523,
+      "cc": 2,
+      "nloc": 5,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/runtime.ts",
+      "function": "inspectIndexCompatibility",
+      "line": 528,
+      "cc": 1,
+      "nloc": 4,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/runtime.ts",
+      "function": "rebuildIncompatibleIndex",
+      "line": 533,
+      "cc": 7,
+      "nloc": 33,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/runtime.ts",
+      "function": "(anonymous)",
+      "line": 569,
+      "cc": 1,
+      "nloc": 1,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/runtime.ts",
+      "function": "run",
+      "line": 568,
+      "cc": 6,
+      "nloc": 16,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/runtime.ts",
+      "function": "resolveBinaryPath",
+      "line": 586,
+      "cc": 1,
+      "nloc": 4,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/runtime.ts",
+      "function": "nativeEnv",
+      "line": 592,
+      "cc": 1,
+      "nloc": 3,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/runtime.ts",
+      "function": "checkCompatibility",
+      "line": 596,
+      "cc": 1,
+      "nloc": 5,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/code-mode.ts",
+      "function": "assertSafeReadPath",
+      "line": 99,
+      "cc": 3,
+      "nloc": 11,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/code-mode.ts",
+      "function": "boundedInteger",
+      "line": 115,
+      "cc": 5,
+      "nloc": 8,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/code-mode.ts",
+      "function": "requiredText",
+      "line": 123,
+      "cc": 4,
+      "nloc": 7,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/code-mode.ts",
+      "function": "outputArgs",
+      "line": 130,
+      "cc": 1,
+      "nloc": 12,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/code-mode.ts",
+      "function": "optionalTextField",
+      "line": 142,
+      "cc": 3,
+      "nloc": 4,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/code-mode.ts",
+      "function": "wireLinesValid",
+      "line": 146,
+      "cc": 6,
+      "nloc": 8,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/code-mode.ts",
+      "function": "parseWireHitRef",
+      "line": 155,
+      "cc": 8,
+      "nloc": 18,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/code-mode.ts",
+      "function": "(anonymous)",
+      "line": 178,
+      "cc": 2,
+      "nloc": 1,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/code-mode.ts",
+      "function": "isValidHitShape",
+      "line": 174,
+      "cc": 18,
+      "nloc": 12,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/code-mode.ts",
+      "function": "parseSearchHit",
+      "line": 186,
+      "cc": 4,
+      "nloc": 26,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/code-mode.ts",
+      "function": "asSearchResponse",
+      "line": 212,
+      "cc": 10,
+      "nloc": 17,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/code-mode.ts",
+      "function": "refValue",
+      "line": 230,
+      "cc": 2,
+      "nloc": 4,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/code-mode.ts",
+      "function": "parseSgrepRef",
+      "line": 235,
+      "cc": 1,
+      "nloc": 3,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/code-mode.ts",
+      "function": "parseRef",
+      "line": 239,
+      "cc": 8,
+      "nloc": 12,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/code-mode.ts",
+      "function": "inside",
+      "line": 252,
+      "cc": 4,
+      "nloc": 5,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/code-mode.ts",
+      "function": "checkAbort",
+      "line": 257,
+      "cc": 2,
+      "nloc": 4,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/code-mode.ts",
+      "function": "boundedPrefix",
+      "line": 261,
+      "cc": 3,
+      "nloc": 10,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/code-mode.ts",
+      "function": "formatReadRef",
+      "line": 281,
+      "cc": 1,
+      "nloc": 4,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/code-mode.ts",
+      "function": "consumeLine",
+      "line": 313,
+      "cc": 9,
+      "nloc": 18,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/code-mode.ts",
+      "function": "readLineWindow",
+      "line": 285,
+      "cc": 25,
+      "nloc": 96,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/code-mode.ts",
+      "function": "runSearch",
+      "line": 407,
+      "cc": 1,
+      "nloc": 10,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/code-mode.ts",
+      "function": "resolveReadableFile",
+      "line": 418,
+      "cc": 6,
+      "nloc": 23,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/code-mode.ts",
+      "function": "openStableHandle",
+      "line": 442,
+      "cc": 9,
+      "nloc": 30,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/code-mode.ts",
+      "function": "constructor",
+      "line": 476,
+      "cc": 1,
+      "nloc": 12,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/code-mode.ts",
+      "function": "execute",
+      "line": 489,
+      "cc": 2,
+      "nloc": 4,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/code-mode.ts",
+      "function": "keywordSearch",
+      "line": 494,
+      "cc": 1,
+      "nloc": 3,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/code-mode.ts",
+      "function": "astSearch",
+      "line": 498,
+      "cc": 1,
+      "nloc": 3,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/code-mode.ts",
+      "function": "semanticSearch",
+      "line": 502,
+      "cc": 1,
+      "nloc": 3,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/code-mode.ts",
+      "function": "find",
+      "line": 506,
+      "cc": 1,
+      "nloc": 3,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/code-mode.ts",
+      "function": "astFind",
+      "line": 510,
+      "cc": 1,
+      "nloc": 3,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/code-mode.ts",
+      "function": "semantic",
+      "line": 514,
+      "cc": 1,
+      "nloc": 3,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/code-mode.ts",
+      "function": "createSgrepCodeMode",
+      "line": 567,
+      "cc": 1,
+      "nloc": 3,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/edit.ts",
+      "function": "containedInRoot",
+      "line": 66,
+      "cc": 4,
+      "nloc": 5,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/edit.ts",
+      "function": "assertSafeEditTarget",
+      "line": 72,
+      "cc": 3,
+      "nloc": 11,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/edit.ts",
+      "function": "repairEditPath",
+      "line": 84,
+      "cc": 8,
+      "nloc": 20,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/edit.ts",
+      "function": "looksBinary",
+      "line": 106,
+      "cc": 3,
+      "nloc": 11,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/edit.ts",
+      "function": "isRecord",
+      "line": 117,
+      "cc": 3,
+      "nloc": 3,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/edit.ts",
+      "function": "parseEditParams",
+      "line": 125,
+      "cc": 13,
+      "nloc": 51,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/edit.ts",
+      "function": "planEdit",
+      "line": 177,
+      "cc": 7,
+      "nloc": 28,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/edit.ts",
+      "function": "applyEdit",
+      "line": 209,
+      "cc": 3,
+      "nloc": 12,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/index.ts",
+      "function": "(anonymous)",
+      "line": 101,
+      "cc": 1,
+      "nloc": 1,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/index.ts",
+      "function": "bounded",
+      "line": 103,
+      "cc": 2,
+      "nloc": 4,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/index.ts",
+      "function": "success",
+      "line": 107,
+      "cc": 5,
+      "nloc": 10,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/index.ts",
+      "function": "errorDetails",
+      "line": 121,
+      "cc": 4,
+      "nloc": 8,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/index.ts",
+      "function": "failure",
+      "line": 130,
+      "cc": 1,
+      "nloc": 7,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/index.ts",
+      "function": "report",
+      "line": 138,
+      "cc": 1,
+      "nloc": 5,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/index.ts",
+      "function": "queryForMode",
+      "line": 147,
+      "cc": 8,
+      "nloc": 7,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/index.ts",
+      "function": "searchArgs",
+      "line": 154,
+      "cc": 9,
+      "nloc": 9,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/index.ts",
+      "function": "execute",
+      "line": 163,
+      "cc": 1,
+      "nloc": 9,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/index.ts",
+      "function": "ensurePool",
+      "line": 194,
+      "cc": 3,
+      "nloc": 7,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/index.ts",
+      "function": "resolveRoot",
+      "line": 222,
+      "cc": 1,
+      "nloc": 2,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/index.ts",
+      "function": "probeCli",
+      "line": 235,
+      "cc": 5,
+      "nloc": 11,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/index.ts",
+      "function": "requireBackend",
+      "line": 254,
+      "cc": 2,
+      "nloc": 15,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/index.ts",
+      "function": "runCli",
+      "line": 271,
+      "cc": 1,
+      "nloc": 8,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/index.ts",
+      "function": "nativeCall",
+      "line": 280,
+      "cc": 3,
+      "nloc": 14,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/index.ts",
+      "function": "run",
+      "line": 298,
+      "cc": 1,
+      "nloc": 2,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/index.ts",
+      "function": "resolveRoot",
+      "line": 299,
+      "cc": 1,
+      "nloc": 2,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/index.ts",
+      "function": "warmRuntime.inspectIndexCompatibility",
+      "line": 303,
+      "cc": 1,
+      "nloc": 1,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/index.ts",
+      "function": "warmRuntime.rebuildIncompatibleIndex",
+      "line": 306,
+      "cc": 1,
+      "nloc": 1,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/index.ts",
+      "function": "(anonymous)",
+      "line": 309,
+      "cc": 6,
+      "nloc": 6,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/index.ts",
+      "function": "execute",
+      "line": 341,
+      "cc": 6,
+      "nloc": 12,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/index.ts",
+      "function": "run",
+      "line": 358,
+      "cc": 1,
+      "nloc": 1,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/index.ts",
+      "function": "runBatch?",
+      "line": 360,
+      "cc": 1,
+      "nloc": 5,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/index.ts",
+      "function": "run",
+      "line": 366,
+      "cc": 3,
+      "nloc": 2,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/index.ts",
+      "function": "batchHost.runBatch",
+      "line": 371,
+      "cc": 1,
+      "nloc": 1,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/index.ts",
+      "function": "(anonymous)",
+      "line": 372,
+      "cc": 3,
+      "nloc": 2,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/index.ts",
+      "function": "(anonymous)",
+      "line": 376,
+      "cc": 3,
+      "nloc": 11,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/index.ts",
+      "function": "stats",
+      "line": 392,
+      "cc": 1,
+      "nloc": 1,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/index.ts",
+      "function": "execute",
+      "line": 441,
+      "cc": 4,
+      "nloc": 17,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/index.ts",
+      "function": "execute",
+      "line": 465,
+      "cc": 6,
+      "nloc": 17,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/index.ts",
+      "function": "execute",
+      "line": 489,
+      "cc": 5,
+      "nloc": 15,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/index.ts",
+      "function": "execute",
+      "line": 511,
+      "cc": 4,
+      "nloc": 20,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/index.ts",
+      "function": "searchToolCall",
+      "line": 554,
+      "cc": 11,
+      "nloc": 22,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/index.ts",
+      "function": "safeRender",
+      "line": 578,
+      "cc": 4,
+      "nloc": 10,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/index.ts",
+      "function": "summarizeCodemode",
+      "line": 588,
+      "cc": 15,
+      "nloc": 31,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/index.ts",
+      "function": "runCommand",
+      "line": 626,
+      "cc": 3,
+      "nloc": 15,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/index.ts",
+      "function": "(anonymous)",
+      "line": 646,
+      "cc": 1,
+      "nloc": 1,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/index.ts",
+      "function": "compactCommandResult",
+      "line": 642,
+      "cc": 7,
+      "nloc": 12,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/index.ts",
+      "function": "handler",
+      "line": 661,
+      "cc": 3,
+      "nloc": 6,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/index.ts",
+      "function": "astSgrepExtension",
+      "line": 671,
+      "cc": 1,
+      "nloc": 6,
+      "cognitive": null,
+      "tool": "lizard"
+    }
+  ],
+  "hotspots": [
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/code-mode.ts",
+      "function": "readLineWindow",
+      "line": 285,
+      "cc": 25,
+      "nloc": 96,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/code-mode.ts",
+      "function": "isValidHitShape",
+      "line": 174,
+      "cc": 18,
+      "nloc": 12,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/runtime.ts",
+      "function": "parseEnvelope",
+      "line": 431,
+      "cc": 17,
+      "nloc": 27,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/session-pool.ts",
+      "function": "#start",
+      "line": 149,
+      "cc": 16,
+      "nloc": 47,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/runtime.ts",
+      "function": "indexHealth",
+      "line": 204,
+      "cc": 16,
+      "nloc": 13,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/index.ts",
+      "function": "summarizeCodemode",
+      "line": 588,
+      "cc": 15,
+      "nloc": 31,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/edit.ts",
+      "function": "parseEditParams",
+      "line": 125,
+      "cc": 13,
+      "nloc": 51,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/native.ts",
+      "function": "platformTriple",
+      "line": 68,
+      "cc": 11,
+      "nloc": 10,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/codemode/dispatch.ts",
+      "function": "argvFor",
+      "line": 256,
+      "cc": 11,
+      "nloc": 18,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/packages/pi/extension/src/index.ts",
+      "function": "searchToolCall",
+      "line": 554,
+      "cc": 11,
+      "nloc": 22,
+      "cognitive": null,
+      "tool": "lizard"
+    }
+  ]
+}
