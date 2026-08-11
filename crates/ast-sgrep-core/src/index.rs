@@ -648,16 +648,17 @@ impl Indexer {
             let Ok(rel) = abs.strip_prefix(&self.options.root) else {
                 continue;
             };
+            // Empty relative path or directory events are not "skipped" files.
             if rel.as_os_str().is_empty() || abs.is_dir() {
                 continue;
             }
             let rel_str = indexed_rel_path(rel)?;
-            if rel
-                .components()
-                .any(|c| should_skip_dir(Path::new(c.as_os_str())))
-                || should_skip_file(&abs)
-                || (self.options.respect_gitignore && self.ignore.is_ignored(rel))
-            {
+            if should_skip_watch_path(
+                &abs,
+                rel,
+                self.options.respect_gitignore,
+                &self.ignore,
+            ) {
                 stats.files_skipped += 1;
                 continue;
             }
@@ -1035,6 +1036,21 @@ fn normalize_watch_path(root: &Path, input_path: &Path) -> Option<PathBuf> {
         let parent = input_path.parent()?.canonicalize().ok()?;
         Some(parent.join(input_path.file_name()?))
     })
+}
+
+/// Guard predicate for watch updates: skip-dir components, skip-file policy, gitignore.
+/// Callers still handle empty-rel / directory continues separately (those do not bump files_skipped).
+fn should_skip_watch_path(
+    abs: &Path,
+    rel: &Path,
+    respect_gitignore: bool,
+    ignore: &crate::gitignore::IgnoreMatcher,
+) -> bool {
+    // Same short-circuit order as the former inline condition in `update_paths`.
+    rel.components()
+        .any(|c| should_skip_dir(Path::new(c.as_os_str())))
+        || should_skip_file(abs)
+        || (respect_gitignore && ignore.is_ignored(rel))
 }
 
 fn prepare_file(
