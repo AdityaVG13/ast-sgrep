@@ -64,6 +64,31 @@ fn literal_trigram(
     }
     Ok(hits)
 }
+/// SQL templates for literal line scan: [case_insensitive][has_lang].
+/// Case-insensitive → LIKE ESCAPE; case-sensitive → GLOB (no ESCAPE). Bead ast-sgrep-c2j5.
+/// Lang filter in SQL before ORDER/LIMIT so a lang page cannot go empty (iva9.5).
+const LITERAL_SQL: [[&str; 2]; 2] = [
+    // case_sensitive (GLOB)
+    [
+        "SELECT f.path, f.language, l.line_no, l.content
+         FROM lines l JOIN files f ON f.id = l.file_id WHERE l.content GLOB ?1 ORDER BY f.path, l.line_no LIMIT ?2",
+        "SELECT f.path, f.language, l.line_no, l.content
+         FROM lines l JOIN files f ON f.id = l.file_id WHERE l.content GLOB ?1 AND f.language = ?3 ORDER BY f.path, l.line_no LIMIT ?2",
+    ],
+    // case_insensitive (LIKE ESCAPE)
+    [
+        "SELECT f.path, f.language, l.line_no, l.content
+         FROM lines l JOIN files f ON f.id = l.file_id WHERE l.content LIKE ?1 ESCAPE '\\' ORDER BY f.path, l.line_no LIMIT ?2",
+        "SELECT f.path, f.language, l.line_no, l.content
+         FROM lines l JOIN files f ON f.id = l.file_id WHERE l.content LIKE ?1 ESCAPE '\\' AND f.language = ?3 ORDER BY f.path, l.line_no LIMIT ?2",
+    ],
+];
+
+#[inline]
+fn literal_sql_template(case_insensitive: bool, has_lang: bool) -> &'static str {
+    LITERAL_SQL[usize::from(case_insensitive)][usize::from(has_lang)]
+}
+
 fn literal_sql(
     store: &IndexStore,
     options: &SearchOptions,
@@ -71,34 +96,14 @@ fn literal_sql(
     needle: &str,
 ) -> Result<Vec<SearchHit>> {
     // Escape metacharacters so the needle is matched literally.
-    // Case-insensitive path uses LIKE ESCAPE; case-sensitive uses GLOB with
-    // character-class escaping (GLOB has no ESCAPE clause). Bead ast-sgrep-c2j5.
-    //
-    // iva9.5: apply lang filter in SQL before path ORDER/LIMIT so a lang page
-    // cannot go empty while alphabetically-later matching files exist.
     let limit = options.limit.max(100);
     let lang = options.lang_filter.as_deref();
-    let (sql, pattern) = if options.case_insensitive {
-        let pattern = format!("%{}%", crate::store::sql::escape_like_term(needle));
-        let sql = if lang.is_some() {
-            "SELECT f.path, f.language, l.line_no, l.content
-         FROM lines l JOIN files f ON f.id = l.file_id WHERE l.content LIKE ?1 ESCAPE '\\' AND f.language = ?3 ORDER BY f.path, l.line_no LIMIT ?2"
-        } else {
-            "SELECT f.path, f.language, l.line_no, l.content
-         FROM lines l JOIN files f ON f.id = l.file_id WHERE l.content LIKE ?1 ESCAPE '\\' ORDER BY f.path, l.line_no LIMIT ?2"
-        };
-        (sql, pattern)
+    let pattern = if options.case_insensitive {
+        format!("%{}%", crate::store::sql::escape_like_term(needle))
     } else {
-        let pattern = format!("*{}*", crate::store::sql::escape_glob_literal(needle));
-        let sql = if lang.is_some() {
-            "SELECT f.path, f.language, l.line_no, l.content
-         FROM lines l JOIN files f ON f.id = l.file_id WHERE l.content GLOB ?1 AND f.language = ?3 ORDER BY f.path, l.line_no LIMIT ?2"
-        } else {
-            "SELECT f.path, f.language, l.line_no, l.content
-         FROM lines l JOIN files f ON f.id = l.file_id WHERE l.content GLOB ?1 ORDER BY f.path, l.line_no LIMIT ?2"
-        };
-        (sql, pattern)
+        format!("*{}*", crate::store::sql::escape_glob_literal(needle))
     };
+    let sql = literal_sql_template(options.case_insensitive, lang.is_some());
     let mut stmt = store.connection().prepare_cached(sql)?;
     let rows = match lang {
         Some(lang) => stmt.query_map(params![pattern, limit as i64, lang], map_line_row)?,

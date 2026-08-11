@@ -227,35 +227,51 @@ function emptyStats(): DispatchStats {
   };
 }
 
-/** Build CLI argv for spawn fallback (typed path preferred). */
+/** Build CLI argv for spawn fallback (typed path preferred). Data-driven tool table. */
+type ArgvSpec =
+  | { form: "capsule"; key: "query" | "symbol" | "module"; prefix?: string }
+  | { form: "semantic" }
+  | { form: "chain" }
+  | { form: "status" }
+  | { form: "index_repo" };
+
+const ARGV_SPEC: Record<string, ArgvSpec> = {
+  search: { form: "capsule", key: "query" },
+  semantic: { form: "semantic" },
+  chain: { form: "chain" },
+  defs: { form: "capsule", key: "symbol", prefix: "defs" },
+  callers: { form: "capsule", key: "symbol", prefix: "callers" },
+  imports: { form: "capsule", key: "module", prefix: "imports" },
+  index_status: { form: "status" },
+  index_repo: { form: "index_repo" },
+  // No CLI equivalent — sticky/batch only.
+  catalog_search: { form: "status" },
+  catalog_describe: { form: "status" },
+};
+
+function argStr(args: Record<string, unknown>, key: string): string {
+  return String(args[key] ?? "");
+}
+
 export function argvFor(tool: string, args: Record<string, unknown>): string[] {
+  const spec = ARGV_SPEC[tool] ?? { form: "capsule" as const, key: "query" as const };
+  if (spec.form === "status") return ["status", ".", "--json"];
+  if (spec.form === "index_repo") return [args.force === true ? "reindex" : "index", ".", "--json"];
+
   const limit = num(args.limit, 8);
+  if (spec.form === "chain") {
+    return ["chain", argStr(args, "query"), ".", "--json", "--limit", String(limit)];
+  }
+
   const excerpt = num(args.excerpt_lines ?? args.excerptLines, 0);
   const capsule = ["--json", "--format", "agent-capsule", "--limit", String(limit), "--excerpt-lines", String(excerpt)];
-  switch (tool) {
-    case "search":
-      return [...capsule, String(args.query ?? ""), "."];
-    case "semantic":
-      return ["semantic", String(args.query ?? ""), ".", ...capsule];
-    case "chain":
-      return ["chain", String(args.query ?? ""), ".", "--json", "--limit", String(limit)];
-    case "defs":
-      return [...capsule, `defs:${String(args.symbol ?? "")}`, "."];
-    case "callers":
-      return [...capsule, `callers:${String(args.symbol ?? "")}`, "."];
-    case "imports":
-      return [...capsule, `imports:${String(args.module ?? "")}`, "."];
-    case "index_status":
-      return ["status", ".", "--json"];
-    case "index_repo":
-      return [args.force === true ? "reindex" : "index", ".", "--json"];
-    case "catalog_search":
-    case "catalog_describe":
-      // No CLI equivalent — sticky/batch only.
-      return ["status", ".", "--json"];
-    default:
-      return [...capsule, String(args.query ?? ""), "."];
+  if (spec.form === "semantic") {
+    return ["semantic", argStr(args, "query"), ".", ...capsule];
   }
+  // capsule (+ optional prefix for defs/callers/imports)
+  const raw = argStr(args, spec.key);
+  const token = spec.prefix ? `${spec.prefix}:${raw}` : raw;
+  return [...capsule, token, "."];
 }
 
 function num(value: unknown, fallback: number): number {

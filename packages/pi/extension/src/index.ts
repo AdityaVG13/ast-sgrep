@@ -531,40 +531,48 @@ export function registerAstSgrepTools(
   });
 }
 
-/** Map one-shot search params to typed sticky tool+args. */
+/** Map one-shot search params to typed sticky tool+args. Data-driven mode table. */
+type SearchCallSpec =
+  | { tool: "semantic" }
+  | { tool: "chain" }
+  | { tool: "defs" | "callers" | "imports"; key: "symbol" | "module" }
+  | { tool: "search"; prefix?: string };
+
+const SEARCH_CALL_SPEC: { [M in SearchMode]: SearchCallSpec } = {
+  semantic: { tool: "semantic" },
+  chain: { tool: "chain" },
+  defs: { tool: "defs", key: "symbol" },
+  callers: { tool: "callers", key: "symbol" },
+  imports: { tool: "imports", key: "module" },
+  pattern: { tool: "search", prefix: "pattern" },
+  word: { tool: "search", prefix: "word" },
+  literal: { tool: "search", prefix: "literal" },
+  regex: { tool: "search", prefix: "regex" },
+  natural: { tool: "search" },
+};
+
 function searchToolCall(params: {
   query: string;
   mode?: SearchMode;
   limit?: number;
   excerptLines?: number;
 }): [string, Record<string, unknown>] {
-  const mode = params.mode ?? "natural";
+  const mode: SearchMode = params.mode ?? "natural";
   const limit = params.limit ?? DEFAULT_LIMIT;
   const excerpt_lines = params.excerptLines ?? 0;
-  switch (mode) {
-    case "semantic":
-      return ["semantic", { query: params.query, limit, excerpt_lines, format: "capsule" }];
-    case "chain":
-      return ["chain", { query: params.query, limit, top_n: 20 }];
-    case "defs":
-      return ["defs", { symbol: params.query, limit, excerpt_lines }];
-    case "callers":
-      return ["callers", { symbol: params.query, limit, excerpt_lines }];
-    case "imports":
-      return ["imports", { module: params.query, limit, excerpt_lines }];
-    case "pattern":
-    case "word":
-    case "literal":
-    case "regex":
-      return ["search", { query: `${mode}: ${params.query}`, limit, excerpt_lines, format: "capsule" }];
-    case "natural":
-      return ["search", { query: params.query, limit, excerpt_lines, format: "capsule" }];
-    default: {
-      const _exhaustive: never = mode;
-      void _exhaustive;
-      return ["search", { query: params.query, limit, excerpt_lines, format: "capsule" }];
-    }
+  const spec = SEARCH_CALL_SPEC[mode];
+  if (spec.tool === "semantic") {
+    return ["semantic", { query: params.query, limit, excerpt_lines, format: "capsule" }];
   }
+  if (spec.tool === "chain") {
+    return ["chain", { query: params.query, limit, top_n: 20 }];
+  }
+  if (spec.tool === "search") {
+    const query = spec.prefix ? `${spec.prefix}: ${params.query}` : params.query;
+    return ["search", { query, limit, excerpt_lines, format: "capsule" }];
+  }
+  // defs / callers / imports
+  return [spec.tool, { [spec.key]: params.query, limit, excerpt_lines }];
 }
 
 function safeRender(value: unknown): string {
