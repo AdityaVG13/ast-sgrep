@@ -1,0 +1,111 @@
+{
+  "schema_version": "1.0",
+  "loop": 11,
+  "name": "independent-verification-residual-queue",
+  "campaign_pass": 11,
+  "status": "COMPLETE",
+  "mode": "audit",
+  "timestamp_utc": "2026-08-11T03:02:30Z",
+  "freeze_revision": "fb932aac852f5496c0a7035cc5a0b508e05111cb",
+  "head_observed": "7cb1a28d53d5a5752ea62010b970e0b491d2dc75",
+  "axes": {
+    "observer": "skeptic-non-originator",
+    "evidence": "tests+source-reread",
+    "scale": "residual-only",
+    "representation": "dual-evidence-ledger"
+  },
+  "axes_changed_vs_prior": 4,
+  "prior_state_leveraged": true,
+  "zerostack_engines": "unavailable-tokenzero",
+  "open_beads_at_start": 51,
+  "beads_created": 0,
+  "product_source_edits": 0,
+  "dual_evidence": [
+    {
+      "id": "C2",
+      "aliases": ["BY-CM-ROOT", "GAP-CM-ROOT"],
+      "verdict": "CONFIRMED_CONTRADICTION",
+      "dual_status": "DUAL_OK_ASYMMETRY_PARTIAL_LIVE_PRUNE",
+      "tests": [
+        {
+          "cmd": "cargo test -p ast-sgrep-mcp --test protocol tool_roots_are_sandboxed",
+          "result": "ok_1_passed"
+        }
+      ],
+      "source_anchors": [
+        "crates/ast-sgrep-mcp/src/lib.rs:sandbox_root:547",
+        "crates/ast-sgrep-codemode/src/session.rs:root_arg:105",
+        "crates/ast-sgrep-codemode/src/session.rs:index_repo:248",
+        "crates/ast-sgrep-core/src/index.rs:collect_index_candidates:405",
+        "crates/ast-sgrep-core/src/index.rs:prune_missing_files:454"
+      ],
+      "packet": "R-CM-ROOT-POLICY"
+    },
+    {
+      "id": "CL-MID-SIDECAR-CACHE",
+      "aliases": ["RW-MCP-MID-SIDECAR", "BY-REGISTRY-STALE", "CL-INDEX-FAIL-REGISTRIES"],
+      "verdict": "CONFIRMED_GAP",
+      "dual_status": "DUAL_OK",
+      "tests": [
+        {
+          "cmd": "cargo test -p ast-sgrep-mcp --lib",
+          "result": "ok_3_passed",
+          "pins": "ok_path_invalidate_only"
+        }
+      ],
+      "source_anchors": [
+        "crates/ast-sgrep-core/src/index.rs:index_all:271-284",
+        "crates/ast-sgrep-core/src/store/sqlite.rs:apply_bulk_write_result:540",
+        "crates/ast-sgrep-mcp/src/lib.rs:tool_index_repo:882-897"
+      ],
+      "packet": "R-INDEX-ERR-CACHE-SYNC"
+    },
+    {
+      "id": "GAP-WATCH-XPROC",
+      "aliases": ["GAP-XOR-RUNTIME"],
+      "verdict": "CONFIRMED_GAP",
+      "dual_status": "DUAL_OK",
+      "tests": [],
+      "second_surface": "cli_watch_writer_vs_mcp_process_local_cache",
+      "source_anchors": [
+        "crates/ast-sgrep-cli/src/watch.rs:run_watch:9",
+        "crates/ast-sgrep-mcp/src/lib.rs:index_lock:182",
+        "crates/ast-sgrep-mcp/src/lib.rs:invalidate_searcher_cache:604"
+      ],
+      "packet": "R-XPROC-MULTIWRITER"
+    }
+  ],
+  "residual_packets": [
+    {
+      "id": "R-CM-ROOT-POLICY",
+      "path": "work-queue/01-R-CM-ROOT-POLICY.md",
+      "severity": "high",
+      "disposition": "design_ask"
+    },
+    {
+      "id": "R-INDEX-ERR-CACHE-SYNC",
+      "path": "work-queue/02-R-INDEX-ERR-CACHE-SYNC.md",
+      "severity": "high",
+      "disposition": "fix_candidate"
+    },
+    {
+      "id": "R-XPROC-MULTIWRITER",
+      "path": "work-queue/03-R-XPROC-MULTIWRITER.md",
+      "severity": "high",
+      "disposition": "design_ask"
+    },
+    {
+      "id": "R-OPS-DOCS-FOOTGUNS",
+      "path": "work-queue/04-R-OPS-DOCS-FOOTGUNS.md",
+      "severity": "medium_low",
+      "disposition": "optional_hygiene"
+    }
+  ],
+  "packet_count": 4,
+  "packet_cap": 5,
+  "pass12_zero_change_audit_seal": "eligible_if_no_new_material_R",
+  "pass12_product_green_claim": false,
+  "braid_resolve": "Continue",
+  "new_high_findings": 0,
+  "refuted_high_findings": 0
+}
