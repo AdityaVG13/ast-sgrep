@@ -1,0 +1,225 @@
+{
+  "schema_version": "1.0",
+  "loop_id": 5,
+  "frozen_revision": "fb932aac852f5496c0a7035cc5a0b508e05111cb",
+  "completed_at": "2026-08-11T02:10:55Z",
+  "axes": {
+    "representation": "requirements→properties",
+    "observer": "user+caller",
+    "scale": "system→function",
+    "evidence": "docs+source+tests"
+  },
+  "counts": {
+    "total": 18,
+    "consistent": 11,
+    "contradiction": 2,
+    "gap": 5
+  },
+  "invariants": [
+    {
+      "id": "INV-MCP-SANDBOX",
+      "statement": "MCP tool roots must canonicalize under configured workspace; escapes fail closed.",
+      "criticality": "high",
+      "status": "CONSISTENT",
+      "sources": [
+        "docs/env-trust.md",
+        "crates/ast-sgrep-mcp/src/lib.rs::sandbox_root",
+        "crates/ast-sgrep-mcp/tests/protocol.rs::tool_roots_are_sandboxed_under_configured_workspace"
+      ],
+      "violate": "MCP tools/call with root outside workspace succeeds without escape error"
+    },
+    {
+      "id": "INV-CM-ROOT-FREE",
+      "statement": "Code Mode root_arg accepts OS paths without MCP-style workspace jail.",
+      "criticality": "high",
+      "status": "GAP",
+      "sources": [
+        "crates/ast-sgrep-codemode/src/session.rs::root_arg",
+        "docs/codemode.md",
+        "GAP-CM-ROOT"
+      ],
+      "violate": "Foreign absolute root on index_repo/search is rejected (would falsify free-root)"
+    },
+    {
+      "id": "INV-SURFACE-ROOT-PARITY",
+      "statement": "Agent surfaces that accept project root enforce the same containment policy.",
+      "criticality": "high",
+      "status": "CONTRADICTION",
+      "sources": ["docs/env-trust.md", "docs/codemode.md", "pass4 policy P1"],
+      "violate": "MCP rejects outside root while Code Mode accepts it (observed)"
+    },
+    {
+      "id": "INV-INDEX-PATH-PREC",
+      "statement": "try_index_db_path order: explicit index_path > ASGREP_INDEX_PATH > active generation > local .asgrep/index.db > ASGREP_USE_CACHE path.",
+      "criticality": "high",
+      "status": "CONSISTENT",
+      "sources": [
+        "crates/ast-sgrep-core/src/store/mod.rs::try_index_db_path",
+        "crates/ast-sgrep-testkit/src/isolation.rs"
+      ],
+      "violate": "Explicit index_path ignored in favor of ASGREP_INDEX_PATH"
+    },
+    {
+      "id": "INV-INDEX-PATH-PRIV",
+      "statement": "Absolute ASGREP_INDEX_PATH/--index-path may resolve outside project root (privileged placement).",
+      "criticality": "medium",
+      "status": "GAP",
+      "sources": ["try_index_db_path", "U-INDEX-PATH-PRIV", "GAP-INDEX-PATH"],
+      "violate": "Absolute outside-root path rejected as non-privileged"
+    },
+    {
+      "id": "INV-MCP-SEARCHER-INV",
+      "statement": "MCP index_repo clears Searcher cache, advances generation, clears path registry and emitted snippets.",
+      "criticality": "high",
+      "status": "CONSISTENT",
+      "sources": [
+        "crates/ast-sgrep-mcp/src/lib.rs::tool_index_repo",
+        "index_repo_invalidates_searcher_after_disk_mutation",
+        "reindex_generation_rejects_in_flight_stale_searcher"
+      ],
+      "violate": "Post-index_repo cache still holds pre-mutation Searcher or generation unchanged"
+    },
+    {
+      "id": "INV-CM-SEARCHER-INV",
+      "statement": "Code Mode index_repo clears warm Searcher cache before subsequent searches.",
+      "criticality": "high",
+      "status": "GAP",
+      "sources": [
+        "crates/ast-sgrep-codemode/src/session.rs::index_repo",
+        "invalidate_searcher_cache"
+      ],
+      "violate": "Warm Searcher serves pre-mutation hits after index_repo (no parity test)",
+      "enforcement": "Code present; generation model weaker than MCP; no unit test"
+    },
+    {
+      "id": "INV-BATCH-NO-MUT-PAR",
+      "statement": "Batch never parallelizes when any call targets a non-read_only tool (e.g. index_repo).",
+      "criticality": "high",
+      "status": "CONSISTENT",
+      "sources": [
+        "crates/ast-sgrep-codemode/src/batch.rs::choose_parallel",
+        "batch_never_parallelizes_index_repo_with_readers"
+      ],
+      "violate": "search+index_repo batch with parallel:true runs true parallel"
+    },
+    {
+      "id": "INV-RO-CATALOG",
+      "statement": "read_only=true means host-safe without approval; index_repo is sole catalog mutator (false); session does not gate approval.",
+      "criticality": "medium",
+      "status": "GAP",
+      "sources": [
+        "crates/ast-sgrep-codemode/src/catalog.rs",
+        "adapters openai/anthropic allowed_callers",
+        "GAP-RO-FLAG"
+      ],
+      "violate": "In-process session rejects index_repo without host approval (not implemented)"
+    },
+    {
+      "id": "INV-XOR-CM-MCP",
+      "statement": "A single agent client must load either Code Mode or MCP, never both.",
+      "criticality": "medium",
+      "status": "GAP",
+      "sources": [
+        "docs/codemode.md",
+        "docs/mcp.md",
+        "packages/*/skills/ast-sgrep/SKILL.md",
+        "GAP-XOR-RUNTIME"
+      ],
+      "violate": "Both surfaces registered in one host with no runtime error"
+    },
+    {
+      "id": "INV-EMBED-ALLOW",
+      "statement": "Embed URLs fail closed on host allowlist/scheme; non-loopback http needs ASGREP_EMBED_ALLOW_INSECURE_HTTP; HTTP agent redirects(0).",
+      "criticality": "high",
+      "status": "CONSISTENT",
+      "sources": [
+        "docs/env-trust.md",
+        "crates/ast-sgrep-embed/src/embedder.rs::embed_url_is_allowed",
+        "embed_http_agent redirects(0)",
+        "unit tests metadata/evil/file"
+      ],
+      "violate": "http://169.254.169.254 embed succeeds or allowlisted host 30x followed to disallowed hop"
+    },
+    {
+      "id": "INV-DURABILITY-FC",
+      "statement": "Unknown ASGREP_DURABILITY does not select FastUnsafe; env falls back to Balanced default.",
+      "criticality": "medium",
+      "status": "CONSISTENT",
+      "sources": [
+        "crates/ast-sgrep-core/src/store/mod.rs::Durability",
+        "crates/ast-sgrep-core/tests/store_pragmas.rs"
+      ],
+      "violate": "ASGREP_DURABILITY=off yields synchronous=OFF write path"
+    },
+    {
+      "id": "INV-CASCADE-NO-WIDEN",
+      "statement": "Hybrid semantic cannot introduce files outside cascade working set (subset of lexical survivors).",
+      "criticality": "high",
+      "status": "CONSISTENT",
+      "sources": [
+        "docs/cascade-query-planner.md",
+        "docs/semantic-search.md",
+        "search_hybrid embed_pass_for_files",
+        "cascade_planner.rs"
+      ],
+      "violate": "Hybrid hit file with zero lexical prefilter membership"
+    },
+    {
+      "id": "INV-CASCADE-STRUCT-EMPTY",
+      "statement": "Docs: empty structural stage yields no hybrid hits. Code/tests: lexical fallback + semantic may run (ht1h.3).",
+      "criticality": "high",
+      "status": "CONTRADICTION",
+      "sources": [
+        "docs/cascade-query-planner.md L6-13",
+        "crates/ast-sgrep-core/src/search/mod.rs working_files fallback",
+        "cascade_stops_when_a_stage_has_no_survivors"
+      ],
+      "violate": "Either side: empty-structural hybrid empty (violates code) or non-empty (violates doc)"
+    },
+    {
+      "id": "INV-AST-GREP",
+      "statement": "External ast-grep spawn requires ASGREP_ALLOW_AST_GREP and absolute existing ASGREP_AST_GREP path.",
+      "criticality": "high",
+      "status": "CONSISTENT",
+      "sources": ["docs/env-trust.md", "crates/ast-sgrep-core/src/pattern.rs"],
+      "violate": "PATH-relative ast-grep spawned without ALLOW"
+    },
+    {
+      "id": "INV-EDIT-ROOT",
+      "statement": "Pi planEdit refuses paths outside projectRoot; replace XOR write at boundary.",
+      "criticality": "high",
+      "status": "CONSISTENT",
+      "sources": ["packages/pi/extension/src/edit.ts::planEdit"],
+      "violate": "Edit path resolves outside projectRoot and write proceeds"
+    },
+    {
+      "id": "INV-LIMITS",
+      "statement": "Output limits clamp to 1..=MAX_OUTPUT_RESULTS (1000); queries longer than MAX_QUERY_CHARS (4096) rejected.",
+      "criticality": "medium",
+      "status": "CONSISTENT",
+      "sources": ["crates/ast-sgrep-core/src/limits.rs", "Searcher::new clamp"],
+      "violate": "limit 10000 uncapped or 4097-char query accepted"
+    },
+    {
+      "id": "INV-RANK-FUSION",
+      "statement": "Hybrid multi-channel fusion uses weighted RRF; final order via finish_response; ranking oracle must_include holds on sample corpus.",
+      "criticality": "medium",
+      "status": "CONSISTENT",
+      "sources": [
+        "docs/fusion-ranking.md",
+        "finish_response / cmp_ranked_hits",
+        "crates/ast-sgrep-core/tests/ranking_oracle.rs"
+      ],
+      "violate": "Oracle cases fail or fusion formula diverges without doc update",
+      "note": "No published MRR/nDCG claimed here (benchmarks honesty policy)"
+    }
+  ],
+  "top_contradictions": ["INV-CASCADE-STRUCT-EMPTY", "INV-SURFACE-ROOT-PARITY"],
+  "top_gaps": [
+    "INV-CM-ROOT-FREE",
+    "INV-CM-SEARCHER-INV",
+    "INV-RO-CATALOG",
+    "INV-XOR-CM-MCP",
+    "INV-INDEX-PATH-PRIV"
+  ]
+}

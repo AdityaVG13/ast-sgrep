@@ -1,0 +1,59 @@
+{
+  "schema_version": "1.0",
+  "loop_id": 5,
+  "name": "contracts-and-invariants",
+  "status": "COMPLETE",
+  "mode": "audit",
+  "frozen_revision": "fb932aac852f5496c0a7035cc5a0b508e05111cb",
+  "axes": {
+    "representation": "requirements→properties",
+    "observer": "user+caller",
+    "scale": "system→function",
+    "evidence": "docs+source+tests"
+  },
+  "axes_changed_vs_prior": 4,
+  "braid_resolve": "Continue",
+  "deliverables": [
+    "iterations/05-invariants/invariant-ledger.md",
+    "iterations/05-invariants/contract-anchors.md",
+    "iterations/05-invariants/contradictions-and-gaps.md",
+    "iterations/05-invariants/invariants.json",
+    "iterations/05-invariants/RESULT.md",
+    "tests/artifacts/rotational-code-analysis/pass5-invariants/*"
+  ],
+  "counts": {
+    "invariants": 18,
+    "consistent": 11,
+    "contradiction": 2,
+    "gap": 5
+  },
+  "headline": [
+    "C1 cascade empty-structural: docs stop vs code lexical fallback",
+    "C2 MCP jail vs Code Mode free root",
+    "Safety cores consistent: embed allowlist, durability, AST_GREP, MCP invalidate",
+    "Gaps: CM invalidation test, read_only advisory, XOR docs-only, index path privilege doc"
+  ],
+  "residuals": [
+    "Pass6 happy-path: hybrid lexical-only (C1), CM foreign root, MCP index+search invalidate, Pi index_repo approval, ranking oracle path",
+    "GAP-CM-ROOT / GAP-CM-INV-TEST / GAP-RO-HOST / GAP-XOR-RUNTIME / GAP-INDEX-PATH-DOC",
+    "B-DIRTY-FREEZE, B-ZS-ENGINES, B-SECURITY-NAPI-DOC open"
+  ],
+  "commands": [
+    {
+      "cmd": "rg sandbox_root|root_arg|try_index_db_path|invalidate_searcher|read_only|embed_url_is_allowed|working_files|Durability",
+      "exit": 0,
+      "summary": "anchors located"
+    },
+    {
+      "cmd": "read cascade_planner.rs + search_hybrid + docs/cascade-query-planner.md",
+      "exit": 0,
+      "summary": "C1 contradiction evidenced"
+    },
+    {
+      "cmd": "zs fs compound (failed: fszero-codemode missing)",
+      "exit": "nonzero",
+      "summary": "B-ZS-ENGINES; native path used"
+    }
+  ],
+  "completed_at": "2026-08-11T02:10:55Z"
+}
