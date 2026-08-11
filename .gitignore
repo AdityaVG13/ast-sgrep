@@ -155,3 +155,6 @@ fuzz/corpus/
 
 # module-coupling-topology skill artifacts (local books)
 .module-coupling-topology/
+.rotational-code-analysis/
+.rotational-code-analysis
+*.rotational-code-analysis/
