@@ -266,7 +266,6 @@ impl Indexer {
                 .collect();
             (candidates, stats, prepared)
         };
-        let mut seen_paths = HashSet::new();
         let mut semantic_ivf_dirty = false;
         {
             let _span = crate::perf_profile::Span::start(
@@ -275,62 +274,80 @@ impl Indexer {
                 "bulk upsert_file transaction",
             );
             self.store.begin_bulk_tx()?;
-            let write_result = (|| -> Result<()> {
-                for (rel_str, outcome) in candidates.iter().map(|(_, r)| r).zip(prepared) {
-                    match outcome {
-                        PrepareOutcome::Unchanged => {
-                            seen_paths.insert(rel_str.clone());
-                            stats.files_skipped += 1;
-                        }
-                        PrepareOutcome::Filtered => {
-                            // --lang must not destructively wipe other languages (y1oy.8):
-                            // filtered paths are skipped here; prune_missing_files also
-                            // respects lang_filter when removing absent files.
-                        }
-                        PrepareOutcome::Failed(msg) => {
-                            eprintln!("[asgrep] failed to index {rel_str}: {msg}");
-                            stats.files_failed += 1;
-                        }
-                        PrepareOutcome::Ready(prep) => {
-                            seen_paths.insert(rel_str.clone());
-                            self.store.upsert_file(UpsertFileInput {
-                                rel_path: rel_str,
-                                language: prep.language.as_deref(),
-                                mtime_secs: prep.mtime_secs,
-                                mtime_nanos: prep.mtime_nanos,
-                                content_hash: &prep.hash,
-                                lines: &prep.lines,
-                                eol: &prep.eol,
-                                symbols: &prep.symbols,
-                                callers: &prep.callers,
-                                imports: &prep.imports,
-                                pattern_nodes: &prep.pattern_nodes,
-                                semantic_chunks: &prep.semantic_chunks,
-                                embed_semantic: self.options.embed_semantic,
-                                embed_backend: self.options.embed_backend.to_preference(),
-                            })?;
-                            // Same bulk_tx as upsert: fail + rollback if body meta cannot land
-                            // (structure-skip must not use a stale body fingerprint).
-                            self.store
-                                .set_meta(&format!("body:{rel_str}"), &prep.body_hash)?;
-                            stats.files_indexed += 1;
-                            stats.symbols_extracted += prep.symbols.len();
-                            stats.callers_extracted += prep.callers.len();
-                            stats.imports_extracted += prep.imports.len();
-                            if self.options.embed_semantic {
-                                semantic_ivf_dirty = true;
-                            }
-                        }
-                    }
-                }
-                if should_prune_missing_files(stats.walk_errors) {
-                    self.prune_missing_files(&seen_paths, &mut stats, &mut semantic_ivf_dirty)?;
-                }
-                Ok(())
-            })();
+            let write_result =
+                self.commit_prepared_files(&candidates, prepared, &mut stats, &mut semantic_ivf_dirty);
             self.store.apply_bulk_write_result(write_result)?;
         }
         self.rebuild_dirty_sidecars(&stats, semantic_ivf_dirty)?;
+        self.post_index_hooks()?;
+        Ok(stats)
+    }
+
+    /// Bulk-tx body: upsert prepared outcomes, then prune missing files when safe.
+    /// Callers own `begin_bulk_tx` / `apply_bulk_write_result` so rollback pairing stays visible.
+    fn commit_prepared_files(
+        &self,
+        candidates: &[(PathBuf, String)],
+        prepared: Vec<PrepareOutcome>,
+        stats: &mut IndexStats,
+        semantic_ivf_dirty: &mut bool,
+    ) -> Result<()> {
+        let mut seen_paths = HashSet::new();
+        for (rel_str, outcome) in candidates.iter().map(|(_, r)| r).zip(prepared) {
+            match outcome {
+                PrepareOutcome::Unchanged => {
+                    seen_paths.insert(rel_str.clone());
+                    stats.files_skipped += 1;
+                }
+                PrepareOutcome::Filtered => {
+                    // --lang must not destructively wipe other languages (y1oy.8):
+                    // filtered paths are skipped here; prune_missing_files also
+                    // respects lang_filter when removing absent files.
+                }
+                PrepareOutcome::Failed(msg) => {
+                    eprintln!("[asgrep] failed to index {rel_str}: {msg}");
+                    stats.files_failed += 1;
+                }
+                PrepareOutcome::Ready(prep) => {
+                    seen_paths.insert(rel_str.clone());
+                    self.store.upsert_file(UpsertFileInput {
+                        rel_path: rel_str,
+                        language: prep.language.as_deref(),
+                        mtime_secs: prep.mtime_secs,
+                        mtime_nanos: prep.mtime_nanos,
+                        content_hash: &prep.hash,
+                        lines: &prep.lines,
+                        eol: &prep.eol,
+                        symbols: &prep.symbols,
+                        callers: &prep.callers,
+                        imports: &prep.imports,
+                        pattern_nodes: &prep.pattern_nodes,
+                        semantic_chunks: &prep.semantic_chunks,
+                        embed_semantic: self.options.embed_semantic,
+                        embed_backend: self.options.embed_backend.to_preference(),
+                    })?;
+                    // Same bulk_tx as upsert: fail + rollback if body meta cannot land
+                    // (structure-skip must not use a stale body fingerprint).
+                    self.store
+                        .set_meta(&format!("body:{rel_str}"), &prep.body_hash)?;
+                    stats.files_indexed += 1;
+                    stats.symbols_extracted += prep.symbols.len();
+                    stats.callers_extracted += prep.callers.len();
+                    stats.imports_extracted += prep.imports.len();
+                    if self.options.embed_semantic {
+                        *semantic_ivf_dirty = true;
+                    }
+                }
+            }
+        }
+        if should_prune_missing_files(stats.walk_errors) {
+            self.prune_missing_files(&seen_paths, stats, semantic_ivf_dirty)?;
+        }
+        Ok(())
+    }
+
+    /// Lexicon rebuild (best-effort) + semantic-v1 → v2 promote after a full rewrite.
+    fn post_index_hooks(&self) -> Result<()> {
         // ufk7: learn this repository's own vocabulary. Local, incremental with
         // the index, and cheap enough to stay on by default -- no download.
         if let Err(error) = self.rebuild_lexicon() {
@@ -350,7 +367,7 @@ impl Indexer {
                 self.store.delete_meta("embed_backend_pref")?;
             }
         }
-        Ok(stats)
+        Ok(())
     }
 
     /// Rebuild the repository semantic lexicon from indexed symbols (ufk7).
@@ -755,32 +772,17 @@ impl Indexer {
         }
         let body_hash = body_structure_hash(content, language);
         let body_key = format!("body:{rel_path}");
-        if !self.options.embed_semantic {
-            if let Some(file_id) = self.store.file_id(rel_path)? {
-                if self.store.get_meta(&body_key)?.as_deref() == Some(body_hash.as_str()) {
-                    let split = split_content_lines(content);
-                    self.store.begin_file_tx()?;
-                    match self.store.refresh_lines_only(RefreshLinesInput {
-                        file_id,
-                        language: language.map(|l| l.as_str()),
-                        mtime_secs,
-                        mtime_nanos,
-                        content_hash: &hash,
-                        lines: &split.lines,
-                        eol: split.eol,
-                        rel_path,
-                    }) {
-                        Ok(_) => {
-                            self.store.commit_file_tx()?;
-                            return Ok(FileIndexStats::default());
-                        }
-                        Err(e) => {
-                            self.store.rollback_file_tx()?;
-                            return Err(e);
-                        }
-                    }
-                }
-            }
+        if let Some(stats) = self.try_structure_skip_refresh(
+            rel_path,
+            content,
+            language,
+            &body_hash,
+            &body_key,
+            &hash,
+            mtime_secs,
+            mtime_nanos,
+        )? {
+            return Ok(stats);
         }
         let (symbols, callers, imports, pattern_nodes) =
             self.extract_rows(rel_path, content, language)?;
@@ -821,6 +823,52 @@ impl Indexer {
             imports: imports.len(),
             skipped: false,
         })
+    }
+
+    /// Structure-skip fast path: body fingerprint matches → refresh lines only.
+    /// Returns `Some(stats)` when the skip completed; `None` when full upsert is required.
+    /// Disabled under `embed_semantic` (semantic identity may need a full rewrite).
+    fn try_structure_skip_refresh(
+        &mut self,
+        rel_path: &str,
+        content: &str,
+        language: Option<Language>,
+        body_hash: &str,
+        body_key: &str,
+        hash: &str,
+        mtime_secs: i64,
+        mtime_nanos: u32,
+    ) -> Result<Option<FileIndexStats>> {
+        if self.options.embed_semantic {
+            return Ok(None);
+        }
+        let Some(file_id) = self.store.file_id(rel_path)? else {
+            return Ok(None);
+        };
+        if self.store.get_meta(body_key)?.as_deref() != Some(body_hash) {
+            return Ok(None);
+        }
+        let split = split_content_lines(content);
+        self.store.begin_file_tx()?;
+        match self.store.refresh_lines_only(RefreshLinesInput {
+            file_id,
+            language: language.map(|l| l.as_str()),
+            mtime_secs,
+            mtime_nanos,
+            content_hash: hash,
+            lines: &split.lines,
+            eol: split.eol,
+            rel_path,
+        }) {
+            Ok(_) => {
+                self.store.commit_file_tx()?;
+                Ok(Some(FileIndexStats::default()))
+            }
+            Err(e) => {
+                self.store.rollback_file_tx()?;
+                Err(e)
+            }
+        }
     }
     fn is_unchanged(&self, rel_path: &str, hash: &str) -> Result<bool> {
         if self.options.force_reindex {

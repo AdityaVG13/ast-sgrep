@@ -227,44 +227,10 @@ fn codemode_session_config(cli: &Cli, root: PathBuf) -> ast_sgrep_codemode::Sess
 }
 
 fn run_codemode_batch(cli: &Cli, requests: &Path) -> anyhow::Result<()> {
-    // Cap batch payload (file *and* stdin) so a huge pipe cannot OOM the process (d2a1.9).
-    use machine::{read_utf8_capped, MAX_BATCH_REQUEST_BYTES};
-    let raw = if requests.as_os_str() == "-" {
-        read_utf8_capped(std::io::stdin().lock(), MAX_BATCH_REQUEST_BYTES).context(
-            "read batch requests from stdin (payload exceeds max or I/O error)",
-        )?
-    } else {
-        let meta = std::fs::metadata(requests)
-            .with_context(|| format!("stat batch requests {}", requests.display()))?;
-        anyhow::ensure!(
-            meta.len() <= MAX_BATCH_REQUEST_BYTES,
-            "batch requests file exceeds max {} bytes",
-            MAX_BATCH_REQUEST_BYTES
-        );
-        // Re-cap on the read path: file may grow between stat and open (same as io_bounds).
-        let file = std::fs::File::open(requests)
-            .with_context(|| format!("open batch requests {}", requests.display()))?;
-        read_utf8_capped(file, MAX_BATCH_REQUEST_BYTES).with_context(|| {
-            format!(
-                "read batch requests {} (payload exceeds max or I/O error)",
-                requests.display()
-            )
-        })?
-    };
+    let raw = load_batch_raw(requests)?;
     let mut request: ast_sgrep_codemode::BatchRequest =
         serde_json::from_str(&raw).context("parse batch requests JSON")?;
-    if request.root.is_none() {
-        request.root = Some(cli.root.clone().unwrap_or_else(|| PathBuf::from(".")));
-    }
-    if request.index_path.is_none() {
-        request.index_path = cli.index_path.clone();
-    }
-    if request.use_embed.is_none() {
-        request.use_embed = Some(!cli.active_tuning().no_embed);
-    }
-    if request.limit.is_none() {
-        request.limit = cli.limit;
-    }
+    apply_cli_batch_defaults(&mut request, cli);
     let config = ast_sgrep_codemode::SessionConfig {
         root: request
             .root
@@ -299,6 +265,48 @@ fn run_codemode_batch(cli: &Cli, requests: &Path) -> anyhow::Result<()> {
     // Broken-pipe safe: agents often pipe batch JSON through head/jq (d2a1.9).
     machine::write_stdout_line(&serde_json::to_string(&envelope)?)?;
     Ok(())
+}
+
+/// Cap batch payload (file *and* stdin) so a huge pipe cannot OOM the process (d2a1.9).
+fn load_batch_raw(requests: &Path) -> anyhow::Result<String> {
+    use machine::{read_utf8_capped, MAX_BATCH_REQUEST_BYTES};
+    if requests.as_os_str() == "-" {
+        return read_utf8_capped(std::io::stdin().lock(), MAX_BATCH_REQUEST_BYTES).context(
+            "read batch requests from stdin (payload exceeds max or I/O error)",
+        );
+    }
+    let meta = std::fs::metadata(requests)
+        .with_context(|| format!("stat batch requests {}", requests.display()))?;
+    anyhow::ensure!(
+        meta.len() <= MAX_BATCH_REQUEST_BYTES,
+        "batch requests file exceeds max {} bytes",
+        MAX_BATCH_REQUEST_BYTES
+    );
+    // Re-cap on the read path: file may grow between stat and open (same as io_bounds).
+    let file = std::fs::File::open(requests)
+        .with_context(|| format!("open batch requests {}", requests.display()))?;
+    read_utf8_capped(file, MAX_BATCH_REQUEST_BYTES).with_context(|| {
+        format!(
+            "read batch requests {} (payload exceeds max or I/O error)",
+            requests.display()
+        )
+    })
+}
+
+/// Fill unset batch request fields from CLI flags (root, index, embed, limit).
+fn apply_cli_batch_defaults(request: &mut ast_sgrep_codemode::BatchRequest, cli: &Cli) {
+    if request.root.is_none() {
+        request.root = Some(cli.root.clone().unwrap_or_else(|| PathBuf::from(".")));
+    }
+    if request.index_path.is_none() {
+        request.index_path = cli.index_path.clone();
+    }
+    if request.use_embed.is_none() {
+        request.use_embed = Some(!cli.active_tuning().no_embed);
+    }
+    if request.limit.is_none() {
+        request.limit = cli.limit;
+    }
 }
 
 fn run_codemode_serve(cli: &Cli) -> anyhow::Result<()> {

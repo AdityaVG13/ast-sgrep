@@ -170,12 +170,9 @@ function parseWireHitRef(hit: Record<string, unknown>): SgrepRef {
   throw new RuntimeError("PROTOCOL_MISMATCH", "ast-sgrep returned an invalid search hit");
 }
 
-function parseSearchHit(candidate: unknown): SgrepHit {
-  if (!candidate || typeof candidate !== "object") {
-    throw new RuntimeError("PROTOCOL_MISMATCH", "ast-sgrep returned an invalid search hit");
-  }
-  const hit = candidate as Record<string, unknown>;
-  const valid = typeof hit.kind === "string" && KINDS.has(hit.kind as SgrepKind)
+/** Wire hit shape gate: required protocol fields + optional text fields. Domain checks kept intact. */
+function isValidHitShape(hit: Record<string, unknown>): boolean {
+  return typeof hit.kind === "string" && KINDS.has(hit.kind as SgrepKind)
     && typeof hit.signal === "string" && SIGNALS.has(hit.signal as SgrepSignal)
     && Array.isArray(hit.contributors) && hit.contributors.length > 0
     && hit.contributors.every((kind) => typeof kind === "string" && KINDS.has(kind as SgrepKind))
@@ -184,7 +181,16 @@ function parseSearchHit(candidate: unknown): SgrepHit {
     && typeof hit.preview === "string"
     && optionalTextField(hit.symbol) && optionalTextField(hit.caller) && optionalTextField(hit.callee)
     && optionalTextField(hit.language) && optionalTextField(hit.excerpt);
-  if (!valid) throw new RuntimeError("PROTOCOL_MISMATCH", "ast-sgrep returned an invalid search hit");
+}
+
+function parseSearchHit(candidate: unknown): SgrepHit {
+  if (!candidate || typeof candidate !== "object") {
+    throw new RuntimeError("PROTOCOL_MISMATCH", "ast-sgrep returned an invalid search hit");
+  }
+  const hit = candidate as Record<string, unknown>;
+  if (!isValidHitShape(hit)) {
+    throw new RuntimeError("PROTOCOL_MISMATCH", "ast-sgrep returned an invalid search hit");
+  }
   const ref = parseWireHitRef(hit);
   const parsed: SgrepHit = {
     kind: hit.kind as SgrepKind,

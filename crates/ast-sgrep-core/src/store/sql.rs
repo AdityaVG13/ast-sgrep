@@ -270,34 +270,41 @@ pub fn at_least_rows(conn: &Connection, table: &str, threshold: usize) -> Result
 /// When `from_line` is `Some(n)`, only rows with `line_no >= n` are removed (truncate path).
 pub fn delete_file_lines(conn: &Connection, file_id: i64, from_line: Option<u32>) -> Result<()> {
     match from_line {
-        Some(first) => {
-            conn.prepare_cached(
+        // Partial: trigram → fts → code_fts → lines (line_no >= first).
+        Some(first) => exec_line_deletes(
+            conn,
+            &[
                 "DELETE FROM lines_trigram WHERE rowid IN \
                  (SELECT rowid FROM lines WHERE file_id = ?1 AND line_no >= ?2)",
-            )?
-            .execute(params![file_id, first])?;
-            conn.prepare_cached("DELETE FROM lines_fts WHERE file_id = ?1 AND line_no >= ?2")?
-                .execute(params![file_id, first])?;
-            // vvpk: the code field must stay in lockstep or it serves stale rows.
-            conn.prepare_cached(
+                "DELETE FROM lines_fts WHERE file_id = ?1 AND line_no >= ?2",
+                // vvpk: the code field must stay in lockstep or it serves stale rows.
                 "DELETE FROM lines_code_fts WHERE file_id = ?1 AND line_no >= ?2",
-            )?
-            .execute(params![file_id, first])?;
-            conn.prepare_cached("DELETE FROM lines WHERE file_id = ?1 AND line_no >= ?2")?
-                .execute(params![file_id, first])?;
-        }
-        None => {
-            conn.prepare_cached("DELETE FROM lines_fts WHERE file_id = ?1")?
-                .execute(params![file_id])?;
-            conn.prepare_cached("DELETE FROM lines_code_fts WHERE file_id = ?1")?
-                .execute(params![file_id])?;
-            conn.prepare_cached(
+                "DELETE FROM lines WHERE file_id = ?1 AND line_no >= ?2",
+            ],
+            params![file_id, first],
+        ),
+        // Whole-file: fts → code_fts → trigram → lines (FTS-content sync safe).
+        None => exec_line_deletes(
+            conn,
+            &[
+                "DELETE FROM lines_fts WHERE file_id = ?1",
+                "DELETE FROM lines_code_fts WHERE file_id = ?1",
                 "DELETE FROM lines_trigram WHERE rowid IN (SELECT rowid FROM lines WHERE file_id = ?1)",
-            )?
-            .execute(params![file_id])?;
-            conn.prepare_cached("DELETE FROM lines WHERE file_id = ?1")?
-                .execute(params![file_id])?;
-        }
+                "DELETE FROM lines WHERE file_id = ?1",
+            ],
+            params![file_id],
+        ),
+    }
+}
+
+/// Run ordered DELETE statements with shared bind params (preserves FTS sync order).
+fn exec_line_deletes(
+    conn: &Connection,
+    statements: &[&str],
+    params: impl rusqlite::Params + Copy,
+) -> Result<()> {
+    for sql in statements {
+        conn.prepare_cached(sql)?.execute(params)?;
     }
     Ok(())
 }

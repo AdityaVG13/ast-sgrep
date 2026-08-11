@@ -983,6 +983,29 @@ fn read_node(
     );
     let start = requested_start.saturating_sub(context_lines).max(1);
     let wanted_end = requested_end.saturating_add(context_lines);
+    let (selected, total_lines) = scan_line_window(handle, start, wanted_end)?;
+    anyhow::ensure!(
+        requested_start <= total_lines && requested_end <= total_lines,
+        "node line range is beyond end of file"
+    );
+    let end = wanted_end.min(total_lines);
+    let selected = selected.join("\n");
+    let (content, truncated) = truncate_chars(&selected, max_chars);
+    Ok(json!({
+        "id": id,
+        "file": file,
+        "lines": {"start": start, "end": end},
+        "content": content,
+        "truncated": truncated
+    }))
+}
+
+/// Scan a file handle for lines in `[start, wanted_end]`. TOCTOU checks stay in `read_node`.
+fn scan_line_window(
+    handle: File,
+    start: usize,
+    wanted_end: usize,
+) -> anyhow::Result<(Vec<String>, usize)> {
     let mut reader = std::io::BufReader::new(handle.take(MAX_SCAN_BYTES + 1));
     let mut line_number = 1usize;
     let mut total_lines = 0usize;
@@ -1023,20 +1046,7 @@ fn read_node(
         }
         line_number += 1;
     }
-    anyhow::ensure!(
-        requested_start <= total_lines && requested_end <= total_lines,
-        "node line range is beyond end of file"
-    );
-    let end = wanted_end.min(total_lines);
-    let selected = selected.join("\n");
-    let (content, truncated) = truncate_chars(&selected, max_chars);
-    Ok(json!({
-        "id": id,
-        "file": file,
-        "lines": {"start": start, "end": end},
-        "content": content,
-        "truncated": truncated
-    }))
+    Ok((selected, total_lines))
 }
 
 fn write_resp(
