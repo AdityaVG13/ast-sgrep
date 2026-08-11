@@ -1,0 +1,136 @@
+{
+  "schema_version": "1.0",
+  "loop_id": 9,
+  "name": "time-concurrency-perturbation",
+  "status": "COMPLETE",
+  "mode": "audit",
+  "frozen_revision": "fb932aac852f5496c0a7035cc5a0b508e05111cb",
+  "completed_at": "2026-08-11T02:50:00Z",
+  "axes": {
+    "representation": "interleaving",
+    "observer": "scheduler",
+    "scale": "thread/task/process",
+    "time": "race+crash+recovery",
+    "perturbation": "cancel/reorder/partial-commit",
+    "evidence": "source+tests"
+  },
+  "axes_changed_vs_prior": 4,
+  "braid_resolve": "Continue",
+  "prior_state_leveraged": true,
+  "deliverables": [
+    "iterations/09-time-concurrency/concurrent-state-machines.md",
+    "iterations/09-time-concurrency/race-crash-window-table.md",
+    "iterations/09-time-concurrency/interleaving-and-idempotency.md",
+    "iterations/09-time-concurrency/loop-09-result.json",
+    "iterations/09-time-concurrency/RESULT.md",
+    "tests/artifacts/rotational-code-analysis/pass9-time-concurrency/*"
+  ],
+  "state_machines": [
+    "SM-1-mcp-searcher-generation",
+    "SM-2-indexer-bulk-sidecars",
+    "SM-3-generation-reindex-jpbq",
+    "SM-4-cli-watch",
+    "SM-5-cm-session-batch",
+    "SM-6-searcher-fence",
+    "SM-7-lsp-index-lock"
+  ],
+  "top_findings": [
+    {
+      "id": "CL-MID-SIDECAR-CACHE",
+      "status": "GAP",
+      "severity": "high",
+      "summary": "post-commit sidecar Err skips MCP/CM searcher and registry invalidate"
+    },
+    {
+      "id": "GAP-WATCH-XPROC",
+      "status": "GAP",
+      "severity": "high",
+      "summary": "external watch/index writers do not invalidate MCP/CM warm Searcher"
+    },
+    {
+      "id": "CL-PINNED-REINDEX",
+      "status": "GAP",
+      "severity": "medium",
+      "summary": "pinned index_path in-place clear window under crash"
+    },
+    {
+      "id": "CL-CM-POISON-INV",
+      "status": "GAP",
+      "severity": "medium",
+      "summary": "CM invalidate no-op on poison; no generation restore"
+    },
+    {
+      "id": "CL-INDEX-FAIL-REGISTRIES",
+      "status": "GAP",
+      "severity": "low-medium",
+      "summary": "path_registry/emitted_snippets uncleared on index Err"
+    },
+    {
+      "id": "RW-NESTED-UNFENCED",
+      "status": "GAP",
+      "severity": "low-medium",
+      "summary": "search fenced path without owned snapshot skips gen hard-fail"
+    }
+  ],
+  "consistent_controls": [
+    "RW-MCP-RESTORE",
+    "RW-MCP-INDEX-OK",
+    "RW-MCP-SINGLE-FLIGHT",
+    "INV-BATCH-NO-MUT-PAR",
+    "CW-GEN-ACTIVATE",
+    "RW-FENCE-OWN",
+    "RW-LSP-LOCK",
+    "apply_bulk_write_result_rollback"
+  ],
+  "new_contradictions": [],
+  "new_product_r_findings": [],
+  "scope_examined": [
+    "crates/ast-sgrep-mcp/src/lib.rs",
+    "crates/ast-sgrep-codemode/src/session.rs",
+    "crates/ast-sgrep-codemode/src/batch.rs",
+    "crates/ast-sgrep-codemode/tests/batch.rs",
+    "crates/ast-sgrep-cli/src/watch.rs",
+    "crates/ast-sgrep-lsp/src/backend.rs",
+    "crates/ast-sgrep-core/src/index.rs",
+    "crates/ast-sgrep-core/src/store/mod.rs",
+    "crates/ast-sgrep-core/src/store/sqlite.rs",
+    "crates/ast-sgrep-core/src/search/mod.rs",
+    "crates/ast-sgrep-core/src/search/passes/embed.rs"
+  ],
+  "commands_run": [
+    "rg concurrency symbols across crates/",
+    "read MCP searcher/index paths",
+    "read CM session/batch, CLI watch, LSP backend",
+    "read index_all, generation activate, fenced search, bulk write",
+    "zs engines unavailable (B-ZS-ENGINES)"
+  ],
+  "handoff": {
+    "new_facts": [
+      "Seven concurrent state machines documented for Searcher/index/watch/batch/LSP",
+      "MCP gen restore CONSISTENT under unit-tested interleaving",
+      "Cross-process watch vs warm cache is primary unowned coherence gap",
+      "Mid-sidecar remains highest same-process consistency GAP"
+    ],
+    "contradictions": [],
+    "next_questions": [
+      "Pass 10: boundary adversary on free root + multi-writer ops",
+      "Should mid-sidecar Err force MCP invalidate even when index_all returns Err?",
+      "Document multi-process cache TTL/reopen policy for long-lived MCP"
+    ]
+  },
+  "residual_for_pass_10": [
+    "BY-CM-ROOT/C2 x concurrent index",
+    "stale path_registry capability",
+    "GAP-WATCH-XPROC ops",
+    "pinned index_path privilege+crash",
+    "embed allowlist retry",
+    "FastUnsafe config footgun",
+    "prior C1/C2/GAP-* retained"
+  ],
+  "gate_met": true,
+  "token_usage": {
+    "input": 0,
+    "cached_input": 0,
+    "output": 0
+  }
+}
