@@ -1,0 +1,189 @@
+{
+  "path": "/Users/aditya/Developer/ast-sgrep/crates/ast-sgrep-cli/src/bench.rs",
+  "threshold": 10,
+  "analyzer": "lizard",
+  "summary": {
+    "functions_scanned": 15,
+    "functions_above_threshold": 4,
+    "max_cc": 29,
+    "median_cc": 3,
+    "total_cc": 101,
+    "mean_cc": 6.73,
+    "total_nloc": 505
+  },
+  "functions": [
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/crates/ast-sgrep-cli/src/bench.rs",
+      "function": "run_bench_command",
+      "line": 14,
+      "cc": 3,
+      "nloc": 18,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/crates/ast-sgrep-cli/src/bench.rs",
+      "function": "maybe_index",
+      "line": 33,
+      "cc": 4,
+      "nloc": 11,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/crates/ast-sgrep-cli/src/bench.rs",
+      "function": "bench_searcher",
+      "line": 45,
+      "cc": 4,
+      "nloc": 11,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/crates/ast-sgrep-cli/src/bench.rs",
+      "function": "timed_searches",
+      "line": 57,
+      "cc": 3,
+      "nloc": 15,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/crates/ast-sgrep-cli/src/bench.rs",
+      "function": "mean_ms",
+      "line": 73,
+      "cc": 2,
+      "nloc": 7,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/crates/ast-sgrep-cli/src/bench.rs",
+      "function": "cv_pct",
+      "line": 82,
+      "cc": 3,
+      "nloc": 18,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/crates/ast-sgrep-cli/src/bench.rs",
+      "function": "ast_grep_comparison",
+      "line": 103,
+      "cc": 3,
+      "nloc": 31,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/crates/ast-sgrep-cli/src/bench.rs",
+      "function": "bench_history_enabled",
+      "line": 138,
+      "cc": 1,
+      "nloc": 6,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/crates/ast-sgrep-cli/src/bench.rs",
+      "function": "bench_ratchet_enabled",
+      "line": 145,
+      "cc": 1,
+      "nloc": 3,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/crates/ast-sgrep-cli/src/bench.rs",
+      "function": "update_bench_history",
+      "line": 149,
+      "cc": 13,
+      "nloc": 62,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/crates/ast-sgrep-cli/src/bench.rs",
+      "function": "add_index_json",
+      "line": 212,
+      "cc": 2,
+      "nloc": 10,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/crates/ast-sgrep-cli/src/bench.rs",
+      "function": "print_index_skipped",
+      "line": 223,
+      "cc": 2,
+      "nloc": 7,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/crates/ast-sgrep-cli/src/bench.rs",
+      "function": "run_bench_suite",
+      "line": 231,
+      "cc": 29,
+      "nloc": 147,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/crates/ast-sgrep-cli/src/bench.rs",
+      "function": "run_bench",
+      "line": 379,
+      "cc": 15,
+      "nloc": 72,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/crates/ast-sgrep-cli/src/bench.rs",
+      "function": "run_bench_batch",
+      "line": 452,
+      "cc": 16,
+      "nloc": 87,
+      "cognitive": null,
+      "tool": "lizard"
+    }
+  ],
+  "hotspots": [
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/crates/ast-sgrep-cli/src/bench.rs",
+      "function": "run_bench_suite",
+      "line": 231,
+      "cc": 29,
+      "nloc": 147,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/crates/ast-sgrep-cli/src/bench.rs",
+      "function": "run_bench_batch",
+      "line": 452,
+      "cc": 16,
+      "nloc": 87,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/crates/ast-sgrep-cli/src/bench.rs",
+      "function": "run_bench",
+      "line": 379,
+      "cc": 15,
+      "nloc": 72,
+      "cognitive": null,
+      "tool": "lizard"
+    },
+    {
+      "file": "/Users/aditya/Developer/ast-sgrep/crates/ast-sgrep-cli/src/bench.rs",
+      "function": "update_bench_history",
+      "line": 149,
+      "cc": 13,
+      "nloc": 62,
+      "cognitive": null,
+      "tool": "lizard"
+    }
+  ]
+}

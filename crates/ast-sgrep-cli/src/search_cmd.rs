@@ -76,13 +76,19 @@ pub(crate) fn run_keyword_search(root: &Path, cli: &Cli, query: &str) -> anyhow:
     print_search_response("keyword", &response, format, cli)
 }
 
+/// Whether this invocation runs the semantic channel (flag or global tuning).
+fn uses_semantic_channel(cli: &Cli, semantic: bool) -> bool {
+    semantic || cli.active_tuning().semantic_only
+}
+
 pub(crate) fn run_search(
     root: &Path,
     cli: &Cli,
     query: &str,
     semantic: bool,
 ) -> anyhow::Result<()> {
-    let ctx = if semantic || cli.active_tuning().semantic_only {
+    let semantic_ch = uses_semantic_channel(cli, semantic);
+    let ctx = if semantic_ch {
         "semantic search failed"
     } else {
         "search failed"
@@ -96,18 +102,14 @@ pub(crate) fn run_search(
         return Ok(());
     }
     let tuning = cli.active_tuning();
-    let default = if semantic || tuning.semantic_only {
+    let default = if semantic_ch {
         ast_sgrep_plugins::OutputFormat::Agent
     } else {
         ast_sgrep_plugins::OutputFormat::Native
     };
     let format = resolve_output_format(tuning.format.as_deref(), default)?;
     print_search_response(
-        if semantic || tuning.semantic_only {
-            "semantic"
-        } else {
-            "search"
-        },
+        if semantic_ch { "semantic" } else { "search" },
         &response,
         format,
         cli,
