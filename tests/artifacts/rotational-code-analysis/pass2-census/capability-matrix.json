@@ -1,0 +1,427 @@
+{
+  "schema_version": "1.0",
+  "frozen_revision": "fb932aac852f5496c0a7035cc5a0b508e05111cb",
+  "open_world_scope": true,
+  "semantic_cells": [
+    {
+      "id": "LANG-RUST",
+      "language": "Rust",
+      "status": "CONFIRMED",
+      "evidence": [
+        "Cargo.toml workspace members (11 crates) edition=2021 version=1.4.0",
+        "cargo metadata --no-deps --format-version 1 \u2192 11 packages (pass1+pass2)",
+        "rustc 1.97.1 / cargo 1.97.1 (pass1 baseline ledger)",
+        "workspace.lints.rust unsafe_code=forbid; mmap+napi allow exceptions"
+      ],
+      "dialect_version": [
+        "edition 2021",
+        "stable rustc 1.97.1 (host)",
+        "workspace package 1.4.0"
+      ],
+      "runtime_compiler": [
+        "rustc/cargo stable-aarch64-apple-darwin",
+        "optional nightly for cargo-fuzz/miri"
+      ],
+      "targets": [
+        "lib: ast_sgrep_core, lang, embed, lsp, mcp, cli, codemode, plugins, testkit, mmap",
+        "bin: asgrep, ast-sgrep, asgrep-lsp, asgrep-mcp",
+        "cdylib: ast_sgrep_codemode_napi",
+        "bench: search (core)",
+        "host: aarch64-apple-darwin (observed); CI ubuntu/macos matrices"
+      ],
+      "feature_profiles": [
+        "default",
+        "cloud-embed / cloud",
+        "neural-embed",
+        "rerank",
+        "local (embed)",
+        "release-perf profile (thin LTO)"
+      ],
+      "manifests": [
+        "Cargo.toml",
+        "Cargo.lock",
+        "crates/*/Cargo.toml",
+        ".cargo/config.toml"
+      ],
+      "generated_paths": [
+        "target/",
+        "target-pass*/",
+        "fuzz/target/"
+      ],
+      "native_commands": {
+        "parse_metadata": [
+          "cargo metadata --no-deps --format-version 1",
+          "cargo tree -p ast-sgrep-core"
+        ],
+        "compile_typecheck": [
+          "cargo check --workspace -j1",
+          "cargo check -p ast-sgrep-core",
+          "cargo build --release -p ast-sgrep-cli"
+        ],
+        "test": [
+          "cargo test -p ast-sgrep-core --test parity -j1 -- --test-threads=1",
+          "cargo test --workspace --release",
+          "cargo test -p ast-sgrep-cli --lib --release"
+        ],
+        "static_analysis": [
+          "cargo clippy --workspace --release --all-targets -- -D warnings",
+          "cargo fmt --check",
+          "bash scripts/verify-forbid-soundness",
+          "cargo audit"
+        ],
+        "dynamic_analysis": [
+          "cargo +nightly miri test -p ast-sgrep-embed --lib math:: (docs/validation; not PR CI)"
+        ],
+        "coverage": [],
+        "fuzz": [
+          "cargo fuzz run <target> (fuzz/ README; requires cargo-fuzz + nightly)",
+          "fuzz targets: query_grammar, rank, lang_parse, classify_native, ann_clusters, embed_roundtrip, lsp_frame, codemode_serve"
+        ],
+        "mutation": [],
+        "model_checking": [],
+        "formal_verification": []
+      },
+      "semantic_risks": [
+        "Feature-gated semantic/embed paths (cloud/neural) change behavior without default tests covering all gates",
+        "ast-sgrep-mmap and codemode-napi allow unsafe \u2014 soundness island vs workspace forbid",
+        "Workspace exclude fuzz/ \u2014 product forbid gate does not cover fuzz targets",
+        "proptest used in metamorphic tests (not full mutation testing)"
+      ],
+      "notes": [
+        "158 Rust files in-scope at freeze (92 source / 55 test / 11 other kinds e.g. fuzz targets counted under M-fuzz)",
+        "39 integration tests on ast-sgrep-core alone",
+        "Tree-sitter 0.26 + language grammars pin set in workspace.dependencies"
+      ]
+    },
+    {
+      "id": "LANG-TS-JS-PI",
+      "language": "TypeScript / JavaScript (packages/pi)",
+      "status": "CONFIRMED",
+      "evidence": [
+        "package.json workspaces: packages/pi/extension, packages/pi/launcher",
+        "packages/pi/extension/package.json name=pi-ast-sgrep; scripts build/test via tsc + node --test",
+        "node v24.14.1 npm 11.11.0 (pass1)",
+        "packages/pi/launcher bin asgrep/ast-sgrep \u2192 bin/asgrep.js"
+      ],
+      "dialect_version": [
+        "TypeScript (devDependency typescript in extension)",
+        "Node ESM/CJS mix (mjs scripts + ts via tsx)",
+        "Node v24.14.1 observed"
+      ],
+      "runtime_compiler": [
+        "node",
+        "tsc",
+        "tsx (tests)",
+        "npm workspaces"
+      ],
+      "targets": [
+        "pi-ast-sgrep extension (dist/ from tsc)",
+        "ast-sgrep npm launcher package",
+        "platform packages under packages/pi/platforms/*",
+        "native addon ast-sgrep-codemode.node via N-API"
+      ],
+      "feature_profiles": [
+        "ASGREP_CODEMODE_BACKEND=cli (default tests)",
+        "native in-process backend (test:native)"
+      ],
+      "manifests": [
+        "package.json",
+        "package-lock.json",
+        "packages/pi/extension/package.json",
+        "packages/pi/launcher/package.json",
+        "packages/pi/platforms/*/package.json",
+        "packages/pi/release-contract.json"
+      ],
+      "generated_paths": [
+        "packages/pi/extension/dist/",
+        "packages/pi/extension/node_modules/",
+        "packages/pi/platforms/*/asgrep(.exe)",
+        "packages/pi/platforms/*/ast-sgrep-codemode.node"
+      ],
+      "native_commands": {
+        "parse_metadata": [
+          "node -e \"console.log(require('./package.json').workspaces)\"",
+          "npm ls --workspaces --depth=0"
+        ],
+        "compile_typecheck": [
+          "npm run build --workspace packages/pi/extension (tsc -p tsconfig.json)",
+          "npm run build:native (cargo napi + copy-native)"
+        ],
+        "test": [
+          "npm test --workspace packages/pi/extension",
+          "npm run test:native --workspace packages/pi/extension",
+          "npm run test:pi-e2e",
+          "npm run test:pi-release-gate",
+          "node --import tsx --test packages/pi/launcher/test/*.test.mjs"
+        ],
+        "static_analysis": [
+          "npm run check:pi-contract",
+          "npm run check:pi-release"
+        ],
+        "dynamic_analysis": [],
+        "coverage": [],
+        "fuzz": [],
+        "mutation": [],
+        "model_checking": [],
+        "formal_verification": []
+      },
+      "semantic_risks": [
+        "dist/ may drift from TS sources (dirty dist observed at freeze)",
+        "platform native slots are LFS/empty placeholders in git (size-0 blobs) until release populate",
+        "Code Mode XOR MCP contract \u2014 dual registration is forbidden by product policy"
+      ],
+      "notes": [
+        "29 TS + 20 JS in-scope (excluding dist/)"
+      ]
+    },
+    {
+      "id": "LANG-PYTHON-SCRIPTS",
+      "language": "Python (repo scripts / checks)",
+      "status": "CONFIRMED",
+      "evidence": [
+        "scripts/check-bench-output.py, check-error-budget.py, cpu-limit-exec.py, test_cpu_limit_exec.py",
+        "Python 3.14.6 observed (pass1)",
+        "not a product library; tooling only"
+      ],
+      "dialect_version": [
+        "CPython 3.x (3.14.6 host)"
+      ],
+      "runtime_compiler": [
+        "python3"
+      ],
+      "targets": [
+        "bench validation",
+        "error budget checks",
+        "cpu-limit harness"
+      ],
+      "feature_profiles": [],
+      "manifests": [
+        "scripts/*.py"
+      ],
+      "generated_paths": [],
+      "native_commands": {
+        "parse_metadata": [
+          "python3 --version"
+        ],
+        "compile_typecheck": [],
+        "test": [
+          "python3 scripts/test_cpu_limit_exec.py"
+        ],
+        "static_analysis": [],
+        "dynamic_analysis": [],
+        "coverage": [],
+        "fuzz": [],
+        "mutation": [],
+        "model_checking": [],
+        "formal_verification": []
+      },
+      "semantic_risks": [
+        "No pyproject/type-checker pin; scripts are best-effort tools"
+      ],
+      "notes": [
+        "7 Python files in-scope"
+      ]
+    },
+    {
+      "id": "LANG-SHELL-CI",
+      "language": "Shell",
+      "status": "CONFIRMED",
+      "evidence": [
+        "scripts/verify-forbid-soundness, scripts/local-release-gate.sh",
+        "tests agent_surface *.sh under cli",
+        ".github/workflows/*.yml invoke bash scripts"
+      ],
+      "dialect_version": [
+        "bash (set -euo pipefail style)"
+      ],
+      "runtime_compiler": [
+        "bash"
+      ],
+      "targets": [
+        "CI gates",
+        "local release gate",
+        "agent surface smoke scripts"
+      ],
+      "feature_profiles": [],
+      "manifests": [
+        "scripts/*",
+        ".github/workflows/*.yml"
+      ],
+      "generated_paths": [],
+      "native_commands": {
+        "parse_metadata": [],
+        "compile_typecheck": [],
+        "test": [
+          "bash scripts/verify-forbid-soundness"
+        ],
+        "static_analysis": [],
+        "dynamic_analysis": [],
+        "coverage": [],
+        "fuzz": [
+          "bash fuzz/scripts/*.sh (seed sync / cmin)"
+        ],
+        "mutation": [],
+        "model_checking": [],
+        "formal_verification": []
+      },
+      "semantic_risks": [
+        "Shell portability assumed bash; CI is ubuntu/macOS"
+      ],
+      "notes": [
+        "8 Shell files + scripts without .sh extension"
+      ]
+    },
+    {
+      "id": "LANG-FIXTURE-POLYGLOT",
+      "language": "Polyglot fixtures (Go/Java/Ruby/C#/C/C++/Kotlin/PHP/Swift/\u2026)",
+      "status": "CONFIRMED",
+      "evidence": [
+        "tests/fixtures/sample/src/* multi-language sample sources",
+        "ast-sgrep-lang Language parsers for Rust, Python, Go, Java, C#, JS/TS, Ruby, Swift, C/C++, Kotlin, PHP",
+        "workspace.dependencies tree-sitter-* crates"
+      ],
+      "dialect_version": [
+        "fixture samples only \u2014 not product runtime dialects"
+      ],
+      "runtime_compiler": [
+        "parsed via tree-sitter in-process; not compiled as product"
+      ],
+      "targets": [
+        "extraction goldens",
+        "lang_parse fuzz seeds",
+        "parity/pattern tests"
+      ],
+      "feature_profiles": [],
+      "manifests": [
+        "tests/fixtures/",
+        "crates/ast-sgrep-lang/"
+      ],
+      "generated_paths": [],
+      "native_commands": {
+        "parse_metadata": [],
+        "compile_typecheck": [],
+        "test": [
+          "cargo test -p ast-sgrep-lang --test extraction_goldens",
+          "cargo test -p ast-sgrep-lang --test pattern",
+          "cargo fuzz run lang_parse"
+        ],
+        "static_analysis": [],
+        "dynamic_analysis": [],
+        "coverage": [],
+        "fuzz": [
+          "cargo fuzz run lang_parse"
+        ],
+        "mutation": [],
+        "model_checking": [],
+        "formal_verification": []
+      },
+      "semantic_risks": [
+        "Fixture language coverage may lag real-world dialect edges",
+        "Do not treat fixture file counts as product language ownership"
+      ],
+      "notes": [
+        "Pass1 spin 'D language 1080' was snapshot noise \u2014 zero product D sources; noext fuzz seeds were mis-hinted"
+      ]
+    }
+  ],
+  "cross_language_boundaries": [
+    {
+      "id": "BND-NAPI",
+      "producer_cell": "LANG-RUST",
+      "consumer_cell": "LANG-TS-JS-PI",
+      "mechanism": "N-API cdylib ast_sgrep_codemode_napi \u2192 ast-sgrep-codemode.node loaded by pi-ast-sgrep; copy-native.mjs packages the artifact",
+      "contract_evidence": [
+        "crates/ast-sgrep-codemode-napi/Cargo.toml (cdylib)",
+        "packages/pi/extension/package.json script build:native",
+        "packages/pi/extension/scripts/copy-native.mjs"
+      ],
+      "status": "CONFIRMED"
+    },
+    {
+      "id": "BND-CLI-JS",
+      "producer_cell": "LANG-RUST",
+      "consumer_cell": "LANG-TS-JS-PI",
+      "mechanism": "asgrep/ast-sgrep CLI binaries shipped via packages/pi/platforms/* and invoked by packages/pi/launcher",
+      "contract_evidence": [
+        "packages/pi/launcher/bin/asgrep.js",
+        "packages/pi/platforms/*/package.json",
+        "Cargo.toml bins asgrep/ast-sgrep on ast-sgrep-cli"
+      ],
+      "status": "CONFIRMED"
+    },
+    {
+      "id": "BND-MCP",
+      "producer_cell": "LANG-RUST",
+      "consumer_cell": "LANG-TS-JS-PI",
+      "mechanism": "asgrep-mcp stdio MCP for agent-plugin / external hosts; product policy Code Mode XOR MCP",
+      "contract_evidence": [
+        "crates/ast-sgrep-mcp/",
+        "packages/agent-plugin/",
+        "README.md Code Mode XOR MCP section"
+      ],
+      "status": "CONFIRMED"
+    },
+    {
+      "id": "BND-TREE-SITTER",
+      "producer_cell": "LANG-FIXTURE-POLYGLOT",
+      "consumer_cell": "LANG-RUST",
+      "mechanism": "tree-sitter language crates + ast-sgrep-lang extraction tables parse polyglot sources for indexing",
+      "contract_evidence": [
+        "Cargo.toml workspace.dependencies tree-sitter-*",
+        "crates/ast-sgrep-lang/src/langs.rs",
+        "tests/fixtures/sample/src/*"
+      ],
+      "status": "CONFIRMED"
+    }
+  ],
+  "unavailable_capabilities": [
+    {
+      "cell_id": "LANG-RUST",
+      "capability": "coverage",
+      "reason": "No tarpaulin/llvm-cov project config or CI job found",
+      "fallback": "Rely on cargo test integration suite + parity/metamorphic oracles; add llvm-cov later if needed"
+    },
+    {
+      "cell_id": "LANG-TS-JS-PI",
+      "capability": "coverage",
+      "reason": "No c8/nyc/istanbul config in package.json scripts",
+      "fallback": "node --test suites without coverage thresholds"
+    },
+    {
+      "cell_id": "LANG-RUST",
+      "capability": "mutation",
+      "reason": "No cargo-mutants/mutagen configuration",
+      "fallback": "proptest metamorphic tests + fuzz oracles provide partial generative pressure"
+    },
+    {
+      "cell_id": "LANG-TS-JS-PI",
+      "capability": "mutation",
+      "reason": "No Stryker or equivalent",
+      "fallback": "release-gate e2e + contract checks"
+    },
+    {
+      "cell_id": "LANG-RUST",
+      "capability": "model_checking",
+      "reason": "No Loom/TLA first-class harness in CI",
+      "fallback": "determinism_loop / store tests for concurrency-ish invariants (not full model checking)"
+    },
+    {
+      "cell_id": "LANG-RUST",
+      "capability": "formal_verification",
+      "reason": "No Kani/Prusti; miri only optional for embed math",
+      "fallback": "docs/validation/scored-property.md optional miri command"
+    },
+    {
+      "cell_id": "LANG-TS-JS-PI",
+      "capability": "fuzz",
+      "reason": "No JS fuzzer harness for extension/launcher",
+      "fallback": "Rust cargo-fuzz covers core/lang/lsp/codemode; Pi relies on node tests + e2e"
+    },
+    {
+      "cell_id": "LANG-RUST",
+      "capability": "zerostack_codemode_host",
+      "reason": "zs CLI present but codemode host engines missing on analyst machine",
+      "fallback": "native shell/git/cargo for audit evidence (stated zerostack gap)"
+    }
+  ]
+}
