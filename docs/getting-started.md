@@ -169,7 +169,7 @@ Machine-oriented catalog: `asgrep capabilities --json` (clap-derived; preferred 
 | `--rerank` | `ASGREP_RERANK` | Local cross-encoder rerank (feature-gated) |
 | `--rerank-top-k` | `ASGREP_RERANK_TOP_K` | Rerank candidate pool (default 20) |
 | `--lang` | | Filter: `rust`, `typescript`, `javascript`, `python`, `go`, … |
-| `--index-path` | `ASGREP_INDEX_PATH` | Custom index DB path |
+| `--index-path` | `ASGREP_INDEX_PATH` | Custom index DB path (**privileged sink**; pin disables gen reindex) |
 
 Store index in cache instead of repo:
 

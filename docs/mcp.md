@@ -43,8 +43,9 @@ Environment variables:
 
 | Variable | Purpose |
 |----------|---------|
-| `ASGREP_ROOT` | Project root (default: cwd) |
-| `ASGREP_INDEX_PATH` | Custom `.asgrep/index.db` path |
+| `ASGREP_ROOT` | Project / workspace root (default: cwd). Tool `root` args must stay under this jail. |
+| `ASGREP_INDEX_PATH` | **Privileged sink** — absolute writable DB path. Pinning disables generation atomic reindex. |
+| `ASGREP_DURABILITY` | `strict` \| `balanced` \| `fast-unsafe` (MCP inherits; FastUnsafe is power-loss risky) |
 | `ASGREP_LIMIT` | Max hits per search (default 16) |
 | `ASGREP_NO_EMBED` | Set to `1` to disable semantic pass |
 
@@ -79,7 +80,8 @@ Build or incrementally update the index. Pass `force: true` for full reindex.
 - Concurrent `index_repo` calls share a process-wide single-flight lock; wait
   time counts toward a **soft wall deadline** (600s). The deadline is checked
   before start and after index work finishes -- it is **not** cooperative
-  mid-build cancellation.
+  mid-build cancellation. If the post-mutation check fails, the error notes
+  that the **index may already have committed** (caches are still invalidated).
 - There is **no** `$/cancel` / `notifications/cancelled` path and no cancel
   token into `Indexer::{index_all,reindex_all}`. Clients cannot abort an
   in-flight index over the wire.

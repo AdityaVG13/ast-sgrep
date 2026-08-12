@@ -43,7 +43,32 @@ to an existing executable file; missing or non-executable paths raise
 `BINARY_NOT_FOUND` / `BINARY_NOT_EXECUTABLE` rather than falling through to an
 untrusted PATH search when an explicit override was configured.
 
-## MCP workspace root
+## MCP / Code Mode / NAPI workspace root
 
 `asgrep-mcp` canonicalizes `ASGREP_ROOT` at startup. Tool `root` arguments must
-canonicalize under that workspace; escapes fail closed.
+canonicalize under that workspace; escapes fail closed
+(`escapes configured workspace`).
+
+Code Mode `CodeModeSession` and NAPI (which wraps Session) apply the **same
+jail** under `SessionConfig.root`. Host duty: set the session/workspace root
+intentionally. Tool `root` is **not** a free absolute-path escape hatch.
+
+## Privileged index path (`ASGREP_INDEX_PATH` / `--index-path`)
+
+An absolute (or otherwise writable) index path is a **privileged sink**: the
+process will create/open that SQLite database wherever the path points. Do not
+accept untrusted values for this env/flag. Pinning also disables generation
+atomic reindex (in-place rebuild crash window) — see
+`docs/index-consistency.md`.
+
+## Durability (`ASGREP_DURABILITY`)
+
+| Value | Risk |
+|-------|------|
+| `balanced` (default) | Survives process crash |
+| `strict` | Survives power loss; slower |
+| `fast-unsafe` | `synchronous=OFF` during write batches; power loss can corrupt the index |
+
+MCP and Code Mode inherit `Durability::from_env()` via `IndexOptions::default`.
+`asgrep doctor` emits `durability_fast_unsafe` when FastUnsafe is active;
+`asgrep status` reports the `durability` field.

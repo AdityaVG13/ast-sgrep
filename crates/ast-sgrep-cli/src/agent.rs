@@ -446,7 +446,6 @@ pub(crate) fn print_agent_help_footer() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Cli;
     use clap::Parser;
 
     fn status_with_durability(durability: &str) -> ast_sgrep_core::IndexStatus {
@@ -493,8 +492,10 @@ mod tests {
     }
 
     #[test]
-    fn doctor_silent_on_balanced() {
+    fn doctor_surfaces_silent_on_balanced() {
         let cli = Cli::try_parse_from(["asgrep", "doctor", "."]).expect("parse");
-        assert!(doctor_fast_unsafe_issue(&cli, Some(&status_with_durability("balanced"))).is_none());
+        assert!(
+            doctor_fast_unsafe_issue(&cli, Some(&status_with_durability("balanced"))).is_none()
+        );
     }
 }

@@ -77,6 +77,14 @@ does not expose). There is no `node:vm` / isolate sandbox — the Pi package
 already has full user privileges; Code Mode is for orchestration speed, not OS
 isolation.
 
+**Root jail (host duty):** `CodeModeSession` / NAPI tool `root` args are jailed
+under the configured session workspace the same way MCP jails under
+`ASGREP_ROOT` (`canonicalize` + containment; message
+`escapes configured workspace`). NAPI has no separate resolver — it inherits
+Session. Hosts must set Session root intentionally; this is policy confinement,
+not an OS security boundary. `ASGREP_INDEX_PATH` remains a privileged sink
+(see `docs/env-trust.md`).
+
 ### Amdahl note
 
 Wall time ≈ serial + parallel_work / N.

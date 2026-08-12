@@ -3,18 +3,25 @@
 Unprefixed `Searcher::search` queries use one constraint cascade instead of independent retrieval fanout:
 
 1. **Literal/trigram prefilter.** Case-insensitive literal terms select at most 100 candidate files. Large indexes use the trigram table; smaller indexes use bounded indexed-line matching. No later stage can introduce a file that did not survive this stage.
-2. **Structural match.** Tree-sitter-derived symbols, graph anchors, and indexed AST signatures are evaluated and retained only inside those candidate files. If none match, the cascade stops.
-3. **Semantic rerank.** The query embedding is compared only with chunks whose files survived the structural stage. Semantic retrieval cannot widen the candidate set.
+2. **Structural match.** Tree-sitter-derived symbols, graph anchors, and indexed AST signatures are evaluated and retained only inside those candidate files.
+3. **Working-file set + semantic rerank.** When structural survivors exist, they become the working set. When the structural stage is **empty**, the cascade **continues** on the lexical survivors (ht1h.3 / INV-CASCADE-STRUCT-EMPTY): plain-content files stay findable and optional semantic ranking runs on those lexical files. Semantic retrieval cannot widen beyond that working set.
 
 The final result gate receives lexical, structural, and semantic evidence from the surviving files. It performs ordinary deduplication, per-kind ceilings, file filtering, ranking, and signal-margin assignment. A result's `signal` remains the producer provenance even when semantic evidence changes the final ordering.
 
 ## Stop behavior
 
-The cascade returns no hybrid hits when either the lexical or structural stage has no survivors. This is deliberate: semantic similarity is a reranker, not an unconstrained repository-wide fallback. Use `asgrep semantic "<query>"` or `Searcher::search_semantic` when repository-wide semantic discovery is intended. Prefixed `literal:`, `regex:`, `pattern:`, `defs:`, `callers:`, and `imports:` modes continue to execute their dedicated retrieval path directly.
+| Stage empty | Hybrid behavior |
+|-------------|-----------------|
+| **Lexical** | Cascade stops — no hybrid hits. Semantic similarity is not an unconstrained repository-wide fallback. |
+| **Structural** | Cascade **continues** on lexical survivors (+ optional embed on those files). |
+
+Use `asgrep semantic "<query>"` or `Searcher::search_semantic` when repository-wide semantic discovery is intended. Prefixed `literal:`, `regex:`, `pattern:`, `defs:`, `callers:`, and `imports:` modes continue to execute their dedicated retrieval path directly.
+
+> **Historical note:** Earlier drafts of this doc claimed empty structural stopped the cascade. That mismatched `search_hybrid` and `cascade_planner` tests (C1 / INV-CASCADE-STRUCT-EMPTY). Current text matches code.
 
 ## Work bounds
 
 - Structural rows outside lexical candidate files are discarded before they can become survivors.
-- Semantic vector ranking receives only chunks from structural-survivor files.
+- Semantic vector ranking receives only chunks from the working-file set (structural survivors, or lexical survivors when structural is empty).
 - Candidate order is deterministic because final ordering and deduplication remain centralized in `finish_response`.
-- Empty stages short-circuit without running later work.
+- Empty **lexical** short-circuits without running later work; empty **structural** does not.
