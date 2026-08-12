@@ -1,0 +1,38 @@
+ D .beads/.br_history/issues.20260806_020353_251237000.jsonl
+ D .beads/.br_history/issues.20260806_020353_251237000.jsonl.meta.json
+ D .beads/.br_history/issues.20260806_020404_459224000.jsonl
+ D .beads/.br_history/issues.20260806_020404_459224000.jsonl.meta.json
+ D .beads/.br_history/issues.20260806_020451_346418000.jsonl
+ D .beads/.br_history/issues.20260806_020451_346418000.jsonl.meta.json
+ D .beads/.br_history/issues.20260806_020457_174453000.jsonl
+ D .beads/.br_history/issues.20260806_020457_174453000.jsonl.meta.json
+ D .beads/.br_history/issues.20260806_032753_121249000.jsonl
+ D .beads/.br_history/issues.20260806_032753_121249000.jsonl.meta.json
+ M .beads/beads.db
+ M .beads/beads.db-wal
+ M .beads/issues.jsonl
+ M .beads/last-touched
+ M .papercuts.jsonl
+ M Cargo.lock
+ M packages/pi/extension/dist/code-mode.js
+ M packages/pi/extension/dist/codemode/dispatch.d.ts
+ M packages/pi/extension/dist/codemode/dispatch.js
+ M packages/pi/extension/dist/index.js
+ M packages/pi/extension/dist/runtime.js
+ M packages/pi/extension/src/index.ts
+ M packages/pi/extension/src/runtime.ts
+ M packages/pi/extension/test/runtime.test.ts
+ M packages/pi/extension/test/skill-workflow.test.ts
+ M packages/pi/extension/test/tools.test.ts
+?? .skill-loop-progress-conformance.md
+?? .skill-loop-progress-fuzzing.md
+?? .skill-loop-progress-gauntlet.md
+?? .skill-loop-progress-golden-artifacts.md
+?? .skill-loop-progress-rotational-code-analysis-harden.md
+?? target-pass11/
+?? target-pass13/
+?? target-pass14/
+?? target-pass15/
+?? target-pass4/
+?? target-pass8/
+?? tests/artifacts/bug-hunt/
