@@ -46,6 +46,23 @@ Under concurrent reindex, a hybrid query may fuse passes from adjacent **committ
 
 **Integrity on open:** existing DBs run `PRAGMA integrity_check`. Failure quarantines the file to `index.db.corrupt` and returns an error (fail closed; reindex required).
 
+## Pinned `ASGREP_INDEX_PATH` and generation reindex
+
+Default layout under `<root>/.asgrep/` uses **build-then-swap** generations for
+`reindex_all` (candidate DB + activate). Callers that set `ASGREP_INDEX_PATH` or
+an explicit `--index-path` / `IndexOptions.index_path` **pin** a specific file:
+`generation_layout_root()` returns `None`, so reindex stays **in-place**
+(clear + rebuild). That preserves the pin but reopens a crash window mid-rebuild.
+Prefer the default `.asgrep/` home unless a shared absolute DB is required
+(e.g. one MCP + CLI watch pair).
+
+## Durability profiles
+
+`ASGREP_DURABILITY` / `--durability` selects `strict` | `balanced` |
+`fast-unsafe`. FastUnsafe uses `synchronous=OFF` only inside write batches and
+restores NORMAL afterward; power loss during a batch can still tear the DB.
+Status reports `durability`; doctor flags FastUnsafe (`durability_fast_unsafe`).
+
 ## Atomic sidecar publish
 
 `semantic.ivf` is written to `*.ivf.tmp`, `fsync`ed, then `rename`d into place. Readers either see the previous complete file or the new complete file, never a torn write.

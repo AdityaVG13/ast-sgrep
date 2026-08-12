@@ -185,6 +185,27 @@ fn clap_catalog(command: &clap::Command) -> (Vec<Value>, Vec<String>, Vec<String
     commands.sort_by(|a, b| a["name"].as_str().cmp(&b["name"].as_str()));
     (commands, global_flags, search_tuning_flags)
 }
+/// Doctor issue when FastUnsafe durability is active (R-OPS-DOCS-FOOTGUNS).
+fn doctor_fast_unsafe_issue(
+    cli: &Cli,
+    status: Option<&ast_sgrep_core::IndexStatus>,
+) -> Option<Value> {
+    let from_status = status
+        .map(|st| st.durability.as_str())
+        .filter(|d| *d == "fast-unsafe");
+    let from_cli = cli
+        .durability
+        .filter(|d| *d == ast_sgrep_core::store::Durability::FastUnsafe)
+        .map(|_| "fast-unsafe");
+    if from_status.or(from_cli).is_none() {
+        return None;
+    }
+    Some(json!({
+        "kind": "durability_fast_unsafe",
+        "message": "ASGREP_DURABILITY=fast-unsafe (or --durability fast-unsafe) is active: power loss during a write batch can corrupt the index. Prefer balanced/strict outside trusted CI speed paths; MCP/Code Mode inherit this env."
+    }))
+}
+
 fn doctor_triage_json(cli: &Cli, root: &Path) -> anyhow::Result<Value> {
     crate::ensure_unambiguous_root(root, cli)?;
     let root = crate::effective_root(cli, root);
@@ -208,6 +229,12 @@ fn doctor_triage_json(cli: &Cli, root: &Path) -> anyhow::Result<Value> {
             }
         }
     };
+    if let Some(issue) = doctor_fast_unsafe_issue(cli, status.as_ref()) {
+        issues.push(issue);
+        next.push(
+            "unset ASGREP_DURABILITY  # or: asgrep --durability balanced …".to_string(),
+        );
+    }
     let root_display = root.display().to_string();
     if status.is_none() {
         next.push(format!("asgrep index {root_display} --json"));
@@ -265,7 +292,12 @@ See `capabilities --json` → `commands` (complete clap catalog). Notable: `sear
 ## Exit codes
 - 0 success · 1 usage · 2 index/search failure
 ## Environment
-See `capabilities --json` → `environment`. Common: `ASGREP_INDEX_PATH`, `ASGREP_LIMIT`, `ASGREP_NO_EMBED`, `NO_COLOR`, `CI`.
+See `capabilities --json` → `environment`. Common: `ASGREP_INDEX_PATH`, `ASGREP_LIMIT`, `ASGREP_NO_EMBED`, `ASGREP_DURABILITY`, `NO_COLOR`, `CI`.
+## Ops footguns (privileged sinks)
+- `ASGREP_INDEX_PATH` / `--index-path` is a **privileged sink**: any absolute writable path is accepted. Treat it like a database URL; do not point it at untrusted locations.
+- Pinning `ASGREP_INDEX_PATH` (or an explicit `--index-path`) **disables** generation atomic reindex — rebuilds stay in-place (crash window). Default `.asgrep/` layout uses build-then-swap generations.
+- `ASGREP_DURABILITY=fast-unsafe` (or `--durability fast-unsafe`) opts into power-loss corruption risk during write batches. `asgrep doctor` / `status` surface it; MCP/Code Mode inherit the env.
+- MCP and Code Mode / NAPI jail tool `root` under the configured workspace (`escapes configured workspace`). Host duty remains: set `ASGREP_ROOT` / Session root intentionally; NAPI inherits Session (not a free root).
 ## Common mistakes
 - Missing or empty index: run `asgrep index <root> --json` before searching.
 - Missing ROOT is an operational error; it is never reported as an empty result.
@@ -409,4 +441,60 @@ pub(crate) fn print_agent_help_footer() {
     eprintln!(
         "Exit codes: 0=ok, 1=usage, 2=operation failed. Use --json for machine-readable stdout."
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Cli;
+    use clap::Parser;
+
+    fn status_with_durability(durability: &str) -> ast_sgrep_core::IndexStatus {
+        ast_sgrep_core::IndexStatus {
+            root: "/tmp".into(),
+            index_path: "/tmp/.asgrep/index.db".into(),
+            file_count: 1,
+            line_count: 1,
+            symbol_count: 0,
+            caller_count: 0,
+            import_count: 0,
+            semantic_chunk_count: 0,
+            embed_backend: None,
+            embed_dim: None,
+            embed_cache_entries: 0,
+            embed_cache_capacity: 0,
+            embed_cache_hits: 0,
+            embed_cache_misses: 0,
+            semantic_ivf_present: false,
+            durability: durability.into(),
+            writer_generation: 0,
+        }
+    }
+
+    #[test]
+    fn doctor_surfaces_fast_unsafe_from_status() {
+        let cli = Cli::try_parse_from(["asgrep", "doctor", "."]).expect("parse");
+        let issue = doctor_fast_unsafe_issue(&cli, Some(&status_with_durability("fast-unsafe")));
+        assert_eq!(issue.as_ref().unwrap()["kind"], "durability_fast_unsafe");
+    }
+
+    #[test]
+    fn doctor_surfaces_fast_unsafe_from_cli_flag() {
+        let cli = Cli::try_parse_from([
+            "asgrep",
+            "--durability",
+            "fast-unsafe",
+            "doctor",
+            ".",
+        ])
+        .expect("parse");
+        let issue = doctor_fast_unsafe_issue(&cli, Some(&status_with_durability("balanced")));
+        assert_eq!(issue.as_ref().unwrap()["kind"], "durability_fast_unsafe");
+    }
+
+    #[test]
+    fn doctor_silent_on_balanced() {
+        let cli = Cli::try_parse_from(["asgrep", "doctor", "."]).expect("parse");
+        assert!(doctor_fast_unsafe_issue(&cli, Some(&status_with_durability("balanced"))).is_none());
+    }
 }

@@ -218,6 +218,7 @@ pub(crate) fn print_status(s: &ast_sgrep_core::IndexStatus) {
         "not built (below ANN threshold or not indexed)"
     };
     println!("Semantic IVF sidecar: {ivf}");
+    println!("Durability: {}", s.durability);
     println!("Writer generation: {}", s.writer_generation);
 }
 

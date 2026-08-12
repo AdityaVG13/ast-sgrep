@@ -920,9 +920,11 @@ impl McpServer {
         // serving pre-mutation hits (R-INDEX-ERR-CACHE-SYNC / d2a1.13).
         self.invalidate_after_index_attempt();
         let stats = result?;
+        // ESC-3: soft deadline is checked after durable index work; failure here
+        // does not roll back a successful commit — agents must not assume clean miss.
         anyhow::ensure!(
             started.elapsed() <= INDEX_REPO_DEADLINE,
-            "index_repo exceeded {}s deadline",
+            "index_repo exceeded {}s deadline after mutation (index may have committed; caches were invalidated)",
             INDEX_REPO_DEADLINE.as_secs()
         );
         Ok(serde_json::to_string(&stats)?)
