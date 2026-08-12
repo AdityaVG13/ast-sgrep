@@ -76,7 +76,14 @@ fn schema_upgrade_invalidates_legacy_semantic_layouts() {
         .connection()
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(version, 7, "semantic wipe must land as schema 7");
+    // Migrations advance to the binary's current SCHEMA_VERSION (not the
+    // historical wipe step id). Pinning "7" bit-rotted when SCHEMA_VERSION
+    // moved to 9 (wave2 loop12 upgrade compat).
+    assert_eq!(
+        version,
+        migrated.schema_version(),
+        "legacy layout wipe must land at current schema version"
+    );
 }
 
 #[test]
@@ -116,7 +123,35 @@ fn schema_6_main_indexes_still_get_semantic_wipe_at_7() {
         .connection()
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(version, 7);
+    assert_eq!(version, migrated.schema_version());
+}
+
+#[test]
+fn newer_than_binary_schema_refuses_open() {
+    // Old peer / rolling downgrade: on-disk user_version ahead of this binary
+    // must not open (wave2 loop12: storage-format + old+new-peer + upgrade).
+    let temp = TempDir::new().unwrap();
+    let store = IndexStore::open(temp.path(), None).unwrap();
+    let future = store.schema_version() + 1;
+    store
+        .connection()
+        .execute_batch(&format!("PRAGMA user_version = {future}"))
+        .unwrap();
+    drop(store);
+
+    let err = match IndexStore::open(temp.path(), None) {
+        Ok(_) => panic!("future schema must refuse"),
+        Err(e) => e,
+    };
+    let msg = err.to_string();
+    assert!(
+        msg.contains("newer than this binary supports"),
+        "refuse message must name the upgrade gate: {msg}"
+    );
+    assert!(
+        msg.contains(&future.to_string()),
+        "refuse message must cite on-disk version: {msg}"
+    );
 }
 
 #[test]

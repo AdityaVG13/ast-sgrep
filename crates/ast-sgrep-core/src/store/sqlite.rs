@@ -166,7 +166,17 @@ impl IndexStore {
         let version: i64 = self
             .conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))?;
-        if version >= SCHEMA_VERSION {
+        // Old binary + newer on-disk schema must fail closed (wave2 loop12:
+        // wire/storage-format · old+new-peer · upgrade). Silent open of a
+        // future user_version served wrong answers / mid-query SQL failures.
+        if version > SCHEMA_VERSION {
+            return Err(crate::StoreError::Other(format!(
+                "index schema version {version} is newer than this binary supports \
+                 ({SCHEMA_VERSION}); upgrade asgrep or rebuild the index with a \
+                 matching binary"
+            )));
+        }
+        if version == SCHEMA_VERSION {
             // Probe core tables even when user_version is current (a639).
             let core: i64 = self.conn.query_row(
                 "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('files','lines','meta','symbols')",
