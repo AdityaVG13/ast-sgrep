@@ -25,7 +25,7 @@
 #![forbid(unsafe_code)]
 
 use anyhow::Context;
-use ast_sgrep_core::{EmbedBackend, IndexOptions, Indexer, SearchOptions, Searcher};
+use ast_sgrep_core::{force_sidecar_rebuild_err, EmbedBackend, IndexOptions, Indexer, SearchOptions, Searcher};
 use ast_sgrep_plugins::{
     format_response_with_budget, to_budgeted_compact_json, to_compact_miss_json, CompactBudget,
     DetailLevel, MissContext, OutputBudget, OutputFormat,
@@ -878,23 +878,34 @@ impl McpServer {
             },
             ..self.base_index_options(root)
         })?;
-        let stats = if force {
-            indexer.reindex_all()?
+        // index_all commits SQLite before sidecar rebuild; Err may still mean
+        // durable mutation. Capture result then always sync session caches.
+        let result = if force {
+            indexer.reindex_all()
         } else {
-            indexer.index_all()?
+            indexer.index_all()
         };
-        // Index mutated on disk — always drop cached Searcher / path ids / elisions
-        // before any post-work deadline check. A soft timeout must not leave a
-        // stale Searcher serving pre-mutation hits (d2a1.13).
-        self.invalidate_searcher_cache();
-        Self::lock_or_recover(&self.path_registry, |registry| registry.clear()).clear();
-        Self::lock_or_recover(&self.emitted_snippets, |seen| seen.clear()).clear();
+        // Always drop cached Searcher / path ids / elisions after a mutative
+        // attempt (Ok or Err). Mid-sidecar Err must not leave a warm Searcher
+        // serving pre-mutation hits (R-INDEX-ERR-CACHE-SYNC / d2a1.13).
+        self.invalidate_after_index_attempt();
+        let stats = result?;
         anyhow::ensure!(
             started.elapsed() <= INDEX_REPO_DEADLINE,
             "index_repo exceeded {}s deadline",
             INDEX_REPO_DEADLINE.as_secs()
         );
         Ok(serde_json::to_string(&stats)?)
+    }
+
+    /// Invalidate Searcher + session path/snippet maps after any index attempt.
+    ///
+    /// Call on both Ok and Err once `Indexer::new` succeeded and `index_all` /
+    /// `reindex_all` returned: bulk commit can land before sidecar rebuild fails.
+    fn invalidate_after_index_attempt(&self) {
+        self.invalidate_searcher_cache();
+        Self::lock_or_recover(&self.path_registry, |registry| registry.clear()).clear();
+        Self::lock_or_recover(&self.emitted_snippets, |seen| seen.clear()).clear();
     }
 }
 
@@ -1192,6 +1203,52 @@ mod cache_tests {
         assert!(
             McpServer::lock_or_recover(&server.emitted_snippets, |_| {}).is_empty(),
             "emitted snippets must clear on index mutation"
+        );
+    }
+
+    /// Pins R-INDEX-ERR-CACHE-SYNC: mid-sidecar Err after bulk commit must still
+    /// advance generation and clear path/snippet session maps.
+    #[test]
+    fn index_repo_invalidates_searcher_on_index_err() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        std::fs::write(root.join("lib.rs"), "fn hello() {}\n").unwrap();
+        let server = test_server(root.clone());
+        let (searcher, generation) = server.searcher_for(root.clone(), 10).unwrap();
+        server.restore_searcher(root.clone(), 10, generation, searcher);
+        McpServer::lock_or_recover(&server.path_registry, |_| {})
+            .insert("p0".into(), "lib.rs".into());
+        McpServer::lock_or_recover(&server.emitted_snippets, |_| {})
+            .insert("p0:1-1".into(), 42);
+
+        let args = server
+            .parse_index_repo(&json!({}))
+            .expect("empty index_repo args should parse");
+        let _fail = force_sidecar_rebuild_err();
+        let err = server
+            .tool_index_repo(args)
+            .expect_err("forced sidecar rebuild must surface as index_repo Err");
+        assert!(
+            err.to_string().contains("forced sidecar rebuild failure"),
+            "unexpected error: {err}"
+        );
+
+        let cache = McpServer::lock_or_recover(&server.searcher_cache, |_| {});
+        assert!(
+            cache.entry.is_none(),
+            "searcher cache must clear on index_repo Err after possible disk mutation"
+        );
+        assert!(
+            cache.generation != generation,
+            "generation must advance on index_repo Err so restore cannot reinstall stale Searcher"
+        );
+        assert!(
+            McpServer::lock_or_recover(&server.path_registry, |_| {}).is_empty(),
+            "path registry must clear on index_repo Err"
+        );
+        assert!(
+            McpServer::lock_or_recover(&server.emitted_snippets, |_| {}).is_empty(),
+            "emitted snippets must clear on index_repo Err"
         );
     }
 }

@@ -253,16 +253,70 @@ impl CodeModeSession {
             embed_backend: EmbedBackend::Auto,
             ..IndexOptions::default()
         })?;
-        let stats = if force {
-            indexer.reindex_all()?
+        // Bulk SQLite may commit before sidecar rebuild; invalidate on Ok and Err.
+        let result = if force {
+            indexer.reindex_all()
         } else {
-            indexer.index_all()?
+            indexer.index_all()
         };
         self.invalidate_searcher_cache();
+        let stats = result?;
         Ok(json!({
             "ok": true,
             "force": force,
             "stats": stats,
         }))
+    }
+
+    #[cfg(test)]
+    fn searcher_cache_occupied(&self) -> bool {
+        self.searcher_cache
+            .lock()
+            .map(|g| g.is_some())
+            .unwrap_or(false)
+    }
+}
+
+#[cfg(test)]
+mod index_err_cache_tests {
+    use super::*;
+    use ast_sgrep_core::force_sidecar_rebuild_err;
+    use tempfile::TempDir;
+
+    #[test]
+    fn index_repo_invalidates_searcher_on_index_err() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        std::fs::write(root.join("lib.rs"), "fn hello() {}\n").unwrap();
+        let mut session = CodeModeSession::new(SessionConfig {
+            root: root.clone(),
+            index_path: None,
+            limit: 8,
+            use_embed: false,
+            ..SessionConfig::default()
+        });
+        // Warm the Searcher cache (drop guard so invalidate can clear the slot).
+        drop(
+            session
+                .searcher_for(root.clone(), 8)
+                .expect("warm searcher"),
+        );
+        assert!(
+            session.searcher_cache_occupied(),
+            "precondition: searcher cache warm"
+        );
+
+        let _fail = force_sidecar_rebuild_err();
+        let err = session
+            .index_repo(&json!({}))
+            .expect_err("forced sidecar rebuild must surface as index_repo Err");
+        assert!(
+            err.to_string().contains("forced sidecar rebuild failure"),
+            "unexpected error: {err}"
+        );
+        assert!(
+            !session.searcher_cache_occupied(),
+            "searcher cache must clear on index_repo Err after possible disk mutation"
+        );
     }
 }

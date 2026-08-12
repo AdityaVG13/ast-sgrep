@@ -53,7 +53,8 @@ pub use fusion::{
     FusionExample, LearnedFusionModel, WeightSensitivity,
 };
 pub use index::{
-    indexed_rel_path, EmbedBackend, FileIndexStats, IndexOptions, IndexStats, Indexer,
+    force_sidecar_rebuild_err, indexed_rel_path, EmbedBackend, FileIndexStats,
+    ForceSidecarRebuildErr, IndexOptions, IndexStats, Indexer,
 };
 pub use io_bounds::{read_text_capped, MAX_INDEX_FILE_BYTES};
 pub use limits::{

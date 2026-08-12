@@ -9,8 +9,34 @@ use rayon::prelude::*;
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::cell::Cell;
 use std::time::SystemTime;
 use walkdir::WalkDir;
+
+thread_local! {
+    /// Test-only: when set, [`Indexer::rebuild_dirty_sidecars`] returns Err after the
+    /// bulk SQLite commit so callers can pin Err-path cache invalidation.
+    /// Thread-local so parallel `cargo test` workers do not cross-contaminate.
+    static FORCE_SIDECAR_REBUILD_ERR: Cell<bool> = Cell::new(false);
+}
+
+/// RAII guard that forces sidecar rebuild to fail on this thread (simulates
+/// mid-sidecar Err after durable bulk commit). Clears the flag on drop.
+#[doc(hidden)]
+pub struct ForceSidecarRebuildErr;
+
+impl Drop for ForceSidecarRebuildErr {
+    fn drop(&mut self) {
+        FORCE_SIDECAR_REBUILD_ERR.with(|c| c.set(false));
+    }
+}
+
+/// Arm the mid-sidecar rebuild failure inject for the current thread.
+#[doc(hidden)]
+pub fn force_sidecar_rebuild_err() -> ForceSidecarRebuildErr {
+    FORCE_SIDECAR_REBUILD_ERR.with(|c| c.set(true));
+    ForceSidecarRebuildErr
+}
 /// Indexed relative paths must be valid UTF-8. Lossy conversion is forbidden:
 /// two distinct non-UTF8 `OsStr` paths must not collide into one DB key.
 ///
@@ -228,6 +254,15 @@ impl Indexer {
     pub fn store(&self) -> &IndexStore {
         &self.store
     }
+    /// Index all reachable files under `root`.
+    ///
+    /// # Caller cache duty
+    ///
+    /// The bulk SQLite transaction commits **before** sidecar rebuild. If this
+    /// returns `Err` after that commit (for example mid-sidecar failure), durable
+    /// rows may already be visible on disk. Callers that cache a `Searcher`, path
+    /// ids, or snippet elisions **must invalidate those caches on both `Ok` and
+    /// `Err`** once indexing has been attempted.
     pub fn index_all(&mut self) -> Result<IndexStats> {
         let _perf_run = crate::perf_profile::Run::start("index_all");
         self.ignore.clear();
@@ -479,6 +514,12 @@ impl Indexer {
         Ok(())
     }
     fn rebuild_dirty_sidecars(&self, _stats: &IndexStats, semantic_ivf_dirty: bool) -> Result<()> {
+        // After bulk commit: injectable Err so MCP/CM tests pin invalidate-on-Err.
+        if FORCE_SIDECAR_REBUILD_ERR.with(|c| c.get()) {
+            return Err(crate::StoreError::Other(
+                "forced sidecar rebuild failure after bulk commit (test inject)".into(),
+            ));
+        }
         let file_count = self.store.status()?.file_count;
         if crate::tantivy_index::should_use_tantivy(file_count, self.options.use_tantivy) {
             self.rebuild_tantivy_sidecar()?;
