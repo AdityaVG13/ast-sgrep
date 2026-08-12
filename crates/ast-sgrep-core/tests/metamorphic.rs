@@ -101,7 +101,11 @@ fn hit_keys(hits: &[ast_sgrep_core::search::SearchHit]) -> BTreeSet<(String, u32
         .collect()
 }
 
-fn index_and_searcher(root: &std::path::Path, index_path: &std::path::Path, limit: usize) -> Searcher {
+fn index_and_searcher(
+    root: &std::path::Path,
+    index_path: &std::path::Path,
+    limit: usize,
+) -> Searcher {
     let mut indexer = Indexer::new(IndexOptions {
         root: root.to_path_buf(),
         index_path: Some(index_path.to_path_buf()),
@@ -171,8 +175,14 @@ fn mr_limit_top_k_subset() {
     // Several files share a token so ranking has multiple hits.
     for (name, body) in [
         ("one.rs", "fn shared_token() { let a = 1; }\n"),
-        ("two.rs", "fn shared_token_helper() { shared_token(); }\nfn shared_token() {}\n"),
-        ("three.rs", "// shared_token appears in comment\nfn other() {}\n"),
+        (
+            "two.rs",
+            "fn shared_token_helper() { shared_token(); }\nfn shared_token() {}\n",
+        ),
+        (
+            "three.rs",
+            "// shared_token appears in comment\nfn other() {}\n",
+        ),
         ("four.rs", "fn call() { shared_token(); shared_token(); }\n"),
     ] {
         fs::write(corpus.path().join(name), body).unwrap();
@@ -251,7 +261,7 @@ fn mr_ann_query_scale_invariance() {
     let q = [1.0f32, 0.05, 0.0, 0.0];
     let a = index.candidate_indices(&q, Some(4));
     let q2 = [10.0f32, 0.5, 0.0, 0.0]; // same direction before renorm in search path
-    // candidate_indices may assume unit query — scale explicitly via same direction
+                                       // candidate_indices may assume unit query — scale explicitly via same direction
     let b = index.candidate_indices(&q2, Some(4));
     // If implementation renorms, a==b; if not, this MR documents required renorm behavior.
     assert_eq!(
@@ -409,23 +419,19 @@ fn mr_pred_corpus_add_orthogonal(before: &BTreeSet<HitKey>, after: &BTreeSet<Hit
 fn mr_suite_mutation_kill_matrix() {
     // --- Healthy fixtures (correct behavior) ---------------------------------
     let healthy_small: BTreeSet<HitKey> = [(String::from("a.rs"), 1, 1)].into_iter().collect();
-    let healthy_large: BTreeSet<HitKey> = [
-        (String::from("a.rs"), 1, 1),
-        (String::from("b.rs"), 2, 2),
-    ]
-    .into_iter()
-    .collect();
+    let healthy_large: BTreeSet<HitKey> =
+        [(String::from("a.rs"), 1, 1), (String::from("b.rs"), 2, 2)]
+            .into_iter()
+            .collect();
     let healthy_probe_lo: BTreeSet<usize> = [0, 2].into_iter().collect();
     let healthy_probe_hi: BTreeSet<usize> = [0, 1, 2, 5].into_iter().collect();
     let healthy_cand_q: Vec<usize> = vec![3, 1, 7, 0];
     let healthy_cand_scaled: Vec<usize> = vec![3, 1, 7, 0]; // α>0 same direction
     let healthy_lang_filt: BTreeSet<HitKey> = [(String::from("a.rs"), 1, 1)].into_iter().collect();
-    let healthy_lang_all: BTreeSet<HitKey> = [
-        (String::from("a.rs"), 1, 1),
-        (String::from("b.py"), 2, 2),
-    ]
-    .into_iter()
-    .collect();
+    let healthy_lang_all: BTreeSet<HitKey> =
+        [(String::from("a.rs"), 1, 1), (String::from("b.py"), 2, 2)]
+            .into_iter()
+            .collect();
     let healthy_reindex_before: BTreeSet<HitKey> =
         [(String::from("a.rs"), 1, 1), (String::from("b.rs"), 3, 3)]
             .into_iter()
@@ -552,8 +558,14 @@ fn mr_suite_mutation_kill_matrix() {
     // of the same class still passes (avoids "always false" placebo predicates).
     assert!(mr_pred_limit_subset(&healthy_small, &healthy_large));
     assert!(mr_pred_probe_monotone(&healthy_probe_lo, &healthy_probe_hi));
-    assert!(mr_pred_scale_invariance(&healthy_cand_q, &healthy_cand_scaled));
-    assert!(mr_pred_lang_filter_subset(&healthy_lang_filt, &healthy_lang_all));
+    assert!(mr_pred_scale_invariance(
+        &healthy_cand_q,
+        &healthy_cand_scaled
+    ));
+    assert!(mr_pred_lang_filter_subset(
+        &healthy_lang_filt,
+        &healthy_lang_all
+    ));
     assert!(mr_pred_reindex_idempotent(
         &healthy_reindex_before,
         &healthy_reindex_after
@@ -562,10 +574,7 @@ fn mr_suite_mutation_kill_matrix() {
         &healthy_flat_small,
         &healthy_flat_large
     ));
-    assert!(mr_pred_term_order_equiv(
-        &healthy_terms_a,
-        &healthy_terms_b
-    ));
+    assert!(mr_pred_term_order_equiv(&healthy_terms_a, &healthy_terms_b));
     assert!(mr_pred_corpus_add_orthogonal(
         &healthy_add_before,
         &healthy_add_after
@@ -709,12 +718,8 @@ fn mr_query_trim_search_equivalence() {
     let searcher = index_and_searcher(corpus.path(), &index_path, 16);
 
     let bare = searcher.search(token).expect("bare");
-    let padded = searcher
-        .search(&format!("  {token}  "))
-        .expect("padded");
-    let tabbed = searcher
-        .search(&format!("\t{token}\n"))
-        .expect("tabbed");
+    let padded = searcher.search(&format!("  {token}  ")).expect("padded");
+    let tabbed = searcher.search(&format!("\t{token}\n")).expect("tabbed");
 
     assert!(
         !bare.hits.is_empty(),
@@ -933,9 +938,7 @@ fn mr_query_term_order_equivalence() {
     let c = "mr_perm_gamma_tok";
     fs::write(
         corpus.path().join("combo.rs"),
-        format!(
-            "fn {a}() {{}}\nfn {b}() {{ {a}(); }}\nfn {c}() {{ {a}(); {b}(); }}\n"
-        ),
+        format!("fn {a}() {{}}\nfn {b}() {{ {a}(); }}\nfn {c}() {{ {a}(); {b}(); }}\n"),
     )
     .unwrap();
     fs::write(
@@ -1053,10 +1056,7 @@ fn mr_compound_lang_filter_then_limit_subset() {
             "d.py",
             format!("def {token}():\n    pass\n\ndef py_call():\n    {token}()\n"),
         ),
-        (
-            "e.py",
-            format!("# {token} also in python\nx = 1\n"),
-        ),
+        ("e.py", format!("# {token} also in python\nx = 1\n")),
     ] {
         fs::write(corpus.path().join(name), body).unwrap();
     }

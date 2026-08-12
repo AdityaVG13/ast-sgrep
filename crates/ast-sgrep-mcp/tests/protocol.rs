@@ -62,7 +62,7 @@ fn initialize_returns_protocol_and_tools_capability() {
     // r2lu: a client that names no revision gets the current one.
     let r = rpc(json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}));
     assert_eq!(r["id"], 1);
-    assert_eq!(r["result"]["protocolVersion"], "2026-07-28");
+    assert_eq!(r["result"]["protocolVersion"], "2025-11-25");
     assert!(r["result"]["capabilities"]["tools"].is_object());
     assert_eq!(r["result"]["serverInfo"]["name"], "ast-sgrep");
     assert!(r.get("error").is_none());
@@ -83,16 +83,17 @@ fn initialize_negotiates_the_requested_protocol_revision() {
 
     let current = rpc(json!({
         "jsonrpc":"2.0","id":2,"method":"initialize",
-        "params":{"protocolVersion":"2026-07-28"}
+        "params":{"protocolVersion":"2025-11-25"}
     }));
-    assert_eq!(current["result"]["protocolVersion"], "2026-07-28");
+    assert_eq!(current["result"]["protocolVersion"], "2025-11-25");
 
-    // An unsupported revision falls back to ours rather than echoing nonsense.
+    // The discovery-based revision is unsupported by this handshake server and
+    // must not be echoed back merely because the client requested it.
     let unknown = rpc(json!({
         "jsonrpc":"2.0","id":3,"method":"initialize",
-        "params":{"protocolVersion":"1999-01-01"}
+        "params":{"protocolVersion":"2026-07-28"}
     }));
-    assert_eq!(unknown["result"]["protocolVersion"], "2026-07-28");
+    assert_eq!(unknown["result"]["protocolVersion"], "2025-11-25");
 }
 
 /// r2lu: every search tool declares an outputSchema, and results carry typed
@@ -116,7 +117,10 @@ fn search_results_carry_structured_content_matching_the_declared_schema() {
         let name = tool["name"].as_str().unwrap();
         if name.ends_with("_search") || name == "code_search" {
             let schema = &tool["outputSchema"];
-            assert_eq!(schema["type"], "object", "{name} must declare an outputSchema");
+            assert_eq!(
+                schema["type"], "object",
+                "{name} must declare an outputSchema"
+            );
             assert!(schema["properties"]["h"].is_object(), "{name} schema hits");
             assert!(schema["properties"]["p"].is_object(), "{name} schema paths");
         }
@@ -127,14 +131,20 @@ fn search_results_carry_structured_content_matching_the_declared_schema() {
         Some(temp.path()),
     );
     let structured = &response["result"]["structuredContent"];
-    assert!(structured.is_object(), "structuredContent missing: {response:#}");
+    assert!(
+        structured.is_object(),
+        "structuredContent missing: {response:#}"
+    );
     assert_eq!(structured["v"], 1);
     assert!(structured["h"].is_array());
 
     // The text fallback stays, and says exactly the same thing.
     let text = response["result"]["content"][0]["text"].as_str().unwrap();
     let parsed: Value = serde_json::from_str(text).expect("text fallback is JSON");
-    assert_eq!(&parsed, structured, "text and structured content must agree");
+    assert_eq!(
+        &parsed, structured,
+        "text and structured content must agree"
+    );
     assert!(!text.contains('\n'), "text fallback must stay minified");
 }
 #[test]
@@ -240,12 +250,19 @@ fn compact_search_ids_expand_through_code_read_in_one_session() {
     let responses = rpc_session(vec![search.clone()], Some(temp.path()));
     let body = tool_body(&responses[0]);
     let compact_id = body["h"][0][0].as_str().expect("compact id").to_owned();
-    assert!(!compact_id.contains('/'), "id must be interned: {compact_id}");
+    assert!(
+        !compact_id.contains('/'),
+        "id must be interned: {compact_id}"
+    );
 
     let read = json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"code_read","arguments":{"ids":[compact_id]}}});
     let responses = rpc_session(vec![search, read], Some(temp.path()));
     assert_eq!(responses.len(), 2, "{responses:#?}");
-    assert_eq!(responses[1]["result"]["isError"], false, "{:#}", responses[1]);
+    assert_eq!(
+        responses[1]["result"]["isError"], false,
+        "{:#}",
+        responses[1]
+    );
     let read_body = tool_body(&responses[1]);
     assert!(
         read_body["nodes"][0]["content"]
@@ -399,7 +416,6 @@ fn tool_roots_are_sandboxed_under_configured_workspace() {
     );
 }
 
-
 /// 9q0l: tool definitions ride in the prompt on every request, so they are the
 /// largest cacheable region this server controls. Any instability here costs a
 /// full cache miss per call for every connected client.
@@ -456,9 +472,16 @@ fn search_envelope_is_byte_stable_with_volatile_accounting_last() {
 
     let search = json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"keyword_search","arguments":{"query":"target_symbol","limit":4,"resend_seen":true}}});
     let responses = rpc_session(vec![search.clone(), search], Some(temp.path()));
-    let first = responses[0]["result"]["content"][0]["text"].as_str().unwrap();
-    let second = responses[1]["result"]["content"][0]["text"].as_str().unwrap();
-    assert_eq!(first, second, "repeated identical search was not byte-stable");
+    let first = responses[0]["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap();
+    let second = responses[1]["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap();
+    assert_eq!(
+        first, second,
+        "repeated identical search was not byte-stable"
+    );
 
     // Content keys precede the volatile `z*` tail on the wire.
     let tail = first.find("\"zb\"").expect("zb accounting present");
@@ -497,9 +520,15 @@ fn repeated_search_elides_already_sent_snippets_until_reindex() {
     );
     assert_eq!(responses.len(), 4, "{responses:#?}");
 
-    let first = responses[0]["result"]["content"][0]["text"].as_str().unwrap();
-    let second = responses[1]["result"]["content"][0]["text"].as_str().unwrap();
-    let after_reindex = responses[3]["result"]["content"][0]["text"].as_str().unwrap();
+    let first = responses[0]["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap();
+    let second = responses[1]["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap();
+    let after_reindex = responses[3]["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap();
 
     // Second identical call carries markers instead of bodies, and is smaller.
     let body = tool_body(&responses[1]);
@@ -553,8 +582,12 @@ fn resend_seen_disables_snippet_elision() {
 
     let search = json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"keyword_search","arguments":{"query":"target_symbol","limit":4,"resend_seen":true}}});
     let responses = rpc_session(vec![search.clone(), search], Some(temp.path()));
-    let first = responses[0]["result"]["content"][0]["text"].as_str().unwrap();
-    let second = responses[1]["result"]["content"][0]["text"].as_str().unwrap();
+    let first = responses[0]["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap();
+    let second = responses[1]["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap();
     assert_eq!(first, second, "resend_seen must keep responses identical");
     assert!(!second.contains("\"~\""), "no elision expected: {second}");
 }
@@ -601,7 +634,10 @@ fn zero_hit_search_returns_a_diagnostic_miss_envelope() {
         json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"keyword_search","arguments":{"query":"present","limit":4}}}),
         Some(temp.path()),
     );
-    let miss_bytes = response["result"]["content"][0]["text"].as_str().unwrap().len();
+    let miss_bytes = response["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap()
+        .len();
     let hit_bytes = hit["result"]["content"][0]["text"].as_str().unwrap().len();
     assert!(miss_bytes < hit_bytes, "{miss_bytes} vs {hit_bytes}");
 }

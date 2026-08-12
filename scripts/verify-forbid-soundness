@@ -3,7 +3,8 @@
 #
 # Distinct from `cargo audit` (dependency CVE scanning). This gate checks that
 # first-party product code cannot introduce `unsafe` without an explicit sealed
-# exception (ast-sgrep-mmap only).
+# exception (`ast-sgrep-mmap` for one hand-written map call and
+# `ast-sgrep-codemode-napi` for generated Node-API FFI glue).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -23,6 +24,7 @@ echo "== product crate roots carry #![forbid(unsafe_code)] =="
 product_roots=(
   crates/ast-sgrep-core/src/lib.rs
   crates/ast-sgrep-cli/src/lib.rs
+  crates/ast-sgrep-codemode/src/lib.rs
   crates/ast-sgrep-embed/src/lib.rs
   crates/ast-sgrep-lang/src/lib.rs
   crates/ast-sgrep-lsp/src/lib.rs
@@ -42,9 +44,9 @@ done
 echo "== product crates inherit workspace lints (no deny/allow override) =="
 for toml in crates/*/Cargo.toml; do
   name="$(basename "$(dirname "$toml")")"
-  if [[ "$name" == "ast-sgrep-mmap" ]]; then
+  if [[ "$name" == "ast-sgrep-mmap" || "$name" == "ast-sgrep-codemode-napi" ]]; then
     if ! grep -q 'unsafe_code = "allow"' "$toml"; then
-      echo "FAIL: sealed mmap crate must explicitly allow unsafe_code"
+      echo "FAIL: sealed exception $name must explicitly allow unsafe_code"
       fail=1
     else
       echo "ok: $name is sealed allow exception"
@@ -62,9 +64,10 @@ for toml in crates/*/Cargo.toml; do
   fi
 done
 
-echo "== no first-party unsafe outside sealed mmap =="
+echo "== no hand-written first-party unsafe outside sealed mmap =="
 # Match `unsafe {` / `unsafe fn` / `unsafe impl` / `unsafe trait` in product sources.
-# Exclude the sealed mmap crate and vendored/target paths.
+# NAPI macros expand generated FFI unsafe code but its first-party source stays
+# in this scan. Exclude only the mmap crate's reviewed hand-written call.
 # rg is preferred but not guaranteed on CI runners; fall back to GNU grep.
 if command -v rg >/dev/null 2>&1; then
   scan_cmd=(rg -n --glob '!crates/ast-sgrep-mmap/**' --glob '!target/**' --glob '!fuzz/**' \
@@ -78,7 +81,7 @@ while IFS= read -r match; do
   fail=1
 done < <("${scan_cmd[@]}" || true)
 
-echo "== sealed mmap is the only intentional unsafe =="
+echo "== sealed exception inventory =="
 if command -v rg >/dev/null 2>&1; then
   has_sealed="$(rg -q 'unsafe \{' crates/ast-sgrep-mmap/src/lib.rs && echo yes || echo no)"
 else
@@ -89,6 +92,12 @@ if [[ "$has_sealed" != "yes" ]]; then
   fail=1
 else
   echo "ok: sealed unsafe present in ast-sgrep-mmap"
+fi
+if ! grep -q 'unsafe_code = "allow"' crates/ast-sgrep-codemode-napi/Cargo.toml; then
+  echo "FAIL: ast-sgrep-codemode-napi must remain an explicit generated-FFI exception"
+  fail=1
+else
+  echo "ok: generated NAPI FFI exception is explicit"
 fi
 
 echo "== rustc enforces forbid on a product crate =="

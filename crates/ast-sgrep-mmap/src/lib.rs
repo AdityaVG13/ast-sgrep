@@ -1,8 +1,9 @@
 //! Sealed read-only mmap boundary for ast-sgrep.
 //!
 //! **Policy (`ast-sgrep-p7l3`):** first-party product crates use
-//! `#![forbid(unsafe_code)]`. The only intentional `unsafe` in this workspace
-//! lives here, wrapping `memmap2::MmapOptions::map` behind a safe API.
+//! `#![forbid(unsafe_code)]`. The only hand-written `unsafe` in this workspace
+//! lives here, wrapping `memmap2::MmapOptions::map` behind a safe API. The
+//! separate N-API crate permits macro-generated FFI glue only.
 //!
 //! Callers must not mutate a published sidecar inode in place; writers fsync
 //! and rename a separate file so existing mappings keep a stable view.

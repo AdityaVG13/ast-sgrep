@@ -1,18 +1,23 @@
 #!/usr/bin/env bash
 # Reproducible evaluation pack (bead ast-sgrep-tef-eval-pack-d2dv).
 #
-# Regenerates every retrieval and token-efficiency number recorded for the
-# `self` corpus in benchmarks/results/baselines.md, from a clean checkout, with
-# no network access and no external corpora.
+# Regenerates the candidate retrieval and token-efficiency measurements for the
+# `self` corpus in benchmarks/results/baselines.md. It does not fetch external
+# corpora; Rust dependencies must already be available or downloadable by Cargo.
 #
 #   ./benchmarks/run_eval.sh            # build + evaluate + write raw artifacts
 #
-# Raw artifacts land in benchmarks/results/raw/ and are checked in, so a reader
-# can diff a new run against the recorded one instead of trusting a summary.
+# Raw artifacts land in ignored benchmarks/results/raw/. Promote only a clean,
+# reviewed fingerprint row to baselines.md; generated payloads are local evidence.
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
+
+if [[ -n "$(git status --porcelain --untracked-files=normal)" ]]; then
+  echo "error: evaluation requires a clean worktree so results identify one commit" >&2
+  exit 1
+fi
 
 gold="benchmarks/gold/self.json"
 out="benchmarks/results/raw"
@@ -27,11 +32,9 @@ else
 fi
 
 commit="$(git rev-parse HEAD)"
-dirty="false"
-if ! git diff --quiet || ! git diff --cached --quiet; then dirty="true"; fi
 
 echo "== provenance =="
-echo "commit=$commit dirty=$dirty"
+echo "commit=$commit dirty=false"
 "$bin" version --json > "$out/version.json"
 
 # 1. Retrieval quality, and the hybrid vs no-embed A/B in one run.
@@ -45,7 +48,9 @@ echo "== token efficiency (self corpus) =="
 # A dedicated, freshly built index keeps the measurement deterministic: the
 # native/agent envelopes embed the snapshot generation, so reusing a repo index
 # whose generation keeps incrementing would change the byte totals run to run.
-token_index="$(mktemp -d)/index.db"
+token_work="$(mktemp -d)"
+trap 'rm -rf -- "$token_work"' EXIT
+token_index="$token_work/index.db"
 "$bin" --index-path "$token_index" index . >/dev/null
 python3 - "$bin" "$gold" "$out" "$token_index" <<'PY'
 import json, subprocess, sys
@@ -58,14 +63,14 @@ for query in gold["queries"]:
         proc = subprocess.run(
             [binary, "--index-path", index_path, "--json", "--format", fmt,
              "--limit", "10", query["query"], "."],
-            capture_output=True, text=True,
+            capture_output=True, text=True, check=True,
         )
         row[fmt] = len(proc.stdout.strip())
     # m38g: budgeted compact picks per-result detail under one ceiling.
     proc = subprocess.run(
         [binary, "--index-path", index_path, "--json", "--format", "compact",
          "--budget-tokens", "300", "--limit", "10", query["query"], "."],
-        capture_output=True, text=True,
+        capture_output=True, text=True, check=True,
     )
     row["compact-budget300"] = len(proc.stdout.strip())
     rows.append(row)
@@ -96,7 +101,7 @@ def result_ids(query_text, extra):
     proc = subprocess.run(
         [binary, "--index-path", index_path, "--json", "--format", "compact",
          "--limit", "10", *extra, query_text, "."],
-        capture_output=True, text=True,
+        capture_output=True, text=True, check=True,
     )
     body = json.loads(proc.stdout)
     return [row[0] for row in body.get("h", [])]
@@ -126,18 +131,18 @@ if mismatches:
 BUDGETPY
 
 echo "== reliability invariants =="
-cargo test -p ast-sgrep-core --test snapshot_generation --test generation_swap \
-  --test store_pragmas 2>&1 | tee "$out/reliability-tests.txt" | tail -5
+cargo test -p ast-sgrep-core --test snapshot_generation --test store_pragmas \
+  2>&1 | tee "$out/reliability-tests.txt" | tail -5
 
-python3 - "$out" "$commit" "$dirty" <<'PY'
+python3 - "$out" "$commit" <<'PY'
 import json, sys
-out_dir, commit, dirty = sys.argv[1], sys.argv[2], sys.argv[3]
+out_dir, commit = sys.argv[1], sys.argv[2]
 quality = json.load(open(f"{out_dir}/self-quality.json"))
 ab = json.load(open(f"{out_dir}/self-ab-no-embed.json"))
 tokens = json.load(open(f"{out_dir}/self-token-efficiency.json"))
 summary = {
     "commit": commit,
-    "dirty_worktree": dirty == "true",
+    "dirty_worktree": False,
     "corpus": "self",
     "gold_queries": quality["aggregate"]["n_queries"],
     "retrieval": quality["aggregate"],

@@ -66,25 +66,21 @@
     "node": ">=22.19.0"
   },
   "dependencies": {
-    "ast-sgrep": "1.4.0"
+    "ast-sgrep": "1.4.0",
+    "typebox": "^1.0.0"
   },
   "peerDependencies": {
-    "@earendil-works/pi-coding-agent": "*",
-    "typebox": "*"
+    "@earendil-works/pi-coding-agent": ">=0.80.6 <1"
   },
   "peerDependenciesMeta": {
     "@earendil-works/pi-coding-agent": {
       "optional": true
-    },
-    "typebox": {
-      "optional": true
     }
   },
   "devDependencies": {
-    "@earendil-works/pi-coding-agent": "^0.80.6",
+    "@earendil-works/pi-coding-agent": "^0.84.1",
     "@types/node": "^22.15.0",
     "tsx": "^4.20.0",
-    "typescript": "^5.8.0",
-    "typebox": "^1.0.0"
+    "typescript": "^5.8.0"
   }
 }

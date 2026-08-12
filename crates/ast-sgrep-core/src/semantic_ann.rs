@@ -1,6 +1,7 @@
 use crate::semantic_ivf::{
     compute_ann_fingerprint, invalidate_semantic_ivf, load_semantic_ivf,
-    load_semantic_ivf_unchecked, save_semantic_ivf_with_publication, semantic_ivf_path, PersistedSemanticIvf,
+    load_semantic_ivf_unchecked, save_semantic_ivf_with_publication, semantic_ivf_path,
+    PersistedSemanticIvf,
 };
 use crate::store::IndexStore;
 use crate::Result;
@@ -10,7 +11,7 @@ use ast_sgrep_embed::{
     PARALLEL_CHUNK_THRESHOLD,
 };
 use rayon::prelude::*;
-use std::io::{Read, Write};
+use std::io::Write;
 use std::sync::{Arc, Mutex, PoisonError};
 pub const DEFAULT_ANN_THRESHOLD: usize = 2_000;
 /// Measured minimum satisfying recall@10 >= 0.99 at 2,048 and 10,000 vectors.
@@ -55,7 +56,7 @@ impl SemanticAnnIndex {
         }
     }
     pub fn write_to<W: Write>(&self, writer: &mut W, dim: usize) -> std::io::Result<()> {
-        write_u32(writer, self.centroids.len() as u32)?;
+        write_usize_u32(writer, self.centroids.len())?;
         for c in &self.centroids {
             for &v in c {
                 writer.write_all(&v.to_le_bytes())?;
@@ -64,42 +65,14 @@ impl SemanticAnnIndex {
                 writer.write_all(&0.0f32.to_le_bytes())?;
             }
         }
-        write_u32(writer, self.clusters.len() as u32)?;
+        write_usize_u32(writer, self.clusters.len())?;
         for cluster in &self.clusters {
-            write_u32(writer, cluster.len() as u32)?;
+            write_usize_u32(writer, cluster.len())?;
             for &idx in cluster {
-                write_u32(writer, idx as u32)?;
+                write_usize_u32(writer, idx)?;
             }
         }
         Ok(())
-    }
-    pub fn read_clusters_from<R: Read>(
-        reader: &mut R,
-        k: usize,
-        dim: usize,
-    ) -> std::io::Result<Self> {
-        let mut centroids = Vec::with_capacity(k);
-        for _ in 0..k {
-            let mut c = vec![0.0f32; dim];
-            for v in &mut c {
-                *v = read_f32(reader)?;
-            }
-            centroids.push(c);
-        }
-        let cluster_count = read_u32(reader)? as usize;
-        let mut clusters = Vec::with_capacity(cluster_count);
-        for _ in 0..cluster_count {
-            let len = read_u32(reader)? as usize;
-            let mut members = Vec::with_capacity(len);
-            for _ in 0..len {
-                members.push(read_u32(reader)? as usize);
-            }
-            clusters.push(members);
-        }
-        Ok(Self {
-            centroids,
-            clusters,
-        })
     }
     pub fn read_clusters_bounded(
         bytes: &[u8],
@@ -314,6 +287,15 @@ pub fn flatten_vectors_for_search(chunks: &[SemanticChunkRow], dim: usize) -> Re
 fn write_u32<W: Write>(w: &mut W, v: u32) -> std::io::Result<()> {
     w.write_all(&v.to_le_bytes())
 }
+fn write_usize_u32<W: Write>(w: &mut W, value: usize) -> std::io::Result<()> {
+    let value = u32::try_from(value).map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "semantic IVF exceeds the u32 on-disk format",
+        )
+    })?;
+    write_u32(w, value)
+}
 fn invalid_ivf_index() -> std::io::Error {
     std::io::Error::new(
         std::io::ErrorKind::InvalidData,
@@ -332,16 +314,6 @@ fn take_u32(bytes: &[u8], offset: &mut usize) -> std::io::Result<u32> {
     Ok(u32::from_le_bytes(raw))
 }
 
-fn read_u32<R: Read>(r: &mut R) -> std::io::Result<u32> {
-    let mut b = [0u8; 4];
-    r.read_exact(&mut b)?;
-    Ok(u32::from_le_bytes(b))
-}
-fn read_f32<R: Read>(r: &mut R) -> std::io::Result<f32> {
-    let mut b = [0u8; 4];
-    r.read_exact(&mut b)?;
-    Ok(f32::from_le_bytes(b))
-}
 fn score_members(
     query: &[f32],
     flat: &[f32],
@@ -395,12 +367,9 @@ fn flat_row(flat: &[f32], dim: usize, i: usize) -> &[f32] {
     &flat[start..start + dim]
 }
 fn nearest_centroid(vector: &[f32], centroids: &[Vec<f32>]) -> usize {
-    // T1-R (Pass 9): rows + centroids are L2-normalized (build_from_flat +
-    // post-update renorm). Cosine then equals the plain inner product, and
-    // `dot_similarity` uses simsimd for dim ≥ 64 (product dim=256). Same max
-    // + lowest-index tie-break as the old cosine path; scores differ slightly
-    // from full cosine (f64 renorm) so IVF clusters are not bit-identical to
-    // pre-T1-R sidecars — see L9_CHANGE.md.
+    // Rows and centroids are L2-normalized during build and after updates, so
+    // cosine equals the plain inner product. Keep the same max and lowest-index
+    // tie-break as the previous cosine path.
     centroids
         .iter()
         .enumerate()
@@ -411,11 +380,7 @@ fn nearest_centroid(vector: &[f32], centroids: &[Vec<f32>]) -> usize {
 }
 /// Deterministic k-means over a row-major flat matrix (`n * dim` floats).
 fn kmeans(flat: &[f32], dim: usize, k: usize, max_iters: usize) -> (Vec<Vec<f32>>, Vec<usize>) {
-    let n = if dim == 0 {
-        0
-    } else {
-        flat.len() / dim
-    };
+    let n = flat.len().checked_div(dim).unwrap_or(0);
     let k = k.min(n).max(1);
     let mut centroids = {
         let mut c = vec![flat_row(flat, dim, 0).to_vec()];
@@ -447,10 +412,7 @@ fn kmeans(flat: &[f32], dim: usize, k: usize, max_iters: usize) -> (Vec<Vec<f32>
             .collect();
         // Early exit: OR of per-row deltas (associative). Must match serial:
         // first iteration where all rows stable skips centroid update.
-        let changed = next
-            .iter()
-            .zip(assignments.iter())
-            .any(|(a, b)| a != b);
+        let changed = next.iter().zip(assignments.iter()).any(|(a, b)| a != b);
         assignments = next;
         if !changed {
             break;
@@ -459,8 +421,7 @@ fn kmeans(flat: &[f32], dim: usize, k: usize, max_iters: usize) -> (Vec<Vec<f32>
         // algorithm bit-for-bit (parallel float reduce is forbidden).
         let mut sums = vec![vec![0.0f32; dim]; k];
         let mut counts = vec![0usize; k];
-        for i in 0..n {
-            let c = assignments[i];
+        for (i, &c) in assignments.iter().enumerate() {
             counts[c] += 1;
             for (j, val) in flat_row(flat, dim, i).iter().enumerate() {
                 sums[c][j] += val;
@@ -474,7 +435,12 @@ fn kmeans(flat: &[f32], dim: usize, k: usize, max_iters: usize) -> (Vec<Vec<f32>
                 if count == 0 {
                     prev.clone()
                 } else {
-                    normalize_vec(&sum.iter().map(|v| v / count as f32).collect::<Vec<_>>())
+                    let mut mean = sum.clone();
+                    for value in &mut mean {
+                        *value /= count as f32;
+                    }
+                    normalize_vec_in_place(&mut mean);
+                    mean
                 }
             })
             .collect();
@@ -568,7 +534,12 @@ pub fn load_or_build_semantic_ivf(
     let ivf_path = semantic_ivf_path(store.db_path());
     match load_semantic_ivf(&ivf_path, fingerprint) {
         Ok(Some(ivf)) => {
-            store.set_meta("semantic_ivf_stale", "0")?;
+            // Search holds a read snapshot. Do not attempt a read-to-write
+            // upgrade here: a concurrent index commit would make it fail with
+            // SQLITE_BUSY_SNAPSHOT. The fingerprint remains authoritative.
+            if store.connection().is_autocommit() {
+                store.set_meta("semantic_ivf_stale", "0")?;
+            }
             let ivf = Arc::new(ivf);
             cache_session(&db_key, fingerprint, Arc::clone(&ivf));
             return Ok(Some(ivf));
@@ -579,7 +550,9 @@ pub fn load_or_build_semantic_ivf(
     let flat = flatten_vectors_for_search(chunks, dim)?;
     let index = SemanticAnnIndex::build_from_flat(&flat, dim);
     let published = save_semantic_ivf_with_publication(&ivf_path, fingerprint, dim, &flat, &index)?;
-    store.set_meta("semantic_ivf_stale", if published { "0" } else { "1" })?;
+    if store.connection().is_autocommit() {
+        store.set_meta("semantic_ivf_stale", if published { "0" } else { "1" })?;
+    }
     let ivf = Arc::new(PersistedSemanticIvf::from_owned(
         fingerprint,
         dim,
@@ -698,8 +671,18 @@ fn reassign_stale_ivf_partition(
 
 #[cfg(test)]
 mod min_similarity_gate_tests {
-    use super::{score_members, DEFAULT_ANN_THRESHOLD, SemanticAnnIndex};
+    use super::{score_members, write_usize_u32, SemanticAnnIndex, DEFAULT_ANN_THRESHOLD};
     use ast_sgrep_embed::{top_k_flat_similarity, top_k_similarity, MIN_SIMILARITY};
+
+    #[cfg(target_pointer_width = "64")]
+    #[test]
+    fn ivf_writer_rejects_values_larger_than_its_u32_format() {
+        let mut bytes = Vec::new();
+        let error = write_usize_u32(&mut bytes, u32::MAX as usize + 1)
+            .expect_err("oversized IVF offsets must not truncate");
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+        assert!(bytes.is_empty());
+    }
 
     /// IVF member scoring and flat top-k must share the ULP-stable exclusive gate.
     #[test]
@@ -712,10 +695,7 @@ mod min_similarity_gate_tests {
             top_k_similarity([(0, one)], 1, Some(min)).is_empty(),
             "1 ULP above min must be excluded"
         );
-        assert_eq!(
-            top_k_similarity([(0, two)], 1, Some(min)),
-            vec![(0, two)]
-        );
+        assert_eq!(top_k_similarity([(0, two)], 1, Some(min)), vec![(0, two)]);
         // score_members on a 1-d "flat" of constant rows: cosine(query,row)=row[0]
         // when query=[1] and rows are length-1 (cosine degenerates to sign-aware
         // product / norms). Use dim=2 unit rows for true cosine.
@@ -832,14 +812,8 @@ mod flatten_bounds_tests {
 
     #[test]
     fn flatten_rejects_zero_dim_with_chunks() {
-        let chunks: Vec<SemanticChunkRow> = vec![(
-            "a.rs".into(),
-            1u32,
-            1u32,
-            "sym".into(),
-            "x".into(),
-            vec![],
-        )];
+        let chunks: Vec<SemanticChunkRow> =
+            vec![("a.rs".into(), 1u32, 1u32, "sym".into(), "x".into(), vec![])];
         let err = flatten_vectors_for_search(&chunks, 0).expect_err("dim=0 must fail");
         assert!(
             err.to_string().contains("dimension is 0"),
@@ -863,10 +837,7 @@ mod flatten_bounds_tests {
             ("b.rs".into(), 1u32, 1u32, "s".into(), "x".into(), vec![]),
         ];
         let err = flatten_vectors_for_search(&chunks, dim).expect_err("overflow");
-        assert!(
-            err.to_string().contains("overflow"),
-            "unexpected: {err}"
-        );
+        assert!(err.to_string().contains("overflow"), "unexpected: {err}");
     }
 }
 

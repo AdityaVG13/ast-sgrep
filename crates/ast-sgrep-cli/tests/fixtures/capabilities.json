@@ -102,6 +102,7 @@
         "--neural-embed",
         "--no-embed",
         "--ollama-embed",
+        "--path",
         "--rerank",
         "--rerank-top-k",
         "--response-snippet-tokens",
@@ -112,7 +113,7 @@
       "name": "index",
       "safe_mutating": {
         "kind": "incremental",
-        "note": "incremental refresh; build-then-swap so incomplete writes are not promoted",
+        "note": "incremental refresh with transactional index writes",
         "prefer_first": "asgrep index <ROOT> --json"
       },
       "usage": "asgrep index"
@@ -142,7 +143,7 @@
       "usage": "asgrep keyword"
     },
     {
-      "about": "Clear and rebuild an index",
+      "about": "Force a full transactional rebuild",
       "flags": [
         "--ann-probes",
         "--ann-threshold",
@@ -163,8 +164,8 @@
       ],
       "name": "reindex",
       "safe_mutating": {
-        "kind": "destructive_rebuild",
-        "note": "clears and rebuilds the index; dry-run reports plan without writing",
+        "kind": "full_rebuild",
+        "note": "forces a full in-place transactional rewrite; dry-run reports plan without writing",
         "prefer_first": "asgrep reindex --dry-run <ROOT> --json"
       },
       "usage": "asgrep reindex"
@@ -269,6 +270,7 @@
     "ASGREP_RERANK_TOP_K",
     "ASGREP_EMBED_URL_ALLOWLIST",
     "ASGREP_ALLOW_AST_GREP",
+    "ASGREP_ALLOW_EXTERNAL_INDEX",
     "ASGREP_AST_GREP",
     "ASGREP_LEDGER_PATH",
     "ASGREP_USE_CACHE",
@@ -329,7 +331,7 @@
   "notes": {
     "default_search": "Bare QUERY without a subcommand runs hybrid search; the word 'search' is not a required verb \u2014 use the `search`/`find`/`query` subcommand only when you want an explicit search command.",
     "format_implies_json": true,
-    "safe_mutating": "index is incremental (build-then-swap). reindex clears and rebuilds -- always prefer `asgrep reindex --dry-run <ROOT> --json` before a full reindex."
+    "safe_mutating": "index refreshes incrementally with transactional writes. reindex forces a full transactional rewrite -- prefer `asgrep reindex --dry-run <ROOT> --json` before a full reindex."
   },
   "ok": true,
   "output_limits": {

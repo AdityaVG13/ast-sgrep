@@ -74,115 +74,6 @@ impl Durability {
 
 pub const INDEX_DIR: &str = ".asgrep";
 pub const INDEX_DB: &str = "index.db";
-/// Directory holding candidate and retained index generations (jpbq).
-pub const GENERATIONS_DIR: &str = "generations";
-/// Directory holding the active-generation pointer (jpbq).
-pub const MANIFESTS_DIR: &str = "manifests";
-/// Atomically replaced pointer to the active generation (jpbq).
-pub const ACTIVE_MANIFEST: &str = "active.json";
-
-/// Pointer to the generation currently serving queries (jpbq).
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct ActiveManifest {
-    /// Generation directory name, e.g. `000184`.
-    pub generation: String,
-    /// Schema version the generation was built with.
-    pub schema_version: i64,
-    /// Previous generation, retained for rollback until this one is proven.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub previous: Option<String>,
-    /// Unix seconds when this generation was activated.
-    pub activated_at: i64,
-}
-
-/// Root of the generation layout for an index directory (jpbq).
-pub fn generations_root(index_dir: &Path) -> PathBuf {
-    index_dir.join(GENERATIONS_DIR)
-}
-
-/// Path of the active-generation manifest (jpbq).
-pub fn active_manifest_path(index_dir: &Path) -> PathBuf {
-    index_dir.join(MANIFESTS_DIR).join(ACTIVE_MANIFEST)
-}
-
-/// Read the active manifest, if this index uses the generation layout (jpbq).
-pub fn read_active_manifest(index_dir: &Path) -> Option<ActiveManifest> {
-    let raw = std::fs::read_to_string(active_manifest_path(index_dir)).ok()?;
-    serde_json::from_str(&raw).ok()
-}
-
-/// Replace the active-generation pointer atomically and durably (jpbq).
-pub fn write_active_manifest(index_dir: &Path, manifest: &ActiveManifest) -> crate::Result<()> {
-    use std::fs::{File, OpenOptions};
-    use std::io::Write;
-    use std::sync::atomic::{AtomicU64, Ordering};
-
-    static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
-
-    let path = active_manifest_path(index_dir);
-    let parent = path.parent().expect("manifest path has a parent");
-    std::fs::create_dir_all(parent).map_err(|e| {
-        crate::StoreError::Other(format!("create manifest dir {}: {e}", parent.display()))
-    })?;
-    let body = serde_json::to_string_pretty(manifest)
-        .map_err(|e| crate::StoreError::Other(format!("serialize active manifest: {e}")))?;
-    let sequence = TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-    let temp = parent.join(format!(
-        ".active.{}.{}.tmp",
-        std::process::id(),
-        sequence
-    ));
-    let result = (|| -> crate::Result<()> {
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temp)
-            .map_err(|e| {
-                crate::StoreError::Other(format!("create {}: {e}", temp.display()))
-            })?;
-        file.write_all(body.as_bytes()).map_err(|e| {
-            crate::StoreError::Other(format!("write {}: {e}", temp.display()))
-        })?;
-        file.sync_all().map_err(|e| {
-            crate::StoreError::Other(format!("fsync {}: {e}", temp.display()))
-        })?;
-        // Close before rename so Windows can replace if the target is open.
-        drop(file);
-        std::fs::rename(&temp, &path).map_err(|e| {
-            crate::StoreError::Other(format!("activate {}: {e}", path.display()))
-        })?;
-        #[cfg(unix)]
-        {
-            File::open(parent)
-                .and_then(|dir| dir.sync_all())
-                .map_err(|e| {
-                    crate::StoreError::Other(format!(
-                        "fsync parent {}: {e}",
-                        parent.display()
-                    ))
-                })?;
-        }
-        Ok(())
-    })();
-    if result.is_err() {
-        let _ = std::fs::remove_file(&temp);
-    }
-    result
-}
-
-/// Database path for a named generation (jpbq).
-pub fn generation_db_path(index_dir: &Path, generation: &str) -> PathBuf {
-    generations_root(index_dir).join(generation).join(INDEX_DB)
-}
-
-/// Next generation directory name after the current one (jpbq).
-pub fn next_generation_name(current: Option<&str>) -> String {
-    let next = current
-        .and_then(|name| name.parse::<u64>().ok())
-        .unwrap_or(0)
-        .saturating_add(1);
-    format!("{next:06}")
-}
 fn as_db_path(path: PathBuf) -> PathBuf {
     if path.extension().is_some_and(|e| e == "db") {
         path
@@ -191,28 +82,28 @@ fn as_db_path(path: PathBuf) -> PathBuf {
     }
 }
 pub fn index_db_path(root: &Path, index_path: Option<&Path>) -> PathBuf {
-    try_index_db_path(root, index_path)
-        .unwrap_or_else(|_| root.join(INDEX_DIR).join(INDEX_DB))
+    try_index_db_path(root, index_path).unwrap_or_else(|_| root.join(INDEX_DIR).join(INDEX_DB))
 }
 
 pub fn try_index_db_path(root: &Path, index_path: Option<&Path>) -> crate::Result<PathBuf> {
     if let Some(path) = index_path {
-        return Ok(as_db_path(path.to_path_buf()));
+        let path = if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            root.join(path)
+        };
+        return Ok(as_db_path(path));
     }
     if let Ok(env_path) = std::env::var("ASGREP_INDEX_PATH") {
-        return Ok(as_db_path(PathBuf::from(env_path)));
+        let path = PathBuf::from(env_path);
+        let path = if path.is_absolute() {
+            path
+        } else {
+            root.join(path)
+        };
+        return Ok(as_db_path(path));
     }
-    let index_dir = root.join(INDEX_DIR);
-    // jpbq: an active-generation pointer wins over the legacy flat layout.
-    if let Some(manifest) = read_active_manifest(&index_dir) {
-        let candidate = generation_db_path(&index_dir, &manifest.generation);
-        if candidate.exists() {
-            return Ok(candidate);
-        }
-        // A pointer to a missing generation is a corrupt activation; fall
-        // through to the legacy path rather than failing every command.
-    }
-    let local = index_dir.join(INDEX_DB);
+    let local = root.join(INDEX_DIR).join(INDEX_DB);
     if local.exists() {
         return Ok(local);
     }
@@ -226,8 +117,23 @@ pub fn try_index_db_path(root: &Path, index_path: Option<&Path>) -> crate::Resul
     Ok(local)
 }
 /// Resolve a private cache index path. Refuses shared `/tmp` when HOME/XDG_CACHE_HOME unset (i5ef).
-fn cache_index_path(root: &Path) -> crate::Result<PathBuf> {
-    let hash = blake3::hash(root.to_string_lossy().as_bytes());
+pub fn cache_index_path(root: &Path) -> crate::Result<PathBuf> {
+    let mut hasher = blake3::Hasher::new();
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        hasher.update(root.as_os_str().as_bytes());
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        for unit in root.as_os_str().encode_wide() {
+            hasher.update(&unit.to_le_bytes());
+        }
+    }
+    #[cfg(not(any(unix, windows)))]
+    hasher.update(root.to_string_lossy().as_bytes());
+    let hash = hasher.finalize();
     let base = std::env::var("XDG_CACHE_HOME")
         .ok()
         .filter(|s| !s.trim().is_empty())

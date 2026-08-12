@@ -67,7 +67,7 @@ pub(crate) fn capabilities_json(_cli: &Cli) -> anyhow::Result<Value> {
             "precedence": "conflicting --root and positional ROOT is a usage error; effective_root prefers --root when set",
             "bin_aliases": ["asgrep", "ast-sgrep"]
         },
-        "environment": ["ASGREP_LIMIT", "ASGREP_INDEX_PATH", "ASGREP_DURABILITY", "ASGREP_NO_EMBED", "ASGREP_CLOUD_EMBED", "ASGREP_OLLAMA_EMBED", "ASGREP_NEURAL_EMBED", "ASGREP_NEURAL_FALLBACK", "ASGREP_EMBED_FALLBACK", "ASGREP_SEMANTIC_ONLY", "ASGREP_TANTIVY", "ASGREP_ANN_THRESHOLD", "ASGREP_ANN_PROBES", "ASGREP_RERANK", "ASGREP_RERANK_TOP_K", "ASGREP_EMBED_URL_ALLOWLIST", "ASGREP_ALLOW_AST_GREP", "ASGREP_AST_GREP", "ASGREP_LEDGER_PATH", "ASGREP_USE_CACHE", "XDG_CACHE_HOME", "NO_COLOR", "CI"],
+        "environment": ["ASGREP_LIMIT", "ASGREP_INDEX_PATH", "ASGREP_DURABILITY", "ASGREP_NO_EMBED", "ASGREP_CLOUD_EMBED", "ASGREP_OLLAMA_EMBED", "ASGREP_NEURAL_EMBED", "ASGREP_NEURAL_FALLBACK", "ASGREP_EMBED_FALLBACK", "ASGREP_SEMANTIC_ONLY", "ASGREP_TANTIVY", "ASGREP_ANN_THRESHOLD", "ASGREP_ANN_PROBES", "ASGREP_RERANK", "ASGREP_RERANK_TOP_K", "ASGREP_EMBED_URL_ALLOWLIST", "ASGREP_ALLOW_AST_GREP", "ASGREP_ALLOW_EXTERNAL_INDEX", "ASGREP_AST_GREP", "ASGREP_LEDGER_PATH", "ASGREP_USE_CACHE", "XDG_CACHE_HOME", "NO_COLOR", "CI"],
         "environment_bool_values": ["1", "0", "true", "false", "yes", "no", "on", "off"],
         "sibling_binaries": [
             {"name":"asgrep-mcp","purpose":"MCP stdio server","launch":"asgrep-mcp (stdio JSON-RPC)"},
@@ -104,16 +104,28 @@ pub(crate) fn capabilities_json(_cli: &Cli) -> anyhow::Result<Value> {
         "notes": {
             "default_search": "Bare QUERY without a subcommand runs hybrid search; the word 'search' is not a required verb — use the `search`/`find`/`query` subcommand only when you want an explicit search command.",
             "format_implies_json": true,
-            "safe_mutating": "index is incremental (build-then-swap). reindex clears and rebuilds -- always prefer `asgrep reindex --dry-run <ROOT> --json` before a full reindex."
+            "safe_mutating": "index refreshes incrementally with transactional writes. reindex forces a full transactional rewrite -- prefer `asgrep reindex --dry-run <ROOT> --json` before a full reindex."
         }
     }))
 }
 
 fn clap_catalog(command: &clap::Command) -> (Vec<Value>, Vec<String>, Vec<String>) {
     const SEARCH_TUNING: &[&str] = &[
-        "--no-embed", "--cloud-embed", "--ollama-embed", "--neural-embed", "--semantic-only",
-        "--tantivy", "--ann-threshold", "--ann-probes", "--rerank", "--rerank-top-k",
-        "--format", "--excerpt-lines", "--snippet-tokens", "--response-snippet-tokens", "--dry-run",
+        "--no-embed",
+        "--cloud-embed",
+        "--ollama-embed",
+        "--neural-embed",
+        "--semantic-only",
+        "--tantivy",
+        "--ann-threshold",
+        "--ann-probes",
+        "--rerank",
+        "--rerank-top-k",
+        "--format",
+        "--excerpt-lines",
+        "--snippet-tokens",
+        "--response-snippet-tokens",
+        "--dry-run",
         // m38g: whole-response token budget that picks per-result detail.
         "--budget-tokens",
     ];
@@ -126,7 +138,10 @@ fn clap_catalog(command: &clap::Command) -> (Vec<Value>, Vec<String>, Vec<String
             global_flags.push(flag);
         } else if SEARCH_TUNING.iter().any(|s| *s == flag) {
             search_tuning_flags.push(flag);
-        } else if matches!(flag.as_str(), "--json" | "--robot-help" | "--root" | "--limit" | "--index-path" | "--lang") {
+        } else if matches!(
+            flag.as_str(),
+            "--json" | "--robot-help" | "--root" | "--limit" | "--index-path" | "--lang"
+        ) {
             // Non-global copies still documented as agent-visible globals when present on root.
             global_flags.push(flag);
         }
@@ -168,16 +183,16 @@ fn clap_catalog(command: &clap::Command) -> (Vec<Value>, Vec<String>, Vec<String
         }
         if name == "reindex" {
             entry["safe_mutating"] = json!({
-                "kind": "destructive_rebuild",
+                "kind": "full_rebuild",
                 "prefer_first": "asgrep reindex --dry-run <ROOT> --json",
-                "note": "clears and rebuilds the index; dry-run reports plan without writing"
+                "note": "forces a full in-place transactional rewrite; dry-run reports plan without writing"
             });
         }
         if name == "index" {
             entry["safe_mutating"] = json!({
                 "kind": "incremental",
                 "prefer_first": "asgrep index <ROOT> --json",
-                "note": "incremental refresh; build-then-swap so incomplete writes are not promoted"
+                "note": "incremental refresh with transactional index writes"
             });
         }
         commands.push(entry);
@@ -261,7 +276,7 @@ See `capabilities --json` → `commands` (complete clap catalog). Notable: `sear
 - Machine mode emits one JSON value on stdout and no duplicate stderr diagnostics.
 ## Index cancel / dry-run
 - `asgrep index --dry-run` / `asgrep reindex --dry-run` report planned work without mutating the index.
-- SIGINT during a real index leaves the previous on-disk index if the build uses build-then-swap; incomplete writes are not promoted.
+- Index writes are transactional; an interrupted uncommitted write is rolled back when SQLite recovers.
 ## Exit codes
 - 0 success · 1 usage · 2 index/search failure
 ## Environment
@@ -269,7 +284,7 @@ See `capabilities --json` → `environment`. Common: `ASGREP_INDEX_PATH`, `ASGRE
 ## Common mistakes
 - Missing or empty index: run `asgrep index <root> --json` before searching.
 - Missing ROOT is an operational error; it is never reported as an empty result.
-- Destructive rebuild: prefer `asgrep reindex --dry-run <root> --json` before a full `reindex`.
+- Full rebuild: prefer `asgrep reindex --dry-run <root> --json` before `reindex`.
 - Output format is not `json`: use `--json` and optionally `--format compact` (not `--format json`).
 - Piping: `asgrep --json … | head` is safe (broken pipe exits cleanly); always put data flags on asgrep, not the pipe consumer.
 "#
@@ -302,7 +317,13 @@ pub(crate) fn query_looks_like_subcommand_typo(query: &str) -> Option<&'static s
     let lower = q.to_ascii_lowercase();
     // Plausible search tokens that sit near a command name at edit-distance 2.
     const SEARCH_SAFE: &[&str] = &[
-        "static", "string", "struct", "switch", "symbol", "sample", "searchable",
+        "static",
+        "string",
+        "struct",
+        "switch",
+        "symbol",
+        "sample",
+        "searchable",
     ];
     if SEARCH_SAFE.contains(&lower.as_str()) {
         return None;

@@ -113,7 +113,7 @@ Settings may be nested under `"asgrep"` or at the top level of `initializationOp
 | `semanticOnly` | bool | Offline semantic only |
 | `annThreshold` | number | Symbol count before IVF-ANN (default 2000) |
 | `embedBackend` | string | `auto`, `cloud`, `ollama`, `semantic` |
-| `indexPath` | string | Custom `index.db` path |
+| `indexPath` | string | Trusted custom `index.db` path. Disabled unless the operator sets `ASGREP_ALLOW_EXTERNAL_INDEX=1`; otherwise LSP indexes use the private user cache. |
 
 ### Capabilities
 

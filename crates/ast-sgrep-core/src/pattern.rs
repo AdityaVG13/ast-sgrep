@@ -371,11 +371,7 @@ fn search_pattern_native_profiled(
 
 /// Timed `try_wait` loop shared by the optional ast-grep version probe and bench runner.
 /// Returns `Some(())` when the child exits (and succeeds if `require_success`), else kills and returns `None`.
-fn wait_child_deadline(
-    child: &mut Child,
-    deadline: Instant,
-    require_success: bool,
-) -> Option<()> {
+fn wait_child_deadline(child: &mut Child, deadline: Instant, require_success: bool) -> Option<()> {
     loop {
         match child.try_wait() {
             Ok(Some(status)) => {

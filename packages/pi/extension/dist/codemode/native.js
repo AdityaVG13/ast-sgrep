@@ -13,6 +13,7 @@ import { createRequire } from "node:module";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+export const CODEMODE_BINDING_VERSION = "1.4.0";
 let cached;
 function platformTriple() {
     const { platform, arch } = process;
@@ -89,7 +90,12 @@ export function loadCodemodeNative() {
             continue;
         try {
             const binding = require(path);
-            if (typeof binding?.isNative === "function" && binding.isNative()) {
+            if (typeof binding?.isNative === "function" &&
+                binding.isNative() &&
+                typeof binding.bindingVersion === "function" &&
+                binding.bindingVersion() === CODEMODE_BINDING_VERSION &&
+                typeof binding.asyncApiVersion === "function" &&
+                binding.asyncApiVersion() === 1) {
                 cached = binding;
                 return cached;
             }

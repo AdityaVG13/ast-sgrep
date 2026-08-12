@@ -76,13 +76,14 @@ fn schema_upgrade_invalidates_legacy_semantic_layouts() {
         .connection()
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(version, 7, "semantic wipe must land as schema 7");
+    assert_eq!(version, 9, "migration must land on the current schema");
 }
 
 #[test]
 fn schema_6_main_indexes_still_get_semantic_wipe_at_7() {
     // Main independently used SCHEMA_VERSION=6 for symbols_name_lower. A store
-    // already at 6 must still run the semantic-layout wipe when opening with 7.
+    // already at 6 must still run the semantic-layout wipe introduced in 7,
+    // even though later migrations advance it to the current schema.
     let temp = TempDir::new().unwrap();
     let store = IndexStore::open(temp.path(), None).unwrap();
     store
@@ -111,12 +112,15 @@ fn schema_6_main_indexes_still_get_semantic_wipe_at_7() {
         .connection()
         .query_row("SELECT COUNT(*) FROM semantic_chunks", [], |row| row.get(0))
         .unwrap();
-    assert_eq!(count, 0, "schema-6 stores must still wipe semantic layout at 7");
+    assert_eq!(
+        count, 0,
+        "schema-6 stores must still wipe semantic layout at 7"
+    );
     let version: i64 = migrated
         .connection()
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(version, 7);
+    assert_eq!(version, 9);
 }
 
 #[test]

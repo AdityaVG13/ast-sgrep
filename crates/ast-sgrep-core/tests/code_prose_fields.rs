@@ -91,7 +91,11 @@ fn the_two_analyzers_genuinely_differ() {
     // what the trigram field is for.
     assert_eq!(count("lines_code_fts", "indexing"), 0);
     assert_eq!(count("lines_code_fts", "start_indexing"), 1);
-    assert_eq!(count("lines_code_fts", "index"), 1, "`index` matches only its own line");
+    assert_eq!(
+        count("lines_code_fts", "index"),
+        1,
+        "`index` matches only its own line"
+    );
 
     // And the prose field cannot make that distinction at all.
     assert!(

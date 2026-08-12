@@ -77,12 +77,9 @@ function parseWireHitRef(hit) {
     }
     throw new RuntimeError("PROTOCOL_MISMATCH", "ast-sgrep returned an invalid search hit");
 }
-function parseSearchHit(candidate) {
-    if (!candidate || typeof candidate !== "object") {
-        throw new RuntimeError("PROTOCOL_MISMATCH", "ast-sgrep returned an invalid search hit");
-    }
-    const hit = candidate;
-    const valid = typeof hit.kind === "string" && KINDS.has(hit.kind)
+/** Wire hit shape gate: required protocol fields + optional text fields. Domain checks kept intact. */
+function isValidHitShape(hit) {
+    return typeof hit.kind === "string" && KINDS.has(hit.kind)
         && typeof hit.signal === "string" && SIGNALS.has(hit.signal)
         && Array.isArray(hit.contributors) && hit.contributors.length > 0
         && hit.contributors.every((kind) => typeof kind === "string" && KINDS.has(kind))
@@ -91,8 +88,15 @@ function parseSearchHit(candidate) {
         && typeof hit.preview === "string"
         && optionalTextField(hit.symbol) && optionalTextField(hit.caller) && optionalTextField(hit.callee)
         && optionalTextField(hit.language) && optionalTextField(hit.excerpt);
-    if (!valid)
+}
+function parseSearchHit(candidate) {
+    if (!candidate || typeof candidate !== "object") {
         throw new RuntimeError("PROTOCOL_MISMATCH", "ast-sgrep returned an invalid search hit");
+    }
+    const hit = candidate;
+    if (!isValidHitShape(hit)) {
+        throw new RuntimeError("PROTOCOL_MISMATCH", "ast-sgrep returned an invalid search hit");
+    }
     const ref = parseWireHitRef(hit);
     const parsed = {
         kind: hit.kind,
@@ -117,10 +121,12 @@ function asSearchResponse(value) {
     if (value.query !== undefined && typeof value.query !== "string") {
         throw new RuntimeError("PROTOCOL_MISMATCH", "ast-sgrep search response has an invalid query");
     }
-    if (value.hit_count !== undefined
-        && (typeof value.hit_count !== "number" || !Number.isSafeInteger(value.hit_count)
-            || value.hit_count < 0 || value.hit_count !== value.hits.length)) {
-        throw new RuntimeError("PROTOCOL_MISMATCH", "ast-sgrep search response has an invalid hit_count");
+    // Guard form of compound hit_count validity (same checks, less && nesting).
+    if (value.hit_count !== undefined) {
+        if (typeof value.hit_count !== "number" || !Number.isSafeInteger(value.hit_count)
+            || value.hit_count < 0 || value.hit_count !== value.hits.length) {
+            throw new RuntimeError("PROTOCOL_MISMATCH", "ast-sgrep search response has an invalid hit_count");
+        }
     }
     const hits = value.hits.map(parseSearchHit);
     return { ...value, hits };

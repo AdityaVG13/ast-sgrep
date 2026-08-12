@@ -362,11 +362,7 @@ mod property_tests {
             let scored = Scored::new(i, sim);
             assert_eq!(scored.is_some(), sim.is_finite());
         }
-        let mixed: Vec<_> = seeds
-            .iter()
-            .enumerate()
-            .map(|(i, s)| (i, *s))
-            .collect();
+        let mixed: Vec<_> = seeds.iter().enumerate().map(|(i, s)| (i, *s)).collect();
         let ranked = top_by_similarity(mixed, 8, None);
         assert!(ranked.iter().all(|(_, s)| s.is_finite()));
         for window in ranked.windows(2) {

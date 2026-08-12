@@ -15,6 +15,7 @@ export type SessionPoolOptions = {
     binary?: string;
     env?: NodeJS.ProcessEnv;
     timeoutMs?: number;
+    maxOutputBytes?: number;
     root?: string;
     indexPath?: string;
     useEmbed?: boolean;

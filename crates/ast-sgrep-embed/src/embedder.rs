@@ -33,10 +33,7 @@ pub fn embed_url_is_allowed(url: &str) -> Result<(), String> {
     if scheme != "https" && scheme != "http" {
         return Err(format!("embed URL scheme {scheme:?} is not allowed"));
     }
-    let authority = rest
-        .split(|c| c == '/' || c == '?' || c == '#')
-        .next()
-        .unwrap_or("");
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
     if authority.is_empty() {
         return Err("embed URL missing host".to_string());
     }
@@ -596,7 +593,7 @@ fn try_backend_batch(kind: EmbedBackendKind, texts: &[&str]) -> Option<Vec<Vec<f
 }
 pub fn configured_backend_model_id(kind: EmbedBackendKind, dim: usize) -> Option<String> {
     match kind {
-        EmbedBackendKind::Semantic => Some(format!("semantic:hashed-v1:{dim}")),
+        EmbedBackendKind::Semantic => Some(format!("semantic:hashed-v2:{dim}")),
         EmbedBackendKind::Neural => {
             Some(format!("neural:{}", crate::neural::configured_model_id()))
         }

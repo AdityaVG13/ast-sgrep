@@ -58,10 +58,11 @@ pub(super) fn embed_cache_cap() -> usize {
         .unwrap_or(DEFAULT_EMBED_CACHE_CAP)
 }
 fn semantic_mid() -> String {
-    format!(
-        "semantic:hashed-v2:{}",
-        ast_sgrep_embed::default_semantic_dim()
+    ast_sgrep_embed::configured_backend_model_id(
+        ast_sgrep_embed::EmbedBackendKind::Semantic,
+        ast_sgrep_embed::default_semantic_dim(),
     )
+    .expect("local semantic model always has an identity")
 }
 fn neural_mid() -> String {
     format!("neural:{}", ast_sgrep_embed::neural_configured_model_id())
@@ -100,9 +101,7 @@ pub(super) fn requested_model_identity(preference: ast_sgrep_embed::EmbedPrefere
         EmbedPreference::Semantic => semantic_mid(),
         EmbedPreference::Auto => configured(EmbedBackendKind::Cloud)
             .or_else(|| configured(EmbedBackendKind::Ollama))
-            .or_else(|| {
-                crate::env_flag::env_flag("ASGREP_NEURAL_EMBED").then(neural_mid)
-            })
+            .or_else(|| crate::env_flag::env_flag("ASGREP_NEURAL_EMBED").then(neural_mid))
             .unwrap_or_else(semantic_mid),
     }
 }
@@ -140,18 +139,21 @@ fn lookup_embed_cache(conn: &Connection, h: &str, m: &str) -> Result<Option<Cach
         drop_cache(conn, h, m);
         return Ok(None);
     };
-    let ok = usize::try_from(dim_i64)
-        .ok()
-        .and_then(|d| d.checked_mul(4))
-        .is_some_and(|n| n > 0 && vector.len() == n);
-    if !ok {
+    let Ok(dim) = usize::try_from(dim_i64) else {
+        drop_cache(conn, h, m);
+        return Ok(None);
+    };
+    if !dim
+        .checked_mul(4)
+        .is_some_and(|n| n > 0 && vector.len() == n)
+    {
         drop_cache(conn, h, m);
         return Ok(None);
     }
     Ok(Some(CacheRow {
         vector,
         backend,
-        dim: dim_i64 as usize,
+        dim,
     }))
 }
 pub(super) fn insert_embed_cache_entries(

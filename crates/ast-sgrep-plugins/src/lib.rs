@@ -188,7 +188,10 @@ pub fn to_budgeted_compact_json(
 ) -> serde_json::Value {
     let rendered = budget::select(&response.hits, budget);
     let mut envelope = to_compact_json(response, CompactBudget::default());
-    if let Some(hits) = envelope.get_mut("h").and_then(serde_json::Value::as_array_mut) {
+    if let Some(hits) = envelope
+        .get_mut("h")
+        .and_then(serde_json::Value::as_array_mut)
+    {
         for (row, plan) in hits.iter_mut().zip(rendered.iter()) {
             let Some(row) = row.as_array_mut() else {
                 continue;
@@ -351,10 +354,7 @@ fn fold_path_roots(
 
 /// Serialized size of the path table plus root table under a root set (am4a).
 /// `+ 4` covers the `"r":` key and its separator in the envelope.
-fn encoded_len(
-    paths: &std::collections::BTreeMap<String, String>,
-    roots: &[&str],
-) -> usize {
+fn encoded_len(paths: &std::collections::BTreeMap<String, String>, roots: &[&str]) -> usize {
     let (roots, folded) = encode_with_roots(paths, roots);
     let folded = serde_json::to_string(&folded)
         .map(|text| text.len())

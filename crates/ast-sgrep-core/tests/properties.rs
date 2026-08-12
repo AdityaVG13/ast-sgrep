@@ -24,7 +24,11 @@ proptest! {
 #[test]
 fn store_upsert_delete_roundtrip() {
     let corpus = TempDir::new().unwrap();
-    fs::write(corpus.path().join("lib.rs"), "fn alpha() {}\nfn beta() {}\n").unwrap();
+    fs::write(
+        corpus.path().join("lib.rs"),
+        "fn alpha() {}\nfn beta() {}\n",
+    )
+    .unwrap();
     let index_dir = TempDir::new().unwrap();
     let index_path = index_dir.path().join("index.db");
     let mut indexer = Indexer::new(IndexOptions {

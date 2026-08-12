@@ -4,8 +4,10 @@ use crate::cli_args::{usage_error, Cli};
 use crate::machine::print_machine_json;
 use anyhow::Context;
 use ast_sgrep_core::{
-    index_db_path, EmbedBackend, IndexOptions, IndexStats, Indexer, SearchOptions,
+    canonicalize_affected_path, index_db_path, EmbedBackend, IndexOptions, IndexStats, Indexer,
+    SearchOptions, MAX_INCREMENTAL_PATHS,
 };
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 pub(crate) fn effective_root(cli: &Cli, fallback: &Path) -> PathBuf {
@@ -92,12 +94,102 @@ pub(crate) fn with_index<T: serde::Serialize>(
     command: &str,
     root: &Path,
     cli: &Cli,
+    force_reindex: bool,
     op: impl FnOnce(&mut Indexer) -> anyhow::Result<T>,
     human: impl FnOnce(&T),
 ) -> anyhow::Result<()> {
-    let mut indexer = open_indexer(root, cli)?;
+    let root = ensure_existing_root(root, cli)?;
+    let mut options = index_options(&root, cli);
+    options.force_reindex = force_reindex;
+    let db = index_db_display(&options.root, options.index_path.as_deref());
+    let mut indexer = Indexer::new(options).with_context(|| {
+        format!(
+            "failed to open index at {} (root {})",
+            db.display(),
+            root.display()
+        )
+    })?;
     let v = op(&mut indexer)?;
     print_json_or(cli.json, command, &v, || human(&v))
+}
+
+pub(crate) fn run_targeted_index(
+    root_arg: &Path,
+    cli: &Cli,
+    raw_paths: &[PathBuf],
+) -> anyhow::Result<()> {
+    if raw_paths.is_empty() || raw_paths.len() > MAX_INCREMENTAL_PATHS {
+        return Err(usage_error(format!(
+            "--path must be supplied 1..={MAX_INCREMENTAL_PATHS} times"
+        )));
+    }
+    let root = ensure_existing_root(root_arg, cli)?;
+    let root = root
+        .canonicalize()
+        .with_context(|| format!("failed to resolve project root: {}", root.display()))?;
+    let mut seen = HashSet::with_capacity(raw_paths.len());
+    let mut paths = Vec::with_capacity(raw_paths.len());
+    for raw in raw_paths {
+        if raw.as_os_str().is_empty()
+            || raw
+                .components()
+                .any(|component| component == std::path::Component::ParentDir)
+        {
+            return Err(usage_error(format!(
+                "invalid --path (empty or parent traversal): {}",
+                raw.display()
+            )));
+        }
+        let candidate = if raw.is_absolute() {
+            raw.clone()
+        } else {
+            root.join(raw)
+        };
+        let canonical = canonicalize_affected_path(&candidate)
+            .with_context(|| format!("failed to resolve --path: {}", candidate.display()))?;
+        if !canonical.starts_with(&root) {
+            return Err(usage_error(format!(
+                "--path resolves outside project root: {}",
+                candidate.display()
+            )));
+        }
+        if canonical.is_dir() {
+            return Err(usage_error(format!(
+                "--path accepts files, not directories: {}",
+                candidate.display()
+            )));
+        }
+        if seen.insert(canonical.clone()) {
+            paths.push(canonical);
+        }
+    }
+
+    with_index(
+        "index",
+        root_arg,
+        cli,
+        false,
+        |indexer| {
+            let stats = indexer.update_paths(&paths)?;
+            indexer.flush_deferred_rebuilds()?;
+            Ok(serde_json::json!({
+                "targeted": true,
+                "path_count": paths.len(),
+                "stats": stats,
+            }))
+        },
+        |value| {
+            let stats = &value["stats"];
+            println!(
+                "Updated {} paths ({} indexed, {} skipped, {} removed, {} failed)",
+                value["path_count"],
+                stats["files_indexed"],
+                stats["files_skipped"],
+                stats["files_removed"],
+                stats["files_failed"],
+            );
+        },
+    )
 }
 
 pub(crate) fn run_index_dry_run(command: &str, root: &Path, cli: &Cli) -> anyhow::Result<()> {
@@ -142,8 +234,23 @@ pub(crate) fn run_index_dry_run(command: &str, root: &Path, cli: &Cli) -> anyhow
                 let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("");
                 if matches!(
                     ext,
-                    "rs" | "py" | "js" | "ts" | "tsx" | "jsx" | "go" | "java" | "kt" | "kts"
-                        | "c" | "h" | "cc" | "cpp" | "hpp" | "cs" | "rb" | "php"
+                    "rs" | "py"
+                        | "js"
+                        | "ts"
+                        | "tsx"
+                        | "jsx"
+                        | "go"
+                        | "java"
+                        | "kt"
+                        | "kts"
+                        | "c"
+                        | "h"
+                        | "cc"
+                        | "cpp"
+                        | "hpp"
+                        | "cs"
+                        | "rb"
+                        | "php"
                 ) {
                     *files += 1;
                 } else {
@@ -172,7 +279,7 @@ pub(crate) fn run_index_dry_run(command: &str, root: &Path, cli: &Cli) -> anyhow
         "files_skipped": skipped,
         "walk_errors": walk_errors,
         "mutates_index": false,
-        "cancel_semantics": "SIGINT during a real index leaves the previous index if build-then-swap succeeds; dry-run never writes"
+        "cancel_semantics": "index writes are transactional; an interrupted uncommitted write is rolled back during SQLite recovery; dry-run never writes"
     });
     if cli.json {
         print_machine_json(command, payload)

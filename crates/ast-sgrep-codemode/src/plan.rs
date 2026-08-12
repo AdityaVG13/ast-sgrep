@@ -43,12 +43,16 @@ pub struct PlanResult {
 /// via `$id` or `$id.dotted.path` string refs inside args.
 pub fn run_plan(session: &mut CodeModeSession, plan: &Plan) -> Result<PlanResult, CallError> {
     if plan.steps.is_empty() {
-        return Err(CallError::InvalidArgs("plan.steps must be non-empty".into()));
+        return Err(CallError::InvalidArgs(
+            "plan.steps must be non-empty".into(),
+        ));
     }
     let mut outputs: HashMap<String, Value> = HashMap::new();
     for step in &plan.steps {
         if step.id.is_empty() {
-            return Err(CallError::InvalidArgs("plan step id must be non-empty".into()));
+            return Err(CallError::InvalidArgs(
+                "plan step id must be non-empty".into(),
+            ));
         }
         if outputs.contains_key(&step.id) {
             return Err(CallError::InvalidArgs(format!(
@@ -65,10 +69,7 @@ pub fn run_plan(session: &mut CodeModeSession, plan: &Plan) -> Result<PlanResult
         resolve_ref(r, &outputs)?
     } else {
         let last = plan.steps.last().expect("non-empty steps");
-        outputs
-            .get(&last.id)
-            .cloned()
-            .unwrap_or(Value::Null)
+        outputs.get(&last.id).cloned().unwrap_or(Value::Null)
     };
 
     Ok(PlanResult {
@@ -119,10 +120,9 @@ fn resolve_ref(expr: &str, outputs: &HashMap<String, Value>) -> Result<Value, Ca
         .ok_or_else(|| CallError::InvalidArgs(format!("unknown step ref: ${id}")))?;
     for part in parts {
         cur = match &cur {
-            Value::Object(map) => map
-                .get(part)
-                .cloned()
-                .ok_or_else(|| CallError::InvalidArgs(format!("missing path .{part} in ${expr}")))?,
+            Value::Object(map) => map.get(part).cloned().ok_or_else(|| {
+                CallError::InvalidArgs(format!("missing path .{part} in ${expr}"))
+            })?,
             Value::Array(arr) => {
                 let idx: usize = part.parse().map_err(|_| {
                     CallError::InvalidArgs(format!("array index required at .{part} in ${expr}"))

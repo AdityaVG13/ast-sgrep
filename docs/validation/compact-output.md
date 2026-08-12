@@ -36,15 +36,11 @@ The MCP server previously rendered `OutputFormat::AgentCapsule` through
 `serde_json::to_string_pretty`, so the compact reduction above did not reach
 agents at all. Agent search now emits the compact envelope minified.
 
-| Envelope | Bytes | Relative |
-|----------|------:|---------:|
-| Pretty `AgentCapsule` (previous MCP output) | 5,132 | baseline |
-| Minified compact (current MCP output) | 1,448 | 71.8% smaller |
-
 Fixture: ten hits across three files with realistic Rust excerpts, in
 `compact_minified_is_much_smaller_than_pretty_capsule`. The same test asserts
-that each distinct path appears exactly once in the payload -- the previous
-capsule emitted it twice per hit, in `file` and again inside `ref`.
+that minified compact output is smaller than the previous pretty capsule and
+that each distinct path appears exactly once in the payload. The previous
+capsule repeated paths in both `file` and `ref`.
 
 ```bash
 cargo test -p ast-sgrep-plugins --test capsule_format -- --nocapture compact_minified

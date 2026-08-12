@@ -90,11 +90,6 @@ benchmarks/**/__pycache__/
 benchmarks/corpora/
 benchmarks/results/*
 !benchmarks/results/*.md
-# d2dv: the reproducible evaluation pack's raw artifacts ARE tracked, so a
-# later run can be diffed against the recorded one instead of trusted.
-!benchmarks/results/raw/
-!benchmarks/results/raw/*.json
-!benchmarks/results/raw/*.txt
 benchmarks/tmp-idx/
 benchmarks/cold-start-work/
 benchmarks/query-path-work/
@@ -115,6 +110,10 @@ editors/**/*.vsix
 
 # Tests
 tests/artifacts/perf/
+# Local audit reports are review aids, not product fixtures.
+tests/artifacts/cyclomatic-reduction/
+tests/artifacts/rotational-code-analysis/
+tests/artifacts/state-space-collapse/
 # Golden mismatch dumps (assert_golden writes these on failure; never commit)
 *.actual
 
@@ -152,6 +151,8 @@ fuzz/corpus/
 
 # state-space-collapse skill artifacts
 .state-space-collapse/
+/.papercuts.jsonl
+/.skill-loop-progress-*.md
 
 # module-coupling-topology skill artifacts (local books)
 .module-coupling-topology/

@@ -2,7 +2,8 @@
 
 use crate::machine::{print_machine_json, print_machine_json_with_style, write_stdout_line};
 use crate::{
-    ensure_existing_root, ensure_nonempty_index, open_searcher, resolve_root_index, usage_error, Cli,
+    ensure_existing_root, ensure_nonempty_index, open_searcher, resolve_root_index, usage_error,
+    Cli,
 };
 use anyhow::Context;
 use ast_sgrep_core::{
@@ -23,10 +24,7 @@ pub(crate) fn run_chain(root: &Path, cli: &Cli, query: &str) -> anyhow::Result<(
     .context("failed to open index")?;
     ensure_nonempty_index(&root, store.status()?.file_count)?;
     let config = ChainConfig {
-        limit: ast_sgrep_core::clamp_output_limit(
-            cli.limit,
-            ChainConfig::default().limit,
-        ),
+        limit: ast_sgrep_core::clamp_output_limit(cli.limit, ChainConfig::default().limit),
         top_n: 1,
         ..ChainConfig::default()
     };

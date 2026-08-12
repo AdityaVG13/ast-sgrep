@@ -5,8 +5,8 @@ use ast_sgrep_core::semantic_ivf::{
     save_semantic_ivf, vectors_content_digest,
 };
 use ast_sgrep_core::store::{
-    assert_sql_ident, read_active_manifest, write_active_manifest, ActiveManifest, CallerRow,
-    ImportRow, SymbolRow, UpsertFileInput, CALLER_COLUMN_ALLOWLIST, COUNT_TABLE_ALLOWLIST,
+    assert_sql_ident, CallerRow, ImportRow, SymbolRow, UpsertFileInput, CALLER_COLUMN_ALLOWLIST,
+    COUNT_TABLE_ALLOWLIST,
 };
 use ast_sgrep_core::tantivy_index::{TantivySidecar, LEXICAL_DB};
 use ast_sgrep_core::{IndexOptions, IndexStore, Indexer, SearchOptions, Searcher};
@@ -37,57 +37,6 @@ fn write_src(root: &std::path::Path, rel: &str, body: &str) {
         std::fs::create_dir_all(parent).unwrap();
     }
     std::fs::write(path, body).unwrap();
-}
-
-/// jpbq / resource-leak pass — active generation pointer uses durable publish
-/// (tmp + fsync + rename + parent fsync), not bare write+rename.
-#[test]
-fn active_manifest_publish_is_durable_tmp_fsync_rename() {
-    let dir = TempDir::new().unwrap();
-    let index_dir = dir.path();
-    let first = ActiveManifest {
-        generation: "000001".into(),
-        schema_version: 7,
-        previous: None,
-        activated_at: 1,
-    };
-    write_active_manifest(index_dir, &first).unwrap();
-    let path = ast_sgrep_core::store::active_manifest_path(index_dir);
-    assert!(path.is_file());
-    let read = read_active_manifest(index_dir).expect("roundtrip");
-    assert_eq!(read, first);
-    // No leftover temp inodes after a successful publish.
-    let leftovers: Vec<_> = std::fs::read_dir(path.parent().unwrap())
-        .unwrap()
-        .filter_map(|e| e.ok())
-        .filter(|e| {
-            e.file_name()
-                .to_string_lossy()
-                .starts_with(".active.")
-                && e.file_name().to_string_lossy().ends_with(".tmp")
-        })
-        .collect();
-    assert!(
-        leftovers.is_empty(),
-        "successful publish must not leave .active.*.tmp: {leftovers:?}"
-    );
-
-    // Second publish replaces the pointer; previous bytes must not remain as
-    // a partial intermediate under the final name.
-    let second = ActiveManifest {
-        generation: "000002".into(),
-        schema_version: 7,
-        previous: Some("000001".into()),
-        activated_at: 2,
-    };
-    write_active_manifest(index_dir, &second).unwrap();
-    assert_eq!(
-        read_active_manifest(index_dir).expect("second").generation,
-        "000002"
-    );
-    let body = std::fs::read_to_string(&path).unwrap();
-    assert!(body.contains("000002"));
-    assert!(!body.contains("\"generation\": \"000001\""));
 }
 
 /// y1oy.3 — semantic.ivf is published via tmp + fsync + rename (no torn final file).
@@ -360,19 +309,27 @@ fn cosine_threshold_paths_are_unified() {
     );
 }
 
-/// esyi.3 — open runs integrity_check; corruption fails closed / quarantines.
+/// Ordinary opens fail closed; explicit reindex quarantines corruption first.
 #[test]
-fn open_integrity_check_quarantines_corrupt_db() {
+fn explicit_reindex_quarantines_corrupt_db() {
     let temp = TempDir::new().unwrap();
     let root = temp.path();
+    write_src(root, "a.py", "def recovered_needle():\n    return 1\n");
     {
         let store = IndexStore::open(root, None).unwrap();
         let lines = [(1, "ok".into())];
         store.upsert_file(base("a.py", &lines, "h")).unwrap();
     }
     let db = root.join(".asgrep").join("index.db");
+    let old_quarantine = root.join(".asgrep/index.db.corrupt");
+    std::fs::write(&old_quarantine, b"older recovery copy").unwrap();
+    let lexical = root.join(".asgrep/lexical.db");
+    let semantic = root.join(".asgrep/semantic.ivf");
+    std::fs::write(&lexical, b"stale lexical sidecar").unwrap();
+    std::fs::write(&semantic, b"stale semantic sidecar").unwrap();
     // Truncate into an obviously corrupt SQLite header.
-    std::fs::write(&db, b"NOT A SQLITE DATABASE............").unwrap();
+    let corrupt_bytes = b"NOT A SQLITE DATABASE............";
+    std::fs::write(&db, corrupt_bytes).unwrap();
     let err = match IndexStore::open(root, None) {
         Ok(_) => panic!("corrupt DB must not open successfully"),
         Err(e) => e,
@@ -386,6 +343,43 @@ fn open_integrity_check_quarantines_corrupt_db() {
             || msg.contains("database"),
         "corrupt open must fail closed, got: {msg}"
     );
+    assert_eq!(std::fs::read(&db).unwrap(), corrupt_bytes);
+    assert_eq!(
+        std::fs::read(&old_quarantine).unwrap(),
+        b"older recovery copy"
+    );
+    assert!(!root.join(".asgrep/index.db.corrupt.1").exists());
+
+    let mut indexer = Indexer::new(IndexOptions {
+        root: root.to_path_buf(),
+        force_reindex: true,
+        embed_semantic: false,
+        ..IndexOptions::default()
+    })
+    .expect("explicit reindex should quarantine the corrupt DB");
+    indexer.reindex_all().expect("replacement should index");
+    assert_eq!(
+        std::fs::read(root.join(".asgrep/index.db.corrupt.1")).unwrap(),
+        corrupt_bytes
+    );
+    assert!(!lexical.exists(), "stale lexical sidecar must be removed");
+    assert!(!semantic.exists(), "stale semantic sidecar must be removed");
+    assert_eq!(indexer.store().status().unwrap().file_count, 1);
+    assert!(indexer.store().index_data_version().unwrap() > 1_000_000);
+    drop(indexer);
+
+    let searcher = Searcher::new(SearchOptions {
+        root: root.to_path_buf(),
+        use_embed: false,
+        ..SearchOptions::default()
+    })
+    .unwrap();
+    assert!(searcher
+        .search("recovered_needle")
+        .unwrap()
+        .hits
+        .iter()
+        .any(|hit| hit.file == "a.py"));
 }
 
 /// esyi.4 — busy_timeout + NORMAL sync configured on open (documented concurrent writers).
@@ -430,7 +424,10 @@ fn hybrid_response_cache_invalidates_on_index_generation() {
         .upsert_file(base("h.py", &lines_b, "hb"))
         .unwrap();
     let v2 = searcher.store().index_data_version().unwrap();
-    assert!(v2 > v1, "upsert must bump index_data_version ({v1} -> {v2})");
+    assert!(
+        v2 > v1,
+        "upsert must bump index_data_version ({v1} -> {v2})"
+    );
     assert!(
         searcher.search("alpha").unwrap().hits.is_empty(),
         "generation bump must invalidate hybrid/response cache; hits={:?}",
@@ -459,11 +456,7 @@ fn body_hash_meta_persisted_after_index() {
     .unwrap();
     indexer.index_all().unwrap();
     assert!(
-        indexer
-            .store()
-            .get_meta("body:m.py")
-            .unwrap()
-            .is_some(),
+        indexer.store().get_meta("body:m.py").unwrap().is_some(),
         "body hash meta must be persisted (3ddd)"
     );
 }
@@ -505,11 +498,7 @@ fn remove_file_clears_graph_rows() {
 fn body_hash_mismatch_prevents_structure_skip() {
     let temp = TempDir::new().unwrap();
     let root = temp.path();
-    write_src(
-        root,
-        "skip.py",
-        "def original():\n    return 1\n",
-    );
+    write_src(root, "skip.py", "def original():\n    return 1\n");
     let mut indexer = Indexer::new(IndexOptions {
         root: root.to_path_buf(),
         embed_semantic: false,
@@ -523,7 +512,10 @@ fn body_hash_mismatch_prevents_structure_skip() {
         .unwrap()
         .expect("body meta after first index");
     // Corrupt body fingerprint so the next index cannot structure-skip.
-    indexer.store().set_meta("body:skip.py", "stale-body-fp").unwrap();
+    indexer
+        .store()
+        .set_meta("body:skip.py", "stale-body-fp")
+        .unwrap();
     // Trailing trivia only -- real body hash is unchanged.
     write_src(
         root,

@@ -60,7 +60,7 @@ duplicates index opens, and confuses the model about which surface to call.
 `pi-ast-sgrep` exposes **`asgrep`** as the primary tool:
 
 ```text
-Model ──► asgrep({ code }) ──► same-realm AsyncFunction runner
+Model ──► asgrep({ code }) ──► restricted Node `vm` context
                                               │
                                               │  asgrep.search / chain / defs / …
                                               │  Promise.all → same-tick coalesce
@@ -72,10 +72,26 @@ Model ──► asgrep({ code }) ──► same-realm AsyncFunction runner
                                         shaped return + stats
 ```
 
-Authority is the explicit `asgrep.*` API (OpenCode-style: host omits tools it
-does not expose). There is no `node:vm` / isolate sandbox — the Pi package
-already has full user privileges; Code Mode is for orchestration speed, not OS
-isolation.
+The runner exposes only a serialized `asgrep.*` bridge and console. Its `node:vm`
+context disables string and WebAssembly code generation and does not expose
+`process`, module loading, networking, or filesystem globals. Node does not
+consider `vm` an adversarial-code security boundary, however, and the installed
+Pi package itself has the user's privileges. Code Mode is for bounded
+orchestration, not OS isolation.
+
+Each disposable worker is limited to 256 host calls, bounded bridge arguments,
+responses, logs, and final results, plus explicit heap and stack ceilings. Raw
+memory and WebAssembly globals are unavailable because their backing stores are
+not reliably covered by V8 heap limits. The native Code Mode boundary also caps
+each encoded tool value at 1 MiB and complete batch responses at 4 MiB, before
+Node-API converts them into extension-host objects.
+
+One deadline covers freshness work and the Code Mode program. Cancellation
+rejects queued and future host calls and is checked between native batch calls.
+The parent terminates the disposable worker, so synchronous loops, microtask
+loops, and asynchronous JavaScript cannot outlive that deadline. A single
+SQLite/native call already in progress may finish its current operation before
+observing cancellation; its late response is discarded.
 
 ### Amdahl note
 
@@ -109,7 +125,9 @@ cargo build -p ast-sgrep-codemode-napi --release
 npm run build:native -w pi-ast-sgrep
 ```
 
-Measured on the sample fixture (release NAPI, warm): **20 searches ≈ few ms** vs **~60 ms for 5 cold CLI spawns**.
+The in-process path removes per-search process startup and reuses one open
+searcher. This review did not retain a clean before/after benchmark fixture, so
+no numeric speedup is claimed.
 
 Direct tools (`asgrep_search`, `asgrep_index`, `asgrep_status`) remain for simple one-shot lookups. Prefer Code Mode whenever the task needs composition, parallel lookups, or filtering before the model sees data.
 
@@ -128,9 +146,14 @@ async () => {
 }
 ```
 
-Sandbox capabilities: `asgrep.*`, `Promise`, `JSON`, arrays/objects/math. No
-`require`, `process`, `fetch`, or filesystem — same trust model as the Pi package
-(tool-surface authority, not an OS jail).
+Runner capabilities: `asgrep.*`, `Promise`, `JSON`, arrays/objects/math. No
+direct `require`, `process`, `fetch`, or filesystem globals. The configured wall
+deadline terminates the disposable worker, including synchronous or microtask
+loops entered after an `await`, and bounds awaited host calls. Call arguments,
+bridge responses, collected console output, serialized results, and worker
+heap/stack size are capped before returning to the extension host. The worker's
+`node:vm` context is still not an OS security boundary; deployments executing
+adversarial programs must isolate the entire extension process.
 
 ## Rust crate `ast-sgrep-codemode`
 
@@ -152,7 +175,7 @@ cargo test -p ast-sgrep-codemode
 | Path | Role |
 |------|------|
 | `crates/ast-sgrep-codemode` | Rust catalog + session + plan + host adapters |
-| `packages/pi/extension/src/codemode/` | JS connector + AsyncFunction runner |
+| `packages/pi/extension/src/codemode/` | JS connector + restricted `node:vm` runner |
 | `packages/pi/extension` tool `asgrep` | Pi primary Code Mode entry |
 | `crates/ast-sgrep-mcp` | Unrelated MCP transport |
 

@@ -27,10 +27,12 @@ pub fn lsp_search_hit_keys(
 ) -> Vec<HitKey> {
     let mut backend = LspBackend::new(root.to_path_buf());
     backend.set_index_path(index_path.to_path_buf());
-    backend.apply_settings(AsgrepSettings {
-        // Product: no_embed=true disables embed; no_embed=false enables it.
-        no_embed: Some(!use_embed),
-        ..AsgrepSettings::default()
-    });
+    backend
+        .apply_settings(AsgrepSettings {
+            // Product: no_embed=true disables embed; no_embed=false enables it.
+            no_embed: Some(!use_embed),
+            ..AsgrepSettings::default()
+        })
+        .expect("apply LSP settings");
     json_hit_keys(&backend.search(query, false, limit).expect("LSP search"))
 }

@@ -4,6 +4,8 @@
 pub const MAX_OUTPUT_RESULTS: usize = 1000;
 /// Hard ceiling for excerpt line budgets.
 pub const MAX_EXCERPT_LINES: usize = 100;
+/// Hard ceiling for source text retained by one search hit.
+pub const MAX_SEARCH_HIT_EXCERPT_BYTES: usize = 64 * 1024;
 /// Default agent/MCP soft ceiling (stricter than the hard max).
 pub const DEFAULT_AGENT_LIMIT: usize = 100;
 /// Hard ceiling for search query length (characters). Shared with MCP schema.
@@ -59,4 +61,3 @@ mod tests {
         assert!(validate_query_len(&"a".repeat(MAX_QUERY_CHARS + 1)).is_err());
     }
 }
-

@@ -165,8 +165,10 @@ parses results directly instead of reverse-engineering the compact envelope.
 The two always agree: the text is the same JSON, minified.
 
 `initialize` negotiates. A client asking for `2024-11-05` keeps it, a client
-asking for `2026-07-28` gets it, and an unrecognized revision is answered with
-the server's current revision.
+asking for `2025-11-25` gets it, and an unrecognized revision is answered with
+the server's current revision. The server deliberately does not advertise
+`2026-07-28`: that revision replaced this handshake lifecycle with
+`server/discover`, which this stdio server does not implement.
 
 ### Misses
 

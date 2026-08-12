@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { existsSync, realpathSync } from "node:fs";
+import { realpathSync } from "node:fs";
+import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -14,7 +16,6 @@ import { runCodemode } from "../src/codemode/runner.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const sample = realpathSync(join(here, "../../../../tests/fixtures/sample"));
-const indexPath = "/tmp/napi-cm.db";
 
 function requireNative() {
   delete process.env.ASGREP_CODEMODE_BACKEND;
@@ -26,6 +27,14 @@ function requireNative() {
   return binding;
 }
 
+async function indexedNative(binding: NonNullable<ReturnType<typeof requireNative>>): Promise<{ dir: string; indexPath: string }> {
+  const dir = await mkdtemp(join(tmpdir(), "asgrep-napi-index-"));
+  const indexPath = join(dir, "index.db");
+  const session = new binding.Session({ root: sample, indexPath, useEmbed: false, limit: 8 });
+  await session.call("index_repo", { force: false });
+  return { dir, indexPath };
+}
+
 test("NAPI addon loads and reports version", (t) => {
   const binding = requireNative();
   if (!binding) {
@@ -34,26 +43,77 @@ test("NAPI addon loads and reports version", (t) => {
   }
   assert.equal(binding.isNative(), true);
   assert.equal(binding.bindingVersion(), "1.4.0");
+  assert.equal(binding.asyncApiVersion(), 1);
 });
 
-test("in-process session search is sub-millisecond warm", (t) => {
+test("native indexing returns a Promise and does not block the event loop", async (t) => {
   const binding = requireNative();
   if (!binding) {
     t.skip("native addon not built");
     return;
   }
-  if (!existsSync(indexPath)) {
-    t.skip(`index missing at ${indexPath}`);
+  const root = await mkdtemp(join(tmpdir(), "asgrep-napi-async-"));
+  const source = join(root, "src");
+  await mkdir(source);
+  try {
+    await Promise.all(Array.from({ length: 500 }, (_, index) =>
+      writeFile(join(source, `file-${index}.ts`), `export function value${index}() { return ${index}; }\n`, "utf8")));
+    const session = new binding.Session({
+      root,
+      indexPath: join(root, "index.db"),
+      useEmbed: false,
+      limit: 8,
+    });
+    let eventLoopAdvanced = false;
+    setImmediate(() => { eventLoopAdvanced = true; });
+    const operation = session.call("index_repo", { force: false });
+    assert.ok(operation instanceof Promise);
+    await operation;
+    assert.equal(eventLoopAdvanced, true, "native index work must run off the Node event loop");
+
+    const pool = new NativeSessionPool();
+    pool.configure({ useEmbed: false, indexPath: join(root, "index.db") });
+    const worker = await pool.acquire(root);
+    assert.ok(worker);
+    let activeSettled = false;
+    const active = worker!.call("index_repo", { force: true }).finally(() => { activeSettled = true; });
+    const controller = new AbortController();
+    const queued = worker!.call("index_status", {}, { signal: controller.signal });
+    let followingSettled = false;
+    const following = worker!.call("index_status", {}).finally(() => { followingSettled = true; });
+    controller.abort();
+    await assert.rejects(queued, { name: "AbortError" });
+    assert.equal(activeSettled, false, "queued cancellation must reject before active native work finishes");
+    assert.equal(followingSettled, false, "later work must remain behind the active native task");
+    await active;
+    await following;
+    await pool.shutdown();
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("native relative index paths resolve against the session root", async (t) => {
+  const binding = requireNative();
+  if (!binding) {
+    t.skip("native addon not built");
     return;
   }
-  const session = new binding.Session({ root: sample, indexPath, useEmbed: false, limit: 8 });
-  session.call("search", { query: "auth", limit: 3, format: "capsule" });
-  const t0 = Date.now();
-  for (let i = 0; i < 20; i++) {
-    session.call("search", { query: "auth", limit: 3, format: "capsule" });
+  const root = await mkdtemp(join(tmpdir(), "asgrep-napi-relative-index-"));
+  try {
+    await writeFile(join(root, "source.ts"), "export const relativeIndex = true;\n", "utf8");
+    const session = new binding.Session({
+      root,
+      indexPath: "custom-index",
+      useEmbed: false,
+      limit: 8,
+    });
+    await session.call("index_repo", { force: false });
+    const status = await session.call("index_status", {}) as Record<string, unknown>;
+    assert.equal(status.index_path, join(root, "custom-index", "index.db"));
+  } finally {
+    await rm(root, { recursive: true, force: true });
   }
-  const ms = Date.now() - t0;
-  assert.ok(ms < 50, `20 warm in-process searches should be <50ms, got ${ms}ms`);
 });
 
 test("session pool uses napi backend", async (t) => {
@@ -62,9 +122,11 @@ test("session pool uses napi backend", async (t) => {
     t.skip("native addon not built");
     return;
   }
+  const indexed = await indexedNative(binding);
+  t.after(() => rm(indexed.dir, { recursive: true, force: true }));
   assert.equal(nativeAvailable(), true);
   const pool = new NativeSessionPool();
-  pool.configure({ useEmbed: false, indexPath });
+  pool.configure({ useEmbed: false, indexPath: indexed.indexPath });
   const worker = await pool.acquire(sample);
   assert.ok(worker);
   assert.equal(pool.backend(), "napi");
@@ -80,8 +142,10 @@ test("Code Mode Promise.all stays in-process (no spawn)", async (t) => {
     t.skip("native addon not built");
     return;
   }
+  const indexed = await indexedNative(binding);
+  t.after(() => rm(indexed.dir, { recursive: true, force: true }));
   const pool = new NativeSessionPool();
-  pool.configure({ useEmbed: false, indexPath });
+  pool.configure({ useEmbed: false, indexPath: indexed.indexPath });
   const sticky = await pool.acquire(sample);
   assert.ok(sticky);
   const bundle = createAsgrepConnector({

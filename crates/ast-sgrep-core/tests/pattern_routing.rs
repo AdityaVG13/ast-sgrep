@@ -42,8 +42,7 @@ fn exotic_pattern_without_ast_grep_is_structured_empty_not_panic() {
 
 #[test]
 fn hybrid_quoted_literal_intent_hits_phrase_line() {
-    let session =
-        indexed_rs("fn main() {\n    let msg = \"foo bar unique_phrase\";\n}\n");
+    let session = indexed_rs("fn main() {\n    let msg = \"foo bar unique_phrase\";\n}\n");
     let searcher = session.searcher(SearchOptions {
         use_embed: false,
         limit: 16,

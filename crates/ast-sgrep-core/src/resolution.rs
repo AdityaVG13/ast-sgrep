@@ -70,9 +70,7 @@ pub enum Resolution {
     /// Matched on name alone, with no disambiguation. A guess.
     NameOnly,
     /// Several candidates match and none could be chosen.
-    Ambiguous {
-        candidates: Vec<SymbolId>,
-    },
+    Ambiguous { candidates: Vec<SymbolId> },
 }
 
 impl Resolution {

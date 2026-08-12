@@ -1,8 +1,5 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdtemp, writeFile, readFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { registerAstSgrepTools } from "../src/index.js";
 import { RuntimeError, type MachineEnvelope } from "../src/runtime.js";
@@ -47,7 +44,7 @@ async function invoke(tool: Tool, params: Record<string, unknown> = {}, signal =
 
 test("registers Code Mode first, then direct one-shot tools", () => {
   const { tools, byName } = fixture();
-  assert.deepEqual(tools.map(({ name }) => name), ["asgrep", "asgrep_search", "asgrep_index", "asgrep_status", "asgrep_edit"]);
+  assert.deepEqual(tools.map(({ name }) => name), ["asgrep", "asgrep_search", "asgrep_index", "asgrep_status"]);
   const search = byName("asgrep_search").parameters;
   assert.equal(search.additionalProperties, false);
   assert.equal(search.properties.query.minLength, 1);
@@ -154,13 +151,11 @@ test("marks successful official write and edit tool results dirty", () => {
   const emit = f.handlers[0]!;
   emit({ toolName: "write", input: { path: "src/new.ts" }, isError: false }, { cwd: "/project" });
   emit({ toolName: "edit", input: { path: "/project/src/existing.ts" }, isError: false }, { cwd: "/project" });
-  emit({ toolName: "asgrep_edit", input: { path: "src/via-asgrep.ts" }, isError: false }, { cwd: "/project" });
   emit({ toolName: "write", input: { path: "ignored.ts" }, isError: true }, { cwd: "/project" });
   emit({ toolName: "bash", input: { command: "touch hidden" }, isError: false }, { cwd: "/project" });
   assert.deepEqual(f.dirtied, [
     { path: "src/new.ts", cwd: "/project" },
     { path: "/project/src/existing.ts", cwd: "/project" },
-    { path: "src/via-asgrep.ts", cwd: "/project" },
   ]);
 });
 
@@ -177,7 +172,11 @@ test("search refreshes before querying and refuses unknown index health", async 
     async resolveRoot(context: { cwd: string }) { return context.cwd; },
     async run(args: readonly string[]) {
       calls.push(args[0]!);
-      return args[0] === "status" ? status : { tool: "asgrep" as const, schema_version: "1.0.0", ok: true, hits: [] };
+      if (args[0] === "status") return status;
+      if (args[0] === "index") {
+        return { tool: "asgrep" as const, schema_version: "1.0.0", ok: true, files_failed: 0, walk_errors: false };
+      }
+      return { tool: "asgrep" as const, schema_version: "1.0.0", ok: true, hits: [] };
     },
   };
   registerAstSgrepTools(pi, runtime);
@@ -208,73 +207,6 @@ test("maps runtime failures to concise structured tool errors", async () => {
     command: "search",
     error: { code: "CANCELLED", message: "execution cancelled", details: { source: "signal" } },
   });
-});
-
-
-test("asgrep_edit replaces a unique string and dirties freshness", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "asgrep-edit-"));
-  const file = join(dir, "sample.ts");
-  await writeFile(file, "const a = 1;\nconst b = 2;\n", "utf8");
-  const f = fixture();
-  const out = await f.byName("asgrep_edit").execute("e1", {
-    path: "sample.ts",
-    old_string: "const a = 1;",
-    new_string: "const a = 42;",
-  }, new AbortController().signal, () => {}, { cwd: dir });
-  assert.equal(out.details.ok, true);
-  assert.equal(out.details.mode, "replace");
-  assert.equal(out.details.replacements, 1);
-  assert.equal(await readFile(file, "utf8"), "const a = 42;\nconst b = 2;\n");
-  assert.ok(f.dirtied.some((d) => d.cwd === dir));
-});
-
-test("asgrep_edit rejects ambiguous replace without replace_all", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "asgrep-edit-amb-"));
-  await writeFile(join(dir, "sample.ts"), "x = 1;\nx = 2;\n", "utf8");
-  const f = fixture();
-  const out = await f.byName("asgrep_edit").execute("e1", {
-    path: "sample.ts",
-    old_string: "x = ",
-    new_string: "y = ",
-  }, new AbortController().signal, () => {}, { cwd: dir });
-  assert.equal(out.details.ok, false);
-  assert.equal((out.details.error as { code: string }).code, "EDIT_STRING_AMBIGUOUS");
-});
-
-test("asgrep_edit writes full contents and dirties freshness", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "asgrep-edit-write-"));
-  const file = join(dir, "created.ts");
-  const f = fixture();
-  const out = await f.byName("asgrep_edit").execute("e1", {
-    path: "created.ts",
-    contents: "export const n = 1;\n",
-  }, new AbortController().signal, () => {}, { cwd: dir });
-  assert.equal(out.details.ok, true);
-  assert.equal(out.details.mode, "write");
-  assert.equal(out.details.created, true);
-  assert.equal(await readFile(file, "utf8"), "export const n = 1;\n");
-  assert.ok(f.dirtied.some((d) => d.cwd === dir));
-});
-
-test("asgrep_edit rejects both replace and write fields", async () => {
-  const f = fixture();
-  const out = await f.byName("asgrep_edit").execute("e1", {
-    path: "sample.ts",
-    old_string: "a",
-    new_string: "b",
-    contents: "c",
-  }, new AbortController().signal, () => {}, { cwd: process.cwd() });
-  assert.equal(out.details.ok, false);
-  assert.equal((out.details.error as { code: string }).code, "INVALID_EDIT");
-});
-
-test("asgrep_edit rejects neither replace nor write fields", async () => {
-  const f = fixture();
-  const out = await f.byName("asgrep_edit").execute("e1", {
-    path: "sample.ts",
-  }, new AbortController().signal, () => {}, { cwd: process.cwd() });
-  assert.equal(out.details.ok, false);
-  assert.equal((out.details.error as { code: string }).code, "INVALID_EDIT");
 });
 
 test("missing CLI backend surfaces BACKEND_UNAVAILABLE from search", async () => {
@@ -320,43 +252,4 @@ test("missing backend surfaces BACKEND_UNAVAILABLE from asgrep ensureFresh path"
   const out = await codemode.execute("c1", { code: "async () => 1" }, new AbortController().signal, () => {}, { cwd: "/project" });
   assert.equal(out.details.ok, false);
   assert.equal((out.details.error as { code: string }).code, "BACKEND_UNAVAILABLE");
-});
-
-
-test("asgrep_edit repairs quoted paths before writing", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "asgrep-edit-quote-"));
-  const file = join(dir, "sample.ts");
-  await writeFile(file, "const a = 1;\n", "utf8");
-  const f = fixture();
-  const out = await f.byName("asgrep_edit").execute("e1", {
-    path: "'sample.ts'",
-    old_string: "const a = 1;",
-    new_string: "const a = 2;",
-  }, new AbortController().signal, () => {}, { cwd: dir });
-  assert.equal(out.details.ok, true);
-  assert.equal(await readFile(file, "utf8"), "const a = 2;\n");
-});
-
-test("asgrep_edit rejects device paths", async () => {
-  const f = fixture();
-  const out = await f.byName("asgrep_edit").execute("e1", {
-    path: "/dev/null",
-    contents: "x",
-  }, new AbortController().signal, () => {}, { cwd: process.cwd() });
-  assert.equal(out.details.ok, false);
-  assert.equal((out.details.error as { code: string }).code, "EDIT_FORBIDDEN_PATH");
-});
-
-test("asgrep_edit repairs curly-quoted paths", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "asgrep-edit-curly-"));
-  const file = join(dir, "sample.ts");
-  await writeFile(file, "const a = 1;\n", "utf8");
-  const f = fixture();
-  const out = await f.byName("asgrep_edit").execute("e1", {
-    path: "\u2018sample.ts\u2019",
-    old_string: "const a = 1;",
-    new_string: "const a = 2;",
-  }, new AbortController().signal, () => {}, { cwd: dir });
-  assert.equal(out.details.ok, true);
-  assert.equal(await readFile(file, "utf8"), "const a = 2;\n");
 });

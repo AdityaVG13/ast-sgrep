@@ -14,13 +14,6 @@ const HOSTS = new Map([
 ]);
 const nativeRequire = createRequire(import.meta.url);
 
-/** Error codes that allow PATH fallback when the platform package path fails. */
-const PATH_FALLBACK_CODES = new Set([
-  "ASGREP_PLATFORM_PACKAGE_MISSING",
-  "ASGREP_EXECUTABLE_EMPTY",
-  "ASGREP_UNSUPPORTED_PLATFORM"
-]);
-
 /** resolveHost errors that mean the Code Mode addon is simply unavailable. */
 const OPTIONAL_HOST_MISS_CODES = new Set([
   "ASGREP_UNSUPPORTED_PLATFORM",
@@ -69,27 +62,6 @@ function validateExecutable(path, fs, checkAccess) {
     try { fs.accessSync(path, constants.X_OK); } catch (cause) { fail("ASGREP_EXECUTABLE_NOT_EXECUTABLE", "ast-sgrep executable is not executable: " + path, path, cause); }
   }
   return path;
-}
-
-function pathLookup(name, env, fs) {
-  const pathEnv = env.PATH || env.Path || "";
-  const delimiter = process.platform === "win32" ? ";" : ":";
-  for (const dir of pathEnv.split(delimiter)) {
-    if (!dir) continue;
-    const candidate = join(dir, name);
-    try {
-      const stat = fs.statSync(candidate);
-      if (stat.isFile() && stat.size > 0) return candidate;
-    } catch {
-      // try next
-    }
-  }
-  return null;
-}
-
-/** Guard helper: true when package resolution may fall back to PATH. */
-function isPathFallbackError(code) {
-  return PATH_FALLBACK_CODES.has(code);
 }
 
 /** Guard helper: true when missing host package means addon is optional-null. */
@@ -202,29 +174,20 @@ export function resolveBinary(options = {}) {
   const fs = options.fs ?? { accessSync, existsSync, readFileSync, statSync };
   if (override) return validateExecutable(resolve(override), fs, platform !== "win32");
 
-  try {
-    const host = resolveHost(options);
-    const executablePath = join(host.packageDir, host.executableName);
-    validateExecutable(executablePath, host.fs, platform !== "win32");
-    assertPackageFileChecksum(
-      host.fs,
-      executablePath,
-      host.checksumPath,
-      host.executableName,
-      host.packageName,
-      "ASGREP_EXECUTABLE_MISSING",
-      "Cannot read native executable: ",
-      "Native executable checksum mismatch at "
-    );
-    return executablePath;
-  } catch (error) {
-    // Early rethrow: only selected package-path failures may fall back to PATH.
-    if (!(error instanceof AstSgrepBinaryError) || !isPathFallbackError(error.code)) throw error;
-    const exeName = platform === "win32" ? "asgrep.exe" : "asgrep";
-    const fromPath = pathLookup(exeName, env, fs);
-    if (fromPath) return validateExecutable(fromPath, fs, platform !== "win32");
-    throw error;
-  }
+  const host = resolveHost(options);
+  const executablePath = join(host.packageDir, host.executableName);
+  validateExecutable(executablePath, host.fs, platform !== "win32");
+  assertPackageFileChecksum(
+    host.fs,
+    executablePath,
+    host.checksumPath,
+    host.executableName,
+    host.packageName,
+    "ASGREP_EXECUTABLE_MISSING",
+    "Cannot read native executable: ",
+    "Native executable checksum mismatch at "
+  );
+  return executablePath;
 }
 
 /** Resolve the in-process Code Mode NAPI addon from the platform package, or null if absent. */

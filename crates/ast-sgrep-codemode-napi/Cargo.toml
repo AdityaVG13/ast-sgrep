@@ -8,7 +8,9 @@ repository.workspace = true
 homepage.workspace = true
 publish = false
 
-# NAPI requires unsafe FFI into Node's C ABI.
+# Sealed exception: napi-derive generates unsafe FFI glue for Node's C ABI.
+# First-party source must remain free of hand-written unsafe blocks; enforced by
+# scripts/verify-forbid-soundness.
 [lints.rust]
 unsafe_code = "allow"
 
