@@ -41,7 +41,5 @@ fn doctor_surfaces_fast_unsafe_from_cli_flag() {
 #[test]
 fn doctor_surfaces_silent_on_balanced() {
     let cli = Cli::try_parse_from(["asgrep", "doctor", "."]).expect("parse");
-    assert!(
-        doctor_fast_unsafe_issue(&cli, Some(&status_with_durability("balanced"))).is_none()
-    );
+    assert!(doctor_fast_unsafe_issue(&cli, Some(&status_with_durability("balanced"))).is_none());
 }

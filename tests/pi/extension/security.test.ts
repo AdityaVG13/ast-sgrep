@@ -1,12 +1,16 @@
 import assert from "node:assert/strict";
+import { createRequire } from "node:module";
 import { mkdtemp, mkdir, realpath, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, test } from "node:test";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { Check } from "typebox/value";
 import { registerAstSgrepTools } from "../../../packages/pi/extension/src/index.js";
 import { FreshnessCoordinator, RuntimeError, resolveConfig, resolveRuntimeRoot, type MachineEnvelope, type RunOptions, type RuntimeContext } from "../../../packages/pi/extension/src/runtime.js";
+
+const { Check } = createRequire(
+  new URL("../../../packages/pi/extension/package.json", import.meta.url),
+)("typebox/value") as typeof import("typebox/value");
 
 const temporary: string[] = [];
 afterEach(async () => {
