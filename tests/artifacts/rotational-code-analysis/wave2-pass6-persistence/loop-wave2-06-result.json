@@ -1,0 +1,25 @@
+{
+  "schema_version": "1.0",
+  "loop_id": "wave2-06-persistence",
+  "logical_loop": 9,
+  "name": "persistence-transactions-and-cache-consistency",
+  "mode": "harden",
+  "status": "COMPLETE",
+  "PRODUCTIVE": true,
+  "braid_resolve": "Continue",
+  "axes_changed": 3,
+  "axes": [
+    "representation:state-store-model",
+    "observer:data-integrity",
+    "time:commit+recovery"
+  ],
+  "residual_closed": "R-MISSING-GEN-FALLTHROUGH",
+  "bead": "ast-sgrep-aeft",
+  "verify": {
+    "cmd": "rch exec -- cargo test -p ast-sgrep-core --test generation_swap",
+    "exit": 0,
+    "passed": 5
+  },
+  "NEXT_PASS": "Seal wave-2 (residuals closed) or authorized Pi leftover only",
+  "books": "tests/artifacts/rotational-code-analysis/wave2-pass6-persistence/"
+}

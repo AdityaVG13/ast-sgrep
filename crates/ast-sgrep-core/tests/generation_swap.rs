@@ -1,8 +1,9 @@
 //! jpbq: a full rebuild must never destroy the last known-good index.
 use ast_sgrep_core::store::{
-    active_manifest_path, generation_db_path, read_active_manifest, INDEX_DIR,
+    active_manifest_path, generation_db_path, read_active_manifest, try_index_db_path, INDEX_DB,
+    INDEX_DIR,
 };
-use ast_sgrep_core::{IndexOptions, Indexer, SearchOptions, Searcher};
+use ast_sgrep_core::{IndexOptions, IndexStore, Indexer, SearchOptions, Searcher};
 
 fn corpus(root: &std::path::Path, files: usize) {
     let src = root.join("src");
@@ -66,6 +67,49 @@ fn reindex_activates_a_new_generation_and_retains_the_previous() {
         "previous generation must be retained until the new one is proven"
     );
     assert!(search_hits(temp.path(), "target_symbol_1") > 0);
+}
+
+/// Missing active generation must not silently serve a leftover flat legacy DB
+/// (wave2 loop9: state-store + data-integrity + commit/recovery).
+#[test]
+fn missing_active_generation_refuses_stale_legacy_fallthrough() {
+    let temp = tempfile::tempdir().unwrap();
+    corpus(temp.path(), 3);
+    indexer(temp.path()).index_all().expect("first index");
+    indexer(temp.path()).reindex_all().expect("reindex into generation layout");
+
+    let index_dir = temp.path().join(INDEX_DIR);
+    let active = read_active_manifest(&index_dir).expect("manifest");
+    let gen_dir = index_dir.join("generations").join(&active.generation);
+    let legacy = index_dir.join(INDEX_DB);
+    assert!(
+        legacy.is_file(),
+        "fixture needs leftover flat index.db from the pre-generation index"
+    );
+    assert!(generation_db_path(&index_dir, &active.generation).is_file());
+
+    // Corrupt activation: active pointer remains, generation directory is gone.
+    std::fs::remove_dir_all(&gen_dir).expect("remove active generation");
+
+    let err = try_index_db_path(temp.path(), None).expect_err("must refuse fallthrough");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("active generation") && msg.contains("refusing"),
+        "error must name corrupt activation, got: {msg}"
+    );
+    assert!(
+        IndexStore::open(temp.path(), None).is_err(),
+        "IndexStore must not open the stale legacy corpus"
+    );
+    assert!(
+        Searcher::new(SearchOptions {
+            root: temp.path().to_path_buf(),
+            use_embed: false,
+            ..SearchOptions::default()
+        })
+        .is_err(),
+        "Searcher must fail closed instead of answering from legacy index.db"
+    );
 }
 
 /// The crash-safety property: whatever happens to a candidate build, the

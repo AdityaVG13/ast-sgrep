@@ -196,8 +196,18 @@ pub(crate) fn as_db_path(path: PathBuf) -> PathBuf {
     }
 }
 pub fn index_db_path(root: &Path, index_path: Option<&Path>) -> PathBuf {
-    try_index_db_path(root, index_path)
-        .unwrap_or_else(|_| root.join(INDEX_DIR).join(INDEX_DB))
+    try_index_db_path(root, index_path).unwrap_or_else(|_| {
+        // Prefer naming a broken active generation for diagnostics over a
+        // leftover flat legacy path (same integrity rule as try_index_db_path).
+        let index_dir = root.join(INDEX_DIR);
+        if let Some(manifest) = read_active_manifest(&index_dir) {
+            let candidate = generation_db_path(&index_dir, &manifest.generation);
+            if !candidate.exists() {
+                return candidate;
+            }
+        }
+        root.join(INDEX_DIR).join(INDEX_DB)
+    })
 }
 
 pub fn try_index_db_path(root: &Path, index_path: Option<&Path>) -> crate::Result<PathBuf> {
@@ -214,8 +224,15 @@ pub fn try_index_db_path(root: &Path, index_path: Option<&Path>) -> crate::Resul
         if candidate.exists() {
             return Ok(candidate);
         }
-        // A pointer to a missing generation is a corrupt activation; fall
-        // through to the legacy path rather than failing every command.
+        // Corrupt activation: do not fall through to a leftover flat
+        // `.asgrep/index.db` (stale corpus) or create an empty DB while the
+        // manifest still claims a generation layout (wave2 loop9 / data-integrity).
+        return Err(crate::StoreError::Other(format!(
+            "active generation '{}' is missing at {}; refusing legacy/empty fallthrough \
+             (restore the generation directory or reindex)",
+            manifest.generation,
+            candidate.display()
+        )));
     }
     let local = index_dir.join(INDEX_DB);
     if local.exists() {
