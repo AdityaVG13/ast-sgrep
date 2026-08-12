@@ -21,7 +21,7 @@ The parity fixture proves the concrete stored keys:
 | `callers.callee` | Rust call `RefreshToken()` | `RefreshToken` |
 | `imports.module_path` | TypeScript `from './Utils'` | `./Utils` |
 
-`crates/ast-sgrep-core/tests/parity.rs` reads these values back from SQLite,
+`tests/core/parity.rs` reads these values back from SQLite,
 prints them beside the queried forms, and then exercises case variants through
 the public `Searcher` API.
 

@@ -21,3 +21,11 @@ serde_json.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true
+
+# Integration tests live in the repo-root tests/ tree.
+[[test]]
+name = "budget_render"
+path = "../../tests/plugins/budget_render.rs"
+[[test]]
+name = "capsule_format"
+path = "../../tests/plugins/capsule_format.rs"

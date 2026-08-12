@@ -49,7 +49,7 @@ identity, or latency threshold breaches. The official package release invokes
 
 ## Pull requests
 
-- Keep changes focused; extend `crates/ast-sgrep-core/tests/parity.rs` (or a targeted unit test) when behavior changes.
+- Keep changes focused; extend `tests/core/parity.rs` (or a targeted unit test) when behavior changes.
 - Do not commit local agent/tool caches or skill-run trees -- they are gitignored.
 - Do not commit secrets, `.env`, local caches, or `fuzz/target/`.
 - Prefer conventional commits: `feat:`, `fix:`, `refactor:`, `docs:`, `test:`, `ci:`, `chore:`.

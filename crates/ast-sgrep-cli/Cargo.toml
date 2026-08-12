@@ -47,3 +47,17 @@ signal-hook = "0.3"
 ast-sgrep-testkit = { path = "../ast-sgrep-testkit" }
 serde_json.workspace = true
 tempfile.workspace = true
+
+# Integration tests live in the repo-root tests/ tree.
+[[test]]
+name = "cli_smoke"
+path = "../../tests/cli/cli_smoke.rs"
+[[test]]
+name = "machine_contracts"
+path = "../../tests/cli/machine_contracts.rs"
+[[test]]
+name = "no_embed_hit_key_parity"
+path = "../../tests/cli/no_embed_hit_key_parity.rs"
+[[test]]
+name = "watch_incremental"
+path = "../../tests/cli/watch_incremental.rs"

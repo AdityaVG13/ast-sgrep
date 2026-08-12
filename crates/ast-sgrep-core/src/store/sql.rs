@@ -337,15 +337,8 @@ DELETE FROM embed_cache; \
 DELETE FROM meta WHERE key NOT IN ('root', 'semantic_data_version', 'index_data_version', 'lexicon_data_version');";
 
 #[cfg(test)]
-#[test]
-fn clear_all_meta_whitelist_matches_sql() {
-    for key in CLEAR_ALL_META_WHITELIST {
-        assert!(
-            CLEAR_ALL_SQL.contains(&format!("'{key}'")),
-            "CLEAR_ALL_SQL must list whitelist key {key}"
-        );
-    }
-}
+#[path = "../../../../tests/unit/core/store__sql__clear_all_sql_tests.rs"]
+mod clear_all_sql_tests;
 
 pub(crate) fn emb_vec(r: &rusqlite::Row<'_>, idx: usize) -> rusqlite::Result<Vec<f32>> {
     let v: Vec<u8> = r.get(idx)?;
@@ -418,17 +411,5 @@ pub fn integrity_check(conn: &Connection) -> Result<String> {
 }
 
 #[cfg(test)]
-mod escape_tests {
-    use super::{escape_glob_literal, escape_like_term};
-
-    #[test]
-    fn glob_escapes_metachars() {
-        assert_eq!(escape_glob_literal("arr[0]"), "arr[[]0[]]");
-        assert_eq!(escape_glob_literal("a*b?c"), "a[*]b[?]c");
-    }
-
-    #[test]
-    fn like_escapes_metachars() {
-        assert_eq!(escape_like_term("a%b_c\\d"), "a\\%b\\_c\\\\d");
-    }
-}
+#[path = "../../../../tests/unit/core/store__sql__escape_tests.rs"]
+mod escape_tests;
