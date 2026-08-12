@@ -31,7 +31,7 @@ cp -rf source dest          # NOT: cp -r source dest
 <!-- BEGIN BEADS INTEGRATION v:2 profile:minimal -->
 ## br (beads_rust) Issue Tracker
 
-> **non-invasive:** br never executes Git commands. After `br sync --flush-only`, manually stage `.beads/` and commit it when the active instructions authorize a commit.
+> **non-invasive:** br never executes Git commands. `.beads/` is gitignored and must not be committed. Keep the tracker local (`br sync --flush-only` updates the local store only).
 
 Use br as the sole source of truth for current and future project work. This managed tracker block is guidance, not permission to override repository, user, or orchestrator instructions.
 
@@ -60,22 +60,20 @@ br stats --json                       # Inspect tracker totals
 
 The primary store is SQLite at `.beads/beads.db`. Its `-wal` and `-shm` sidecars can contain live state, so never copy, delete, or commit database files individually while br is active. Use br commands for mutations.
 
-Export the database to the Git-friendly files explicitly, then handle Git yourself:
+The Git-friendly JSONL export stays local under `.beads/` (gitignored). Do not `git add .beads/`.
 
 ```bash
 br sync --flush-only
-git add .beads/
-git commit -m "sync beads"
 ```
 
-br does not stage, commit, pull, push, or otherwise execute Git commands. The Git commands above are manual steps and must be omitted when current instructions prohibit committing. After receiving updated `.beads/` files, use `br sync --import-only` to import JSONL into SQLite.
+br does not stage, commit, pull, push, or otherwise execute Git commands. After pulling a clone, run `br sync --import-only` only if you have a local JSONL to import; there is no beads tree in git.
 
 ### Session Completion
 
 1. Create br issues for remaining durable follow-up work.
 2. Run the appropriate quality gates if code changed.
 3. Close completed issues and update in-progress work.
-4. Run `br sync --flush-only`; if authorized, manually stage `.beads/` and commit.
+4. Run `br sync --flush-only` to persist the local tracker. Do not stage `.beads/`.
 5. Hand off changed files, validation, issue status, and any sync or commit step blocked by active instructions.
 
 **Critical rules:**
