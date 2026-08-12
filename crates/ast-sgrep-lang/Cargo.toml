@@ -34,3 +34,14 @@ tree-sitter-php = "0.24"
 
 [dev-dependencies]
 ast-sgrep-testkit = { path = "../ast-sgrep-testkit" }
+
+# Integration tests live in the repo-root tests/ tree.
+[[test]]
+name = "extraction_goldens"
+path = "../../tests/lang/extraction_goldens.rs"
+[[test]]
+name = "fuzz_oracles"
+path = "../../tests/lang/fuzz_oracles.rs"
+[[test]]
+name = "pattern"
+path = "../../tests/lang/pattern.rs"

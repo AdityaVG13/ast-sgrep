@@ -88,31 +88,6 @@ impl Language {
     }
 }
 
-#[cfg(test)]
-mod language_id_tests {
-    use super::Language;
-
-    #[test]
-    fn all_languages_round_trip_as_str_parse() {
-        for &lang in Language::all() {
-            assert_eq!(Language::parse(lang.as_str()), Some(lang));
-            assert_eq!(Language::normalize_id(lang.as_str()), lang.as_str());
-        }
-        assert_eq!(Language::all().len(), 13);
-    }
-
-    #[test]
-    fn title_case_and_aliases_normalize_to_as_str() {
-        assert_eq!(Language::normalize_id("Rust"), "rust");
-        assert_eq!(Language::normalize_id("TypeScript"), "typescript");
-        assert_eq!(Language::normalize_id("C#"), "csharp");
-        assert_eq!(Language::normalize_id("CSharp"), "csharp");
-        assert_eq!(Language::normalize_id("C++"), "cpp");
-        assert_eq!(Language::normalize_id("Kotlin"), "kotlin");
-        assert_eq!(Language::normalize_id("PHP"), "php");
-        assert_eq!(Language::normalize_id("Swift"), "swift");
-    }
-}
 impl std::fmt::Display for Language {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.as_str())
@@ -264,3 +239,7 @@ fn make_parser(lang: Language) -> Box<dyn LanguageParser> {
         Language::Php => Box::new(PhpParser),
     }
 }
+
+#[cfg(test)]
+#[path = "../../../tests/unit/lang/lib__language_id_tests.rs"]
+mod language_id_tests;

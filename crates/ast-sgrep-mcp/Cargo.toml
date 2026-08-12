@@ -27,3 +27,8 @@ serde_json.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+
+# Integration tests live in the repo-root tests/ tree.
+[[test]]
+name = "protocol"
+path = "../../tests/mcp/protocol.rs"

@@ -27,3 +27,11 @@ serde_json.workspace = true
 [dev-dependencies]
 ast-sgrep-testkit = { path = "../ast-sgrep-testkit" }
 tempfile.workspace = true
+
+# Integration tests live in the repo-root tests/ tree.
+[[test]]
+name = "fuzz_oracles"
+path = "../../tests/lsp/fuzz_oracles.rs"
+[[test]]
+name = "lsp"
+path = "../../tests/lsp/lsp.rs"

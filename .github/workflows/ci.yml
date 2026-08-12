@@ -29,6 +29,16 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      - name: tests live under tests/
+        run: |
+          if grep -R --include='*.rs' -n '#\[test\]' crates/*/src; then
+            echo "#[test] must not live in crates/*/src; put tests under tests/" >&2
+            exit 1
+          fi
+          if ls -d crates/*/tests 2>/dev/null; then
+            echo "crates/*/tests must not exist; use tests/<crate>/" >&2
+            exit 1
+          fi
       - name: test workspace
         run: cargo test --workspace -j1
 
@@ -43,7 +53,7 @@ jobs:
       - run: npm ci --ignore-scripts
       - run: npm run build --workspace pi-ast-sgrep
       - run: npm test --workspace pi-ast-sgrep
-      - run: node --test packages/pi/launcher/test/*.test.mjs
+      - run: node --test tests/pi/launcher/*.test.mjs
       - run: npm run check:pi-contract && npm run check:pi-release
 
   build-and-test:

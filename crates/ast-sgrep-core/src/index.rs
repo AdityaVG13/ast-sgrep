@@ -1493,36 +1493,11 @@ fn system_time_to_parts(time: SystemTime) -> (i64, u32) {
         .unwrap_or_default();
     (d.as_secs() as i64, d.subsec_nanos())
 }
-#[cfg(test)]
-mod tests {
-    use super::should_prune_missing_files;
-    #[test]
-    fn walk_error_prevents_pruning_from_incomplete_seen_paths() {
-        assert!(!should_prune_missing_files(true));
-        assert!(should_prune_missing_files(false));
-    }
-}
-#[cfg(test)]
-mod body_hash_tests {
-    use super::body_structure_hash;
-    use ast_sgrep_lang::Language;
 
-    #[test]
-    fn trailing_comment_preserves_body_hash_for_its_language() {
-        let a = "export function x() {\n  return 1;\n}\n";
-        let js_comment = format!("{a}\n// sub1ms-bench-marker\n");
-        assert_eq!(
-            body_structure_hash(a, Some(Language::JavaScript)),
-            body_structure_hash(&js_comment, Some(Language::JavaScript))
-        );
-        let hash_line = format!("{a}\n# not-a-javascript-comment\n");
-        assert_ne!(
-            body_structure_hash(a, Some(Language::JavaScript)),
-            body_structure_hash(&hash_line, Some(Language::JavaScript))
-        );
-        assert_eq!(
-            body_structure_hash(a, Some(Language::Python)),
-            body_structure_hash(&hash_line, Some(Language::Python))
-        );
-    }
-}
+#[cfg(test)]
+#[path = "../../../tests/unit/core/index.rs"]
+mod tests;
+
+#[cfg(test)]
+#[path = "../../../tests/unit/core/index__body_hash_tests.rs"]
+mod body_hash_tests;
