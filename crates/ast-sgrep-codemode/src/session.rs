@@ -102,11 +102,61 @@ impl CodeModeSession {
         }
     }
 
-    fn root_arg(&self, args: &Value) -> PathBuf {
-        args.get("root")
+    /// Resolve optional tool `root`, jailed under the session workspace (MCP parity).
+    ///
+    /// Product decision **R-CM-ROOT-POLICY option A**: refuse roots that escape
+    /// `SessionConfig.root` so a foreign tree cannot walk into a pinned
+    /// `index_path` and prune the project corpus. NAPI inherits this via
+    /// `CodeModeSession`.
+    fn root_arg(&self, args: &Value) -> anyhow::Result<PathBuf> {
+        let candidate = args
+            .get("root")
             .and_then(|v| v.as_str())
             .map(PathBuf::from)
-            .unwrap_or_else(|| self.config.root.clone())
+            .unwrap_or_else(|| self.config.root.clone());
+        self.sandbox_root(candidate)
+    }
+
+    /// Keep Code Mode / NAPI tool roots under the configured workspace (MCP `sandbox_root`).
+    fn sandbox_root(&self, candidate: PathBuf) -> anyhow::Result<PathBuf> {
+        let workspace = if self.config.root.exists() {
+            self.config
+                .root
+                .canonicalize()
+                .with_context(|| {
+                    format!(
+                        "canonicalize workspace root {}",
+                        self.config.root.display()
+                    )
+                })?
+        } else {
+            anyhow::bail!(
+                "configured workspace root does not exist: {}",
+                self.config.root.display()
+            );
+        };
+        let canonical = if candidate.exists() {
+            candidate
+                .canonicalize()
+                .with_context(|| format!("canonicalize root {}", candidate.display()))?
+        } else {
+            anyhow::bail!(
+                "project root does not exist or is not a directory: {}",
+                candidate.display()
+            );
+        };
+        anyhow::ensure!(
+            canonical.starts_with(&workspace),
+            "root {} escapes configured workspace {}",
+            canonical.display(),
+            workspace.display()
+        );
+        anyhow::ensure!(
+            canonical.is_dir(),
+            "project root is not a directory: {}",
+            canonical.display()
+        );
+        Ok(canonical)
     }
 
     fn resolve_format(&self, args: &Value) -> OutputFormat {
@@ -183,7 +233,7 @@ impl CodeModeSession {
             .map(|n| n as usize)
             .unwrap_or(0);
         let format = self.resolve_format(args);
-        let root = self.root_arg(args);
+        let root = self.root_arg(args)?;
         let guard = self.searcher_for(root, limit)?;
         let searcher = &guard.as_ref().expect("searcher_for populates cache").1;
         let mut response = if semantic_only {
@@ -223,7 +273,7 @@ impl CodeModeSession {
             .map(|n| n as usize)
             .unwrap_or(20)
             .clamp(1, 50);
-        let root = self.root_arg(args);
+        let root = self.root_arg(args)?;
         let guard = self.searcher_for(root, self.config.limit)?;
         let searcher = &guard.as_ref().expect("searcher_for populates cache").1;
         let config = ChainConfig {
@@ -238,7 +288,7 @@ impl CodeModeSession {
 
     pub(crate) fn index_status(&mut self, args: &Value) -> anyhow::Result<Value> {
         let indexer = Indexer::new(IndexOptions {
-            root: self.root_arg(args),
+            root: self.root_arg(args)?,
             index_path: self.config.index_path.clone(),
             ..IndexOptions::default()
         })?;
@@ -248,7 +298,7 @@ impl CodeModeSession {
     pub(crate) fn index_repo(&mut self, args: &Value) -> anyhow::Result<Value> {
         let force = args.get("force").and_then(|v| v.as_bool()).unwrap_or(false);
         let mut indexer = Indexer::new(IndexOptions {
-            root: self.root_arg(args),
+            root: self.root_arg(args)?,
             index_path: self.config.index_path.clone(),
             embed_backend: EmbedBackend::Auto,
             ..IndexOptions::default()
@@ -318,5 +368,66 @@ mod index_err_cache_tests {
             !session.searcher_cache_occupied(),
             "searcher cache must clear on index_repo Err after possible disk mutation"
         );
+    }
+}
+
+#[cfg(test)]
+mod root_sandbox_tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn foreign_root_is_rejected_under_session_workspace() {
+        let workspace = TempDir::new().unwrap();
+        let outside = TempDir::new().unwrap();
+        let root = workspace.path().canonicalize().unwrap();
+        std::fs::write(root.join("ok.rs"), "fn ok() {}\n").unwrap();
+        let index_path = root.join("index.db");
+        // Seed a project index so a free-root bug could prune it.
+        {
+            let mut indexer = Indexer::new(IndexOptions {
+                root: root.clone(),
+                index_path: Some(index_path.clone()),
+                embed_semantic: false,
+                ..IndexOptions::default()
+            })
+            .expect("indexer");
+            indexer.index_all().expect("seed index");
+        }
+        let before = std::fs::metadata(&index_path)
+            .expect("seeded index")
+            .len();
+
+        let mut session = CodeModeSession::new(SessionConfig {
+            root: root.clone(),
+            index_path: Some(index_path.clone()),
+            limit: 8,
+            use_embed: false,
+            ..SessionConfig::default()
+        });
+
+        let foreign = outside.path().canonicalize().unwrap();
+        std::fs::write(foreign.join("evil.rs"), "fn evil() {}\n").unwrap();
+        let err = session
+            .index_repo(&json!({ "root": foreign.to_string_lossy() }))
+            .expect_err("foreign root must be refused");
+        assert!(
+            err.to_string().contains("escapes configured workspace"),
+            "unexpected error: {err}"
+        );
+
+        // Refuse must not rewrite the pinned project DB.
+        let after = std::fs::metadata(&index_path)
+            .expect("index still present")
+            .len();
+        assert_eq!(before, after, "pinned index_path must be untouched");
+
+        // Nested root under workspace still allowed (MCP parity).
+        let nested = root.join("src");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::write(nested.join("lib.rs"), "fn nested() {}\n").unwrap();
+        session
+            .index_status(&json!({ "root": nested.to_string_lossy() }))
+            .expect("nested root under workspace must succeed");
     }
 }

@@ -7,6 +7,12 @@
 //! crate must **never** depend on `ast-sgrep-mcp`, and MCP must never depend on
 //! this crate. Both sit on `ast-sgrep-core` only.
 //!
+//! # Root policy (R-CM-ROOT-POLICY option A)
+//!
+//! Tool `root` args are jailed under `SessionConfig.root` (canonicalize +
+//! `Path::starts_with`), matching MCP `sandbox_root`. Foreign roots fail closed
+//! with `escapes configured workspace`. NAPI inherits the same Session contract.
+//!
 //! Pi's primary agent surface is the **JS sandbox** in
 //! `packages/pi/extension/src/codemode/` (`asgrep` tool). This Rust
 //! crate serves Rust hosts and emits Anthropic/OpenAI/Cloudflare-shaped tool

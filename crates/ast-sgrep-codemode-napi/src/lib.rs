@@ -2,6 +2,13 @@
 //!
 //! Same retrieval path as MCP (links `ast-sgrep-codemode` → core). Pi loads this
 //! `.node` addon and never needs to spawn the `asgrep` CLI for Code Mode work.
+//!
+//! # Root policy (R-CM-ROOT-POLICY option A)
+//!
+//! Tool `root` overrides are jailed under the session workspace root — the same
+//! `starts_with` / contained-in-root contract as MCP `sandbox_root`. NAPI does
+//! not bypass this: every `Session::call` / `batch` goes through
+//! `CodeModeSession::root_arg`.
 
 #![deny(clippy::all)]
 
