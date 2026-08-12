@@ -1,0 +1,36 @@
+{
+  "loop_id": "wave2-09-resources",
+  "loop_protocol": 14,
+  "name": "resources-performance-and-backpressure",
+  "wave": 2,
+  "campaign_pass": 9,
+  "status": "complete",
+  "mode": "harden",
+  "PRODUCTIVE": false,
+  "ZERO_CHANGE": true,
+  "braid_resolve": "Continue",
+  "axes_changed": 4,
+  "axes": [
+    "representation:cost-model",
+    "observer:capacity-planner",
+    "scale:request→fleet",
+    "time:load"
+  ],
+  "residual_closed": null,
+  "residual_opened": [
+    "R-EMBED-HTTP-TIMEOUT-BODY",
+    "R-PATTERN-UNBOUNDED-READ",
+    "R-CM-SOFT-TIMEOUT-ORPHAN"
+  ],
+  "residual_refused": [
+    "R-PI-EDIT-SYMLINK-LEXICAL"
+  ],
+  "product_files": [],
+  "verify": "ZERO-CHANGE (source dual-evidence only)",
+  "verify_result": "n/a",
+  "NEXT_PASS": "Loop 15 or Seal wave-2; optional embed timeout/body + pattern read-cap packets; optional R-PI-EDIT-SYMLINK-LEXICAL",
+  "books_slim": "tests/artifacts/rotational-code-analysis/wave2-pass9-resources/",
+  "void_avoided": "V-SAME-GAZE (schema/watch/generation/root not re-done)",
+  "sites_checked": 9,
+  "gate": "externally amplifiable resources bounded or residual-named; no micro-opt theater"
+}
