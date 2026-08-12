@@ -44,7 +44,7 @@ Environment variables:
 | Variable | Purpose |
 |----------|---------|
 | `ASGREP_ROOT` | Project / workspace root (default: cwd). Tool `root` args must stay under this jail. |
-| `ASGREP_INDEX_PATH` | **Privileged sink** — absolute writable DB path. Pinning disables generation atomic reindex. |
+| `ASGREP_INDEX_PATH` | **Privileged sink** — absolute writable DB path. Pins which file; rebuilds stay in-place (no generation swap). |
 | `ASGREP_DURABILITY` | `strict` \| `balanced` \| `fast-unsafe` (MCP inherits; FastUnsafe is power-loss risky) |
 | `ASGREP_LIMIT` | Max hits per search (default 16) |
 | `ASGREP_NO_EMBED` | Set to `1` to disable semantic pass |
