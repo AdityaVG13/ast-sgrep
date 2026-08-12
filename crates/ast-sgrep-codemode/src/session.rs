@@ -119,17 +119,16 @@ impl CodeModeSession {
         }
     }
 
-    /// Drop warm Searcher when an external writer bumped the on-disk stamp.
+    /// Drop warm Searcher when an external writer bumped the on-disk stamp
+    /// for the cached Searcher's root (not the session workspace).
     fn sync_writer_generation(&self) -> anyhow::Result<()> {
-        let current = ast_sgrep_core::read_writer_generation(
-            &self.config.root,
-            self.config.index_path.as_deref(),
-        );
         let mut guard = self
             .searcher_cache
             .lock()
             .map_err(|_| anyhow!("searcher cache lock poisoned"))?;
         if let Some((key, _)) = guard.as_ref() {
+            let current =
+                ast_sgrep_core::read_writer_generation(&key.root, key.index_path.as_deref());
             if key.writer_generation != current {
                 *guard = None;
             }
@@ -193,17 +192,15 @@ impl CodeModeSession {
                     && key.open_limit >= needed
                     && key.writer_generation
                         == ast_sgrep_core::read_writer_generation(
-                            &self.config.root,
-                            self.config.index_path.as_deref(),
+                            &key.root,
+                            key.index_path.as_deref(),
                         )
         );
         if !reuse {
             // Open at least as wide as config + this call so later smaller calls reuse.
             let open_limit = needed.max(self.config.limit).clamp(1, 500);
-            let writer_generation = ast_sgrep_core::read_writer_generation(
-                &self.config.root,
-                self.config.index_path.as_deref(),
-            );
+            let writer_generation =
+                ast_sgrep_core::read_writer_generation(&root, self.config.index_path.as_deref());
             let searcher = Searcher::new(SearchOptions {
                 root: root.clone(),
                 index_path: self.config.index_path.clone(),
@@ -573,6 +570,50 @@ mod index_err_cache_tests {
             .and_then(|g| g.as_ref().map(|(k, _)| k.writer_generation));
         assert_eq!(gen, Some(bumped));
     }
+
+    #[test]
+    fn nested_root_external_writer_invalidates_warm_searcher() {
+        let temp = TempDir::new().unwrap();
+        let workspace = temp.path().canonicalize().unwrap();
+        let nested = workspace.join("pkg");
+        std::fs::create_dir(&nested).unwrap();
+        std::fs::write(nested.join("lib.rs"), "fn hello() {}\n").unwrap();
+        let session = CodeModeSession::new(SessionConfig {
+            root: workspace.clone(),
+            index_path: None,
+            limit: 8,
+            use_embed: false,
+            ..SessionConfig::default()
+        });
+        drop(
+            session
+                .searcher_for(nested.clone(), 8)
+                .expect("warm searcher on nested root"),
+        );
+        assert!(
+            session.searcher_cache_occupied(),
+            "precondition: searcher cache warm"
+        );
+
+        let bumped = ast_sgrep_core::bump_writer_generation(&nested, None).unwrap();
+        assert_eq!(
+            ast_sgrep_core::read_writer_generation(&workspace, None),
+            0,
+            "workspace stamp must stay untouched"
+        );
+
+        drop(
+            session
+                .searcher_for(nested, 8)
+                .expect("reopen after nested stamp bump"),
+        );
+        let gen = session
+            .searcher_cache
+            .lock()
+            .ok()
+            .and_then(|g| g.as_ref().map(|(k, _)| k.writer_generation));
+        assert_eq!(gen, Some(bumped));
+    }
 }
 
 #[cfg(test)]
@@ -597,9 +638,7 @@ mod root_sandbox_tests {
             .expect("indexer");
             indexer.index_all().expect("seed index");
         }
-        let before = std::fs::metadata(&index_path)
-            .expect("seeded index")
-            .len();
+        let before = std::fs::metadata(&index_path).expect("seeded index").len();
 
         let mut session = CodeModeSession::new(SessionConfig {
             root: root.clone(),
@@ -626,4 +665,3 @@ mod root_sandbox_tests {
         assert_eq!(before, after, "foreign root must not rewrite pinned index");
     }
 }
-

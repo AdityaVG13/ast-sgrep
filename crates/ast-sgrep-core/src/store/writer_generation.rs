@@ -66,10 +66,27 @@ pub fn read_writer_generation(root: &Path, index_path: Option<&Path>) -> u64 {
         .unwrap_or(0)
 }
 
-/// Atomically bump the writer generation and return the new value.
+/// Unique epoch for one bump. Not a +1 counter: two writers that both read
+/// `N` must not both publish `N+1`, or a peer that already observed `N+1`
+/// will skip the second mutation (`!=` check).
+fn unique_epoch(sequence: u64) -> u64 {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0);
+    let pid = u64::from(std::process::id());
+    nanos
+        .wrapping_mul(0x9E37_79B9_7F4A_7C15)
+        .wrapping_add(pid.wrapping_shl(32))
+        .wrapping_add(sequence)
+}
+
+/// Atomically publish a new writer epoch and return it.
 ///
-/// Writers call this after durable index mutations (and after generation
-/// activation) so peer processes with warm Searcher caches can detect change.
+/// Writers call this after durable index mutations so peer processes with
+/// warm Searcher caches can detect change. The value is unique per bump
+/// (time + pid + sequence), not `read+1`, so concurrent writers cannot
+/// publish a duplicate epoch.
 pub fn bump_writer_generation(root: &Path, index_path: Option<&Path>) -> crate::Result<u64> {
     static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
@@ -86,8 +103,8 @@ pub fn bump_writer_generation(root: &Path, index_path: Option<&Path>) -> crate::
             parent.display()
         ))
     })?;
-    let next = read_writer_generation(root, index_path).saturating_add(1);
     let sequence = TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    let next = unique_epoch(sequence);
     let temp = parent.join(format!(
         ".writer_generation.{}.{}.tmp",
         std::process::id(),
@@ -99,28 +116,20 @@ pub fn bump_writer_generation(root: &Path, index_path: Option<&Path>) -> crate::
             .write(true)
             .create_new(true)
             .open(&temp)
-            .map_err(|e| {
-                crate::StoreError::Other(format!("create {}: {e}", temp.display()))
-            })?;
-        file.write_all(body.as_bytes()).map_err(|e| {
-            crate::StoreError::Other(format!("write {}: {e}", temp.display()))
-        })?;
-        file.sync_all().map_err(|e| {
-            crate::StoreError::Other(format!("fsync {}: {e}", temp.display()))
-        })?;
+            .map_err(|e| crate::StoreError::Other(format!("create {}: {e}", temp.display())))?;
+        file.write_all(body.as_bytes())
+            .map_err(|e| crate::StoreError::Other(format!("write {}: {e}", temp.display())))?;
+        file.sync_all()
+            .map_err(|e| crate::StoreError::Other(format!("fsync {}: {e}", temp.display())))?;
         drop(file);
-        std::fs::rename(&temp, &path).map_err(|e| {
-            crate::StoreError::Other(format!("activate {}: {e}", path.display()))
-        })?;
+        std::fs::rename(&temp, &path)
+            .map_err(|e| crate::StoreError::Other(format!("activate {}: {e}", path.display())))?;
         #[cfg(unix)]
         {
             File::open(parent)
                 .and_then(|dir| dir.sync_all())
                 .map_err(|e| {
-                    crate::StoreError::Other(format!(
-                        "fsync parent {}: {e}",
-                        parent.display()
-                    ))
+                    crate::StoreError::Other(format!("fsync parent {}: {e}", parent.display()))
                 })?;
         }
         Ok(())
@@ -143,15 +152,44 @@ mod tests {
         let root = temp.path();
         assert_eq!(read_writer_generation(root, None), 0);
         let g1 = bump_writer_generation(root, None).unwrap();
-        assert_eq!(g1, 1);
-        assert_eq!(read_writer_generation(root, None), 1);
+        assert_ne!(g1, 0);
+        assert_eq!(read_writer_generation(root, None), g1);
         let g2 = bump_writer_generation(root, None).unwrap();
-        assert_eq!(g2, 2);
+        assert_ne!(g2, g1);
         let path = writer_generation_path(root, None);
         assert!(path.starts_with(root.join(INDEX_DIR)));
         assert_eq!(
             std::fs::read_to_string(&path).unwrap().trim(),
-            "2"
+            g2.to_string()
+        );
+    }
+
+    #[test]
+    fn concurrent_bumps_never_publish_the_same_epoch() {
+        use std::collections::HashSet;
+        use std::sync::Mutex;
+        let temp = TempDir::new().unwrap();
+        let root = temp.path();
+        let published = Mutex::new(Vec::new());
+        std::thread::scope(|scope| {
+            for _ in 0..8 {
+                scope.spawn(|| {
+                    let epoch = bump_writer_generation(root, None).unwrap();
+                    published.lock().unwrap().push(epoch);
+                });
+            }
+        });
+        let values = published.into_inner().unwrap();
+        let unique: HashSet<u64> = values.iter().copied().collect();
+        assert_eq!(
+            unique.len(),
+            values.len(),
+            "duplicate writer epochs: {values:?}"
+        );
+        let on_disk = read_writer_generation(root, None);
+        assert!(
+            unique.contains(&on_disk),
+            "file epoch {on_disk} missing from published {values:?}"
         );
     }
 
@@ -162,7 +200,8 @@ mod tests {
         let db = root.join("custom").join("index.db");
         std::fs::create_dir_all(db.parent().unwrap()).unwrap();
         let g = bump_writer_generation(root, Some(&db)).unwrap();
-        assert_eq!(g, 1);
+        assert_ne!(g, 0);
+        assert_eq!(read_writer_generation(root, Some(&db)), g);
         assert_eq!(
             writer_generation_path(root, Some(&db)),
             root.join("custom").join(WRITER_GENERATION_FILE)
@@ -179,7 +218,8 @@ mod tests {
             .join("000001")
             .join("index.db");
         let g = bump_writer_generation(root, Some(&candidate)).unwrap();
-        assert_eq!(g, 1);
+        assert_ne!(g, 0);
+        assert_eq!(read_writer_generation(root, Some(&candidate)), g);
         assert_eq!(
             writer_generation_path(root, Some(&candidate)),
             root.join(INDEX_DIR).join(WRITER_GENERATION_FILE)

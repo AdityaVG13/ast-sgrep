@@ -647,21 +647,20 @@ impl McpServer {
         });
         guard.generation = guard.generation.wrapping_add(1);
         guard.entry = None;
-        // Refresh observed stamp so a local invalidate does not immediately
-        // thrash against an unchanged on-disk epoch.
-        guard.writer_generation = ast_sgrep_core::read_writer_generation(
-            &self.root,
-            self.index_path.as_deref(),
-        );
+        // Entry is gone; next searcher_for polls the stamp for that call's root.
+        guard.writer_generation = 0;
     }
 
-    /// Drop warm Searcher (+ session maps) when an external writer bumped the stamp.
+    /// Drop warm Searcher (+ session maps) when an external writer bumped the stamp
+    /// for the **cached** index root (not the session workspace).
     fn sync_writer_generation(&self) {
-        let current =
-            ast_sgrep_core::read_writer_generation(&self.root, self.index_path.as_deref());
         let mut guard = Self::lock_or_recover(&self.searcher_cache, |cache| {
             cache.entry = None;
         });
+        let Some((key, _)) = guard.entry.as_ref() else {
+            return;
+        };
+        let current = ast_sgrep_core::read_writer_generation(&key.root, key.index_path.as_deref());
         if guard.writer_generation != current {
             guard.generation = guard.generation.wrapping_add(1);
             guard.entry = None;
@@ -686,16 +685,14 @@ impl McpServer {
         };
         if need_new {
             let searcher = Searcher::new(SearchOptions {
-                root,
+                root: root.clone(),
                 index_path: self.index_path.clone(),
                 limit,
                 use_embed: self.use_embed,
                 ..SearchOptions::default()
             })?;
-            guard.writer_generation = ast_sgrep_core::read_writer_generation(
-                &self.root,
-                self.index_path.as_deref(),
-            );
+            guard.writer_generation =
+                ast_sgrep_core::read_writer_generation(&root, self.index_path.as_deref());
             guard.entry = Some((key, searcher));
         }
         let generation = guard.generation;
@@ -1280,8 +1277,7 @@ mod cache_tests {
         server.restore_searcher(root.clone(), 10, generation, searcher);
         McpServer::lock_or_recover(&server.path_registry, |_| {})
             .insert("p0".into(), "lib.rs".into());
-        McpServer::lock_or_recover(&server.emitted_snippets, |_| {})
-            .insert("p0:1-1".into(), 42);
+        McpServer::lock_or_recover(&server.emitted_snippets, |_| {}).insert("p0:1-1".into(), 42);
 
         let args = server
             .parse_index_repo(&json!({}))
@@ -1348,6 +1344,43 @@ mod cache_tests {
             McpServer::lock_or_recover(&server.path_registry, |_| {}).is_empty(),
             "path registry must clear across writer generations"
         );
+    }
+
+    /// Session workspace ≠ per-call index root: poll the cached Searcher's stamp.
+    #[test]
+    fn nested_root_external_writer_invalidates_warm_searcher() {
+        let temp = tempfile::tempdir().unwrap();
+        let workspace = temp.path().canonicalize().unwrap();
+        let nested = workspace.join("pkg");
+        std::fs::create_dir(&nested).unwrap();
+        std::fs::write(nested.join("lib.rs"), "fn hello() {}\n").unwrap();
+        let server = test_server(workspace.clone());
+
+        let (searcher, generation) = server.searcher_for(nested.clone(), 10).unwrap();
+        server.restore_searcher(nested.clone(), 10, generation, searcher);
+        {
+            let cache = McpServer::lock_or_recover(&server.searcher_cache, |_| {});
+            assert!(
+                cache.entry.is_some(),
+                "precondition: warm Searcher on nested root"
+            );
+        }
+
+        let bumped = ast_sgrep_core::bump_writer_generation(&nested, None).unwrap();
+        assert_eq!(
+            ast_sgrep_core::read_writer_generation(&workspace, None),
+            0,
+            "workspace stamp must stay untouched"
+        );
+
+        let (searcher2, generation2) = server.searcher_for(nested, 10).unwrap();
+        assert!(
+            generation2 != generation,
+            "nested-root stamp bump must drop the warm Searcher"
+        );
+        drop(searcher2);
+        let cache = McpServer::lock_or_recover(&server.searcher_cache, |_| {});
+        assert_eq!(cache.writer_generation, bumped);
     }
 }
 /// FNV-1a over snippet bytes (v972). Content-keyed so an edited file re-sends.

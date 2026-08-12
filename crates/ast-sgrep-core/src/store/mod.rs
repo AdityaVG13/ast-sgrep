@@ -11,11 +11,11 @@ pub use sqlite::{
     CallerRow, ImportRow, IndexStore, IndexedLineRow, RefreshLinesInput, SymbolLocationRow,
     SymbolRow, UpsertFileInput,
 };
+use std::path::{Path, PathBuf};
 pub use writer_generation::{
     bump_writer_generation, read_writer_generation, writer_generation_home, writer_generation_path,
     WRITER_GENERATION_FILE,
 };
-use std::path::{Path, PathBuf};
 
 /// Write-durability profile for the index database (0obi).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]

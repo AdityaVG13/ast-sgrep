@@ -246,9 +246,7 @@ fn doctor_triage_json(cli: &Cli, root: &Path) -> anyhow::Result<Value> {
     };
     if let Some(issue) = doctor_fast_unsafe_issue(cli, status.as_ref()) {
         issues.push(issue);
-        next.push(
-            "unset ASGREP_DURABILITY  # or: asgrep --durability balanced …".to_string(),
-        );
+        next.push("unset ASGREP_DURABILITY  # or: asgrep --durability balanced …".to_string());
     }
     let root_display = root.display().to_string();
     if status.is_none() {
@@ -500,14 +498,8 @@ mod tests {
 
     #[test]
     fn doctor_surfaces_fast_unsafe_from_cli_flag() {
-        let cli = Cli::try_parse_from([
-            "asgrep",
-            "--durability",
-            "fast-unsafe",
-            "doctor",
-            ".",
-        ])
-        .expect("parse");
+        let cli = Cli::try_parse_from(["asgrep", "--durability", "fast-unsafe", "doctor", "."])
+            .expect("parse");
         let issue = doctor_fast_unsafe_issue(&cli, Some(&status_with_durability("balanced")));
         assert_eq!(issue.as_ref().unwrap()["kind"], "durability_fast_unsafe");
     }
