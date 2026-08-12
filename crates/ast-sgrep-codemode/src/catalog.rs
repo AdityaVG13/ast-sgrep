@@ -31,7 +31,6 @@ pub struct ToolDef {
     pub read_only: bool,
 }
 
-/// Shared schema text for tool `root` (R-CM-ROOT-POLICY option A / MCP parity).
 const ROOT_ARG_DESC: &str =
     "Optional subdirectory under the session workspace root (foreign paths are refused)";
 
@@ -166,13 +165,20 @@ pub fn tool_catalog() -> Vec<ToolDef> {
         },
         ToolDef {
             name: "index_repo",
-            description: "Build or incrementally update the .asgrep index. Use force=true for a full rebuild.",
+            description: "Build or incrementally update the .asgrep index. Pass known changed paths for a targeted update; use force=true for a full rebuild.",
             kind: ToolKind::Index,
             input_schema: json!({
                 "type": "object",
                 "properties": {
                     "root": {"type": "string", "description": ROOT_ARG_DESC},
-                    "force": {"type": "boolean", "default": false}
+                    "force": {"type": "boolean", "default": false},
+                    "paths": {
+                        "type": "array",
+                        "items": {"type": "string", "minLength": 1},
+                        "minItems": 1,
+                        "maxItems": 1024,
+                        "description": "Known created, changed, or deleted paths under root"
+                    }
                 },
                 "additionalProperties": false
             }),

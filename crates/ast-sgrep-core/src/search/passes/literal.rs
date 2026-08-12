@@ -1,7 +1,7 @@
 use crate::query::{ParsedQuery, QueryMode};
 use crate::search::passes::bmh::{
-    asgrep_line_hit, build_file_lines_map, excerpt_opt, is_word_boundary, map_line_row,
-    needs_context, BMH_LINE_THRESHOLD,
+    asgrep_line_hit, attach_context, is_word_boundary, map_line_row, retained_limit,
+    BMH_LINE_THRESHOLD,
 };
 use crate::search::types::matches_lang;
 use crate::search::types::{SearchHit, SearchOptions};
@@ -30,11 +30,6 @@ fn literal_trigram(
     needle: &str,
 ) -> Result<Vec<SearchHit>> {
     let query = crate::fts::escape_fts_term(needle);
-    let file_map = if needs_context(options) {
-        Some(build_file_lines_map(&store.all_indexed_lines()?))
-    } else {
-        None
-    };
     let mut stmt = store.connection().prepare_cached(
         "SELECT f.path, f.language, l.line_no, l.content
          FROM lines_trigram JOIN lines l ON l.rowid = lines_trigram.rowid JOIN files f ON f.id = l.file_id WHERE lines_trigram MATCH ?1 ORDER BY f.path, l.line_no",
@@ -51,12 +46,14 @@ fn literal_trigram(
         if !content_matches_literal(&content, needle, needle_lower.as_deref(), word_mode) {
             continue;
         }
-        let excerpt_text = excerpt_opt(file_map.as_ref(), &path, line_no, &content, options);
-        hits.push(asgrep_line_hit(path, language, line_no, excerpt_text, 1.0));
+        hits.push(asgrep_line_hit(path, language, line_no, content, 1.0));
         if hits.len() >= options.limit.max(100) {
             break;
         }
     }
+    drop(stmt);
+    hits.truncate(retained_limit(options));
+    attach_context(store, options, &mut hits)?;
     Ok(hits)
 }
 /// SQL templates for literal line scan: [case_insensitive][has_lang].
@@ -107,30 +104,26 @@ fn literal_sql(
     let word_mode = parsed.mode == QueryMode::Word;
     // SQL already matched the literal; word_mode only needs a boundary postfilter.
     let needle_lower = (word_mode && options.case_insensitive).then(|| needle.to_lowercase());
-    let file_map = if needs_context(options) {
-        Some(build_file_lines_map(&store.all_indexed_lines()?))
-    } else {
-        None
-    };
     let mut hits = Vec::new();
     for (rank, row) in rows.enumerate() {
         let (path, language, line_no, content) = row?;
         if !matches_lang(language.as_deref(), options.lang_filter.as_deref()) {
             continue;
         }
-        if word_mode
-            && !content_matches_literal(&content, needle, needle_lower.as_deref(), true)
-        {
+        if word_mode && !content_matches_literal(&content, needle, needle_lower.as_deref(), true) {
             continue;
         }
         hits.push(asgrep_line_hit(
             path.clone(),
             language,
             line_no,
-            excerpt_opt(file_map.as_ref(), &path, line_no, &content, options),
+            content,
             1.0 / (1.0 + rank as f64 * 0.01),
         ));
     }
+    drop(stmt);
+    hits.truncate(retained_limit(options));
+    attach_context(store, options, &mut hits)?;
     Ok(hits)
 }
 

@@ -1,15 +1,12 @@
 use crate::query::ParsedQuery;
-use crate::search::passes::bmh::{
-    asgrep_line_hit, build_file_lines_map, excerpt_opt, needs_context, FileLinesMap,
-};
+use crate::search::passes::bmh::{asgrep_line_hit, attach_regex_context, retained_limit};
 use crate::search::types::matches_lang;
 use crate::search::types::{SearchHit, SearchOptions};
 use crate::store::IndexStore;
 use crate::{Result, StoreError};
 use regex::Regex;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::collections::HashMap;
 use std::sync::Arc;
-use std::thread;
 use std::time::{Duration, Instant};
 /// Default wall-clock budget for `regex:` scans (ReDoS / large-corpus hang guard).
 pub const DEFAULT_REGEX_BUDGET_MS: u64 = 2_000;
@@ -20,8 +17,13 @@ fn regex_budget() -> Duration {
         .map(Duration::from_millis)
         .unwrap_or(Duration::from_millis(DEFAULT_REGEX_BUDGET_MS))
 }
-fn budget_exhausted(deadline: Instant, timed_out: &AtomicBool) -> bool {
-    timed_out.load(Ordering::Relaxed) || Instant::now() >= deadline
+fn regex_deadline(start: Instant, budget: Duration) -> Result<Instant> {
+    start.checked_add(budget).ok_or_else(|| {
+        StoreError::Other(format!(
+            "regex wall-clock budget of {}ms is too large",
+            budget.as_millis()
+        ))
+    })
 }
 pub fn regex_pass(
     store: &IndexStore,
@@ -45,76 +47,38 @@ pub fn regex_pass(
     }
     .map_err(|e| StoreError::Other(format!("invalid regex: {e}")))?;
     let trigram_literal = required_literal(pattern);
-    let lines = if let Some(literal) = trigram_literal.as_deref() {
-        trigram_regex_candidates(store, literal)?
-    } else {
-        store.all_indexed_lines()?
-    };
-    if lines.is_empty() {
-        return Ok(Vec::new());
-    }
-    let num_threads = std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(1)
-        .min(lines.len());
-    let chunk_size = lines.len().div_ceil(num_threads).max(1);
-    let file_map = if needs_context(options) {
-        if trigram_literal.is_some() {
-            Some(Arc::new(build_file_lines_map(&store.all_indexed_lines()?)))
-        } else {
-            Some(Arc::new(build_file_lines_map(&lines)))
-        }
-    } else {
-        None
-    };
-    let lang_filter = options.lang_filter.clone();
-    let options = options.clone();
-    let re = Arc::new(re);
+    let file_filter = options
+        .file_filter
+        .as_deref()
+        .map(super::super::compile_glob)
+        .transpose()
+        .map_err(StoreError::Other)?;
     let budget = regex_budget();
-    let deadline = Instant::now() + budget;
-    let timed_out = Arc::new(AtomicBool::new(false));
-    thread::scope(|scope| {
-        let mut handles = Vec::new();
-        for chunk in lines.chunks(chunk_size) {
-            let re = Arc::clone(&re);
-            let file_map = file_map.clone();
-            let lang_filter = lang_filter.clone();
-            let options = options.clone();
-            let timed_out = Arc::clone(&timed_out);
-            handles.push(scope.spawn(move || {
-                scan_regex_chunk(
-                    chunk,
-                    &re,
-                    &lang_filter,
-                    &options,
-                    file_map.as_deref(),
-                    deadline,
-                    &timed_out,
-                )
-            }));
-        }
-        Ok({
-            let mut out = Vec::new();
-            for handle in handles {
-                match handle.join() {
-                    Ok(hits) => out.extend(hits),
-                    // Fail closed: a panicked worker must not silently drop hits (sxjc).
-                    Err(_) => {
-                        return Err(StoreError::Other(
-                            "regex search worker panicked".to_string(),
-                        ));
-                    }
-                }
-            }
-            if timed_out.load(Ordering::Relaxed) {
-                return Err(StoreError::Other(format!(
-                    "regex search exceeded wall-clock budget of {}ms (ASGREP_REGEX_BUDGET_MS); partial results discarded",
-                    budget.as_millis()
-                )));
-            }
-            out
-        })
-    })
+    let deadline = regex_deadline(Instant::now(), budget)?;
+    let mut hits = if let Some(literal) = trigram_literal.as_deref() {
+        let query = crate::fts::escape_fts_term(literal);
+        let mut stmt = store.connection().prepare_cached(
+            "SELECT f.path, l.line_no, l.content, f.language
+             FROM lines_trigram
+             JOIN lines l ON l.rowid = lines_trigram.rowid
+             JOIN files f ON f.id = l.file_id
+             WHERE lines_trigram MATCH ?1
+             ORDER BY f.path, l.line_no",
+        )?;
+        let rows = stmt.query_map([query], map_regex_row)?;
+        scan_regex_rows(rows, &re, file_filter.as_ref(), options, deadline, budget)?
+    } else {
+        let mut stmt = store.connection().prepare_cached(
+            "SELECT f.path, l.line_no, l.content, f.language
+             FROM lines l JOIN files f ON f.id = l.file_id
+             ORDER BY f.path, l.line_no",
+        )?;
+        let rows = stmt.query_map([], map_regex_row)?;
+        scan_regex_rows(rows, &re, file_filter.as_ref(), options, deadline, budget)?
+    };
+    hits.truncate(retained_limit(options));
+    attach_regex_context(store, options, &mut hits, deadline, budget)?;
+    Ok(hits)
 }
 fn required_literal(pattern: &str) -> Option<String> {
     if pattern.contains("(?") {
@@ -171,52 +135,73 @@ fn required_literal(pattern: &str) -> Option<String> {
         .filter(|s| s.len() >= 3)
         .max_by_key(String::len)
 }
-fn trigram_regex_candidates(
-    store: &IndexStore,
-    literal: &str,
-) -> Result<Vec<crate::store::IndexedLineRow>> {
-    let query = crate::fts::escape_fts_term(literal);
-    let mut stmt = store.connection().prepare_cached( "SELECT f.path, l.line_no, l.content, f.language
-         FROM lines_trigram JOIN lines l ON l.rowid = lines_trigram.rowid JOIN files f ON f.id = l.file_id WHERE lines_trigram MATCH ?1 ORDER BY f.path, l.line_no",
-    )?;
-    let rows = stmt.query_map([query], |row| {
-        Ok((
-            Arc::<str>::from(row.get::<_, String>(0)?),
-            row.get(1)?,
-            row.get(2)?,
-            row.get::<_, Option<String>>(3)?.map(Arc::from),
-        ))
-    })?;
-    rows.collect::<std::result::Result<Vec<_>, _>>()
-        .map_err(Into::into)
+fn map_regex_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<crate::store::IndexedLineRow> {
+    Ok((
+        Arc::<str>::from(row.get::<_, String>(0)?),
+        row.get(1)?,
+        row.get(2)?,
+        row.get::<_, Option<String>>(3)?.map(Arc::from),
+    ))
 }
-fn scan_regex_chunk(
-    chunk: &[crate::store::IndexedLineRow],
+
+fn scan_regex_rows(
+    rows: impl Iterator<Item = rusqlite::Result<crate::store::IndexedLineRow>>,
     re: &Regex,
-    lang_filter: &Option<String>,
+    file_filter: Option<&Regex>,
     options: &SearchOptions,
-    file_map: Option<&FileLinesMap>,
     deadline: Instant,
-    timed_out: &AtomicBool,
-) -> Vec<SearchHit> {
-    let mut hits = Vec::new();
-    for (rank, (path, line_no, content, language)) in chunk.iter().enumerate() {
+    budget: Duration,
+) -> Result<Vec<SearchHit>> {
+    const PREFERRED_PER_FILE: usize = 3;
+    let candidate_limit = options.limit.max(100);
+    let mut preferred = Vec::new();
+    let mut overflow = Vec::new();
+    let mut per_file = HashMap::<Arc<str>, usize>::new();
+    for (rank, row) in rows.enumerate() {
         // Between-line deadline check (56w1.3): a zero budget must fail
         // immediately instead of scanning everything.
-        if budget_exhausted(deadline, timed_out) {
-            timed_out.store(true, Ordering::Relaxed);
-            break;
+        if Instant::now() >= deadline {
+            return Err(StoreError::Other(format!(
+                "regex search exceeded wall-clock budget of {}ms (ASGREP_REGEX_BUDGET_MS); partial results discarded",
+                budget.as_millis()
+            )));
         }
-        if !matches_lang(language.as_deref(), lang_filter.as_deref()) || !re.is_match(content) {
+        let (path, line_no, content, language) = row?;
+        if file_filter.is_some_and(|filter| !filter.is_match(&path))
+            || !matches_lang(language.as_deref(), options.lang_filter.as_deref())
+            || !re.is_match(&content)
+        {
             continue;
         }
-        hits.push(asgrep_line_hit(
+        let hit = asgrep_line_hit(
             path.to_string(),
             language.as_deref().map(str::to_owned),
-            *line_no,
-            excerpt_opt(file_map, path, *line_no, content, options),
+            line_no,
+            content,
             1.0 / (1.0 + rank as f64 * 0.01),
-        ));
+        );
+        let count = per_file.entry(path).or_default();
+        if *count < PREFERRED_PER_FILE {
+            *count += 1;
+            preferred.push(hit);
+        } else if overflow.len() < candidate_limit {
+            overflow.push(hit);
+        }
+        if preferred.len() >= candidate_limit {
+            break;
+        }
     }
-    hits
+    preferred.extend(overflow.into_iter().take(candidate_limit - preferred.len()));
+    Ok(preferred)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::regex_deadline;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn unrepresentable_regex_budget_is_an_error_not_a_panic() {
+        assert!(regex_deadline(Instant::now(), Duration::MAX).is_err());
+    }
 }

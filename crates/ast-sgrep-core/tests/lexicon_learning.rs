@@ -1,7 +1,7 @@
 //! ufk7: the engine learns this repository's vocabulary instead of relying on
 //! hand-written global concept groups.
 use ast_sgrep_core::lexicon::{
-    explain, prose_terms, subtokens, Lexicon, LexiconBuilder, Observation, MIN_SUPPORT,
+    explain, prose_terms, subtokens, Association, Lexicon, LexiconBuilder, Observation, MIN_SUPPORT,
 };
 use ast_sgrep_core::{IndexOptions, IndexStore, Indexer, SearchOptions, Searcher};
 
@@ -80,7 +80,10 @@ fn learning_is_deterministic() {
         let again = build();
         assert_eq!(first.len(), again.len());
         for (a, b) in first.iter().zip(again.iter()) {
-            assert_eq!((&a.term, &a.related, a.support), (&b.term, &b.related, b.support));
+            assert_eq!(
+                (&a.term, &a.related, a.support),
+                (&b.term, &b.related, b.support)
+            );
         }
     }
 }
@@ -185,6 +188,115 @@ fn indexing_builds_a_lexicon_from_the_corpus() {
     let first = &response.query_expansions[0];
     assert!(first.support > 0);
     assert!(first.because.contains("repository association"));
+}
+
+#[test]
+fn targeted_mutations_clear_then_rebuild_the_lexicon() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("terms.rs");
+    let corpus = |left: &str, right: &str| {
+        let related = (0..8)
+            .map(|index| format!("/// {right} domain relation\nfn {left}_{index}() {{}}\n"))
+            .collect::<String>();
+        let background = (0..24)
+            .map(|index| {
+                format!("/// unrelated geometry topic {index}\nfn background_mesh_{index}() {{}}\n")
+            })
+            .collect::<String>();
+        related + &background
+    };
+    std::fs::write(&source, corpus("rotate_credentials", "renewal")).unwrap();
+    let mut indexer = Indexer::new(IndexOptions {
+        root: temp.path().to_path_buf(),
+        embed_semantic: false,
+        ..IndexOptions::default()
+    })
+    .unwrap();
+    indexer.index_all().unwrap();
+    assert!(!indexer.store().all_lexicon_rows().unwrap().is_empty());
+
+    std::fs::write(&source, corpus("compute_geometry", "bounding")).unwrap();
+    indexer.update_paths(std::slice::from_ref(&source)).unwrap();
+    assert!(
+        indexer.store().all_lexicon_rows().unwrap().is_empty(),
+        "source mutation must never leave stale associations visible"
+    );
+    assert!(indexer.deferred_rebuilds_pending());
+    indexer.flush_deferred_rebuilds().unwrap();
+    assert!(indexer
+        .store()
+        .all_lexicon_rows()
+        .unwrap()
+        .iter()
+        .all(|association| association.term != "rotate"));
+}
+
+#[test]
+fn learning_bounds_pathological_terms_and_observations() {
+    use ast_sgrep_core::lexicon::MAX_TERM_CHARS;
+
+    assert!(subtokens(&"x".repeat(MAX_TERM_CHARS + 1)).is_empty());
+    let mut builder = LexiconBuilder::new();
+    for _ in 0..MIN_SUPPORT {
+        builder.observe(&Observation {
+            identifier_terms: vec!["x".repeat(MAX_TERM_CHARS + 1)],
+            prose_terms: vec!["bounded".into()],
+        });
+    }
+    assert!(
+        builder.finish().is_empty(),
+        "direct builder inputs must enforce the same term-size bound as tokenization"
+    );
+}
+
+#[test]
+fn persisted_lexicon_rejects_oversized_rows_and_terms() {
+    use ast_sgrep_core::lexicon::{load_lexicon, MAX_PAIRS, MAX_TERM_CHARS};
+
+    let temp = tempfile::tempdir().unwrap();
+    let store = ast_sgrep_core::IndexStore::open(temp.path(), None).unwrap();
+    store
+        .connection()
+        .execute_batch(&format!(
+            "WITH RECURSIVE counter(value) AS (
+               VALUES(0)
+               UNION ALL
+               SELECT value + 1 FROM counter WHERE value < {MAX_PAIRS}
+             )
+             INSERT INTO lexicon(term, related, ppmi, support)
+             SELECT printf('term%06d', value), 'related', 1.0, 3 FROM counter;"
+        ))
+        .unwrap();
+    let error = load_lexicon(&store).expect_err("row cap must fail closed");
+    assert!(error.to_string().contains("exceeds maximum"), "{error}");
+
+    store
+        .connection()
+        .execute("DELETE FROM lexicon", [])
+        .unwrap();
+    store
+        .connection()
+        .execute(
+            "INSERT INTO lexicon(term, related, ppmi, support) VALUES(?1, 'related', 1.0, 3)",
+            rusqlite::params!["x".repeat(MAX_TERM_CHARS + 1)],
+        )
+        .unwrap();
+    let error = load_lexicon(&store).expect_err("term cap must fail closed");
+    assert!(
+        error.to_string().contains("term exceeds maximum"),
+        "{error}"
+    );
+
+    let invalid = Association {
+        term: "credential".into(),
+        related: "renewal".into(),
+        ppmi: f64::NAN,
+        support: MIN_SUPPORT,
+    };
+    let error = store
+        .replace_lexicon(&[invalid])
+        .expect_err("non-finite first-party scores must be rejected before storage");
+    assert!(error.to_string().contains("non-finite"), "{error}");
 }
 
 #[test]

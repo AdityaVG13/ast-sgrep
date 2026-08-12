@@ -153,6 +153,66 @@ fn imports_mode_is_case_insensitive_on_mixed_case_module_path() {
         );
     }
 }
+
+#[test]
+fn literal_and_regex_context_is_targeted_bounded_and_file_diverse() {
+    let corpus = tempfile::tempdir().unwrap();
+    let index_dir = tempfile::tempdir().unwrap();
+    let mut crowded = String::new();
+    for index in 0..200 {
+        crowded.push_str(&format!("let needle_{index} = true;\n"));
+    }
+    fs::write(corpus.path().join("a.rs"), crowded).unwrap();
+    fs::write(
+        corpus.path().join("b.rs"),
+        format!(
+            "fn giant_symbol() {{\nlet before = 1;\nlet needle_other = \"{}\";\nlet after = 2;\n}}\n",
+            "🦀".repeat(20_000)
+        ),
+    )
+    .unwrap();
+    let index_path = index_dir.path().join("index.db");
+    let mut indexer = Indexer::new(IndexOptions {
+        root: corpus.path().to_path_buf(),
+        index_path: Some(index_path.clone()),
+        force_reindex: true,
+        embed_semantic: false,
+        ..IndexOptions::default()
+    })
+    .unwrap();
+    indexer.index_all().unwrap();
+    let searcher = Searcher::new(SearchOptions {
+        root: corpus.path().to_path_buf(),
+        index_path: Some(index_path),
+        limit: 4,
+        use_embed: false,
+        context_before: 1,
+        context_after: 1,
+        ..SearchOptions::default()
+    })
+    .unwrap();
+
+    let literal = searcher.search("literal:needle_other").unwrap();
+    let excerpt = &literal.hits[0].excerpt;
+    assert!(excerpt.contains("let before = 1;"));
+    assert!(excerpt.contains("let needle_other"));
+    assert!(excerpt.len() <= ast_sgrep_core::MAX_SEARCH_HIT_EXCERPT_BYTES);
+    assert!(excerpt.ends_with('…'));
+
+    let definition = searcher.search("defs:giant_symbol").unwrap();
+    let excerpt = &definition.hits[0].excerpt;
+    assert!(excerpt.contains("fn giant_symbol()"));
+    assert!(excerpt.len() <= ast_sgrep_core::MAX_SEARCH_HIT_EXCERPT_BYTES);
+    assert!(excerpt.ends_with('…'));
+
+    let regex = searcher.search("regex:needle_").unwrap();
+    assert_eq!(regex.hits.len(), 4);
+    assert!(
+        regex.hits.iter().any(|hit| hit.file == "b.rs"),
+        "per-file preference must retain later files: {:?}",
+        regex.hits.iter().map(|hit| &hit.file).collect::<Vec<_>>()
+    );
+}
 #[test]
 #[ignore = "requires ASGREP_REAL_PI_FIXTURE archive"]
 fn archived_pi_fixture_graph_modes_match_indexed_keys() {
@@ -390,7 +450,7 @@ fn parity_embed_backend_and_search_option_wiring() {
     assert_eq!(opts.ann_probes, Some(4));
     assert!(opts.use_rerank);
     assert_eq!(opts.rerank_top_k, 5);
-    let indexed = index_sample(IndexOptions {
+    let _indexed = index_sample(IndexOptions {
         force_reindex: true,
         embed_backend: EmbedBackend::Semantic,
         ..IndexOptions::default()
@@ -405,7 +465,7 @@ fn parity_embed_backend_and_search_option_wiring() {
     );
     #[cfg(all(feature = "neural-embed", feature = "rerank"))]
     {
-        let searcher = searcher_from(&indexed, opts.clone());
+        let searcher = searcher_from(&_indexed, opts.clone());
         let resp = searcher.search("defs:auth_refresh").unwrap();
         assert!(
             resp.hits
@@ -446,6 +506,38 @@ fn index_all_preserves_semantic_ivf_on_noop_and_file_failure() {
     assert_eq!(failed.files_failed, 1);
     assert_eq!(failed.files_indexed, 0);
     assert_eq!(fs::read(&sidecar).unwrap(), original);
+}
+
+#[test]
+fn failed_file_preparation_preserves_prior_rows_and_aborts_strict_reindex() {
+    let corpus = tempfile::tempdir().unwrap();
+    let index_dir = tempfile::tempdir().unwrap();
+    let source = corpus.path().join("lib.rs");
+    let index_path = index_dir.path().join("index.db");
+    fs::write(&source, "fn durable_symbol() {}\n").unwrap();
+    let mut indexer = Indexer::new(IndexOptions {
+        root: corpus.path().to_path_buf(),
+        index_path: Some(index_path.clone()),
+        embed_semantic: false,
+        ..IndexOptions::default()
+    })
+    .unwrap();
+    indexer.index_all().unwrap();
+
+    fs::write(&source, [0xff]).unwrap();
+    let partial = indexer.index_all().unwrap();
+    assert_eq!(partial.files_failed, 1);
+    assert_eq!(indexer.store().status().unwrap().file_count, 1);
+    assert!(indexer.reindex_all().is_err());
+
+    let searcher = Searcher::new(SearchOptions {
+        root: corpus.path().to_path_buf(),
+        index_path: Some(index_path),
+        use_embed: false,
+        ..SearchOptions::default()
+    })
+    .unwrap();
+    assert!(!searcher.search("durable_symbol").unwrap().hits.is_empty());
 }
 #[test]
 fn parity_index_defs_hybrid_chain() {

@@ -100,7 +100,12 @@ fn cv_pct(samples: &[f64]) -> f64 {
 
 /// Optional ast-grep timing only for `pattern:` queries when the binary exists.
 /// Hybrid/token comparisons are vacuous and must not emit speedup claims.
-fn ast_grep_comparison(query: &str, root: &Path, iterations: u32, avg_ms: f64) -> serde_json::Value {
+fn ast_grep_comparison(
+    query: &str,
+    root: &Path,
+    iterations: u32,
+    avg_ms: f64,
+) -> serde_json::Value {
     let Some(pat) = query
         .strip_prefix("pattern:")
         .map(str::trim)
@@ -229,10 +234,7 @@ fn print_index_skipped(stats: Option<&IndexStats>, index_ms: Option<f64>) {
 }
 
 /// Shared collapse: suite + single-query both enforce the same ratchet gate.
-fn enforce_bench_ratchet(
-    history: &Option<serde_json::Value>,
-    subject: &str,
-) -> anyhow::Result<()> {
+fn enforce_bench_ratchet(history: &Option<serde_json::Value>, subject: &str) -> anyhow::Result<()> {
     let Some(h) = history.as_ref() else {
         return Ok(());
     };
@@ -310,8 +312,10 @@ fn run_bench_suite(
     let searcher = bench_searcher(&bench_root, cli, skip_index)?;
     let mut results: Vec<serde_json::Value> = Vec::with_capacity(cases.len());
     for case in cases {
-        let expected = ast_sgrep_core::bench_suite::benchmark_expectation(case)
-            .ok_or_else(|| anyhow::anyhow!("benchmark case '{}' has no identity contract", case.name))?;
+        let expected =
+            ast_sgrep_core::bench_suite::benchmark_expectation(case).ok_or_else(|| {
+                anyhow::anyhow!("benchmark case '{}' has no identity contract", case.name)
+            })?;
         let semantic_only = expected.kind == Some(ast_sgrep_core::search::HitKind::Embed);
         let (times, last) = timed_searches(&searcher, case.query, semantic_only, iterations)?;
         let hits = last.as_ref().map_or(0, |r| r.hits.len());

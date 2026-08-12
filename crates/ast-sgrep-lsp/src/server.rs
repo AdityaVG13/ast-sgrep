@@ -130,26 +130,44 @@ impl LspServer {
         match notif.method.as_str() {
             "initialized" => {}
             "textDocument/didOpen" => {
-                self.sync_rel_path(stdout, "didOpen", notif.params, |b, p: DidOpenTextDocumentParams| {
-                    let rel = uri_to_rel_path(&p.text_document.uri, b.root())?;
-                    b.index_content(&rel, &p.text_document.text)
-                })?;
+                self.sync_rel_path(
+                    stdout,
+                    "didOpen",
+                    notif.params,
+                    |b, p: DidOpenTextDocumentParams| {
+                        let rel = uri_to_rel_path(&p.text_document.uri, b.root())?;
+                        b.index_content(&rel, &p.text_document.text)
+                    },
+                )?;
             }
             "textDocument/didSave" => {
-                self.sync_rel_path(stdout, "didSave", notif.params, |b, p: DidSaveTextDocumentParams| {
-                    let rel = uri_to_rel_path(&p.text_document.uri, b.root())?;
-                    b.reindex_file(&rel)
-                })?;
+                self.sync_rel_path(
+                    stdout,
+                    "didSave",
+                    notif.params,
+                    |b, p: DidSaveTextDocumentParams| {
+                        let rel = uri_to_rel_path(&p.text_document.uri, b.root())?;
+                        b.reindex_file(&rel)
+                    },
+                )?;
             }
             "textDocument/didChange" => {
-                self.sync_rel_path(stdout, "didChange", notif.params, |b, p: DidChangeTextDocumentParams| {
-                    b.apply_document_changes(&p.text_document.uri, &p.content_changes)
-                })?;
+                self.sync_rel_path(
+                    stdout,
+                    "didChange",
+                    notif.params,
+                    |b, p: DidChangeTextDocumentParams| {
+                        b.apply_document_changes(&p.text_document.uri, &p.content_changes)
+                    },
+                )?;
             }
             "textDocument/didClose" => {
-                self.sync_rel_path(stdout, "didClose", notif.params, |b, p: DidCloseTextDocumentParams| {
-                    b.close_document(&p.text_document.uri)
-                })?;
+                self.sync_rel_path(
+                    stdout,
+                    "didClose",
+                    notif.params,
+                    |b, p: DidCloseTextDocumentParams| b.close_document(&p.text_document.uri),
+                )?;
             }
             "exit" => self.exit_requested = true,
             _ => {}
@@ -198,9 +216,10 @@ impl LspServer {
 
     fn h_init(&mut self, params: &Value) -> anyhow::Result<Value> {
         let params: InitializeParams = serde_json::from_value(params.clone())?;
-        let mut backend = LspBackend::new(canonicalize_workspace_root(resolve_root(&params)));
+        let mut backend =
+            LspBackend::new_cached(canonicalize_workspace_root(resolve_root(&params)))?;
         if let Some(ref opts) = params.initialization_options {
-            backend.apply_settings(AsgrepSettings::from_initialization_options(opts));
+            backend.apply_settings(AsgrepSettings::from_initialization_options(opts))?;
         }
         backend.start_background_index();
         let result = backend.initialize_result();
@@ -410,9 +429,7 @@ fn reply_invalid_request_if_id(stdout: &mut impl Write, body: &str) -> io::Resul
         return Ok(());
     };
     match value.get("id") {
-        Some(id) if !id.is_null() => {
-            send_error(stdout, id, -32600, "Invalid Request")
-        }
+        Some(id) if !id.is_null() => send_error(stdout, id, -32600, "Invalid Request"),
         _ => Ok(()),
     }
 }

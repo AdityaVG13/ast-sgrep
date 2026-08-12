@@ -23,10 +23,7 @@ pub(crate) struct SemanticCache {
     flat_vectors: Arc<Vec<f32>>,
 }
 
-fn lock_clear_on_poison<T>(
-    mutex: &Mutex<T>,
-    clear: impl FnOnce(&mut T),
-) -> MutexGuard<'_, T> {
+fn lock_clear_on_poison<T>(mutex: &Mutex<T>, clear: impl FnOnce(&mut T)) -> MutexGuard<'_, T> {
     match mutex.lock() {
         Ok(guard) => guard,
         Err(poisoned) => {

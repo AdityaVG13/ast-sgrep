@@ -21,11 +21,13 @@
 //!
 //! `tools_list_is_byte_identical_across_calls` enforces the first rule.
 
-
 #![forbid(unsafe_code)]
 
 use anyhow::Context;
-use ast_sgrep_core::{force_sidecar_rebuild_err, EmbedBackend, IndexOptions, Indexer, SearchOptions, Searcher};
+use ast_sgrep_core::io_bounds::{read_bounded_line, BoundedLine};
+use ast_sgrep_core::{
+    force_sidecar_rebuild_err, EmbedBackend, IndexOptions, Indexer, SearchOptions, Searcher,
+};
 use ast_sgrep_plugins::{
     format_response_with_budget, to_budgeted_compact_json, to_compact_miss_json, CompactBudget,
     DetailLevel, MissContext, OutputBudget, OutputFormat,
@@ -39,8 +41,12 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
-/// Current MCP revision this server implements (r2lu).
-const PROTOCOL_VERSION: &str = "2026-07-28";
+/// Current handshake-based MCP revision this server implements (r2lu).
+///
+/// The 2026-07-28 revision removed `initialize`, requires per-request protocol
+/// metadata, and adds `server/discover`. Advertising it from this legacy stdio
+/// lifecycle would make modern clients select a protocol we do not implement.
+const PROTOCOL_VERSION: &str = "2025-11-25";
 /// Handshake-era revision kept for existing clients (r2lu).
 const LEGACY_PROTOCOL_VERSION: &str = "2024-11-05";
 /// Revisions this server will negotiate down to, newest first.
@@ -150,6 +156,7 @@ struct IndexRepoArgs {
 
 #[derive(Debug, Deserialize)]
 struct JsonRpcRequest {
+    jsonrpc: String,
     id: Option<Value>,
     method: String,
     #[serde(default)]
@@ -219,41 +226,70 @@ impl McpServer {
 
     pub fn run_stdio(&self) -> anyhow::Result<()> {
         let stdin = io::stdin();
+        let mut input = stdin.lock();
         let mut stdout = io::stdout();
-        for line in stdin.lock().lines() {
-            let line = line.context("read stdin")?;
-            if line.len() > ast_sgrep_core::MAX_STDIN_LINE_BYTES {
-                // Bound JSON-RPC line memory; oversized lines are parse-error, not silent drop.
-                // JSON-RPC 2.0: parse/invalid-id errors MUST use id: null (not omit id).
-                write_resp(
-                    &mut stdout,
-                    Some(Value::Null),
-                    None,
-                    Some(json!({
-                        "code": -32600,
-                        "message": format!(
-                            "request line exceeds max {} bytes",
-                            ast_sgrep_core::MAX_STDIN_LINE_BYTES
-                        )
-                    })),
-                )?;
-                continue;
-            }
-            if line.trim().is_empty() {
-                continue;
-            }
-            let request: JsonRpcRequest = match serde_json::from_str(&line) {
-                Ok(req) => req,
-                Err(e) => {
+        loop {
+            let Some(line) = read_bounded_line(&mut input, ast_sgrep_core::MAX_STDIN_LINE_BYTES)
+                .context("read stdin")?
+            else {
+                break;
+            };
+            let line = match line {
+                BoundedLine::Line(line) => line,
+                BoundedLine::TooLong => {
+                    // Reject before allocating the complete attacker-controlled line.
+                    // JSON-RPC 2.0 parse/invalid-id errors use id: null.
                     write_resp(
                         &mut stdout,
                         Some(Value::Null),
                         None,
-                        Some(json!({"code": -32700, "message": format!("parse error: {e}")})),
+                        Some(json!({
+                            "code": -32600,
+                            "message": format!(
+                                "request line exceeds max {} bytes",
+                                ast_sgrep_core::MAX_STDIN_LINE_BYTES
+                            )
+                        })),
                     )?;
                     continue;
                 }
             };
+            if line.iter().all(u8::is_ascii_whitespace) {
+                continue;
+            }
+            let request: JsonRpcRequest = match serde_json::from_slice(&line) {
+                Ok(req) => req,
+                Err(e) => {
+                    let code = if serde_json::from_slice::<Value>(&line).is_ok() {
+                        -32600
+                    } else {
+                        -32700
+                    };
+                    let label = if code == -32600 {
+                        "invalid request"
+                    } else {
+                        "parse error"
+                    };
+                    write_resp(
+                        &mut stdout,
+                        Some(Value::Null),
+                        None,
+                        Some(json!({"code": code, "message": format!("{label}: {e}")})),
+                    )?;
+                    continue;
+                }
+            };
+            if request.jsonrpc != "2.0" {
+                write_resp(
+                    &mut stdout,
+                    Some(Value::Null),
+                    None,
+                    Some(
+                        json!({"code": -32600, "message": "invalid request: jsonrpc must be 2.0"}),
+                    ),
+                )?;
+                continue;
+            }
             if let Some(response) = self.handle_request(&request) {
                 match response {
                     Ok(result) => write_resp(&mut stdout, request.id, Some(result), None)?,
@@ -671,13 +707,7 @@ impl McpServer {
         Ok((searcher, generation))
     }
 
-    fn restore_searcher(
-        &self,
-        root: PathBuf,
-        limit: usize,
-        generation: u64,
-        searcher: Searcher,
-    ) {
+    fn restore_searcher(&self, root: PathBuf, limit: usize, generation: u64, searcher: Searcher) {
         let key = self.searcher_key(root, limit);
         let mut guard = Self::lock_or_recover(&self.searcher_cache, |cache| {
             cache.generation = cache.generation.wrapping_add(1);
@@ -870,9 +900,7 @@ impl McpServer {
         } = args;
         let per_ref_chars = max_chars / ids.len();
         let remainder = max_chars % ids.len();
-        let root = root
-            .canonicalize()
-            .context("canonicalize project root")?;
+        let root = root.canonicalize().context("canonicalize project root")?;
         let mut nodes = Vec::with_capacity(ids.len());
         for (index, id) in ids.iter().enumerate() {
             let budget = per_ref_chars + usize::from(index < remainder);
@@ -920,8 +948,6 @@ impl McpServer {
         // serving pre-mutation hits (R-INDEX-ERR-CACHE-SYNC / d2a1.13).
         self.invalidate_after_index_attempt();
         let stats = result?;
-        // ESC-3: soft deadline is checked after durable index work; failure here
-        // does not roll back a successful commit — agents must not assume clean miss.
         anyhow::ensure!(
             started.elapsed() <= INDEX_REPO_DEADLINE,
             "index_repo exceeded {}s deadline after mutation (index may have committed; caches were invalidated)",
@@ -1114,7 +1140,6 @@ fn write_resp(
     stdout.flush()
 }
 
-
 #[cfg(test)]
 mod write_resp_tests {
     use super::*;
@@ -1189,7 +1214,10 @@ mod cache_tests {
         server.invalidate_searcher_cache();
         server.restore_searcher(root, 10, generation, searcher);
         let cache = McpServer::lock_or_recover(&server.searcher_cache, |_| {});
-        assert!(cache.entry.is_none(), "stale searcher returned after reindex");
+        assert!(
+            cache.entry.is_none(),
+            "stale searcher returned after reindex"
+        );
     }
 
     #[test]
@@ -1208,8 +1236,7 @@ mod cache_tests {
         // Seed session maps that must not survive reindex.
         McpServer::lock_or_recover(&server.path_registry, |_| {})
             .insert("p0".into(), "lib.rs".into());
-        McpServer::lock_or_recover(&server.emitted_snippets, |_| {})
-            .insert("p0:1-1".into(), 42);
+        McpServer::lock_or_recover(&server.emitted_snippets, |_| {}).insert("p0:1-1".into(), 42);
 
         let args = server
             .parse_index_repo(&json!({}))
@@ -1217,7 +1244,10 @@ mod cache_tests {
         let body = server
             .tool_index_repo(args)
             .expect("index_repo should succeed on tiny fixture");
-        assert!(body.contains("files_indexed") || body.contains("files"), "{body}");
+        assert!(
+            body.contains("files_indexed") || body.contains("files"),
+            "{body}"
+        );
 
         let cache = McpServer::lock_or_recover(&server.searcher_cache, |_| {});
         assert!(
@@ -1311,7 +1341,6 @@ mod cache_tests {
             generation2 != generation,
             "in-process generation must advance when writer stamp changes"
         );
-        // Returning a fresh Searcher is enough; restore under the new generation.
         server.restore_searcher(root, 10, generation2, searcher2);
         let cache = McpServer::lock_or_recover(&server.searcher_cache, |_| {});
         assert_eq!(cache.writer_generation, bumped);

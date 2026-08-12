@@ -21,38 +21,69 @@ pub const MIN_SUPPORT: u32 = 3;
 /// Cap on stored associations per term, keeping the strongest.
 pub const MAX_PER_TERM: usize = 8;
 
+/// Hard learning bounds: repository vocabulary is an optional ranking hint,
+/// never a reason to retain or cross-product an unbounded source line.
+pub const MAX_TERM_CHARS: usize = 64;
+pub const MAX_IDENTIFIER_TERMS: usize = 8;
+pub const MAX_PROSE_TERMS: usize = 64;
+pub const MAX_OBSERVATIONS: u64 = 100_000;
+pub const MAX_PAIRS: usize = 250_000;
+
 /// Terms too generic to carry meaning in any repository.
 const STOP_TERMS: &[&str] = &[
     "the", "a", "an", "and", "or", "of", "to", "in", "is", "it", "for", "on", "with", "self",
-    "this", "that", "new", "get", "set", "value", "return", "returns", "type", "use", "used",
-    "fn", "let", "mut", "pub", "impl", "struct", "enum", "test", "tests", "none", "some", "ok",
-    "err", "err", "result", "option", "string", "str", "usize", "i32", "u32", "bool",
+    "this", "that", "new", "get", "set", "value", "return", "returns", "type", "use", "used", "fn",
+    "let", "mut", "pub", "impl", "struct", "enum", "test", "tests", "none", "some", "ok", "err",
+    "result", "option", "string", "str", "usize", "i32", "u32", "bool",
 ];
 
 /// Split an identifier into lowercase subtokens: `refresh_token` and
 /// `refreshToken` both yield ["refresh", "token"].
 pub fn subtokens(identifier: &str) -> Vec<String> {
+    fn finish(
+        out: &mut Vec<String>,
+        current: &mut String,
+        current_chars: &mut usize,
+        overflowed: &mut bool,
+    ) {
+        if !*overflowed
+            && *current_chars >= 3
+            && !STOP_TERMS.contains(&current.as_str())
+            && out.len() < MAX_PROSE_TERMS
+        {
+            out.push(std::mem::take(current));
+        } else {
+            current.clear();
+        }
+        *current_chars = 0;
+        *overflowed = false;
+    }
+
     let mut out = Vec::new();
     let mut current = String::new();
+    let mut current_chars = 0usize;
+    let mut overflowed = false;
     let mut previous_lower = false;
     for ch in identifier.chars() {
         if ch == '_' || ch == '-' || ch == ':' || ch == '.' || ch.is_whitespace() {
-            if !current.is_empty() {
-                out.push(std::mem::take(&mut current));
-            }
+            finish(&mut out, &mut current, &mut current_chars, &mut overflowed);
             previous_lower = false;
             continue;
         }
         if ch.is_uppercase() && previous_lower && !current.is_empty() {
-            out.push(std::mem::take(&mut current));
+            finish(&mut out, &mut current, &mut current_chars, &mut overflowed);
         }
         previous_lower = ch.is_lowercase() || ch.is_numeric();
-        current.extend(ch.to_lowercase());
+        for lowercase in ch.to_lowercase() {
+            if current_chars < MAX_TERM_CHARS {
+                current.push(lowercase);
+            } else {
+                overflowed = true;
+            }
+            current_chars = current_chars.saturating_add(1);
+        }
     }
-    if !current.is_empty() {
-        out.push(current);
-    }
-    out.retain(|token| token.len() >= 3 && !STOP_TERMS.contains(&token.as_str()));
+    finish(&mut out, &mut current, &mut current_chars, &mut overflowed);
     out
 }
 
@@ -60,6 +91,7 @@ pub fn subtokens(identifier: &str) -> Vec<String> {
 pub fn prose_terms(text: &str) -> Vec<String> {
     text.split(|c: char| !c.is_alphanumeric() && c != '_')
         .flat_map(subtokens)
+        .take(MAX_PROSE_TERMS)
         .collect()
 }
 
@@ -86,19 +118,50 @@ impl LexiconBuilder {
 
     /// Record one symbol's vocabulary. Pairs are directed identifier -> prose,
     pub fn observe(&mut self, observation: &Observation) {
+        if self.observations >= MAX_OBSERVATIONS {
+            return;
+        }
+        let mut identifier_terms: Vec<&String> = observation
+            .identifier_terms
+            .iter()
+            .filter(|term| !term.is_empty() && term.chars().count() <= MAX_TERM_CHARS)
+            .take(MAX_IDENTIFIER_TERMS)
+            .collect();
+        identifier_terms.sort();
+        identifier_terms.dedup();
+        if identifier_terms.is_empty() {
+            return;
+        }
         let mut seen_terms: Vec<&String> = Vec::new();
-        seen_terms.extend(observation.identifier_terms.iter());
-        seen_terms.extend(observation.prose_terms.iter());
+        seen_terms.extend(identifier_terms.iter().copied());
+        seen_terms.extend(
+            observation
+                .prose_terms
+                .iter()
+                .filter(|term| !term.is_empty() && term.chars().count() <= MAX_TERM_CHARS)
+                .take(MAX_PROSE_TERMS),
+        );
         seen_terms.sort();
         seen_terms.dedup();
         if seen_terms.len() < 2 {
             return;
         }
+
+        // Every identifier is also in seen_terms, so each contributes at most
+        // seen_terms.len() - 1 directed pairs. Reserving for that worst case
+        // avoids allocating temporary String pairs merely to probe the map.
+        let possible_pairs = identifier_terms
+            .len()
+            .saturating_mul(seen_terms.len().saturating_sub(1));
+        if self.pair_counts.len().saturating_add(possible_pairs) > MAX_PAIRS {
+            return;
+        }
+
         self.observations += 1;
         for term in &seen_terms {
             *self.term_counts.entry((*term).clone()).or_default() += 1;
         }
-        for left in &observation.identifier_terms {
+        for left in identifier_terms {
             for right in &seen_terms {
                 if left == *right {
                     continue;
@@ -191,10 +254,7 @@ impl Lexicon {
 
     /// Terms this repository associates with `term`, strongest first.
     pub fn related(&self, term: &str) -> &[Association] {
-        self.by_term
-            .get(term)
-            .map(Vec::as_slice)
-            .unwrap_or(&[])
+        self.by_term.get(term).map(Vec::as_slice).unwrap_or(&[])
     }
 
     /// Expand a query with repository-learned terms, returning the added terms
@@ -237,4 +297,27 @@ pub fn store_lexicon(store: &crate::store::IndexStore, associations: &[Associati
 /// Load the persisted lexicon (ufk7).
 pub fn load_lexicon(store: &crate::store::IndexStore) -> Result<Lexicon> {
     Ok(Lexicon::from_associations(store.all_lexicon_rows()?))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn learning_storage_is_hard_bounded() {
+        let mut builder = LexiconBuilder::new();
+        for index in 0..4_100 {
+            builder.observe(&Observation {
+                identifier_terms: vec![format!("identifier{index}")],
+                prose_terms: (0..MAX_PROSE_TERMS)
+                    .map(|term| format!("prose{index}_{term}"))
+                    .collect(),
+            });
+        }
+        assert!(builder.pair_counts.len() <= MAX_PAIRS);
+        assert!(builder.observations <= MAX_OBSERVATIONS);
+        // With one identifier and N prose terms, there is one more retained
+        // term than pairs per observation; MAX_OBSERVATIONS covers that gap.
+        assert!(builder.term_counts.len() <= MAX_PAIRS + MAX_OBSERVATIONS as usize);
+    }
 }

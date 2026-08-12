@@ -25,10 +25,7 @@ fn only_disambiguated_resolutions_are_precise() {
     assert!(!Resolution::NameOnly.is_precise());
     assert!(!Resolution::RepositoryUnique.is_precise());
     assert!(!Resolution::Ambiguous {
-        candidates: vec![
-            SymbolId::new("a.rs", "send"),
-            SymbolId::new("b.rs", "send"),
-        ],
+        candidates: vec![SymbolId::new("a.rs", "send"), SymbolId::new("b.rs", "send"),],
     }
     .is_precise());
 }
@@ -74,10 +71,7 @@ fn candidate_counts_classify_the_match() {
     let ambiguous = Resolution::from_candidates(
         0,
         3,
-        [
-            SymbolId::new("a.rs", "send"),
-            SymbolId::new("b.rs", "send"),
-        ],
+        [SymbolId::new("a.rs", "send"), SymbolId::new("b.rs", "send")],
     );
     match &ambiguous {
         Resolution::Ambiguous { candidates } => assert_eq!(candidates.len(), 2),
@@ -166,7 +160,9 @@ fn caller_hits_carry_a_resolution_tier() {
     // Two same-named definitions exist, so nothing here may claim precision
     // through repository uniqueness.
     assert!(
-        resolved.iter().all(|r| !matches!(r, Resolution::RepositoryUnique)),
+        resolved
+            .iter()
+            .all(|r| !matches!(r, Resolution::RepositoryUnique)),
         "a duplicated name must not resolve as repository-unique: {resolved:?}"
     );
 
@@ -177,9 +173,10 @@ fn caller_hits_carry_a_resolution_tier() {
         .filter_map(|hit| hit.resolution.clone())
         .collect();
     assert!(
-        unique_resolutions
-            .iter()
-            .any(|r| matches!(r, Resolution::FileLocalUnique | Resolution::RepositoryUnique)),
+        unique_resolutions.iter().any(|r| matches!(
+            r,
+            Resolution::FileLocalUnique | Resolution::RepositoryUnique
+        )),
         "a uniquely-named callee must resolve better than name-only: {unique_resolutions:?}"
     );
 }

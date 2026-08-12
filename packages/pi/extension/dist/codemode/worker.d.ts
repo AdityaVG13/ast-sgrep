@@ -13,6 +13,8 @@ export type StickyWorkerOptions = {
     signal?: AbortSignal;
     /** Kill worker when one request exceeds this duration (ms). */
     timeoutMs?: number;
+    /** Maximum bytes accepted in one NDJSON response. */
+    maxOutputBytes?: number;
 };
 export declare function startStickyWorker(options: StickyWorkerOptions): Promise<StickyWorker>;
 /** One-shot batch via stdin (avoids tempfile). */
@@ -23,4 +25,5 @@ export declare function runBatchViaStdin(options: {
     env?: NodeJS.ProcessEnv;
     signal?: AbortSignal;
     timeoutMs?: number;
+    maxOutputBytes?: number;
 }): Promise<MachineEnvelope>;

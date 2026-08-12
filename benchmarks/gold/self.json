@@ -27,11 +27,11 @@
       ]
     },
     {
-      "name": "defs-write-active-manifest",
-      "query": "defs:write_active_manifest",
+      "name": "defs-index-generation",
+      "query": "defs:index_generation",
       "k": 5,
       "relevant": [
-        { "file": "crates/ast-sgrep-core/src/store/mod.rs", "symbol": "write_active_manifest" }
+        { "file": "crates/ast-sgrep-core/src/store/sqlite.rs", "symbol": "index_generation" }
       ]
     },
     {
@@ -94,12 +94,12 @@
       ]
     },
     {
-      "name": "conceptual-generation-swap",
-      "query": "atomic generation activation rollback",
+      "name": "conceptual-snapshot-consistency",
+      "query": "consistent search snapshot generation",
       "k": 20,
       "relevant": [
-        { "file": "crates/ast-sgrep-core/src/store/mod.rs" },
-        { "file": "crates/ast-sgrep-core/src/index.rs" }
+        { "file": "crates/ast-sgrep-core/src/search/mod.rs" },
+        { "file": "crates/ast-sgrep-core/src/search/types.rs" }
       ]
     }
   ]

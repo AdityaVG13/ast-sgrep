@@ -65,7 +65,6 @@ export declare function createCodemodeDispatcher(host: BatchCapableHost): {
     stats: () => DispatchStats;
     resetStats: () => void;
 };
-/** Build CLI argv for spawn fallback (typed path preferred). */
 export declare function argvFor(tool: string, args: Record<string, unknown>): string[];
 export declare function asEnvelope(value: unknown, command?: string): MachineEnvelope;
 /** One-shot batch via stdin (no tempfile) when spawn-with-stdin is available. */

@@ -2,7 +2,7 @@
 
 ## Contract
 
-Sidecar format 2 keeps the `ASIVF\0` magic, uses a fixed validated header, stores the centroid/posting index first, aligns vectors to a 4096-byte boundary, and maps vector bytes read-only through the sealed `ast-sgrep-mmap` crate (the only intentional `unsafe` in the workspace; product crates `forbid(unsafe_code)`). Opening a sidecar may decode the much smaller cluster index, but it does not read or allocate the vector payload. Writers create and fsync a unique temporary file before publication; existing mappings continue to reference their prior inode. Windows publication that is blocked by another process's mapping keeps the prior sidecar and the new in-memory index, leaving the stale marker set for a later retry.
+Sidecar format 2 keeps the `ASIVF\0` magic, uses a fixed validated header, stores the centroid/posting index first, aligns vectors to a 4096-byte boundary, and maps vector bytes read-only through the sealed `ast-sgrep-mmap` crate (the only hand-written `unsafe` in the workspace; ordinary product crates `forbid(unsafe_code)`). Opening a sidecar may decode the much smaller cluster index, but it does not read or allocate the vector payload. Writers create and fsync a unique temporary file before publication; existing mappings continue to reference their prior inode. Windows publication that is blocked by another process's mapping keeps the prior sidecar and the new in-memory index, leaving the stale marker set for a later retry.
 
 ## Fixture
 

@@ -168,10 +168,9 @@ fn uppercase_symbol_resolves_through_definition_and_reference_endpoints() {
         !defs_hits.is_empty(),
         "defs:foobar returned no hits; case-insensitive symbol lookup is broken"
     );
-    assert!(defs_hits.iter().any(|h| h["excerpt"]
-        .as_str()
-        .unwrap_or("")
-        .contains("fn FooBar")));
+    assert!(defs_hits
+        .iter()
+        .any(|h| h["excerpt"].as_str().unwrap_or("").contains("fn FooBar")));
     let callers = backend.search("callers:foobar", false, 32).unwrap();
     let callers_hits = callers["hits"].as_array().unwrap();
     assert!(

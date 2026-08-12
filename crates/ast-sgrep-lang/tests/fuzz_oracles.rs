@@ -1,8 +1,6 @@
 //! Durable checks for native parse / classify APIs used by cargo-fuzz targets.
 
-use ast_sgrep_lang::{
-    classify_native, needs_ast_grep_fallback, Language, ParserRegistry,
-};
+use ast_sgrep_lang::{classify_native, needs_ast_grep_fallback, Language, ParserRegistry};
 use std::sync::OnceLock;
 
 fn registry() -> &'static ParserRegistry {
@@ -26,7 +24,13 @@ fn lang_parse_polyglot_snippets_do_not_panic() {
 
 #[test]
 fn classify_native_consistency_with_fallback() {
-    for p in ["fn $NAME() {}", "class Foo", "def $F", "foo.bar($X)", "no dollars"] {
+    for p in [
+        "fn $NAME() {}",
+        "class Foo",
+        "def $F",
+        "foo.bar($X)",
+        "no dollars",
+    ] {
         let kind = classify_native(p);
         let needs = needs_ast_grep_fallback(p);
         if kind.is_some() {

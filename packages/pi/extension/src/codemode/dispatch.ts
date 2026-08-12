@@ -61,11 +61,29 @@ type Pending = {
   args: Record<string, unknown>;
   context: { cwd: string };
   options?: { signal?: AbortSignal };
+  settled: boolean;
   resolve: (value: MachineEnvelope) => void;
   reject: (reason: unknown) => void;
 };
 
 const MAX_WAVE = 32;
+const MUTATING_TOOLS = new Set(["index_repo"]);
+
+const abortError = (): Error => Object.assign(new Error("codemode aborted"), { name: "AbortError" });
+
+function rejectWave(wave: Pending[], cause: unknown): void {
+  for (const item of wave) item.reject(cause);
+}
+
+function sharedBatchOptions(wave: Pending[]): { signal?: AbortSignal } | undefined {
+  const signal = wave[0]?.options?.signal;
+  return signal && wave.every((item) => item.options?.signal === signal) ? { signal } : undefined;
+}
+
+function isSharedAbort(cause: unknown, options: { signal?: AbortSignal } | undefined): boolean {
+  return options?.signal !== undefined
+    && (options.signal.aborted || (cause instanceof Error && cause.name === "AbortError"));
+}
 
 /**
  * Wraps a host so Promise.all([asgrep.search, asgrep.defs, …]) collapses into
@@ -81,7 +99,7 @@ export function createCodemodeDispatcher(host: BatchCapableHost): {
   let stats: DispatchStats = emptyStats();
 
   const flush = async () => {
-    const wave = pending;
+    const wave = pending.filter((item) => !item.settled);
     pending = [];
     scheduled = false;
     if (wave.length === 0) return;
@@ -98,7 +116,8 @@ export function createCodemodeDispatcher(host: BatchCapableHost): {
 
       // Chunk oversized waves (batch max = 32).
       for (let offset = 0; offset < wave.length; offset += MAX_WAVE) {
-        const chunk = wave.slice(offset, offset + MAX_WAVE);
+        const chunk = wave.slice(offset, offset + MAX_WAVE).filter((item) => !item.settled);
+        if (chunk.length === 0) continue;
         await settleWave(host, chunk, stats);
       }
     } finally {
@@ -108,8 +127,26 @@ export function createCodemodeDispatcher(host: BatchCapableHost): {
 
   const enqueue = (item: Pending): Promise<MachineEnvelope> =>
     new Promise<MachineEnvelope>((resolve, reject) => {
-      item.resolve = resolve;
-      item.reject = reject;
+      const signal = item.options?.signal;
+      const cleanup = () => signal?.removeEventListener("abort", onAbort);
+      item.resolve = (value) => {
+        if (item.settled) return;
+        item.settled = true;
+        cleanup();
+        resolve(value);
+      };
+      item.reject = (reason) => {
+        if (item.settled) return;
+        item.settled = true;
+        cleanup();
+        reject(reason);
+      };
+      const onAbort = () => item.reject(abortError());
+      if (signal?.aborted) {
+        item.reject(abortError());
+        return;
+      }
+      signal?.addEventListener("abort", onAbort, { once: true });
       pending.push(item);
       if (!scheduled) {
         scheduled = true;
@@ -121,7 +158,14 @@ export function createCodemodeDispatcher(host: BatchCapableHost): {
 
   const dispatchHost: DispatchSurface = {
     call(tool, args, context, options) {
-      const item: Pending = { tool, args, context, resolve: () => undefined, reject: () => undefined };
+      const item: Pending = {
+        tool,
+        args,
+        context,
+        settled: false,
+        resolve: () => undefined,
+        reject: () => undefined,
+      };
       if (options) item.options = options;
       return enqueue(item);
     },
@@ -153,42 +197,63 @@ async function settleOne(host: BatchCapableHost, item: Pending, stats: DispatchS
 
 async function settleWave(host: BatchCapableHost, wave: Pending[], stats: DispatchStats): Promise<void> {
   if (host.sticky) {
+    const transportOptions = sharedBatchOptions(wave);
     try {
       const calls = wave.map((item, index) => ({
         id: String(index),
         tool: item.tool,
         args: item.args,
       }));
-      const batch = await host.sticky.batch(calls, wave[0]?.options);
+      const batch = await host.sticky.batch(calls, transportOptions);
       stats.stickyCalls += wave.length;
       settleFromBatch(wave, batch);
       return;
     } catch (cause) {
+      if (isSharedAbort(cause, transportOptions)) {
+        rejectWave(wave, cause);
+        return;
+      }
+      if (wave.some((item) => MUTATING_TOOLS.has(item.tool))) {
+        // The worker may have committed a mutation before its transport died.
+        // Replaying the wave through another transport would be ambiguous.
+        rejectWave(wave, cause);
+        return;
+      }
       // Sticky died mid-program — fall through to one-shot / spawn.
-      void cause;
     }
   }
 
+  const batchWave = wave.filter((item) => !item.settled);
+  if (batchWave.length === 0) return;
   if (host.runBatch) {
+    const transportOptions = sharedBatchOptions(batchWave);
     try {
-      const calls = wave.map((item, index) => ({
+      const calls = batchWave.map((item, index) => ({
         id: String(index),
         tool: item.tool,
         args: item.args,
       }));
-      const batch = await host.runBatch(calls, wave[0]!.context, wave[0]!.options);
-      stats.batchedCalls += wave.length;
-      settleFromBatch(wave, batch);
+      const batch = await host.runBatch(calls, batchWave[0]!.context, transportOptions);
+      stats.batchedCalls += batchWave.length;
+      settleFromBatch(batchWave, batch);
       return;
     } catch (cause) {
+      if (isSharedAbort(cause, transportOptions)) {
+        rejectWave(batchWave, cause);
+        return;
+      }
+      if (batchWave.some((item) => MUTATING_TOOLS.has(item.tool))) {
+        rejectWave(batchWave, cause);
+        return;
+      }
       // Transport failure only — do NOT re-run when per-call ok:false.
-      void cause;
     }
   }
 
-  stats.parallelSpawnCalls += wave.length;
+  const spawnWave = batchWave.filter((item) => !item.settled);
+  stats.parallelSpawnCalls += spawnWave.length;
   await Promise.all(
-    wave.map(async (item) => {
+    spawnWave.map(async (item) => {
       try {
         const args = argvFor(item.tool, item.args);
         item.resolve(await host.run(args, item.context, item.options));
@@ -244,9 +309,6 @@ const ARGV_SPEC: Record<string, ArgvSpec> = {
   imports: { form: "capsule", key: "module", prefix: "imports" },
   index_status: { form: "status" },
   index_repo: { form: "index_repo" },
-  // No CLI equivalent — sticky/batch only.
-  catalog_search: { form: "status" },
-  catalog_describe: { form: "status" },
 };
 
 function argStr(args: Record<string, unknown>, key: string): string {
@@ -254,9 +316,16 @@ function argStr(args: Record<string, unknown>, key: string): string {
 }
 
 export function argvFor(tool: string, args: Record<string, unknown>): string[] {
-  const spec = ARGV_SPEC[tool] ?? { form: "capsule" as const, key: "query" as const };
+  const spec = ARGV_SPEC[tool];
+  if (!spec) throw new Error(`codemode tool has no direct CLI fallback: ${tool}`);
   if (spec.form === "status") return ["status", ".", "--json"];
-  if (spec.form === "index_repo") return [args.force === true ? "reindex" : "index", ".", "--json"];
+  if (spec.form === "index_repo") {
+    const command = args.force === true ? "reindex" : "index";
+    const paths = Array.isArray(args.paths)
+      ? args.paths.filter((path): path is string => typeof path === "string")
+      : [];
+    return [command, ".", "--json", ...paths.flatMap((path) => ["--path", path])];
+  }
 
   const limit = num(args.limit, 8);
   if (spec.form === "chain") {

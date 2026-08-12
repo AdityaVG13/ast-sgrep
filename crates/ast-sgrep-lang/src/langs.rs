@@ -44,7 +44,11 @@ const RB_CLASS: &[&str] = &["class"];
 const SWIFT_TYPES: &[&str] = &["class_declaration", "protocol_declaration"];
 const CPP_TYPES: &[&str] = &["class_specifier", "struct_specifier"];
 const KT_CLASS: &[&str] = &["class_declaration", "object_declaration"];
-const PHP_CLASS: &[&str] = &["class_declaration", "interface_declaration", "enum_declaration"];
+const PHP_CLASS: &[&str] = &[
+    "class_declaration",
+    "interface_declaration",
+    "enum_declaration",
+];
 const GO_TYPE_CASES: &[(&str, SymbolKind)] = &[("interface_type", Interface)];
 const SWIFT_TYPE_CASES: &[(&str, SymbolKind)] = &[
     ("class", Class),
@@ -246,7 +250,12 @@ parser!(RubyParser, Ruby, tree_sitter_ruby::LANGUAGE, RUBY);
 parser!(SwiftParser, Swift, tree_sitter_swift::LANGUAGE, SWIFT);
 parser!(CParser, C, tree_sitter_c::LANGUAGE, C);
 parser!(CppParser, Cpp, tree_sitter_cpp::LANGUAGE, CPP);
-parser!(KotlinParser, Kotlin, tree_sitter_kotlin_ng::LANGUAGE, KOTLIN);
+parser!(
+    KotlinParser,
+    Kotlin,
+    tree_sitter_kotlin_ng::LANGUAGE,
+    KOTLIN
+);
 parser!(PhpParser, Php, tree_sitter_php::LANGUAGE_PHP, PHP);
 parser!(
     TypeScriptParser,

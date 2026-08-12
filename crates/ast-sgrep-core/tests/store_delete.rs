@@ -66,7 +66,9 @@ fn re_upsert_refreshes_fts_without_touching_other_files() {
     let store = IndexStore::open(temp.path(), None).unwrap();
     let path = "stale_test.py";
     let other = [(1, "second unique haystack".into())];
-    store.upsert_file(base("second.py", &other, "other1")).unwrap();
+    store
+        .upsert_file(base("second.py", &other, "other1"))
+        .unwrap();
     let first = [(1, "alpha beta gamma".into()), (2, "delta epsilon".into())];
     store.upsert_file(base(path, &first, "hash1")).unwrap();
     assert_eq!(count_match(&store, "lines_fts", "alpha"), 1);

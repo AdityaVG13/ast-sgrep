@@ -87,7 +87,11 @@ pub(crate) struct SearchTuning {
         help = "Build IVF ANN when chunk count exceeds this"
     )]
     pub(crate) ann_threshold: Option<usize>,
-    #[arg(long, env = "ASGREP_ANN_PROBES", help = "IVF clusters to probe (0 = adaptive)")]
+    #[arg(
+        long,
+        env = "ASGREP_ANN_PROBES",
+        help = "IVF clusters to probe (0 = adaptive)"
+    )]
     pub(crate) ann_probes: Option<usize>,
     #[arg(
         long,
@@ -151,6 +155,23 @@ pub(crate) struct IndexCmd {
     pub(crate) tuning: SearchTuning,
     #[arg(long, help = "Report planned index work without writing")]
     pub(crate) dry_run: bool,
+    #[arg(
+        long = "path",
+        value_name = "PATH",
+        action = clap::ArgAction::Append,
+        help = "Update one changed file path (repeatable; index only, max 1024)"
+    )]
+    pub(crate) paths: Vec<PathBuf>,
+}
+
+#[derive(Args, Clone, Debug)]
+pub(crate) struct ReindexCmd {
+    #[command(flatten)]
+    pub(crate) root: RootArg,
+    #[command(flatten)]
+    pub(crate) tuning: SearchTuning,
+    #[arg(long, help = "Report planned index work without writing")]
+    pub(crate) dry_run: bool,
 }
 
 #[derive(Args, Clone, Debug)]
@@ -171,7 +192,10 @@ pub(crate) struct QueryCmd {
 pub(crate) struct Cli {
     #[command(subcommand)]
     pub(crate) command: Option<Commands>,
-    #[arg(value_name = "QUERY", help = "Bare hybrid search query (omit subcommand)")]
+    #[arg(
+        value_name = "QUERY",
+        help = "Bare hybrid search query (omit subcommand)"
+    )]
     pub(crate) query: Option<String>,
     #[arg(
         id = "global-root",
@@ -193,7 +217,12 @@ pub(crate) struct Cli {
     /// Print the agent handbook and exit
     #[arg(long, global = true, help = "Print robot-docs guide and exit")]
     pub(crate) robot_help: bool,
-    #[arg(long, global = true, env = "ASGREP_INDEX_PATH", help = "Override index database path")]
+    #[arg(
+        long,
+        global = true,
+        env = "ASGREP_INDEX_PATH",
+        help = "Override index database path"
+    )]
     pub(crate) index_path: Option<PathBuf>,
     #[arg(long, global = true, help = "Language filter")]
     pub(crate) lang: Option<String>,
@@ -210,7 +239,11 @@ pub(crate) struct Cli {
     /// Search-tuning for bare (no-subcommand) search only — not inherited by capabilities/doctor (vdqo).
     #[command(flatten)]
     pub(crate) tuning: SearchTuning,
-    #[arg(value_name = "ROOT", default_value = ".", help = "Bare-search project root")]
+    #[arg(
+        value_name = "ROOT",
+        default_value = ".",
+        help = "Bare-search project root"
+    )]
     pub(crate) search_root: PathBuf,
 }
 
@@ -222,11 +255,15 @@ pub(crate) enum Commands {
     /// Show index and embedding status
     #[command(about = "Show index and embedding status")]
     Status(RootArg),
-    /// Clear and rebuild an index
-    #[command(about = "Clear and rebuild an index")]
-    Reindex(IndexCmd),
+    /// Force a full transactional rebuild
+    #[command(about = "Force a full transactional rebuild")]
+    Reindex(ReindexCmd),
     /// Search explicitly; aliases: find, query
-    #[command(about = "Hybrid search (aliases: find, query)", alias = "find", alias = "query")]
+    #[command(
+        about = "Hybrid search (aliases: find, query)",
+        alias = "find",
+        alias = "query"
+    )]
     Search(QueryCmd),
     /// Run fixed performance and identity suites
     #[command(about = "Run fixed performance and identity suites")]
@@ -394,9 +431,7 @@ fn edit_distance(a: &str, b: &str) -> usize {
         cur[0] = i + 1;
         for (j, &cb) in b.iter().enumerate() {
             let cost = usize::from(ca != cb);
-            cur[j + 1] = (prev[j + 1] + 1)
-                .min(cur[j] + 1)
-                .min(prev[j] + cost);
+            cur[j + 1] = (prev[j + 1] + 1).min(cur[j] + 1).min(prev[j] + cost);
         }
         std::mem::swap(&mut prev, &mut cur);
     }
@@ -425,7 +460,8 @@ impl Cli {
     pub(crate) fn active_tuning(&self) -> SearchTuning {
         let mut t = self.tuning.clone();
         let overlay = match self.command.as_ref() {
-            Some(Commands::Index(c) | Commands::Reindex(c)) => Some(&c.tuning),
+            Some(Commands::Index(c)) => Some(&c.tuning),
+            Some(Commands::Reindex(c)) => Some(&c.tuning),
             Some(Commands::Search(c) | Commands::Keyword(c) | Commands::Semantic(c)) => {
                 Some(&c.tuning)
             }
@@ -460,6 +496,9 @@ impl Cli {
             }
             if o.response_snippet_tokens != DEFAULT_RESPONSE_SNIPPET_TOKENS {
                 t.response_snippet_tokens = o.response_snippet_tokens;
+            }
+            if o.budget_tokens.is_some() {
+                t.budget_tokens = o.budget_tokens;
             }
         }
         t

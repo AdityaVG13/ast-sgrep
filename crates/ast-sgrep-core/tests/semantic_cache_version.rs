@@ -146,8 +146,7 @@ fn delete_readd_with_changed_content_serves_fresh_semantic_vectors() {
         .unwrap();
     let old = searcher.search("credential legacy obsolete").unwrap();
     assert!(old.hits.iter().any(|hit| {
-        (hit.kind == HitKind::Embed
-            || hit.contributors.iter().any(|k| *k == HitKind::Embed))
+        (hit.kind == HitKind::Embed || hit.contributors.contains(&HitKind::Embed))
             && hit.symbol.as_deref() == Some("legacy_handler")
     }));
 
@@ -161,8 +160,7 @@ fn delete_readd_with_changed_content_serves_fresh_semantic_vectors() {
 
     let fresh = searcher.search("payment renewal fresh").unwrap();
     assert!(fresh.hits.iter().any(|hit| {
-        (hit.kind == HitKind::Embed
-            || hit.contributors.iter().any(|k| *k == HitKind::Embed))
+        (hit.kind == HitKind::Embed || hit.contributors.contains(&HitKind::Embed))
             && hit.symbol.as_deref() == Some("fresh_handler")
     }));
     assert!(!fresh
@@ -182,10 +180,51 @@ fn clear_all_data_bumps_semantic_data_version() {
         .unwrap();
     let v_before = store.semantic_data_version().unwrap();
     assert_eq!(v_before, 1);
+    let sidecar = ast_sgrep_core::semantic_ivf::semantic_ivf_path(store.db_path());
+    std::fs::write(&sidecar, b"derived sidecar").unwrap();
 
     store.clear_all_data().unwrap();
     let v_after = store.semantic_data_version().unwrap();
     assert_eq!(v_after, 2, "clear_all_data must bump semantic_data_version");
+    assert!(
+        !sidecar.exists(),
+        "clear_all_data must invalidate the semantic sidecar"
+    );
+    assert_eq!(
+        store.get_meta("semantic_ivf_stale").unwrap().as_deref(),
+        Some("1")
+    );
+}
+
+#[test]
+fn semantic_ann_build_does_not_upgrade_a_pinned_read_snapshot() {
+    let temp = TempDir::new().unwrap();
+    let reader = IndexStore::open(temp.path(), None).unwrap();
+    let lines = [(1u32, "def pinned(): pass".into())];
+    let chunks = [chunk("pinned", "def pinned(): pass")];
+    reader
+        .upsert_file(base("pinned.py", &lines, "pinned-hash", &chunks))
+        .unwrap();
+    let writer = IndexStore::open(temp.path(), None).unwrap();
+
+    reader.connection().execute_batch("BEGIN DEFERRED").unwrap();
+    let rows = reader.all_semantic_chunks(None).unwrap();
+    let flat =
+        ast_sgrep_core::semantic_ann::flatten_vectors_for_search(&rows, rows[0].5.len()).unwrap();
+    writer.set_meta("concurrent_commit", "1").unwrap();
+
+    let ranked = ast_sgrep_core::semantic_ann::rank_chunk_indices_flat(
+        &reader,
+        &rows[0].5,
+        &rows,
+        Some(&flat),
+        1,
+        Some(1),
+    )
+    .expect("ANN search must not attempt a metadata write inside the read snapshot");
+    assert_eq!(ranked.len(), 1);
+    assert!(!reader.connection().is_autocommit());
+    reader.connection().execute_batch("COMMIT").unwrap();
 }
 
 // Regression for the emb-empty re-upsert path: a re-upsert of an existing file

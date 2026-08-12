@@ -2,16 +2,23 @@
 
 ## Forbid-soundness (first-party `unsafe`)
 
-Product crates inherit `[workspace.lints.rust] unsafe_code = "forbid"` and each
-crate root carries `#![forbid(unsafe_code)]`. New workspace members must use
-`[lints] workspace = true` so they inherit the ban.
+Ordinary product crates inherit `[workspace.lints.rust] unsafe_code = "forbid"`
+and each crate root carries `#![forbid(unsafe_code)]`. New workspace members
+must use `[lints] workspace = true` so they inherit the ban.
 
-The **only** intentional `unsafe` in this repository is
-`crates/ast-sgrep-mmap`, a sealed wrapper around `memmap2::MmapOptions::map`.
-IVF sidecars are published via write → fsync → rename; callers never mutate a
-mapped inode in place. Do not add `#[allow(unsafe_code)]` in product crates.
+There are exactly two sealed exceptions:
 
-Local / CI gate (also on `pull_request`):
+- `crates/ast-sgrep-mmap` contains the repository's only hand-written `unsafe`,
+  wrapping `memmap2::MmapOptions::map`. IVF sidecars are published via write →
+  fsync → rename; callers never mutate a mapped inode in place.
+- `crates/ast-sgrep-codemode-napi` permits unsafe only because `napi-derive`
+  generates FFI glue for Node's C ABI. Its first-party source contains no
+  hand-written unsafe block.
+
+Do not add `#[allow(unsafe_code)]` or another crate-level exception outside
+these two reviewed boundaries.
+
+Local / manual CI gate:
 
 ```bash
 bash scripts/verify-forbid-soundness
@@ -21,7 +28,7 @@ bash scripts/verify-forbid-soundness
 
 | Gate | What it checks |
 |------|----------------|
-| `scripts/verify-forbid-soundness` | First-party product code cannot use `unsafe` except the sealed mmap crate |
+| `scripts/verify-forbid-soundness` | First-party code cannot use hand-written `unsafe` except the sealed mmap crate; the generated N-API FFI exception stays explicit |
 | `cargo audit` | Known advisories in **dependencies** (RustSec) |
 
 Both are required. Passing audit does not mean forbid-soundness holds.

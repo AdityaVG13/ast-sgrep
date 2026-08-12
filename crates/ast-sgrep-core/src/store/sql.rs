@@ -92,7 +92,7 @@ pub const FILE_CHILD_TABLE_ALLOWLIST: &[&str] = &[
     "semantic_chunks",
 ];
 pub fn assert_sql_ident(name: &str, allowlist: &[&str]) -> Result<()> {
-    if allowlist.iter().any(|a| *a == name) {
+    if allowlist.contains(&name) {
         Ok(())
     } else {
         Err(crate::StoreError::Other(format!(
@@ -248,9 +248,8 @@ where
 pub fn count_star(conn: &Connection, table: &str) -> Result<usize> {
     assert_sql_ident(table, COUNT_TABLE_ALLOWLIST)?;
     conn.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
-        row.get::<_, i64>(0)
+        row.get::<_, usize>(0)
     })
-    .map(|n| n as usize)
     .map_err(Into::into)
 }
 /// Fast existence-style probe: true when table has ≥ `threshold` rows (LIMIT probe, not full COUNT).
@@ -259,12 +258,12 @@ pub fn at_least_rows(conn: &Connection, table: &str, threshold: usize) -> Result
     if threshold == 0 {
         return Ok(true);
     }
-    let n: i64 = conn.query_row(
+    let n: usize = conn.query_row(
         &format!("SELECT COUNT(*) FROM (SELECT 1 FROM {table} LIMIT {threshold})"),
         [],
         |row| row.get(0),
     )?;
-    Ok(n as usize >= threshold)
+    Ok(n >= threshold)
 }
 /// Delete lines_fts + content-sync trigram + lines for one file.
 /// When `from_line` is `Some(n)`, only rows with `line_no >= n` are removed (truncate path).
@@ -322,8 +321,12 @@ pub fn delete_file_children(conn: &Connection, file_id: i64) -> Result<()> {
 /// Fingerprints (`body:`/`struct:`/`eol:`) and `embed_*` backend/dim/cache stats
 /// are wiped so a reindex cannot inherit stale identity (ast-sgrep-28vo).
 #[allow(dead_code)] // kept in sync with CLEAR_ALL_SQL (see clear_all_meta_whitelist_matches_sql)
-pub const CLEAR_ALL_META_WHITELIST: &[&str] =
-    &["root", "semantic_data_version", "index_data_version"];
+pub const CLEAR_ALL_META_WHITELIST: &[&str] = &[
+    "root",
+    "semantic_data_version",
+    "index_data_version",
+    "lexicon_data_version",
+];
 /// Full wipe of index content tables (schema left intact). Order keeps FTS/content-sync safe.
 /// Meta is cleared except the schema whitelist (bead ast-sgrep-28vo).
 pub const CLEAR_ALL_SQL: &str = "\
@@ -331,7 +334,7 @@ DELETE FROM lines_trigram; DELETE FROM lines_fts; DELETE FROM lines_code_fts; DE
 DELETE FROM pattern_nodes; DELETE FROM embeddings; DELETE FROM imports; \
 DELETE FROM callers; DELETE FROM symbols; DELETE FROM lines; DELETE FROM files; \
 DELETE FROM embed_cache; \
-DELETE FROM meta WHERE key NOT IN ('root', 'semantic_data_version', 'index_data_version');";
+DELETE FROM meta WHERE key NOT IN ('root', 'semantic_data_version', 'index_data_version', 'lexicon_data_version');";
 
 #[cfg(test)]
 #[test]

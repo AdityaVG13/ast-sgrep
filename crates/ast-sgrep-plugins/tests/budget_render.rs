@@ -89,7 +89,11 @@ fn budget_is_respected_and_spends_on_the_top_result_first() {
     };
     let plan = select(&hits, tight);
 
-    assert_eq!(plan.len(), 3, "a budget degrades detail, never drops results");
+    assert_eq!(
+        plan.len(),
+        3,
+        "a budget degrades detail, never drops results"
+    );
     assert!(
         plan_cost(&plan) <= tight.max_tokens,
         "plan cost {} exceeded budget {}",
@@ -158,7 +162,7 @@ fn tighter_budgets_never_produce_larger_output() {
             cost >= previous,
             "raising the budget must not shrink output ({previous} -> {cost})"
         );
-        assert!(cost <= max_tokens.max(0), "cost {cost} exceeded {max_tokens}");
+        assert!(cost <= max_tokens, "cost {cost} exceeded {max_tokens}");
         previous = cost;
     }
 }

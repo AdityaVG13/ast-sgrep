@@ -569,8 +569,8 @@ mod tests {
                 contributors: vec![kind],
                 margin: 0.0,
                 confidence: 0.0,
-                excerpt: String::new(),
                 resolution: None,
+                excerpt: String::new(),
             }
         }
         let mut hits = vec![
@@ -616,8 +616,8 @@ mod tests {
                 contributors: vec![HitKind::Asgrep],
                 margin: 0.0,
                 confidence: 0.0,
-                excerpt: symbol.unwrap_or_default().into(),
                 resolution: None,
+                excerpt: symbol.unwrap_or_default().into(),
             }
         }
         let mut hits = vec![

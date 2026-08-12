@@ -48,7 +48,10 @@ fn response_carries_the_snapshot_it_was_read_from() {
     assert!(!response.hits.is_empty(), "fixture must match");
 
     let stamp = &response.snapshot;
-    assert!(stamp.generation > 0, "generation must be recorded: {stamp:?}");
+    assert!(
+        stamp.generation > 0,
+        "generation must be recorded: {stamp:?}"
+    );
     // Assert against the store's own view rather than a literal, so a future
     // schema bump does not look like a snapshot regression.
     assert_eq!(
@@ -198,7 +201,10 @@ fn deferred_read_snapshot_hides_a_concurrent_commit() {
         )
         .expect("bump generation");
     let advanced = writer.index_generation().expect("writer generation");
-    assert!(advanced > pinned, "writer must advance ({pinned} -> {advanced})");
+    assert!(
+        advanced > pinned,
+        "writer must advance ({pinned} -> {advanced})"
+    );
 
     // The reader is still pinned to its snapshot.
     let still = reader.index_generation().expect("reader generation");
@@ -218,6 +224,31 @@ fn deferred_read_snapshot_hides_a_concurrent_commit() {
     assert_eq!(
         reader.index_generation().expect("post-commit generation"),
         advanced
+    );
+}
+
+#[test]
+fn snapshot_setup_failure_does_not_leave_a_read_transaction_open() {
+    let temp = tempfile::tempdir().unwrap();
+    corpus(temp.path(), 1);
+    index_at(temp.path());
+    let searcher = searcher_at(temp.path());
+    searcher
+        .store()
+        .connection()
+        .execute_batch("DROP TABLE meta")
+        .expect("break generation lookup");
+
+    let error = searcher
+        .search("target_symbol_0")
+        .expect_err("generation lookup must fail");
+    assert!(
+        error.to_string().contains("meta"),
+        "unexpected error: {error}"
+    );
+    assert!(
+        searcher.store().connection().is_autocommit(),
+        "failed snapshot setup must still close its transaction"
     );
 }
 
@@ -247,8 +278,7 @@ fn stale_semantic_sidecar_is_reported_as_a_degraded_channel() {
     })
     .expect("searcher");
 
-    let sidecar =
-        ast_sgrep_core::semantic_ivf::semantic_ivf_path(searcher.store().db_path());
+    let sidecar = ast_sgrep_core::semantic_ivf::semantic_ivf_path(searcher.store().db_path());
     assert!(
         sidecar.exists(),
         "fixture must build a real IVF sidecar at {}, or this test proves nothing",

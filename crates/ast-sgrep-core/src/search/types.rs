@@ -89,6 +89,7 @@ pub struct SearchHit {
     /// How a graph edge was resolved, when this hit came from one (dvc4).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resolution: Option<crate::resolution::Resolution>,
+    #[serde(serialize_with = "serialize_excerpt")]
     pub excerpt: String,
 }
 #[derive(serde::Deserialize)]
@@ -146,7 +147,7 @@ impl<'de> serde::Deserialize<'de> for SearchHit {
             },
             // dvc4: resolution is engine-derived, never trusted from the wire.
             resolution: None,
-            excerpt: wire.excerpt,
+            excerpt: bound_excerpt(wire.excerpt),
         })
     }
 }
@@ -185,7 +186,7 @@ impl SearchHit {
             margin: 0.0,
             confidence: 0.0,
             resolution: None,
-            excerpt,
+            excerpt: bound_excerpt(excerpt),
         }
     }
     pub fn span(input: SpanHitInput) -> Self {
@@ -211,7 +212,7 @@ impl SearchHit {
         Self {
             symbol: Some(module_path.clone()),
             language,
-            excerpt: format!("import {module_path}"),
+            excerpt: bound_excerpt(format!("import {module_path}")),
             ..Self::base(HitKind::Import, file, line_no, line_no, 2.0, String::new())
         }
     }
@@ -228,7 +229,7 @@ impl SearchHit {
             caller: Some(caller),
             callee: Some(callee),
             language,
-            excerpt,
+            excerpt: bound_excerpt(excerpt),
             ..Self::base(
                 HitKind::Caller,
                 file,
@@ -252,11 +253,52 @@ impl SearchHit {
             caller: Some(caller.clone()),
             callee: Some(callee.clone()),
             language,
-            excerpt: format!("{caller} calls {callee}"),
+            excerpt: bound_excerpt(format!("{caller} calls {callee}")),
             score,
             ..Self::base(HitKind::Graph, file, line_no, line_no, score, String::new())
         }
     }
+}
+
+pub(crate) fn bound_excerpt(mut excerpt: String) -> String {
+    const MARKER: &str = "\n…";
+    let max = crate::limits::MAX_SEARCH_HIT_EXCERPT_BYTES;
+    if excerpt.len() <= max {
+        return excerpt;
+    }
+    let mut end = max.saturating_sub(MARKER.len());
+    while end > 0 && !excerpt.is_char_boundary(end) {
+        end -= 1;
+    }
+    excerpt.truncate(end);
+    excerpt.push_str(MARKER);
+    excerpt
+}
+
+pub(crate) fn bound_excerpt_ref(excerpt: &str) -> String {
+    const MARKER: &str = "\n…";
+    let max = crate::limits::MAX_SEARCH_HIT_EXCERPT_BYTES;
+    if excerpt.len() <= max {
+        return excerpt.to_owned();
+    }
+    let mut end = max.saturating_sub(MARKER.len());
+    while end > 0 && !excerpt.is_char_boundary(end) {
+        end -= 1;
+    }
+    let mut bounded = String::with_capacity(end + MARKER.len());
+    bounded.push_str(&excerpt[..end]);
+    bounded.push_str(MARKER);
+    bounded
+}
+
+fn serialize_excerpt<S>(excerpt: &str, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    if excerpt.len() <= crate::limits::MAX_SEARCH_HIT_EXCERPT_BYTES {
+        return serializer.serialize_str(excerpt);
+    }
+    serializer.serialize_str(&bound_excerpt_ref(excerpt))
 }
 #[derive(Debug, Clone)]
 pub struct SearchOptions {
@@ -397,19 +439,6 @@ pub struct DegradedChannel {
     pub reason: String,
 }
 
-/// What the planner decided to run, and where it stopped (ocx8).
-#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct PlanTrace {
-    /// Stages actually executed, in order.
-    pub stages: Vec<String>,
-    /// Why the planner stopped before the remaining stages, if it did.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub stopped_because: Option<String>,
-    /// Stages deliberately not run.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub skipped: Vec<String>,
-}
-
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SearchResponse {
     pub query: String,
@@ -427,9 +456,6 @@ pub struct SearchResponse {
     /// Index snapshot this response was built from (d3l5).
     #[serde(default)]
     pub snapshot: SnapshotStamp,
-    /// What the planner ran and why it stopped (ocx8).
-    #[serde(default)]
-    pub plan: PlanTrace,
     /// Repository associations that widened this query (ufk7).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub query_expansions: Vec<QueryExpansion>,
@@ -586,11 +612,11 @@ fn merge_channel_evidence(kept: &mut SearchHit, other: SearchHit) {
         kept.score = other.score;
         kept.kind = other.kind;
         if !other.excerpt.is_empty() {
-            kept.excerpt = other.excerpt;
+            kept.excerpt = bound_excerpt(other.excerpt);
         }
         kept.margin = other.margin;
     } else if kept.excerpt.is_empty() && !other.excerpt.is_empty() {
-        kept.excerpt = other.excerpt;
+        kept.excerpt = bound_excerpt(other.excerpt);
     }
     // Fill in identity details the kept row happened to lack.
     kept.symbol = kept.symbol.take().or(other.symbol);
@@ -658,8 +684,8 @@ mod tests {
             contributors: vec![kind],
             margin: 0.0,
             confidence: 0.0,
-            excerpt: String::new(),
             resolution: None,
+            excerpt: String::new(),
         }
     }
 
@@ -744,5 +770,41 @@ mod tests {
         let hit: SearchHit = serde_json::from_str(json).expect("deserialize without confidence");
         assert_eq!(hit.confidence, 0.0);
         assert_eq!(hit.kind, HitKind::Embed);
+    }
+
+    #[test]
+    fn constructed_and_deserialized_excerpts_are_utf8_safely_bounded() {
+        let oversized = "🦀".repeat(crate::limits::MAX_SEARCH_HIT_EXCERPT_BYTES);
+        let hit = SearchHit::span(SpanHitInput {
+            kind: HitKind::Asgrep,
+            file: "large.rs".into(),
+            line_start: 1,
+            line_end: 1,
+            score: 1.0,
+            excerpt: oversized.clone(),
+            symbol: None,
+            language: Some("rust".into()),
+        });
+        assert!(hit.excerpt.len() <= crate::limits::MAX_SEARCH_HIT_EXCERPT_BYTES);
+        assert!(hit.excerpt.ends_with("\n…"));
+
+        let wire = serde_json::json!({
+            "kind": "asgrep",
+            "file": "large.rs",
+            "line_start": 1,
+            "line_end": 1,
+            "score": 1.0,
+            "excerpt": oversized,
+        });
+        let decoded: SearchHit = serde_json::from_value(wire).expect("bounded hit");
+        assert!(decoded.excerpt.len() <= crate::limits::MAX_SEARCH_HIT_EXCERPT_BYTES);
+        assert!(decoded.excerpt.ends_with("\n…"));
+
+        let mut externally_mutated = hit;
+        externally_mutated.excerpt = "🦀".repeat(crate::limits::MAX_SEARCH_HIT_EXCERPT_BYTES);
+        let encoded = serde_json::to_value(externally_mutated).expect("bounded serialization");
+        let excerpt = encoded["excerpt"].as_str().expect("serialized excerpt");
+        assert!(excerpt.len() <= crate::limits::MAX_SEARCH_HIT_EXCERPT_BYTES);
+        assert!(excerpt.ends_with("\n…"));
     }
 }

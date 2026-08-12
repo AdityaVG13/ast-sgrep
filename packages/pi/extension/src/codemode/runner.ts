@@ -1,3 +1,4 @@
+import { Worker } from "node:worker_threads";
 import type { AsgrepConnector } from "./connector.js";
 import type { DispatchStats } from "./dispatch.js";
 
@@ -25,6 +26,16 @@ export type CodemodeRunResult = CodemodeRunSuccess | CodemodeRunFailure;
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const MAX_CODE_CHARS = 32_000;
+const MAX_BRIDGE_CALLS = 256;
+const MAX_BRIDGE_REQUEST_CHARS = 64_000;
+const MAX_BRIDGE_RESPONSE_CHARS = 4 * 1024 * 1024;
+const MAX_ERROR_CHARS = 8_192;
+const MAX_LOG_LINES = 100;
+const MAX_LOG_CHARS = 64_000;
+const MAX_LOG_LINE_CHARS = 4_096;
+const MAX_RESULT_JSON_CHARS = 1_000_000;
+const RESULT_SERIALIZE_TIMEOUT_MS = 1_000;
+const MAX_TIMER_MS = 2_147_483_647;
 
 /** Strip markdown fences and normalize to an async IIFE expression. */
 export function normalizeCode(raw: string): string {
@@ -52,15 +63,35 @@ type HostMethod = keyof Pick<
   | "catalogDescribe"
 >;
 
+type SandboxCall = {
+  id: number;
+  method: string;
+  payload: string;
+};
+
+type SandboxCalls = {
+  type: "calls";
+  calls: SandboxCall[];
+};
+
+type SandboxDone = {
+  type: "done";
+  ok: boolean;
+  result?: unknown;
+  error?: string;
+  logs: string[];
+};
+
+type SandboxMessage = SandboxCalls | SandboxDone;
+
 /**
  * Run model-generated JavaScript against the typed `asgrep` connector.
  *
- * Trust model (OpenCode-style): Code Mode is an orchestration pattern, not an OS
- * jail. The Pi package already runs with the installing user's privileges. Authority
- * is the explicit `asgrep.*` surface passed into the program — same idea as
- * OpenCode CodeMode exposing only host-supplied tools. We intentionally do **not**
- * use `node:vm` / isolates: same-realm `AsyncFunction` is faster and enough for
- * composition (`Promise.all`, filter, shape).
+ * Model-generated code is not trusted with the extension host's ambient Node
+ * authority. A dedicated worker contains CPU/microtask denial of service; its
+ * VM hides `process`, module loading, and host constructors, with a JSON bridge
+ * as the only exposed capability. This is not an OS sandbox, so deployments
+ * requiring adversarial-code isolation should still restrict the Pi process.
  */
 export async function runCodemode(
   rawCode: string,
@@ -71,7 +102,10 @@ export async function runCodemode(
     stats?: () => DispatchStats;
   } = {},
 ): Promise<CodemodeRunResult> {
-  const timeoutMs = Math.max(1, options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+  const requestedTimeout = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const timeoutMs = Number.isFinite(requestedTimeout)
+    ? Math.min(MAX_TIMER_MS, Math.max(1, Math.trunc(requestedTimeout)))
+    : DEFAULT_TIMEOUT_MS;
   const wall0 = Date.now();
   if (rawCode.length > MAX_CODE_CHARS) {
     return resultErr(`code exceeds ${MAX_CODE_CHARS} characters`, [], rawCode.slice(0, 200), wall0, options.stats);
@@ -80,104 +114,200 @@ export async function runCodemode(
     return resultErr("codemode aborted", [], rawCode.slice(0, 200), wall0, options.stats);
   }
 
-  const logs: string[] = [];
-  const formatLog = (value: unknown): string => {
-    if (typeof value === "string") return value;
-    try {
-      return JSON.stringify(value);
-    } catch {
-      return String(value);
-    }
-  };
-  const consoleApi = Object.freeze({
-    log: (...args: unknown[]) => {
-      logs.push(args.map(formatLog).join(" "));
-    },
-    info: (...args: unknown[]) => {
-      logs.push(args.map(formatLog).join(" "));
-    },
-    warn: (...args: unknown[]) => {
-      logs.push(args.map(formatLog).join(" "));
-    },
-    error: (...args: unknown[]) => {
-      logs.push(args.map(formatLog).join(" "));
-    },
-    debug: (...args: unknown[]) => {
-      logs.push(args.map(formatLog).join(" "));
-    },
-  });
-
-  const methods: HostMethod[] = [
-    "search",
-    "semantic",
-    "chain",
-    "defs",
-    "callers",
-    "imports",
-    "indexStatus",
-    "indexRepo",
-    "catalogSearch",
-    "catalogDescribe",
-  ];
-  const api: Record<string, (args?: Record<string, unknown>) => Promise<unknown>> = Object.create(null);
-  for (const method of methods) {
-    const fn = asgrep[method].bind(asgrep) as (args?: Record<string, unknown>) => Promise<unknown>;
-    api[method] = (args = {}) => fn(args);
-  }
-  Object.freeze(api);
-
   const code = normalizeCode(rawCode);
-  // Same-realm AsyncFunction: faster than node:vm; no microtask-queue isolation issues.
-  const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor as new (
-    ...args: string[]
-  ) => (...args: unknown[]) => Promise<unknown>;
-
-  let run: (...args: unknown[]) => Promise<unknown>;
+  const runController = new AbortController();
+  const hostMethods = {
+    search: asgrep.search.bind(asgrep),
+    semantic: asgrep.semantic.bind(asgrep),
+    chain: asgrep.chain.bind(asgrep),
+    defs: asgrep.defs.bind(asgrep),
+    callers: asgrep.callers.bind(asgrep),
+    imports: asgrep.imports.bind(asgrep),
+    indexStatus: asgrep.indexStatus.bind(asgrep),
+    indexRepo: asgrep.indexRepo.bind(asgrep),
+    catalogSearch: asgrep.catalogSearch.bind(asgrep),
+    catalogDescribe: asgrep.catalogDescribe.bind(asgrep),
+  };
+  const workerUrl = new URL(
+    import.meta.url.endsWith(".ts") ? "./sandbox-worker.ts" : "./sandbox-worker.js",
+    import.meta.url,
+  );
+  let worker: Worker;
   try {
-    run = new AsyncFunction(
-      "asgrep",
-      "console",
-      `"use strict";\nreturn await (${code});`,
-    );
+    worker = new Worker(workerUrl, {
+      workerData: {
+        code,
+        timeoutMs,
+        limits: {
+          bridgeCalls: MAX_BRIDGE_CALLS,
+          bridgeRequestChars: MAX_BRIDGE_REQUEST_CHARS,
+          errorChars: MAX_ERROR_CHARS,
+          logLines: MAX_LOG_LINES,
+          logChars: MAX_LOG_CHARS,
+          logLineChars: MAX_LOG_LINE_CHARS,
+          resultJsonChars: MAX_RESULT_JSON_CHARS,
+          serializeTimeoutMs: RESULT_SERIALIZE_TIMEOUT_MS,
+        },
+      },
+      resourceLimits: {
+        maxOldGenerationSizeMb: 64,
+        maxYoungGenerationSizeMb: 16,
+        stackSizeMb: 4,
+      },
+    });
   } catch (cause) {
     return resultErr(
       cause instanceof Error ? cause.message : String(cause),
-      logs,
+      [],
       code,
       wall0,
       options.stats,
     );
   }
-
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  let onAbort: (() => void) | undefined;
-  try {
-    const races: Array<Promise<unknown>> = [
-      Promise.resolve(run(api, consoleApi)),
-      new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error(`codemode timeout after ${timeoutMs}ms`)), timeoutMs);
-      }),
-    ];
-    if (options.signal) {
-      races.push(new Promise<never>((_, reject) => {
-        onAbort = () => reject(new Error("codemode aborted"));
-        options.signal!.addEventListener("abort", onAbort, { once: true });
-      }));
-    }
-    const value = await Promise.race(races);
-    return resultOk(cloneOut(value), logs, code, wall0, options.stats);
-  } catch (cause) {
-    return resultErr(
-      cause instanceof Error ? cause.message : String(cause),
-      logs,
-      code,
-      wall0,
-      options.stats,
+  return new Promise<CodemodeRunResult>((resolve) => {
+    let active = true;
+    const receivedCallIds = new Set<number>();
+    const finish = (outcome: CodemodeRunResult) => {
+      if (!active) return;
+      active = false;
+      clearTimeout(timer);
+      options.signal?.removeEventListener("abort", onAbort);
+      // Cancel host work that the disposable worker was awaiting or abandoned.
+      runController.abort();
+      void worker.terminate().catch(() => undefined).then(() => {
+        outcome.wallMs = Date.now() - wall0;
+        resolve(outcome);
+      });
+    };
+    const fail = (error: string, logs: string[] = []) => {
+      finish(resultErr(error, logs, code, wall0, options.stats));
+    };
+    const onAbort = () => fail("codemode aborted");
+    const timer = setTimeout(
+      () => fail(`codemode timeout after ${timeoutMs}ms`),
+      timeoutMs,
     );
-  } finally {
-    if (timer) clearTimeout(timer);
-    if (onAbort) options.signal?.removeEventListener("abort", onAbort);
+
+    worker.on("message", (message: unknown) => {
+      if (!active) return;
+      if (!isSandboxMessage(message)) {
+        fail("codemode worker sent an invalid message");
+        return;
+      }
+      if (message.type === "done") {
+        if (message.ok) {
+          finish(resultOk(message.result, message.logs, code, wall0, options.stats));
+        } else {
+          fail(message.error ?? "codemode worker failed", message.logs);
+        }
+        return;
+      }
+      for (const call of message.calls) {
+        if (call.id >= MAX_BRIDGE_CALLS || receivedCallIds.has(call.id)) {
+          fail("codemode worker exceeded its bridge call allowance");
+          return;
+        }
+        receivedCallIds.add(call.id);
+      }
+      for (const call of message.calls) void handleSandboxCall(call);
+    });
+    worker.once("error", (error) => fail(error.message));
+    worker.once("exit", (code) => {
+      if (active) fail(`codemode worker exited ${code}`);
+    });
+
+    const handleSandboxCall = async (call: SandboxCall): Promise<void> => {
+      if (!active) return;
+      let payload: string;
+      try {
+        if (call.payload.length > MAX_BRIDGE_REQUEST_CHARS) {
+          throw new Error(`codemode call arguments exceed ${MAX_BRIDGE_REQUEST_CHARS} characters`);
+        }
+        if (!Object.hasOwn(hostMethods, call.method)) {
+          throw new Error(`unknown asgrep method: ${call.method}`);
+        }
+        const input = JSON.parse(call.payload) as Record<string, unknown>;
+        const methodCall = hostMethods[call.method as HostMethod] as (
+          args: Record<string, unknown>,
+          options?: { signal?: AbortSignal },
+        ) => Promise<unknown>;
+        const value = await methodCall(input, { signal: runController.signal });
+        payload = stringifyBounded(
+          { ok: true, value },
+          MAX_BRIDGE_RESPONSE_CHARS,
+          "codemode call result",
+        );
+      } catch (cause) {
+        payload = JSON.stringify({
+          ok: false,
+          error: safeErrorMessage(cause).slice(0, MAX_ERROR_CHARS),
+        });
+      }
+      if (active) worker.postMessage({ type: "callResult", id: call.id, payload });
+    };
+
+    options.signal?.addEventListener("abort", onAbort, { once: true });
+    if (options.signal?.aborted) onAbort();
+  });
+}
+
+function isSandboxMessage(message: unknown): message is SandboxMessage {
+  if (typeof message !== "object" || message === null || !("type" in message)) return false;
+  if (message.type === "calls") {
+    return "calls" in message
+      && Array.isArray(message.calls)
+      && message.calls.length > 0
+      && message.calls.length <= MAX_BRIDGE_CALLS
+      && message.calls.every((call) => isSandboxCall(call));
   }
+  if (message.type !== "done"
+    || !("ok" in message)
+    || typeof message.ok !== "boolean"
+    || !("logs" in message)
+    || !Array.isArray(message.logs)
+    || message.logs.length > MAX_LOG_LINES
+    || !message.logs.every((line) => typeof line === "string" && line.length <= MAX_LOG_LINE_CHARS)
+    || message.logs.reduce((total, line) => total + line.length, 0) > MAX_LOG_CHARS) {
+    return false;
+  }
+  return !("error" in message)
+    || message.error === undefined
+    || (typeof message.error === "string" && message.error.length <= MAX_ERROR_CHARS);
+}
+
+function isSandboxCall(call: unknown): call is SandboxCall {
+  return typeof call === "object"
+    && call !== null
+    && "id" in call
+    && typeof call.id === "number"
+    && Number.isSafeInteger(call.id)
+    && call.id >= 0
+    && "method" in call
+    && typeof call.method === "string"
+    && "payload" in call
+    && typeof call.payload === "string";
+}
+
+function safeErrorMessage(cause: unknown): string {
+  try {
+    return String(cause instanceof Error ? cause.message : cause);
+  } catch {
+    return "codemode call failed";
+  }
+}
+
+function stringifyBounded(value: unknown, maxBytes: number, label: string): string {
+  let remaining = maxBytes;
+  const payload = JSON.stringify(value, (key, item: unknown) => {
+    remaining -= Buffer.byteLength(key) + 8;
+    if (typeof item === "string") remaining -= Buffer.byteLength(item);
+    if (remaining < 0) throw new Error(`${label} exceeds ${maxBytes} bytes`);
+    return item;
+  });
+  if (payload === undefined || Buffer.byteLength(payload) > maxBytes) {
+    throw new Error(`${label} exceeds ${maxBytes} bytes`);
+  }
+  return payload;
 }
 
 function resultOk(
@@ -204,17 +334,4 @@ function resultErr(
   const stats = statsFn?.();
   if (stats) out.stats = stats;
   return out;
-}
-
-function cloneOut(value: unknown): unknown {
-  if (value === undefined) return undefined;
-  try {
-    return structuredClone(value);
-  } catch {
-    try {
-      return JSON.parse(JSON.stringify(value)) as unknown;
-    } catch {
-      return value;
-    }
-  }
 }

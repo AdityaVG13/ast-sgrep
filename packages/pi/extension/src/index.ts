@@ -12,7 +12,6 @@ import {
   type StickyWorker,
 } from "./codemode/index.js";
 import { AstSgrepRuntime, FreshnessCoordinator, RuntimeError, type FreshnessRuntime, type MachineEnvelope, type RunOptions } from "./runtime.js";
-import { applyEdit, parseEditParams, planEdit } from "./edit.js";
 
 const DEFAULT_LIMIT = 8;
 const MAX_LIMIT = 100;
@@ -52,44 +51,20 @@ const codemodeParameters = Type.Object({
   }),
 }, { additionalProperties: false });
 
-const editPathParameter = Type.String({
-  minLength: 1,
-  maxLength: 4_096,
-  description: "File path relative to the project root (or absolute under root)",
-});
-
-/** Replace arm -- contents / write fields unrepresentable (additionalProperties: false). */
-const editReplaceParameters = Type.Object({
-  path: editPathParameter,
-  old_string: Type.String({ minLength: 1, description: "Exact text to replace" }),
-  new_string: Type.String({ description: "Replacement text" }),
-  replace_all: Type.Optional(Type.Boolean({
-    default: false,
-    description: "Replace every old_string occurrence (default: exactly one match required)",
-  })),
-}, { additionalProperties: false });
-
-/** Write arm -- replace fields unrepresentable (additionalProperties: false). */
-const editWriteParameters = Type.Object({
-  path: editPathParameter,
-  contents: Type.String({ description: "Full file contents for write/create" }),
-}, { additionalProperties: false });
-
-/** Wire oneOf/anyOf aligned with EditPlan modes: replace XOR write. */
-const editParameters = Type.Union([editReplaceParameters, editWriteParameters], {
-  description: "Exactly one mode: replace (old_string+new_string) or write (contents)",
-});
-
 type RuntimeLike = {
   run(args: readonly string[], context: { cwd: string }, options?: RunOptions): Promise<MachineEnvelope>;
   resolveRoot?(context: { cwd: string }): Promise<string>;
   resolveBinaryPath?(options?: { env?: NodeJS.ProcessEnv }): string;
   nativeEnv?(options?: { env?: NodeJS.ProcessEnv }): NodeJS.ProcessEnv;
-  config?: { timeoutMs?: number; refreshIntervalMs?: number };
+  config?: { timeoutMs?: number; maxOutputBytes?: number; refreshIntervalMs?: number };
   inspectIndexCompatibility?(context: { cwd: string }): Promise<"ready" | "missing" | "incompatible">;
   rebuildIncompatibleIndex?(context: { cwd: string }, options?: RunOptions): Promise<MachineEnvelope>;
+  resolveIndexPath?(root: string): string;
+  watchExternalChanges?: boolean;
 };
-type FreshnessLike = Pick<FreshnessCoordinator, "ensureFresh" | "markAffectedPath">;
+type FreshnessLike = Pick<FreshnessCoordinator, "ensureFresh" | "markAffectedPath"> & {
+  shutdown?(): void;
+};
 type ToolContext = { cwd: string };
 type CommandContext = ToolContext & {
   hasUI: boolean;
@@ -204,11 +179,13 @@ export function registerAstSgrepTools(
         binary?: string;
         env: NodeJS.ProcessEnv;
         timeoutMs?: number;
+        maxOutputBytes?: number;
         useEmbed?: boolean;
         indexPath?: string;
       } = { env };
       if (binary) opts.binary = binary;
       if (runtime.config?.timeoutMs !== undefined) opts.timeoutMs = runtime.config.timeoutMs;
+      if (runtime.config?.maxOutputBytes !== undefined) opts.maxOutputBytes = runtime.config.maxOutputBytes;
       if (typeof env.ASGREP_NO_EMBED === "string") {
         opts.useEmbed = env.ASGREP_NO_EMBED !== "1" && env.ASGREP_NO_EMBED !== "true";
       }
@@ -299,18 +276,32 @@ export function registerAstSgrepTools(
     resolveRoot: (context) => resolveRoot(context.cwd),
     nativeCall,
   };
+  if (runtime.watchExternalChanges !== undefined) {
+    warmRuntime.watchExternalChanges = runtime.watchExternalChanges;
+  }
+  if (runtime.resolveIndexPath) {
+    warmRuntime.resolveIndexPath = (root) => runtime.resolveIndexPath!(root);
+  }
   if (runtime.inspectIndexCompatibility) {
     warmRuntime.inspectIndexCompatibility = (context) => runtime.inspectIndexCompatibility!(context);
   }
   if (runtime.rebuildIncompatibleIndex) {
-    warmRuntime.rebuildIncompatibleIndex = (context, options) => runtime.rebuildIncompatibleIndex!(context, options);
+    warmRuntime.rebuildIncompatibleIndex = async (context, options) => {
+      const root = await resolveRoot(context.cwd);
+      await pool.invalidate(root);
+      return runtime.rebuildIncompatibleIndex!(context, options);
+    };
   }
 
   pi.on("tool_result", (event, ctx) => {
     if (event.isError) return;
-    if (event.toolName !== "write" && event.toolName !== "edit" && event.toolName !== "asgrep_edit") return;
+    if (event.toolName !== "write" && event.toolName !== "edit") return;
     const path = event.input.path;
     if (typeof path === "string") freshness.markAffectedPath(path, ctx.cwd);
+  });
+  pi.on("session_shutdown", () => {
+    freshness.shutdown?.();
+    void pool.shutdown();
   });
 
   // Primary surface: Code Mode -- in-process NAPI (MCP-class), compose in JS.
@@ -341,7 +332,13 @@ export function registerAstSgrepTools(
     async execute(_toolCallId, params, signal, onUpdate, ctx) {
       report(onUpdate, "codemode", "started");
       try {
-        const options = signal ? { signal } : {};
+        const timeoutMs = runtime.config?.timeoutMs ?? 30_000;
+        const deadline = Date.now() + timeoutMs;
+        const timeoutSignal = AbortSignal.timeout(timeoutMs);
+        const operationSignal = signal
+          ? AbortSignal.any([signal, timeoutSignal])
+          : timeoutSignal;
+        const options = { signal: operationSignal };
         await freshness.ensureFresh(warmRuntime, { cwd: ctx.cwd }, options);
         ensurePool();
         const root = await resolveRoot(ctx.cwd);
@@ -382,6 +379,7 @@ export function registerAstSgrepTools(
                 };
                 if (o?.signal) stdinOpts.signal = o.signal;
                 if (runtime.config?.timeoutMs !== undefined) stdinOpts.timeoutMs = runtime.config.timeoutMs;
+                if (runtime.config?.maxOutputBytes !== undefined) stdinOpts.maxOutputBytes = runtime.config.maxOutputBytes;
                 return runBatchViaStdin(stdinOpts);
               },
             );
@@ -393,8 +391,8 @@ export function registerAstSgrepTools(
           timeoutMs?: number;
           signal?: AbortSignal;
         } = { stats: bundle.stats };
-        if (runtime.config?.timeoutMs !== undefined) codemodeOptions.timeoutMs = runtime.config.timeoutMs;
-        if (signal) codemodeOptions.signal = signal;
+        codemodeOptions.timeoutMs = Math.max(1, deadline - Date.now());
+        codemodeOptions.signal = operationSignal;
         const outcome = await runCodemode(params.code, bundle.asgrep, codemodeOptions);
         report(onUpdate, "codemode", "completed");
         if (!outcome.ok) {
@@ -499,33 +497,6 @@ export function registerAstSgrepTools(
         return success("status", response);
       } catch (cause) {
         return failure("status", cause);
-      }
-    },
-  });
-
-  pi.registerTool({
-    name: "asgrep_edit",
-    label: "ast-sgrep edit",
-    description: "Edit a project file (exact string replace or full-file write). Marks the index dirty for the next asgrep search. Prefer this over native write/edit when already using asgrep.",
-    parameters: editParameters,
-    async execute(_toolCallId, params, signal, onUpdate, ctx) {
-      report(onUpdate, "edit", "started");
-      try {
-        if (signal?.aborted) throw new RuntimeError("CANCELLED", "edit cancelled");
-        const root = await resolveRoot(ctx.cwd);
-        const plan = planEdit(parseEditParams(params), root);
-        const outcome = await applyEdit(plan);
-        freshness.markAffectedPath(plan.absolutePath, ctx.cwd);
-        report(onUpdate, "edit", "completed");
-        const summary = outcome.mode === "write"
-          ? `edit completed: wrote ${outcome.path}${outcome.created ? " (created)" : ""}`
-          : `edit completed: ${outcome.replacements ?? 0} replacement${(outcome.replacements ?? 0) === 1 ? "" : "s"} in ${outcome.path}`;
-        return {
-          content: [{ type: "text" as const, text: bounded(summary) }],
-          details: { ok: true, command: "edit", ...outcome },
-        };
-      } catch (cause) {
-        return failure("edit", cause, signal);
       }
     },
   });

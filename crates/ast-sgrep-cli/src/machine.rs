@@ -8,7 +8,10 @@ const MAX_ERROR_MESSAGE_CHARS: usize = 4_096;
 /// Write a line. Agents often pipe through `head`/`jq` and close early;
 /// treat broken pipe as success so the process does not panic.
 pub(crate) fn write_line(out: &mut impl Write, line: &str) -> io::Result<()> {
-    match out.write_all(line.as_bytes()).and_then(|_| out.write_all(b"\n")) {
+    match out
+        .write_all(line.as_bytes())
+        .and_then(|_| out.write_all(b"\n"))
+    {
         Ok(()) => Ok(()),
         Err(e) if e.kind() == io::ErrorKind::BrokenPipe => Ok(()),
         Err(e) => Err(e),
@@ -100,8 +103,7 @@ pub(crate) fn print_machine_failure(command: &str, kind: &str, exit_code: i32, m
         "ok": false, "exit_code": exit_code,
         "error": {"kind": kind, "message": bounded_error_message(message)}
     });
-    let payload =
-        serde_json::to_string_pretty(&value).expect("failure envelope serializes");
+    let payload = serde_json::to_string_pretty(&value).expect("failure envelope serializes");
     // Ignore broken pipe: agents piping JSON may close early.
     let _ = write_stdout_line(&payload);
 }
@@ -145,8 +147,7 @@ pub(crate) fn raw_command_name(args: &[std::ffi::OsString]) -> &'static str {
 
 /// Max bytes for `codemode-batch` request payloads (file or stdin).
 /// 4× `MAX_STDIN_LINE_BYTES` keeps batch JSON roomy without unbounded alloc.
-pub(crate) const MAX_BATCH_REQUEST_BYTES: u64 =
-    (ast_sgrep_core::MAX_STDIN_LINE_BYTES as u64) * 4;
+pub(crate) const MAX_BATCH_REQUEST_BYTES: u64 = (ast_sgrep_core::MAX_STDIN_LINE_BYTES as u64) * 4;
 
 /// Read UTF-8 from `reader`, never allocating more than `max_bytes + 1`.
 /// Rejects payloads larger than `max_bytes` (d2a1.9: stdin must not OOM).
@@ -233,4 +234,3 @@ mod tests {
         assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
     }
 }
-

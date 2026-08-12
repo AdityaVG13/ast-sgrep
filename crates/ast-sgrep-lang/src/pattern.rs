@@ -177,10 +177,7 @@ pub fn classify_native(pattern: &str) -> Option<NativeKind> {
     }
     let args = p[open + 1..close].trim();
     // Args must be empty, $$$, or pure metavars separated by commas.
-    if !args.is_empty()
-        && args != "$$$"
-        && !args.split(',').all(is_pure_metavariable)
-    {
+    if !args.is_empty() && args != "$$$" && !args.split(',').all(is_pure_metavariable) {
         return None;
     }
     let callee = p[..open].trim();
@@ -418,10 +415,16 @@ fn path_from_node(node: &Node, source: &str) -> Option<Vec<String>> {
 fn path_matches(actual: &[String], pattern: &[Option<String>]) -> bool {
     let segment_ok = |a: &String, p: &Option<String>| p.as_ref().is_none_or(|w| w == a);
     if actual.len() == pattern.len() {
-        return actual.iter().zip(pattern.iter()).all(|(a, p)| segment_ok(a, p));
+        return actual
+            .iter()
+            .zip(pattern.iter())
+            .all(|(a, p)| segment_ok(a, p));
     }
     // Exact length only — except a single-segment pattern matches the last call segment.
-    pattern.len() == 1 && actual.last().is_some_and(|last| segment_ok(last, &pattern[0]))
+    pattern.len() == 1
+        && actual
+            .last()
+            .is_some_and(|last| segment_ok(last, &pattern[0]))
 }
 
 fn walk_literal(node: Node, source: &str, pattern: &str, out: &mut Vec<PatternMatch>) {

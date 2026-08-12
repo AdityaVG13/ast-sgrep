@@ -51,7 +51,6 @@ fn sample() -> SearchResponse {
         returned_excerpt_bytes: 350,
         prevented_read_bytes: 650,
         snapshot: Default::default(),
-        plan: Default::default(),
         query_expansions: Vec::new(),
     }
 }
@@ -318,7 +317,11 @@ fn compact_minified_is_much_smaller_than_pretty_capsule() {
             "path {path} emitted more than once"
         );
         let name = path.rsplit('/').next().expect("file name");
-        assert_eq!(new.matches(name).count(), 1, "{name} emitted more than once");
+        assert_eq!(
+            new.matches(name).count(),
+            1,
+            "{name} emitted more than once"
+        );
     }
 }
 
@@ -357,7 +360,6 @@ fn many_file_sample() -> SearchResponse {
         returned_excerpt_bytes: 800,
         prevented_read_bytes: 3_200,
         snapshot: Default::default(),
-        plan: Default::default(),
         query_expansions: Vec::new(),
     }
 }
@@ -495,7 +497,6 @@ fn miss_envelope_is_smaller_than_the_agent_zero_hit_response() {
         returned_excerpt_bytes: 0,
         prevented_read_bytes: 0,
         snapshot: Default::default(),
-        plan: Default::default(),
         query_expansions: Vec::new(),
     };
     let old = serde_json::to_string(&format_response_with(

@@ -10,11 +10,11 @@ This guide walks through install, first index, everyday queries, and common conf
 pi install npm:pi-ast-sgrep
 ```
 
-Open Pi in the project you want to search. The extension immediately provides the primary `asgrep` Code Mode tool, plus `asgrep_search`, `asgrep_edit`, `asgrep_index`, and `asgrep_status`; `/asgrep-doctor`, `/asgrep-status`, `/asgrep-index`, and `/asgrep-reindex`; and the `ast-sgrep` skill. The first search lazily creates the index, so no separate setup command is required. Start with:
+Open Pi in the project you want to search. The extension immediately provides the primary `asgrep` Code Mode tool, plus `asgrep_search`, `asgrep_index`, and `asgrep_status`; `/asgrep-doctor`, `/asgrep-status`, `/asgrep-index`, and `/asgrep-reindex`; and the `ast-sgrep` skill. The first search lazily creates the index, so no separate setup command is required. Start with:
 
 1. `/asgrep-doctor` if native availability or configuration is uncertain.
 2. `/asgrep-status` to inspect the current project.
-3. Ask Pi to use `asgrep` for multi-step lookup, or `asgrep_search` with `mode: "defs"`, `"callers"`, or `"semantic"` for one-shot queries. Use `asgrep_edit` for replace/write.
+3. Ask Pi to use `asgrep` for multi-step lookup, or `asgrep_search` with `mode: "defs"`, `"callers"`, or `"semantic"` for one-shot queries.
 
 No Cargo build, source checkout, PATH configuration, MCP adapter, API key, or runtime executable download is part of the Pi package path. Read the [canonical Pi package guide](pi-package.md) before configuring external embeddings, updating, rolling back, or removing the package; it also documents supported hosts, `.asgrep` retention, security, and complete troubleshooting.
 

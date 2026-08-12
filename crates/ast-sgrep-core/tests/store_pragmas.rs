@@ -127,7 +127,10 @@ fn default_durability_never_reaches_synchronous_off() {
     assert_eq!(Durability::FastUnsafe.write_pragma(), "OFF");
 
     // Only the explicit opt-in spelling selects the unsafe profile.
-    assert_eq!(Durability::parse("fast-unsafe"), Some(Durability::FastUnsafe));
+    assert_eq!(
+        Durability::parse("fast-unsafe"),
+        Some(Durability::FastUnsafe)
+    );
     assert_eq!(Durability::parse("balanced"), Some(Durability::Balanced));
     assert_eq!(Durability::parse("strict"), Some(Durability::Strict));
     // An unknown value must not silently downgrade durability.
@@ -143,5 +146,8 @@ fn default_durability_never_reaches_synchronous_off() {
         .query_row("PRAGMA synchronous", [], |row| row.get(0))
         .expect("synchronous");
     store.commit_bulk_tx().expect("commit bulk");
-    assert_ne!(during, 0, "default indexing must never run with synchronous=OFF");
+    assert_ne!(
+        during, 0,
+        "default indexing must never run with synchronous=OFF"
+    );
 }

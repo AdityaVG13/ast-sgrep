@@ -14,6 +14,7 @@
 
 use crate::env_flag::env_flag;
 use serde_json::json;
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::fs::OpenOptions;
 use std::io::Write;
@@ -27,30 +28,32 @@ static ENABLED: OnceLock<bool> = OnceLock::new();
 static RUN_SEQ: AtomicU64 = AtomicU64::new(1);
 static COLLECTOR: OnceLock<Mutex<Collector>> = OnceLock::new();
 
+thread_local! {
+    static CURRENT_RUN_ID: Cell<Option<u64>> = const { Cell::new(None) };
+}
+
 struct SpanAcc {
     category: &'static str,
     evidence: &'static str,
     samples_us: Vec<u64>,
+    sample_count: u64,
     cumulative_us: u128,
 }
 
-struct Collector {
-    /// Nested run depth (index then search can nest in theory).
-    depth: u32,
-    run_id: u64,
+struct RunAcc {
     run_label: &'static str,
-    run_start: Option<Instant>,
+    run_start: Instant,
     spans: HashMap<&'static str, SpanAcc>,
+}
+
+struct Collector {
+    runs: HashMap<u64, RunAcc>,
 }
 
 impl Collector {
     fn new() -> Self {
         Self {
-            depth: 0,
-            run_id: 0,
-            run_label: "",
-            run_start: None,
-            spans: HashMap::new(),
+            runs: HashMap::new(),
         }
     }
 }
@@ -68,60 +71,75 @@ pub fn enabled() -> bool {
 /// Process-scoped profiling run. Emits `run_start` on create and
 /// `span_summary` + `run_complete` on drop when profiling is enabled.
 pub struct Run {
-    active: bool,
+    run_id: Option<u64>,
+    previous_run_id: Option<u64>,
 }
 
 impl Run {
     pub fn start(label: &'static str) -> Self {
         if !enabled() {
-            return Self { active: false };
+            return Self {
+                run_id: None,
+                previous_run_id: None,
+            };
         }
         let run_id = RUN_SEQ.fetch_add(1, Ordering::Relaxed);
         if let Ok(mut g) = collector().lock() {
-            g.depth = g.depth.saturating_add(1);
-            if g.depth == 1 {
-                g.run_id = run_id;
-                g.run_label = label;
-                g.run_start = Some(Instant::now());
-                g.spans.clear();
-                emit(json!({
-                    "event": "perf.profile.run_start",
-                    "run_id": run_id,
-                    "label": label,
-                    "ts_unix_ms": unix_ms(),
-                }));
-            }
+            g.runs.insert(
+                run_id,
+                RunAcc {
+                    run_label: label,
+                    run_start: Instant::now(),
+                    spans: HashMap::new(),
+                },
+            );
+            let previous_run_id = CURRENT_RUN_ID.with(|current| current.replace(Some(run_id)));
+            emit(json!({
+                "event": "perf.profile.run_start",
+                "run_id": run_id,
+                "label": label,
+                "ts_unix_ms": unix_ms(),
+            }));
+            return Self {
+                run_id: Some(run_id),
+                previous_run_id,
+            };
         }
-        Self { active: true }
+        Self {
+            run_id: None,
+            previous_run_id: None,
+        }
+    }
+
+    /// Identifier used to attribute samples collected by worker threads that
+    /// do not inherit the initiating thread's profiler context.
+    pub(crate) fn id(&self) -> Option<u64> {
+        self.run_id
     }
 }
 
 impl Drop for Run {
     fn drop(&mut self) {
-        if !self.active {
-            return;
-        }
-        let Ok(mut g) = collector().lock() else {
+        let Some(run_id) = self.run_id.take() else {
             return;
         };
-        if g.depth == 0 {
+        CURRENT_RUN_ID.with(|current| {
+            if current.get() == Some(run_id) {
+                current.set(self.previous_run_id);
+            }
+        });
+        let Some(mut run) = collector()
+            .lock()
+            .ok()
+            .and_then(|mut collector| collector.runs.remove(&run_id))
+        else {
             return;
-        }
-        g.depth -= 1;
-        if g.depth != 0 {
-            return;
-        }
-        let run_id = g.run_id;
-        let label = g.run_label;
-        let wall_us = g
-            .run_start
-            .take()
-            .map(|t| t.elapsed().as_micros() as u64)
-            .unwrap_or(0);
-        let mut names: Vec<&'static str> = g.spans.keys().copied().collect();
+        };
+        let wall_us = run.run_start.elapsed().as_micros() as u64;
+        let mut names: Vec<&'static str> = run.spans.keys().copied().collect();
         names.sort_unstable();
         for name in names {
-            let Some(acc) = g.spans.get(name) else {
+            let Some(acc) = run.spans.get(name) else {
                 continue;
             };
             let summary = summarize(acc);
@@ -137,11 +155,11 @@ impl Drop for Run {
                 "evidence": acc.evidence,
             }));
         }
-        g.spans.clear();
+        run.spans.clear();
         emit(json!({
             "event": "perf.profile.run_complete",
             "run_id": run_id,
-            "label": label,
+            "label": run.run_label,
             "wall_us": wall_us,
             "ts_unix_ms": unix_ms(),
         }));
@@ -150,6 +168,7 @@ impl Drop for Run {
 
 /// RAII wall-clock span. Records one sample on drop.
 pub struct Span {
+    run_id: Option<u64>,
     name: &'static str,
     category: &'static str,
     evidence: &'static str,
@@ -161,6 +180,7 @@ impl Span {
     pub fn start(name: &'static str, category: &'static str, evidence: &'static str) -> Self {
         if !enabled() {
             return Self {
+                run_id: None,
                 name,
                 category,
                 evidence,
@@ -168,6 +188,7 @@ impl Span {
             };
         }
         Self {
+            run_id: CURRENT_RUN_ID.with(Cell::get),
             name,
             category,
             evidence,
@@ -182,7 +203,14 @@ impl Drop for Span {
             return;
         };
         let us = start.elapsed().as_micros() as u64;
-        record_sample(self.name, self.category, self.evidence, us, true);
+        record_sample_for(
+            self.run_id,
+            self.name,
+            self.category,
+            self.evidence,
+            us,
+            true,
+        );
     }
 }
 
@@ -198,13 +226,36 @@ pub fn record_sample(
     if !enabled() {
         return;
     }
+    let run_id = CURRENT_RUN_ID.with(Cell::get);
+    record_sample_for(run_id, name, category, evidence, us, emit_sample_event);
+}
+
+/// Record a sample for an explicitly captured run. This is used by worker
+/// threads, which do not inherit thread-local profiler context.
+#[inline]
+pub(crate) fn record_sample_for(
+    run_id: Option<u64>,
+    name: &'static str,
+    category: &'static str,
+    evidence: &'static str,
+    us: u64,
+    emit_sample_event: bool,
+) {
+    let Some(run_id) = run_id else {
+        return;
+    };
     if let Ok(mut g) = collector().lock() {
-        let acc = g.spans.entry(name).or_insert_with(|| SpanAcc {
+        let Some(run) = g.runs.get_mut(&run_id) else {
+            return;
+        };
+        let acc = run.spans.entry(name).or_insert_with(|| SpanAcc {
             category,
             evidence,
             samples_us: Vec::new(),
+            sample_count: 0,
             cumulative_us: 0,
         });
+        acc.sample_count = acc.sample_count.saturating_add(1);
         acc.cumulative_us = acc.cumulative_us.saturating_add(u128::from(us));
         if acc.samples_us.len() < MAX_SAMPLES_PER_SPAN {
             acc.samples_us.push(us);
@@ -213,6 +264,7 @@ pub fn record_sample(
     if emit_sample_event {
         emit(json!({
             "event": "perf.profile.sample_collected",
+            "run_id": run_id,
             "span": name,
             "us": us,
             "category": category,
@@ -222,7 +274,7 @@ pub fn record_sample(
 
 struct Summary {
     cumulative_us: u64,
-    count: usize,
+    count: u64,
     p50_us: u64,
     p95_us: u64,
 }
@@ -230,20 +282,12 @@ struct Summary {
 fn summarize(acc: &SpanAcc) -> Summary {
     let mut samples = acc.samples_us.clone();
     samples.sort_unstable();
-    let count = if samples.is_empty() {
-        if acc.cumulative_us > 0 {
-            1
-        } else {
-            0
-        }
-    } else {
-        samples.len()
-    };
     let p50_us = percentile_us(&samples, 50);
     let p95_us = percentile_us(&samples, 95);
     Summary {
-        cumulative_us: u64::try_from(acc.cumulative_us.min(u128::from(u64::MAX))).unwrap_or(u64::MAX),
-        count,
+        cumulative_us: u64::try_from(acc.cumulative_us.min(u128::from(u64::MAX)))
+            .unwrap_or(u64::MAX),
+        count: acc.sample_count,
         p50_us,
         p95_us,
     }
@@ -305,12 +349,27 @@ mod tests {
             category: "index",
             evidence: "test",
             samples_us: vec![10, 20, 30, 40],
+            sample_count: 4,
             cumulative_us: 100,
         };
         let s = summarize(&acc);
         assert_eq!(s.count, 4);
         assert_eq!(s.cumulative_us, 100);
         assert_eq!(s.p50_us, 20);
+    }
+
+    #[test]
+    fn summary_count_is_not_capped_with_percentile_samples() {
+        let acc = SpanAcc {
+            category: "index",
+            evidence: "test",
+            samples_us: vec![10; MAX_SAMPLES_PER_SPAN],
+            sample_count: MAX_SAMPLES_PER_SPAN as u64 + 10,
+            cumulative_us: (MAX_SAMPLES_PER_SPAN as u128 + 10) * 10,
+        };
+        let summary = summarize(&acc);
+        assert_eq!(summary.count, MAX_SAMPLES_PER_SPAN as u64 + 10);
+        assert_eq!(summary.p95_us, 10);
     }
 
     #[test]

@@ -21,6 +21,28 @@ fn read_message_rejects_oversize_content_length() {
 }
 
 #[test]
+fn read_message_rejects_unbounded_or_ambiguous_headers() {
+    let mut long_line = Cursor::new(format!("X-Test: {}\r\n\r\n", "x".repeat(9_000)));
+    assert!(read_message(&mut long_line).is_err());
+
+    let mut many_headers = Cursor::new(
+        std::iter::repeat_n("X-Test: x\r\n", 6_000)
+            .collect::<String>()
+            .into_bytes(),
+    );
+    assert!(read_message(&mut many_headers).is_err());
+
+    let mut duplicate = Cursor::new(b"Content-Length: 2\r\ncontent-length: 2\r\n\r\n{}".as_slice());
+    assert!(read_message(&mut duplicate).is_err());
+}
+
+#[test]
+fn read_message_accepts_case_insensitive_content_length() {
+    let mut cur = Cursor::new(b"content-length: 2\r\n\r\n{}".as_slice());
+    assert_eq!(read_message(&mut cur).unwrap().as_deref(), Some("{}"));
+}
+
+#[test]
 fn read_message_incomplete_returns_none_or_err() {
     let mut cur = Cursor::new(b"Content-Length: 10\r\n\r\nshort");
     let res = read_message(&mut cur);

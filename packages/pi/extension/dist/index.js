@@ -1,7 +1,6 @@
 import { Type } from "typebox";
 import { createAsgrepConnector, runCodemode, runNativeBatch, runBatchViaStdin, CODEMODE_TYPES_FOR_MODEL, NativeSessionPool, argvFor, asEnvelope, } from "./codemode/index.js";
 import { AstSgrepRuntime, FreshnessCoordinator, RuntimeError } from "./runtime.js";
-import { applyEdit, parseEditParams, planEdit } from "./edit.js";
 const DEFAULT_LIMIT = 8;
 const MAX_LIMIT = 100;
 const MAX_EXCERPT_LINES = 100;
@@ -35,30 +34,6 @@ const codemodeParameters = Type.Object({
         description: "JavaScript async body that calls asgrep.* methods. Prefer Promise.all for independent lookups. Return only the shaped final value.",
     }),
 }, { additionalProperties: false });
-const editPathParameter = Type.String({
-    minLength: 1,
-    maxLength: 4_096,
-    description: "File path relative to the project root (or absolute under root)",
-});
-/** Replace arm -- contents / write fields unrepresentable (additionalProperties: false). */
-const editReplaceParameters = Type.Object({
-    path: editPathParameter,
-    old_string: Type.String({ minLength: 1, description: "Exact text to replace" }),
-    new_string: Type.String({ description: "Replacement text" }),
-    replace_all: Type.Optional(Type.Boolean({
-        default: false,
-        description: "Replace every old_string occurrence (default: exactly one match required)",
-    })),
-}, { additionalProperties: false });
-/** Write arm -- replace fields unrepresentable (additionalProperties: false). */
-const editWriteParameters = Type.Object({
-    path: editPathParameter,
-    contents: Type.String({ description: "Full file contents for write/create" }),
-}, { additionalProperties: false });
-/** Wire oneOf/anyOf aligned with EditPlan modes: replace XOR write. */
-const editParameters = Type.Union([editReplaceParameters, editWriteParameters], {
-    description: "Exactly one mode: replace (old_string+new_string) or write (contents)",
-});
 function bounded(text) {
     return text.length <= MAX_CONTENT_CHARS ? text : `${text.slice(0, MAX_CONTENT_CHARS - 1)}…`;
 }
@@ -143,6 +118,8 @@ export function registerAstSgrepTools(pi, runtime = new AstSgrepRuntime(pi), fre
                 opts.binary = binary;
             if (runtime.config?.timeoutMs !== undefined)
                 opts.timeoutMs = runtime.config.timeoutMs;
+            if (runtime.config?.maxOutputBytes !== undefined)
+                opts.maxOutputBytes = runtime.config.maxOutputBytes;
             if (typeof env.ASGREP_NO_EMBED === "string") {
                 opts.useEmbed = env.ASGREP_NO_EMBED !== "1" && env.ASGREP_NO_EMBED !== "true";
             }
@@ -209,20 +186,34 @@ export function registerAstSgrepTools(pi, runtime = new AstSgrepRuntime(pi), fre
         resolveRoot: (context) => resolveRoot(context.cwd),
         nativeCall,
     };
+    if (runtime.watchExternalChanges !== undefined) {
+        warmRuntime.watchExternalChanges = runtime.watchExternalChanges;
+    }
+    if (runtime.resolveIndexPath) {
+        warmRuntime.resolveIndexPath = (root) => runtime.resolveIndexPath(root);
+    }
     if (runtime.inspectIndexCompatibility) {
         warmRuntime.inspectIndexCompatibility = (context) => runtime.inspectIndexCompatibility(context);
     }
     if (runtime.rebuildIncompatibleIndex) {
-        warmRuntime.rebuildIncompatibleIndex = (context, options) => runtime.rebuildIncompatibleIndex(context, options);
+        warmRuntime.rebuildIncompatibleIndex = async (context, options) => {
+            const root = await resolveRoot(context.cwd);
+            await pool.invalidate(root);
+            return runtime.rebuildIncompatibleIndex(context, options);
+        };
     }
     pi.on("tool_result", (event, ctx) => {
         if (event.isError)
             return;
-        if (event.toolName !== "write" && event.toolName !== "edit" && event.toolName !== "asgrep_edit")
+        if (event.toolName !== "write" && event.toolName !== "edit")
             return;
         const path = event.input.path;
         if (typeof path === "string")
             freshness.markAffectedPath(path, ctx.cwd);
+    });
+    pi.on("session_shutdown", () => {
+        freshness.shutdown?.();
+        void pool.shutdown();
     });
     // Primary surface: Code Mode -- in-process NAPI (MCP-class), compose in JS.
     // Sibling to MCP: pick one surface; both link core, never each other.
@@ -252,7 +243,13 @@ export function registerAstSgrepTools(pi, runtime = new AstSgrepRuntime(pi), fre
         async execute(_toolCallId, params, signal, onUpdate, ctx) {
             report(onUpdate, "codemode", "started");
             try {
-                const options = signal ? { signal } : {};
+                const timeoutMs = runtime.config?.timeoutMs ?? 30_000;
+                const deadline = Date.now() + timeoutMs;
+                const timeoutSignal = AbortSignal.timeout(timeoutMs);
+                const operationSignal = signal
+                    ? AbortSignal.any([signal, timeoutSignal])
+                    : timeoutSignal;
+                const options = { signal: operationSignal };
                 await freshness.ensureFresh(warmRuntime, { cwd: ctx.cwd }, options);
                 ensurePool();
                 const root = await resolveRoot(ctx.cwd);
@@ -282,16 +279,16 @@ export function registerAstSgrepTools(pi, runtime = new AstSgrepRuntime(pi), fre
                             stdinOpts.signal = o.signal;
                         if (runtime.config?.timeoutMs !== undefined)
                             stdinOpts.timeoutMs = runtime.config.timeoutMs;
+                        if (runtime.config?.maxOutputBytes !== undefined)
+                            stdinOpts.maxOutputBytes = runtime.config.maxOutputBytes;
                         return runBatchViaStdin(stdinOpts);
                     });
                 }
                 const bundle = createAsgrepConnector(batchHost, { cwd: ctx.cwd }, options);
                 bundle.resetStats();
                 const codemodeOptions = { stats: bundle.stats };
-                if (runtime.config?.timeoutMs !== undefined)
-                    codemodeOptions.timeoutMs = runtime.config.timeoutMs;
-                if (signal)
-                    codemodeOptions.signal = signal;
+                codemodeOptions.timeoutMs = Math.max(1, deadline - Date.now());
+                codemodeOptions.signal = operationSignal;
                 const outcome = await runCodemode(params.code, bundle.asgrep, codemodeOptions);
                 report(onUpdate, "codemode", "completed");
                 if (!outcome.ok) {
@@ -400,64 +397,36 @@ export function registerAstSgrepTools(pi, runtime = new AstSgrepRuntime(pi), fre
             }
         },
     });
-    pi.registerTool({
-        name: "asgrep_edit",
-        label: "ast-sgrep edit",
-        description: "Edit a project file (exact string replace or full-file write). Marks the index dirty for the next asgrep search. Prefer this over native write/edit when already using asgrep.",
-        parameters: editParameters,
-        async execute(_toolCallId, params, signal, onUpdate, ctx) {
-            report(onUpdate, "edit", "started");
-            try {
-                if (signal?.aborted)
-                    throw new RuntimeError("CANCELLED", "edit cancelled");
-                const root = await resolveRoot(ctx.cwd);
-                const plan = planEdit(parseEditParams(params), root);
-                const outcome = await applyEdit(plan);
-                freshness.markAffectedPath(plan.absolutePath, ctx.cwd);
-                report(onUpdate, "edit", "completed");
-                const summary = outcome.mode === "write"
-                    ? `edit completed: wrote ${outcome.path}${outcome.created ? " (created)" : ""}`
-                    : `edit completed: ${outcome.replacements ?? 0} replacement${(outcome.replacements ?? 0) === 1 ? "" : "s"} in ${outcome.path}`;
-                return {
-                    content: [{ type: "text", text: bounded(summary) }],
-                    details: { ok: true, command: "edit", ...outcome },
-                };
-            }
-            catch (cause) {
-                return failure("edit", cause, signal);
-            }
-        },
-    });
 }
-/** Map one-shot search params to typed sticky tool+args. */
+const SEARCH_CALL_SPEC = {
+    semantic: { tool: "semantic" },
+    chain: { tool: "chain" },
+    defs: { tool: "defs", key: "symbol" },
+    callers: { tool: "callers", key: "symbol" },
+    imports: { tool: "imports", key: "module" },
+    pattern: { tool: "search", prefix: "pattern" },
+    word: { tool: "search", prefix: "word" },
+    literal: { tool: "search", prefix: "literal" },
+    regex: { tool: "search", prefix: "regex" },
+    natural: { tool: "search" },
+};
 function searchToolCall(params) {
     const mode = params.mode ?? "natural";
     const limit = params.limit ?? DEFAULT_LIMIT;
     const excerpt_lines = params.excerptLines ?? 0;
-    switch (mode) {
-        case "semantic":
-            return ["semantic", { query: params.query, limit, excerpt_lines, format: "capsule" }];
-        case "chain":
-            return ["chain", { query: params.query, limit, top_n: 20 }];
-        case "defs":
-            return ["defs", { symbol: params.query, limit, excerpt_lines }];
-        case "callers":
-            return ["callers", { symbol: params.query, limit, excerpt_lines }];
-        case "imports":
-            return ["imports", { module: params.query, limit, excerpt_lines }];
-        case "pattern":
-        case "word":
-        case "literal":
-        case "regex":
-            return ["search", { query: `${mode}: ${params.query}`, limit, excerpt_lines, format: "capsule" }];
-        case "natural":
-            return ["search", { query: params.query, limit, excerpt_lines, format: "capsule" }];
-        default: {
-            const _exhaustive = mode;
-            void _exhaustive;
-            return ["search", { query: params.query, limit, excerpt_lines, format: "capsule" }];
-        }
+    const spec = SEARCH_CALL_SPEC[mode];
+    if (spec.tool === "semantic") {
+        return ["semantic", { query: params.query, limit, excerpt_lines, format: "capsule" }];
     }
+    if (spec.tool === "chain") {
+        return ["chain", { query: params.query, limit, top_n: 20 }];
+    }
+    if (spec.tool === "search") {
+        const query = spec.prefix ? `${spec.prefix}: ${params.query}` : params.query;
+        return ["search", { query, limit, excerpt_lines, format: "capsule" }];
+    }
+    // defs / callers / imports
+    return [spec.tool, { [spec.key]: params.query, limit, excerpt_lines }];
 }
 function safeRender(value) {
     try {

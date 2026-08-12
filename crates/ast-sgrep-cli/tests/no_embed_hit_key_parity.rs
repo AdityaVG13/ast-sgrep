@@ -13,10 +13,7 @@ fn sorted_keys(mut keys: Vec<SurfaceHitKey>) -> Vec<SurfaceHitKey> {
 }
 
 fn embed_keys(keys: &[SurfaceHitKey]) -> Vec<SurfaceHitKey> {
-    keys.iter()
-        .filter(|k| k.kind == "embed")
-        .cloned()
-        .collect()
+    keys.iter().filter(|k| k.kind == "embed").cloned().collect()
 }
 
 /// x1p5: multi-mode surface equivalence (CLI / core / LSP HitKeys) with

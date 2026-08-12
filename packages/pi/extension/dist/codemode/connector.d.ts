@@ -24,34 +24,54 @@ export type DispatchSurface = {
     }): Promise<MachineEnvelope>;
 };
 export type AsgrepConnector = {
-    search(input: SearchArgs): Promise<MachineEnvelope>;
-    semantic(input: SearchArgs): Promise<MachineEnvelope>;
-    chain(input: ChainArgs): Promise<MachineEnvelope>;
+    search(input: SearchArgs, options?: {
+        signal?: AbortSignal;
+    }): Promise<MachineEnvelope>;
+    semantic(input: SearchArgs, options?: {
+        signal?: AbortSignal;
+    }): Promise<MachineEnvelope>;
+    chain(input: ChainArgs, options?: {
+        signal?: AbortSignal;
+    }): Promise<MachineEnvelope>;
     defs(input: {
         symbol: string;
         limit?: number;
         excerptLines?: number;
+    }, options?: {
+        signal?: AbortSignal;
     }): Promise<MachineEnvelope>;
     callers(input: {
         symbol: string;
         limit?: number;
         excerptLines?: number;
+    }, options?: {
+        signal?: AbortSignal;
     }): Promise<MachineEnvelope>;
     imports(input: {
         module: string;
         limit?: number;
         excerptLines?: number;
+    }, options?: {
+        signal?: AbortSignal;
     }): Promise<MachineEnvelope>;
-    indexStatus(): Promise<MachineEnvelope>;
+    indexStatus(options?: {
+        signal?: AbortSignal;
+    }): Promise<MachineEnvelope>;
     indexRepo(input?: {
         force?: boolean;
+    }, options?: {
+        signal?: AbortSignal;
     }): Promise<MachineEnvelope>;
     /** Progressive discovery (like deferred tools) — list/filter available asgrep tools. */
     catalogSearch(input: {
         query: string;
+    }, options?: {
+        signal?: AbortSignal;
     }): Promise<MachineEnvelope>;
     catalogDescribe(input: {
         name: string;
+    }, options?: {
+        signal?: AbortSignal;
     }): Promise<MachineEnvelope>;
 };
 export type ConnectorBundle = {

@@ -90,7 +90,7 @@ mod tests {
     fn semantic_backend_identity_includes_layout_and_dimension() {
         assert_eq!(
             configured_backend_model_id(EmbedBackendKind::Semantic, 256).as_deref(),
-            Some("semantic:hashed-v1:256")
+            Some("semantic:hashed-v2:256")
         );
         assert!(configured_backend_model_id(EmbedBackendKind::Neural, 256)
             .unwrap()

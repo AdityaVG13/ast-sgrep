@@ -1,9 +1,9 @@
+use crate::support::path_to_file_uri;
 use crate::support::{
     call_hierarchy_endpoint, document_symbol_kind, extract_identifier_at, innermost_symbol,
     line_at_index, line_range, line_range_ext, location_value, try_apply_text_edit,
     utf16_char_to_byte, workspace_symbol, AsgrepSettings,
 };
-use crate::support::path_to_file_uri;
 pub use crate::support::{path_to_file_uri as path_to_uri, uri_to_rel_path};
 use crate::types::{
     CallHierarchyItem, DocumentSymbolParams, ExecuteCommandParams, TextDocumentContentChangeEvent,
@@ -33,11 +33,40 @@ fn first_cmd_arg(p: &ExecuteCommandParams) -> &str {
     p.arguments.first().and_then(|v| v.as_str()).unwrap_or("")
 }
 
+fn resolve_lsp_index_path(
+    root: &Path,
+    configured: &str,
+    allow_external: bool,
+) -> anyhow::Result<PathBuf> {
+    anyhow::ensure!(
+        allow_external,
+        "custom LSP indexPath is disabled by default; indexes use the private user cache. Set ASGREP_ALLOW_EXTERNAL_INDEX=1 only for a trusted operator-supplied path"
+    );
+    let requested = Path::new(configured);
+    Ok(if requested.is_absolute() {
+        requested.to_path_buf()
+    } else {
+        root.join(requested)
+    })
+}
+
 impl LspBackend {
     pub fn new(root: PathBuf) -> Self {
+        Self::with_index_path(crate::support::canonicalize_workspace_root(root), None)
+    }
+
+    /// Construct the stdio LSP backend with a race-safe default outside the
+    /// workspace. This is fallible because a private cache home is required.
+    pub fn new_cached(root: PathBuf) -> anyhow::Result<Self> {
+        let root = root.canonicalize()?;
+        let index_path = ast_sgrep_core::store::cache_index_path(&root)?;
+        Ok(Self::with_index_path(root, Some(index_path)))
+    }
+
+    fn with_index_path(root: PathBuf, index_path: Option<PathBuf>) -> Self {
         Self {
-            root: crate::support::canonicalize_workspace_root(root),
-            index_path: None,
+            root,
+            index_path,
             settings: AsgrepSettings::default(),
             index_ready: Arc::new(AtomicBool::new(false)),
             background_index_started: false,
@@ -46,11 +75,16 @@ impl LspBackend {
         }
     }
 
-    pub fn apply_settings(&mut self, settings: AsgrepSettings) {
+    pub fn apply_settings(&mut self, settings: AsgrepSettings) -> anyhow::Result<()> {
         if let Some(ref p) = settings.index_path {
-            self.index_path = Some(PathBuf::from(p));
+            self.index_path = Some(resolve_lsp_index_path(
+                &self.root,
+                p,
+                ast_sgrep_core::env_flag::env_flag("ASGREP_ALLOW_EXTERNAL_INDEX"),
+            )?);
         }
         self.settings = settings;
+        Ok(())
     }
 
     pub fn root(&self) -> &Path {
@@ -135,7 +169,12 @@ impl LspBackend {
             .collect())
     }
 
-    fn prefixed_hits(&self, s: &Searcher, prefix: &str, symbol: &str) -> anyhow::Result<Vec<Value>> {
+    fn prefixed_hits(
+        &self,
+        s: &Searcher,
+        prefix: &str,
+        symbol: &str,
+    ) -> anyhow::Result<Vec<Value>> {
         self.hit_locations(s, &format!("{prefix}{symbol}"))
     }
 
@@ -489,7 +528,7 @@ impl LspBackend {
 
 #[cfg(test)]
 mod dirty_lock_tests {
-    use super::LspBackend;
+    use super::{resolve_lsp_index_path, LspBackend};
     use std::panic::{catch_unwind, AssertUnwindSafe};
     use std::sync::Arc;
 
@@ -517,5 +556,47 @@ mod dirty_lock_tests {
             backend.dirty_map().get("src/a.rs").map(String::as_str),
             Some("fn a() {}\n")
         );
+    }
+
+    #[test]
+    fn custom_index_path_requires_explicit_trusted_operator_opt_in() {
+        let workspace = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let root = workspace.path().canonicalize().unwrap();
+
+        let error = resolve_lsp_index_path(&root, "state/index.db", false)
+            .expect_err("all custom paths must require explicit opt-in");
+        assert!(error.to_string().contains("disabled by default"));
+
+        let allowed = resolve_lsp_index_path(
+            &root,
+            outside.path().join("index.db").to_str().unwrap(),
+            true,
+        )
+        .unwrap();
+        assert_eq!(allowed, outside.path().join("index.db"));
+    }
+
+    #[test]
+    fn trusted_relative_index_path_resolves_under_workspace() {
+        let workspace = tempfile::tempdir().unwrap();
+        let root = workspace.path().canonicalize().unwrap();
+        let path = resolve_lsp_index_path(&root, "state/index.db", true).unwrap();
+        assert_eq!(path, root.join("state/index.db"));
+
+        let mut backend = LspBackend::new(root.clone());
+        backend.index_path = Some(path);
+        assert_eq!(backend.index_options().index_path, backend.index_path);
+        assert_eq!(backend.search_options(1).index_path, backend.index_path);
+    }
+
+    #[test]
+    fn default_index_path_uses_private_cache() {
+        let workspace = tempfile::tempdir().unwrap();
+        let root = workspace.path().canonicalize().unwrap();
+        let backend = LspBackend::new_cached(root.clone()).unwrap();
+        let index_path = backend.index_path.expect("private cache path");
+        assert!(!index_path.starts_with(root));
+        assert!(index_path.ends_with("index.db"));
     }
 }

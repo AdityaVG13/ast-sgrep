@@ -4,7 +4,12 @@
 //! long-lived MCP / Code Mode Searcher caches poll it and reopen when it changes.
 //! This is not a lease or IPC bus — peers detect staleness by reading the file.
 
-use super::{as_db_path, GENERATIONS_DIR, INDEX_DIR};
+use super::{as_db_path, INDEX_DIR};
+
+/// Historical generation-layout directory name. Origin no longer uses
+/// build-then-swap, but leftover `generations/<id>/index.db` paths still
+/// stamp the enclosing `.asgrep/` home so peers share one epoch file.
+const GENERATIONS_DIR: &str = "generations";
 use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};

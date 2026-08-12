@@ -12,6 +12,8 @@ use std::io::{self, BufRead, Write};
 use std::path::{Component, Path, PathBuf};
 
 pub const MAX_MESSAGE_BYTES: usize = 8 * 1024 * 1024;
+const MAX_HEADER_LINE_BYTES: usize = 8 * 1024;
+const MAX_HEADER_BYTES: usize = 64 * 1024;
 
 pub fn read_message(reader: &mut impl BufRead) -> io::Result<Option<String>> {
     let Some(len) = read_content_length(reader)? else {
@@ -32,18 +34,54 @@ pub fn read_message(reader: &mut impl BufRead) -> io::Result<Option<String>> {
 
 fn read_content_length(reader: &mut impl BufRead) -> io::Result<Option<usize>> {
     let mut content_length = None;
+    let mut header_bytes = 0usize;
+    let mut saw_header = false;
     loop {
-        let mut line = String::new();
-        if reader.read_line(&mut line)? == 0 {
-            return Ok(None);
-        }
-        let line = line.trim_end_matches(['\r', '\n']);
+        let Some(line) =
+            ast_sgrep_core::io_bounds::read_bounded_line(reader, MAX_HEADER_LINE_BYTES)?
+        else {
+            return if saw_header {
+                Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "incomplete LSP header",
+                ))
+            } else {
+                Ok(None)
+            };
+        };
+        let line = match line {
+            ast_sgrep_core::io_bounds::BoundedLine::Line(line) => line,
+            ast_sgrep_core::io_bounds::BoundedLine::TooLong => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "LSP header line exceeds limit",
+                ))
+            }
+        };
+        header_bytes = header_bytes
+            .checked_add(line.len().saturating_add(1))
+            .filter(|bytes| *bytes <= MAX_HEADER_BYTES)
+            .ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidData, "LSP headers exceed limit")
+            })?;
         if line.is_empty() {
             break;
         }
-        let Some(rest) = line.strip_prefix("Content-Length:") else {
+        saw_header = true;
+        let line = std::str::from_utf8(&line)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+        let Some((name, rest)) = line.split_once(':') else {
             continue;
         };
+        if !name.eq_ignore_ascii_case("Content-Length") {
+            continue;
+        }
+        if content_length.is_some() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "duplicate Content-Length header",
+            ));
+        }
         content_length = Some(rest.trim().parse().map_err(|e| {
             io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -102,12 +140,9 @@ impl AsgrepSettings {
         serde_json::from_value(value.clone()).unwrap_or_default()
     }
 
-    fn apply_path_ann(&self, index_path: &mut Option<PathBuf>, ann: &mut Option<usize>) {
+    fn apply_ann(&self, ann: &mut Option<usize>) {
         if let Some(t) = self.ann_threshold {
             *ann = Some(t);
-        }
-        if let Some(ref p) = self.index_path {
-            *index_path = Some(PathBuf::from(p));
         }
     }
 
@@ -128,7 +163,7 @@ impl AsgrepSettings {
         if self.semantic_only == Some(true) {
             opts.embed_backend = EmbedBackend::Semantic;
         }
-        self.apply_path_ann(&mut opts.index_path, &mut opts.ann_threshold);
+        self.apply_ann(&mut opts.ann_threshold);
     }
 
     pub fn apply_to_search_options(&self, opts: &mut SearchOptions) {
@@ -144,7 +179,7 @@ impl AsgrepSettings {
         if let Some(s) = self.semantic_only {
             opts.use_semantic_only = s;
         }
-        self.apply_path_ann(&mut opts.index_path, &mut opts.ann_threshold);
+        self.apply_ann(&mut opts.ann_threshold);
     }
 }
 
@@ -285,13 +320,16 @@ pub fn try_apply_text_edit(
     let Some(range) = &change.range else {
         return Ok(change.text.clone());
     };
-    let start = pos_to_byte(content, &range.start)
-        .ok_or_else(|| anyhow::anyhow!("invalid text edit range: start position is out of bounds"))?;
+    let start = pos_to_byte(content, &range.start).ok_or_else(|| {
+        anyhow::anyhow!("invalid text edit range: start position is out of bounds")
+    })?;
     let end = match change.range_length {
-        Some(len) => utf16_span_end(content, &range.start, len)
-            .ok_or_else(|| anyhow::anyhow!("invalid text edit range: rangeLength is out of bounds"))?,
-        None => pos_to_byte(content, &range.end)
-            .ok_or_else(|| anyhow::anyhow!("invalid text edit range: end position is out of bounds"))?,
+        Some(len) => utf16_span_end(content, &range.start, len).ok_or_else(|| {
+            anyhow::anyhow!("invalid text edit range: rangeLength is out of bounds")
+        })?,
+        None => pos_to_byte(content, &range.end).ok_or_else(|| {
+            anyhow::anyhow!("invalid text edit range: end position is out of bounds")
+        })?,
     };
     if start > end || end > content.len() {
         anyhow::bail!(
@@ -348,8 +386,7 @@ fn pos_to_byte(content: &str, pos: &Position) -> Option<usize> {
         next_line += 1;
     }
     let trailing_empty_line = content.is_empty() || content.ends_with('\n');
-    (trailing_empty_line && pos.line == next_line && pos.character == 0)
-        .then_some(content.len())
+    (trailing_empty_line && pos.line == next_line && pos.character == 0).then_some(content.len())
 }
 
 pub fn extract_identifier_at(line: &str, byte_offset: usize) -> Option<String> {

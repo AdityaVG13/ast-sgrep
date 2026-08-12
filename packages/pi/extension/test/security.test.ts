@@ -59,7 +59,14 @@ test("concurrent refresh failure rejects every waiter, clears in-flight state, a
         await gate.promise;
         throw new Error("concurrent index failure");
       }
-      return { tool: "asgrep", schema_version: "1.0.0", ok: true, index: { exists: true, compatible: true, status: "ready" } };
+      return {
+        tool: "asgrep",
+        schema_version: "1.0.0",
+        ok: true,
+        index: { exists: true, compatible: true, status: "ready" },
+        files_failed: 0,
+        walk_errors: false,
+      };
     },
   };
   const freshness = new FreshnessCoordinator();

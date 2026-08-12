@@ -9,6 +9,7 @@
  * 2. `@ast-sgrep/<platform>/ast-sgrep-codemode.node` via launcher (release install)
  * 3. Local `extension/native/` / cargo `target/release` (dev builds)
  */
+export declare const CODEMODE_BINDING_VERSION = "1.4.0";
 export type NativeSessionConfig = {
     root?: string;
     indexPath?: string;
@@ -34,22 +35,16 @@ export type NativeBatchResponse = {
     mode: string;
 };
 export type NativeSession = {
-    call(tool: string, args?: Record<string, unknown>): unknown;
+    call(tool: string, args?: Record<string, unknown>, signal?: AbortSignal): Promise<unknown>;
+    batch(calls: NativeBatchCall[], signal?: AbortSignal): Promise<NativeBatchResponse>;
     readonly callCount: number;
     readonly root: string;
 };
 export type CodemodeNativeBinding = {
     Session: new (config?: NativeSessionConfig) => NativeSession;
-    batch(request: {
-        root?: string;
-        indexPath?: string;
-        useEmbed?: boolean;
-        limit?: number;
-        parallelMode?: string;
-        calls: NativeBatchCall[];
-    }): NativeBatchResponse;
     bindingVersion(): string;
     isNative(): boolean;
+    asyncApiVersion(): number;
 };
 /** Load the NAPI binding once. Returns null if unavailable on this host. */
 export declare function loadCodemodeNative(): CodemodeNativeBinding | null;

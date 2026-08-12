@@ -1,6 +1,6 @@
 use ast_sgrep_codemode::{
     run_batch, run_serve, BatchCall, BatchRequest, CodeModeSession, ParallelMode, ServeRequest,
-    ServeResponse, SessionConfig,
+    ServeResponse, SessionConfig, MAX_BATCH_ERROR_BYTES, MAX_BATCH_RESPONSE_BYTES,
 };
 use ast_sgrep_core::{IndexOptions, Indexer};
 use ast_sgrep_testkit::sample_root;
@@ -31,7 +31,11 @@ fn indexed_config() -> (TempDir, SessionConfig) {
     (temp, config)
 }
 
-fn batch_req(config: &SessionConfig, parallel: Option<bool>, calls: Vec<BatchCall>) -> BatchRequest {
+fn batch_req(
+    config: &SessionConfig,
+    parallel: Option<bool>,
+    calls: Vec<BatchCall>,
+) -> BatchRequest {
     BatchRequest {
         root: Some(config.root.clone()),
         index_path: config.index_path.clone(),
@@ -164,6 +168,47 @@ fn batch_partial_failure_keeps_sibling_ok() {
 }
 
 #[test]
+fn batch_drops_values_beyond_the_aggregate_response_budget() {
+    let (_tmp, config) = indexed_config();
+    let payload = "x".repeat(900_000);
+    let calls = (0..5)
+        .map(|index| BatchCall {
+            id: index.to_string(),
+            tool: "select".into(),
+            args: json!({"value": {"payload": payload}, "fields": ["payload"]}),
+        })
+        .collect();
+    let response =
+        run_batch(config.clone(), &batch_req(&config, Some(false), calls)).expect("bounded batch");
+    assert!(!response.all_ok);
+    assert!(response.results.iter().any(|result| {
+        !result.ok
+            && result
+                .error
+                .as_deref()
+                .is_some_and(|error| error.contains(&MAX_BATCH_RESPONSE_BYTES.to_string()))
+    }));
+    let encoded = serde_json::to_vec(&response).expect("response JSON");
+    assert!(encoded.len() <= MAX_BATCH_RESPONSE_BYTES);
+}
+
+#[test]
+fn batch_rejects_oversized_response_identifiers() {
+    let (_tmp, config) = indexed_config();
+    let request = batch_req(
+        &config,
+        Some(false),
+        vec![BatchCall {
+            id: "x".repeat(129),
+            tool: "search".into(),
+            args: json!({"query": "auth"}),
+        }],
+    );
+    let error = run_batch(config, &request).unwrap_err();
+    assert!(error.to_string().contains("id exceeds 128 bytes"));
+}
+
+#[test]
 fn batch_beats_cold_sequential_sessions_on_wall_time() {
     let (_tmp, config) = indexed_config();
     let calls = vec![
@@ -256,6 +301,48 @@ fn sticky_serve_reuses_session_across_calls() {
 }
 
 #[test]
+fn sticky_serve_preserves_valid_id_on_schema_errors() {
+    let (_tmp, config) = indexed_config();
+    let input = b"{\"type\":\"call\",\"id\":\"request-7\",\"tool\":7}\n";
+    let mut out = Vec::new();
+    run_serve(config, Cursor::new(input), &mut out).expect("serve");
+    let response: ServeResponse = serde_json::from_slice(out.strip_suffix(b"\n").unwrap()).unwrap();
+    match response {
+        ServeResponse::Error { id, .. } => assert_eq!(id.as_deref(), Some("request-7")),
+        other => panic!("expected validation error, got {other:?}"),
+    }
+}
+
+#[test]
+fn sticky_serve_bounds_request_derived_tool_errors() {
+    let (_tmp, config) = indexed_config();
+    let name = "unknown".repeat(4_000);
+    let input = format!(
+        "{}\n",
+        serde_json::to_string(&ServeRequest::Call {
+            id: "bounded-error".into(),
+            tool: "catalog_describe".into(),
+            args: json!({ "name": name }),
+        })
+        .unwrap()
+    );
+    let mut out = Vec::new();
+    run_serve(config, Cursor::new(input), &mut out).expect("serve");
+    let response: ServeResponse = serde_json::from_slice(out.strip_suffix(b"\n").unwrap()).unwrap();
+    match response {
+        ServeResponse::Result {
+            ok: false,
+            error: Some(error),
+            ..
+        } => {
+            assert!(error.len() <= MAX_BATCH_ERROR_BYTES);
+            assert!(error.ends_with('…'));
+        }
+        other => panic!("expected bounded tool error, got {other:?}"),
+    }
+}
+
+#[test]
 fn searcher_cache_survives_limit_changes() {
     let (_tmp, config) = indexed_config();
     let mut session = CodeModeSession::new(config);
@@ -266,7 +353,9 @@ fn searcher_cache_survives_limit_changes() {
     let second = session
         .call("search", json!({"query": "token", "limit": 5}))
         .expect("second");
-    assert!(second.get("hits").is_some() || second.get("hit_count").is_some() || second.is_object());
+    assert!(
+        second.get("hits").is_some() || second.get("hit_count").is_some() || second.is_object()
+    );
 }
 
 #[test]

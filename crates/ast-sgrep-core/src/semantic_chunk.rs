@@ -221,16 +221,10 @@ fn comment_markers_for(language: Option<&str>) -> &'static [&'static str] {
     match language {
         Some("python") | Some("ruby") => &["#"],
         Some("php") => &["#", "//", "/**", "/*", "*/", "*"],
-        Some("rust")
-        | Some("typescript")
-        | Some("javascript")
-        | Some("java")
-        | Some("go")
-        | Some("csharp")
-        | Some("c")
-        | Some("cpp")
-        | Some("kotlin")
-        | Some("swift") => &["///", "//!", "//", "/**", "/*", "*/", "*"],
+        Some("rust") | Some("typescript") | Some("javascript") | Some("java") | Some("go")
+        | Some("csharp") | Some("c") | Some("cpp") | Some("kotlin") | Some("swift") => {
+            &["///", "//!", "//", "/**", "/*", "*/", "*"]
+        }
         // Unknown: C-style only — never bare `#`.
         _ => &["///", "//!", "//", "/**", "/*", "*/", "*", "--"],
     }
@@ -350,7 +344,8 @@ mod tests {
             line_end: 4,
             excerpt: "inside_call()".into(),
         }];
-        let chunks = build_semantic_chunks_with_patterns(&[outer, inner], &[], &nodes, &lines, None);
+        let chunks =
+            build_semantic_chunks_with_patterns(&[outer, inner], &[], &nodes, &lines, None);
         let owners = chunks
             .iter()
             .filter(|chunk| chunk.excerpt == "inside_call()")
@@ -376,7 +371,8 @@ mod tests {
                 excerpt: "charge()".into(),
             },
         ];
-        let chunks = build_semantic_chunks_with_patterns(&[function(1, 1)], &[], &nodes, &lines, None);
+        let chunks =
+            build_semantic_chunks_with_patterns(&[function(1, 1)], &[], &nodes, &lines, None);
         assert_eq!(chunks.len(), 1);
         assert_eq!(chunks[0].excerpt, "charge()");
         assert_eq!((chunks[0].line_start, chunks[0].line_end), (1, 1));
@@ -411,11 +407,13 @@ mod tests {
                 excerpt: format!("child_{line}"),
             })
             .collect::<Vec<_>>();
-        let chunks = build_semantic_chunks_with_patterns(&[function(1, 60)], &[], &nodes, &[], None);
+        let chunks =
+            build_semantic_chunks_with_patterns(&[function(1, 60)], &[], &nodes, &[], None);
         assert_eq!(chunks.len(), MAX_CHILD_CHUNKS_PER_PARENT);
 
         let lines = [(1, "fn renew_account() {}".into())];
-        let fallback = build_semantic_chunks_with_patterns(&[function(1, 1)], &[], &[], &lines, None);
+        let fallback =
+            build_semantic_chunks_with_patterns(&[function(1, 1)], &[], &[], &lines, None);
         assert_eq!(fallback.len(), 1);
         assert_eq!(fallback[0].excerpt, "fn renew_account() {}");
     }
@@ -430,10 +428,7 @@ mod tests {
             byte_start: 20,
             byte_end: 40,
         }];
-        let lines = [
-            (1u32, "#[derive(Debug)]".into()),
-            (2, "fn foo() {}".into()),
-        ];
+        let lines = [(1u32, "#[derive(Debug)]".into()), (2, "fn foo() {}".into())];
         let chunks = build_semantic_chunks_with_patterns(&symbols, &[], &[], &lines, Some("rust"));
         assert_eq!(chunks.len(), 1);
         assert!(
@@ -458,10 +453,7 @@ mod tests {
             byte_start: 20,
             byte_end: 40,
         }];
-        let lines = [
-            (1u32, "/// does a thing".into()),
-            (2, "fn foo() {}".into()),
-        ];
+        let lines = [(1u32, "/// does a thing".into()), (2, "fn foo() {}".into())];
         let chunks = build_semantic_chunks_with_patterns(&symbols, &[], &[], &lines, Some("rust"));
         assert_eq!(chunks[0].doc, "does a thing");
     }
@@ -476,11 +468,9 @@ mod tests {
             byte_start: 20,
             byte_end: 40,
         }];
-        let lines = [
-            (1u32, "  #foo = 1;".into()),
-            (2, "  method() {}".into()),
-        ];
-        let chunks = build_semantic_chunks_with_patterns(&symbols, &[], &[], &lines, Some("typescript"));
+        let lines = [(1u32, "  #foo = 1;".into()), (2, "  method() {}".into())];
+        let chunks =
+            build_semantic_chunks_with_patterns(&symbols, &[], &[], &lines, Some("typescript"));
         assert_eq!(chunks.len(), 1);
         assert!(
             chunks[0].doc.is_empty(),
@@ -499,11 +489,9 @@ mod tests {
             byte_start: 20,
             byte_end: 40,
         }];
-        let lines = [
-            (1u32, "# helper".into()),
-            (2, "def foo():".into()),
-        ];
-        let chunks = build_semantic_chunks_with_patterns(&symbols, &[], &[], &lines, Some("python"));
+        let lines = [(1u32, "# helper".into()), (2, "def foo():".into())];
+        let chunks =
+            build_semantic_chunks_with_patterns(&symbols, &[], &[], &lines, Some("python"));
         assert_eq!(chunks[0].doc, "helper");
     }
 }

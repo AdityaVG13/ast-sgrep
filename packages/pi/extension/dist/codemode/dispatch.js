@@ -8,6 +8,20 @@ import { mkdtemp, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 const MAX_WAVE = 32;
+const MUTATING_TOOLS = new Set(["index_repo"]);
+const abortError = () => Object.assign(new Error("codemode aborted"), { name: "AbortError" });
+function rejectWave(wave, cause) {
+    for (const item of wave)
+        item.reject(cause);
+}
+function sharedBatchOptions(wave) {
+    const signal = wave[0]?.options?.signal;
+    return signal && wave.every((item) => item.options?.signal === signal) ? { signal } : undefined;
+}
+function isSharedAbort(cause, options) {
+    return options?.signal !== undefined
+        && (options.signal.aborted || (cause instanceof Error && cause.name === "AbortError"));
+}
 /**
  * Wraps a host so Promise.all([asgrep.search, asgrep.defs, …]) collapses into
  * one microtask wave. Prefers sticky serve → one-shot batch → overlapped spawn.
@@ -17,7 +31,7 @@ export function createCodemodeDispatcher(host) {
     let scheduled = false;
     let stats = emptyStats();
     const flush = async () => {
-        const wave = pending;
+        const wave = pending.filter((item) => !item.settled);
         pending = [];
         scheduled = false;
         if (wave.length === 0)
@@ -32,7 +46,9 @@ export function createCodemodeDispatcher(host) {
             }
             // Chunk oversized waves (batch max = 32).
             for (let offset = 0; offset < wave.length; offset += MAX_WAVE) {
-                const chunk = wave.slice(offset, offset + MAX_WAVE);
+                const chunk = wave.slice(offset, offset + MAX_WAVE).filter((item) => !item.settled);
+                if (chunk.length === 0)
+                    continue;
                 await settleWave(host, chunk, stats);
             }
         }
@@ -41,8 +57,28 @@ export function createCodemodeDispatcher(host) {
         }
     };
     const enqueue = (item) => new Promise((resolve, reject) => {
-        item.resolve = resolve;
-        item.reject = reject;
+        const signal = item.options?.signal;
+        const cleanup = () => signal?.removeEventListener("abort", onAbort);
+        item.resolve = (value) => {
+            if (item.settled)
+                return;
+            item.settled = true;
+            cleanup();
+            resolve(value);
+        };
+        item.reject = (reason) => {
+            if (item.settled)
+                return;
+            item.settled = true;
+            cleanup();
+            reject(reason);
+        };
+        const onAbort = () => item.reject(abortError());
+        if (signal?.aborted) {
+            item.reject(abortError());
+            return;
+        }
+        signal?.addEventListener("abort", onAbort, { once: true });
         pending.push(item);
         if (!scheduled) {
             scheduled = true;
@@ -53,7 +89,14 @@ export function createCodemodeDispatcher(host) {
     });
     const dispatchHost = {
         call(tool, args, context, options) {
-            const item = { tool, args, context, resolve: () => undefined, reject: () => undefined };
+            const item = {
+                tool,
+                args,
+                context,
+                settled: false,
+                resolve: () => undefined,
+                reject: () => undefined,
+            };
             if (options)
                 item.options = options;
             return enqueue(item);
@@ -84,41 +127,63 @@ async function settleOne(host, item, stats) {
 }
 async function settleWave(host, wave, stats) {
     if (host.sticky) {
+        const transportOptions = sharedBatchOptions(wave);
         try {
             const calls = wave.map((item, index) => ({
                 id: String(index),
                 tool: item.tool,
                 args: item.args,
             }));
-            const batch = await host.sticky.batch(calls, wave[0]?.options);
+            const batch = await host.sticky.batch(calls, transportOptions);
             stats.stickyCalls += wave.length;
             settleFromBatch(wave, batch);
             return;
         }
         catch (cause) {
+            if (isSharedAbort(cause, transportOptions)) {
+                rejectWave(wave, cause);
+                return;
+            }
+            if (wave.some((item) => MUTATING_TOOLS.has(item.tool))) {
+                // The worker may have committed a mutation before its transport died.
+                // Replaying the wave through another transport would be ambiguous.
+                rejectWave(wave, cause);
+                return;
+            }
             // Sticky died mid-program — fall through to one-shot / spawn.
-            void cause;
         }
     }
+    const batchWave = wave.filter((item) => !item.settled);
+    if (batchWave.length === 0)
+        return;
     if (host.runBatch) {
+        const transportOptions = sharedBatchOptions(batchWave);
         try {
-            const calls = wave.map((item, index) => ({
+            const calls = batchWave.map((item, index) => ({
                 id: String(index),
                 tool: item.tool,
                 args: item.args,
             }));
-            const batch = await host.runBatch(calls, wave[0].context, wave[0].options);
-            stats.batchedCalls += wave.length;
-            settleFromBatch(wave, batch);
+            const batch = await host.runBatch(calls, batchWave[0].context, transportOptions);
+            stats.batchedCalls += batchWave.length;
+            settleFromBatch(batchWave, batch);
             return;
         }
         catch (cause) {
+            if (isSharedAbort(cause, transportOptions)) {
+                rejectWave(batchWave, cause);
+                return;
+            }
+            if (batchWave.some((item) => MUTATING_TOOLS.has(item.tool))) {
+                rejectWave(batchWave, cause);
+                return;
+            }
             // Transport failure only — do NOT re-run when per-call ok:false.
-            void cause;
         }
     }
-    stats.parallelSpawnCalls += wave.length;
-    await Promise.all(wave.map(async (item) => {
+    const spawnWave = batchWave.filter((item) => !item.settled);
+    stats.parallelSpawnCalls += spawnWave.length;
+    await Promise.all(spawnWave.map(async (item) => {
         try {
             const args = argvFor(item.tool, item.args);
             item.resolve(await host.run(args, item.context, item.options));
@@ -154,35 +219,45 @@ function emptyStats() {
         wallMs: 0,
     };
 }
-/** Build CLI argv for spawn fallback (typed path preferred). */
+const ARGV_SPEC = {
+    search: { form: "capsule", key: "query" },
+    semantic: { form: "semantic" },
+    chain: { form: "chain" },
+    defs: { form: "capsule", key: "symbol", prefix: "defs" },
+    callers: { form: "capsule", key: "symbol", prefix: "callers" },
+    imports: { form: "capsule", key: "module", prefix: "imports" },
+    index_status: { form: "status" },
+    index_repo: { form: "index_repo" },
+};
+function argStr(args, key) {
+    return String(args[key] ?? "");
+}
 export function argvFor(tool, args) {
+    const spec = ARGV_SPEC[tool];
+    if (!spec)
+        throw new Error(`codemode tool has no direct CLI fallback: ${tool}`);
+    if (spec.form === "status")
+        return ["status", ".", "--json"];
+    if (spec.form === "index_repo") {
+        const command = args.force === true ? "reindex" : "index";
+        const paths = Array.isArray(args.paths)
+            ? args.paths.filter((path) => typeof path === "string")
+            : [];
+        return [command, ".", "--json", ...paths.flatMap((path) => ["--path", path])];
+    }
     const limit = num(args.limit, 8);
+    if (spec.form === "chain") {
+        return ["chain", argStr(args, "query"), ".", "--json", "--limit", String(limit)];
+    }
     const excerpt = num(args.excerpt_lines ?? args.excerptLines, 0);
     const capsule = ["--json", "--format", "agent-capsule", "--limit", String(limit), "--excerpt-lines", String(excerpt)];
-    switch (tool) {
-        case "search":
-            return [...capsule, String(args.query ?? ""), "."];
-        case "semantic":
-            return ["semantic", String(args.query ?? ""), ".", ...capsule];
-        case "chain":
-            return ["chain", String(args.query ?? ""), ".", "--json", "--limit", String(limit)];
-        case "defs":
-            return [...capsule, `defs:${String(args.symbol ?? "")}`, "."];
-        case "callers":
-            return [...capsule, `callers:${String(args.symbol ?? "")}`, "."];
-        case "imports":
-            return [...capsule, `imports:${String(args.module ?? "")}`, "."];
-        case "index_status":
-            return ["status", ".", "--json"];
-        case "index_repo":
-            return [args.force === true ? "reindex" : "index", ".", "--json"];
-        case "catalog_search":
-        case "catalog_describe":
-            // No CLI equivalent — sticky/batch only.
-            return ["status", ".", "--json"];
-        default:
-            return [...capsule, String(args.query ?? ""), "."];
+    if (spec.form === "semantic") {
+        return ["semantic", argStr(args, "query"), ".", ...capsule];
     }
+    // capsule (+ optional prefix for defs/callers/imports)
+    const raw = argStr(args, spec.key);
+    const token = spec.prefix ? `${spec.prefix}:${raw}` : raw;
+    return [...capsule, token, "."];
 }
 function num(value, fallback) {
     if (typeof value === "number" && Number.isFinite(value))

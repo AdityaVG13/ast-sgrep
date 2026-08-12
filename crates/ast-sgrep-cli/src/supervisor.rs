@@ -110,7 +110,7 @@ fn parent_exe_matches(supervisor_pid: i32) -> bool {
     #[cfg(target_os = "linux")]
     {
         let parent_exe = std::fs::read_link(format!("/proc/{supervisor_pid}/exe")).ok();
-        return parent_exe.as_ref() == Some(&self_exe);
+        parent_exe.as_ref() == Some(&self_exe)
     }
     #[cfg(target_os = "macos")]
     {
@@ -166,7 +166,8 @@ pub fn worker_authenticate() -> bool {
     }
     // Reject constant/"1" nonces: supervisor always emits >= 32 hex chars.
     match std::env::var(WORKER_NONCE_ENV) {
-        Ok(ref v) if v.len() >= WORKER_NONCE_MIN_LEN && v.bytes().all(|b| b.is_ascii_hexdigit()) => {}
+        Ok(ref v)
+            if v.len() >= WORKER_NONCE_MIN_LEN && v.bytes().all(|b| b.is_ascii_hexdigit()) => {}
         _ => return fail(),
     }
     if !parent_exe_matches(supervisor_pid) {
@@ -429,10 +430,19 @@ mod childguard_tests {
 
     #[test]
     fn parse_cpu_limit_clamps() {
-        assert_eq!(crate::supervisor::parse_cpu_limit(""), crate::supervisor::DEFAULT_CPU_LIMIT);
-        assert_eq!(crate::supervisor::parse_cpu_limit("0"), crate::supervisor::DEFAULT_CPU_LIMIT);
+        assert_eq!(
+            crate::supervisor::parse_cpu_limit(""),
+            crate::supervisor::DEFAULT_CPU_LIMIT
+        );
+        assert_eq!(
+            crate::supervisor::parse_cpu_limit("0"),
+            crate::supervisor::DEFAULT_CPU_LIMIT
+        );
         assert_eq!(crate::supervisor::parse_cpu_limit("80"), 80);
-        assert_eq!(crate::supervisor::parse_cpu_limit("99"), crate::supervisor::DEFAULT_CPU_LIMIT);
+        assert_eq!(
+            crate::supervisor::parse_cpu_limit("99"),
+            crate::supervisor::DEFAULT_CPU_LIMIT
+        );
     }
 
     #[test]

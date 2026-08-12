@@ -1,8 +1,9 @@
+import { type FSWatcher } from "node:fs";
 import { resolveBinary } from "ast-sgrep";
 export declare const RUNTIME_VERSION = "1.4.0";
 export declare const MACHINE_SCHEMA_VERSION = "1.0.0";
 export declare const CONFIG_SCHEMA_VERSION: 1;
-export declare const INDEX_FORMAT_VERSION: 7;
+export declare const INDEX_FORMAT_VERSION: 9;
 export declare const DEFAULT_TIMEOUT_MS = 30000;
 export declare const DEFAULT_MAX_OUTPUT_BYTES: number;
 export declare const DEFAULT_REFRESH_INTERVAL_MS = 30000;
@@ -83,16 +84,26 @@ export interface FreshnessRuntime {
     resolveRoot(context: RuntimeContext): Promise<string>;
     inspectIndexCompatibility?(context: RuntimeContext): Promise<IndexHealth>;
     rebuildIncompatibleIndex?(context: RuntimeContext, options?: RunOptions): Promise<MachineEnvelope>;
+    /** Absolute database path whose SQLite/derived writes are owned by this runtime. */
+    resolveIndexPath?(root: string): string;
     /**
      * Optional warm native call (session sticky pool). When present, freshness
      * prefers this over cold `run` for status/index — same Searcher as Code Mode.
      */
     nativeCall?(tool: string, args: Record<string, unknown>, context: RuntimeContext, options?: RunOptions): Promise<MachineEnvelope>;
+    /** Enable low-latency external filesystem change detection for real runtimes. */
+    watchExternalChanges?: boolean;
 }
 export interface FreshnessCoordinatorOptions {
     refreshIntervalMs?: number;
     now?: () => number;
+    watchFactory?: FreshnessWatchFactory;
 }
+export type FreshnessWatchFactory = (root: string, options: {
+    recursive: true;
+    persistent: false;
+    encoding: "utf8";
+}, listener: (eventType: "rename" | "change", filename: string | null) => void) => FSWatcher;
 export type IndexHealth = "ready" | "missing" | "incompatible";
 export declare class FreshnessCoordinator {
     #private;
@@ -100,13 +111,16 @@ export declare class FreshnessCoordinator {
     markAffectedPath(path: string, cwd: string): void;
     markRootDirty(root: string): void;
     ensureFresh(runtime: FreshnessRuntime, context: RuntimeContext, options?: RunOptions): Promise<string>;
+    shutdown(): void;
 }
 export declare class AstSgrepRuntime {
     #private;
     private readonly pi;
+    readonly watchExternalChanges = true;
     readonly config: ReturnType<typeof resolveConfig>;
     constructor(pi: PiExec, sources?: ConfigSources, dependencies?: RuntimeDependencies);
     resolveRoot(context: RuntimeContext): Promise<string>;
+    resolveIndexPath(root: string): string;
     inspectIndexCompatibility(context: RuntimeContext): Promise<IndexHealth>;
     rebuildIncompatibleIndex(context: RuntimeContext, options?: RunOptions): Promise<MachineEnvelope>;
     run(args: readonly string[], context: RuntimeContext, options?: RunOptions): Promise<MachineEnvelope>;

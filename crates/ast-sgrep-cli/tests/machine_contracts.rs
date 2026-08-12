@@ -146,6 +146,107 @@ fn index_reindex_status_and_doctor_have_stable_shapes() {
     assert_eq!(doctor["status"], Value::Null);
     assert!(!doctor["issues"].as_array().expect("issues").is_empty());
 }
+
+#[test]
+fn targeted_index_updates_are_bounded_deduplicated_and_confined() {
+    let bin = asgrep_bin();
+    let root = TempDir::new().expect("root");
+    let index_dir = TempDir::new().expect("index");
+    let index = index_dir.path().join("index.db");
+    let source = root.path().join("source.rs");
+    std::fs::write(&source, "fn before() {}\n").expect("source");
+    let root_str = root.path().to_str().expect("root utf8");
+    let index_str = index.to_str().expect("index utf8");
+    assert_success(
+        &run(
+            &bin,
+            &[
+                "--json",
+                "--no-embed",
+                "--index-path",
+                index_str,
+                "index",
+                root_str,
+            ],
+        ),
+        "index",
+    );
+
+    std::fs::write(&source, "fn after() {}\n").expect("modify");
+    let updated = assert_success(
+        &run(
+            &bin,
+            &[
+                "--json",
+                "--no-embed",
+                "--index-path",
+                index_str,
+                "index",
+                root_str,
+                "--path",
+                "source.rs",
+                "--path",
+                "source.rs",
+            ],
+        ),
+        "index",
+    );
+    assert_eq!(updated["targeted"], true);
+    assert_eq!(updated["path_count"], 1);
+    assert_eq!(updated["stats"]["files_indexed"], 1);
+
+    std::fs::remove_file(&source).expect("delete");
+    let removed = assert_success(
+        &run(
+            &bin,
+            &[
+                "--json",
+                "--no-embed",
+                "--index-path",
+                index_str,
+                "index",
+                root_str,
+                "--path",
+                "source.rs",
+            ],
+        ),
+        "index",
+    );
+    assert_eq!(removed["stats"]["files_removed"], 1);
+
+    let outside = index_dir.path().join("outside.rs");
+    std::fs::write(&outside, "fn outside() {}\n").expect("outside");
+    let escaped = run(
+        &bin,
+        &[
+            "--json",
+            "--no-embed",
+            "--index-path",
+            index_str,
+            "index",
+            root_str,
+            "--path",
+            outside.to_str().expect("outside utf8"),
+        ],
+    );
+    assert_eq!(escaped.status.code(), Some(1));
+    assert_eq!(parse_stdout(&escaped)["error"]["kind"], "usage");
+
+    let mut too_many = vec![
+        "--json",
+        "--no-embed",
+        "--index-path",
+        index_str,
+        "index",
+        root_str,
+    ];
+    for _ in 0..1_025 {
+        too_many.extend(["--path", "source.rs"]);
+    }
+    let rejected = run(&bin, &too_many);
+    assert_eq!(rejected.status.code(), Some(1));
+    assert_eq!(parse_stdout(&rejected)["error"]["kind"], "usage");
+}
 #[test]
 fn agent_search_modes_are_stable_and_bounded() {
     let session = CliSession::sample(asgrep_bin());
@@ -247,10 +348,10 @@ fn agent_search_embed_default_on_surfaces_semantic_hits() {
         "embed-on hybrid agent search must return hits; agent={agent}"
     );
     let has_semantic_flag = agent["has_semantic_hits"].as_bool().unwrap_or(false);
-    let has_embed_kind = hits
+    let has_embed_kind = hits.iter().any(|h| h["kind"].as_str() == Some("embed"));
+    let has_semantic_contrib = hits
         .iter()
-        .any(|h| h["kind"].as_str() == Some("embed"));
-    let has_semantic_contrib = hits.iter().any(|h| h.get("semantic") == Some(&Value::Bool(true)));
+        .any(|h| h.get("semantic") == Some(&Value::Bool(true)));
     assert!(
         has_semantic_flag || has_embed_kind || has_semantic_contrib,
         "embed-on agent JSON must surface semantic/embed path          (has_semantic_hits / kind=embed / hit.semantic);          has_semantic_hits={has_semantic_flag} hits={hits:?}"
@@ -301,7 +402,6 @@ fn agent_search_embed_default_on_surfaces_semantic_hits() {
         "semantic embed path must surface auth_refresh; hits={semantic_hits:?}"
     );
 }
-
 
 #[test]
 fn chain_eval_and_bench_successes_use_machine_envelope() {
@@ -457,25 +557,30 @@ fn agent_discovery_defaults_and_boolish_envs_are_round_trip_free() {
     // --json must wrap the handbook (agents parse stdout as JSON).
     let json_help = run(&bin, &["--json", "--robot-help"]);
     assert_eq!(json_help.status.code(), Some(0), "robot-help --json exit");
-    let help_v: Value = serde_json::from_slice(&json_help.stdout).expect("robot-help --json envelope");
+    let help_v: Value =
+        serde_json::from_slice(&json_help.stdout).expect("robot-help --json envelope");
     assert_eq!(help_v["ok"], true);
     assert_eq!(help_v["command"], "robot-docs");
     assert_eq!(help_v["format"], "markdown");
     assert_eq!(help_v["topic"], "guide");
     assert!(
-        help_v["body"].as_str().unwrap_or("").contains("agent handbook"),
+        help_v["body"]
+            .as_str()
+            .unwrap_or("")
+            .contains("agent handbook"),
         "body should carry markdown handbook"
     );
     let json_docs = run(&bin, &["robot-docs", "--json"]);
     assert_eq!(json_docs.status.code(), Some(0), "robot-docs --json exit");
-    let docs_v: Value = serde_json::from_slice(&json_docs.stdout).expect("robot-docs --json envelope");
+    let docs_v: Value =
+        serde_json::from_slice(&json_docs.stdout).expect("robot-docs --json envelope");
     assert_eq!(docs_v["command"], "robot-docs");
-    assert!(docs_v["body"].as_str().unwrap_or("").contains("agent handbook"));
+    assert!(docs_v["body"]
+        .as_str()
+        .unwrap_or("")
+        .contains("agent handbook"));
     let missing = TempDir::new().expect("tempdir").path().join("missing");
-    let doctor = assert_doctor_unhealthy(&run(
-        &bin,
-        &["doctor", missing.to_str().expect("utf8")],
-    ));
+    let doctor = assert_doctor_unhealthy(&run(&bin, &["doctor", missing.to_str().expect("utf8")]));
     assert_eq!(doctor["issues"][0]["kind"], "missing_root");
 }
 
@@ -592,19 +697,15 @@ fn doctor_suggested_commands_echo_effective_root() {
     let bin = asgrep_bin();
     let doctor = assert_doctor_unhealthy(&run(
         &bin,
-        &[
-            "doctor",
-            "--robot-triage",
-            root.to_str().expect("utf8"),
-        ],
+        &["doctor", "--robot-triage", root.to_str().expect("utf8")],
     ));
     let root_s = root.to_str().expect("utf8");
     assert_eq!(doctor["root"], root_s);
     let suggested = doctor["suggested_commands"].as_array().expect("cmds");
     assert!(
-        suggested
-            .iter()
-            .any(|c| c.as_str().is_some_and(|s| s.contains(root_s) && s.contains("index"))),
+        suggested.iter().any(|c| c
+            .as_str()
+            .is_some_and(|s| s.contains(root_s) && s.contains("index"))),
         "suggested_commands must echo effective root, got {suggested:?}"
     );
 }
@@ -627,7 +728,12 @@ fn format_alone_implies_json_machine_output() {
         ],
     );
     let value = assert_success(&output, "search");
-    assert!(value.get("hits").is_some() || value.get("hit_count").is_some() || value.get("q").is_some() || value.get("query").is_some());
+    assert!(
+        value.get("hits").is_some()
+            || value.get("hit_count").is_some()
+            || value.get("q").is_some()
+            || value.get("query").is_some()
+    );
 }
 
 #[test]
@@ -641,10 +747,25 @@ fn capabilities_lists_all_clap_subcommands_and_siblings() {
         .map(|c| c["name"].as_str().expect("name"))
         .collect();
     for required in [
-        "index", "status", "reindex", "search", "bench", "watch", "keyword", "semantic",
-        "chain", "capabilities", "version", "robot-docs", "doctor", "eval",
+        "index",
+        "status",
+        "reindex",
+        "search",
+        "bench",
+        "watch",
+        "keyword",
+        "semantic",
+        "chain",
+        "capabilities",
+        "version",
+        "robot-docs",
+        "doctor",
+        "eval",
     ] {
-        assert!(names.contains(&required), "missing command {required} in {names:?}");
+        assert!(
+            names.contains(&required),
+            "missing command {required} in {names:?}"
+        );
     }
     assert!(caps["sibling_binaries"].as_array().unwrap().len() >= 2);
     assert!(caps["integrations"]["mcp"]["binary"] == "asgrep-mcp");
@@ -693,12 +814,7 @@ fn index_dry_run_does_not_mutate() {
     let bin = asgrep_bin();
     let out = run(
         &bin,
-        &[
-            "--json",
-            "index",
-            "--dry-run",
-            root.to_str().expect("utf8"),
-        ],
+        &["--json", "index", "--dry-run", root.to_str().expect("utf8")],
     );
     let value = assert_success(&out, "index");
     assert_eq!(value["dry_run"], true);
@@ -957,4 +1073,3 @@ fn codemode_batch_missing_file_machine_envelope_without_json_flag() {
     assert_eq!(value["command"], "codemode-batch");
     assert_eq!(value["error"]["kind"], "operational");
 }
-

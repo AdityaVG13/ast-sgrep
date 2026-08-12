@@ -229,7 +229,9 @@ mod tests {
         });
         let resp = searcher.search("isolated_marker_fn").expect("search");
         assert!(
-            resp.hits.iter().any(|h| h.excerpt.contains("isolated_marker_fn")),
+            resp.hits
+                .iter()
+                .any(|h| h.excerpt.contains("isolated_marker_fn")),
             "expected hit from private index: {:?}",
             resp.hits
         );

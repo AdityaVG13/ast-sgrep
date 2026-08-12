@@ -8,11 +8,7 @@ use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 use tempfile::TempDir;
 
-fn base<'a>(
-    path: &'a str,
-    lines: &'a [(u32, String)],
-    hash: &'a str,
-) -> UpsertFileInput<'a> {
+fn base<'a>(path: &'a str, lines: &'a [(u32, String)], hash: &'a str) -> UpsertFileInput<'a> {
     UpsertFileInput {
         rel_path: path,
         language: Some("python"),
@@ -44,7 +40,9 @@ fn write_src(root: &Path, rel: &str, body: &str) {
 fn clear_all_data_wipes_embed_meta_keeps_root_whitelist() {
     let temp = TempDir::new().unwrap();
     let store = IndexStore::open(temp.path(), None).unwrap();
-    store.set_meta("root", temp.path().to_string_lossy().as_ref()).unwrap();
+    store
+        .set_meta("root", temp.path().to_string_lossy().as_ref())
+        .unwrap();
     let lines = [(1, "print(1)".into())];
     store.upsert_file(base("a.py", &lines, "h1")).unwrap();
     store.set_meta("struct:a.py", "fp").unwrap();
@@ -86,7 +84,11 @@ fn is_unchanged_auto_does_not_match_concrete_backend() {
     let first = semantic.index_all().unwrap();
     assert!(first.files_indexed >= 1);
     assert_eq!(
-        semantic.store().get_meta("embed_backend").unwrap().as_deref(),
+        semantic
+            .store()
+            .get_meta("embed_backend")
+            .unwrap()
+            .as_deref(),
         Some("semantic-v2")
     );
     drop(semantic);
@@ -151,6 +153,19 @@ fn indexed_rel_path_rejects_traversal_and_absolute() {
     assert_eq!(
         indexed_rel_path(Path::new("./src/lib.rs")).unwrap(),
         "./src/lib.rs"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn indexed_rel_path_does_not_rewrite_unix_backslashes_into_separators() {
+    assert_eq!(
+        indexed_rel_path(Path::new("dir\\file.rs")).unwrap(),
+        "dir\\file.rs"
+    );
+    assert_eq!(
+        indexed_rel_path(Path::new("..\\escape.rs")).unwrap(),
+        "..\\escape.rs"
     );
 }
 
