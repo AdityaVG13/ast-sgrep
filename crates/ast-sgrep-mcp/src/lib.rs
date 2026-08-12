@@ -167,6 +167,8 @@ struct SearcherKey {
 #[derive(Default)]
 struct SearcherCache {
     generation: u64,
+    /// Last observed on-disk writer stamp; mismatch forces reopen.
+    writer_generation: u64,
     entry: Option<(SearcherKey, Searcher)>,
 }
 
@@ -609,9 +611,33 @@ impl McpServer {
         });
         guard.generation = guard.generation.wrapping_add(1);
         guard.entry = None;
+        // Refresh observed stamp so a local invalidate does not immediately
+        // thrash against an unchanged on-disk epoch.
+        guard.writer_generation = ast_sgrep_core::read_writer_generation(
+            &self.root,
+            self.index_path.as_deref(),
+        );
+    }
+
+    /// Drop warm Searcher (+ session maps) when an external writer bumped the stamp.
+    fn sync_writer_generation(&self) {
+        let current =
+            ast_sgrep_core::read_writer_generation(&self.root, self.index_path.as_deref());
+        let mut guard = Self::lock_or_recover(&self.searcher_cache, |cache| {
+            cache.entry = None;
+        });
+        if guard.writer_generation != current {
+            guard.generation = guard.generation.wrapping_add(1);
+            guard.entry = None;
+            guard.writer_generation = current;
+            drop(guard);
+            Self::lock_or_recover(&self.path_registry, |registry| registry.clear()).clear();
+            Self::lock_or_recover(&self.emitted_snippets, |seen| seen.clear()).clear();
+        }
     }
 
     fn searcher_for(&self, root: PathBuf, limit: usize) -> anyhow::Result<(Searcher, u64)> {
+        self.sync_writer_generation();
         let key = self.searcher_key(root.clone(), limit);
         // Poison fails closed: invalidate and rebuild rather than reuse tainted state.
         let mut guard = Self::lock_or_recover(&self.searcher_cache, |cache| {
@@ -630,6 +656,10 @@ impl McpServer {
                 use_embed: self.use_embed,
                 ..SearchOptions::default()
             })?;
+            guard.writer_generation = ast_sgrep_core::read_writer_generation(
+                &self.root,
+                self.index_path.as_deref(),
+            );
             guard.entry = Some((key, searcher));
         }
         let generation = guard.generation;
@@ -1249,6 +1279,43 @@ mod cache_tests {
         assert!(
             McpServer::lock_or_recover(&server.emitted_snippets, |_| {}).is_empty(),
             "emitted snippets must clear on index_repo Err"
+        );
+    }
+
+    /// Pins R-XPROC-MULTIWRITER Option C lite: an external writer bumping the
+    /// durable stamp must drop a warm Searcher without an in-process index_repo.
+    #[test]
+    fn external_writer_generation_invalidates_warm_searcher() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        std::fs::write(root.join("lib.rs"), "fn hello() {}\n").unwrap();
+        let server = test_server(root.clone());
+
+        let (searcher, generation) = server.searcher_for(root.clone(), 10).unwrap();
+        server.restore_searcher(root.clone(), 10, generation, searcher);
+        {
+            let cache = McpServer::lock_or_recover(&server.searcher_cache, |_| {});
+            assert!(cache.entry.is_some(), "precondition: warm Searcher");
+        }
+        McpServer::lock_or_recover(&server.path_registry, |_| {})
+            .insert("p0".into(), "lib.rs".into());
+
+        // Simulate watch / CLI index in another process: bump stamp only.
+        let bumped = ast_sgrep_core::bump_writer_generation(&root, None).unwrap();
+        assert!(bumped >= 1);
+
+        let (searcher2, generation2) = server.searcher_for(root.clone(), 10).unwrap();
+        assert!(
+            generation2 != generation,
+            "in-process generation must advance when writer stamp changes"
+        );
+        // Returning a fresh Searcher is enough; restore under the new generation.
+        server.restore_searcher(root, 10, generation2, searcher2);
+        let cache = McpServer::lock_or_recover(&server.searcher_cache, |_| {});
+        assert_eq!(cache.writer_generation, bumped);
+        assert!(
+            McpServer::lock_or_recover(&server.path_registry, |_| {}).is_empty(),
+            "path registry must clear across writer generations"
         );
     }
 }

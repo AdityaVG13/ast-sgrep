@@ -46,6 +46,8 @@ struct SearcherKey {
     /// Opened Searcher limit; reused for any call whose limit is ≤ this.
     open_limit: usize,
     use_embed: bool,
+    /// On-disk writer stamp observed when this Searcher was opened.
+    writer_generation: u64,
 }
 
 /// Stateful façade: warm `Searcher`, budgets, and tool dispatch.
@@ -100,6 +102,24 @@ impl CodeModeSession {
         if let Ok(mut guard) = self.searcher_cache.lock() {
             *guard = None;
         }
+    }
+
+    /// Drop warm Searcher when an external writer bumped the on-disk stamp.
+    fn sync_writer_generation(&self) -> anyhow::Result<()> {
+        let current = ast_sgrep_core::read_writer_generation(
+            &self.config.root,
+            self.config.index_path.as_deref(),
+        );
+        let mut guard = self
+            .searcher_cache
+            .lock()
+            .map_err(|_| anyhow!("searcher cache lock poisoned"))?;
+        if let Some((key, _)) = guard.as_ref() {
+            if key.writer_generation != current {
+                *guard = None;
+            }
+        }
+        Ok(())
     }
 
     /// Resolve optional tool `root`, jailed under the session workspace (MCP parity).
@@ -172,6 +192,7 @@ impl CodeModeSession {
         root: PathBuf,
         needed_limit: usize,
     ) -> anyhow::Result<std::sync::MutexGuard<'_, Option<(SearcherKey, Searcher)>>> {
+        self.sync_writer_generation()?;
         let needed = needed_limit.clamp(1, 500);
         let mut guard = self
             .searcher_cache
@@ -182,7 +203,12 @@ impl CodeModeSession {
                 if k.root == root
                     && k.index_path == self.config.index_path
                     && k.use_embed == self.config.use_embed
-                    && k.open_limit >= needed =>
+                    && k.open_limit >= needed
+                    && k.writer_generation
+                        == ast_sgrep_core::read_writer_generation(
+                            &self.config.root,
+                            self.config.index_path.as_deref(),
+                        ) =>
             {
                 true
             }
@@ -191,6 +217,10 @@ impl CodeModeSession {
         if !reuse {
             // Open at least as wide as config + this call so later smaller calls reuse.
             let open_limit = needed.max(self.config.limit).clamp(1, 500);
+            let writer_generation = ast_sgrep_core::read_writer_generation(
+                &self.config.root,
+                self.config.index_path.as_deref(),
+            );
             let searcher = Searcher::new(SearchOptions {
                 root: root.clone(),
                 index_path: self.config.index_path.clone(),
@@ -204,6 +234,7 @@ impl CodeModeSession {
                     index_path: self.config.index_path.clone(),
                     open_limit,
                     use_embed: self.config.use_embed,
+                    writer_generation,
                 },
                 searcher,
             ));
@@ -368,6 +399,44 @@ mod index_err_cache_tests {
             !session.searcher_cache_occupied(),
             "searcher cache must clear on index_repo Err after possible disk mutation"
         );
+    }
+
+    #[test]
+    fn external_writer_generation_invalidates_warm_searcher() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        std::fs::write(root.join("lib.rs"), "fn hello() {}\n").unwrap();
+        let session = CodeModeSession::new(SessionConfig {
+            root: root.clone(),
+            index_path: None,
+            limit: 8,
+            use_embed: false,
+            ..SessionConfig::default()
+        });
+        drop(
+            session
+                .searcher_for(root.clone(), 8)
+                .expect("warm searcher"),
+        );
+        assert!(
+            session.searcher_cache_occupied(),
+            "precondition: searcher cache warm"
+        );
+
+        let bumped = ast_sgrep_core::bump_writer_generation(&root, None).unwrap();
+        assert!(bumped >= 1);
+
+        drop(
+            session
+                .searcher_for(root, 8)
+                .expect("reopen after stamp bump"),
+        );
+        let gen = session
+            .searcher_cache
+            .lock()
+            .ok()
+            .and_then(|g| g.as_ref().map(|(k, _)| k.writer_generation));
+        assert_eq!(gen, Some(bumped));
     }
 }
 

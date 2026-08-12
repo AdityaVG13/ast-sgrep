@@ -570,6 +570,7 @@ mod tests {
                 margin: 0.0,
                 confidence: 0.0,
                 excerpt: String::new(),
+                resolution: None,
             }
         }
         let mut hits = vec![
@@ -616,6 +617,7 @@ mod tests {
                 margin: 0.0,
                 confidence: 0.0,
                 excerpt: symbol.unwrap_or_default().into(),
+                resolution: None,
             }
         }
         let mut hits = vec![

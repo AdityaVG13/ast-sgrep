@@ -993,6 +993,12 @@ impl IndexStore {
             embed_cache_misses: self.meta_u64("embed_cache_misses")?,
             semantic_ivf_present: crate::semantic_ivf::semantic_ivf_path(&self.db_path).exists(),
             durability: self.durability.as_str().to_owned(),
+            writer_generation: crate::store::read_writer_generation(
+                &self.root,
+                // Prefer the opened DB's parent home via path; env/index_path
+                // resolution already chose db_path, so stamp beside that home.
+                Some(&self.db_path),
+            ),
         })
     }
     pub fn indexed_line_count(&self) -> Result<usize> {

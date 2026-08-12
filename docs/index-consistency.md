@@ -42,6 +42,8 @@ Under concurrent reindex, a hybrid query may fuse passes from adjacent **committ
 
 **Concurrent writers:** supported at the SQLite level via WAL + busy timeout. Application-level indexing should prefer a single indexer process per index path; two bulk indexers on one DB will serialize on `BEGIN IMMEDIATE` and may contend. Searchers may open additional read connections safely.
 
+**Cross-process Searcher caches (R-XPROC-MULTIWRITER Option C lite):** writers (`Indexer::index_all`, watch `update_paths` / deferred sidecar flush, generation activation) bump a durable `writer_generation` stamp beside the index home (`.asgrep/writer_generation`, or next to a pinned `ASGREP_INDEX_PATH`). Long-lived MCP and Code Mode Searcher caches poll that stamp before reuse and reopen when it changes, so `asgrep watch` / CLI index cannot silently leave a warm peer serving a pre-mutation snapshot. This is an epoch poll, not a flock or IPC bus. `asgrep status` reports `writer_generation`.
+
 **Integrity on open:** existing DBs run `PRAGMA integrity_check`. Failure quarantines the file to `index.db.corrupt` and returns an error (fail closed; reindex required).
 
 ## Atomic sidecar publish

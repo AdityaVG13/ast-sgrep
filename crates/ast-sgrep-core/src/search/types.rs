@@ -659,6 +659,7 @@ mod tests {
             margin: 0.0,
             confidence: 0.0,
             excerpt: String::new(),
+            resolution: None,
         }
     }
 

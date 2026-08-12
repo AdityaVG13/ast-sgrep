@@ -2,6 +2,7 @@ mod embed_support;
 mod module_resolve;
 pub(crate) mod sql;
 mod sqlite;
+mod writer_generation;
 pub use sql::integrity_check;
 pub use sql::{
     assert_sql_ident, CALLER_COLUMN_ALLOWLIST, COUNT_TABLE_ALLOWLIST, FILE_CHILD_TABLE_ALLOWLIST,
@@ -9,6 +10,10 @@ pub use sql::{
 pub use sqlite::{
     CallerRow, ImportRow, IndexStore, IndexedLineRow, RefreshLinesInput, SymbolLocationRow,
     SymbolRow, UpsertFileInput,
+};
+pub use writer_generation::{
+    bump_writer_generation, read_writer_generation, writer_generation_home, writer_generation_path,
+    WRITER_GENERATION_FILE,
 };
 use std::path::{Path, PathBuf};
 
@@ -183,7 +188,7 @@ pub fn next_generation_name(current: Option<&str>) -> String {
         .saturating_add(1);
     format!("{next:06}")
 }
-fn as_db_path(path: PathBuf) -> PathBuf {
+pub(crate) fn as_db_path(path: PathBuf) -> PathBuf {
     if path.extension().is_some_and(|e| e == "db") {
         path
     } else {
@@ -271,4 +276,6 @@ pub struct IndexStatus {
     pub semantic_ivf_present: bool,
     /// Active write-durability profile (0obi).
     pub durability: String,
+    /// Cross-process writer epoch stamped beside the index home (R-XPROC-MULTIWRITER).
+    pub writer_generation: u64,
 }

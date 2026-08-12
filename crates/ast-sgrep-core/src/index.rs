@@ -313,6 +313,9 @@ impl Indexer {
                 self.commit_prepared_files(&candidates, prepared, &mut stats, &mut semantic_ivf_dirty);
             self.store.apply_bulk_write_result(write_result)?;
         }
+        // Durable rows may already be visible; advertise before sidecar work so
+        // peer Searcher caches cannot keep a pre-mutation snapshot (Option C lite).
+        self.advertise_writer_generation();
         self.rebuild_dirty_sidecars(&stats, semantic_ivf_dirty)?;
         self.post_index_hooks()?;
         Ok(stats)
@@ -633,6 +636,9 @@ impl Indexer {
             self.options.index_path.as_deref(),
             self.options.durability,
         )?;
+        // Activation flips which DB serves queries; bump again so peers that
+        // already observed the candidate-build stamp still reopen.
+        self.advertise_writer_generation();
         Ok(stats)
     }
 
@@ -738,9 +744,13 @@ impl Indexer {
                 self.mark_sidecars_dirty()?;
             }
         }
+        if stats.files_indexed + stats.files_removed > 0 {
+            self.advertise_writer_generation();
+        }
         Ok(stats)
     }
     pub fn flush_deferred_rebuilds(&mut self) -> Result<()> {
+        let pending = self.deferred_rebuilds_pending();
         if self.sidecars_dirty.tantivy {
             self.rebuild_tantivy_sidecar()?;
             self.sidecars_dirty.tantivy = false;
@@ -749,7 +759,20 @@ impl Indexer {
             self.rebuild_semantic_ivf_sidecar()?;
             self.sidecars_dirty.semantic_ivf = false;
         }
+        if pending {
+            self.advertise_writer_generation();
+        }
         Ok(())
+    }
+
+    /// Bump the cross-process writer stamp (best-effort; never fails the index).
+    fn advertise_writer_generation(&self) {
+        if let Err(error) = crate::store::bump_writer_generation(
+            &self.options.root,
+            self.options.index_path.as_deref(),
+        ) {
+            eprintln!("asgrep: writer_generation stamp skipped: {error}");
+        }
     }
     pub fn deferred_rebuilds_pending(&self) -> bool {
         self.sidecars_dirty.tantivy || self.sidecars_dirty.semantic_ivf

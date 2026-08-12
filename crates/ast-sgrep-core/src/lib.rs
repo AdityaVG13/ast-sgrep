@@ -68,7 +68,10 @@ pub use search::format_hit_line;
 pub use pattern::search_pattern;
 pub use query::{ParsedQuery, QueryMode};
 pub use search::{HitSignal, SearchHit, SearchOptions, SearchResponse, Searcher};
-pub use store::{index_db_path, try_index_db_path, IndexStatus, IndexStore};
+pub use store::{
+    bump_writer_generation, index_db_path, read_writer_generation, try_index_db_path,
+    writer_generation_path, IndexStatus, IndexStore, WRITER_GENERATION_FILE,
+};
 #[derive(Debug, Error)]
 pub enum StoreError {
     #[error("database error: {0}")]

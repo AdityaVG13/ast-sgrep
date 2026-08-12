@@ -1179,6 +1179,7 @@ mod tests {
             margin: 0.0,
             confidence: 0.0,
             excerpt: String::new(),
+            resolution: None,
         }
     }
 
@@ -1255,6 +1256,8 @@ mod tests {
             returned_excerpt_bytes: 0,
             prevented_read_bytes: 0,
             snapshot: SnapshotStamp::default(),
+            plan: PlanTrace::default(),
+            query_expansions: vec![],
         };
         let err = append_ledger_entry(&missing_parent, &response).expect_err("missing parent");
         assert!(
@@ -1278,6 +1281,8 @@ mod tests {
             returned_excerpt_bytes: 2,
             prevented_read_bytes: 8,
             snapshot: SnapshotStamp::default(),
+            plan: PlanTrace::default(),
+            query_expansions: vec![],
         };
         append_ledger_entry(&path, &response).expect("write");
         let body = std::fs::read_to_string(&path).unwrap();

@@ -272,6 +272,7 @@ See `capabilities --json` → `environment`. Common: `ASGREP_INDEX_PATH`, `ASGRE
 - Destructive rebuild: prefer `asgrep reindex --dry-run <root> --json` before a full `reindex`.
 - Output format is not `json`: use `--json` and optionally `--format compact` (not `--format json`).
 - Piping: `asgrep --json … | head` is safe (broken pipe exits cleanly); always put data flags on asgrep, not the pipe consumer.
+- Watch + long-lived MCP/Code Mode on the same index: writers bump `writer_generation` beside the index home; warm Searchers poll and reopen. Prefer one shared `ASGREP_INDEX_PATH`. See `docs/index-consistency.md`.
 "#
 }
 
