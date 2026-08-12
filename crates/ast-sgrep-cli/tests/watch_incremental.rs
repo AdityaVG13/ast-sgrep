@@ -77,3 +77,51 @@ fn update_paths_handles_exact_targets_and_prunes_removals() {
     assert_eq!(stats.files_indexed, 0);
     assert_eq!(stats.files_skipped, 1);
 }
+
+#[cfg(unix)]
+#[test]
+fn update_paths_refuses_symlink_escape_into_index() {
+    use std::os::unix::fs::symlink;
+
+    let (_dir, root) = temp_project();
+    let outside = tempfile::tempdir().expect("outside");
+    let secret = outside.path().join("secret.rs");
+    fs::write(&secret, "pub fn leaked_secret() {}\n").unwrap();
+    let link = root.join("escape.rs");
+    symlink(&secret, &link).expect("symlink");
+
+    let mut indexer = indexer_for(&root);
+    indexer.index_all().expect("initial index");
+    assert!(
+        indexer
+            .store()
+            .file_hash("escape.rs")
+            .expect("hash")
+            .is_none(),
+        "full index must not follow symlinks"
+    );
+
+    let stats = indexer
+        .update_paths(&[link])
+        .expect("symlink update must not error");
+    assert_eq!(
+        stats.files_indexed, 0,
+        "watch must not index through symlink escape"
+    );
+    assert!(
+        indexer
+            .store()
+            .file_hash("escape.rs")
+            .expect("hash")
+            .is_none(),
+        "symlink escape must not land in the index"
+    );
+    let leaked = indexer
+        .store()
+        .symbols_named("leaked_secret", 8)
+        .expect("symbols");
+    assert!(
+        leaked.is_empty(),
+        "outside content must not appear via watch symlink; got {leaked:?}"
+    );
+}

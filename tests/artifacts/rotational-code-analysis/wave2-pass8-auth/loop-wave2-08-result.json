@@ -1,0 +1,28 @@
+{
+  "loop_id": "wave2-08-auth",
+  "loop_protocol": 13,
+  "name": "authentication-authorization-and-isolation",
+  "wave": 2,
+  "campaign_pass": 8,
+  "status": "complete",
+  "mode": "harden",
+  "PRODUCTIVE": true,
+  "braid_resolve": "Continue",
+  "axes_changed": 3,
+  "axes": [
+    "representation:policy-lattice",
+    "observer:attacker+tenant",
+    "scale:identity→resource"
+  ],
+  "residual_closed": "R-WATCH-SYMLINK-ESCAPE",
+  "residual_opened": "R-PI-EDIT-SYMLINK-LEXICAL",
+  "product_files": [
+    "crates/ast-sgrep-core/src/index.rs",
+    "crates/ast-sgrep-cli/tests/watch_incremental.rs"
+  ],
+  "verify": "rch exec -- cargo test -p ast-sgrep-cli --test watch_incremental",
+  "verify_result": "2 passed",
+  "NEXT_PASS": "Loop 14 or Seal wave-2; optional R-PI-EDIT-SYMLINK-LEXICAL",
+  "books_slim": "tests/artifacts/rotational-code-analysis/wave2-pass8-auth/",
+  "void_avoided": "V-SAME-GAZE (sandbox_root / pass3 Option A not re-described)"
+}

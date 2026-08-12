@@ -1140,14 +1140,27 @@ fn materialize_upsert(
 }
 
 /// Normalize a watcher path against a canonicalized index root.
+///
+/// Existing symlinks are refused so watch matches `WalkDir::follow_links(false)`:
+/// `fs::metadata` / `is_file` follow links and would otherwise index (and search-
+/// surface) content outside the project through a planted in-tree symlink.
+/// Missing paths stay lexical for deletion pruning.
 fn normalize_watch_path(root: &Path, input_path: &Path) -> Option<PathBuf> {
-    if input_path.starts_with(root) {
-        return Some(input_path.to_path_buf());
+    let candidate = if input_path.starts_with(root) {
+        input_path.to_path_buf()
+    } else {
+        input_path.canonicalize().ok().or_else(|| {
+            let parent = input_path.parent()?.canonicalize().ok()?;
+            Some(parent.join(input_path.file_name()?))
+        })?
+    };
+    if !candidate.starts_with(root) {
+        return None;
     }
-    input_path.canonicalize().ok().or_else(|| {
-        let parent = input_path.parent()?.canonicalize().ok()?;
-        Some(parent.join(input_path.file_name()?))
-    })
+    match fs::symlink_metadata(&candidate) {
+        Ok(meta) if meta.file_type().is_symlink() => None,
+        Ok(_) | Err(_) => Some(candidate),
+    }
 }
 
 /// Guard predicate for watch updates: skip-dir components, skip-file policy, gitignore.
