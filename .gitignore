@@ -62,6 +62,7 @@ agent_ergonomics_audit/
 /AGENTS.md
 /CLAUDE.md
 /GEMINI.md
+.skill-loop-progress.md
 .doctor/
 .bv/
 .dolt/
@@ -151,6 +152,7 @@ fuzz/corpus/
 # state-space-collapse skill artifacts
 .state-space-collapse/
 /.papercuts.jsonl
+/.skill-loop-progress-*.md
 
 # module-coupling-topology skill artifacts (local books)
 .module-coupling-topology/
