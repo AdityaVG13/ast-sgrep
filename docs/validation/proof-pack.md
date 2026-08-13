@@ -21,4 +21,5 @@ Artifacts:
 - `docs/validation/DISCREPANCIES.md`
 - `docs/validation/COVERAGE.md`
 - `docs/validation/conformance-verdicts.md`
+- `docs/progress/README.md`
 - `EPIC_EVIDENCE.md`

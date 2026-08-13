@@ -15,5 +15,6 @@ Canonical product features covered by ranking/oracle and agent surfaces.
 | `mcp_index_repo` | MCP | Single-flight + deadline |
 | `forbid_soundness` | CI | First-party unsafe ban |
 
-Negative ledgers: `docs/validation/negative-ledgers.md`.
+Negative ledgers (fail-closed product cases): `docs/validation/negative-ledgers.md`.
+Campaign deferrals: `docs/progress/surface-deferrals.md`.
 Engine identity: `docs/validation/engine-identity.md`.

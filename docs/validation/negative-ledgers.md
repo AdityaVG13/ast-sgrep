@@ -1,5 +1,14 @@
 # Negative ledgers (`6lmt`)
 
+**Naming bridge:** this file is the **product fail-closed case table** (CLI/MCP
+must error, not return empty hits). It is **not** the gauntlet campaign
+rejection ledger. Campaign Open/Closed/Retired rows live under
+[`docs/progress/`](../progress/README.md)
+(`perf-negative-results.md`, `conformance-negative-results.md`,
+`surface-deferrals.md`). Do not copy fail-closed rows into those files as
+"measured rejects," and do not treat a campaign Open pointer as a product
+error contract.
+
 Cases that must **not** succeed as silent empty hits:
 
 | Case | Expected |
