@@ -64,6 +64,9 @@ identity, or latency threshold breaches. The official package release invokes
 | `ast-sgrep-embed` | Embeddings (+ optional neural/rerank features) |
 | `ast-sgrep-lsp` | Language server |
 | `ast-sgrep-mcp` | MCP server for agents |
+| `ast-sgrep-mmap` | Sealed read-only mmap wrapper (sole hand-written unsafe boundary) |
+| `ast-sgrep-codemode` | Code Mode / programmatic tool-calling |
+| `ast-sgrep-codemode-napi` | Node-API bindings for in-process Code Mode |
 | `ast-sgrep-plugins` | Output formats (native/github/gitlab/agent/capsule) |
 | `ast-sgrep-testkit` | Shared fixtures for integration tests |
 
