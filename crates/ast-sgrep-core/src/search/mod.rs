@@ -1,4 +1,5 @@
 pub mod passes;
+mod fusion;
 mod types;
 use crate::query::{ParsedQuery, QueryMode};
 use crate::store::IndexStore;
@@ -18,9 +19,10 @@ use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{SystemTime, UNIX_EPOCH};
 use types::{assign_hit_confidence, assign_signal_margins};
+pub use fusion::dedup_hits;
 pub use types::{
-    dedup_hits, format_hit_line, hit_why, DegradedChannel, HitKind, HitSignal, QueryExpansion,
-    SearchHit, SearchOptions, SearchResponse, SnapshotStamp, SpanHitInput,
+    format_hit_line, hit_why, DegradedChannel, HitKind, HitSignal, QueryExpansion, SearchHit,
+    SearchOptions, SearchResponse, SnapshotStamp, SpanHitInput,
 };
 const CASCADE_PREFILTER_FILE_LIMIT: usize = 100;
 /// Cap on reported query expansions (ufk7).

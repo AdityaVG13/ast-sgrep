@@ -563,35 +563,8 @@ pub fn assign_hit_confidence(hits: &mut [SearchHit]) {
     }
 }
 
-pub fn dedup_hits(hits: Vec<SearchHit>) -> Vec<SearchHit> {
-    let mut best: Vec<SearchHit> = Vec::with_capacity(hits.len());
-    let mut positions: std::collections::HashMap<_, usize> = std::collections::HashMap::new();
-    for hit in hits {
-        // vh65: identity is the LOCATION. Channel kind is evidence about a
-        // location, not part of what a location is -- keying on it let one
-        // physical span survive three times as three near-identical rows with
-        // three opaque scores.
-        let key = (
-            hit.file.clone(),
-            hit.line_start,
-            hit.line_end,
-            hit.symbol.clone(),
-            hit.caller.clone(),
-            hit.callee.clone(),
-        );
-        if let Some(&index) = positions.get(&key) {
-            merge_channel_evidence(&mut best[index], hit);
-        } else {
-            positions.insert(key, best.len());
-            best.push(hit);
-        }
-    }
-    assign_hit_confidence(&mut best);
-    best
-}
-
 /// Fold a duplicate observation of the same location into the kept hit (vh65).
-fn merge_channel_evidence(kept: &mut SearchHit, other: SearchHit) {
+pub(super) fn merge_channel_evidence(kept: &mut SearchHit, other: SearchHit) {
     for contributor in other
         .contributors
         .iter()
