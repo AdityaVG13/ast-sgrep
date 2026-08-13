@@ -9,7 +9,7 @@
 
 | Step | Commit | Change |
 |---|---|---|
-| 1 | (this) | Watch-path leaf helpers → `crates/ast-sgrep-core/src/index_watch.rs`; `mod index_watch;` in `lib.rs` |
+| 1 | `2152e30` | Watch-path leaf helpers → `crates/ast-sgrep-core/src/index_watch.rs`; `mod index_watch;` in `lib.rs` |
 
 **Moved into `index_watch.rs`:** `normalize_watch_path` (`pub(crate)`), `canonicalize_affected_path` (`pub`), `should_skip_watch_path` (`pub(crate)`).
 
