@@ -1,4 +1,4 @@
-use ast_sgrep_testkit::CliSession;
+use ast_sgrep_testkit::{assert_golden_json_at, CliSession};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -93,7 +93,9 @@ fn capabilities_and_version_match_goldens() {
     let bin = asgrep_bin();
     let mut capabilities = assert_success(&run(&bin, &["capabilities", "--json"]), "capabilities");
     capabilities["version"] = "<version>".into();
-    assert_eq!(capabilities, fixture("capabilities"));
+    let capabilities_golden = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/cli/fixtures/capabilities.json");
+    assert_golden_json_at(&capabilities_golden, &capabilities);
     let mut version = assert_success(&run(&bin, &["version", "--json"]), "version");
     version["version"] = "<version>".into();
     assert_eq!(version, fixture("envelopes")["version"]);

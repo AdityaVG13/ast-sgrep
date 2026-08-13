@@ -276,6 +276,7 @@ dependencies = [
  "ast-sgrep-core",
  "ast-sgrep-lang",
  "ast-sgrep-lsp",
+ "regex",
  "serde",
  "serde_json",
  "tempfile",
