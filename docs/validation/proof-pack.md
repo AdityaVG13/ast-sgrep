@@ -24,5 +24,6 @@ Artifacts:
 - `docs/progress/README.md`
 - `docs/validation/oracle-dispatch.md`
 - `docs/validation/residual-leaf-shares-post-T1R.md`
+- `docs/QUERY_GRAMMAR.md`
 - `docs/contracts/oracle_dispatch.toml`
 - `EPIC_EVIDENCE.md`

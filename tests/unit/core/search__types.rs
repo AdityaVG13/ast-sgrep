@@ -1,4 +1,5 @@
 use super::*;
+use crate::search::dedup_hits;
 
 fn hit(kind: HitKind, file: &str, line: u32, score: f64) -> SearchHit {
     SearchHit {

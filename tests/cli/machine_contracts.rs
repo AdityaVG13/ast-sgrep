@@ -1,3 +1,16 @@
+//! Machine envelope contracts. Clause map (ghiw.2): `docs/validation/machine-json-schema.md`.
+//!
+//! MJ-001/002/003/004 — `assert_success` / `assert_doctor_unhealthy`
+//! MJ-005 — `operational_failures_are_json_and_exit_two`
+//! MJ-006 — `bounded_arguments_are_json_usage_errors` (+ typo cases)
+//! MJ-007 — `capabilities_and_version_match_goldens`
+//! MJ-008 — `index_reindex_status_and_doctor_have_stable_shapes`
+//! MJ-009 — `format_aliases_typos_and_root_failures_are_unambiguous`
+//! MJ-010 — doctor unhealthy / `missing_root`
+//! MJ-013 — `format_alone_implies_json_machine_output`
+//! MJ-011 gap — full hit-array freeze (nz7i.2)
+//! MJ-012 disc — MCP non-envelope (`DISC-mcp-not-full-suite`)
+//! NL-008 — `compact_omits_native_hit_array_and_excerpt_blobs`
 use ast_sgrep_testkit::{assert_golden_json_at, CliSession};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
@@ -710,6 +723,39 @@ fn doctor_suggested_commands_echo_effective_root() {
             .is_some_and(|s| s.contains(root_s) && s.contains("index"))),
         "suggested_commands must echo effective root, got {suggested:?}"
     );
+}
+
+/// NL-008 / `DISC-compact-drops-provenance`: compact is not a native hit dump.
+#[test]
+fn compact_omits_native_hit_array_and_excerpt_blobs() {
+    let session = CliSession::sample(asgrep_bin());
+    let index = session.index_path.to_str().expect("index utf8");
+    let root = session.root.to_str().expect("root utf8");
+    let output = run(
+        &session.bin,
+        &[
+            "--no-embed",
+            "--index-path",
+            index,
+            "--format",
+            "compact",
+            "search",
+            "process_request",
+            root,
+        ],
+    );
+    let value = assert_success(&output, "search");
+    assert_eq!(value["v"], 1);
+    assert!(
+        value.get("hits").is_none(),
+        "compact must not emit native hits array"
+    );
+    assert!(
+        value.get("excerpt").is_none() && value.get("excerpts").is_none(),
+        "compact must not emit native excerpt provenance blobs"
+    );
+    assert!(value.get("h").is_some(), "compact hit rows live in h");
+    assert!(value.get("p").is_some(), "compact path dictionary lives in p");
 }
 
 #[test]

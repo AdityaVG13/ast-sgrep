@@ -4,6 +4,11 @@ Normative surface for `ParsedQuery::parse` in `crates/ast-sgrep-core/src/query.r
 There is no composable `AND` / `path:` / `lang:` / `sem:` grammar — unprefixed
 input is hybrid retrieval; one leading mode prefix selects a single channel.
 
+Clause IDs **QG-xxx** (ghiw.2). Tests: `tests/unit/core/query.rs` (lib
+`query::tests`) and `tests/core/properties.rs` (`parse_never_panics`). Score is
+**TBD** until a full conformance run (ghiw.5). Do not quote MUST% from this
+file.
+
 ## Mode prefixes
 
 | Prefix | Mode | Notes |
@@ -30,17 +35,56 @@ regex:foo.*bar
 word:token
 ```
 
+## MUST matrix
+
+Prefixes are **case-sensitive** (`Callers:Foo` is Hybrid, not Callers). `parse`
+trims the full input; `raw` is that trimmed string (prefix kept). `target` for
+prefixed modes is the remainder after the first matching prefix, then trimmed.
+Unprefixed Hybrid sets `target: None`.
+
+| ID | MUST | Observed contract | Test |
+|---|---|---|---|
+| QG-001 | Unprefixed input is Hybrid | `process_request` → `QueryMode::Hybrid`, `target: None` | `qg_must_matrix` |
+| QG-002 | `callers:` selects Callers | remainder is `target` | `qg_must_matrix` |
+| QG-003 | `defs:` selects Defs | remainder is `target` | `qg_must_matrix` |
+| QG-004 | `imports:` selects Imports | remainder is `target` | `qg_must_matrix` |
+| QG-005 | `pattern:` selects Pattern | remainder is `target`; terms = `[target]` | `qg_must_matrix` |
+| QG-006 | `literal:` selects Literal | terms preserve case | `qg_must_matrix`, `literal_and_regex_terms_preserve_case` |
+| QG-007 | `regex:` selects Regex | terms preserve case | `qg_must_matrix`, `literal_and_regex_terms_preserve_case` |
+| QG-008 | `word:` selects Word | terms are lowercased | `qg_must_matrix` |
+| QG-009 | `raw` retains the mode prefix | `raw == trimmed input` for every prefixed mode | `raw_keeps_mode_prefix_across_all_modes` |
+| QG-010 | `parse` never panics | property over arbitrary strings | `tests/core/properties.rs` `parse_never_panics` |
+| QG-011 | Empty target after a prefix is well-defined | `callers:` / `pattern:` → `target: Some("")`, mode still prefixed | `qg_must_matrix` |
+| QG-012 | Target remainder is trimmed | `defs:  auth` → target `auth` | `qg_must_matrix` |
+
+## Unsupported / negative matrix
+
+These are **not errors**. The parser does not reject unknown grammar; it
+selects the first leading mode prefix or Hybrid-as-text.
+
+| ID | MUST-not / negative | Observed contract | Test |
+|---|---|---|---|
+| QG-020 | No `sem:` query filter | `sem:foo` is Hybrid; the string is scored as text | `qg_must_matrix` |
+| QG-021 | No `path:` query filter | `path:src/` is Hybrid-as-text | `qg_must_matrix` |
+| QG-022 | No `lang:` query filter | `lang:rust foo` is Hybrid-as-text | `qg_must_matrix` |
+| QG-023 | No composable AND / multi-prefix | `callers:Foo defs:Bar` is Callers with target `Foo defs:Bar` | `qg_must_matrix` |
+| QG-024 | Nested / parenthesized boolean unsupported | `(defs:Foo AND callers:Bar)` is Hybrid-as-text (no leading prefix) | `qg_must_matrix` |
+| QG-025 | Prefix match is case-sensitive | `Callers:Foo` is Hybrid, not Callers | `qg_must_matrix` |
+| QG-026 | Unknown prefix is Hybrid-as-text | `xyzzy:Foo` is Hybrid | `qg_must_matrix` |
+
+Use CLI/MCP/LSP options (language filter, semantic-only search) for filters
+that are not part of the query string. `pattern:` completeness vs ast-grep is
+**ghiw.3** (`DISC-pattern-native-subset`), not this matrix.
+
 ## What is not supported
 
 - Clause conjunction (`AND`, multiple prefixes in one query)
 - `sem:`, `path:`, `lang:` filter clauses
 - Nested / parenthesized boolean expressions
 
-Use CLI/MCP/LSP options (e.g. language filter, semantic-only search) for filters
-that are not part of the query string.
-
 ## Related
 
 - [How it works](how-it-works.md) — hybrid ranking overview
 - [Semantic search](semantic-search.md) — embed backends
 - [Structural patterns](../README.md) — pattern examples in the main README
+- [COVERAGE](validation/COVERAGE.md) — clause family status
