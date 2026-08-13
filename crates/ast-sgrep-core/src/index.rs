@@ -653,113 +653,127 @@ impl Indexer {
         }
         let mut stats = WatchUpdateStats::default();
         let mut changed = false;
-        for input_path in paths {
-            let Some(abs) = normalize_watch_path(&self.options.root, input_path) else {
-                continue;
-            };
-            let Ok(rel) = abs.strip_prefix(&self.options.root) else {
-                continue;
-            };
-            // Empty relative path or directory events are not "skipped" files.
-            if rel.as_os_str().is_empty() || abs.is_dir() {
-                continue;
-            }
-            let rel_str = indexed_rel_path(rel)?;
-            let mut path_stats = WatchUpdateStats::default();
-            let mut path_changed = false;
-            let mut index_failure = false;
-            let descendant_prefix = format!("{rel_str}/");
-            let transactional_replace = self.store.has_file_with_prefix(&descendant_prefix)?;
-            if transactional_replace {
-                self.store.begin_file_tx()?;
-            }
-            let update_result = (|| -> Result<()> {
-                // Filesystem paths cannot simultaneously be files and directories.
-                // Delete stale descendants in the same transaction as a replacement
-                // file upsert, so an unreadable replacement preserves the last usable
-                // directory-shaped index state.
-                let descendants = if transactional_replace {
-                    self.store.remove_files_with_prefix(&descendant_prefix)?
-                } else {
-                    0
+        // Isolate `?` so a later path error cannot skip the writer stamp after
+        // earlier paths already committed (watch batches / multi-path CLI).
+        let result = (|| -> Result<()> {
+            for input_path in paths {
+                let Some(abs) = normalize_watch_path(&self.options.root, input_path) else {
+                    continue;
                 };
-                path_stats.files_removed += descendants;
-                path_changed |= descendants > 0;
-                if !abs.exists() {
-                    if self.store.file_hash(&rel_str)?.is_some() {
-                        self.store.remove_file(&rel_str)?;
-                        path_stats.files_removed += 1;
-                        path_changed = true;
-                    }
-                    return Ok(());
+                let Ok(rel) = abs.strip_prefix(&self.options.root) else {
+                    continue;
+                };
+                // Empty relative path or directory events are not "skipped" files.
+                if rel.as_os_str().is_empty() || abs.is_dir() {
+                    continue;
                 }
-                if should_skip_watch_path(&abs, rel, self.options.respect_gitignore, &self.ignore) {
-                    if self.store.file_hash(&rel_str)?.is_some() {
-                        self.store.remove_file(&rel_str)?;
-                        path_stats.files_removed += 1;
-                        path_changed = true;
+                let rel_str = indexed_rel_path(rel)?;
+                let mut path_stats = WatchUpdateStats::default();
+                let mut path_changed = false;
+                let mut index_failure = false;
+                let descendant_prefix = format!("{rel_str}/");
+                let transactional_replace = self.store.has_file_with_prefix(&descendant_prefix)?;
+                if transactional_replace {
+                    self.store.begin_file_tx()?;
+                }
+                let update_result = (|| -> Result<()> {
+                    // Filesystem paths cannot simultaneously be files and directories.
+                    // Delete stale descendants in the same transaction as a replacement
+                    // file upsert, so an unreadable replacement preserves the last usable
+                    // directory-shaped index state.
+                    let descendants = if transactional_replace {
+                        self.store.remove_files_with_prefix(&descendant_prefix)?
                     } else {
-                        path_stats.files_skipped += 1;
-                    }
-                    return Ok(());
-                }
-                let leaf_is_symlink = fs::symlink_metadata(&abs)
-                    .is_ok_and(|metadata| metadata.file_type().is_symlink());
-                if leaf_is_symlink {
-                    if self.store.file_hash(&rel_str)?.is_some() {
-                        self.store.remove_file(&rel_str)?;
-                        path_stats.files_removed += 1;
-                        path_changed = true;
-                    }
-                } else if abs.is_file() {
-                    match self.index_file_outcome(&abs, &rel_str) {
-                        Ok(outcome) if outcome.removed => {
+                        0
+                    };
+                    path_stats.files_removed += descendants;
+                    path_changed |= descendants > 0;
+                    if !abs.exists() {
+                        if self.store.file_hash(&rel_str)?.is_some() {
+                            self.store.remove_file(&rel_str)?;
                             path_stats.files_removed += 1;
                             path_changed = true;
                         }
-                        Ok(outcome) if outcome.stats.skipped => path_stats.files_skipped += 1,
-                        Ok(_) => {
-                            path_stats.files_indexed += 1;
+                        return Ok(());
+                    }
+                    if should_skip_watch_path(
+                        &abs,
+                        rel,
+                        self.options.respect_gitignore,
+                        &self.ignore,
+                    ) {
+                        if self.store.file_hash(&rel_str)?.is_some() {
+                            self.store.remove_file(&rel_str)?;
+                            path_stats.files_removed += 1;
+                            path_changed = true;
+                        } else {
+                            path_stats.files_skipped += 1;
+                        }
+                        return Ok(());
+                    }
+                    let leaf_is_symlink = fs::symlink_metadata(&abs)
+                        .is_ok_and(|metadata| metadata.file_type().is_symlink());
+                    if leaf_is_symlink {
+                        if self.store.file_hash(&rel_str)?.is_some() {
+                            self.store.remove_file(&rel_str)?;
+                            path_stats.files_removed += 1;
                             path_changed = true;
                         }
-                        Err(error) => {
-                            index_failure = true;
+                    } else if abs.is_file() {
+                        match self.index_file_outcome(&abs, &rel_str) {
+                            Ok(outcome) if outcome.removed => {
+                                path_stats.files_removed += 1;
+                                path_changed = true;
+                            }
+                            Ok(outcome) if outcome.stats.skipped => path_stats.files_skipped += 1,
+                            Ok(_) => {
+                                path_stats.files_indexed += 1;
+                                path_changed = true;
+                            }
+                            Err(error) => {
+                                index_failure = true;
+                                return Err(error);
+                            }
+                        }
+                    } else if self.store.file_hash(&rel_str)?.is_some() {
+                        self.store.remove_file(&rel_str)?;
+                        path_stats.files_removed += 1;
+                        path_changed = true;
+                    }
+                    Ok(())
+                })();
+                match update_result {
+                    Ok(()) => {
+                        if transactional_replace {
+                            self.store.commit_file_tx()?;
+                        }
+                        stats.files_indexed += path_stats.files_indexed;
+                        stats.files_skipped += path_stats.files_skipped;
+                        stats.files_removed += path_stats.files_removed;
+                        changed |= path_changed;
+                    }
+                    Err(error) => {
+                        if transactional_replace {
+                            self.store.rollback_file_tx()?;
+                        }
+                        if !index_failure {
                             return Err(error);
                         }
+                        eprintln!("[asgrep] failed to index {rel_str}: {error}");
+                        stats.files_failed += 1;
                     }
-                } else if self.store.file_hash(&rel_str)?.is_some() {
-                    self.store.remove_file(&rel_str)?;
-                    path_stats.files_removed += 1;
-                    path_changed = true;
-                }
-                Ok(())
-            })();
-            match update_result {
-                Ok(()) => {
-                    if transactional_replace {
-                        self.store.commit_file_tx()?;
-                    }
-                    stats.files_indexed += path_stats.files_indexed;
-                    stats.files_skipped += path_stats.files_skipped;
-                    stats.files_removed += path_stats.files_removed;
-                    changed |= path_changed;
-                }
-                Err(error) => {
-                    if transactional_replace {
-                        self.store.rollback_file_tx()?;
-                    }
-                    if !index_failure {
-                        return Err(error);
-                    }
-                    eprintln!("[asgrep] failed to index {rel_str}: {error}");
-                    stats.files_failed += 1;
                 }
             }
-        }
+            Ok(())
+        })();
         if changed {
-            self.mark_sidecars_dirty()?;
+            // Advertise even when `result` is Err: earlier paths may already be
+            // durable. Prefer peer reopen over silencing the stamp on mark failure.
+            let mark = self.mark_sidecars_dirty();
             self.advertise_writer_generation();
+            mark?;
         }
+        result?;
         Ok(stats)
     }
     pub fn flush_deferred_rebuilds(&mut self) -> Result<()> {

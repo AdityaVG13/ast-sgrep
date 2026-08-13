@@ -312,3 +312,48 @@ fn update_paths_refuses_symlink_escape_into_index() {
         "outside content must not appear via watch symlink; got {leaked:?}"
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn update_paths_advertises_after_partial_batch_error() {
+    use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt;
+
+    let (_dir, root) = temp_project();
+    let mut indexer = indexer_for(&root);
+    indexer.index_all().expect("initial index");
+    let before = ast_sgrep_core::read_writer_generation(&root, None);
+
+    fs::write(
+        root.join("alpha.rs"),
+        "pub fn alpha_one() -> u32 { 1 }\npub fn alpha_edited() -> u32 { 9 }\n",
+    )
+    .unwrap();
+    let bad = root.join(OsString::from_vec(vec![0xff, 0xfe, b'.', b'r', b's']));
+    fs::write(&bad, "pub fn bad_non_utf8() {}\n").expect("non-utf8 file");
+
+    let err = indexer
+        .update_paths(&[root.join("alpha.rs"), bad])
+        .expect_err("non-UTF8 path must fail the batch");
+    assert!(
+        err.to_string().contains("non-UTF8"),
+        "unexpected error: {err}"
+    );
+
+    let after = ast_sgrep_core::read_writer_generation(&root, None);
+    assert_ne!(
+        after, before,
+        "durable alpha edit must still bump writer_generation when a later path errors"
+    );
+    let names: Vec<String> = indexer
+        .store()
+        .symbols_in_file("alpha.rs")
+        .expect("symbols")
+        .into_iter()
+        .map(|s| s.name)
+        .collect();
+    assert!(
+        names.contains(&"alpha_edited".to_string()),
+        "partial batch must keep the committed edit; got {names:?}"
+    );
+}
