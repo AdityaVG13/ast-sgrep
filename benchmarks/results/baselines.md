@@ -1,13 +1,13 @@
 # Baselines
 
-> **Reproducibility status:** Every numeric row in this report is a historical
-> published value and is **unreproducible from this source tree**: the generating
-> harnesses, raw corpora, and raw result artifacts are absent. The external
-> artifact location is the [Speed benchmark workflow](https://github.com/AdityaVG13/ast-sgrep/actions/workflows/speed.yml).
-> No retained artifact is identified there for these historical runs, so this
-> link is a storage location, not evidence that a row can currently be regenerated.
+> **Ledger mix:** section tags below (`canonical` / `historical` /
+> `UNREPRODUCIBLE` / `reproducible-in-tree`). Vocabulary:
+> [`benchmarks/README.md`](../README.md). A section tagged
+> `UNREPRODUCIBLE` cannot be regenerated from this tree. The candidate
+> `./benchmarks/run_eval.sh` pack is **not** a live quality fingerprint.
 
-> **Published record** of measured results. No runnable harnesses ship in this tree.
+> External artifact location (historical dumps, not proof of regeneration):
+> [Speed benchmark workflow](https://github.com/AdityaVG13/ast-sgrep/actions/workflows/speed.yml).
 
 Single source of truth for every MRR / recall / latency claim in this
 repository. Any number quoted in docs, commit messages, or bead close reasons
@@ -15,6 +15,9 @@ must trace back to a row here or carry its own reproduce command. Scores were
 produced by the harness, twice, on the machine below — no hand-edited figures.
 
 ## Canonical fingerprint rows
+
+**Status: `canonical` + `UNREPRODUCIBLE`.** Cite these ids. The gold + eval
+harness that produced them is not in this tree.
 
 One versioned fingerprint per (corpus × metric × config). Other publications
 must cite these rows; they must not introduce a second “canonical” value.
@@ -33,6 +36,9 @@ They are two fingerprint rows. Do not cite dual ~0.75 / 0.746 self-corpus
 figures alongside 0.712 as current.
 
 ## Candidate evaluation pack (no canonical run yet)
+
+**Status: `historical` (negative ledger).** `./benchmarks/run_eval.sh` exists
+and refuses dirty worktrees. It has **not** produced a canonical fingerprint.
 
 The tree now contains a gold fixture and a harness:
 
@@ -58,6 +64,8 @@ and agent-in-the-loop token/tool-call outcomes.
 
 ## Provenance
 
+**Status: `historical`.** Pins for the UNREPRODUCIBLE quality/speed rows below.
+
 | field | value |
 |-------|-------|
 | date | 2026-07-10 |
@@ -81,6 +89,7 @@ The original run used a `corpora.lock` file that is not shipped in this tree. It
 
 ## Retrieval quality — self corpus (18 gold queries)
 
+**Status: `canonical` citation of `self-hybrid-d3eab74` + `UNREPRODUCIBLE`.**
 **Reproduction status:** unavailable from this tree. The recorded run used an 18-query eval gold file and retrieval harness that are not checked in; the current `tests/fixtures/ranking/cases.json` is a different schema and corpus. `asgrep eval --gold <gold.json> <root> --ab <mode>` is the supported evaluator shape, but without the original gold file it cannot reproduce these rows.
 
 | tool | MRR | Recall@k | nDCG@k |
@@ -97,6 +106,7 @@ query). The historical run recorded a `retrieval_gold.rs` gate (MRR >= 0.70), bu
 
 ## Retrieval quality — foreign-corpus bake-off (k=10)
 
+**Status: `canonical` for `rg-hybrid-default-d3eab74` / `rg-neural-rerank-d3eab74` + `UNREPRODUCIBLE`.**
 **Reproduction status:** unavailable from this tree. The foreign corpora can be recovered from the pinned SHAs above, but their gold labels and the cross-tool bake-off harness are not checked in. Running `cd benchmarks` alone performs no evaluation.
 
 ### ripgrep 14.1.1 (Rust, 14 queries)
@@ -128,18 +138,20 @@ The semgrep 0.536 MRR on the ripgrep corpus is the standing reference for the
 
 ## Speed — cold index and hybrid NL query latency
 
-Reproduce (hyperfine; index: `--warmup 1 --min-runs 3` with the index dir
-removed in `--prepare`; query: `--warmup 3 --min-runs 20` against a warm
-index):
+**Status: `historical` + `UNREPRODUCIBLE` for the table below.** The hyperfine
+shape is documented; original `<root>` corpora and `corpora.lock` are not in
+this tree, so these numbers are not a live keep. In-tree latency gates are
+`asgrep bench` + `.bench-history` (`reproducible-in-tree`).
+
+Illustrative hyperfine shape (does **not** regenerate the published table
+without the missing corpora):
 
 ```bash
 cargo build --profile release-perf -p ast-sgrep-cli
-cd benchmarks && # cold index
 hyperfine --warmup 1 --min-runs 3 --prepare 'rm -rf /tmp/bl.db' \
-  '../target/release-perf/asgrep --index-path /tmp/bl.db index <root>'
-# hybrid NL query (warm index)
+  './target/release-perf/asgrep --index-path /tmp/bl.db index <root>'
 hyperfine --warmup 3 --min-runs 20 \
-  "../target/release-perf/asgrep --index-path /tmp/bl.db --json '<query>' <root>"
+  "./target/release-perf/asgrep --index-path /tmp/bl.db --json '<query>' <root>"
 ```
 
 Queries: self = "where is hybrid ranking fused"; ripgrep = "where does
@@ -159,14 +171,9 @@ this table is the pinned reference going forward.
 
 ## Watch mode -- per-save incremental index work
 
-Reproduce (synthetic 120-file project, 60 single-file saves, timings parsed
-from the watcher's own update lines; includes the kill-9 recovery check):
-
-```bash
-cd benchmarks
-python3 watch-bench.py --bin ../target/release-perf/asgrep --saves 60
-python3 watch-bench.py --bin ../target/release-perf/asgrep --saves 60 --no-embed
-```
+**Status: `historical` + `UNREPRODUCIBLE`.** `watch-bench.py` is **not** in this
+tree. Do not treat the commands as a live harness. Numbers below are a
+published record only.
 
 | config | median | p95 |
 |--------|-------:|----:|
@@ -195,8 +202,10 @@ Every suite was run twice back-to-back on the same build:
 
 ## Rules
 
-1. No number may be quoted without a reproduce command from this file.
-2. Rebaselining requires two consecutive runs within the noise bounds above
-   and a commit that updates this file and `results.json` together.
-3. `eval-bakeoff.py` stamps `results.json` with the live git commit and date;
-   never hand-edit `results.json` scores.
+1. No number may be quoted without a section status tag plus a row in this
+   file (or another results doc that cites a fingerprint id here).
+2. Rebaselining a `canonical` quality row requires the gold + eval harness
+   restored in-tree. Until then the fingerprint stays `UNREPRODUCIBLE`.
+3. `eval-bakeoff.py` / `results.json` stamping is **absent** from this tree.
+   Do not hand-edit historical scores. Do not claim a new MRR win in a close
+   reason.

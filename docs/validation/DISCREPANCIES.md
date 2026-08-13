@@ -25,7 +25,7 @@ Claim classes (do not mix):
 | `DISC-extraction-presence-only` | Lang extraction | Presence tuples / kind checks, not full dump goldens (those are nz7i.4). | `crates/ast-sgrep-testkit/src/lang.rs` | Fail on missing expected symbol. Not a dump freeze. |
 | `DISC-mcp-not-full-suite` | MCP | MCP does not auto-fuse hybrid channels; not a full CLI clone. | `docs/validation/surface-parity.md` | Peer-parity tests only. |
 | `DISC-ivf-adaptive-threshold` | ANN | IVF/ANN only above `chunk_count` threshold; small corpora stay brute cosine. | `docs/validation/semantic-ivf-mmap.md` | Do not claim ANN on sample fixtures. |
-| `DISC-baselines-unreproducible` | Published benches | Some quality/speed ledger rows are historical / UNREPRODUCIBLE. | `docs/validation/proof-pack.md`, `benchmarks/results/` | Not-run ≠ Pass. Never invent replacement numbers. |
+| `DISC-baselines-unreproducible` | Published benches | Quality fingerprints stay UNREPRODUCIBLE until gold+eval is in-tree. Latency 2026-08-05 self-corpus rows are `reproducible-in-tree`. File-level banners must not override section tags. | `benchmarks/README.md`, `benchmarks/results/baselines.md` | Not-run ≠ Pass. Never invent replacement numbers. |
 
 ## Verdict conventions
 

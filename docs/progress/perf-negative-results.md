@@ -5,7 +5,7 @@ not be closed as green without artifacts. Check before a new optimization pass.
 
 Skill headers: gauntlet WP3 / K-3. Predicate forms: `docs/progress/README.md`.
 
-**Closed:** empty on seed. Do not invent keep-gate closes.
+**Closed:** honesty / policy closes only. Do not invent keep-gate measurement closes.
 
 ## Closed
 
@@ -19,6 +19,16 @@ Skill headers: gauntlet WP3 / K-3. Predicate forms: `docs/progress/README.md`.
 - **retry_condition_predicate:** Not worth retrying as a standalone patch. The 50% optional `ASGREP_BENCH_RATCHET=1` tripwire is replaced by default-on −3%/−5% class keep vs committed `.latest.json` plus cv quarantine.
 - **bead_id:** `ast-sgrep-gauntlet-remediation-program-1vhy.1`
 
+### 2026-08-13 — `published-ledger-dual-banner` — closed (honesty pass, no new numbers)
+
+- **target_workload:** published MRR / latency ledgers
+- **files_touched:** `benchmarks/README.md`, `benchmarks/results/{baselines,speed,head-to-head,bakeoff,losses}.md`, `README.md`, `docs/benchmarks.md`
+- **correctness_proof:** documentation-only; no new MRR/latency invented
+- **evidence_artifact_paths:** `benchmarks/README.md` status vocabulary
+- **measured_result:** not claimed
+- **retry_condition_predicate:** Worth a measurement retry only when a fingerprint row in `baselines.md` is regenerated with gold + eval harness + competitor pins in this tree (then retag that row `reproducible-in-tree`).
+- **bead_id:** `ast-sgrep-gauntlet-remediation-program-1vhy.2`
+
 _(no invented measurement closes)_
 
 ## Open (pointer imports)
@@ -26,22 +36,22 @@ _(no invented measurement closes)_
 ### `historical-baselines-unreproducible`
 
 - **target_workload:** published MRR / latency rows
-- **files_touched:** `no-source-patch-attempted`
+- **files_touched:** honesty tags landed 2026-08-13; quality fingerprints remain UNREPRODUCIBLE
 - **correctness_proof:** not-measured
-- **evidence_artifact_paths:** `benchmarks/results/baselines.md`, `DISC-baselines-unreproducible`
+- **evidence_artifact_paths:** `benchmarks/results/baselines.md`, `DISC-baselines-unreproducible`, `benchmarks/README.md`
 - **baseline_configuration:** pointer-only
 - **candidate_configuration:** pointer-only
-- **measured_result:** not claimed here (see UNREPRODUCIBLE banner on the results files)
+- **measured_result:** not claimed here
 - **retry_condition_predicate:** Worth reconsidering when `benchmarks/results/baselines.md` marks a fingerprint row reproducible with harness + corpus + competitor pins in this tree.
 - **bead_id:** `ast-sgrep-gauntlet-remediation-program-1vhy.2`
 
 ### `budget-rebaseline-open`
 
 - **target_workload:** error budgets / keep-gate thresholds
-- **files_touched:** `no-source-patch-attempted`
-- **evidence_artifact_paths:** `docs/benchmarks.md`, `benchmarks/README.md`, WP1 keep-gate bead
-- **retry_condition_predicate:** Blocked until WP1 keep-gate that refuses to lie lands; track as `ast-sgrep-gauntlet-remediation-program-1vhy.1`.
-- **bead_id:** `ast-sgrep-gauntlet-remediation-program-1vhy.1`
+- **files_touched:** 110-file 285 ms budget archived in `benchmarks/README.md` (file-count 110, SHA unrecorded; current 1,107 files @ `cea904a` breaches)
+- **evidence_artifact_paths:** `benchmarks/README.md`, `docs/benchmarks.md`, WP1 keep-gate
+- **retry_condition_predicate:** Retry only after a new cold-index measurement on a frozen corpus with file-count + git SHA, then replace the 285 ms passing claim (do not quote 285 ms as passing until that lands).
+- **bead_id:** `ast-sgrep-gauntlet-remediation-program-1vhy.2`
 
 ### `losses-rg-std-printer`
 

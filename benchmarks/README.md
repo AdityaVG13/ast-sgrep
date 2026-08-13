@@ -1,11 +1,23 @@
 # Benchmarks
 
-Published result documents remain historical, but release-time gates now run
-the in-tree CLI benchmark suites against the checked-in sample fixture and the
-repository itself. The [Speed benchmark workflow](https://github.com/AdityaVG13/ast-sgrep/actions/workflows/speed.yml)
-and bake-off workflow upload their JSON measurements and fail when result
-identity, minimum-hit, or latency thresholds regress. Large external corpora
-are still not vendored.
+Published quality fingerprints in `results/` are a **mixed ledger**. Read the
+**status tag on each section**, not a single file-level banner.
+
+| Tag | Meaning |
+|-----|---------|
+| `canonical` | Fingerprint others must cite. Regeneration may still be `UNREPRODUCIBLE`. |
+| `historical` | Published record. Not a live SLA. |
+| `UNREPRODUCIBLE` | This tree cannot regenerate the row (missing harness, gold, corpus, or artifact). |
+| `reproducible-in-tree` | Exact command + pins exist here (`scripts/run-benchmarks.sh`, `asgrep bench` + `.bench-history`). |
+
+A file-level UNREPRODUCIBLE banner does **not** apply to `reproducible-in-tree`
+sections. A reproducible latency section does **not** make historical MRR rows
+live. Do not invent replacement MRR/latency wins.
+
+Release-time gates run the in-tree CLI suites against the sample fixture and
+the repository itself. The [Speed benchmark workflow](https://github.com/AdityaVG13/ast-sgrep/actions/workflows/speed.yml)
+uploads JSON and fails on identity / hit / keep-gate regression. Large external
+corpora are still not vendored.
 
 ```text
 benchmarks/
@@ -66,16 +78,25 @@ keep oracle. Competitor latency is not keep.
 ## Latency error budgets
 
 Published latency budgets are hard sample thresholds, separate from the measured
-tables in `results/`. The cold self-index budget is **285 ms p95**: the prior
-258.4 ms p95 plus a 10% same-host variance allowance, rounded up. A baseline
-above its threshold must not be published as a passing budget.
+tables in `results/`. A baseline above its threshold must not be published as a
+passing budget.
 
-| Surface | Hard p95 threshold | SLO |
-|---------|--------------------|-----|
-| cold self-index CLI | 285 ms | 95% |
-| literal CLI fixture | 15 ms | 95% |
-| semantic CLI fixture | 15 ms | 95% |
-| natural-language CLI fixture | 15 ms | 95% |
+| Surface | Status | Corpus file-count | git SHA | Hard p95 | SLO |
+|---------|--------|------------------:|---------|----------|-----|
+| cold self-index CLI (archived 110-file) | `historical` | 110 | unrecorded in-tree | 285 ms | 95% |
+| cold self-index CLI (current self) | `historical` (breached) | 1,107 | `cea904a` | 285 ms **must not be quoted as passing** | 95% |
+| literal CLI fixture | `reproducible-in-tree` (policy + keep-gate) | sample fixture | see `.bench-history` | 15 ms | 95% |
+| semantic CLI fixture | `reproducible-in-tree` (policy + keep-gate) | sample fixture | see `.bench-history` | 15 ms | 95% |
+| natural-language CLI fixture | `reproducible-in-tree` (policy + keep-gate) | sample fixture | see `.bench-history` | 15 ms | 95% |
+
+### Archived: 110-file cold-index budget
+
+The 285 ms p95 (prior 258.4 ms + 10% same-host variance, rounded up) was set
+against a **110-file** self corpus. SHA for that 110-file tree was **not
+recorded**. On 2026-08-05 the self corpus was **1,107 tracked files** at
+`cea904a`; measured cold index 906–992 ms p95 **breaches** 285 ms. Do not
+delete this miss. Do not invent a new passing cold-index number here
+(re-baseline is a later measurement, not this honesty pass).
 
 The historical 10 ms self-repo Searcher-query target does not apply to CLI
 startup fixtures. Each CLI surface is gated independently; handoff JSON must
