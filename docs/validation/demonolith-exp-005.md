@@ -9,7 +9,7 @@
 
 | Step | Commit | Change |
 |---|---|---|
-| 1 | (this) | `HitKey` + eight `mr_pred_*` helpers → `tests/core/metamorphic_preds.rs`; `#[path]` include from `metamorphic.rs` |
+| 1 | `c32f377` | `HitKey` + eight `mr_pred_*` helpers → `tests/core/metamorphic_preds.rs`; `#[path]` include from `metamorphic.rs` |
 
 **Moved into `metamorphic_preds.rs` (`pub(super)`):** `HitKey`, `mr_pred_limit_subset`, `mr_pred_probe_monotone`, `mr_pred_scale_invariance`, `mr_pred_lang_filter_subset`, `mr_pred_reindex_idempotent`, `mr_pred_search_flat_prefix`, `mr_pred_term_order_equiv`, `mr_pred_corpus_add_orthogonal`.
 
