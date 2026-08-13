@@ -2,9 +2,9 @@
 
 **Run:** `2026-08-13-ast-sgrep-wt-demonolith-1`  
 **Branch:** `refactor/de-monolithize-isomorphic`  
-**Pass:** Leave-alone documentation only (no extractions, no crate source edits)  
-**Confirmed extracts kept:** EXP-001..006  
-**Sizes:** `wc -l` at documentation time (product soft threshold = 1000 code LOC / repo rule)
+**Pass:** 14 — finalize leave-alone after EXP-007/008 (docs only; no crate source edits)  
+**Confirmed extracts:** EXP-001..008  
+**Sizes:** `wc -l` measured at documentation time (product soft threshold = 1000 code LOC / repo rule)
 
 ## Compile-resource
 
@@ -12,13 +12,13 @@
 |---|---|
 | Compile time + peak RSS (`compile-mem-profile.sh`) | **SKIPPED** — Phase 3 incomplete; no invented numbers |
 | Criterion benches | **SKIPPED** — Phase 3 incomplete; no invented numbers |
-| Isomorphism GATE 4/5 (perf / compile-resource) | **SKIPPED** — same Phase 3 gap; EXP-001..006 used `--quick` class proof (suite + public-api only) |
+| Isomorphism GATE 4/5 (perf / compile-resource) | **SKIPPED** — same Phase 3 gap; EXP-001..008 used `--quick` class proof (suite + public-api only) |
 
-Re-measure on a quiet SAME-MACHINE window before claiming compile-resource neutrality for any future `index.rs` extract.
+Re-measure on a quiet SAME-MACHINE window before claiming compile-resource neutrality for any future extract.
 
 ## No new dyn dispatch
 
-This pass adds none. Prior EXP-001..006 moved only pre-existing `&dyn ToSql` sites with their methods (sqlite); no new `Box<dyn` / `Arc<dyn>` / trait-object hubs.
+This campaign adds none. EXP-001..006 moved only pre-existing `&dyn ToSql` sites with their methods (sqlite); EXP-007/008 moved free helpers / watch path leafs. No new `Box<dyn` / `Arc<dyn>` / trait-object hubs.
 
 ---
 
@@ -58,22 +58,28 @@ This pass adds none. Prior EXP-001..006 moved only pre-existing `&dyn ToSql` sit
 - Navigation: Intentional B5; mechanical extract without Searcher redesign is out of scope.
 - Re-examine when: Cache ownership redesign is explicitly scoped.
 
-### `crates/ast-sgrep-core/src/index.rs` — 1347 (still over)
+### `crates/ast-sgrep-core/src/index.rs` — 1034 `wc -l` — **leave-alone-with-rationale**
 
 | Field | Value |
 |---|---|
-| Bucket | B1+B3 (Indexer pipeline + helpers); B5(test) `FORCE_SIDECAR_REBUILD_ERR` (F-003) |
-| Cohesion | Recovery leaf already EXP-002 (`index_recovery.rs`). Remaining file still mixes Indexer hub with prepare/hash/extract (F-002) and watch-path helpers (F-004). |
-| Decision | **Must-split residual — do not extract this pass** (fresh-eyes / next pass). Primary residual: **F-002 prepare/hash/extract helpers**. Secondary: F-004 watch-path leaf; F-003 inject ownership before any C1/C2 product cut. |
-| This pass | Document only; no `⊕ EXTRACT`. |
+| Bucket | **B4 Indexer hub** (post EXP-002 recovery, EXP-007 prepare/hash, EXP-008 watch-path) |
+| Cohesion | Remaining body is the Indexer method surface + public types + open/quick_check. Confirmed leaf seams are already extracted. |
+| Decision | **Leave-alone-with-rationale** — evidence-backed product seams are exhausted. Further cuts would be aesthetic Indexer-method slicing (visual sections), which the skill forbids. |
+| F-003 | `FORCE_SIDECAR_REBUILD_ERR` / inject helpers stay with the hub (**escalate / leave-alone** — not a product extract; ownership hygiene only). |
+| Measured | `wc -l` **1034** after EXP-007/008 confirmed cuts (was 1503 on `origin/main`). Soft threshold still slightly exceeded; overage is hub cohesion, not an open seam. |
+| Re-examine when | A new concern lands beside Indexer with cluster/co-change evidence, or F-003 inject ownership is redesigned with its own SEAM_CONFIRMED probe (not visual method dumps). |
 
-### Residual still-split (next pass)
+### LEAVE-ALONE: Indexer hub residual (B4) + F-003 injects
 
-| Finding | Target | Severity | Note |
-|---|---|---|---|
-| **F-002** | prepare / hash / extract-row helpers (`PreparedFile`, `prepare_file`, `hash_content`, `rows_from_extraction`, …) | **must-split** | Leaf-ward of Indexer; language/`ParserRegistry` thread_local must move with `prepare_file` or stay reachable. |
-| F-004 | `normalize_watch_path` / `canonicalize_affected_path` (+ adjacency) | should-split | Small leaf; preserve `pub` façade for `canonicalize_affected_path`. |
-| F-003 | `FORCE_SIDECAR_REBUILD_ERR` ownership | borderline + escalate | Not a product split; clear SEAM-KILLER before splitting inject owner from rebuild path. |
+- Concern: Post-extract Indexer hub (`index.rs` 1034) after recovery / prepare / watch satellites.
+- Cluster evidence: EXP-002 / EXP-007 / EXP-008 confirmed and extracted every evidence-backed leaf. No remaining SEAM_CONFIRMED candidate without aesthetic Indexer-impl slicing.
+- F-003: `FORCE_SIDECAR*` thread-local injects stay with the hub; escalate/leave-alone (blocker hygiene, not a split).
+- Navigation: Hub + named satellites (`index_recovery`, `index_prepare`, `index_watch`) is the intended layout.
+- Re-examine when: New non-hub concern + confirmed seam, or explicit F-003 ownership redesign.
+
+### Residual still-split
+
+**None.** Prior F-002 (prepare/hash) and F-004 (watch-path) are closed by EXP-007 / EXP-008. F-003 is leave-alone-with-escalate, not a product extract.
 
 ### `crates/ast-sgrep-mcp/src/lib.rs` — 1005 `wc -l` / ~972 tokei code (borderline)
 
@@ -90,7 +96,7 @@ This pass adds none. Prior EXP-001..006 moved only pre-existing `&dyn ToSql` sit
 |---|---|
 | Bucket | B9 test monolith; F-003 file-level leave-alone (justified catalog) |
 | Cohesion | Single metamorphic-relations suite with strong `//!` inventory. EXP-005 moved `mr_pred_*` + `HitKey` to `metamorphic_preds.rs`; catalog `fn mr_*` stays together. Low historical churn. |
-| Decision | **Leave-alone (F-003)** — keep MR catalog unified; further ANN-family splits (old F-002) stay deferred. |
+| Decision | **Leave-alone (F-003 / B9 catalog)** — keep MR catalog unified; further ANN-family splits stay deferred. Already decided; unchanged this pass. |
 | Re-examine when | File > ~1500 LOC, or ANN vs search reviewers conflict on the same suite. |
 
 ### LEAVE-ALONE: `tests/core/metamorphic.rs` (1382 LOC, bucket B9 / justified catalog)
@@ -108,7 +114,7 @@ This pass adds none. Prior EXP-001..006 moved only pre-existing `&dyn ToSql` sit
 |---|---|
 | Bucket | B9 multi-family CLI machine-JSON contracts |
 | Cohesion | Organizational “one contract suite”; graph shows soft communities with high helper inter-edges (F-001/F-002). Not Q≫0.3 product modularity. |
-| Decision | **Borderline leave-alone** this pass — acceptable single suite if navigation stays fine. Helper extract (F-002) is prerequisite before any family file split; not executed here. |
+| Decision | **Borderline leave-alone (B9)** — already decided; acceptable single suite if navigation stays fine. Helper extract prerequisite before any family file split; not executed. |
 | Re-examine when | File > ~1500 LOC, or families conflict in review / CI ownership. |
 
 ### `crates/ast-sgrep-core/src/semantic_ann.rs` — 682 (under)
@@ -141,19 +147,18 @@ This pass adds none. Prior EXP-001..006 moved only pre-existing `&dyn ToSql` sit
 | `store/sqlite/queries.rs` | EXP-001 satellite | leave-alone (under) |
 | `store/sqlite/writes.rs` | EXP-006 satellite | leave-alone (under) |
 | `search/mod.rs` | Hub under soft; **F-005** Mutex caches | leave-alone |
+| **`index.rs`** | **B4 Indexer hub; F-003 injects stay; 1034 after EXP-007/008** | **leave-alone-with-rationale** |
 | `mcp/lib.rs` | Borderline MCP stdio hub post EXP-004 | borderline leave-alone |
-| `tests/core/metamorphic.rs` | B9 catalog; **F-003** | leave-alone |
-| `tests/cli/machine_contracts.rs` | B9 multi-family | borderline leave-alone |
+| `tests/core/metamorphic.rs` | B9 catalog; **F-003** | leave-alone (unchanged) |
+| `tests/cli/machine_contracts.rs` | B9 multi-family | borderline leave-alone (unchanged) |
 | `semantic_ann.rs` | Under soft | leave-alone |
 | `packages/pi/extension/src/runtime.ts` | Under soft | leave-alone |
 
 ### Residual still-split list
 
-| File | Finding | Severity | This pass |
+| File | Finding | Severity | Status |
 |---|---|---|---|
-| `crates/ast-sgrep-core/src/index.rs` | **F-002** prepare/hash/extract | must-split | **deferred** (next / fresh-eyes) |
-| `index.rs` | F-004 watch-path helpers | should-split | deferred |
-| `index.rs` | F-003 FORCE_SIDECAR inject ownership | borderline + escalate | deferred (blocker hygiene, not product extract) |
+| — | — | — | **Empty** — no open product extracts |
 
 ### Compile-resource status
 
