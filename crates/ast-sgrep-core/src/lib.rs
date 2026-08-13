@@ -9,6 +9,7 @@ pub mod gitignore;
 pub mod index;
 mod index_prepare;
 mod index_recovery;
+mod index_watch;
 pub mod intent;
 pub mod io_bounds;
 pub mod limits;

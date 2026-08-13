@@ -1,6 +1,7 @@
 //! Prepare / hash / extract-row helpers for indexing.
 //! Extracted from `index.rs` (EXP-007 / F-002 prepare/hash cluster). Leaf-ward of
-//! `Indexer`; watch-path helpers and FORCE_SIDECAR stay in `index`.
+//! `Indexer`; watch-path helpers live in `index_watch` (EXP-008); FORCE_SIDECAR
+//! stays in `index` (F-003).
 
 use crate::index::{split_content_lines, IndexOptions, SplitLines};
 use crate::store::{CallerRow, ImportRow, SymbolRow};
