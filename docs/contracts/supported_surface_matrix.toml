@@ -1,0 +1,210 @@
+# Formal surface matrix (WP5). Statuses: present | partial | missing | excluded | n/a
+# PASS6 draft was not in this worktree; rows are product promises vs intentional non-goals.
+# Scoring numbers: ast-sgrep-gauntlet-remediation-program-1vhy.6
+# Intentional deltas: docs/progress/surface-deferrals.md
+schema_version = "1"
+subject_id = "asgrep"
+
+[[feature]]
+id = "hybrid_search"
+category = "search"
+hosts = { cli = "present", mcp = "excluded", lsp = "partial", pi = "partial", codemode = "partial" }
+rationale = "CLI unprefixed query fuses channels. MCP must not auto-fuse (DISC-mcp-not-full-suite). LSP asgrep.search is hybrid-ish navigation, not the full CLI cascade."
+evidence = ["docs/validation/surface-parity.md", "docs/progress/surface-deferrals.md"]
+disc_ids = ["DISC-mcp-not-full-suite"]
+deferral = "mcp-no-auto-fusion"
+
+[[feature]]
+id = "keyword_search"
+category = "search"
+hosts = { cli = "present", mcp = "present", lsp = "partial", pi = "partial", codemode = "present" }
+rationale = "FTS/trigram. Not ripgrep identity."
+evidence = ["tests/core/parity.rs"]
+disc_ids = ["DISC-lexical-not-rg"]
+
+[[feature]]
+id = "semantic_search"
+category = "search"
+hosts = { cli = "present", mcp = "present", lsp = "present", pi = "partial", codemode = "present" }
+rationale = "Embed channel. IVF only above chunk threshold."
+evidence = ["docs/validation/semantic-ivf-mmap.md"]
+disc_ids = ["DISC-ivf-adaptive-threshold"]
+
+[[feature]]
+id = "pattern_search"
+category = "search"
+hosts = { cli = "present", mcp = "present", lsp = "n/a", pi = "partial", codemode = "present" }
+rationale = "Native indexed subset. Not ast-grep CLI."
+evidence = ["docs/structural-patterns.md"]
+disc_ids = ["DISC-pattern-native-subset"]
+
+[[feature]]
+id = "graph_defs_callers_imports"
+category = "graph"
+hosts = { cli = "present", mcp = "missing", lsp = "present", pi = "partial", codemode = "partial" }
+rationale = "CLI prefixes + LSP asgrep.defs/callers. MCP has no first-class graph tools (not a fusion bug)."
+evidence = ["tests/core/graph_oracle.rs", "crates/ast-sgrep-lsp/src/backend.rs"]
+
+[[feature]]
+id = "chain"
+category = "graph"
+hosts = { cli = "present", mcp = "missing", lsp = "n/a", pi = "missing", codemode = "partial" }
+rationale = "CLI chain command. MCP/Pi first-class chain is tracked, not implied by MCP search tools."
+evidence = ["crates/ast-sgrep-cli/src/cli_args.rs"]
+
+[[feature]]
+id = "index_build"
+category = "index"
+hosts = { cli = "present", mcp = "present", lsp = "present", pi = "partial", codemode = "present" }
+rationale = "CLI index/reindex, MCP index_repo single-flight, LSP background / asgrep.reindex."
+evidence = ["docs/validation/surface-parity.md"]
+
+[[feature]]
+id = "index_watch"
+category = "index"
+hosts = { cli = "present", mcp = "excluded", lsp = "partial", pi = "n/a", codemode = "n/a" }
+rationale = "CLI watch daemon. MCP is request/response. LSP may refresh on save."
+evidence = ["crates/ast-sgrep-cli/src/cli_args.rs"]
+
+[[feature]]
+id = "doctor"
+category = "ops"
+hosts = { cli = "present", mcp = "excluded", lsp = "excluded", pi = "partial", codemode = "n/a" }
+rationale = "CLI doctor fail-closed. MCP/LSP doctor is a product non-goal until WP5 cell changes; Pi handbook only."
+evidence = ["docs/validation/surface-parity.md", "docs/progress/surface-deferrals.md"]
+deferral = "mcp-no-doctor"
+
+[[feature]]
+id = "status"
+category = "ops"
+hosts = { cli = "present", mcp = "missing", lsp = "n/a", pi = "partial", codemode = "n/a" }
+rationale = "CLI status. Not MCP."
+evidence = ["crates/ast-sgrep-cli/src/cli_args.rs"]
+
+[[feature]]
+id = "capabilities_machine_json"
+category = "machine"
+hosts = { cli = "present", mcp = "partial", lsp = "n/a", pi = "n/a", codemode = "n/a" }
+rationale = "CLI capabilities + envelopes. MCP protocol is peer, not a full CLI clone."
+evidence = ["tests/cli/machine_contracts.rs"]
+disc_ids = ["DISC-mcp-not-full-suite"]
+related = "ghiw.2"
+
+[[feature]]
+id = "compact_output"
+category = "machine"
+hosts = { cli = "present", mcp = "excluded", lsp = "n/a", pi = "n/a", codemode = "n/a" }
+rationale = "Token-budget format. Drops provenance. MCP has no format arg by product split."
+evidence = ["docs/validation/compact-output.md"]
+disc_ids = ["DISC-compact-drops-provenance"]
+deferral = "compact-drops-provenance"
+
+[[feature]]
+id = "mcp_format_arg"
+category = "machine"
+hosts = { cli = "n/a", mcp = "missing", lsp = "n/a", pi = "n/a", codemode = "n/a" }
+rationale = "Optional MCP format argument is tracked, not required for CLI/MCP split honesty."
+evidence = ["docs/mcp.md"]
+related = "ghiw.2"
+
+[[feature]]
+id = "code_read"
+category = "agent"
+hosts = { cli = "partial", mcp = "present", lsp = "n/a", pi = "partial", codemode = "present" }
+rationale = "MCP/codemode node-id read. CLI is search-first."
+evidence = ["crates/ast-sgrep-mcp/src/lib.rs"]
+
+[[feature]]
+id = "codemode_batch"
+category = "agent"
+hosts = { cli = "present", mcp = "excluded", lsp = "n/a", pi = "present", codemode = "present" }
+rationale = "Code Mode XOR MCP -- never both. Dual process is intentional."
+evidence = ["docs/mcp.md", "docs/progress/surface-deferrals.md"]
+deferral = "dual-banner-process-cli-mcp"
+
+[[feature]]
+id = "pi_extension"
+category = "agent"
+hosts = { cli = "n/a", mcp = "n/a", lsp = "n/a", pi = "present", codemode = "present" }
+rationale = "packages/pi/extension. Mode test matrix honesty is partial until ghiw/lbx1 fill it."
+evidence = ["packages/pi/extension/package.json"]
+related = "lbx1"
+
+[[feature]]
+id = "pi_mode_test_matrix"
+category = "agent"
+hosts = { cli = "n/a", mcp = "n/a", lsp = "n/a", pi = "partial", codemode = "partial" }
+rationale = "Honesty row: do not claim a full Pi mode matrix until tests exist."
+evidence = ["docs/progress/surface-deferrals.md"]
+
+[[feature]]
+id = "eval_gold"
+category = "eval"
+hosts = { cli = "present", mcp = "n/a", lsp = "n/a", pi = "n/a", codemode = "n/a" }
+rationale = "asgrep eval vs gold fixture. Dirty-run withdrawn; see baselines negative note."
+evidence = ["benchmarks/results/baselines.md"]
+
+[[feature]]
+id = "bench_keep_gate"
+category = "eval"
+hosts = { cli = "present", mcp = "n/a", lsp = "n/a", pi = "n/a", codemode = "n/a" }
+rationale = "latency_only. Never correctness."
+evidence = [".bench-history/README.md", "docs/validation/oracle-dispatch.md"]
+
+[[feature]]
+id = "ranking_oracle"
+category = "eval"
+hosts = { cli = "present", mcp = "n/a", lsp = "n/a", pi = "n/a", codemode = "n/a" }
+rationale = "must_include bag, not gold ranks."
+evidence = ["tests/core/ranking_oracle.rs"]
+disc_ids = ["DISC-ranking-soft-oracle"]
+
+[[feature]]
+id = "extraction_dumps"
+category = "eval"
+hosts = { cli = "partial", mcp = "n/a", lsp = "n/a", pi = "n/a", codemode = "n/a" }
+rationale = "Presence-only until nz7i.4 dump goldens."
+evidence = ["docs/progress/surface-deferrals.md"]
+disc_ids = ["DISC-extraction-presence-only"]
+related = "nz7i.4"
+deferral = "extraction-presence-not-dump-golden"
+
+[[feature]]
+id = "in_query_boolean_grammar"
+category = "search"
+hosts = { cli = "excluded", mcp = "excluded", lsp = "excluded", pi = "excluded", codemode = "excluded" }
+rationale = "QUERY_GRAMMAR has no composable AND. Permanent product non-goal until ghiw.2 says otherwise."
+evidence = ["docs/QUERY_GRAMMAR.md"]
+related = "ghiw.2"
+
+[[feature]]
+id = "jell_external_differential"
+category = "eval"
+hosts = { cli = "excluded", mcp = "excluded", lsp = "n/a", pi = "n/a", codemode = "n/a" }
+rationale = "asgrep vs rg vs ast-grep hit-ID bake-off deferred. Not a product promise."
+evidence = ["docs/validation/jell-deferral.md"]
+disc_ids = ["DISC-no-jell-harness"]
+
+[[feature]]
+id = "ast_grep_rewrites"
+category = "search"
+hosts = { cli = "excluded", mcp = "excluded", lsp = "excluded", pi = "excluded", codemode = "excluded" }
+rationale = "Use standalone ast-grep. Not silently delegated."
+evidence = ["docs/structural-patterns.md"]
+disc_ids = ["DISC-pattern-native-subset"]
+deferral = "pattern-rewrites-not-in-product"
+
+[[feature]]
+id = "neural_embed"
+category = "search"
+hosts = { cli = "partial", mcp = "partial", lsp = "partial", pi = "n/a", codemode = "n/a" }
+rationale = "Feature-gated. Live e2e owned by lbx1, not this matrix."
+evidence = ["crates/ast-sgrep-cli/Cargo.toml"]
+related = "lbx1"
+
+[[feature]]
+id = "forbid_soundness"
+category = "ops"
+hosts = { cli = "present", mcp = "n/a", lsp = "n/a", pi = "n/a", codemode = "n/a" }
+rationale = "CI / scripts/verify-forbid-soundness."
+evidence = ["scripts/verify-forbid-soundness"]

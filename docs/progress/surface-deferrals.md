@@ -19,7 +19,7 @@ _(none -- no invented "we shipped parity" closes)_
 
 - **target_workload:** MCP vs CLI hybrid
 - **evidence_artifact_paths:** `docs/validation/surface-parity.md`, `DISC-mcp-not-full-suite`
-- **retry_condition_predicate:** Reconsider only inside the broader MCP hybrid-fusion redesign (track as `ast-sgrep-gauntlet-remediation-program-1vhy.5`).
+- **retry_condition_predicate:** Reconsider only inside the broader MCP hybrid-fusion redesign. Status in WP5 matrix is `excluded` (not missing). Track as `ast-sgrep-gauntlet-remediation-program-1vhy.5`.
 - **bead_id:** `ast-sgrep-gauntlet-remediation-program-1vhy.5`
 
 ### `mcp-no-doctor`

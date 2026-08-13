@@ -37,6 +37,7 @@ Canonical entry points for humans and agents. Prefer this list over scavenging t
 | [validation/proof-pack.md](validation/proof-pack.md) | Minimal reproducible ranking/honesty gates |
 | [validation/oracle-dispatch.md](validation/oracle-dispatch.md) | Channel × scenario → authoritative oracle |
 | [progress/README.md](progress/README.md) | Campaign negative ledgers (perf / conformance / surface) |
+| [contracts/README.md](contracts/README.md) | Surface matrix + oracle dispatch + score weights |
 | [../benchmarks/README.md](../benchmarks/README.md) | Benchmark folder index and error budgets |
 
 Published result tables (`head-to-head`, `speed`, `bakeoff`, `losses`, `baselines`)

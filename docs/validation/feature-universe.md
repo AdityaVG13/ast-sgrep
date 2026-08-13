@@ -1,6 +1,11 @@
 # Feature universe (`f8qy.3`)
 
-Canonical product features covered by ranking/oracle and agent surfaces.
+Canonical IDs live in the machine matrix
+[`docs/contracts/supported_surface_matrix.toml`](../contracts/supported_surface_matrix.toml)
+(`present|partial|missing|excluded|n/a` per host). This table is the short human index.
+
+Weights (not scores): [`docs/contracts/parity_score_contract.toml`](../contracts/parity_score_contract.toml).
+Intentional deltas: [`docs/progress/surface-deferrals.md`](../progress/surface-deferrals.md).
 
 | Feature ID | Surface | Notes |
 |------------|---------|-------|

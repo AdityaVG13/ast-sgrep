@@ -9,5 +9,6 @@
 | Doctor/triage | `doctor` | — | — | handbook |
 | Boolish env | clap Boolish + core `env_flag` | NO_EMBED boolish | settings | env aliases |
 
-Intentional deltas: MCP does not auto-fuse channels; LSP focuses on IDE
-navigation commands.
+Intentional deltas: MCP does not auto-fuse channels (`excluded`, not a bug);
+LSP focuses on IDE navigation. Formal statuses:
+[`docs/contracts/supported_surface_matrix.toml`](../contracts/supported_surface_matrix.toml).
