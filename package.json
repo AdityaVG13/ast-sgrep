@@ -8,6 +8,7 @@
   ],
   "scripts": {
     "check:pi-contract": "node packages/pi/scripts/check-contract.mjs",
+    "check:pi-dist": "npm run build --workspace pi-ast-sgrep && git diff --exit-code -- packages/pi/extension/dist",
     "check:pi-release": "node packages/pi/scripts/check-native-workflow.mjs",
     "pack:pi-release": "node packages/pi/scripts/release-acceptance.mjs pack",
     "test:pi-release-gate": "node packages/pi/scripts/release-acceptance.mjs self-test",

@@ -65,6 +65,7 @@ report(workspace.version === version, 'npm workspace version drifts from the Pi 
 report(workspace.name === 'ast-sgrep-workspace' && workspace.private === true, 'root npm workspace name/private policy changed');
 report(equal(workspace.workspaces, ['packages/pi/extension', 'packages/pi/launcher']), 'root npm workspace paths changed or native platform templates became direct workspaces');
 report(workspace.scripts?.['check:pi-contract'] === 'node packages/pi/scripts/check-contract.mjs', 'root contract-check script changed');
+report(workspace.scripts?.['check:pi-dist'] === 'npm run build --workspace pi-ast-sgrep && git diff --exit-code -- packages/pi/extension/dist', 'root Pi extension dist freshness script changed');
 report(workspace.scripts?.['check:pi-release'] === 'node packages/pi/scripts/check-native-workflow.mjs' && workspace.scripts?.['pack:pi-release'] === 'node packages/pi/scripts/release-acceptance.mjs pack' && workspace.scripts?.['test:pi-release-gate'] === 'node packages/pi/scripts/release-acceptance.mjs self-test', 'root release acceptance scripts changed');
 report(Object.keys(workspace).every((key) => ['name', 'version', 'private', 'workspaces', 'scripts'].includes(key)), 'root package.json must remain the minimal private workspace');
 

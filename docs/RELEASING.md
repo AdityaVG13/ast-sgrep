@@ -16,10 +16,13 @@ Local preparation is side-effect free:
 
 ```bash
 npm run check:pi-contract
+npm run check:pi-dist
 npm run check:pi-release
 npm run test:pi-release-gate
 npm run test:pi-e2e
 ```
+
+`check:pi-contract` remains the release-metadata/version skew gate (including a few src↔dist constant checks). `check:pi-dist` rebuilds the committed `packages/pi/extension/dist` via `tsc` and fails if emit drifts from git (`npm files` ships `dist`; do not un-commit it).
 
 The release-gate and E2E commands exercise packed artifacts and the official Pi loader without publishing. Package-level `npm pack --dry-run`/`npm pack` preparation is allowed; do not run `npm publish` locally. The manual **Pi native artifacts** workflow (`.github/workflows/pi-native-artifacts.yml`) is dry-run only. The tag-only **Pi npm official release** workflow (`.github/workflows/pi-npm-release.yml`) is the canonical publisher. Both pin Rust `1.97.1`; the official matrix packs, clean-installs, and executes each native artifact on its matching host before upload.
 
