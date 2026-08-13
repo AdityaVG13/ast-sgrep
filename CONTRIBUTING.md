@@ -68,3 +68,8 @@ identity, or latency threshold breaches. The official package release invokes
 | `ast-sgrep-testkit` | Shared fixtures for integration tests |
 
 See [README.md](README.md) and [docs/README.md](docs/README.md) for user-facing docs.
+
+Conformance honesty: [docs/validation/DISCREPANCIES.md](docs/validation/DISCREPANCIES.md),
+[docs/validation/COVERAGE.md](docs/validation/COVERAGE.md), and
+[docs/validation/conformance-verdicts.md](docs/validation/conformance-verdicts.md).
+XFAIL/`#[ignore]` only with a registered DISC id. Not-run is not Pass.

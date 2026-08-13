@@ -74,7 +74,7 @@ flowchart LR
     P -->|callers:| C["Caller graph SQL"]
     P -->|defs:| D["Symbol lookup SQL"]
     P -->|imports:| I["Import lookup SQL"]
-    P -->|pattern:| AG["ast-grep delegate"]
+    P -->|pattern:| AG["native pattern subset"]
     P -->|hybrid| H["Multi-pass fusion"]
     H --> L["Lexical FTS5"]
     H --> S["Symbol match"]
@@ -94,9 +94,9 @@ flowchart LR
 
 ### Query routing
 
-1. **Prefixed queries** bypass hybrid fusion and hit dedicated SQL or external tools:
+1. **Prefixed queries** bypass hybrid fusion and hit dedicated SQL or the native pattern matcher:
    - `callers:`, `defs:`, `imports:` → graph/symbol tables
-   - `pattern:` → ast-grep subprocess (when installed)
+   - `pattern:` → indexed signatures + tree-sitter reparse (native subset, not ast-grep CLI)
 
 2. **Hybrid queries** (no prefix) run multiple passes in parallel conceptually, then fuse:
    - **Lexical**, FTS5 BM25 on `lines_fts` (and optional Tantivy sidecar at scale)

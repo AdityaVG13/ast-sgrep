@@ -13,7 +13,7 @@ Three tools, three jobs. ast-sgrep is the **navigation and intent layer** you ad
 | **Symbol definitions** | Yes (`defs:`) | Via pattern only | No |
 | **Caller / callee graph** | Yes (`callers:`) | No | No |
 | **Import tracking** | Yes (`imports:`) | No | No |
-| **Structural patterns** | Yes (`pattern:` → ast-grep) | Native | No |
+| **Structural patterns** | Native indexed subset (`pattern:`) | Native (full rules/rewrites) | No |
 | **Polyglot AST** | 13 languages, unified index | Yes | Text only |
 | **CI / platform JSON** | GitHub & GitLab shapes | No | `--json` (ripgrep format) |
 | **LSP** | `asgrep-lsp` | Separate ecosystem | No |
@@ -49,7 +49,7 @@ Three tools, three jobs. ast-sgrep is the **navigation and intent layer** you ad
 └─────────────────────────────────────────────────────────┘
 ```
 
-**ast-sgrep complements the others.** It delegates structural queries to ast-grep via `pattern:` and does not compete with ripgrep on raw scan speed over arbitrary unindexed files.
+**ast-sgrep complements the others.** `pattern:` is a native indexed subset (not an ast-grep subprocess) and does not compete with ripgrep on raw scan speed over arbitrary unindexed files. See `docs/structural-patterns.md` and `DISC-pattern-native-subset`.
 
 ## Feature deep dive
 
@@ -84,13 +84,13 @@ ast-grep matches **structure**, not **meaning**. ripgrep matches **text**, not *
 
 ### Structural patterns
 
-ast-grep is the specialist. ast-sgrep exposes it:
+ast-grep is the specialist for nested templates, YAML rules, and rewrites. ast-sgrep ships a native subset for indexed signatures and simple declaration/call shapes:
 
 ```bash
 asgrep "pattern:fn $NAME($$$)"
 ```
 
-Requires ast-grep CLI installed. Results appear as `PATTERN` hits in ast-sgrep output.
+This does **not** require the ast-grep CLI. Unsupported shapes return no hits rather than spawning a subprocess. Results appear as `PATTERN` hits. See `docs/structural-patterns.md`.
 
 ### Output for automation
 

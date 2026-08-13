@@ -2,6 +2,9 @@
 /// The fixture existed but no repository consumer loaded it, so the expected
 /// ranks protected no invariant. This test deserializes the cases, indexes the
 /// sample corpus, runs each query, and asserts the must_include constraints.
+///
+/// Verdict: Fail = missing must_include (panic). Soft oracle, not gold ranks
+/// (`DISC-ranking-soft-oracle` in docs/validation/DISCREPANCIES.md).
 use ast_sgrep_core::search::HitKind;
 use ast_sgrep_core::{IndexOptions, SearchOptions, Searcher};
 use ast_sgrep_testkit::index_sample;

@@ -9,6 +9,7 @@ mod isolation;
 mod lang;
 mod lsp;
 mod scrub;
+mod verdict;
 pub use cli::CliSession;
 pub use fixture::{sample_file, sample_root};
 pub use golden::{
@@ -27,3 +28,4 @@ pub use lang::{
 };
 pub use lsp::{lsp_search_hit_keys, sample_backend};
 pub use scrub::Scrubber;
+pub use verdict::TestVerdict;

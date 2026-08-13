@@ -18,4 +18,7 @@ Artifacts:
 - `docs/validation/feature-universe.md`
 - `docs/validation/engine-identity.md`
 - `docs/validation/negative-ledgers.md`
+- `docs/validation/DISCREPANCIES.md`
+- `docs/validation/COVERAGE.md`
+- `docs/validation/conformance-verdicts.md`
 - `EPIC_EVIDENCE.md`
