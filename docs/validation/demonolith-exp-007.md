@@ -9,7 +9,7 @@
 
 | Step | Commit | Change |
 |---|---|---|
-| 1 | (this commit) | Prepare/hash leaf helpers → `crates/ast-sgrep-core/src/index_prepare.rs`; `mod index_prepare;` in `lib.rs` |
+| 1 | `2eaa414` | Prepare/hash leaf helpers → `crates/ast-sgrep-core/src/index_prepare.rs`; `mod index_prepare;` in `lib.rs` |
 
 **Moved into `index_prepare.rs`:** `ExtractedRows`, `PreparedFile`, `PrepareOutcome`, `UpsertMaterial`, `body_structure_hash`, `is_trailing_trivia_line` (module-private), `hash_content`, `materialize_upsert`, `prepare_file`, `rows_from_extraction`, `should_prune_missing_files`, `system_time_to_parts` (`pub(crate)` as needed).
 
