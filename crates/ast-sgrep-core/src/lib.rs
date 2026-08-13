@@ -7,6 +7,7 @@ pub mod env_flag;
 pub mod fusion;
 pub mod gitignore;
 pub mod index;
+mod index_prepare;
 mod index_recovery;
 pub mod intent;
 pub mod io_bounds;
