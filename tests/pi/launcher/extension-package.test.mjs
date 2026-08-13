@@ -36,13 +36,13 @@ test("packed extension inventory is exact and carries registry integrity", () =>
     "dist/codemode/worker.js",
     "dist/index.d.ts",
     "dist/index.js",
+    "dist/present.d.ts",
+    "dist/present.js",
     "dist/runtime.d.ts",
     "dist/runtime.js",
     "native/.gitignore",
     "native/README.md",
     "package.json",
-    "skills/ast-sgrep/SKILL.md",
-    "skills/ast-sgrep/references/query-guide.md",
   ].sort());
   assert.match(packed.integrity, /^sha512-[A-Za-z0-9+/]+={0,2}$/u);
   assert.match(packed.shasum, /^[0-9a-f]{40}$/u);

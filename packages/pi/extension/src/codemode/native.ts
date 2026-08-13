@@ -47,6 +47,8 @@ export type NativeBatchResponse = {
 
 export type NativeSession = {
   call(tool: string, args?: Record<string, unknown>, signal?: AbortSignal): Promise<unknown>;
+  /** Sync warm lookup; omitted on older addons. Throws if the session is busy. */
+  callNow?(tool: string, args?: Record<string, unknown>): unknown;
   batch(calls: NativeBatchCall[], signal?: AbortSignal): Promise<NativeBatchResponse>;
   readonly callCount: number;
   readonly root: string;
@@ -102,6 +104,8 @@ function candidatePaths(): string[] {
     // Workspace release output
     join(here, "..", "..", "..", "..", "target", "release"),
   ];
+  const cargoTarget = process.env.CARGO_TARGET_DIR;
+  if (cargoTarget) dirs.push(join(cargoTarget, "release"));
   const out: string[] = [];
   const override = process.env.ASGREP_CODEMODE_NAPI_PATH;
   if (override) out.push(override);

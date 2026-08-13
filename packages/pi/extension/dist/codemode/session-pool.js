@@ -11,20 +11,40 @@ import { asEnvelope } from "./dispatch.js";
 import { loadCodemodeNative } from "./native.js";
 import { startStickyWorker } from "./worker.js";
 const abortError = () => Object.assign(new Error("native call aborted"), { name: "AbortError" });
+/** Tools cheap enough to run on the JS thread once the Searcher is warm. */
+const FAST_LOOKUP = new Set([
+    "search",
+    "defs",
+    "callers",
+    "imports",
+    "index_status",
+    "catalog_search",
+    "catalog_describe",
+]);
+function isBusyError(cause) {
+    const message = cause instanceof Error ? cause.message : String(cause);
+    return /session is busy/i.test(message);
+}
 function inProcessWorker(session) {
     let tail = Promise.resolve();
     let closed = false;
+    let inflight = 0;
     const enqueue = (operation, signal) => {
         if (closed)
             return Promise.reject(new Error("native session is closed"));
         if (signal?.aborted)
             return Promise.reject(abortError());
+        inflight += 1;
         const slot = tail.then(() => {
             if (signal?.aborted)
                 throw abortError();
             return operation();
         });
-        tail = slot.then(() => undefined, () => undefined);
+        tail = slot.then(() => {
+            inflight -= 1;
+        }, () => {
+            inflight -= 1;
+        });
         if (!signal)
             return slot;
         return new Promise((resolve, reject) => {
@@ -35,6 +55,18 @@ function inProcessWorker(session) {
     };
     return {
         call(tool, args, options) {
+            if (options?.signal?.aborted)
+                return Promise.reject(abortError());
+            const sync = session.callNow;
+            if (inflight === 0 && !closed && sync && FAST_LOOKUP.has(tool)) {
+                try {
+                    return Promise.resolve(asEnvelope(sync.call(session, tool, args ?? {}), tool));
+                }
+                catch (cause) {
+                    if (!isBusyError(cause))
+                        return Promise.reject(cause);
+                }
+            }
             return enqueue(async () => asEnvelope(await session.call(tool, args, options?.signal), tool), options?.signal);
         },
         batch(calls, options) {

@@ -1,5 +1,5 @@
 /**
- * ktog: schema modes ⊆ tested modes ⊆ skill docs.
+ * ktog: schema modes ⊆ tested modes ⊆ tool docs.
  * Mirrors packages/pi/extension/src/index.ts searchArgs/queryForMode without TS deps.
  */
 import assert from "node:assert/strict";
@@ -10,11 +10,8 @@ import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const indexTs = readFileSync(path.join(root, "packages/pi/extension/src/index.ts"), "utf8");
-const skill = readFileSync(path.join(root, "packages/pi/extension/skills/ast-sgrep/SKILL.md"), "utf8");
-const guide = readFileSync(
-  path.join(root, "packages/pi/extension/skills/ast-sgrep/references/query-guide.md"),
-  "utf8",
-);
+const presentTs = readFileSync(path.join(root, "packages/pi/extension/src/present.ts"), "utf8");
+const readme = readFileSync(path.join(root, "packages/pi/extension/README.md"), "utf8");
 
 const SCHEMA_MODES = [
   "natural",
@@ -86,8 +83,8 @@ test("every schema mode has argv routing coverage", () => {
   }
 });
 
-test("skill docs mention every schema mode", () => {
+test("tool docs mention every schema mode", () => {
   for (const mode of SCHEMA_MODES) {
-    assert.match(skill + "\n" + guide, new RegExp(`\\b${mode}\\b`), mode);
+    assert.match(indexTs + "\n" + presentTs + "\n" + readme, new RegExp(`\\b${mode}\\b`), mode);
   }
 });

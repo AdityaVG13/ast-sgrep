@@ -214,13 +214,12 @@ try {
   const statusTool = runner.getToolDefinition('asgrep_status');
   assert.ok(codemodeTool && searchTool && indexTool && statusTool);
   const invokeSearch = (params, signal = undefined) => searchTool.execute('release-gate', params, signal, undefined, context);
-  await stage('skill-discovery-workflow', async () => {
-    const skills = pi.loadSkillsFromDir({ dir: path.join(extensionRoot, 'skills'), source: 'release-gate' });
-    assert.deepEqual(skills.diagnostics, []);
-    assert.deepEqual(skills.skills.map((skill) => skill.name), ['ast-sgrep']);
-    assert.match(pi.formatSkillsForPrompt(skills.skills), /ast-sgrep/u);
-    const text = await readFile(skills.skills[0].filePath, 'utf8');
-    for (const instruction of ['exact-text search', 'natural', 'defs', 'callers', '/asgrep-doctor', '/asgrep-index']) assert.ok(text.includes(instruction), instruction);
+  await stage('tool-prompt-auto-register', async () => {
+    assert.ok(codemodeTool.promptSnippet, 'asgrep must contribute a system-prompt snippet');
+    assert.ok(Array.isArray(codemodeTool.promptGuidelines) && codemodeTool.promptGuidelines.length >= 2);
+    assert.match(codemodeTool.promptSnippet, /asgrep/i);
+    assert.match(codemodeTool.description, /do not wait for the user/i);
+    assert.match(searchTool.description, /asgrep/i);
   });
   const lazy = await stage('lazy-index-natural-search', async () => invokeSearch({ query: 'initialNeedle', mode: 'natural', limit: 8 }));
   assert.ok(existsSync(path.join(project, '.asgrep', 'index.db')), 'lazy search did not create the project index');
@@ -281,7 +280,7 @@ try {
     assert.equal(value.projectIndexPreserved, true);
   });
   assert.equal(children.size, 0, 'extension subprocesses are still running');
-  console.log(JSON.stringify({ ok: true, release: version, machineSchema, node: process.version, pi: piVersion, host: process.platform + '-' + process.arch, loader: 'Pi loadExtensions + ExtensionAPI + ExtensionRunner', packedArtifacts: ['native.tgz', 'launcher.tgz', 'typebox.tgz', 'extension.tgz'], tools: toolNames, commands: commandNames, stages, criteria: { packedArtifacts: true, parentEnvironmentIsolation: true, realPiLoader: true, toolsAndCommands: true, skillDiscovery: true, lazyIndex: true, naturalPatternDefsCallersSemantic: true, createModifyDeleteFreshness: true, cancellation: true, doctorStatusIndexReindex: true, versionAlignment: true, incompatibleIndexRecovery: true, updateRemovalViaTwoVersionHarness: true, projectIndexPreservedOnRemoval: true, boundedOutput: true, isolatedHomeProject: true, noCredentialsAdaptersPathOrMcp: true, cleanup: true } }));
+  console.log(JSON.stringify({ ok: true, release: version, machineSchema, node: process.version, pi: piVersion, host: process.platform + '-' + process.arch, loader: 'Pi loadExtensions + ExtensionAPI + ExtensionRunner', packedArtifacts: ['native.tgz', 'launcher.tgz', 'typebox.tgz', 'extension.tgz'], tools: toolNames, commands: commandNames, stages, criteria: { packedArtifacts: true, parentEnvironmentIsolation: true, realPiLoader: true, toolsAndCommands: true, toolPromptAutoRegister: true, lazyIndex: true, naturalPatternDefsCallersSemantic: true, createModifyDeleteFreshness: true, cancellation: true, doctorStatusIndexReindex: true, versionAlignment: true, incompatibleIndexRecovery: true, updateRemovalViaTwoVersionHarness: true, projectIndexPreservedOnRemoval: true, boundedOutput: true, isolatedHomeProject: true, noCredentialsAdaptersPathOrMcp: true, cleanup: true } }));
 } catch (cause) {
   primaryFailure = cause;
   throw cause;

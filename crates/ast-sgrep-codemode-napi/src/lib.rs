@@ -31,6 +31,15 @@ fn map_err(err: impl std::fmt::Display) -> Error {
     Error::from_reason(err.to_string())
 }
 
+/// Lookups that are sub-millisecond on a warm Searcher. Heavier tools stay on
+/// the libuv pool so they cannot stall Node's event loop.
+fn is_fast_lookup(tool: &str) -> bool {
+    matches!(
+        tool,
+        "search" | "defs" | "callers" | "imports" | "index_status" | "catalog_search" | "catalog_describe"
+    )
+}
+
 #[napi(object)]
 pub struct JsSessionConfig {
     pub root: Option<String>,
@@ -333,6 +342,34 @@ impl Session {
             },
             signal,
         ))
+    }
+
+    /// Warm lookup on the JS thread (search/defs/callers/imports/status).
+    ///
+    /// Index, semantic, and chain stay on [`Self::call`] so they cannot stall
+    /// Node's event loop. Returns "session is busy" when a worker-pool task
+    /// already holds the session so the JS host can fall back to `call`.
+    #[napi]
+    pub fn call_now(&self, tool: String, args: Option<Value>) -> Result<Value> {
+        if !is_fast_lookup(&tool) {
+            return Err(Error::from_reason(
+                "callNow is only for warm lookups; use call() for index/semantic/chain",
+            ));
+        }
+        if self.busy.load(Ordering::Acquire) {
+            return Err(Error::from_reason("session is busy"));
+        }
+        let _admission = self.admit()?;
+        let mut session = self
+            .inner
+            .try_lock()
+            .map_err(|_| Error::from_reason("session is busy"))?;
+        let result = session.call(&tool, args.unwrap_or(Value::Object(Default::default())));
+        self.call_count.store(
+            session.call_count().min(u32::MAX as usize) as u32,
+            Ordering::Relaxed,
+        );
+        result.map_err(map_err)
     }
 
     /// Dispatch one serial warm batch in a single worker-pool task.

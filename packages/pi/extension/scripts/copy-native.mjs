@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 
 const extensionDir = join(dirname(fileURLToPath(import.meta.url)), "..");
 const workspaceRoot = join(extensionDir, "..", "..", "..");
+const targetRoot = process.env.CARGO_TARGET_DIR ?? join(workspaceRoot, "target");
 const outDir = join(extensionDir, "native");
 mkdirSync(outDir, { recursive: true });
 
@@ -21,9 +22,9 @@ else if (platform === "darwin" && arch === "x64") triple = "darwin-x64";
 else if (platform === "win32" && arch === "x64") triple = "win32-x64-msvc";
 
 const candidates = [
-  join(workspaceRoot, "target/release/libast_sgrep_codemode_napi.so"),
-  join(workspaceRoot, "target/release/libast_sgrep_codemode_napi.dylib"),
-  join(workspaceRoot, "target/release/ast_sgrep_codemode_napi.dll"),
+  join(targetRoot, "release/libast_sgrep_codemode_napi.so"),
+  join(targetRoot, "release/libast_sgrep_codemode_napi.dylib"),
+  join(targetRoot, "release/ast_sgrep_codemode_napi.dll"),
 ];
 const src = candidates.find((p) => existsSync(p));
 if (!src) {

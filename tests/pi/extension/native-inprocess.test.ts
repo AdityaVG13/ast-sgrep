@@ -110,7 +110,7 @@ test("native relative index paths resolve against the session root", async (t) =
     });
     await session.call("index_repo", { force: false });
     const status = await session.call("index_status", {}) as Record<string, unknown>;
-    assert.equal(status.index_path, join(root, "custom-index", "index.db"));
+    assert.equal(status.index_path, join(realpathSync(root), "custom-index", "index.db"));
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -133,6 +133,39 @@ test("session pool uses napi backend", async (t) => {
   const envelope = await worker!.call("search", { query: "token", limit: 2, format: "capsule" });
   assert.equal(envelope.tool, "asgrep");
   assert.equal(envelope.ok, true);
+  await pool.shutdown();
+});
+
+test("warm in-process search activation is under 1ms", async (t) => {
+  const binding = requireNative();
+  if (!binding) {
+    t.skip("native addon not built");
+    return;
+  }
+  const indexed = await indexedNative(binding);
+  t.after(() => rm(indexed.dir, { recursive: true, force: true }));
+  const session = new binding.Session({ root: sample, indexPath: indexed.indexPath, useEmbed: false, limit: 8 });
+  assert.equal(typeof session.callNow, "function", "warm lookups need Session.callNow");
+  await session.callNow!("search", { query: "token", limit: 2, format: "capsule" });
+  assert.throws(
+    () => session.callNow!("index_repo", { force: false }),
+    /warm lookups|callNow/i,
+  );
+  const pool = new NativeSessionPool();
+  pool.configure({ useEmbed: false, indexPath: indexed.indexPath });
+  const worker = await pool.acquire(sample);
+  assert.ok(worker);
+  await worker!.call("search", { query: "token", limit: 2, format: "capsule" });
+  const samples: number[] = [];
+  for (let i = 0; i < 25; i += 1) {
+    const started = performance.now();
+    await worker!.call("search", { query: "token", limit: 2, format: "capsule" });
+    samples.push(performance.now() - started);
+  }
+  samples.sort((a, b) => a - b);
+  const p50 = samples[Math.floor(samples.length / 2)]!;
+  console.error(`warm search p50=${p50.toFixed(3)}ms`);
+  assert.ok(p50 < 1, `warm search p50 was ${p50.toFixed(3)}ms; expected < 1ms (${samples.map((ms) => ms.toFixed(3)).join(", ")})`);
   await pool.shutdown();
 });
 
