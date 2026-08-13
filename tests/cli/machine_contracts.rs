@@ -8,10 +8,10 @@
 //! MJ-009 — `format_aliases_typos_and_root_failures_are_unambiguous`
 //! MJ-010 — doctor unhealthy / `missing_root`
 //! MJ-013 — `format_alone_implies_json_machine_output`
-//! MJ-011 gap — full hit-array freeze (nz7i.2)
+//! MJ-011 — `search_hit_dumps_match_goldens_for_agent_capsule_and_compact` (nz7i.2)
 //! MJ-012 disc — MCP non-envelope (`DISC-mcp-not-full-suite`)
 //! NL-008 — `compact_omits_native_hit_array_and_excerpt_blobs`
-use ast_sgrep_testkit::{assert_golden_json_at, CliSession};
+use ast_sgrep_testkit::{assert_golden_json_at, CliSession, Scrubber};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -101,13 +101,50 @@ fn assert_shape(value: &Value, shape: &Value) {
         .collect();
     assert_eq!(actual, expected);
 }
+
+fn cli_fixture(name: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/cli/fixtures")
+        .join(name)
+}
+
+/// `search_dump(root)` then `machine_contract` (package version only; scores stay).
+fn scrub_search_dump(root: &Path, value: &Value) -> Value {
+    let raw = serde_json::to_string(value).expect("serialize search dump");
+    let scrubbed = Scrubber::machine_contract().apply(&Scrubber::search_dump(root).apply(&raw));
+    serde_json::from_str(&scrubbed).expect("scrubbed search dump parses")
+}
+
+fn search_format(session: &CliSession, format: &str) -> Value {
+    let index = session.index_path.to_str().expect("index utf8");
+    let root = session.root.to_str().expect("root utf8");
+    assert_success(
+        &run(
+            &session.bin,
+            &[
+                "--json",
+                "--no-embed",
+                "--index-path",
+                index,
+                "--limit",
+                "2",
+                "--format",
+                format,
+                "process_request",
+                root,
+            ],
+        ),
+        "search",
+    )
+}
+
 #[test]
 fn capabilities_and_version_match_goldens() {
     let bin = asgrep_bin();
     let mut capabilities = assert_success(&run(&bin, &["capabilities", "--json"]), "capabilities");
     capabilities["version"] = "<version>".into();
-    let capabilities_golden = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../tests/cli/fixtures/capabilities.json");
+    let capabilities_golden =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/cli/fixtures/capabilities.json");
     assert_golden_json_at(&capabilities_golden, &capabilities);
     let mut version = assert_success(&run(&bin, &["version", "--json"]), "version");
     version["version"] = "<version>".into();
@@ -755,7 +792,10 @@ fn compact_omits_native_hit_array_and_excerpt_blobs() {
         "compact must not emit native excerpt provenance blobs"
     );
     assert!(value.get("h").is_some(), "compact hit rows live in h");
-    assert!(value.get("p").is_some(), "compact path dictionary lives in p");
+    assert!(
+        value.get("p").is_some(),
+        "compact path dictionary lives in p"
+    );
 }
 
 #[test]
@@ -1120,4 +1160,53 @@ fn codemode_batch_missing_file_machine_envelope_without_json_flag() {
     assert_eq!(value["ok"], false);
     assert_eq!(value["command"], "codemode-batch");
     assert_eq!(value["error"]["kind"], "operational");
+}
+
+/// MJ-011 / nz7i.2: freeze ranked hit payloads, not just top-level key sets.
+#[test]
+fn search_hit_dumps_match_goldens_for_agent_capsule_and_compact() {
+    let session = CliSession::sample(asgrep_bin());
+    for (format, file) in [
+        ("agent", "search_agent_hits.json"),
+        ("agent-capsule", "search_agent_capsule_hits.json"),
+        ("compact", "search_compact_hits.json"),
+    ] {
+        let dump = scrub_search_dump(&session.root, &search_format(&session, format));
+        assert_golden_json_at(&cli_fixture(file), &dump);
+    }
+}
+
+/// nz7i.2 F2: native / github / gitlab were listed in capabilities but unshaped.
+#[test]
+fn native_github_gitlab_search_shapes_are_stable() {
+    let session = CliSession::sample(asgrep_bin());
+    let shapes = fixture("shapes");
+    for format in ["native", "github", "gitlab"] {
+        assert_shape(&search_format(&session, format), &shapes[format]);
+    }
+}
+
+/// nz7i.2 F4: path-free usage teaching is frozen in full, not blanked to `<message>`.
+#[test]
+fn path_free_usage_teaching_messages_match_goldens() {
+    let bin = asgrep_bin();
+    let typo = parse_stdout(&run(&bin, &["--json", "indxx"]));
+    assert_eq!(typo["ok"], false);
+    assert_eq!(typo["error"]["kind"], "usage");
+    let typo_msg = typo["error"]["message"].as_str().expect("typo message");
+    assert!(
+        typo_msg.contains("did you mean") && typo_msg.contains("index"),
+        "expected index teaching, got {typo_msg}"
+    );
+    assert_golden_json_at(&cli_fixture("teaching_indxx.json"), &typo);
+
+    let format = parse_stdout(&run(&bin, &["--json", "--format", "agnt", "query", "."]));
+    assert_eq!(format["ok"], false);
+    assert_eq!(format["error"]["kind"], "usage");
+    let format_msg = format["error"]["message"].as_str().expect("format message");
+    assert!(
+        format_msg.contains("did you mean") && format_msg.contains("agent"),
+        "expected agent teaching, got {format_msg}"
+    );
+    assert_golden_json_at(&cli_fixture("teaching_format_agnt.json"), &format);
 }

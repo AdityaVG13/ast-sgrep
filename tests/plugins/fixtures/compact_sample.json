@@ -1,0 +1,31 @@
+{
+  "h": [
+    [
+      "3updc6syc4j3t:10-42",
+      "d",
+      "t",
+      "auth_refresh",
+      "fn auth_refresh() {\n    renew_token();\n    log();\n}"
+    ],
+    [
+      "3axuqzmgy12jr:7-7",
+      "c",
+      "t",
+      "auth_refresh",
+      "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+    ]
+  ],
+  "p": {
+    "3axuqzmgy12jr": "src/session.rs",
+    "3updc6syc4j3t": "src/auth.rs"
+  },
+  "q": "renewal flow",
+  "v": 1,
+  "zb": [
+    96,
+    768,
+    147
+  ],
+  "zn": 2,
+  "zt": 1
+}
