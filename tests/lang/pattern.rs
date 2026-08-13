@@ -28,7 +28,7 @@ fn literal_pattern_case_mismatch_has_no_match() {
 }
 #[test]
 fn common_metavariable_patterns_are_native() {
-    // Common shapes run in-process; only exotic rules need external ast-grep.
+    // Common shapes run in-process; exotic rules are fail-closed / empty, not delegated.
     assert!(!needs_ast_grep_fallback("fn $NAME($$$)"));
     assert!(!needs_ast_grep_fallback("def $NAME"));
     assert!(!needs_ast_grep_fallback("$OBJ.$METHOD($$$)"));

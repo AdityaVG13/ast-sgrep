@@ -32,8 +32,8 @@ _(none -- no in-tree measurement close on this seed)_
 ### `pattern-native-subset-not-ast-grep-cli`
 
 - **target_workload:** `pattern:` vs ast-grep CLI
-- **evidence_artifact_paths:** `docs/structural-patterns.md`, `DISC-pattern-native-subset`
-- **retry_condition_predicate:** Reconsider only inside the broader pattern vs ast-grep differential (track as `ast-sgrep-conformance-harness-program-ghiw.3`).
+- **evidence_artifact_paths:** `docs/structural-patterns.md`, `DISC-pattern-native-subset`, `tests/core/pattern_diff.rs`
+- **retry_condition_predicate:** Pattern-1 equality only when `ASGREP_DIFF_AST_GREP` is set; unset env is Not-run, not Pass. Full YAML/rewrite parity stays out of contract.
 - **bead_id:** `ast-sgrep-conformance-harness-program-ghiw.3`
 
 ### `ranking-soft-oracle`

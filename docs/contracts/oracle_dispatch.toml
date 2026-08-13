@@ -54,9 +54,9 @@ subject_id = "asgrep"
 oracle_id = "ast-grep-cli"
 comparator = "match_set_differential"
 disc_ids = ["DISC-pattern-native-subset"]
-suite_path = "ghiw.3"
+suite_path = "tests/core/pattern_diff.rs"
 gate_class = "deferred_excluded"
-note = "Implementation owned by ast-sgrep-conformance-harness-program-ghiw.3"
+note = "Pattern-1 equality is #[ignore] unless ASGREP_DIFF_AST_GREP is an absolute ast-grep path. Native in/out rows always run."
 
 [[channel]]
 id = "semantic-ann"
