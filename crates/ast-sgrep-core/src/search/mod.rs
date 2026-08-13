@@ -1,17 +1,17 @@
+mod finish;
 pub mod passes;
 mod types;
-mod finish;
-pub use finish::finish_response;
-pub(crate) use finish::finish_response_checked;
+use crate::query::{ParsedQuery, QueryMode};
+use crate::store::IndexStore;
+use crate::Result;
 #[cfg(test)]
 use finish::apply_rerank_order;
+pub use finish::finish_response;
+pub(crate) use finish::finish_response_checked;
 #[cfg(test)]
 use finish::{
     definition_query_affinity, enforce_result_gates, excerpt_term_coverage, rerank_candidate_limit,
 };
-use crate::query::{ParsedQuery, QueryMode};
-use crate::store::IndexStore;
-use crate::Result;
 use passes::embed::{embed_pass_for_files, run_embed_pass, SemanticCache};
 use passes::lexical::lexical_pass;
 use passes::literal::literal_pass;

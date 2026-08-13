@@ -21,12 +21,18 @@ pub(super) fn mr_pred_scale_invariance(bare: &[usize], scaled: &[usize]) -> bool
 }
 
 /// MR predicate: lang filter subset -- filtered keys ⊆ unfiltered keys.
-pub(super) fn mr_pred_lang_filter_subset(filtered: &BTreeSet<HitKey>, unfiltered: &BTreeSet<HitKey>) -> bool {
+pub(super) fn mr_pred_lang_filter_subset(
+    filtered: &BTreeSet<HitKey>,
+    unfiltered: &BTreeSet<HitKey>,
+) -> bool {
     filtered.is_subset(unfiltered)
 }
 
 /// MR predicate: reindex idempotence -- hit keys unchanged after reindex.
-pub(super) fn mr_pred_reindex_idempotent(before: &BTreeSet<HitKey>, after: &BTreeSet<HitKey>) -> bool {
+pub(super) fn mr_pred_reindex_idempotent(
+    before: &BTreeSet<HitKey>,
+    after: &BTreeSet<HitKey>,
+) -> bool {
     before == after
 }
 
@@ -48,6 +54,9 @@ pub(super) fn mr_pred_term_order_equiv(a: &BTreeSet<HitKey>, b: &BTreeSet<HitKey
 
 /// MR predicate: orthogonal corpus add -- hit keys unchanged when added file
 /// cannot match the query.
-pub(super) fn mr_pred_corpus_add_orthogonal(before: &BTreeSet<HitKey>, after: &BTreeSet<HitKey>) -> bool {
+pub(super) fn mr_pred_corpus_add_orthogonal(
+    before: &BTreeSet<HitKey>,
+    after: &BTreeSet<HitKey>,
+) -> bool {
     before == after
 }

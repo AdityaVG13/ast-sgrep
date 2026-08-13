@@ -788,7 +788,6 @@ impl IndexStore {
         let _ = self.conn.execute_batch("VACUUM");
         Ok(())
     }
-
 }
 
 #[cfg(test)]

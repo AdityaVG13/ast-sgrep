@@ -380,8 +380,11 @@ impl IndexStore {
     }
     pub fn resolve_module_path(&self, from_file: &str, module: &str) -> Result<Vec<String>> {
         let lang = self.file_language(from_file)?;
-        let cands =
-            super::super::module_resolve::collect_module_candidates(from_file, module, lang.as_deref());
+        let cands = super::super::module_resolve::collect_module_candidates(
+            from_file,
+            module,
+            lang.as_deref(),
+        );
         let mut out = Vec::new();
         for c in cands {
             if self.file_exists(&c)? {

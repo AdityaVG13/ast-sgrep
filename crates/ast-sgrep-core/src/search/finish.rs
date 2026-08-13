@@ -1,9 +1,9 @@
-use crate::query::{ParsedQuery, QueryMode};
-use crate::Result;
 use super::types::{
     assign_hit_confidence, assign_signal_margins, dedup_hits, HitKind, SearchHit, SearchOptions,
     SearchResponse, SnapshotStamp,
 };
+use crate::query::{ParsedQuery, QueryMode};
+use crate::Result;
 
 const MAX_HITS_PER_FILE: usize = 3;
 
@@ -304,7 +304,11 @@ pub(super) fn apply_rerank_order(
     out.append(&mut hits);
     out
 }
-pub(super) fn enforce_result_gates(mut hits: Vec<SearchHit>, mode: QueryMode, limit: usize) -> Vec<SearchHit> {
+pub(super) fn enforce_result_gates(
+    mut hits: Vec<SearchHit>,
+    mode: QueryMode,
+    limit: usize,
+) -> Vec<SearchHit> {
     if matches!(mode, QueryMode::Hybrid | QueryMode::Regex) {
         hits = cap_per_file(hits);
     }

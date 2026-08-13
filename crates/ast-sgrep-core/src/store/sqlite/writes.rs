@@ -4,9 +4,7 @@ use super::super::embed_support::{
     EmbeddedChunks,
 };
 use super::super::sql::{delete_file_children, delete_file_lines, query_cached_map};
-use super::{
-    CallerRow, ImportRow, IndexStore, RefreshLinesInput, SymbolRow, UpsertFileInput,
-};
+use super::{CallerRow, ImportRow, IndexStore, RefreshLinesInput, SymbolRow, UpsertFileInput};
 use crate::Result;
 use ast_sgrep_lang::PatternNode;
 use rusqlite::params;
@@ -458,4 +456,3 @@ impl IndexStore {
         })
     }
 }
-
