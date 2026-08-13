@@ -2,6 +2,7 @@
 
 mod agent;
 mod bench;
+mod keep_gate;
 mod cli_args;
 mod eval;
 mod index_cmd;

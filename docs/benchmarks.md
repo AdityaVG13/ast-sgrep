@@ -33,18 +33,29 @@ cargo build --release -p ast-sgrep-cli -j1
 ./target/release/asgrep bench . --query process_request --iterations 1
 ```
 
-## Bench history ratchet + cv_pct
+## Bench history keep-gate
 
-`asgrep bench` / `asgrep bench --suite` JSON output includes `cv_pct` (sample
-coefficient of variation over the timed iterations) and writes
-`.bench-history.json` (override with `ASGREP_BENCH_HISTORY_PATH`; disable with
-`ASGREP_BENCH_HISTORY=0`).
+Committed SSoT: [`.bench-history/`](../.bench-history/README.md) (`*.latest.json` +
+`thresholds.json`). Local `.bench-history.json` is gitignored scratch, not truth.
 
-Optional keep-gate: set `ASGREP_BENCH_RATCHET=1` to fail when the current mean
-exceeds the prior history mean by more than 50% (`ratchet_pct`). Pass-over-pass
-thresholds are intentionally coarse — this is a regression tripwire, not a
-microbenchmark SLA.
+Keep rules (default-on; disable with `ASGREP_BENCH_RATCHET=0`):
+
+- Primary mean regression **> 3%** vs committed prior → fail
+- Suite geomean regression **> 5%** → fail
+- `cv_pct > 5` → **quarantine** (ineligible, not a silent keep)
+- Missing / placeholder prior → **establish baseline**, not a win keep
+- Every decision records `host`, `git_sha`, `profile`
+- Batch (`--queries-file`) emits `cv_pct` + history and uses the same rules
+- Claiming a **win** keep also requires a HotPath / profile sample (checklist)
+
+`--max-average-ms` in CI is a **host-labeled smoke ceiling**, not the keep
+oracle. Competitor latency (ast-grep CLI, ripgrep, UNREPRODUCIBLE
+`benchmarks/results/*` rows) is **not** keep and **not** correctness.
 
 `speedup_vs_ast_grep` is only emitted under `ast_grep_comparison` for
 `pattern:` queries when the ast-grep binary is present; hybrid/token comparisons
-are skipped with an explicit `skipped_reason`.
+are skipped with an explicit `skipped_reason`. Do not read that field as a keep
+gate.
+
+Override history dir with `ASGREP_BENCH_HISTORY_DIR`. Copy a passing `.run.json`
+to `.latest.json` only after a keep (`ASGREP_BENCH_HISTORY_COMMIT=1`).

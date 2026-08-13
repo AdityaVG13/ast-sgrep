@@ -117,9 +117,10 @@ tests/artifacts/state-space-collapse/
 # Golden mismatch dumps (assert_golden writes these on failure; never commit)
 *.actual
 
-# Local bench history ratchet (written by `asgrep bench`)
+# Local bench history scratch (committed SSoT is `.bench-history/*.latest.json`)
 .bench-history.json
 **/.bench-history.json
+.bench-history/*.run.json
 
 # Agent skill specs (local-only)
 .agents/

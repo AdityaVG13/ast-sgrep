@@ -49,17 +49,19 @@ cargo run --locked --release -p ast-sgrep-cli --bin asgrep -- \
   --json --index-path /tmp/asgrep-speed.db \
   bench tests/fixtures/sample --suite default --fixture sample --iterations 10 \
   > speed-results.json
-python3 scripts/check-bench-output.py speed-results.json --max-average-ms 15
+python3 scripts/check-bench-output.py speed-results.json --history-dir .bench-history --label suite:sample:default --smoke-max-average-ms 15
 
 cargo run --locked --release -p ast-sgrep-cli --bin asgrep -- \
   --json --index-path /tmp/asgrep-bakeoff.db \
   bench . --suite self --fixture self --iterations 5 \
   > bakeoff-results.json
-python3 scripts/check-bench-output.py bakeoff-results.json --max-average-ms 100
+python3 scripts/check-bench-output.py bakeoff-results.json --history-dir .bench-history --label suite:self:self --smoke-max-average-ms 100
 ```
 
-Both suites fail inside the CLI when hit counts or expected result identities
-miss. The checker adds a finite measured-latency threshold.
+Both suites fail inside the CLI when hit counts, expected result identities, or
+the keep-gate miss. The checker also applies committed `.bench-history` keep
+rules; `--smoke-max-average-ms` is a host-labeled secondary ceiling, not the
+keep oracle. Competitor latency is not keep.
 
 ## Latency error budgets
 

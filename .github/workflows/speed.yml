@@ -20,8 +20,16 @@ jobs:
             --json --index-path "$RUNNER_TEMP/speed-index.db" \
             bench tests/fixtures/sample --suite default --fixture sample \
             --iterations 10 > speed-results.json
-      - name: Enforce correctness and latency threshold
-        run: python3 scripts/check-bench-output.py speed-results.json --max-average-ms 15
+        env:
+          ASGREP_BENCH_GIT_SHA: ${{ github.sha }}
+          ASGREP_BENCH_PROFILE: release
+          ASGREP_BENCH_HOST: github-actions-ubuntu-latest
+      - name: Enforce identity + keep-gate (smoke ms is host-labeled secondary)
+        env:
+          ASGREP_BENCH_GIT_SHA: ${{ github.sha }}
+          ASGREP_BENCH_PROFILE: release
+          ASGREP_BENCH_HOST: github-actions-ubuntu-latest
+        run: python3 scripts/check-bench-output.py speed-results.json --history-dir .bench-history --label suite:sample:default --smoke-max-average-ms 15
       - uses: actions/upload-artifact@v4
         if: always()
         with:

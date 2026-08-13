@@ -9,7 +9,17 @@ Skill headers: gauntlet WP3 / K-3. Predicate forms: `docs/progress/README.md`.
 
 ## Closed
 
-_(none -- no in-tree measurement close on this seed)_
+### 2026-08-13 — `legacy-50pct-optional-tripwire` — rejected (durable infra replacement)
+
+- **target_workload:** `asgrep bench` keep path
+- **files_touched:** `kept-durable-infra` (`crates/ast-sgrep-cli/src/keep_gate.rs`, `.bench-history/thresholds.json`)
+- **correctness_proof:** not a measurement close; policy replacement
+- **evidence_artifact_paths:** `.bench-history/README.md`, `docs/benchmarks.md`
+- **measured_result:** not claimed
+- **retry_condition_predicate:** Not worth retrying as a standalone patch. The 50% optional `ASGREP_BENCH_RATCHET=1` tripwire is replaced by default-on −3%/−5% class keep vs committed `.latest.json` plus cv quarantine.
+- **bead_id:** `ast-sgrep-gauntlet-remediation-program-1vhy.1`
+
+_(no invented measurement closes)_
 
 ## Open (pointer imports)
 
