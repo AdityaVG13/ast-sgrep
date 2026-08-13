@@ -159,3 +159,4 @@ fuzz/corpus/
 .rotational-code-analysis/
 .rotational-code-analysis
 *.rotational-code-analysis/
+.code-upgrade-enterprise/
