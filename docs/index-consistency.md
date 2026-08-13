@@ -57,6 +57,15 @@ IVF hits require fingerprint match or flat fallback.
 
 **Cross-process Searcher caches (R-XPROC-MULTIWRITER Option C lite):** writers (`Indexer::index_all`, watch `update_paths` / deferred sidecar flush) publish a unique `writer_generation` epoch beside the index home (`.asgrep/writer_generation`, or next to a pinned `ASGREP_INDEX_PATH`). The stamp is not `read+1`: concurrent writers must not publish the same value, or a peer that already observed it will skip the second mutation. Long-lived MCP and Code Mode Searcher caches poll the stamp for the **cached Searcher's root** (the per-call index, not the session workspace) and reopen when it changes, so `asgrep watch` / CLI index cannot silently leave a warm peer serving a pre-mutation snapshot. This is an epoch poll, not a flock or IPC bus. `asgrep status` reports `writer_generation`.
 
+**Writer-generation fail-open (intentional contract):**
+
+| Surface | Contract |
+|---|---|
+| `advertise_writer_generation` | Best-effort after a successful SQLite commit. Stamp I/O failure logs and **skips**; it must **not** fail the index command. Durable rows may already be visible to other connections; turning a committed mutation into a command error is worse than a missed peer reopen hint. |
+| `read_writer_generation` | Returns `0` when the stamp is absent or unreadable. That `0` is the **first-run / cold-start** protocol (no stamp yet), not a soft error to fail closed on. Peers treat epoch `0` as "no advertised external writer yet." |
+
+Residual risk of advertise skip: a warm peer that already cached under epoch `0` may not reopen until a later successful bump (or its own cache invalidation). Accepted trade-off versus fail-closed-after-commit. Observability: skipped bumps print `asgrep: writer_generation stamp skipped ...` with the stamp path.
+
 **Pinned `ASGREP_INDEX_PATH`:** an explicit `--index-path` / `IndexOptions.index_path` / `ASGREP_INDEX_PATH` pins a specific DB file. Prefer one shared path for MCP + CLI watch so the SQLite file and `writer_generation` stamp stay co-located.
 
 **Corruption recovery:** ordinary opens fail closed when SQLite reports a corrupt

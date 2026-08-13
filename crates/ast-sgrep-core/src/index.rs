@@ -779,13 +779,25 @@ impl Indexer {
         Ok(())
     }
 
-    /// Bump the cross-process writer stamp (best-effort; never fails the index).
+    /// Bump the cross-process writer stamp after a durable index mutation.
+    ///
+    /// Fail-open by contract: stamp I/O must never fail the index once SQLite
+    /// has committed. A missed bump only delays peer Searcher reopen; failing
+    /// the command would report error after durable rows are already visible.
+    /// See `docs/index-consistency.md` (writer-generation fail-open).
     fn advertise_writer_generation(&self) {
+        let stamp = crate::store::writer_generation_path(
+            &self.options.root,
+            self.options.index_path.as_deref(),
+        );
         if let Err(error) = crate::store::bump_writer_generation(
             &self.options.root,
             self.options.index_path.as_deref(),
         ) {
-            eprintln!("asgrep: writer_generation stamp skipped: {error}");
+            eprintln!(
+                "asgrep: writer_generation stamp skipped (index commit already durable; path {}): {error}",
+                stamp.display()
+            );
         }
     }
     pub fn deferred_rebuilds_pending(&self) -> bool {
