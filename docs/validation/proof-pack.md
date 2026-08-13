@@ -22,4 +22,6 @@ Artifacts:
 - `docs/validation/COVERAGE.md`
 - `docs/validation/conformance-verdicts.md`
 - `docs/progress/README.md`
+- `docs/validation/oracle-dispatch.md`
+- `docs/contracts/oracle_dispatch.toml`
 - `EPIC_EVIDENCE.md`

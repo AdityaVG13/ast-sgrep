@@ -13,4 +13,5 @@ external tools. Structural patterns are a native subset (see
 
 Proof pack entry: `docs/validation/proof-pack.md`. Registered ids:
 `DISC-no-jell-harness`, `DISC-lexical-not-rg`, `DISC-pattern-native-subset`
-in `docs/validation/DISCREPANCIES.md`.
+in `docs/validation/DISCREPANCIES.md`. Oracle router:
+`docs/validation/oracle-dispatch.md` (jell row is `deferred_excluded`).
