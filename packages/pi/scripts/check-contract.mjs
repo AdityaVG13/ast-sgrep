@@ -64,6 +64,7 @@ report(contract.canonicalVersion?.nativeCliSource === 'Cargo.toml#workspace.pack
 report(workspace.version === version, 'npm workspace version drifts from the Pi contract');
 report(workspace.name === 'ast-sgrep-workspace' && workspace.private === true, 'root npm workspace name/private policy changed');
 report(equal(workspace.workspaces, ['packages/pi/extension', 'packages/pi/launcher']), 'root npm workspace paths changed or native platform templates became direct workspaces');
+report(workspace.scripts?.['check:agent-plugin'] === 'node packages/agent-plugin/scripts/check-plugin.mjs', 'root agent-plugin check script changed');
 report(workspace.scripts?.['check:pi-contract'] === 'node packages/pi/scripts/check-contract.mjs', 'root contract-check script changed');
 report(workspace.scripts?.['check:pi-dist'] === 'npm run build --workspace pi-ast-sgrep && test -z "$(git status --porcelain -- packages/pi/extension/dist)"', 'root Pi extension dist freshness script changed');
 report(workspace.scripts?.['check:pi-release'] === 'node packages/pi/scripts/check-native-workflow.mjs' && workspace.scripts?.['pack:pi-release'] === 'node packages/pi/scripts/release-acceptance.mjs pack' && workspace.scripts?.['test:pi-release-gate'] === 'node packages/pi/scripts/release-acceptance.mjs self-test', 'root release acceptance scripts changed');

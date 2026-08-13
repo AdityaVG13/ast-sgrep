@@ -54,6 +54,7 @@ jobs:
       - run: npm run check:pi-dist
       - run: npm test --workspace pi-ast-sgrep
       - run: node --test tests/pi/launcher/*.test.mjs
+      - run: npm run check:agent-plugin
       - run: npm run check:pi-contract && npm run check:pi-release
 
   build-and-test:

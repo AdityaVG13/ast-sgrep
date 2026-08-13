@@ -7,6 +7,7 @@
     "packages/pi/launcher"
   ],
   "scripts": {
+    "check:agent-plugin": "node packages/agent-plugin/scripts/check-plugin.mjs",
     "check:pi-contract": "node packages/pi/scripts/check-contract.mjs",
     "check:pi-dist": "npm run build --workspace pi-ast-sgrep && test -z \"$(git status --porcelain -- packages/pi/extension/dist)\"",
     "check:pi-release": "node packages/pi/scripts/check-native-workflow.mjs",
