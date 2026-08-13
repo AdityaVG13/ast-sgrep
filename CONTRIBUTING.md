@@ -52,7 +52,8 @@ latency threshold breaches.
 ## Pull requests
 
 - Keep changes focused; extend `tests/core/parity.rs` (or a targeted unit test) when behavior changes.
-- Do not commit local agent/tool caches or skill-run trees -- they are gitignored.
+- Do not commit skill-run trees (`.code-upgrade-enterprise/`, `.rotational-code-analysis/`, and similar). Those stay gitignored.
+- Do commit `.skill-loop-progress.md` on the branch that ran the loop. It is the resume source of truth, not a cache.
 - Do not commit secrets, `.env`, local caches, or `fuzz/target/`.
 - Prefer conventional commits: `feat:`, `fix:`, `refactor:`, `docs:`, `test:`, `ci:`, `chore:`.
 
