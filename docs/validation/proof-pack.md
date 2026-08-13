@@ -23,5 +23,6 @@ Artifacts:
 - `docs/validation/conformance-verdicts.md`
 - `docs/progress/README.md`
 - `docs/validation/oracle-dispatch.md`
+- `docs/validation/residual-leaf-shares-post-T1R.md`
 - `docs/contracts/oracle_dispatch.toml`
 - `EPIC_EVIDENCE.md`
