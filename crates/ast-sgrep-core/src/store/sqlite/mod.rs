@@ -1737,9 +1737,9 @@ impl IndexStore {
 }
 
 #[cfg(test)]
-#[path = "../../../../tests/unit/core/store__sqlite__restore_synchronous_tests.rs"]
+#[path = "../../../../../tests/unit/core/store__sqlite__restore_synchronous_tests.rs"]
 mod restore_synchronous_tests;
 
 #[cfg(test)]
-#[path = "../../../../tests/unit/core/store__sqlite__pass3_deep_core_tests.rs"]
+#[path = "../../../../../tests/unit/core/store__sqlite__pass3_deep_core_tests.rs"]
 mod pass3_deep_core_tests;
