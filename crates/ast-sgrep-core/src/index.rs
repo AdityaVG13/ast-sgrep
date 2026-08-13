@@ -22,7 +22,7 @@ thread_local! {
     /// Test-only: when set, [`Indexer::rebuild_dirty_sidecars`] returns Err after the
     /// bulk SQLite commit so callers can pin Err-path cache invalidation.
     /// Thread-local so parallel `cargo test` workers do not cross-contaminate.
-    static FORCE_SIDECAR_REBUILD_ERR: Cell<bool> = Cell::new(false);
+    static FORCE_SIDECAR_REBUILD_ERR: Cell<bool> = const { Cell::new(false) };
 }
 
 /// RAII guard that forces sidecar rebuild to fail on this thread (simulates
