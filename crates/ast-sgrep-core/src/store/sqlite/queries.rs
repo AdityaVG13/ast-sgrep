@@ -464,7 +464,7 @@ impl IndexStore {
         limit: usize,
     ) -> Result<Vec<ImportQueryRow>> {
         let map = |r: &rusqlite::Row<'_>| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?));
-        if module.is_none_or(|m| m.is_empty()) {
+        let Some(m) = module.filter(|m| !m.is_empty()) else {
             let mut parts = Vec::new();
             let mut bind = Vec::new();
             append_lang_filter(&mut parts, &mut bind, lang);
@@ -476,9 +476,8 @@ impl IndexStore {
                 limit,
                 map,
             );
-        }
-        let m = module.unwrap().to_string();
-        let (w, bind) = like_terms_filter("i.module_path", &[m], lang);
+        };
+        let (w, bind) = like_terms_filter("i.module_path", &[m.to_string()], lang);
         query_limit_map(
             &self.conn,
             &format!("{IMPORT_SELECT}{w} LIMIT ?{}", bind.len() + 1),
