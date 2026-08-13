@@ -2,6 +2,7 @@ mod embed_support;
 mod module_resolve;
 pub(crate) mod sql;
 mod sqlite;
+mod writer_generation;
 pub use sql::integrity_check;
 pub use sql::{
     assert_sql_ident, CALLER_COLUMN_ALLOWLIST, COUNT_TABLE_ALLOWLIST, FILE_CHILD_TABLE_ALLOWLIST,
@@ -11,6 +12,71 @@ pub use sqlite::{
     SymbolRow, UpsertFileInput,
 };
 use std::path::{Path, PathBuf};
+pub use writer_generation::{
+    bump_writer_generation, read_writer_generation, writer_generation_home, writer_generation_path,
+    WRITER_GENERATION_FILE,
+};
+
+/// Write-durability profile for the index database (0obi).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Durability {
+    /// `WAL` + `synchronous = FULL`. Survives power loss; slowest to index.
+    Strict,
+    /// `WAL` + `synchronous = NORMAL`. Survives process crash. Default.
+    #[default]
+    Balanced,
+    /// `synchronous = OFF`. Fastest, and can corrupt the index on power loss.
+    FastUnsafe,
+}
+
+impl Durability {
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "strict" => Some(Self::Strict),
+            "balanced" | "default" => Some(Self::Balanced),
+            "fast-unsafe" | "fast_unsafe" | "unsafe" => Some(Self::FastUnsafe),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Strict => "strict",
+            Self::Balanced => "balanced",
+            Self::FastUnsafe => "fast-unsafe",
+        }
+    }
+
+    /// `PRAGMA synchronous` value held outside write transactions.
+    pub fn steady_pragma(self) -> &'static str {
+        match self {
+            Self::Strict => "FULL",
+            // A crashed process must not leave `OFF` behind, so even the unsafe
+            // profile returns to NORMAL between write batches.
+            Self::Balanced | Self::FastUnsafe => "NORMAL",
+        }
+    }
+
+    /// `PRAGMA synchronous` value used inside bulk and per-file write batches.
+    pub fn write_pragma(self) -> &'static str {
+        match self {
+            Self::Strict => "FULL",
+            Self::Balanced => "NORMAL",
+            Self::FastUnsafe => "OFF",
+        }
+    }
+
+    /// Resolve from `ASGREP_DURABILITY`, falling back to the safe default.
+    /// An unrecognized value must not silently downgrade durability.
+    pub fn from_env() -> Self {
+        std::env::var("ASGREP_DURABILITY")
+            .ok()
+            .and_then(|value| Self::parse(&value))
+            .unwrap_or_default()
+    }
+}
+
 pub const INDEX_DIR: &str = ".asgrep";
 pub const INDEX_DB: &str = "index.db";
 fn as_db_path(path: PathBuf) -> PathBuf {
@@ -21,16 +87,26 @@ fn as_db_path(path: PathBuf) -> PathBuf {
     }
 }
 pub fn index_db_path(root: &Path, index_path: Option<&Path>) -> PathBuf {
-    try_index_db_path(root, index_path)
-        .unwrap_or_else(|_| root.join(INDEX_DIR).join(INDEX_DB))
+    try_index_db_path(root, index_path).unwrap_or_else(|_| root.join(INDEX_DIR).join(INDEX_DB))
 }
 
 pub fn try_index_db_path(root: &Path, index_path: Option<&Path>) -> crate::Result<PathBuf> {
     if let Some(path) = index_path {
-        return Ok(as_db_path(path.to_path_buf()));
+        let path = if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            root.join(path)
+        };
+        return Ok(as_db_path(path));
     }
     if let Ok(env_path) = std::env::var("ASGREP_INDEX_PATH") {
-        return Ok(as_db_path(PathBuf::from(env_path)));
+        let path = PathBuf::from(env_path);
+        let path = if path.is_absolute() {
+            path
+        } else {
+            root.join(path)
+        };
+        return Ok(as_db_path(path));
     }
     let local = root.join(INDEX_DIR).join(INDEX_DB);
     if local.exists() {
@@ -46,8 +122,23 @@ pub fn try_index_db_path(root: &Path, index_path: Option<&Path>) -> crate::Resul
     Ok(local)
 }
 /// Resolve a private cache index path. Refuses shared `/tmp` when HOME/XDG_CACHE_HOME unset (i5ef).
-fn cache_index_path(root: &Path) -> crate::Result<PathBuf> {
-    let hash = blake3::hash(root.to_string_lossy().as_bytes());
+pub fn cache_index_path(root: &Path) -> crate::Result<PathBuf> {
+    let mut hasher = blake3::Hasher::new();
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        hasher.update(root.as_os_str().as_bytes());
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        for unit in root.as_os_str().encode_wide() {
+            hasher.update(&unit.to_le_bytes());
+        }
+    }
+    #[cfg(not(any(unix, windows)))]
+    hasher.update(root.to_string_lossy().as_bytes());
+    let hash = hasher.finalize();
     let base = std::env::var("XDG_CACHE_HOME")
         .ok()
         .filter(|s| !s.trim().is_empty())
@@ -89,4 +180,8 @@ pub struct IndexStatus {
     pub embed_cache_hits: u64,
     pub embed_cache_misses: u64,
     pub semantic_ivf_present: bool,
+    /// Active write-durability profile (0obi).
+    pub durability: String,
+    /// Cross-process writer epoch stamped beside the index home (R-XPROC-MULTIWRITER).
+    pub writer_generation: u64,
 }

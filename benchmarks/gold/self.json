@@ -1,0 +1,106 @@
+{
+  "corpus": "self",
+  "notes": "Gold fixture over this repository (d2dv). Every relevant span was verified present in the tree at the pinned commit recorded in benchmarks/results/baselines.md. Queries are drawn from real questions an agent asks about this engine, split across exact-symbol, structural, and conceptual intents so a single channel cannot win them all.",
+  "queries": [
+    {
+      "name": "defs-dedup-hits",
+      "query": "defs:dedup_hits",
+      "k": 5,
+      "relevant": [
+        { "file": "crates/ast-sgrep-core/src/search/types.rs", "symbol": "dedup_hits" }
+      ]
+    },
+    {
+      "name": "defs-compute-ann-fingerprint",
+      "query": "defs:compute_ann_fingerprint",
+      "k": 5,
+      "relevant": [
+        { "file": "crates/ast-sgrep-core/src/semantic_ivf.rs", "symbol": "compute_ann_fingerprint" }
+      ]
+    },
+    {
+      "name": "defs-begin-bulk-tx",
+      "query": "defs:begin_bulk_tx",
+      "k": 5,
+      "relevant": [
+        { "file": "crates/ast-sgrep-core/src/store/sqlite.rs", "symbol": "begin_bulk_tx" }
+      ]
+    },
+    {
+      "name": "defs-index-generation",
+      "query": "defs:index_generation",
+      "k": 5,
+      "relevant": [
+        { "file": "crates/ast-sgrep-core/src/store/sqlite.rs", "symbol": "index_generation" }
+      ]
+    },
+    {
+      "name": "defs-to-compact-json",
+      "query": "defs:to_compact_json",
+      "k": 5,
+      "relevant": [
+        { "file": "crates/ast-sgrep-plugins/src/lib.rs", "symbol": "to_compact_json" }
+      ]
+    },
+    {
+      "name": "literal-pragma-synchronous",
+      "query": "literal:PRAGMA synchronous",
+      "k": 20,
+      "relevant": [
+        { "file": "crates/ast-sgrep-core/src/store/sqlite.rs" },
+        { "file": "crates/ast-sgrep-core/src/store/sql.rs" }
+      ]
+    },
+    {
+      "name": "literal-begin-deferred",
+      "query": "literal:BEGIN DEFERRED",
+      "k": 20,
+      "relevant": [
+        { "file": "crates/ast-sgrep-core/src/search/mod.rs" }
+      ]
+    },
+    {
+      "name": "callers-integrity-check",
+      "query": "callers:integrity_check",
+      "k": 20,
+      "relevant": [
+        { "file": "crates/ast-sgrep-core/src/index.rs" }
+      ]
+    },
+    {
+      "name": "word-snapshotstamp",
+      "query": "word:SnapshotStamp",
+      "k": 20,
+      "relevant": [
+        { "file": "crates/ast-sgrep-core/src/search/types.rs" },
+        { "file": "crates/ast-sgrep-core/src/search/mod.rs" }
+      ]
+    },
+    {
+      "name": "conceptual-index-durability",
+      "query": "index write durability profile",
+      "k": 20,
+      "relevant": [
+        { "file": "crates/ast-sgrep-core/src/store/mod.rs" },
+        { "file": "crates/ast-sgrep-core/src/store/sqlite.rs" }
+      ]
+    },
+    {
+      "name": "conceptual-path-interning",
+      "query": "compact output path interning",
+      "k": 20,
+      "relevant": [
+        { "file": "crates/ast-sgrep-plugins/src/lib.rs" }
+      ]
+    },
+    {
+      "name": "conceptual-snapshot-consistency",
+      "query": "consistent search snapshot generation",
+      "k": 20,
+      "relevant": [
+        { "file": "crates/ast-sgrep-core/src/search/mod.rs" },
+        { "file": "crates/ast-sgrep-core/src/search/types.rs" }
+      ]
+    }
+  ]
+}

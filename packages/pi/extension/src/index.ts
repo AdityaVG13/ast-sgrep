@@ -56,11 +56,15 @@ type RuntimeLike = {
   resolveRoot?(context: { cwd: string }): Promise<string>;
   resolveBinaryPath?(options?: { env?: NodeJS.ProcessEnv }): string;
   nativeEnv?(options?: { env?: NodeJS.ProcessEnv }): NodeJS.ProcessEnv;
-  config?: { timeoutMs?: number; refreshIntervalMs?: number };
+  config?: { timeoutMs?: number; maxOutputBytes?: number; refreshIntervalMs?: number };
   inspectIndexCompatibility?(context: { cwd: string }): Promise<"ready" | "missing" | "incompatible">;
   rebuildIncompatibleIndex?(context: { cwd: string }, options?: RunOptions): Promise<MachineEnvelope>;
+  resolveIndexPath?(root: string): string;
+  watchExternalChanges?: boolean;
 };
-type FreshnessLike = Pick<FreshnessCoordinator, "ensureFresh" | "markAffectedPath">;
+type FreshnessLike = Pick<FreshnessCoordinator, "ensureFresh" | "markAffectedPath"> & {
+  shutdown?(): void;
+};
 type ToolContext = { cwd: string };
 type CommandContext = ToolContext & {
   hasUI: boolean;
@@ -175,11 +179,13 @@ export function registerAstSgrepTools(
         binary?: string;
         env: NodeJS.ProcessEnv;
         timeoutMs?: number;
+        maxOutputBytes?: number;
         useEmbed?: boolean;
         indexPath?: string;
       } = { env };
       if (binary) opts.binary = binary;
       if (runtime.config?.timeoutMs !== undefined) opts.timeoutMs = runtime.config.timeoutMs;
+      if (runtime.config?.maxOutputBytes !== undefined) opts.maxOutputBytes = runtime.config.maxOutputBytes;
       if (typeof env.ASGREP_NO_EMBED === "string") {
         opts.useEmbed = env.ASGREP_NO_EMBED !== "1" && env.ASGREP_NO_EMBED !== "true";
       }
@@ -193,6 +199,61 @@ export function registerAstSgrepTools(
   const resolveRoot = async (cwd: string): Promise<string> =>
     runtime.resolveRoot ? await runtime.resolveRoot({ cwd }) : cwd;
 
+  /**
+   * Closed backend availability after sticky acquire fails.
+   * Parallel `{napi,cli}` bools made `{napi:true,cli:true}` and both-false+free-cause
+   * separate states; runtime only needs one live backend or a single unavailable variant.
+   */
+  type BackendAvailability =
+    | { kind: "napi" }
+    | { kind: "cli" }
+    | { kind: "unavailable"; cause?: string };
+
+  const probeCli = (options: RunOptions = {}): BackendAvailability => {
+    // Test fixtures inject `run` without a resolver; production always has resolveBinaryPath.
+    if (typeof runtime.resolveBinaryPath !== "function") return { kind: "cli" };
+    try {
+      const base = runtime.nativeEnv?.() ?? {};
+      if (options.env) {
+        runtime.resolveBinaryPath({ env: { ...base, ...options.env } });
+      } else {
+        runtime.resolveBinaryPath({ env: base });
+      }
+      return { kind: "cli" };
+    } catch (cause) {
+      return {
+        kind: "unavailable",
+        cause: cause instanceof Error ? cause.message : String(cause),
+      };
+    }
+  };
+
+  const requireBackend = (availability: BackendAvailability, context: { cwd: string }): void => {
+    if (availability.kind !== "unavailable") return;
+    throw new RuntimeError(
+      "BACKEND_UNAVAILABLE",
+      "ast-sgrep backend unavailable (no NAPI session and no CLI binary)",
+      {
+        backend: "unavailable",
+        // Agent-facing mirrors of the closed unavailable variant (not an open product).
+        napi: false,
+        cli: false,
+        cwd: context.cwd,
+        hint: "Install @ast-sgrep/<platform> or run npm run build:native in packages/pi/extension",
+        ...(availability.cause ? { cause: availability.cause } : {}),
+      },
+    );
+  };
+
+  const runCli = async (
+    args: readonly string[],
+    context: { cwd: string },
+    options: RunOptions = {},
+  ): Promise<MachineEnvelope> => {
+    requireBackend(probeCli(options), context);
+    return runtime.run(args, context, options);
+  };
+
   const nativeCall = async (
     tool: string,
     args: Record<string, unknown>,
@@ -205,8 +266,8 @@ export function registerAstSgrepTools(
     if (worker) {
       return asEnvelope(await worker.call(tool, args, options.signal ? { signal: options.signal } : {}));
     }
-    // Last resort: cold CLI argv (tests without NAPI / missing addon).
-    return runtime.run(argvFor(tool, args), context, options);
+    // Cold CLI only when a real binary resolves -- never remap missing natives to BINARY_RESOLUTION_FAILED.
+    return runCli(argvFor(tool, args), context, options);
   };
 
   // Freshness + tools share the same warm in-process Searcher as Code Mode.
@@ -215,28 +276,43 @@ export function registerAstSgrepTools(
     resolveRoot: (context) => resolveRoot(context.cwd),
     nativeCall,
   };
+  if (runtime.watchExternalChanges !== undefined) {
+    warmRuntime.watchExternalChanges = runtime.watchExternalChanges;
+  }
+  if (runtime.resolveIndexPath) {
+    warmRuntime.resolveIndexPath = (root) => runtime.resolveIndexPath!(root);
+  }
   if (runtime.inspectIndexCompatibility) {
     warmRuntime.inspectIndexCompatibility = (context) => runtime.inspectIndexCompatibility!(context);
   }
   if (runtime.rebuildIncompatibleIndex) {
-    warmRuntime.rebuildIncompatibleIndex = (context, options) => runtime.rebuildIncompatibleIndex!(context, options);
+    warmRuntime.rebuildIncompatibleIndex = async (context, options) => {
+      const root = await resolveRoot(context.cwd);
+      await pool.invalidate(root);
+      return runtime.rebuildIncompatibleIndex!(context, options);
+    };
   }
 
   pi.on("tool_result", (event, ctx) => {
-    if (event.isError || (event.toolName !== "write" && event.toolName !== "edit")) return;
+    if (event.isError) return;
+    if (event.toolName !== "write" && event.toolName !== "edit") return;
     const path = event.input.path;
     if (typeof path === "string") freshness.markAffectedPath(path, ctx.cwd);
   });
+  pi.on("session_shutdown", () => {
+    freshness.shutdown?.();
+    void pool.shutdown();
+  });
 
-  // Primary surface: Code Mode — in-process NAPI (MCP-class), compose in JS.
+  // Primary surface: Code Mode -- in-process NAPI (MCP-class), compose in JS.
   // Sibling to MCP: pick one surface; both link core, never each other.
   pi.registerTool({
-    name: "asgrep_codemode",
+    name: "asgrep",
     label: "ast-sgrep Code Mode",
     description: [
       "Primary ast-sgrep tool. Write JavaScript that calls typed asgrep.* methods.",
       "Compose with await / Promise.all, filter in code, return only the shaped final value.",
-      "Runs in-process (native addon) — no CLI spawn; warm Searcher for the Pi session.",
+      "Runs in-process (native addon) -- no CLI spawn; warm Searcher for the Pi session.",
       "",
       CODEMODE_TYPES_FOR_MODEL,
       "",
@@ -256,7 +332,13 @@ export function registerAstSgrepTools(
     async execute(_toolCallId, params, signal, onUpdate, ctx) {
       report(onUpdate, "codemode", "started");
       try {
-        const options = signal ? { signal } : {};
+        const timeoutMs = runtime.config?.timeoutMs ?? 30_000;
+        const deadline = Date.now() + timeoutMs;
+        const timeoutSignal = AbortSignal.timeout(timeoutMs);
+        const operationSignal = signal
+          ? AbortSignal.any([signal, timeoutSignal])
+          : timeoutSignal;
+        const options = { signal: operationSignal };
         await freshness.ensureFresh(warmRuntime, { cwd: ctx.cwd }, options);
         ensurePool();
         const root = await resolveRoot(ctx.cwd);
@@ -297,6 +379,7 @@ export function registerAstSgrepTools(
                 };
                 if (o?.signal) stdinOpts.signal = o.signal;
                 if (runtime.config?.timeoutMs !== undefined) stdinOpts.timeoutMs = runtime.config.timeoutMs;
+                if (runtime.config?.maxOutputBytes !== undefined) stdinOpts.maxOutputBytes = runtime.config.maxOutputBytes;
                 return runBatchViaStdin(stdinOpts);
               },
             );
@@ -308,17 +391,17 @@ export function registerAstSgrepTools(
           timeoutMs?: number;
           signal?: AbortSignal;
         } = { stats: bundle.stats };
-        if (runtime.config?.timeoutMs !== undefined) codemodeOptions.timeoutMs = runtime.config.timeoutMs;
-        if (signal) codemodeOptions.signal = signal;
+        codemodeOptions.timeoutMs = Math.max(1, deadline - Date.now());
+        codemodeOptions.signal = operationSignal;
         const outcome = await runCodemode(params.code, bundle.asgrep, codemodeOptions);
         report(onUpdate, "codemode", "completed");
         if (!outcome.ok) {
           return {
-            content: [{ type: "text" as const, text: bounded(`codemode failed: ${outcome.error ?? "unknown error"}`) }],
+            content: [{ type: "text" as const, text: bounded(`codemode failed: ${outcome.error}`) }],
             details: {
               ok: false,
               command: "codemode",
-              error: { code: "CODEMODE_ERROR", message: outcome.error ?? "unknown error", details: { logs: outcome.logs, stats: outcome.stats } },
+              error: { code: "CODEMODE_ERROR", message: outcome.error, details: { logs: outcome.logs, stats: outcome.stats } },
               code: outcome.code,
               stats: outcome.stats,
               wallMs: outcome.wallMs,
@@ -346,12 +429,12 @@ export function registerAstSgrepTools(
     },
   });
 
-  // Escape hatches: one-shot tools for simple lookups. Prefer asgrep_codemode.
+  // Escape hatches: one-shot tools for simple lookups. Prefer asgrep.
   // They ride the same session sticky pool when available (no cold spawn).
   pi.registerTool({
     name: "asgrep_search",
     label: "ast-sgrep search",
-    description: "One-shot search. Prefer asgrep_codemode for anything multi-step, parallel, or filtered.",
+    description: "One-shot search. Prefer asgrep for anything multi-step, parallel, or filtered.",
     parameters: searchParameters,
     async execute(_toolCallId, params, signal, onUpdate, ctx) {
       const options = signal ? { signal } : {};
@@ -363,7 +446,7 @@ export function registerAstSgrepTools(
         const sticky = await pool.acquire(root);
         const response = sticky
           ? await sticky.call(...searchToolCall(params), options)
-          : await runtime.run(searchArgs(params), { cwd: ctx.cwd }, options);
+          : await runCli(searchArgs(params), { cwd: ctx.cwd }, options);
         report(onUpdate, "search", "completed");
         return success("search", response);
       } catch (cause) {
@@ -375,7 +458,7 @@ export function registerAstSgrepTools(
   pi.registerTool({
     name: "asgrep_index",
     label: "ast-sgrep index",
-    description: "Build or rebuild the index. Prefer asgrep.indexRepo inside asgrep_codemode.",
+    description: "Build or rebuild the index. Prefer asgrep.indexRepo inside asgrep.",
     parameters: indexParameters,
     async execute(_toolCallId, params, signal, onUpdate, ctx) {
       const force = params.force === true;
@@ -387,7 +470,7 @@ export function registerAstSgrepTools(
         const sticky = await pool.acquire(root);
         const response = sticky
           ? await sticky.call("index_repo", { force }, signal ? { signal } : {})
-          : await runtime.run([command, ".", "--json"], { cwd: ctx.cwd }, signal ? { signal } : {});
+          : await runCli([command, ".", "--json"], { cwd: ctx.cwd }, signal ? { signal } : {});
         report(onUpdate, command, "completed");
         return success(command, response);
       } catch (cause) {
@@ -399,7 +482,7 @@ export function registerAstSgrepTools(
   pi.registerTool({
     name: "asgrep_status",
     label: "ast-sgrep status",
-    description: "Index/runtime status. Prefer asgrep.indexStatus inside asgrep_codemode.",
+    description: "Index/runtime status. Prefer asgrep.indexStatus inside asgrep.",
     parameters: statusParameters,
     async execute(_toolCallId, _params, signal, onUpdate, ctx) {
       report(onUpdate, "status", "started");
@@ -409,7 +492,7 @@ export function registerAstSgrepTools(
         const sticky = await pool.acquire(root);
         const response = sticky
           ? await sticky.call("index_status", {}, signal ? { signal } : {})
-          : await runtime.run(["status", ".", "--json"], { cwd: ctx.cwd }, signal ? { signal } : {});
+          : await runCli(["status", ".", "--json"], { cwd: ctx.cwd }, signal ? { signal } : {});
         report(onUpdate, "status", "completed");
         return success("status", response);
       } catch (cause) {
@@ -419,40 +502,48 @@ export function registerAstSgrepTools(
   });
 }
 
-/** Map one-shot search params to typed sticky tool+args. */
+/** Map one-shot search params to typed sticky tool+args. Data-driven mode table. */
+type SearchCallSpec =
+  | { tool: "semantic" }
+  | { tool: "chain" }
+  | { tool: "defs" | "callers" | "imports"; key: "symbol" | "module" }
+  | { tool: "search"; prefix?: string };
+
+const SEARCH_CALL_SPEC: { [M in SearchMode]: SearchCallSpec } = {
+  semantic: { tool: "semantic" },
+  chain: { tool: "chain" },
+  defs: { tool: "defs", key: "symbol" },
+  callers: { tool: "callers", key: "symbol" },
+  imports: { tool: "imports", key: "module" },
+  pattern: { tool: "search", prefix: "pattern" },
+  word: { tool: "search", prefix: "word" },
+  literal: { tool: "search", prefix: "literal" },
+  regex: { tool: "search", prefix: "regex" },
+  natural: { tool: "search" },
+};
+
 function searchToolCall(params: {
   query: string;
   mode?: SearchMode;
   limit?: number;
   excerptLines?: number;
 }): [string, Record<string, unknown>] {
-  const mode = params.mode ?? "natural";
+  const mode: SearchMode = params.mode ?? "natural";
   const limit = params.limit ?? DEFAULT_LIMIT;
   const excerpt_lines = params.excerptLines ?? 0;
-  switch (mode) {
-    case "semantic":
-      return ["semantic", { query: params.query, limit, excerpt_lines, format: "capsule" }];
-    case "chain":
-      return ["chain", { query: params.query, limit, top_n: 20 }];
-    case "defs":
-      return ["defs", { symbol: params.query, limit, excerpt_lines }];
-    case "callers":
-      return ["callers", { symbol: params.query, limit, excerpt_lines }];
-    case "imports":
-      return ["imports", { module: params.query, limit, excerpt_lines }];
-    case "pattern":
-    case "word":
-    case "literal":
-    case "regex":
-      return ["search", { query: `${mode}: ${params.query}`, limit, excerpt_lines, format: "capsule" }];
-    case "natural":
-      return ["search", { query: params.query, limit, excerpt_lines, format: "capsule" }];
-    default: {
-      const _exhaustive: never = mode;
-      void _exhaustive;
-      return ["search", { query: params.query, limit, excerpt_lines, format: "capsule" }];
-    }
+  const spec = SEARCH_CALL_SPEC[mode];
+  if (spec.tool === "semantic") {
+    return ["semantic", { query: params.query, limit, excerpt_lines, format: "capsule" }];
   }
+  if (spec.tool === "chain") {
+    return ["chain", { query: params.query, limit, top_n: 20 }];
+  }
+  if (spec.tool === "search") {
+    const query = spec.prefix ? `${spec.prefix}: ${params.query}` : params.query;
+    return ["search", { query, limit, excerpt_lines, format: "capsule" }];
+  }
+  // defs / callers / imports
+  return [spec.tool, { [spec.key]: params.query, limit, excerpt_lines }];
 }
 
 function safeRender(value: unknown): string {

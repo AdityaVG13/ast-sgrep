@@ -10,7 +10,7 @@
 
 import type { MachineEnvelope } from "../runtime.js";
 import { asEnvelope, type BatchResult, type StickyWorker } from "./dispatch.js";
-import { loadCodemodeNative, type NativeSession, type CodemodeNativeBinding } from "./native.js";
+import { loadCodemodeNative, type NativeSession } from "./native.js";
 import { startStickyWorker, type StickyWorkerOptions } from "./worker.js";
 
 export type SessionPoolOptions = {
@@ -18,6 +18,7 @@ export type SessionPoolOptions = {
   binary?: string;
   env?: NodeJS.ProcessEnv;
   timeoutMs?: number;
+  maxOutputBytes?: number;
   root?: string;
   indexPath?: string;
   useEmbed?: boolean;
@@ -33,39 +34,51 @@ type Entry = {
   backend: "napi" | "cli";
 };
 
-function inProcessWorker(session: NativeSession, binding: CodemodeNativeBinding, root: string): StickyWorker {
+const abortError = (): Error => Object.assign(new Error("native call aborted"), { name: "AbortError" });
+
+function inProcessWorker(session: NativeSession): StickyWorker {
+  let tail = Promise.resolve();
+  let closed = false;
+
+  const enqueue = <T>(operation: () => Promise<T>, signal?: AbortSignal): Promise<T> => {
+    if (closed) return Promise.reject(new Error("native session is closed"));
+    if (signal?.aborted) return Promise.reject(abortError());
+    const slot = tail.then(() => {
+      if (signal?.aborted) throw abortError();
+      return operation();
+    });
+    tail = slot.then(() => undefined, () => undefined);
+    if (!signal) return slot;
+    return new Promise<T>((resolve, reject) => {
+      const abort = () => reject(abortError());
+      signal.addEventListener("abort", abort, { once: true });
+      slot.then(resolve, reject).finally(() => signal.removeEventListener("abort", abort));
+    });
+  };
+
   return {
-    async call(tool, args) {
-      const value = session.call(tool, args);
-      return asEnvelope(value);
+    call(tool, args, options) {
+      return enqueue(
+        async () => asEnvelope(await session.call(tool, args, options?.signal), tool),
+        options?.signal,
+      );
     },
-    async batch(calls) {
-      // Prefer session.call in a loop — reuses the warm Searcher already open.
-      const results: BatchResult["results"] = [];
-      let allOk = true;
-      const t0 = Date.now();
-      for (const c of calls) {
-        try {
-          const value = session.call(c.tool, c.args);
-          results.push({ id: c.id, ok: true, value });
-        } catch (cause) {
-          allOk = false;
-          results.push({
-            id: c.id,
-            ok: false,
-            error: cause instanceof Error ? cause.message : String(cause),
-          });
-        }
-      }
-      // For large waves, binding.batch can parallelize; serial warm is the default win.
-      if (calls.length >= 4 && allOk) {
-        void binding;
-        void root;
-      }
-      return { results, all_ok: allOk, wall_ms: Date.now() - t0, mode: "serial-napi" };
+    batch(calls, options) {
+      return enqueue(async () => {
+        const response = await session.batch(calls, options?.signal);
+        const result: BatchResult = {
+          results: response.results,
+          all_ok: response.allOk,
+          wall_ms: response.wallMs,
+          mode: response.mode,
+        };
+        return result;
+      }, options?.signal);
     },
     async end() {
-      // NAPI session is GC'd; nothing to kill.
+      closed = true;
+      await tail;
+      // The NAPI session is released when this worker closure is dropped.
     },
   };
 }
@@ -77,6 +90,7 @@ export class NativeSessionPool {
   #generations = new Map<string, number>();
   #startFn: StickyStarter;
   #backend: "napi" | "cli" | "none" = "none";
+  #shutdownPromise: Promise<void> | null = null;
 
   constructor(startFn: StickyStarter = startStickyWorker) {
     this.#startFn = startFn;
@@ -96,6 +110,7 @@ export class NativeSessionPool {
   }
 
   async acquire(root: string): Promise<StickyWorker | null> {
+    if (this.#shutdownPromise) return null;
     const existing = this.#entries.get(root);
     if (existing) return existing.worker;
 
@@ -117,7 +132,7 @@ export class NativeSessionPool {
     args: Record<string, unknown> = {},
     options?: { signal?: AbortSignal },
   ): Promise<MachineEnvelope> {
-    if (options?.signal?.aborted) throw new Error("native call aborted");
+    if (options?.signal?.aborted) throw abortError();
     const worker = await this.acquire(root);
     if (!worker) throw new Error("native Code Mode backend unavailable");
     return worker.call(tool, args, options);
@@ -125,21 +140,38 @@ export class NativeSessionPool {
 
   async invalidate(root: string): Promise<void> {
     this.#generations.set(root, this.#generationFor(root) + 1);
+    const starting = this.#starting.get(root);
     this.#starting.delete(root);
     const entry = this.#entries.get(root);
     this.#entries.delete(root);
     if (entry) await entry.worker.end().catch(() => undefined);
+    if (starting) await starting.catch(() => null);
     if (this.#entries.size === 0) this.#backend = "none";
   }
 
   async shutdown(): Promise<void> {
+    if (this.#shutdownPromise) return this.#shutdownPromise;
+    const shutdown = this.#shutdownAll();
+    this.#shutdownPromise = shutdown;
+    try {
+      await shutdown;
+    } finally {
+      if (this.#shutdownPromise === shutdown) this.#shutdownPromise = null;
+    }
+  }
+
+  async #shutdownAll(): Promise<void> {
     const roots = new Set([...this.#entries.keys(), ...this.#starting.keys()]);
     for (const root of roots) this.#generations.set(root, this.#generationFor(root) + 1);
     const entries = [...this.#entries.values()];
+    const starting = [...this.#starting.values()];
     this.#entries.clear();
     this.#starting.clear();
     this.#backend = "none";
-    await Promise.all(entries.map((e) => e.worker.end().catch(() => undefined)));
+    await Promise.all([
+      ...entries.map((e) => e.worker.end().catch(() => undefined)),
+      ...starting.map((start) => start.catch(() => null)),
+    ]);
   }
 
   #generationFor(root: string): number {
@@ -164,7 +196,7 @@ export class NativeSessionPool {
         if (opts.limit !== undefined) config.limit = opts.limit;
         if (opts.useEmbed !== undefined) config.useEmbed = opts.useEmbed;
         const session = new binding.Session(config);
-        const worker = inProcessWorker(session, binding, root);
+        const worker = inProcessWorker(session);
         if (gen !== this.#generationFor(root)) {
           await worker.end().catch(() => undefined);
           return null;
@@ -186,6 +218,7 @@ export class NativeSessionPool {
       };
       if (opts.env) stickyOpts.env = opts.env;
       if (opts.timeoutMs !== undefined) stickyOpts.timeoutMs = opts.timeoutMs;
+      if (opts.maxOutputBytes !== undefined) stickyOpts.maxOutputBytes = opts.maxOutputBytes;
       const worker = await this.#startFn(stickyOpts);
       if (gen !== this.#generationFor(root)) {
         await worker.end().catch(() => undefined);

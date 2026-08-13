@@ -17,7 +17,11 @@ use std::path::PathBuf;
 
 pub struct LspServer {
     backend: Option<LspBackend>,
-    shutdown: bool,
+    /// Set after a successful `shutdown` request. Further requests get
+    /// InvalidRequest until `exit` (LSP lifecycle / d2a1.14).
+    shutdown_received: bool,
+    /// Set by the `exit` notification; leaves the message loop.
+    exit_requested: bool,
 }
 
 type ReqH = fn(&mut LspServer, &Value) -> anyhow::Result<Value>;
@@ -46,7 +50,18 @@ impl LspServer {
     pub fn new() -> Self {
         Self {
             backend: None,
-            shutdown: false,
+            shutdown_received: false,
+            exit_requested: false,
+        }
+    }
+
+    /// Process exit code after `run` returns: 0 if `shutdown` was seen before
+    /// `exit` (or clean EOF), 1 if `exit` arrived without a prior `shutdown`.
+    pub fn process_exit_code(&self) -> i32 {
+        if self.exit_requested && !self.shutdown_received {
+            1
+        } else {
+            0
         }
     }
 
@@ -54,20 +69,45 @@ impl LspServer {
         let stdin = io::stdin();
         let mut stdout = io::stdout();
         let mut reader = BufReader::new(stdin.lock());
-        while let Some(body) = read_message(&mut reader)? {
+        self.run_with(&mut reader, &mut stdout)
+    }
+
+    /// Drive the LSP loop over arbitrary readers (stdio or tests).
+    pub fn run_with(
+        &mut self,
+        reader: &mut impl io::BufRead,
+        stdout: &mut impl Write,
+    ) -> io::Result<()> {
+        while let Some(body) = read_message(reader)? {
             if let Ok(req) = serde_json::from_str::<RequestMessage>(&body) {
-                self.handle_request(&mut stdout, req)?;
-                if self.shutdown {
+                self.handle_request(stdout, req)?;
+            } else if let Ok(notif) = serde_json::from_str::<NotificationMessage>(&body) {
+                self.handle_notification(stdout, notif)?;
+                if self.exit_requested {
                     break;
                 }
-            } else if let Ok(notif) = serde_json::from_str::<NotificationMessage>(&body) {
-                self.handle_notification(&mut stdout, notif)?;
+            } else {
+                // JSON-RPC: a message with an id that is not a valid Request must
+                // not be silent-dropped -- the client is waiting on that id.
+                // Notifications (no id / null id) stay fire-and-forget.
+                reply_invalid_request_if_id(stdout, &body)?;
             }
         }
         Ok(())
     }
 
     fn handle_request(&mut self, stdout: &mut impl Write, req: RequestMessage) -> io::Result<()> {
+        // After shutdown, only further messages should be exit (notification).
+        // Any request is InvalidRequest per LSP.
+        if self.shutdown_received {
+            send_error(
+                stdout,
+                &req.id,
+                -32600,
+                "server is shutting down; send exit notification",
+            )?;
+            return Ok(());
+        }
         match self.dispatch(&req.method, &req.params) {
             Ok(v) => send_response(stdout, &req.id, v)?,
             Err(e) => {
@@ -90,28 +130,46 @@ impl LspServer {
         match notif.method.as_str() {
             "initialized" => {}
             "textDocument/didOpen" => {
-                self.sync_rel_path(stdout, "didOpen", notif.params, |b, p: DidOpenTextDocumentParams| {
-                    let rel = uri_to_rel_path(&p.text_document.uri, b.root())?;
-                    b.index_content(&rel, &p.text_document.text)
-                })?;
+                self.sync_rel_path(
+                    stdout,
+                    "didOpen",
+                    notif.params,
+                    |b, p: DidOpenTextDocumentParams| {
+                        let rel = uri_to_rel_path(&p.text_document.uri, b.root())?;
+                        b.index_content(&rel, &p.text_document.text)
+                    },
+                )?;
             }
             "textDocument/didSave" => {
-                self.sync_rel_path(stdout, "didSave", notif.params, |b, p: DidSaveTextDocumentParams| {
-                    let rel = uri_to_rel_path(&p.text_document.uri, b.root())?;
-                    b.reindex_file(&rel)
-                })?;
+                self.sync_rel_path(
+                    stdout,
+                    "didSave",
+                    notif.params,
+                    |b, p: DidSaveTextDocumentParams| {
+                        let rel = uri_to_rel_path(&p.text_document.uri, b.root())?;
+                        b.reindex_file(&rel)
+                    },
+                )?;
             }
             "textDocument/didChange" => {
-                self.sync_rel_path(stdout, "didChange", notif.params, |b, p: DidChangeTextDocumentParams| {
-                    b.apply_document_changes(&p.text_document.uri, &p.content_changes)
-                })?;
+                self.sync_rel_path(
+                    stdout,
+                    "didChange",
+                    notif.params,
+                    |b, p: DidChangeTextDocumentParams| {
+                        b.apply_document_changes(&p.text_document.uri, &p.content_changes)
+                    },
+                )?;
             }
             "textDocument/didClose" => {
-                self.sync_rel_path(stdout, "didClose", notif.params, |b, p: DidCloseTextDocumentParams| {
-                    b.close_document(&p.text_document.uri)
-                })?;
+                self.sync_rel_path(
+                    stdout,
+                    "didClose",
+                    notif.params,
+                    |b, p: DidCloseTextDocumentParams| b.close_document(&p.text_document.uri),
+                )?;
             }
-            "exit" => self.shutdown = true,
+            "exit" => self.exit_requested = true,
             _ => {}
         }
         Ok(())
@@ -158,9 +216,10 @@ impl LspServer {
 
     fn h_init(&mut self, params: &Value) -> anyhow::Result<Value> {
         let params: InitializeParams = serde_json::from_value(params.clone())?;
-        let mut backend = LspBackend::new(canonicalize_workspace_root(resolve_root(&params)));
+        let mut backend =
+            LspBackend::new_cached(canonicalize_workspace_root(resolve_root(&params)))?;
         if let Some(ref opts) = params.initialization_options {
-            backend.apply_settings(AsgrepSettings::from_initialization_options(opts));
+            backend.apply_settings(AsgrepSettings::from_initialization_options(opts))?;
         }
         backend.start_background_index();
         let result = backend.initialize_result();
@@ -169,7 +228,7 @@ impl LspServer {
     }
 
     fn h_shutdown(&mut self, _: &Value) -> anyhow::Result<Value> {
-        self.shutdown = true;
+        self.shutdown_received = true;
         Ok(Value::Null)
     }
 
@@ -263,6 +322,115 @@ mod limit_tests {
         assert_eq!(clamp_lsp_search_limit(32), 32);
         assert_eq!(clamp_lsp_search_limit(500), 500);
         assert_eq!(clamp_lsp_search_limit(10_000), 1000);
+    }
+}
+
+#[cfg(test)]
+mod lifecycle_tests {
+    use super::LspServer;
+    use crate::support::read_message;
+    use std::io::Cursor;
+
+    fn frame(body: &str) -> Vec<u8> {
+        format!("Content-Length: {}\r\n\r\n{body}", body.len()).into_bytes()
+    }
+
+    fn drain_messages(stdout: &[u8]) -> Vec<serde_json::Value> {
+        let mut reader = std::io::BufReader::new(Cursor::new(stdout));
+        let mut out = Vec::new();
+        while let Some(body) = read_message(&mut reader).expect("frame") {
+            out.push(serde_json::from_str(&body).expect("json"));
+        }
+        out
+    }
+
+    #[test]
+    fn exit_without_shutdown_leaves_loop_with_code_1() {
+        let mut server = LspServer::new();
+        let input = frame(r#"{"jsonrpc":"2.0","method":"exit"}"#);
+        let mut reader = Cursor::new(input);
+        let mut stdout = Vec::new();
+        server.run_with(&mut reader, &mut stdout).unwrap();
+        assert!(server.exit_requested);
+        assert!(!server.shutdown_received);
+        assert_eq!(server.process_exit_code(), 1);
+        assert!(stdout.is_empty(), "exit is a notification");
+    }
+
+    #[test]
+    fn shutdown_stays_up_until_exit_and_rejects_later_requests() {
+        let mut server = LspServer::new();
+        let mut input = Vec::new();
+        input.extend(frame(
+            r#"{"jsonrpc":"2.0","id":1,"method":"shutdown","params":{}}"#,
+        ));
+        input.extend(frame(
+            r#"{"jsonrpc":"2.0","id":2,"method":"workspace/symbol","params":{"query":"x"}}"#,
+        ));
+        input.extend(frame(r#"{"jsonrpc":"2.0","method":"exit"}"#));
+        let mut reader = Cursor::new(input);
+        let mut stdout = Vec::new();
+        server.run_with(&mut reader, &mut stdout).unwrap();
+        assert!(server.shutdown_received);
+        assert!(server.exit_requested);
+        assert_eq!(server.process_exit_code(), 0);
+        let messages = drain_messages(&stdout);
+        assert_eq!(messages.len(), 2, "{messages:?}");
+        assert_eq!(messages[0]["id"], 1);
+        assert!(messages[0]["result"].is_null());
+        assert_eq!(messages[1]["id"], 2);
+        assert_eq!(messages[1]["error"]["code"], -32600);
+    }
+
+    #[test]
+    fn unparseable_message_with_id_gets_invalid_request() {
+        // Missing method + present id must not hang the client (silent drop).
+        let mut server = LspServer::new();
+        let mut input = Vec::new();
+        input.extend(frame(r#"{"jsonrpc":"2.0","id":42,"params":{}}"#));
+        input.extend(frame(r#"{"jsonrpc":"2.0","method":"exit"}"#));
+        let mut reader = Cursor::new(input);
+        let mut stdout = Vec::new();
+        server.run_with(&mut reader, &mut stdout).unwrap();
+        let messages = drain_messages(&stdout);
+        assert_eq!(messages.len(), 1, "{messages:?}");
+        assert_eq!(messages[0]["id"], 42);
+        assert_eq!(messages[0]["error"]["code"], -32600);
+        assert!(
+            messages[0]["error"]["message"]
+                .as_str()
+                .unwrap_or("")
+                .contains("Invalid Request"),
+            "{messages:?}"
+        );
+    }
+
+    #[test]
+    fn unparseable_message_without_id_is_dropped() {
+        let mut server = LspServer::new();
+        let mut input = Vec::new();
+        input.extend(frame(r#"{"jsonrpc":"2.0","params":{}}"#));
+        input.extend(frame(r#"{"jsonrpc":"2.0","method":"exit"}"#));
+        let mut reader = Cursor::new(input);
+        let mut stdout = Vec::new();
+        server.run_with(&mut reader, &mut stdout).unwrap();
+        assert!(stdout.is_empty(), "no id → no response: {stdout:?}");
+        assert!(server.exit_requested);
+    }
+}
+
+/// If `body` is JSON with a non-null `id`, reply Invalid Request (-32600).
+/// Used when the frame is neither a Request nor a Notification (missing
+/// method, wrong types, …) so clients do not hang waiting forever.
+fn reply_invalid_request_if_id(stdout: &mut impl Write, body: &str) -> io::Result<()> {
+    let Ok(value) = serde_json::from_str::<Value>(body) else {
+        // Unparseable JSON with no recoverable id: LSP has nowhere to address
+        // a response; drop (same as most servers). Frame framing already ran.
+        return Ok(());
+    };
+    match value.get("id") {
+        Some(id) if !id.is_null() => send_error(stdout, id, -32600, "Invalid Request"),
+        _ => Ok(()),
     }
 }
 

@@ -30,6 +30,36 @@ The measured reduction exceeds the 50% acceptance threshold while retaining
 100% of ranked task identities. The metric is deliberately labeled
 conservative token units, not vendor-specific tokenizer output.
 
+## MCP surface adoption (kxmc)
+
+The MCP server previously rendered `OutputFormat::AgentCapsule` through
+`serde_json::to_string_pretty`, so the compact reduction above did not reach
+agents at all. Agent search now emits the compact envelope minified.
+
+Fixture: ten hits across three files with realistic Rust excerpts, in
+`compact_minified_is_much_smaller_than_pretty_capsule`. The same test asserts
+that minified compact output is smaller than the previous pretty capsule and
+that each distinct path appears exactly once in the payload. The previous
+capsule repeated paths in both `file` and `ref`.
+
+```bash
+cargo test -p ast-sgrep-plugins --test capsule_format -- --nocapture compact_minified
+```
+
+## Key ordering (9q0l)
+
+`serde_json` sorts object keys alphabetically, so key names determine wire
+order. Per-call accounting is therefore named `zb` (budget), `zn` (hit count),
+and `zt` (truncation count) so it sorts after the content keys `h`, `p`, `q`,
+and `v`. Envelopes have a stable head and a volatile tail, and repeated
+identical searches over an unchanged index are byte-stable
+(`search_envelope_is_byte_stable_with_volatile_accounting_last`).
+
+MCP `tools/list` is byte-identical across calls and across processes
+(`tools_list_is_byte_identical_across_calls_and_processes`). Tool definitions
+enter the prompt on every request, so this is the largest cacheable region the
+server controls.
+
 ## Reproduction
 
 All Rust compilation and tests run through the remote compilation helper:

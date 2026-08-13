@@ -32,6 +32,30 @@ must cite these rows; they must not introduce a second “canonical” value.
 They are two fingerprint rows. Do not cite dual ~0.75 / 0.746 self-corpus
 figures alongside 0.712 as current.
 
+## Candidate evaluation pack (no canonical run yet)
+
+The tree now contains a gold fixture and a harness:
+
+```bash
+./benchmarks/run_eval.sh
+```
+
+The harness refuses dirty worktrees and writes generated output under
+`benchmarks/results/raw/`, which remains untracked. A previous dirty run was
+withdrawn because its corpus referenced experimental generation-layout code
+that is no longer part of this change. **No value from that run is canonical or
+reproducible, and no performance, token-reduction, or retrieval-quality claim
+may cite it.** This note remains as the required negative ledger.
+
+The live `self` corpus changes with the worktree and is therefore weak evidence
+for retrieval-quality deltas. Use a frozen or foreign corpus before claiming a
+quality change. The repository PPMI lexicon is reported as explainable evidence
+but is deliberately not fed into ranking; no retrieval lift is claimed.
+
+Still unmeasured here: foreign-corpus quality and token efficiency, confidence
+calibration, graph precision by resolution tier, multi-field semantic vectors,
+and agent-in-the-loop token/tool-call outcomes.
+
 ## Provenance
 
 | field | value |

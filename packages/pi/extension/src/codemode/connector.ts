@@ -8,30 +8,43 @@ import {
 
 const DEFAULT_LIMIT = 8;
 
+/**
+ * Spawn/CLI transport. Hosts provide argv `run` only — never a typed twin.
+ * Typed entry lives solely on {@link DispatchSurface} (dispatcher output).
+ */
 export type ConnectorHost = {
-  /** Typed tool call (preferred — no argv archaeology). */
-  call?(
+  run(
+    args: readonly string[],
+    context: { cwd: string },
+    options?: { signal?: AbortSignal },
+  ): Promise<MachineEnvelope>;
+};
+
+/**
+ * Trusted typed dispatch after coalescing. `call` is required; no argv peer
+ * that can disagree with tool+args.
+ */
+export type DispatchSurface = {
+  call(
     tool: string,
     args: Record<string, unknown>,
     context: { cwd: string },
     options?: { signal?: AbortSignal },
   ): Promise<MachineEnvelope>;
-  /** Legacy CLI argv (spawn fallback / direct tools). */
-  run(args: readonly string[], context: { cwd: string }, options?: { signal?: AbortSignal }): Promise<MachineEnvelope>;
 };
 
 export type AsgrepConnector = {
-  search(input: SearchArgs): Promise<MachineEnvelope>;
-  semantic(input: SearchArgs): Promise<MachineEnvelope>;
-  chain(input: ChainArgs): Promise<MachineEnvelope>;
-  defs(input: { symbol: string; limit?: number; excerptLines?: number }): Promise<MachineEnvelope>;
-  callers(input: { symbol: string; limit?: number; excerptLines?: number }): Promise<MachineEnvelope>;
-  imports(input: { module: string; limit?: number; excerptLines?: number }): Promise<MachineEnvelope>;
-  indexStatus(): Promise<MachineEnvelope>;
-  indexRepo(input?: { force?: boolean }): Promise<MachineEnvelope>;
+  search(input: SearchArgs, options?: { signal?: AbortSignal }): Promise<MachineEnvelope>;
+  semantic(input: SearchArgs, options?: { signal?: AbortSignal }): Promise<MachineEnvelope>;
+  chain(input: ChainArgs, options?: { signal?: AbortSignal }): Promise<MachineEnvelope>;
+  defs(input: { symbol: string; limit?: number; excerptLines?: number }, options?: { signal?: AbortSignal }): Promise<MachineEnvelope>;
+  callers(input: { symbol: string; limit?: number; excerptLines?: number }, options?: { signal?: AbortSignal }): Promise<MachineEnvelope>;
+  imports(input: { module: string; limit?: number; excerptLines?: number }, options?: { signal?: AbortSignal }): Promise<MachineEnvelope>;
+  indexStatus(options?: { signal?: AbortSignal }): Promise<MachineEnvelope>;
+  indexRepo(input?: { force?: boolean }, options?: { signal?: AbortSignal }): Promise<MachineEnvelope>;
   /** Progressive discovery (like deferred tools) — list/filter available asgrep tools. */
-  catalogSearch(input: { query: string }): Promise<MachineEnvelope>;
-  catalogDescribe(input: { name: string }): Promise<MachineEnvelope>;
+  catalogSearch(input: { query: string }, options?: { signal?: AbortSignal }): Promise<MachineEnvelope>;
+  catalogDescribe(input: { name: string }, options?: { signal?: AbortSignal }): Promise<MachineEnvelope>;
 };
 
 export type ConnectorBundle = {
@@ -51,7 +64,7 @@ function clampExcerpt(excerptLines: number | undefined): number {
 }
 
 /**
- * Host-side connector: typed methods the sandbox calls.
+ * Host-side connector: typed methods the Code Mode program calls.
  *
  * Same-tick calls (Promise.all) are coalesced by CodemodeDispatcher so N
  * lookups share sticky serve / one warm batch process when available.
@@ -62,60 +75,65 @@ export function createAsgrepConnector(
   options: { signal?: AbortSignal } = {},
 ): ConnectorBundle {
   const dispatcher = createCodemodeDispatcher(host);
-  const runOptions = options.signal ? { signal: options.signal } : {};
-
-  const call = (tool: string, args: Record<string, unknown>) => {
-    if (dispatcher.host.call) {
-      return dispatcher.host.call(tool, args, context, runOptions);
+  const combinedSignals = new WeakMap<AbortSignal, AbortSignal>();
+  const callOptions = (signal?: AbortSignal): { signal?: AbortSignal } => {
+    if (!options.signal) return signal ? { signal } : {};
+    if (!signal || signal === options.signal) return { signal: options.signal };
+    let combined = combinedSignals.get(signal);
+    if (!combined) {
+      combined = AbortSignal.any([options.signal, signal]);
+      combinedSignals.set(signal, combined);
     }
-    // Should not happen — dispatcher always exposes call.
-    return dispatcher.host.run([], context, runOptions);
+    return { signal: combined };
   };
+
+  const call = (tool: string, args: Record<string, unknown>, signal?: AbortSignal) =>
+    dispatcher.host.call(tool, args, context, callOptions(signal));
 
   // Bound function properties (not methods) so vm call sites cannot lose `this`.
   const asgrep: AsgrepConnector = {
-    search: (input) =>
+    search: (input, callOptions) =>
       call("search", {
         query: input.query,
         limit: clampLimit(input.limit),
         excerpt_lines: clampExcerpt(input.excerptLines),
         format: input.format === "agent" ? "agent" : "capsule",
-      }),
-    semantic: (input) =>
+      }, callOptions?.signal),
+    semantic: (input, callOptions) =>
       call("semantic", {
         query: input.query,
         limit: clampLimit(input.limit),
         excerpt_lines: clampExcerpt(input.excerptLines),
         format: input.format === "agent" ? "agent" : "capsule",
-      }),
-    chain: (input) =>
+      }, callOptions?.signal),
+    chain: (input, callOptions) =>
       call("chain", {
         query: input.query,
         limit: clampLimit(input.limit),
         top_n: 20,
-      }),
-    defs: (input) =>
+      }, callOptions?.signal),
+    defs: (input, callOptions) =>
       call("defs", {
         symbol: input.symbol,
         limit: clampLimit(input.limit),
         excerpt_lines: clampExcerpt(input.excerptLines),
-      }),
-    callers: (input) =>
+      }, callOptions?.signal),
+    callers: (input, callOptions) =>
       call("callers", {
         symbol: input.symbol,
         limit: clampLimit(input.limit),
         excerpt_lines: clampExcerpt(input.excerptLines),
-      }),
-    imports: (input) =>
+      }, callOptions?.signal),
+    imports: (input, callOptions) =>
       call("imports", {
         module: input.module,
         limit: clampLimit(input.limit),
         excerpt_lines: clampExcerpt(input.excerptLines),
-      }),
-    indexStatus: () => call("index_status", {}),
-    indexRepo: (input = {}) => call("index_repo", { force: input.force === true }),
-    catalogSearch: (input) => call("catalog_search", { query: input.query }),
-    catalogDescribe: (input) => call("catalog_describe", { name: input.name }),
+      }, callOptions?.signal),
+    indexStatus: (callOptions) => call("index_status", {}, callOptions?.signal),
+    indexRepo: (input = {}, callOptions) => call("index_repo", { force: input.force === true }, callOptions?.signal),
+    catalogSearch: (input, callOptions) => call("catalog_search", { query: input.query }, callOptions?.signal),
+    catalogDescribe: (input, callOptions) => call("catalog_describe", { name: input.name }, callOptions?.signal),
   };
 
   return {

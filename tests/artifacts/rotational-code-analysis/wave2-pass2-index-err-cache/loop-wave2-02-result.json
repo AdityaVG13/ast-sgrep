@@ -1,0 +1,41 @@
+{
+  "schema_version": "1.0",
+  "loop": "wave2-pass2-index-err-cache",
+  "name": "harden-R-INDEX-ERR-CACHE-SYNC",
+  "wave": 2,
+  "campaign_pass": 2,
+  "status": "COMPLETE",
+  "mode": "harden",
+  "timestamp_utc": "2026-08-12T16:45:01Z",
+  "freeze_revision_retained": "06a6e944e7d1ea826ade9a0c9b7bbd659117d48c",
+  "head_observed": "06a6e944e7d1ea826ade9a0c9b7bbd659117d48c",
+  "dirty": true,
+  "axes": {
+    "representation": "exception-graph",
+    "time": "degradation",
+    "observer": "failure-handler"
+  },
+  "axes_changed": [
+    "representation",
+    "time",
+    "observer"
+  ],
+  "axes_changed_count": 3,
+  "product_source_edits": 4,
+  "residual_closed": [
+    "R-INDEX-ERR-CACHE-SYNC"
+  ],
+  "residuals_open": [
+    "R-CM-ROOT-POLICY",
+    "R-XPROC-MULTIWRITER",
+    "R-OPS-DOCS-FOOTGUNS"
+  ],
+  "tests": {
+    "ast-sgrep-mcp --lib": "ok 4 passed",
+    "ast-sgrep-codemode --lib": "ok 1 passed"
+  },
+  "braid_resolve": "Continue",
+  "NEXT_PASS": "Harden R-CM-ROOT-POLICY",
+  "PRODUCTIVE": true,
+  "zerostack": "unavailable-fszero-codemode"
+}

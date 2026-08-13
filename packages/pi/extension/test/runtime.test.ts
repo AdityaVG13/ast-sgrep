@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, realpath, rm, symlink } from "node:fs/promises";
+import { EventEmitter } from "node:events";
+import { statSync } from "node:fs";
+import { mkdtemp, mkdir, realpath, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
@@ -109,6 +111,12 @@ describe("canonical roots", () => {
     const { project } = await fixture(); const child = join(project, "src"); await mkdir(child);
     assert.equal(await resolveRuntimeRoot(project), await realpath(project)); assert.equal(await resolveRuntimeRoot(project, "src"), await realpath(child));
   });
+  it("accepts contained names beginning with two dots", async () => {
+    const { project } = await fixture();
+    const child = join(project, "..cache");
+    await mkdir(child);
+    assert.equal(await resolveRuntimeRoot(project, "..cache"), await realpath(child));
+  });
   it("rejects traversal and symlink escapes after realpath", async () => {
     const { project, outside } = await fixture(); await symlink(outside, join(project, "escape"));
     await errorCode(() => resolveRuntimeRoot(project, "../outside"), "ROOT_OUTSIDE_PROJECT");
@@ -176,24 +184,28 @@ describe("index format upgrades", () => {
     const subject = runtime(new FakePi(), project, { environment: { ASGREP_INDEX_PATH: "index.cache.v1" } });
     assert.equal(await subject.inspectIndexCompatibility({ cwd: project }), "ready");
   });
-  it("atomically replaces an incompatible index only after a valid rebuild", async () => {
+  it("rebuilds an incompatible index in place so warm sessions retain the same inode", async () => {
     const { project } = await fixture();
     const indexPath = join(project, ".asgrep", "index.db");
     await createIndex(indexPath, INDEX_FORMAT_VERSION - 1, "prior");
+    const inode = statSync(indexPath).ino;
     const pi = new FakePi(async (_options, args) => {
-      const option = args.indexOf("--index-path");
-      assert.notEqual(option, -1);
-      await createIndex(args[option + 1]!, INDEX_FORMAT_VERSION, "replacement");
-      return valid({ command: "index", files_indexed: 1 });
+      assert.deepEqual(args, ["reindex", ".", "--json"]);
+      const database = new DatabaseSync(indexPath);
+      try {
+        database.exec(`PRAGMA user_version = ${INDEX_FORMAT_VERSION}`);
+        database.prepare("UPDATE marker SET value = ?").run("rebuilt");
+      } finally {
+        database.close();
+      }
+      return valid({ command: "reindex", files_indexed: 1, files_failed: 0, walk_errors: false });
     });
     const subject = runtime(pi, project, { environment: {} });
     assert.equal(await subject.inspectIndexCompatibility({ cwd: project }), "incompatible");
     await subject.rebuildIncompatibleIndex({ cwd: project });
     assert.equal(await subject.inspectIndexCompatibility({ cwd: project }), "ready");
-    assert.equal(readMarker(indexPath), "replacement");
-    assert.equal(pi.calls[0]?.args[0], "--index-path");
-    assert.match(pi.calls[0]?.args[1] ?? "", /\.asgrep\/\.rebuild-[^/]+\/index\.db$/);
-    assert.deepEqual(pi.calls[0]?.args.slice(2), ["index", ".", "--json"]);
+    assert.equal(readMarker(indexPath), "rebuilt");
+    assert.equal(statSync(indexPath).ino, inode);
   });
 
   it("rejects a future index schema without modifying or rebuilding it", async () => {
@@ -232,11 +244,63 @@ describe("index format upgrades", () => {
     assert.equal(error.details.recoveryPath, await realpath(indexPath));
     assert.equal(readMarker(indexPath), "prior");
   });
+
+  it("reports the quarantine created by this failed recovery, not an older copy", async () => {
+    const { project } = await fixture();
+    const indexPath = join(project, ".asgrep", "index.db");
+    const oldQuarantine = `${indexPath}.corrupt`;
+    const currentQuarantine = `${indexPath}.corrupt.1`;
+    await createIndex(indexPath, INDEX_FORMAT_VERSION - 1, "prior");
+    await writeFile(oldQuarantine, "older recovery copy");
+    const subject = runtime(new FakePi(async () => {
+      await rename(indexPath, currentQuarantine);
+      await writeFile(indexPath, "partial replacement");
+      return valid({ command: "reindex", files_failed: 1, walk_errors: false });
+    }), project, { environment: {} });
+
+    const error = await errorCode(
+      () => subject.rebuildIncompatibleIndex({ cwd: project }),
+      "INDEX_REBUILD_FAILED",
+    );
+    assert.equal(error.details.recoveryPath, currentQuarantine);
+    assert.deepEqual(error.details.recoveryPaths, [currentQuarantine, indexPath]);
+    assert.equal(error.details.priorIndexPreserved, true);
+  });
+
+  it("rejects a partial rebuild even when migration made the schema look current", async () => {
+    const { project } = await fixture();
+    const indexPath = join(project, ".asgrep", "index.db");
+    await createIndex(indexPath, INDEX_FORMAT_VERSION - 1, "prior");
+    const subject = runtime(new FakePi(async () => {
+      const database = new DatabaseSync(indexPath);
+      try {
+        database.exec(`PRAGMA user_version = ${INDEX_FORMAT_VERSION}`);
+      } finally {
+        database.close();
+      }
+      return valid({ command: "reindex", files_failed: 1, walk_errors: false });
+    }), project, { environment: {} });
+
+    const error = await errorCode(
+      () => subject.rebuildIncompatibleIndex({ cwd: project }),
+      "INDEX_REBUILD_FAILED",
+    );
+    assert.match(String(error.details.cause), /did not complete/u);
+    assert.equal(readMarker(indexPath), "prior");
+  });
 });
 
 
 
-const machine = (extra: Record<string, unknown> = {}): MachineEnvelope => ({ tool: "asgrep", schema_version: MACHINE_SCHEMA_VERSION, ok: true, ...extra });
+const machine = (extra: Record<string, unknown> = {}): MachineEnvelope => {
+  const stats = extra.stats;
+  const normalized = stats !== null && typeof stats === "object" && !Array.isArray(stats)
+    && typeof (stats as Record<string, unknown>).files_failed === "number"
+    && (stats as Record<string, unknown>).walk_errors === undefined
+    ? { ...extra, stats: { ...(stats as Record<string, unknown>), walk_errors: false } }
+    : extra;
+  return { tool: "asgrep", schema_version: MACHINE_SCHEMA_VERSION, ok: true, ...normalized };
+};
 type FreshCall = { command: string; root: string; signal?: AbortSignal };
 class FakeFreshnessRuntime {
   calls: FreshCall[] = [];
@@ -248,7 +312,11 @@ class FakeFreshnessRuntime {
   async run(args: readonly string[], context: RuntimeContext, options: RunOptions = {}): Promise<MachineEnvelope> {
     const command = args[0]!;
     this.calls.push({ command, root: context.cwd, signal: options.signal });
-    return this.handler(command, context.cwd, options);
+    const response = await this.handler(command, context.cwd, options);
+    if ((command === "index" || command === "reindex") && response.files_failed === undefined) {
+      return { ...response, files_failed: 0, walk_errors: false };
+    }
+    return response;
   }
 }
 
@@ -274,7 +342,7 @@ describe("per-root index freshness", () => {
     assert.deepEqual(commands(runtime), ["status", "reindex"]);
   });
 
-  it("fully reconciles external create, modify, and delete after interval expiry", async () => {
+  it("performs a correctness scan on interval expiry even without watcher evidence", async () => {
     let now = 0;
     const runtime = new FakeFreshnessRuntime();
     const subject = new FreshnessCoordinator({ refreshIntervalMs: 10, now: () => now });
@@ -286,14 +354,325 @@ describe("per-root index freshness", () => {
     assert.deepEqual(commands(runtime), ["status", "index", "status", "index", "status", "index", "status", "index"]);
   });
 
-  it("refreshes immediately after known write paths and retains pre-first-search dirtying", async () => {
-    const runtime = new FakeFreshnessRuntime();
+  it("uses external watcher evidence safely and closes the watcher on shutdown", async () => {
+    const { project } = await fixture();
+    const calls: Array<{ tool: string; args: Record<string, unknown> }> = [];
+    let listener: ((event: "rename" | "change", filename: string | null) => void) | undefined;
+    let closed = false;
+    let watchAttempts = 0;
+    const watcher = new EventEmitter();
+    Object.assign(watcher, { close() { closed = true; } });
+    const runtime = {
+      watchExternalChanges: true,
+      async resolveRoot() { return project; },
+      async run(): Promise<MachineEnvelope> { assert.fail("native path must not spawn the CLI"); },
+      async nativeCall(tool: string, args: Record<string, unknown>): Promise<MachineEnvelope> {
+        calls.push({ tool, args });
+        return machine({ index: { exists: true, compatible: true, status: "ready" }, stats: { files_failed: 0 } });
+      },
+    };
+    const subject = new FreshnessCoordinator({
+      watchFactory(_root, _options, callback) {
+        watchAttempts += 1;
+        listener = callback;
+        return watcher as never;
+      },
+    });
+    await subject.ensureFresh(runtime, { cwd: project });
+    listener?.("change", "src/changed.ts");
+    await subject.ensureFresh(runtime, { cwd: project });
+    assert.deepEqual(calls.at(-1), {
+      tool: "index_repo",
+      args: { paths: [join(project, "src/changed.ts")] },
+    });
+
+    const beforeSelfWrite = calls.length;
+    listener?.("rename", ".asgrep/index.db");
+    await subject.ensureFresh(runtime, { cwd: project });
+    assert.equal(calls.length, beforeSelfWrite);
+
+    listener?.("rename", "src/created.ts");
+    await subject.ensureFresh(runtime, { cwd: project });
+    assert.deepEqual(calls.at(-1), { tool: "index_repo", args: { force: false } });
+
+    watcher.emit("error", new Error("watch failed"));
+    await subject.ensureFresh(runtime, { cwd: project });
+    assert.deepEqual(calls.at(-1), { tool: "index_repo", args: { force: false } });
+    assert.equal(watchAttempts, 1, "a failed watcher must not be restarted on every request");
+    subject.shutdown();
+    assert.equal(closed, true);
+  });
+
+  it("ignores only owned artifacts in a custom in-project index directory", async () => {
+    const { project } = await fixture();
+    const indexPath = join(project, "custom-index", "index.db");
+    const calls: Array<{ tool: string; args: Record<string, unknown> }> = [];
+    let listener: ((event: "rename" | "change", filename: string | null) => void) | undefined;
+    const watcher = new EventEmitter();
+    Object.assign(watcher, { close() {} });
+    const runtime = {
+      watchExternalChanges: true,
+      resolveIndexPath() { return indexPath; },
+      async resolveRoot() { return project; },
+      async run(): Promise<MachineEnvelope> { assert.fail("native path must not spawn the CLI"); },
+      async nativeCall(tool: string, args: Record<string, unknown>): Promise<MachineEnvelope> {
+        calls.push({ tool, args });
+        return machine({ index: { exists: true, compatible: true, status: "ready" }, stats: { files_failed: 0 } });
+      },
+    };
+    const subject = new FreshnessCoordinator({
+      watchFactory(_root, _options, callback) {
+        listener = callback;
+        return watcher as never;
+      },
+    });
+    await subject.ensureFresh(runtime, { cwd: project });
+    const initializedCalls = calls.length;
+
+    for (const artifact of [
+      "index.db",
+      "index.db-wal",
+      "index.db-shm",
+      "index.db-journal",
+      "index.db.reindex.lock",
+      "index.db.corrupt",
+      "index.db.corrupt.1",
+      "index.db.corrupt.1-wal",
+      "lexical.db",
+      "lexical.db-wal",
+      "lexical.db-shm",
+      "semantic.ivf",
+      ".semantic.ivf.123.4.tmp",
+    ]) {
+      listener?.("rename", `custom-index/${artifact}`);
+    }
+    await subject.ensureFresh(runtime, { cwd: project });
+    assert.equal(calls.length, initializedCalls, "owned index writes must not dirty freshness");
+
+    listener?.("change", "custom-index/source.ts");
+    await subject.ensureFresh(runtime, { cwd: project });
+    assert.deepEqual(calls.at(-1), {
+      tool: "index_repo",
+      args: { paths: [join(project, "custom-index/source.ts")] },
+    });
+    subject.shutdown();
+  });
+
+  it("does one immediate correctness scan when recursive watching is unsupported", async () => {
+    const { project } = await fixture();
+    const calls: Array<{ tool: string; args: Record<string, unknown> }> = [];
+    let watchAttempts = 0;
+    const runtime = {
+      watchExternalChanges: true,
+      async resolveRoot() { return project; },
+      async run(): Promise<MachineEnvelope> { assert.fail("native path must not spawn the CLI"); },
+      async nativeCall(tool: string, args: Record<string, unknown>): Promise<MachineEnvelope> {
+        calls.push({ tool, args });
+        return machine({ index: { exists: true, compatible: true, status: "ready" }, stats: { files_failed: 0 } });
+      },
+    };
+    const subject = new FreshnessCoordinator({
+      watchFactory() {
+        watchAttempts += 1;
+        throw new Error("recursive watching unsupported");
+      },
+    });
+
+    await subject.ensureFresh(runtime, { cwd: project });
+    await subject.ensureFresh(runtime, { cwd: project });
+
+    assert.equal(watchAttempts, 1);
+    assert.deepEqual(calls, [
+      { tool: "index_status", args: {} },
+      { tool: "index_repo", args: { force: false } },
+    ]);
+  });
+
+  it("fully reconciles first use, then updates only known write paths", async () => {
+    const { project } = await fixture();
+    const calls: Array<{ tool: string; args: Record<string, unknown> }> = [];
+    const runtime = {
+      async resolveRoot() { return project; },
+      async run(): Promise<MachineEnvelope> { assert.fail("native path must not spawn the CLI"); },
+      async nativeCall(tool: string, args: Record<string, unknown>): Promise<MachineEnvelope> {
+        calls.push({ tool, args });
+        return machine({ index: { exists: true, compatible: true, status: "ready" }, stats: { files_failed: 0 } });
+      },
+    };
     const subject = new FreshnessCoordinator({ refreshIntervalMs: 1_000, now: () => 0 });
-    subject.markAffectedPath("src/created.ts", "/root");
-    await subject.ensureFresh(runtime, { cwd: "/root" });
-    subject.markAffectedPath("/root/src/modified.ts", "/elsewhere");
-    await subject.ensureFresh(runtime, { cwd: "/root" });
-    assert.deepEqual(commands(runtime), ["status", "index", "status", "index"]);
+    subject.markAffectedPath("src/created.ts", project);
+    await subject.ensureFresh(runtime, { cwd: project });
+    subject.markAffectedPath(join(project, "src/modified.ts"), "/elsewhere");
+    await subject.ensureFresh(runtime, { cwd: project });
+    assert.deepEqual(calls, [
+      { tool: "index_status", args: {} },
+      { tool: "index_repo", args: { force: false } },
+      { tool: "index_status", args: {} },
+      { tool: "index_repo", args: { paths: [join(project, "src/modified.ts")] } },
+    ]);
+  });
+
+  it("promotes pre-first-search ignore edits to a full scan", async () => {
+    const { project } = await fixture();
+    const calls: Array<{ tool: string; args: Record<string, unknown> }> = [];
+    const runtime = {
+      async resolveRoot() { return project; },
+      async run(): Promise<MachineEnvelope> { assert.fail("native path must not spawn the CLI"); },
+      async nativeCall(tool: string, args: Record<string, unknown>): Promise<MachineEnvelope> {
+        calls.push({ tool, args });
+        return machine({ index: { exists: true, compatible: true, status: "ready" }, stats: { files_failed: 0 } });
+      },
+    };
+    const subject = new FreshnessCoordinator();
+    subject.markAffectedPath(join(project, ".gitignore"), project);
+    await subject.ensureFresh(runtime, { cwd: project });
+    assert.deepEqual(calls, [
+      { tool: "index_status", args: {} },
+      { tool: "index_repo", args: { force: false } },
+    ]);
+  });
+
+  it("tracks valid children beginning with two dots but rejects a parent escape", async () => {
+    const { project, outside } = await fixture();
+    const calls: Array<{ tool: string; args: Record<string, unknown> }> = [];
+    const runtime = {
+      async resolveRoot() { return project; },
+      async run(): Promise<MachineEnvelope> { assert.fail("native path must not spawn the CLI"); },
+      async nativeCall(tool: string, args: Record<string, unknown>): Promise<MachineEnvelope> {
+        calls.push({ tool, args });
+        return machine({ index: { exists: true, compatible: true, status: "ready" }, stats: { files_failed: 0 } });
+      },
+    };
+    const subject = new FreshnessCoordinator();
+    await subject.ensureFresh(runtime, { cwd: project });
+    const contained = join(project, "..cache/file.ts");
+    subject.markAffectedPath(contained, project);
+    await subject.ensureFresh(runtime, { cwd: project });
+    subject.markAffectedPath(join(outside, "outside.ts"), project);
+    await subject.ensureFresh(runtime, { cwd: project });
+    assert.deepEqual(calls.filter(({ tool }) => tool === "index_repo"), [
+      { tool: "index_repo", args: { force: false } },
+      { tool: "index_repo", args: { paths: [contained] } },
+    ]);
+  });
+
+  it("retries incomplete targeted updates without dropping dirty paths", async () => {
+    const { project } = await fixture();
+    const calls: Array<{ tool: string; args: Record<string, unknown> }> = [];
+    let failTargeted = false;
+    const runtime = {
+      async resolveRoot() { return project; },
+      async run(): Promise<MachineEnvelope> { assert.fail("native path must not spawn the CLI"); },
+      async nativeCall(tool: string, args: Record<string, unknown>): Promise<MachineEnvelope> {
+        calls.push({ tool, args });
+        if (tool === "index_repo" && Array.isArray(args.paths) && failTargeted) {
+          failTargeted = false;
+          return machine({ stats: { files_failed: 1 } });
+        }
+        return machine({ index: { exists: true, compatible: true, status: "ready" }, stats: { files_failed: 0 } });
+      },
+    };
+    const subject = new FreshnessCoordinator();
+    await subject.ensureFresh(runtime, { cwd: project });
+    calls.length = 0;
+    failTargeted = true;
+    const changed = join(project, "src/changed.ts");
+    subject.markAffectedPath(changed, project);
+    await assert.rejects(subject.ensureFresh(runtime, { cwd: project }), { code: "INDEX_UPDATE_INCOMPLETE" });
+    await subject.ensureFresh(runtime, { cwd: project });
+    assert.deepEqual(calls.filter(({ tool }) => tool === "index_repo"), [
+      { tool: "index_repo", args: { paths: [changed] } },
+      { tool: "index_repo", args: { paths: [changed] } },
+    ]);
+  });
+
+  it("falls back to one full scan when targeted update admission is exceeded", async () => {
+    const { project } = await fixture();
+    const calls: Array<{ tool: string; args: Record<string, unknown> }> = [];
+    const runtime = {
+      async resolveRoot() { return project; },
+      async run(): Promise<MachineEnvelope> { assert.fail("targeted updates must not spawn the CLI"); },
+      async nativeCall(tool: string, args: Record<string, unknown>): Promise<MachineEnvelope> {
+        calls.push({ tool, args });
+        return machine({ index: { exists: true, compatible: true, status: "ready" }, stats: { files_failed: 0 } });
+      },
+    };
+    const subject = new FreshnessCoordinator();
+    for (let index = 0; index < 1_025; index++) {
+      subject.markAffectedPath(join(project, `generated/${index}.ts`), project);
+    }
+    await subject.ensureFresh(runtime, { cwd: project });
+    assert.deepEqual(calls.filter(({ tool }) => tool === "index_repo"), [
+      { tool: "index_repo", args: { force: false } },
+    ]);
+  });
+
+  it("keeps pre-initialization overflow isolated per project root", async () => {
+    const { project: projectA, outside: projectB } = await fixture();
+    const calls: Array<{ tool: string; root: string; args: Record<string, unknown> }> = [];
+    const runtime = {
+      async resolveRoot(context: RuntimeContext) { return context.cwd; },
+      async run(): Promise<MachineEnvelope> { assert.fail("native path must not spawn the CLI"); },
+      async nativeCall(tool: string, args: Record<string, unknown>, context: RuntimeContext): Promise<MachineEnvelope> {
+        calls.push({ tool, root: context.cwd, args });
+        return machine({ index: { exists: true, compatible: true, status: "ready" }, stats: { files_failed: 0 } });
+      },
+    };
+    const subject = new FreshnessCoordinator();
+    for (let index = 0; index < 1_025; index++) {
+      subject.markAffectedPath(join(projectA, `generated/${index}.ts`), projectA);
+    }
+    const changedB = join(projectB, "changed.ts");
+    subject.markAffectedPath(changedB, projectB);
+
+    await subject.ensureFresh(runtime, { cwd: projectA });
+    await subject.ensureFresh(runtime, { cwd: projectB });
+
+    assert.deepEqual(calls.filter(({ tool }) => tool === "index_repo"), [
+      { tool: "index_repo", root: projectA, args: { force: false } },
+      { tool: "index_repo", root: projectB, args: { force: false } },
+    ]);
+  });
+
+  it("delivers one pending full scan to each overlapping root", async () => {
+    const { project } = await fixture();
+    const nested = join(project, "nested-root");
+    await mkdir(nested);
+    const calls: Array<{ tool: string; root: string; args: Record<string, unknown> }> = [];
+    const runtime = {
+      async resolveRoot(context: RuntimeContext) { return context.cwd; },
+      async run(): Promise<MachineEnvelope> { assert.fail("native path must not spawn the CLI"); },
+      async nativeCall(tool: string, args: Record<string, unknown>, context: RuntimeContext): Promise<MachineEnvelope> {
+        calls.push({ tool, root: context.cwd, args });
+        return machine({ index: { exists: true, compatible: true, status: "ready" }, stats: { files_failed: 0 } });
+      },
+    };
+    const subject = new FreshnessCoordinator();
+    subject.markRootDirty(project);
+
+    await subject.ensureFresh(runtime, { cwd: nested });
+    await subject.ensureFresh(runtime, { cwd: project });
+    await subject.ensureFresh(runtime, { cwd: nested });
+
+    assert.deepEqual(calls.filter(({ tool }) => tool === "index_repo"), [
+      { tool: "index_repo", root: nested, args: { force: false } },
+      { tool: "index_repo", root: project, args: { force: false } },
+    ]);
+    subject.shutdown();
+  });
+
+  it("uses a full incremental scan when a known edit changes ignore rules", async () => {
+    const { project } = await fixture();
+    const runtime = new FakeFreshnessRuntime();
+    const subject = new FreshnessCoordinator();
+    await subject.ensureFresh(runtime, { cwd: project });
+
+    subject.markAffectedPath(join(project, ".gitignore"), project);
+    await subject.ensureFresh(runtime, { cwd: project });
+    subject.markAffectedPath(join(project, "nested/.asgrepignore"), project);
+    await subject.ensureFresh(runtime, { cwd: project });
+
+    assert.deepEqual(commands(runtime), ["status", "index", "status", "index", "status", "index"]);
   });
 
   it("coalesces canonical aliases while distinct roots refresh concurrently", async () => {
@@ -315,6 +694,33 @@ describe("per-root index freshness", () => {
     assert.equal(runtime.calls.filter(({ root, command }) => root === "/root" && command === "index").length, 1);
   });
 
+  it("lets one waiter cancel without cancelling a shared root refresh", async () => {
+    const runtime = new FakeFreshnessRuntime();
+    let release!: () => void;
+    let started!: () => void;
+    const didStart = new Promise<void>((resolve) => { started = resolve; });
+    runtime.handler = async (command, _root, options) => {
+      assert.equal(options.signal, undefined, "request cancellation must not own shared work");
+      if (command === "status") {
+        return machine({ command, index: { exists: true, compatible: true, status: "ready" } });
+      }
+      started();
+      await new Promise<void>((resolve) => { release = resolve; });
+      return machine({ command, index: { exists: true, compatible: true, status: "ready" } });
+    };
+    const subject = new FreshnessCoordinator();
+    const controller = new AbortController();
+    const cancelled = subject.ensureFresh(runtime, { cwd: "/root" }, { signal: controller.signal });
+    await didStart;
+    const surviving = subject.ensureFresh(runtime, { cwd: "/root" });
+
+    controller.abort();
+    await errorCode(() => cancelled, "CANCELLED");
+    release();
+    assert.equal(await surviving, "/root");
+    assert.deepEqual(commands(runtime), ["status", "index"]);
+  });
+
   it("reuses the original context when concurrent searches share a relative configured root", async () => {
     const { project } = await fixture();
     const sourceRoot = join(project, "src");
@@ -324,7 +730,12 @@ describe("per-root index freshness", () => {
     const pi = new FakePi(async (_options, args) => {
       const command = args[0];
       if (command === "index") await new Promise<void>((resolve) => { release = resolve; });
-      return valid({ command, index: { exists: command !== "status", compatible: true, status: command === "status" ? "missing" : "ready" } });
+      return valid({
+        command,
+        index: { exists: command !== "status", compatible: true, status: command === "status" ? "missing" : "ready" },
+        files_failed: 0,
+        walk_errors: false,
+      });
     });
     const configured = new AstSgrepRuntime(
       pi,
@@ -337,7 +748,7 @@ describe("per-root index freshness", () => {
     const concurrent = subject.ensureFresh(configured, { cwd: project });
     release();
     await Promise.all([first, concurrent]);
-    assert.deepEqual(pi.calls.map(({ args }) => args[0]), ["status", "index"]);
+    assert.deepEqual(pi.calls.map(({ args }) => args[0]), ["index"]);
     assert.ok(pi.calls.every(({ options }) => options.cwd === canonicalSourceRoot));
   });
 
@@ -357,12 +768,70 @@ describe("per-root index freshness", () => {
   });
 
 
-  it("indexes on first use even when status reports ready, then deduplicates", async () => {
+  it("reconciles a healthy existing index with the worktree on first use", async () => {
     const runtime = new FakeFreshnessRuntime();
     const subject = new FreshnessCoordinator({ refreshIntervalMs: 1_000, now: () => 0 });
     await subject.ensureFresh(runtime, { cwd: "/root" });
     await subject.ensureFresh(runtime, { cwd: "/root" });
     assert.deepEqual(commands(runtime), ["status", "index"]);
+  });
+
+  it("retries full reconciliation when a native index response is incomplete", async () => {
+    let incomplete = true;
+    const calls: Array<{ tool: string; args: Record<string, unknown> }> = [];
+    const runtime = {
+      async resolveRoot(context: RuntimeContext) { return context.cwd; },
+      async run(): Promise<MachineEnvelope> { assert.fail("native path must not spawn the CLI"); },
+      async nativeCall(tool: string, args: Record<string, unknown>): Promise<MachineEnvelope> {
+        calls.push({ tool, args });
+        if (tool === "index_status") {
+          return machine({ index: { exists: true, compatible: true, status: "ready" } });
+        }
+        if (incomplete) {
+          incomplete = false;
+          return machine({ stats: { files_failed: 1, walk_errors: true } });
+        }
+        return machine({ stats: { files_failed: 0, walk_errors: false } });
+      },
+    };
+    const subject = new FreshnessCoordinator();
+    await assert.rejects(subject.ensureFresh(runtime, { cwd: "/root" }), {
+      code: "INDEX_UPDATE_INCOMPLETE",
+    });
+    await subject.ensureFresh(runtime, { cwd: "/root" });
+    assert.deepEqual(calls, [
+      { tool: "index_status", args: {} },
+      { tool: "index_repo", args: { force: false } },
+      { tool: "index_status", args: {} },
+      { tool: "index_repo", args: { force: false } },
+    ]);
+  });
+
+  it("rejects incomplete flat CLI index responses", async () => {
+    const runtime = new FakeFreshnessRuntime();
+    runtime.handler = async (command) => command === "status"
+      ? machine({ command, index: { exists: true, compatible: true, status: "ready" } })
+      : machine({ command, files_failed: 0, walk_errors: true });
+    const subject = new FreshnessCoordinator();
+    await assert.rejects(subject.ensureFresh(runtime, { cwd: "/root" }), {
+      code: "INDEX_UPDATE_INCOMPLETE",
+    });
+    assert.deepEqual(commands(runtime), ["status", "index"]);
+  });
+
+  it("fails closed when an index response omits completion status", async () => {
+    const runtime = {
+      async resolveRoot(context: RuntimeContext) { return context.cwd; },
+      async run(args: readonly string[]): Promise<MachineEnvelope> {
+        return args[0] === "status"
+          ? machine({ index: { exists: true, compatible: true, status: "ready" } })
+          : machine({ command: "index" });
+      },
+    };
+    await assert.rejects(
+      new FreshnessCoordinator().ensureFresh(runtime, { cwd: "/root" }),
+      { code: "INDEX_RESPONSE_INVALID" },
+    );
   });
 
   it("preserves dirtiness recorded while a refresh is in flight", async () => {
@@ -374,6 +843,7 @@ describe("per-root index freshness", () => {
       return machine({ command, index: { exists: true, compatible: true, status: "ready" } });
     };
     const subject = new FreshnessCoordinator({ refreshIntervalMs: 1_000, now: () => 0 });
+    subject.markAffectedPath("src/first.ts", "/root");
     const first = subject.ensureFresh(runtime, { cwd: "/root" });
     while (!release) await new Promise((resolve) => setImmediate(resolve));
     subject.markAffectedPath("src/changed.ts", "/root");
@@ -395,6 +865,26 @@ describe("per-root index freshness", () => {
     subject.markAffectedPath(join(alias, "not-created", "file.ts"), alias);
     await subject.ensureFresh(runtime, { cwd: project });
     assert.deepEqual(commands(runtime), ["status", "index", "status", "index"]);
+  });
+  it("preserves a final symlink's indexed path instead of updating its target", async () => {
+    const { project, outside } = await fixture();
+    const link = join(project, "source.ts");
+    const target = join(outside, "target.ts");
+    await symlink(target, link);
+    const calls: Array<{ tool: string; args: Record<string, unknown> }> = [];
+    const runtime = {
+      async resolveRoot() { return project; },
+      async run(): Promise<MachineEnvelope> { assert.fail("native path must not spawn the CLI"); },
+      async nativeCall(tool: string, args: Record<string, unknown>): Promise<MachineEnvelope> {
+        calls.push({ tool, args });
+        return machine({ index: { exists: true, compatible: true, status: "ready" }, stats: { files_failed: 0 } });
+      },
+    };
+    const subject = new FreshnessCoordinator();
+    await subject.ensureFresh(runtime, { cwd: project });
+    subject.markAffectedPath(link, project);
+    await subject.ensureFresh(runtime, { cwd: project });
+    assert.deepEqual(calls.at(-1), { tool: "index_repo", args: { paths: [link] } });
   });
   it("refuses to silently query when status cannot prove index health", async () => {
     const runtime = new FakeFreshnessRuntime();

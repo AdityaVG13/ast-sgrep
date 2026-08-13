@@ -1,0 +1,26 @@
+{
+  "loop": "wave2-05",
+  "mode": "harden",
+  "residual": "R-OPS-DOCS-FOOTGUNS",
+  "bead": "ast-sgrep-rca-residuals-sp6p.4",
+  "braid_resolve": "Continue",
+  "axes_changed": 3,
+  "axes": [
+    "observer:operator",
+    "representation:lifecycle-runbook",
+    "evidence:docs+source"
+  ],
+  "PRODUCTIVE": true,
+  "acceptance": {
+    "fast_unsafe_doctor": true,
+    "index_path_docs": true,
+    "c1_cascade_docs": true,
+    "esc3_deadline": true,
+    "napi_cm_host_duty": true
+  },
+  "verify": {
+    "cli_doctor_surfaces": "ok 3 passed",
+    "mcp_lib": "ok 5 passed"
+  },
+  "NEXT_PASS": "Seal wave-2 residuals or authorized Pi leftover only"
+}

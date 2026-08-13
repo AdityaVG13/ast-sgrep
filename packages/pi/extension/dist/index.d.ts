@@ -15,6 +15,7 @@ type RuntimeLike = {
     }): NodeJS.ProcessEnv;
     config?: {
         timeoutMs?: number;
+        maxOutputBytes?: number;
         refreshIntervalMs?: number;
     };
     inspectIndexCompatibility?(context: {
@@ -23,8 +24,12 @@ type RuntimeLike = {
     rebuildIncompatibleIndex?(context: {
         cwd: string;
     }, options?: RunOptions): Promise<MachineEnvelope>;
+    resolveIndexPath?(root: string): string;
+    watchExternalChanges?: boolean;
 };
-type FreshnessLike = Pick<FreshnessCoordinator, "ensureFresh" | "markAffectedPath">;
+type FreshnessLike = Pick<FreshnessCoordinator, "ensureFresh" | "markAffectedPath"> & {
+    shutdown?(): void;
+};
 export declare function registerAstSgrepTools(pi: ExtensionAPI, runtime?: RuntimeLike, freshness?: FreshnessLike): void;
 export declare function registerAstSgrepCommands(pi: ExtensionAPI, runtime?: RuntimeLike): void;
 export default function astSgrepExtension(pi: ExtensionAPI): void;

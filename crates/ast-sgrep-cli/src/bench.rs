@@ -100,7 +100,12 @@ fn cv_pct(samples: &[f64]) -> f64 {
 
 /// Optional ast-grep timing only for `pattern:` queries when the binary exists.
 /// Hybrid/token comparisons are vacuous and must not emit speedup claims.
-fn ast_grep_comparison(query: &str, root: &Path, iterations: u32, avg_ms: f64) -> serde_json::Value {
+fn ast_grep_comparison(
+    query: &str,
+    root: &Path,
+    iterations: u32,
+    avg_ms: f64,
+) -> serde_json::Value {
     let Some(pat) = query
         .strip_prefix("pattern:")
         .map(str::trim)
@@ -228,6 +233,50 @@ fn print_index_skipped(stats: Option<&IndexStats>, index_ms: Option<f64>) {
     }
 }
 
+/// Shared collapse: suite + single-query both enforce the same ratchet gate.
+fn enforce_bench_ratchet(history: &Option<serde_json::Value>, subject: &str) -> anyhow::Result<()> {
+    let Some(h) = history.as_ref() else {
+        return Ok(());
+    };
+    if bench_ratchet_enabled() && h["ratchet_ok"] == false {
+        anyhow::bail!(
+            "bench ratchet failed for {subject}: regression_pct={:?} exceeds {}%",
+            h.get("regression_pct"),
+            BENCH_RATCHET_PCT
+        );
+    }
+    Ok(())
+}
+
+/// Shared human-format ast-grep comparison (suite indent vs single-query wording).
+fn print_ast_grep_human(comparison: &serde_json::Value, suite_style: bool, ag_iters: u32) {
+    if comparison["compared"] != true {
+        if !suite_style {
+            if let Some(reason) = comparison["skipped_reason"].as_str() {
+                println!("ast-grep comparison skipped: {reason}");
+            }
+        }
+        return;
+    }
+    let Some(p) = comparison["ast_grep_pattern"].as_str() else {
+        return;
+    };
+    let Some(ms) = comparison["avg_ast_grep_ms"].as_f64() else {
+        return;
+    };
+    if suite_style {
+        println!("    ast-grep ({p}): {ms:.2}ms");
+        if let Some(sp) = comparison["speedup_vs_ast_grep"].as_f64() {
+            println!("    speedup vs ast-grep: {sp:.1}x");
+        }
+    } else {
+        println!("Avg ast-grep (pattern: {p}): {ms:.2}ms over {ag_iters} iterations");
+        if let Some(sp) = comparison["speedup_vs_ast_grep"].as_f64() {
+            println!("Speedup vs ast-grep: {sp:.1}x");
+        }
+    }
+}
+
 fn run_bench_suite(
     root: &Path,
     cli: &Cli,
@@ -263,8 +312,10 @@ fn run_bench_suite(
     let searcher = bench_searcher(&bench_root, cli, skip_index)?;
     let mut results: Vec<serde_json::Value> = Vec::with_capacity(cases.len());
     for case in cases {
-        let expected = ast_sgrep_core::bench_suite::benchmark_expectation(case)
-            .ok_or_else(|| anyhow::anyhow!("benchmark case '{}' has no identity contract", case.name))?;
+        let expected =
+            ast_sgrep_core::bench_suite::benchmark_expectation(case).ok_or_else(|| {
+                anyhow::anyhow!("benchmark case '{}' has no identity contract", case.name)
+            })?;
         let semantic_only = expected.kind == Some(ast_sgrep_core::search::HitKind::Embed);
         let (times, last) = timed_searches(&searcher, case.query, semantic_only, iterations)?;
         let hits = last.as_ref().map_or(0, |r| r.hits.len());
@@ -310,15 +361,7 @@ fn run_bench_suite(
         suite_avg,
         suite_cv,
     )?;
-    if let Some(ref h) = history {
-        if bench_ratchet_enabled() && h["ratchet_ok"] == false {
-            anyhow::bail!(
-                "bench ratchet failed for suite {selected}: regression_pct={:?} exceeds {}%",
-                h.get("regression_pct"),
-                BENCH_RATCHET_PCT
-            );
-        }
-    }
+    enforce_bench_ratchet(&history, &format!("suite {selected}"))?;
     if cli.json {
         let mut obj = serde_json::json!({
             "fixture": fixture_name,
@@ -330,12 +373,11 @@ fn run_bench_suite(
             "cv_pct": suite_cv,
             "bench_history": history,
         });
+        // Collapse skip-path fields into existing helper; keep indexed-path without index_ms.
         if let Some(s) = &stats {
             obj["files_indexed"] = serde_json::json!(s.files_indexed);
         } else {
-            obj["index_skipped"] = serde_json::json!(true);
-            obj["index_ms"] = serde_json::json!(0.0);
-            obj["files_indexed"] = serde_json::Value::Null;
+            add_index_json(&mut obj, None, 0.0);
         }
         print_machine_json_status("bench", &obj, suite_ok, if suite_ok { 0 } else { 2 })?;
         if !suite_ok {
@@ -357,17 +399,7 @@ fn run_bench_suite(
                 row["cv_pct"].as_f64().unwrap_or(0.0),
                 row["hits"].as_u64().unwrap_or(0)
             );
-            if row["ast_grep_comparison"]["compared"] == true {
-                if let (Some(p), Some(ms)) = (
-                    row["ast_grep_comparison"]["ast_grep_pattern"].as_str(),
-                    row["ast_grep_comparison"]["avg_ast_grep_ms"].as_f64(),
-                ) {
-                    println!("    ast-grep ({p}): {ms:.2}ms");
-                    if let Some(sp) = row["ast_grep_comparison"]["speedup_vs_ast_grep"].as_f64() {
-                        println!("    speedup vs ast-grep: {sp:.1}x");
-                    }
-                }
-            }
+            print_ast_grep_human(&row["ast_grep_comparison"], true, 0);
         }
         if !suite_ok {
             anyhow::bail!("benchmark suite failed hit-count or result-identity thresholds");
@@ -403,15 +435,7 @@ fn run_bench(
     let ag_iters = iterations.min(3);
     let comparison = ast_grep_comparison(query, root, ag_iters, avg);
     let history = update_bench_history(&format!("query:{query}"), avg, cv)?;
-    if let Some(ref h) = history {
-        if bench_ratchet_enabled() && h["ratchet_ok"] == false {
-            anyhow::bail!(
-                "bench ratchet failed for query {query:?}: regression_pct={:?} exceeds {}%",
-                h.get("regression_pct"),
-                BENCH_RATCHET_PCT
-            );
-        }
-    }
+    enforce_bench_ratchet(&history, &format!("query {query:?}"))?;
     if cli.json {
         let mut obj = serde_json::json!({
             "query": query,
@@ -432,19 +456,7 @@ fn run_bench(
         print_index_skipped(stats_opt.as_ref(), Some(index_ms));
         println!("Query: {query}");
         println!("Avg search: {avg:.2}ms over {iterations} iterations (cv {cv:.1}%, {hits} hits)");
-        if comparison["compared"] == true {
-            if let (Some(p), Some(ms)) = (
-                comparison["ast_grep_pattern"].as_str(),
-                comparison["avg_ast_grep_ms"].as_f64(),
-            ) {
-                println!("Avg ast-grep (pattern: {p}): {ms:.2}ms over {ag_iters} iterations");
-                if let Some(sp) = comparison["speedup_vs_ast_grep"].as_f64() {
-                    println!("Speedup vs ast-grep: {sp:.1}x");
-                }
-            }
-        } else if let Some(reason) = comparison["skipped_reason"].as_str() {
-            println!("ast-grep comparison skipped: {reason}");
-        }
+        print_ast_grep_human(&comparison, false, ag_iters);
     }
     Ok(())
 }

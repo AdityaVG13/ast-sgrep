@@ -20,7 +20,7 @@ Canonical entry points for humans and agents. Prefer this list over scavenging t
 | [QUERY_GRAMMAR.md](QUERY_GRAMMAR.md) | Mode prefixes and routing (no composable AND) |
 | [semantic-search.md](semantic-search.md) | Symbol chunks, provider chain, IVF-ANN, tuning |
 | [mcp.md](mcp.md) | `asgrep-mcp` setup for agents |
-| [codemode.md](codemode.md) | Code Mode: JS sandbox execution (Pi primary); Rust catalog/session; MCP is a separate sibling |
+| [codemode.md](codemode.md) | Code Mode: JS program orchestration (Pi primary); XOR with MCP — never both |
 | [use-cases.md](use-cases.md) | Agents, LSP, JSON formats, CI patterns |
 
 ## Quality and operations

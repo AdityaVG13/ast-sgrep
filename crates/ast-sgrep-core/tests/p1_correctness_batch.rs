@@ -8,11 +8,7 @@ use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 use tempfile::TempDir;
 
-fn base<'a>(
-    path: &'a str,
-    lines: &'a [(u32, String)],
-    hash: &'a str,
-) -> UpsertFileInput<'a> {
+fn base<'a>(path: &'a str, lines: &'a [(u32, String)], hash: &'a str) -> UpsertFileInput<'a> {
     UpsertFileInput {
         rel_path: path,
         language: Some("python"),
@@ -44,7 +40,9 @@ fn write_src(root: &Path, rel: &str, body: &str) {
 fn clear_all_data_wipes_embed_meta_keeps_root_whitelist() {
     let temp = TempDir::new().unwrap();
     let store = IndexStore::open(temp.path(), None).unwrap();
-    store.set_meta("root", temp.path().to_string_lossy().as_ref()).unwrap();
+    store
+        .set_meta("root", temp.path().to_string_lossy().as_ref())
+        .unwrap();
     let lines = [(1, "print(1)".into())];
     store.upsert_file(base("a.py", &lines, "h1")).unwrap();
     store.set_meta("struct:a.py", "fp").unwrap();
@@ -86,7 +84,11 @@ fn is_unchanged_auto_does_not_match_concrete_backend() {
     let first = semantic.index_all().unwrap();
     assert!(first.files_indexed >= 1);
     assert_eq!(
-        semantic.store().get_meta("embed_backend").unwrap().as_deref(),
+        semantic
+            .store()
+            .get_meta("embed_backend")
+            .unwrap()
+            .as_deref(),
         Some("semantic-v2")
     );
     drop(semantic);
@@ -124,6 +126,66 @@ fn indexed_rel_path_rejects_non_utf8() {
     assert_eq!(a.to_string_lossy(), b.to_string_lossy());
     assert!(indexed_rel_path(a).is_err());
     assert!(indexed_rel_path(b).is_err());
+}
+
+/// Path-traversal / absolute keys must not enter the index (ubs security pass).
+#[test]
+fn indexed_rel_path_rejects_traversal_and_absolute() {
+    for bad in [
+        Path::new("../secret.rs"),
+        Path::new("src/../../etc/passwd"),
+        Path::new("/etc/passwd"),
+        Path::new(""),
+        Path::new("a\0b.rs"),
+    ] {
+        let err = indexed_rel_path(bad).expect_err("must reject unsafe rel");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("asgrep-kqhp"),
+            "policy tag missing for {}: {msg}",
+            bad.display()
+        );
+    }
+    assert_eq!(
+        indexed_rel_path(Path::new("src/main.rs")).unwrap(),
+        "src/main.rs"
+    );
+    assert_eq!(
+        indexed_rel_path(Path::new("./src/lib.rs")).unwrap(),
+        "./src/lib.rs"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn indexed_rel_path_does_not_rewrite_unix_backslashes_into_separators() {
+    assert_eq!(
+        indexed_rel_path(Path::new("dir\\file.rs")).unwrap(),
+        "dir\\file.rs"
+    );
+    assert_eq!(
+        indexed_rel_path(Path::new("..\\escape.rs")).unwrap(),
+        "..\\escape.rs"
+    );
+}
+
+#[test]
+fn index_content_rejects_parent_dir_keys() {
+    let temp = TempDir::new().unwrap();
+    let mut indexer = Indexer::new(IndexOptions {
+        root: temp.path().to_path_buf(),
+        embed_semantic: false,
+        ..IndexOptions::default()
+    })
+    .unwrap();
+    let err = indexer
+        .index_content("../escape.rs", "fn evil() {}")
+        .expect_err("parent-dir key must fail closed");
+    assert!(
+        err.to_string().contains("path traversal") || err.to_string().contains("asgrep-kqhp"),
+        "got {}",
+        err
+    );
 }
 
 /// Prior durability: ResponseCache still invalidates on same-connection generation bump.

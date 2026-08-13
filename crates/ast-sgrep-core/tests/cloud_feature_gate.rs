@@ -17,9 +17,6 @@ fn cloud_embed_feature_is_gated() {
             model: "text-embedding-3-small".into(),
         };
         let err = ast_sgrep_embed::embed_via_api("hi", &cfg).unwrap_err();
-        assert!(
-            err.contains("cloud") || err.contains("feature"),
-            "{err}"
-        );
+        assert!(err.contains("cloud") || err.contains("feature"), "{err}");
     }
 }

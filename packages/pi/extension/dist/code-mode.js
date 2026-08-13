@@ -9,6 +9,17 @@ const DEFAULT_MAX_READ_CHARS = 100_000;
 const MAX_READ_CHARS = 1_000_000;
 const MAX_READ_REFS = 20;
 const MAX_SCAN_BYTES = 64 * 1024 * 1024;
+const MAX_LINE_CHARS = 2_000;
+const DEVICE_PATHS = new Set([
+    "/dev/zero", "/dev/urandom", "/dev/random", "/dev/stdin",
+    "/dev/stdout", "/dev/stderr", "/dev/null", "/dev/fd/0", "/dev/fd/1", "/dev/fd/2",
+]);
+function assertSafeReadPath(absolutePath) {
+    const normalized = absolutePath.replace(/\\/g, "/");
+    if (DEVICE_PATHS.has(normalized) || /^\/proc\/\d+\/fd\//.test(normalized)) {
+        throw new RuntimeError("READ_FORBIDDEN_PATH", `${absolutePath} is a device or process fd path and cannot be read`, { path: absolutePath });
+    }
+}
 const MAX_LINE_NUMBER = 0xffff_ffff;
 const REF_PATTERN = /^(.+?)#L([1-9]\d*)-L([1-9]\d*)$/;
 const KINDS = new Set(["asgrep", "def", "caller", "graph", "anchor", "import", "pattern", "embed"]);
@@ -38,6 +49,71 @@ function outputArgs(options) {
         String(boundedInteger(options.excerptLines, 0, 0, MAX_EXCERPT_LINES, "excerptLines")),
     ];
 }
+function optionalTextField(field) {
+    return field === undefined || field === null || typeof field === "string";
+}
+function wireLinesValid(lines) {
+    return !!lines && typeof lines === "object"
+        && Number.isSafeInteger(lines.start)
+        && Number.isSafeInteger(lines.end)
+        && Number(lines.start) > 0
+        && Number(lines.end) >= Number(lines.start);
+}
+/** Parse wire location once: prefer branded `ref`; else derive from structured file/lines. */
+function parseWireHitRef(hit) {
+    if (typeof hit.ref === "string") {
+        parseRef(hit.ref);
+        return hit.ref;
+    }
+    if (typeof hit.file === "string" && hit.file.length > 0 && !isAbsolute(hit.file) && wireLinesValid(hit.lines)) {
+        const start = Number(hit.lines.start);
+        const end = Number(hit.lines.end);
+        if (start > MAX_LINE_NUMBER || end > MAX_LINE_NUMBER) {
+            throw new RuntimeError("PROTOCOL_MISMATCH", "ast-sgrep returned an invalid search hit");
+        }
+        const ref = `${hit.file}#L${start}-L${end}`;
+        parseRef(ref);
+        return ref;
+    }
+    throw new RuntimeError("PROTOCOL_MISMATCH", "ast-sgrep returned an invalid search hit");
+}
+/** Wire hit shape gate: required protocol fields + optional text fields. Domain checks kept intact. */
+function isValidHitShape(hit) {
+    return typeof hit.kind === "string" && KINDS.has(hit.kind)
+        && typeof hit.signal === "string" && SIGNALS.has(hit.signal)
+        && Array.isArray(hit.contributors) && hit.contributors.length > 0
+        && hit.contributors.every((kind) => typeof kind === "string" && KINDS.has(kind))
+        && typeof hit.score === "number" && Number.isFinite(hit.score)
+        && typeof hit.margin === "number" && Number.isFinite(hit.margin) && hit.margin >= 0
+        && typeof hit.preview === "string"
+        && optionalTextField(hit.symbol) && optionalTextField(hit.caller) && optionalTextField(hit.callee)
+        && optionalTextField(hit.language) && optionalTextField(hit.excerpt);
+}
+function parseSearchHit(candidate) {
+    if (!candidate || typeof candidate !== "object") {
+        throw new RuntimeError("PROTOCOL_MISMATCH", "ast-sgrep returned an invalid search hit");
+    }
+    const hit = candidate;
+    if (!isValidHitShape(hit)) {
+        throw new RuntimeError("PROTOCOL_MISMATCH", "ast-sgrep returned an invalid search hit");
+    }
+    const ref = parseWireHitRef(hit);
+    const parsed = {
+        kind: hit.kind,
+        signal: hit.signal,
+        contributors: hit.contributors,
+        score: hit.score,
+        margin: hit.margin,
+        ref,
+        preview: hit.preview,
+        ...(hit.symbol === undefined ? {} : { symbol: hit.symbol }),
+        ...(hit.caller === undefined ? {} : { caller: hit.caller }),
+        ...(hit.callee === undefined ? {} : { callee: hit.callee }),
+        ...(hit.language === undefined ? {} : { language: hit.language }),
+        ...(hit.excerpt === undefined ? {} : { excerpt: hit.excerpt }),
+    };
+    return parsed;
+}
 function asSearchResponse(value) {
     if (value.ok !== true || !Array.isArray(value.hits)) {
         throw new RuntimeError("PROTOCOL_MISMATCH", "ast-sgrep search response is missing hits");
@@ -45,47 +121,22 @@ function asSearchResponse(value) {
     if (value.query !== undefined && typeof value.query !== "string") {
         throw new RuntimeError("PROTOCOL_MISMATCH", "ast-sgrep search response has an invalid query");
     }
-    if (value.hit_count !== undefined
-        && (typeof value.hit_count !== "number" || !Number.isSafeInteger(value.hit_count)
-            || value.hit_count < 0 || value.hit_count !== value.hits.length)) {
-        throw new RuntimeError("PROTOCOL_MISMATCH", "ast-sgrep search response has an invalid hit_count");
-    }
-    const optionalText = (field) => field === undefined || field === null || typeof field === "string";
-    for (const candidate of value.hits) {
-        if (!candidate || typeof candidate !== "object") {
-            throw new RuntimeError("PROTOCOL_MISMATCH", "ast-sgrep returned an invalid search hit");
-        }
-        const hit = candidate;
-        const lines = hit.lines;
-        const validLines = !!lines && typeof lines === "object"
-            && Number.isSafeInteger(lines.start)
-            && Number.isSafeInteger(lines.end)
-            && Number(lines.start) > 0
-            && Number(lines.end) >= Number(lines.start);
-        const valid = typeof hit.kind === "string" && KINDS.has(hit.kind)
-            && typeof hit.signal === "string" && SIGNALS.has(hit.signal)
-            && Array.isArray(hit.contributors) && hit.contributors.length > 0
-            && hit.contributors.every((kind) => typeof kind === "string" && KINDS.has(kind))
-            && typeof hit.score === "number" && Number.isFinite(hit.score)
-            && typeof hit.margin === "number" && Number.isFinite(hit.margin) && hit.margin >= 0
-            && typeof hit.file === "string" && hit.file.length > 0 && !isAbsolute(hit.file)
-            && validLines
-            && typeof hit.ref === "string"
-            && typeof hit.preview === "string"
-            && optionalText(hit.symbol) && optionalText(hit.caller) && optionalText(hit.callee)
-            && optionalText(hit.language) && optionalText(hit.excerpt);
-        if (!valid)
-            throw new RuntimeError("PROTOCOL_MISMATCH", "ast-sgrep returned an invalid search hit");
-        const parsed = parseRef(hit.ref);
-        const hitLines = lines;
-        if (parsed.file !== hit.file || parsed.start !== hitLines.start || parsed.end !== hitLines.end) {
-            throw new RuntimeError("PROTOCOL_MISMATCH", "ast-sgrep hit ref does not match its file and lines");
+    // Guard form of compound hit_count validity (same checks, less && nesting).
+    if (value.hit_count !== undefined) {
+        if (typeof value.hit_count !== "number" || !Number.isSafeInteger(value.hit_count)
+            || value.hit_count < 0 || value.hit_count !== value.hits.length) {
+            throw new RuntimeError("PROTOCOL_MISMATCH", "ast-sgrep search response has an invalid hit_count");
         }
     }
-    return value;
+    const hits = value.hits.map(parseSearchHit);
+    return { ...value, hits };
 }
 function refValue(value) {
     return typeof value === "string" ? value : value.ref;
+}
+/** Derive file/lines from a branded ref (sole location encoding on SgrepHit). */
+export function parseSgrepRef(ref) {
+    return parseRef(ref);
 }
 function parseRef(ref) {
     const match = REF_PATTERN.exec(ref);
@@ -119,6 +170,9 @@ function boundedPrefix(value, maxChars) {
     }
     return { text: value, chars, truncated: false };
 }
+function formatReadRef(file, start, end) {
+    return `${file}#L${start}-L${end}`;
+}
 async function readLineWindow(handle, parsed, contextLines, maxChars, signal) {
     const stat = await handle.stat();
     if (!stat.isFile())
@@ -146,7 +200,9 @@ async function readLineWindow(handle, parsed, contextLines, maxChars, signal) {
             selectedStart ??= lineNumber;
             selectedEnd = lineNumber;
             if (!truncated) {
-                const addition = `${selectedLines > 0 ? "\n" : ""}${line.endsWith("\r") ? line.slice(0, -1) : line}`;
+                const rawLine = line.endsWith("\r") ? line.slice(0, -1) : line;
+                const clamped = rawLine.length > MAX_LINE_CHARS ? `${rawLine.slice(0, MAX_LINE_CHARS)}…` : rawLine;
+                const addition = `${selectedLines > 0 ? "\n" : ""}${clamped}`;
                 const bounded = boundedPrefix(addition, maxChars - contentChars);
                 content += bounded.text;
                 contentChars += bounded.chars;
@@ -209,14 +265,31 @@ async function readLineWindow(handle, parsed, contextLines, maxChars, signal) {
         stream.destroy();
     }
     checkAbort(signal);
-    if (parsed.start >= lineNumber || parsed.end >= lineNumber) {
-        throw new RuntimeError("RANGE_OUT_OF_BOUNDS", `${parsed.file} has fewer than ${parsed.end} lines`);
+    const totalLines = Math.max(0, lineNumber - 1);
+    if (totalLines === 0) {
+        return {
+            window: null,
+            content: "",
+            truncated: false,
+            note: `${parsed.file} is empty`,
+        };
     }
+    if (parsed.start > totalLines || parsed.end > totalLines) {
+        const resume = Math.max(1, totalLines);
+        throw new RuntimeError("RANGE_OUT_OF_BOUNDS", `Note: offset ${parsed.start} is beyond the end of ${parsed.file} (${totalLines} lines scanned). Retry with a smaller offset (e.g. start=${resume})`, { file: parsed.file, start: parsed.start, end: parsed.end, totalLines, resumeOffset: resume });
+    }
+    const endLine = selectedEnd ?? Math.max(wantedStart, totalLines);
+    const startLine = selectedStart ?? wantedStart;
     return {
-        file: parsed.file,
-        lines: { start: selectedStart ?? wantedStart, end: selectedEnd ?? Math.max(wantedStart, lineNumber - 1) },
+        window: { file: parsed.file, start: startLine, end: endLine },
         content,
         truncated,
+        ...(truncated
+            ? {
+                resumeOffset: endLine,
+                note: `truncated at line ${endLine}; resume with start=${endLine}`,
+            }
+            : {}),
     };
 }
 async function runSearch(runtime, context, command, query, options) {
@@ -225,6 +298,7 @@ async function runSearch(runtime, context, command, query, options) {
 }
 async function resolveReadableFile(root, ref, parsed) {
     const unresolved = resolve(root, parsed.file);
+    assertSafeReadPath(unresolved);
     if (!inside(root, unresolved))
         throw new RuntimeError("PATH_OUTSIDE_ROOT", `Ref escapes the project root: ${ref}`);
     let filePath;
@@ -331,7 +405,17 @@ export class SgrepCodeMode {
             const handle = await openStableHandle(root, ref, parsed.file, unresolved, filePath, expectedStat);
             try {
                 const budget = perRefChars + (index < remainder ? 1 : 0);
-                results.push({ ref, ...await readLineWindow(handle, parsed, contextLines, budget, options.signal) });
+                const payload = await readLineWindow(handle, parsed, contextLines, budget, options.signal);
+                const windowRef = payload.window
+                    ? formatReadRef(payload.window.file, payload.window.start, payload.window.end)
+                    : ref;
+                results.push({
+                    ref: windowRef,
+                    content: payload.content,
+                    truncated: payload.truncated,
+                    ...(payload.resumeOffset === undefined ? {} : { resumeOffset: payload.resumeOffset }),
+                    ...(payload.note === undefined ? {} : { note: payload.note }),
+                });
             }
             finally {
                 await handle.close();

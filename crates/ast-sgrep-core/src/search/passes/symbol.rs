@@ -3,27 +3,26 @@ use crate::rank::{
     best_symbol_score_normalized, normalize_query_terms, score_caller_normalized, score_def,
     SCORE_ANCHOR, SCORE_GRAPH,
 };
+use crate::search::passes::bmh::retained_limit;
 use crate::search::types::matches_lang;
 use crate::search::types::{HitKind, SearchHit, SearchOptions, SpanHitInput};
 use crate::store::sql::{caller_terms_filter, like_terms_filter, query_limit_map};
 use crate::store::IndexStore;
 use crate::Result;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 const SYMBOL_SQL_LIMIT: usize = 500;
 const CALLER_SQL_LIMIT: usize = 500;
 const MODE_SQL_LIMIT: usize = 200;
 const TYPE_SYMBOL_WEIGHT: f64 = 0.65;
 const SYMBOL_KIND_ORDER: &str =
     " ORDER BY CASE WHEN s.kind IN ('function','method') THEN 0 ELSE 1 END, s.id";
-const SYMBOL_SELECT: &str = "SELECT f.path, f.language, s.name, s.kind, s.line_start, s.line_end, s.byte_start, s.byte_end,
-         (SELECT GROUP_CONCAT(l.content, char(10)) FROM lines l
-          WHERE l.file_id = f.id AND l.line_no >= s.line_start AND l.line_no <= s.line_end ORDER BY l.line_no) AS excerpt
+const SYMBOL_SELECT: &str = "SELECT f.path, f.language, s.name, s.kind, s.line_start, s.line_end
          FROM symbols s JOIN files f ON f.id = s.file_id";
-const CALLER_SELECT: &str = "SELECT f.path, f.language, c.caller, c.callee, c.line_no, l.content
-         FROM callers c JOIN files f ON f.id = c.file_id JOIN lines l ON l.file_id = c.file_id AND l.line_no = c.line_no";
-type CallerQueryRow = (String, Option<String>, String, String, u32, String);
+const CALLER_SELECT: &str = "SELECT f.path, f.language, c.caller, c.callee, c.line_no
+         FROM callers c JOIN files f ON f.id = c.file_id";
+type CallerQueryRow = (String, Option<String>, String, String, u32);
 type CallerFilter = fn(&[String], Option<&str>) -> (String, Vec<String>);
-type SymbolSpanRow = (String, Option<String>, String, String, u32, u32, String);
+type SymbolSpanRow = (String, Option<String>, String, String, u32, u32);
 enum CallerMatchMode {
     Hybrid,
     CalleeOnly,
@@ -35,7 +34,6 @@ fn map_caller_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<CallerQueryRow> {
         row.get(2)?,
         row.get(3)?,
         row.get(4)?,
-        row.get(5)?,
     ))
 }
 fn restrict_to_files(
@@ -68,16 +66,31 @@ fn query_caller_rows(
     query_limit_map(store.connection(), &sql, bind, limit, map_caller_row)
 }
 fn caller_rows_to_hits(
+    store: &IndexStore,
     rows: Vec<CallerQueryRow>,
     options: &SearchOptions,
     parsed: &ParsedQuery,
     mode: CallerMatchMode,
 ) -> Result<Vec<SearchHit>> {
+    caller_rows_to_hits_resolved(store, rows, options, parsed, mode, None)
+}
+
+/// dvc4: same as above, but classifies how each name match resolved when a
+/// store is available to count candidates.
+fn caller_rows_to_hits_resolved(
+    excerpt_store: &IndexStore,
+    rows: Vec<CallerQueryRow>,
+    options: &SearchOptions,
+    parsed: &ParsedQuery,
+    mode: CallerMatchMode,
+    store: Option<&IndexStore>,
+) -> Result<Vec<SearchHit>> {
     let primary_lower = parsed.primary_symbol().map(|s| s.to_lowercase());
     // am6l: normalize query terms once per query, not once per scored row.
     let norm_terms = normalize_query_terms(&parsed.terms);
-    let mut hits = Vec::new();
-    for (path, language, caller, callee, line_no, text) in rows {
+    let mut caller_hits = Vec::new();
+    let mut graph_hits = Vec::new();
+    for (path, language, caller, callee, line_no) in rows {
         if !matches_lang(language.as_deref(), options.lang_filter.as_deref()) {
             continue;
         }
@@ -91,13 +104,13 @@ fn caller_rows_to_hits(
         if !matched {
             continue;
         }
-        hits.push(SearchHit::caller(
+        caller_hits.push(SearchHit::caller(
             path.clone(),
             language.clone(),
             caller.clone(),
             callee.clone(),
             line_no,
-            text,
+            String::new(),
             score_caller_normalized(&norm_terms, &callee),
         ));
         let graph = match mode {
@@ -111,7 +124,7 @@ fn caller_rows_to_hits(
             }
         };
         if let Some(graph_score) = graph {
-            hits.push(SearchHit::graph_scored(
+            graph_hits.push(SearchHit::graph_scored(
                 path,
                 language,
                 caller,
@@ -121,7 +134,62 @@ fn caller_rows_to_hits(
             ));
         }
     }
-    Ok(hits)
+    retain_scored_hits(&mut caller_hits, options);
+    retain_scored_hits(&mut graph_hits, options);
+    attach_indexed_excerpts(excerpt_store, &mut caller_hits)?;
+    if let Some(store) = store {
+        let mut candidate_counts = HashMap::new();
+        attach_caller_resolutions(store, &mut candidate_counts, &mut caller_hits)?;
+        attach_caller_resolutions(store, &mut candidate_counts, &mut graph_hits)?;
+    }
+    caller_hits.extend(graph_hits);
+    Ok(caller_hits)
+}
+
+fn retain_scored_hits(hits: &mut Vec<SearchHit>, options: &SearchOptions) {
+    let limit = retained_limit(options);
+    hits.sort_unstable_by(|left, right| {
+        right
+            .score
+            .total_cmp(&left.score)
+            .then_with(|| left.file.cmp(&right.file))
+            .then_with(|| left.line_start.cmp(&right.line_start))
+            .then_with(|| left.symbol.cmp(&right.symbol))
+    });
+    hits.truncate(limit);
+}
+
+fn attach_indexed_excerpts(store: &IndexStore, hits: &mut [SearchHit]) -> Result<()> {
+    for hit in hits {
+        hit.excerpt = store.indexed_excerpt_in_range(&hit.file, hit.line_start, hit.line_end)?;
+    }
+    Ok(())
+}
+
+fn attach_caller_resolutions(
+    store: &IndexStore,
+    candidate_counts: &mut HashMap<String, (HashMap<String, usize>, usize)>,
+    hits: &mut [SearchHit],
+) -> Result<()> {
+    for hit in hits {
+        let Some(callee) = hit.callee.as_deref() else {
+            continue;
+        };
+        if !candidate_counts.contains_key(callee) {
+            candidate_counts.insert(
+                callee.to_owned(),
+                store.symbol_name_candidate_counts(callee)?,
+            );
+        }
+        let (by_file, repo) = &candidate_counts[callee];
+        let same_file = by_file.get(&hit.file).copied().unwrap_or(0);
+        hit.resolution = Some(crate::resolution::Resolution::from_candidates(
+            same_file,
+            *repo,
+            std::iter::empty(),
+        ));
+    }
+    Ok(())
 }
 fn read_symbol_span_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SymbolSpanRow> {
     Ok((
@@ -131,7 +199,6 @@ fn read_symbol_span_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SymbolSpanR
         row.get(3)?,
         row.get(4)?,
         row.get(5)?,
-        row.get::<_, Option<String>>(8)?.unwrap_or_default(),
     ))
 }
 fn query_symbol_spans(
@@ -153,31 +220,31 @@ fn kind_weight(kind: &str) -> f64 {
     }
 }
 fn symbol_span_rows_to_hits(
+    store: &IndexStore,
     rows: Vec<SymbolSpanRow>,
     options: &SearchOptions,
     kind: HitKind,
     score_for: impl Fn(&str) -> f64,
 ) -> Result<Vec<SearchHit>> {
-    Ok(rows
-        .into_iter()
-        .filter(|(_, language, ..)| {
-            matches_lang(language.as_deref(), options.lang_filter.as_deref())
-        })
-        .map(
-            |(path, language, name, sym_kind, line_start, line_end, text)| {
-                SearchHit::span(SpanHitInput {
-                    kind,
-                    file: path,
-                    line_start,
-                    line_end,
-                    score: score_for(&name) * kind_weight(&sym_kind),
-                    excerpt: text,
-                    symbol: Some(name),
-                    language,
-                })
-            },
-        )
-        .collect())
+    let mut hits = Vec::with_capacity(rows.len());
+    for (path, language, name, sym_kind, line_start, line_end) in rows {
+        if !matches_lang(language.as_deref(), options.lang_filter.as_deref()) {
+            continue;
+        }
+        hits.push(SearchHit::span(SpanHitInput {
+            kind,
+            file: path,
+            line_start,
+            line_end,
+            score: score_for(&name) * kind_weight(&sym_kind),
+            excerpt: String::new(),
+            symbol: Some(name),
+            language,
+        }));
+    }
+    retain_scored_hits(&mut hits, options);
+    attach_indexed_excerpts(store, &mut hits)?;
+    Ok(hits)
 }
 pub fn symbol_pass(
     store: &IndexStore,
@@ -206,10 +273,11 @@ pub fn symbol_pass_for_files(
         like_terms_filter("s.name", &parsed.terms, options.lang_filter.as_deref());
     restrict_to_files(&mut where_clause, &mut bind, Some(allowed_files));
     let rows = query_symbol_spans(store, &where_clause, bind, SYMBOL_SQL_LIMIT)?;
-    let mut hits = symbol_span_rows_to_hits(rows, options, HitKind::Def, |name| {
+    let mut hits = symbol_span_rows_to_hits(store, rows, options, HitKind::Def, |name| {
         score_def(&parsed.terms, name)
     })?;
     hits.extend(caller_rows_to_hits(
+        store,
         query_caller_rows(
             store,
             caller_terms_filter,
@@ -252,7 +320,7 @@ pub fn anchor_pass_for_files(
     restrict_to_files(&mut where_clause, &mut bind, Some(allowed_files));
     let rows = query_symbol_spans(store, &where_clause, bind, SYMBOL_SQL_LIMIT)?;
     let term_count = parsed.terms.len();
-    symbol_span_rows_to_hits(rows, options, HitKind::Anchor, |name| {
+    symbol_span_rows_to_hits(store, rows, options, HitKind::Anchor, |name| {
         let matched = parsed
             .terms
             .iter()
@@ -287,7 +355,7 @@ pub fn anchor_pass(
     let (where_clause, bind) = like_terms_filter("s.name", &terms, options.lang_filter.as_deref());
     let rows = query_symbol_spans(store, &where_clause, bind, SYMBOL_SQL_LIMIT)?;
     let term_count = parsed.terms.len();
-    symbol_span_rows_to_hits(rows, options, HitKind::Anchor, |name| {
+    symbol_span_rows_to_hits(store, rows, options, HitKind::Anchor, |name| {
         let matched = parsed
             .terms
             .iter()
@@ -312,7 +380,7 @@ pub(crate) fn def_hits_for_terms(
     let (where_clause, bind) =
         like_terms_filter("s.name", &parsed.terms, options.lang_filter.as_deref());
     let rows = query_symbol_spans(store, &where_clause, bind, limit)?;
-    symbol_span_rows_to_hits(rows, options, HitKind::Def, |name| {
+    symbol_span_rows_to_hits(store, rows, options, HitKind::Def, |name| {
         score_def(&parsed.terms, name)
     })
 }
@@ -333,6 +401,7 @@ pub(crate) fn caller_hits_for_terms(
         return Ok(vec![]);
     }
     caller_rows_to_hits(
+        store,
         query_caller_rows(
             store,
             caller_terms_filter,
@@ -375,7 +444,14 @@ pub fn search_callers(
         MODE_SQL_LIMIT,
         map_caller_row,
     )?;
-    caller_rows_to_hits(rows, options, &q, CallerMatchMode::CalleeOnly)
+    caller_rows_to_hits_resolved(
+        store,
+        rows,
+        options,
+        &q,
+        CallerMatchMode::CalleeOnly,
+        Some(store),
+    )
 }
 pub fn search_defs(
     store: &IndexStore,
@@ -392,7 +468,9 @@ pub fn search_defs(
     }
     let (where_clause, bind) = exact_eq_filter("s.name", name, options.lang_filter.as_deref());
     let rows = query_symbol_spans(store, &where_clause, bind, MODE_SQL_LIMIT)?;
-    symbol_span_rows_to_hits(rows, options, HitKind::Def, |n| score_def(&q.terms, n))
+    symbol_span_rows_to_hits(store, rows, options, HitKind::Def, |n| {
+        score_def(&q.terms, n)
+    })
 }
 pub fn search_imports(
     store: &IndexStore,
@@ -412,7 +490,7 @@ pub fn search_imports(
 
 #[cfg(test)]
 mod cascade_tests {
-    use super::symbol_pass_for_files;
+    use super::{def_hits_for_terms, symbol_pass_for_files};
     use crate::query::ParsedQuery;
     use crate::search::SearchOptions;
     use crate::store::{IndexStore, SymbolRow, UpsertFileInput};
@@ -473,5 +551,57 @@ mod cascade_tests {
             "survivor after the global SQL ceiling was lost: {hits:#?}"
         );
         assert!(hits.iter().all(|hit| allowed.contains(&hit.file)));
+    }
+
+    #[test]
+    fn symbol_excerpts_are_read_only_for_retained_candidates() {
+        let temp = TempDir::new().unwrap();
+        let store = IndexStore::open(temp.path(), None).unwrap();
+        for (path, name) in [("discarded.rs", "target_suffix"), ("kept.rs", "target")] {
+            let lines = [(1, format!("fn {name}() {{}}"))];
+            let symbol = SymbolRow {
+                name: name.into(),
+                kind: "function".into(),
+                line_start: 1,
+                line_end: 1,
+                byte_start: 0,
+                byte_end: lines[0].1.len(),
+            };
+            store
+                .upsert_file(UpsertFileInput {
+                    rel_path: path,
+                    language: Some("rust"),
+                    mtime_secs: 1,
+                    mtime_nanos: 0,
+                    content_hash: name,
+                    lines: &lines,
+                    eol: "\n",
+                    symbols: &[symbol],
+                    callers: &[],
+                    imports: &[],
+                    pattern_nodes: &[],
+                    semantic_chunks: &[],
+                    embed_semantic: false,
+                    embed_backend: ast_sgrep_embed::EmbedPreference::Semantic,
+                })
+                .unwrap();
+        }
+        store
+            .connection()
+            .execute(
+                "UPDATE lines SET content = x'ff' WHERE file_id = (SELECT id FROM files WHERE path = 'discarded.rs')",
+                [],
+            )
+            .unwrap();
+        let options = SearchOptions {
+            root: temp.path().to_path_buf(),
+            limit: 1,
+            ..SearchOptions::default()
+        };
+        let parsed = ParsedQuery::parse("target");
+        let hits = def_hits_for_terms(&store, &options, &parsed, super::SYMBOL_SQL_LIMIT).unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].file, "kept.rs");
+        assert_eq!(hits[0].excerpt, "fn target() {}");
     }
 }

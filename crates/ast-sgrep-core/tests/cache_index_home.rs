@@ -9,6 +9,19 @@ fn env_lock() -> &'static Mutex<()> {
 }
 
 #[test]
+fn relative_custom_index_paths_are_root_relative() {
+    let root = Path::new("/tmp/asgrep-custom-index-root");
+    assert_eq!(
+        try_index_db_path(root, Some(Path::new("indexes/project"))).unwrap(),
+        root.join("indexes/project/index.db")
+    );
+    assert_eq!(
+        try_index_db_path(root, Some(Path::new("indexes/project.db"))).unwrap(),
+        root.join("indexes/project.db")
+    );
+}
+
+#[test]
 fn use_cache_without_home_fails_closed() {
     let _guard = env_lock().lock().unwrap();
     let old_home = std::env::var_os("HOME");

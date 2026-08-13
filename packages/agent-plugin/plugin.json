@@ -1,0 +1,14 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "asgrep",
+  "version": "1.4.0",
+  "description": "Structural, graph, and semantic code search plus MCP for agents (ast-sgrep).",
+  "author": {
+    "name": "AdityaVG13",
+    "url": "https://github.com/AdityaVG13/ast-sgrep"
+  },
+  "homepage": "https://github.com/AdityaVG13/ast-sgrep",
+  "repository": "https://github.com/AdityaVG13/ast-sgrep",
+  "license": "MIT",
+  "keywords": ["code-search", "ast", "mcp", "semantic-search", "asgrep"]
+}

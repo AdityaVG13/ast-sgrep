@@ -12,9 +12,13 @@ fn sorted_keys(mut keys: Vec<SurfaceHitKey>) -> Vec<SurfaceHitKey> {
     keys
 }
 
-/// x1p5: multi-mode surface equivalence (CLI / core / LSP HitKeys).
-/// Equal-score ties may differ in emission order across surfaces; compare sorted
-/// rich HitKeys (file, line, kind, symbol, callee, caller).
+fn embed_keys(keys: &[SurfaceHitKey]) -> Vec<SurfaceHitKey> {
+    keys.iter().filter(|k| k.kind == "embed").cloned().collect()
+}
+
+/// x1p5: multi-mode surface equivalence (CLI / core / LSP HitKeys) with
+/// `--no-embed`. Equal-score ties may differ in emission order across surfaces;
+/// compare sorted rich HitKeys (file, line, kind, symbol, callee, caller).
 #[test]
 fn surface_equivalence_multi_mode_hit_keys() {
     const LIMIT: usize = 10;
@@ -37,12 +41,14 @@ fn surface_equivalence_multi_mode_hit_keys() {
             &session.index_path,
             query,
             LIMIT,
+            /* use_embed */ false,
         ));
         let lsp = sorted_keys(lsp_search_hit_keys(
             &session.root,
             &session.index_path,
             query,
             LIMIT,
+            /* use_embed */ false,
         ));
         assert!(
             !core.is_empty() || query.starts_with("imports:") || query.starts_with("pattern:"),
@@ -53,6 +59,84 @@ fn surface_equivalence_multi_mode_hit_keys() {
             lsp, core,
             "LSP search diverged from core for query {query:?}"
         );
+    }
+}
+
+/// lbx1.13: embed-kind hit-key parity across surfaces with embed ON (hashed).
+///
+/// `--no-embed` parity alone does not close this bead. Same corpus/index;
+/// search with embed on (CLI default, core use_embed=true, LSP no_embed=false):
+/// - non-empty embed-kind keys on every surface (no soft-skip)
+/// - sorted embed hit-keys agree across CLI / core / LSP
+/// - full sorted key sets also agree (hybrid fusion identity)
+#[test]
+fn surface_equivalence_embed_on_hit_keys() {
+    const LIMIT: usize = 16;
+    let session = CliSession::sample(asgrep_bin());
+
+    // NL / semantic-leaning queries that exercise hashed embed on the sample
+    // fixture (credential theme + auth_refresh). Hashed backend -- no network.
+    let cases: &[&str] = &[
+        "credential renewal",
+        "how does auth refresh work",
+        "auth_refresh",
+    ];
+
+    for &query in cases {
+        // CLI: production default is embed-on (do NOT pass --no-embed).
+        let cli_json = session.search_json(query, &["--limit", "16"]);
+        let cli = sorted_keys(json_hit_keys(&cli_json));
+        let core = sorted_keys(core_search_hit_keys(
+            &session.root,
+            &session.index_path,
+            query,
+            LIMIT,
+            /* use_embed */ true,
+        ));
+        let lsp = sorted_keys(lsp_search_hit_keys(
+            &session.root,
+            &session.index_path,
+            query,
+            LIMIT,
+            /* use_embed */ true,
+        ));
+
+        assert!(
+            !core.is_empty(),
+            "embed-on core search must return hits for {query:?}"
+        );
+
+        let cli_embed = embed_keys(&cli);
+        let core_embed = embed_keys(&core);
+        let lsp_embed = embed_keys(&lsp);
+
+        // Hard fail: empty embed channel after hashed semantic index is a bug,
+        // not a soft-skip (mock-free e2e gap lbx1.13 negative).
+        assert!(
+            !core_embed.is_empty(),
+            "embed-on core must emit kind=embed hits for {query:?}; keys={core:?}"
+        );
+        assert!(
+            !cli_embed.is_empty(),
+            "embed-on CLI must emit kind=embed hits for {query:?}; keys={cli:?}"
+        );
+        assert!(
+            !lsp_embed.is_empty(),
+            "embed-on LSP must emit kind=embed hits for {query:?}; keys={lsp:?}"
+        );
+
+        assert_eq!(
+            cli_embed, core_embed,
+            "embed-kind keys: CLI vs core for {query:?}"
+        );
+        assert_eq!(
+            lsp_embed, core_embed,
+            "embed-kind keys: LSP vs core for {query:?}"
+        );
+
+        // Full hybrid key identity (embed + non-embed contributors).
+        assert_eq!(cli, core, "full hit keys: CLI vs core for {query:?}");
+        assert_eq!(lsp, core, "full hit keys: LSP vs core for {query:?}");
     }
 }
 
@@ -88,9 +172,18 @@ fn surface_equivalence_both_error_table() {
     );
 
     // Empty/whitespace query: both return structured empty success (not a crash).
-    let core_empty = core_search_hit_keys(&session.root, &session.index_path, " ", 5);
-    assert!(core_empty.is_empty() || true); // whitespace hybrid may still tokenize nothing
-    let _ = core_empty;
+    // Vacuous `assert!(is_empty() || true)` is forbidden -- assert real shape.
+    let core_empty = core_search_hit_keys(&session.root, &session.index_path, " ", 5, false);
+    assert!(
+        core_empty.is_empty(),
+        "whitespace-only hybrid query must yield zero hits; got {core_empty:?}"
+    );
+    let cli_ws = session.search_json(" ", &["--limit", "5", "--no-embed"]);
+    let cli_hits = cli_ws["hits"].as_array().cloned().unwrap_or_default();
+    assert!(
+        cli_hits.is_empty(),
+        "CLI whitespace-only query must yield zero hits; got {cli_hits:?}"
+    );
 
     // Confirm usage error path remains observable.
     let usage = session.run_failure(&["--index-path", session.index_path.to_str().unwrap()]);

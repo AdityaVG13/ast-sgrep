@@ -4,27 +4,37 @@
 
 Code Mode is a **tool-use pattern**, not a transport:
 
-> The model writes JavaScript that calls typed methods. That code runs in a
-> restricted executor, can fan out work in parallel, filter intermediates, and
-> return only the shaped value the model needs.
+> The model writes JavaScript that calls typed methods. That code runs against
+> an explicit tool surface (`asgrep.*`), can fan out work in parallel, filter
+> intermediates, and return only the shaped value the model needs.
 
 That is the same idea as:
 
-- [Cloudflare Code Mode](https://developers.cloudflare.com/agents/tools/codemode/) — one `codemode` tool, typed connector globals, sandbox executor
+- [Cloudflare Code Mode](https://developers.cloudflare.com/agents/tools/codemode/) — one `codemode` tool, typed connector globals
+- [OpenCode CodeMode](https://github.com/anomalyco/opencode/tree/dev/packages/codemode) — orchestration over host-supplied tools (authority = tools you expose, not an OS jail)
 - [Anthropic programmatic tool calling](https://platform.claude.com/docs/en/agents-and-tools/tool-use/programmatic-tool-calling) — tools callable from code execution via `allowed_callers`
 - [OpenAI programmatic tool calling](https://developers.openai.com/api/docs/guides/tools-programmatic-tool-calling) — JS in a V8 runtime coordinates tools
 
 Traditional MCP/tool calling does **one model round-trip per operation**. Code Mode
 moves loops, branching, filtering, and parallel fan-out into executable code.
 
-## MCP vs Code Mode (do not link them)
+## MCP vs Code Mode — pick one (XOR)
+
+**Use either Code Mode or MCP in a given client — not both.** They are sibling
+front ends on the same retrieval core. Stacking them doubles tool catalogs,
+duplicates index opens, and confuses the model about which surface to call.
+
+| Client | Choose |
+|--------|--------|
+| **Pi** | Code Mode via `pi install npm:pi-ast-sgrep` (`asgrep` tool). Do **not** also register `asgrep-mcp`. |
+| **MCP hosts** (Cursor Cloud, Claude Desktop, Agent Plugins, …) | `asgrep-mcp` / `packages/agent-plugin`. Do **not** also load the Pi Code Mode package in that same agent. |
 
 ```text
                  ast-sgrep-core / native asgrep binary
                     /                         \
                    /                           \
           ast-sgrep-mcp                   Code Mode
-     (stdio JSON-RPC transport)     (JS sandbox execution)
+     (stdio JSON-RPC transport)     (JS program → asgrep.*)
      one tool call ↔ one RPC         model writes JS once
                                             │
                                             ▼
@@ -41,18 +51,16 @@ moves loops, branching, filtering, and parallel fan-out into executable code.
 |---|---|---|
 | Role | Protocol transport for hosts that speak MCP | Execution model: code orchestrates search |
 | Unit of work | One `tools/call` | One JS program (many calls inside) |
-| Parallelism | Host/model schedules calls | `Promise.all` / loops inside the sandbox |
-| Pi | Not used (`pi-mcp-adapter` forbidden) | **Primary Pi agent surface** |
+| Parallelism | Host/model schedules calls | `Promise.all` / loops in the program |
+| Pi | Not used | **Primary Pi agent surface** |
 | Coupling | — | **Never imports MCP; MCP never imports Code Mode** |
-
-Both share the same retrieval base. They are sibling front ends.
 
 ## Pi: built on Code Mode
 
-`pi-ast-sgrep` exposes **`asgrep_codemode`** as the primary tool:
+`pi-ast-sgrep` exposes **`asgrep`** as the primary tool:
 
 ```text
-Model ──► asgrep_codemode({ code }) ──► Node capability sandbox
+Model ──► asgrep({ code }) ──► restricted Node `vm` context
                                               │
                                               │  asgrep.search / chain / defs / …
                                               │  Promise.all → same-tick coalesce
@@ -63,6 +71,35 @@ Model ──► asgrep_codemode({ code }) ──► Node capability sandbox
                                               ▼
                                         shaped return + stats
 ```
+
+The runner exposes only a serialized `asgrep.*` bridge and console. Its `node:vm`
+context disables string and WebAssembly code generation and does not expose
+`process`, module loading, networking, or filesystem globals. Node does not
+consider `vm` an adversarial-code security boundary, however, and the installed
+Pi package itself has the user's privileges. Code Mode is for bounded
+orchestration, not OS isolation.
+
+Each disposable worker is limited to 256 host calls, bounded bridge arguments,
+responses, logs, and final results, plus explicit heap and stack ceilings. Raw
+memory and WebAssembly globals are unavailable because their backing stores are
+not reliably covered by V8 heap limits. The native Code Mode boundary also caps
+each encoded tool value at 1 MiB and complete batch responses at 4 MiB, before
+Node-API converts them into extension-host objects.
+
+One deadline covers freshness work and the Code Mode program. Cancellation
+rejects queued and future host calls and is checked between native batch calls.
+The parent terminates the disposable worker, so synchronous loops, microtask
+loops, and asynchronous JavaScript cannot outlive that deadline. A single
+SQLite/native call already in progress may finish its current operation before
+observing cancellation; its late response is discarded.
+
+**Root jail (host duty):** `CodeModeSession` / NAPI tool `root` args are jailed
+under the configured session workspace the same way MCP jails under
+`ASGREP_ROOT` (`canonicalize` + containment; message
+`escapes configured workspace`). NAPI has no separate resolver — it inherits
+Session. Hosts must set Session root intentionally; this is policy confinement,
+not an OS security boundary. `ASGREP_INDEX_PATH` remains a privileged sink
+(see `docs/env-trust.md`).
 
 ### Amdahl note
 
@@ -96,7 +133,9 @@ cargo build -p ast-sgrep-codemode-napi --release
 npm run build:native -w pi-ast-sgrep
 ```
 
-Measured on the sample fixture (release NAPI, warm): **20 searches ≈ few ms** vs **~60 ms for 5 cold CLI spawns**.
+The in-process path removes per-search process startup and reuses one open
+searcher. This review did not retain a clean before/after benchmark fixture, so
+no numeric speedup is claimed.
 
 Direct tools (`asgrep_search`, `asgrep_index`, `asgrep_status`) remain for simple one-shot lookups. Prefer Code Mode whenever the task needs composition, parallel lookups, or filtering before the model sees data.
 
@@ -115,9 +154,14 @@ async () => {
 }
 ```
 
-Sandbox capabilities: `asgrep.*`, `Promise`, `JSON`, arrays/objects/math. No
-`require`, `process`, `fetch`, or filesystem — same trust model as the Pi package
-(capability restriction, not an OS jail).
+Runner capabilities: `asgrep.*`, `Promise`, `JSON`, arrays/objects/math. No
+direct `require`, `process`, `fetch`, or filesystem globals. The configured wall
+deadline terminates the disposable worker, including synchronous or microtask
+loops entered after an `await`, and bounds awaited host calls. Call arguments,
+bridge responses, collected console output, serialized results, and worker
+heap/stack size are capped before returning to the extension host. The worker's
+`node:vm` context is still not an OS security boundary; deployments executing
+adversarial programs must isolate the entire extension process.
 
 ## Rust crate `ast-sgrep-codemode`
 
@@ -139,8 +183,8 @@ cargo test -p ast-sgrep-codemode
 | Path | Role |
 |------|------|
 | `crates/ast-sgrep-codemode` | Rust catalog + session + plan + host adapters |
-| `packages/pi/extension/src/codemode/` | JS connector + sandbox executor |
-| `packages/pi/extension` tool `asgrep_codemode` | Pi primary Code Mode entry |
+| `packages/pi/extension/src/codemode/` | JS connector + restricted `node:vm` runner |
+| `packages/pi/extension` tool `asgrep` | Pi primary Code Mode entry |
 | `crates/ast-sgrep-mcp` | Unrelated MCP transport |
 
 ## Non-goals

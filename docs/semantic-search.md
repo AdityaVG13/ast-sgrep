@@ -80,7 +80,7 @@ OpenAI-compatible embedding API. Dimension depends on model; stored in index met
 
 ### Hybrid (default)
 
-Default search is a constraint cascade: lexical candidates must survive AST-derived symbol, graph, anchor, or pattern evidence before semantic chunks are ranked. Semantic hits appear as kind `EMBED`, but they cannot widen the survivor file set.
+Default search is a constraint cascade: lexical candidates bound the file set; structural evidence narrows it when present. If structural is empty, hybrid continues on lexical survivors and may still rank semantic chunks inside that set (see `docs/cascade-query-planner.md`). Semantic hits appear as kind `EMBED`, but they cannot widen beyond the working-file set.
 
 ```bash
 asgrep "auth refresh"

@@ -33,10 +33,7 @@ pub fn embed_url_is_allowed(url: &str) -> Result<(), String> {
     if scheme != "https" && scheme != "http" {
         return Err(format!("embed URL scheme {scheme:?} is not allowed"));
     }
-    let authority = rest
-        .split(|c| c == '/' || c == '?' || c == '#')
-        .next()
-        .unwrap_or("");
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
     if authority.is_empty() {
         return Err("embed URL missing host".to_string());
     }
@@ -92,11 +89,22 @@ pub fn embed_url_is_allowed(url: &str) -> Result<(), String> {
 }
 
 // ---- remote cloud/ollama ----
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct CloudEmbeddingConfig {
     pub api_url: String,
     pub api_key: String,
     pub model: String,
+}
+
+impl std::fmt::Debug for CloudEmbeddingConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Never print the raw key -- Debug is used in logs and panic hooks.
+        f.debug_struct("CloudEmbeddingConfig")
+            .field("api_url", &self.api_url)
+            .field("api_key", &"<redacted>")
+            .field("model", &self.model)
+            .finish()
+    }
 }
 impl CloudEmbeddingConfig {
     pub fn from_env() -> Option<Self> {
@@ -129,6 +137,18 @@ struct EmbedResponse {
 struct EmbedData {
     embedding: Vec<f32>,
 }
+
+/// HTTP agent for cloud/ollama embeds: **no redirects**.
+///
+/// Host allowlisting (`embed_url_is_allowed`) only inspects the configured URL.
+/// ureq's default agent follows up to 5 redirects, so an allowlisted host that
+/// 30x-redirects to e.g. `169.254.169.254` would bypass the allowlist (pass10 /
+/// j0x4 residual). `redirects(0)` makes the allowlisted URL the final hop.
+#[cfg(feature = "cloud")]
+fn embed_http_agent() -> ureq::Agent {
+    ureq::builder().redirects(0).build()
+}
+
 #[cfg(feature = "cloud")]
 pub fn embed_via_api(text: &str, config: &CloudEmbeddingConfig) -> Result<Vec<f32>, String> {
     embed_url_is_allowed(&config.api_url)?;
@@ -137,7 +157,8 @@ pub fn embed_via_api(text: &str, config: &CloudEmbeddingConfig) -> Result<Vec<f3
         input: text,
     };
     let json = serde_json::to_string(&body).map_err(|e| e.to_string())?;
-    let response = ureq::post(&config.api_url)
+    let response = embed_http_agent()
+        .post(&config.api_url)
         .set("Authorization", &format!("Bearer {}", config.api_key))
         .set("Content-Type", "application/json")
         .send_string(&json)
@@ -200,7 +221,10 @@ pub fn embed_via_ollama(text: &str, config: &OllamaEmbeddingConfig) -> Result<Ve
         prompt: text,
     };
     let json = serde_json::to_string(&body).map_err(|e| e.to_string())?;
-    let response = ureq::post(&config.embeddings_endpoint())
+    // Re-check after path join so endpoint construction cannot widen host.
+    embed_url_is_allowed(&config.embeddings_endpoint())?;
+    let response = embed_http_agent()
+        .post(&config.embeddings_endpoint())
         .set("Content-Type", "application/json")
         .send_string(&json)
         .map_err(|e| e.to_string())?;
@@ -569,7 +593,7 @@ fn try_backend_batch(kind: EmbedBackendKind, texts: &[&str]) -> Option<Vec<Vec<f
 }
 pub fn configured_backend_model_id(kind: EmbedBackendKind, dim: usize) -> Option<String> {
     match kind {
-        EmbedBackendKind::Semantic => Some(format!("semantic:hashed-v1:{dim}")),
+        EmbedBackendKind::Semantic => Some(format!("semantic:hashed-v2:{dim}")),
         EmbedBackendKind::Neural => {
             Some(format!("neural:{}", crate::neural::configured_model_id()))
         }
@@ -636,6 +660,37 @@ mod dim_probe_tests {
         let vector = Embedder::embed(&embedder, "hello").unwrap();
         assert_eq!(embedder.dim(), vector.len());
         assert_eq!(embedder.dim(), 1536);
+    }
+
+    #[cfg(feature = "cloud")]
+    #[test]
+    fn embed_http_agent_disables_redirects() {
+        // Policy pin: allowlist is hop-final. ureq default is redirects=5.
+        let agent = embed_http_agent();
+        let rendered = format!("{agent:?}");
+        assert!(
+            rendered.contains("redirects: 0") || rendered.contains("redirects:0"),
+            "embed agent must disable redirects so allowlist is final hop: {rendered}"
+        );
+    }
+
+    #[test]
+    fn cloud_config_debug_redacts_api_key() {
+        let cfg = CloudEmbeddingConfig {
+            api_url: "https://api.openai.com/v1/embeddings".into(),
+            api_key: "sk-live-super-secret-value".into(),
+            model: "text-embedding-3-small".into(),
+        };
+        let rendered = format!("{cfg:?}");
+        assert!(
+            rendered.contains("<redacted>"),
+            "expected redaction marker: {rendered}"
+        );
+        assert!(
+            !rendered.contains("sk-live-super-secret-value"),
+            "api_key must not appear in Debug: {rendered}"
+        );
+        assert!(rendered.contains("text-embedding-3-small"));
     }
 }
 

@@ -129,11 +129,7 @@ const CACHED_DECL_KIND_TABLE: &[(&str, &[&str])] = &[
     ),
     (
         "struct ",
-        &[
-            "struct_item",
-            "struct_declaration",
-            "struct_specifier",
-        ],
+        &["struct_item", "struct_declaration", "struct_specifier"],
     ),
     (
         "interface ",
@@ -229,10 +225,7 @@ mod tests {
     fn wildcard_call_signatures_stay_byte_identical() {
         assert_eq!(
             cached_pattern_signatures("$F($$$)").unwrap(),
-            vec![
-                "kind:call_expression".to_string(),
-                "kind:call".to_string(),
-            ]
+            vec!["kind:call_expression".to_string(), "kind:call".to_string(),]
         );
     }
 }

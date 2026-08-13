@@ -87,7 +87,11 @@ pub(crate) struct SearchTuning {
         help = "Build IVF ANN when chunk count exceeds this"
     )]
     pub(crate) ann_threshold: Option<usize>,
-    #[arg(long, env = "ASGREP_ANN_PROBES", help = "IVF clusters to probe (0 = adaptive)")]
+    #[arg(
+        long,
+        env = "ASGREP_ANN_PROBES",
+        help = "IVF clusters to probe (0 = adaptive)"
+    )]
     pub(crate) ann_probes: Option<usize>,
     #[arg(
         long,
@@ -133,10 +137,35 @@ pub(crate) struct SearchTuning {
         help = "Response-wide compact snippet token budget"
     )]
     pub(crate) response_snippet_tokens: usize,
+    /// m38g: a whole-response token budget that picks per-result detail,
+    /// instead of truncating every excerpt to the same ceiling.
+    #[arg(
+        long,
+        value_parser = parse_budget_tokens,
+        help = "Whole-response token budget; picks per-result detail (compact format)"
+    )]
+    pub(crate) budget_tokens: Option<usize>,
 }
 
 #[derive(Args, Clone, Debug)]
 pub(crate) struct IndexCmd {
+    #[command(flatten)]
+    pub(crate) root: RootArg,
+    #[command(flatten)]
+    pub(crate) tuning: SearchTuning,
+    #[arg(long, help = "Report planned index work without writing")]
+    pub(crate) dry_run: bool,
+    #[arg(
+        long = "path",
+        value_name = "PATH",
+        action = clap::ArgAction::Append,
+        help = "Update one changed file path (repeatable; index only, max 1024)"
+    )]
+    pub(crate) paths: Vec<PathBuf>,
+}
+
+#[derive(Args, Clone, Debug)]
+pub(crate) struct ReindexCmd {
     #[command(flatten)]
     pub(crate) root: RootArg,
     #[command(flatten)]
@@ -163,7 +192,10 @@ pub(crate) struct QueryCmd {
 pub(crate) struct Cli {
     #[command(subcommand)]
     pub(crate) command: Option<Commands>,
-    #[arg(value_name = "QUERY", help = "Bare hybrid search query (omit subcommand)")]
+    #[arg(
+        value_name = "QUERY",
+        help = "Bare hybrid search query (omit subcommand)"
+    )]
     pub(crate) query: Option<String>,
     #[arg(
         id = "global-root",
@@ -185,14 +217,33 @@ pub(crate) struct Cli {
     /// Print the agent handbook and exit
     #[arg(long, global = true, help = "Print robot-docs guide and exit")]
     pub(crate) robot_help: bool,
-    #[arg(long, global = true, env = "ASGREP_INDEX_PATH", help = "Override index database path")]
+    #[arg(
+        long,
+        global = true,
+        env = "ASGREP_INDEX_PATH",
+        help = "Override index database path"
+    )]
     pub(crate) index_path: Option<PathBuf>,
     #[arg(long, global = true, help = "Language filter")]
     pub(crate) lang: Option<String>,
+    /// 0obi: `fast-unsafe` can corrupt the index on power loss, so it must be
+    /// asked for by name; it is never reached by default.
+    #[arg(
+        long,
+        global = true,
+        env = "ASGREP_DURABILITY",
+        value_parser = parse_durability,
+        help = "Index write durability: strict|balanced|fast-unsafe (default balanced)"
+    )]
+    pub(crate) durability: Option<ast_sgrep_core::store::Durability>,
     /// Search-tuning for bare (no-subcommand) search only — not inherited by capabilities/doctor (vdqo).
     #[command(flatten)]
     pub(crate) tuning: SearchTuning,
-    #[arg(value_name = "ROOT", default_value = ".", help = "Bare-search project root")]
+    #[arg(
+        value_name = "ROOT",
+        default_value = ".",
+        help = "Bare-search project root"
+    )]
     pub(crate) search_root: PathBuf,
 }
 
@@ -204,11 +255,15 @@ pub(crate) enum Commands {
     /// Show index and embedding status
     #[command(about = "Show index and embedding status")]
     Status(RootArg),
-    /// Clear and rebuild an index
-    #[command(about = "Clear and rebuild an index")]
-    Reindex(IndexCmd),
+    /// Force a full transactional rebuild
+    #[command(about = "Force a full transactional rebuild")]
+    Reindex(ReindexCmd),
     /// Search explicitly; aliases: find, query
-    #[command(about = "Hybrid search (aliases: find, query)", alias = "find", alias = "query")]
+    #[command(
+        about = "Hybrid search (aliases: find, query)",
+        alias = "find",
+        alias = "query"
+    )]
     Search(QueryCmd),
     /// Run fixed performance and identity suites
     #[command(about = "Run fixed performance and identity suites")]
@@ -310,6 +365,20 @@ fn parse_bounded_usize(raw: &str, maximum: usize, name: &str) -> Result<usize, S
     Ok(value)
 }
 
+/// 0obi: an unrecognized durability value is a hard error, never a silent
+/// downgrade to a weaker profile.
+fn parse_durability(raw: &str) -> Result<ast_sgrep_core::store::Durability, String> {
+    ast_sgrep_core::store::Durability::parse(raw).ok_or_else(|| {
+        format!("unknown durability '{raw}' (expected strict, balanced, or fast-unsafe)")
+    })
+}
+
+/// m38g: bounded like the other token knobs so a hostile value cannot make the
+/// renderer allocate without limit.
+fn parse_budget_tokens(raw: &str) -> Result<usize, String> {
+    parse_bounded_usize(raw, MAX_RESPONSE_SNIPPET_TOKENS, "--budget-tokens")
+}
+
 fn parse_output_limit(raw: &str) -> Result<usize, String> {
     parse_bounded_usize(raw, MAX_OUTPUT_RESULTS, "--limit")
 }
@@ -319,11 +388,54 @@ fn parse_excerpt_lines(raw: &str) -> Result<usize, String> {
 }
 
 fn parse_output_format(raw: &str) -> Result<String, String> {
-    ast_sgrep_plugins::OutputFormat::parse(raw)
-        .map(|_| raw.to_ascii_lowercase())
-        .ok_or_else(|| {
-            "format must be one of: native, agent, agent-capsule, compact, github, gitlab".into()
-        })
+    const FORMATS: &[&str] = &[
+        "native",
+        "agent",
+        "agent-capsule",
+        "compact",
+        "github",
+        "gitlab",
+    ];
+    let lower = raw.to_ascii_lowercase();
+    if ast_sgrep_plugins::OutputFormat::parse(&lower).is_some() {
+        return Ok(lower);
+    }
+    // Common agent mistakes: think format is "json" / typo "jason" — prefer compact for LLM use.
+    let suggestion = match lower.as_str() {
+        "json" | "jsno" | "josn" | "jason" | "ndjson" => Some("compact"),
+        "gh" | "github-actions" => Some("github"),
+        "gl" => Some("gitlab"),
+        "capsule" | "agent_capsule" | "agentcapsule" => Some("agent-capsule"),
+        _ => FORMATS
+            .iter()
+            .copied()
+            .filter(|cand| edit_distance(&lower, cand) <= 2)
+            .min_by_key(|cand| edit_distance(&lower, cand)),
+    };
+    let list = FORMATS.join(", ");
+    Err(match suggestion {
+        Some(s) => format!(
+            "invalid --format '{raw}' (did you mean '{s}'?). Try: asgrep --json --format {s} \"query\" .\nAllowed: {list}"
+        ),
+        None => format!(
+            "invalid --format '{raw}'. Try: asgrep --json --format compact \"query\" .\nAllowed: {list}"
+        ),
+    })
+}
+
+fn edit_distance(a: &str, b: &str) -> usize {
+    let (a, b) = (a.as_bytes(), b.as_bytes());
+    let mut prev: Vec<usize> = (0..=b.len()).collect();
+    let mut cur = vec![0; b.len() + 1];
+    for (i, &ca) in a.iter().enumerate() {
+        cur[0] = i + 1;
+        for (j, &cb) in b.iter().enumerate() {
+            let cost = usize::from(ca != cb);
+            cur[j + 1] = (prev[j + 1] + 1).min(cur[j] + 1).min(prev[j] + cost);
+        }
+        std::mem::swap(&mut prev, &mut cur);
+    }
+    prev[b.len()]
 }
 
 fn parse_snippet_tokens(raw: &str) -> Result<usize, String> {
@@ -348,7 +460,8 @@ impl Cli {
     pub(crate) fn active_tuning(&self) -> SearchTuning {
         let mut t = self.tuning.clone();
         let overlay = match self.command.as_ref() {
-            Some(Commands::Index(c) | Commands::Reindex(c)) => Some(&c.tuning),
+            Some(Commands::Index(c)) => Some(&c.tuning),
+            Some(Commands::Reindex(c)) => Some(&c.tuning),
             Some(Commands::Search(c) | Commands::Keyword(c) | Commands::Semantic(c)) => {
                 Some(&c.tuning)
             }
@@ -384,6 +497,9 @@ impl Cli {
             if o.response_snippet_tokens != DEFAULT_RESPONSE_SNIPPET_TOKENS {
                 t.response_snippet_tokens = o.response_snippet_tokens;
             }
+            if o.budget_tokens.is_some() {
+                t.budget_tokens = o.budget_tokens;
+            }
         }
         t
     }
@@ -393,6 +509,8 @@ impl Cli {
             || matches!(self.command.as_ref(), Some(Commands::Capabilities(_)))
             || matches!(self.command.as_ref(), Some(Commands::Version(a)) if a.json)
             || matches!(self.command.as_ref(), Some(Commands::Doctor { .. }))
+            // codemode-batch always emits a JSON envelope on success (no --json gate).
+            || matches!(self.command.as_ref(), Some(Commands::CodemodeBatch { .. }))
     }
 
     pub(crate) fn command_name(&self) -> &'static str {

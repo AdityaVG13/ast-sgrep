@@ -2,13 +2,21 @@
 
 use anyhow::{anyhow, Context};
 use ast_sgrep_core::chain::{expand_chain, ChainConfig};
-use ast_sgrep_core::{EmbedBackend, IndexOptions, Indexer, SearchOptions, Searcher};
+use ast_sgrep_core::{
+    canonicalize_affected_path, EmbedBackend, IndexOptions, Indexer, SearchOptions, Searcher,
+    MAX_EXCERPT_LINES, MAX_INCREMENTAL_PATHS,
+};
 use ast_sgrep_plugins::{format_response_with, OutputFormat};
 use serde_json::{json, Value};
-use std::path::PathBuf;
+use std::collections::HashSet;
+use std::io::Write;
+use std::path::{Component, Path, PathBuf};
 use std::sync::Mutex;
 
 use crate::tools::{call_tool, CallError};
+
+/// Maximum encoded value returned by one Code Mode tool call.
+pub const MAX_CALL_RESPONSE_BYTES: usize = ast_sgrep_core::MAX_STDIN_LINE_BYTES;
 
 #[derive(Debug, Clone)]
 pub struct SessionConfig {
@@ -27,10 +35,12 @@ impl Default for SessionConfig {
                 .map(PathBuf::from)
                 .unwrap_or_else(|_| std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))),
             index_path: std::env::var("ASGREP_INDEX_PATH").ok().map(PathBuf::from),
-            limit: std::env::var("ASGREP_LIMIT")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or_else(SearchOptions::default_limit),
+            limit: ast_sgrep_core::clamp_output_limit(
+                std::env::var("ASGREP_LIMIT")
+                    .ok()
+                    .and_then(|v| v.parse().ok()),
+                SearchOptions::default_limit(),
+            ),
             use_embed: std::env::var("ASGREP_NO_EMBED").ok().as_deref() != Some("1"),
             default_format: OutputFormat::AgentCapsule,
         }
@@ -44,6 +54,8 @@ struct SearcherKey {
     /// Opened Searcher limit; reused for any call whose limit is ≤ this.
     open_limit: usize,
     use_embed: bool,
+    /// On-disk writer stamp observed when this Searcher was opened.
+    writer_generation: u64,
 }
 
 /// Stateful façade: warm `Searcher`, budgets, and tool dispatch.
@@ -80,7 +92,14 @@ impl CodeModeSession {
     /// Dispatch any catalog tool by name.
     pub fn call(&mut self, name: &str, args: Value) -> Result<Value, CallError> {
         self.bump_call().map_err(CallError::from)?;
-        call_tool(self, name, args)
+        let value = call_tool(self, name, args)?;
+        let bytes = encoded_json_len(&value)?;
+        if bytes > MAX_CALL_RESPONSE_BYTES {
+            return Err(CallError::Other(anyhow!(
+                "codemode response exceeds {MAX_CALL_RESPONSE_BYTES} bytes"
+            )));
+        }
+        Ok(value)
     }
 
     pub(crate) fn bump_call(&mut self) -> anyhow::Result<()> {
@@ -100,11 +119,49 @@ impl CodeModeSession {
         }
     }
 
-    fn root_arg(&self, args: &Value) -> PathBuf {
-        args.get("root")
-            .and_then(|v| v.as_str())
-            .map(PathBuf::from)
-            .unwrap_or_else(|| self.config.root.clone())
+    /// Drop warm Searcher when an external writer bumped the on-disk stamp
+    /// for the cached Searcher's root (not the session workspace).
+    fn sync_writer_generation(&self) -> anyhow::Result<()> {
+        let mut guard = self
+            .searcher_cache
+            .lock()
+            .map_err(|_| anyhow!("searcher cache lock poisoned"))?;
+        if let Some((key, _)) = guard.as_ref() {
+            let current =
+                ast_sgrep_core::read_writer_generation(&key.root, key.index_path.as_deref());
+            if key.writer_generation != current {
+                *guard = None;
+            }
+        }
+        Ok(())
+    }
+
+    fn root_arg(&self, args: &Value) -> anyhow::Result<PathBuf> {
+        let configured = self.config.root.canonicalize().with_context(|| {
+            format!(
+                "cannot resolve session root: {}",
+                self.config.root.display()
+            )
+        })?;
+        let Some(raw) = args.get("root").and_then(|v| v.as_str()) else {
+            return Ok(configured);
+        };
+        let requested = Path::new(raw);
+        let candidate = if requested.is_absolute() {
+            requested.to_path_buf()
+        } else {
+            configured.join(requested)
+        };
+        let candidate = candidate
+            .canonicalize()
+            .with_context(|| format!("cannot resolve requested root: {}", candidate.display()))?;
+        if !candidate.starts_with(&configured) {
+            return Err(anyhow!(
+                "requested root is outside the configured session root: {}",
+                candidate.display()
+            ));
+        }
+        Ok(candidate)
     }
 
     fn resolve_format(&self, args: &Value) -> OutputFormat {
@@ -120,25 +177,30 @@ impl CodeModeSession {
         root: PathBuf,
         needed_limit: usize,
     ) -> anyhow::Result<std::sync::MutexGuard<'_, Option<(SearcherKey, Searcher)>>> {
+        self.sync_writer_generation()?;
         let needed = needed_limit.clamp(1, 500);
         let mut guard = self
             .searcher_cache
             .lock()
             .map_err(|_| anyhow!("searcher cache lock poisoned"))?;
-        let reuse = match guard.as_ref() {
-            Some((k, _))
-                if k.root == root
-                    && k.index_path == self.config.index_path
-                    && k.use_embed == self.config.use_embed
-                    && k.open_limit >= needed =>
-            {
-                true
-            }
-            _ => false,
-        };
+        let reuse = matches!(
+            guard.as_ref(),
+            Some((key, _))
+                if key.root == root
+                    && key.index_path == self.config.index_path
+                    && key.use_embed == self.config.use_embed
+                    && key.open_limit >= needed
+                    && key.writer_generation
+                        == ast_sgrep_core::read_writer_generation(
+                            &key.root,
+                            key.index_path.as_deref(),
+                        )
+        );
         if !reuse {
             // Open at least as wide as config + this call so later smaller calls reuse.
             let open_limit = needed.max(self.config.limit).clamp(1, 500);
+            let writer_generation =
+                ast_sgrep_core::read_writer_generation(&root, self.config.index_path.as_deref());
             let searcher = Searcher::new(SearchOptions {
                 root: root.clone(),
                 index_path: self.config.index_path.clone(),
@@ -152,6 +214,7 @@ impl CodeModeSession {
                     index_path: self.config.index_path.clone(),
                     open_limit,
                     use_embed: self.config.use_embed,
+                    writer_generation,
                 },
                 searcher,
             ));
@@ -164,6 +227,7 @@ impl CodeModeSession {
             .get("query")
             .and_then(|v| v.as_str())
             .context("query is required")?;
+        ast_sgrep_core::validate_query_len(query).map_err(|e| anyhow::anyhow!(e))?;
         let limit = args
             .get("limit")
             .and_then(|v| v.as_u64())
@@ -178,9 +242,10 @@ impl CodeModeSession {
             .get("excerpt_lines")
             .and_then(|v| v.as_u64())
             .map(|n| n as usize)
-            .unwrap_or(0);
+            .unwrap_or(0)
+            .min(MAX_EXCERPT_LINES);
         let format = self.resolve_format(args);
-        let root = self.root_arg(args);
+        let root = self.root_arg(args)?;
         let guard = self.searcher_for(root, limit)?;
         let searcher = &guard.as_ref().expect("searcher_for populates cache").1;
         let mut response = if semantic_only {
@@ -193,6 +258,7 @@ impl CodeModeSession {
             response.hits.truncate(limit);
             response.limit = limit;
         }
+        ensure_render_input_bounded(&response, format, excerpt_lines)?;
         Ok(format_response_with(&response, format, excerpt_lines))
     }
 
@@ -201,6 +267,7 @@ impl CodeModeSession {
             .get("query")
             .and_then(|v| v.as_str())
             .context("query is required")?;
+        ast_sgrep_core::validate_query_len(query).map_err(|e| anyhow::anyhow!(e))?;
         let max_depth = args
             .get("max_depth")
             .and_then(|v| v.as_u64())
@@ -219,7 +286,7 @@ impl CodeModeSession {
             .map(|n| n as usize)
             .unwrap_or(20)
             .clamp(1, 50);
-        let root = self.root_arg(args);
+        let root = self.root_arg(args)?;
         let guard = self.searcher_for(root, self.config.limit)?;
         let searcher = &guard.as_ref().expect("searcher_for populates cache").1;
         let config = ChainConfig {
@@ -234,7 +301,7 @@ impl CodeModeSession {
 
     pub(crate) fn index_status(&mut self, args: &Value) -> anyhow::Result<Value> {
         let indexer = Indexer::new(IndexOptions {
-            root: self.root_arg(args),
+            root: self.root_arg(args)?,
             index_path: self.config.index_path.clone(),
             ..IndexOptions::default()
         })?;
@@ -243,22 +310,358 @@ impl CodeModeSession {
 
     pub(crate) fn index_repo(&mut self, args: &Value) -> anyhow::Result<Value> {
         let force = args.get("force").and_then(|v| v.as_bool()).unwrap_or(false);
+        let root = self.root_arg(args)?;
+        let paths = incremental_paths(args, &root)?;
+        if force && paths.is_some() {
+            return Err(anyhow!("index_repo force and paths are mutually exclusive"));
+        }
         let mut indexer = Indexer::new(IndexOptions {
-            root: self.root_arg(args),
+            root,
             index_path: self.config.index_path.clone(),
+            embed_semantic: self.config.use_embed,
             embed_backend: EmbedBackend::Auto,
             ..IndexOptions::default()
         })?;
-        let stats = if force {
-            indexer.reindex_all()?
-        } else {
-            indexer.index_all()?
-        };
+        // Bulk SQLite may commit before sidecar rebuild; invalidate on Ok and Err.
+        let result: anyhow::Result<Value> = (|| {
+            if let Some(paths) = paths {
+                let stats = indexer.update_paths(&paths)?;
+                indexer.flush_deferred_rebuilds()?;
+                Ok(json!({
+                    "ok": true,
+                    "force": false,
+                    "targeted": true,
+                    "path_count": paths.len(),
+                    "stats": {
+                        "files_indexed": stats.files_indexed,
+                        "files_skipped": stats.files_skipped,
+                        "files_removed": stats.files_removed,
+                        "files_failed": stats.files_failed,
+                    },
+                }))
+            } else {
+                let stats = if force {
+                    indexer.reindex_all()?
+                } else {
+                    indexer.index_all()?
+                };
+                Ok(json!({
+                    "ok": true,
+                    "force": force,
+                    "targeted": false,
+                    "stats": stats,
+                }))
+            }
+        })();
         self.invalidate_searcher_cache();
-        Ok(json!({
-            "ok": true,
-            "force": force,
-            "stats": stats,
-        }))
+        result
+    }
+
+    #[cfg(test)]
+    fn searcher_cache_occupied(&self) -> bool {
+        self.searcher_cache
+            .lock()
+            .map(|g| g.is_some())
+            .unwrap_or(false)
+    }
+}
+
+#[derive(Default)]
+struct CountingWriter(usize);
+
+impl Write for CountingWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0 = self.0.saturating_add(buf.len());
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+pub(crate) fn encoded_len(value: &impl serde::Serialize) -> Result<usize, serde_json::Error> {
+    let mut writer = CountingWriter::default();
+    serde_json::to_writer(&mut writer, value)?;
+    Ok(writer.0)
+}
+
+pub(crate) fn encoded_json_len(value: &Value) -> Result<usize, serde_json::Error> {
+    encoded_len(value)
+}
+
+fn ensure_render_input_bounded(
+    response: &ast_sgrep_core::SearchResponse,
+    format: OutputFormat,
+    excerpt_lines: usize,
+) -> anyhow::Result<()> {
+    let mut bytes = response.query.len().saturating_mul(4);
+    for hit in &response.hits {
+        // Metadata is repeated in refs, follow-up hints, and reason strings.
+        bytes = bytes.saturating_add(hit.file.len().saturating_mul(2));
+        for value in [
+            hit.symbol.as_deref(),
+            hit.caller.as_deref(),
+            hit.callee.as_deref(),
+            hit.language.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            bytes = bytes.saturating_add(value.len().saturating_mul(4));
+        }
+        bytes = bytes.saturating_add(match format {
+            OutputFormat::AgentCapsule if excerpt_lines == 0 => 4 * 121,
+            OutputFormat::AgentCapsule => excerpt_prefix_bytes(&hit.excerpt, excerpt_lines),
+            _ => hit.excerpt.len(),
+        });
+        if bytes > MAX_CALL_RESPONSE_BYTES {
+            return Err(anyhow!(
+                "codemode response source exceeds {MAX_CALL_RESPONSE_BYTES} bytes"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn excerpt_prefix_bytes(excerpt: &str, lines: usize) -> usize {
+    excerpt
+        .lines()
+        .take(lines)
+        .enumerate()
+        .fold(0usize, |total, (index, line)| {
+            total
+                .saturating_add(usize::from(index > 0))
+                .saturating_add(line.len())
+        })
+}
+
+fn incremental_paths(args: &Value, root: &Path) -> anyhow::Result<Option<Vec<PathBuf>>> {
+    let Some(raw_paths) = args.get("paths") else {
+        return Ok(None);
+    };
+    let raw_paths = raw_paths
+        .as_array()
+        .context("index_repo paths must be an array")?;
+    if raw_paths.is_empty() {
+        return Err(anyhow!("index_repo paths must be non-empty"));
+    }
+    if raw_paths.len() > MAX_INCREMENTAL_PATHS {
+        return Err(anyhow!(
+            "index_repo paths exceeds max {MAX_INCREMENTAL_PATHS}"
+        ));
+    }
+
+    let root = root
+        .canonicalize()
+        .with_context(|| format!("cannot resolve index root: {}", root.display()))?;
+    let mut seen = HashSet::with_capacity(raw_paths.len());
+    let mut paths = Vec::with_capacity(raw_paths.len());
+    for raw in raw_paths {
+        let raw = raw
+            .as_str()
+            .context("index_repo paths entries must be strings")?;
+        if raw.is_empty() {
+            return Err(anyhow!("index_repo paths entries must be non-empty"));
+        }
+        let path = Path::new(raw);
+        if path
+            .components()
+            .any(|component| component == Component::ParentDir)
+        {
+            return Err(anyhow!("index_repo path traversal rejected: {raw}"));
+        }
+        let candidate = if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            root.join(path)
+        };
+        let canonical = canonicalize_affected_path(&candidate)
+            .with_context(|| format!("cannot resolve index path: {}", candidate.display()))?;
+        if !canonical.starts_with(&root) {
+            return Err(anyhow!(
+                "index_repo path is outside project root: {}",
+                candidate.display()
+            ));
+        }
+        if seen.insert(canonical.clone()) {
+            paths.push(canonical);
+        }
+    }
+    Ok(Some(paths))
+}
+
+#[cfg(test)]
+mod index_err_cache_tests {
+    use super::*;
+    use ast_sgrep_core::force_sidecar_rebuild_err;
+    use tempfile::TempDir;
+
+    #[test]
+    fn index_repo_invalidates_searcher_on_index_err() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        std::fs::write(root.join("lib.rs"), "fn hello() {}\n").unwrap();
+        let mut session = CodeModeSession::new(SessionConfig {
+            root: root.clone(),
+            index_path: None,
+            limit: 8,
+            use_embed: false,
+            ..SessionConfig::default()
+        });
+        drop(
+            session
+                .searcher_for(root.clone(), 8)
+                .expect("warm searcher"),
+        );
+        assert!(
+            session.searcher_cache_occupied(),
+            "precondition: searcher cache warm"
+        );
+
+        let _fail = force_sidecar_rebuild_err();
+        let err = session
+            .index_repo(&json!({}))
+            .expect_err("forced sidecar rebuild must surface as index_repo Err");
+        assert!(
+            err.to_string().contains("forced sidecar rebuild failure"),
+            "unexpected error: {err}"
+        );
+        assert!(
+            !session.searcher_cache_occupied(),
+            "searcher cache must clear on index_repo Err after possible disk mutation"
+        );
+    }
+
+    #[test]
+    fn external_writer_generation_invalidates_warm_searcher() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        std::fs::write(root.join("lib.rs"), "fn hello() {}\n").unwrap();
+        let session = CodeModeSession::new(SessionConfig {
+            root: root.clone(),
+            index_path: None,
+            limit: 8,
+            use_embed: false,
+            ..SessionConfig::default()
+        });
+        drop(
+            session
+                .searcher_for(root.clone(), 8)
+                .expect("warm searcher"),
+        );
+        assert!(
+            session.searcher_cache_occupied(),
+            "precondition: searcher cache warm"
+        );
+
+        let bumped = ast_sgrep_core::bump_writer_generation(&root, None).unwrap();
+        assert!(bumped >= 1);
+
+        drop(
+            session
+                .searcher_for(root, 8)
+                .expect("reopen after stamp bump"),
+        );
+        let gen = session
+            .searcher_cache
+            .lock()
+            .ok()
+            .and_then(|g| g.as_ref().map(|(k, _)| k.writer_generation));
+        assert_eq!(gen, Some(bumped));
+    }
+
+    #[test]
+    fn nested_root_external_writer_invalidates_warm_searcher() {
+        let temp = TempDir::new().unwrap();
+        let workspace = temp.path().canonicalize().unwrap();
+        let nested = workspace.join("pkg");
+        std::fs::create_dir(&nested).unwrap();
+        std::fs::write(nested.join("lib.rs"), "fn hello() {}\n").unwrap();
+        let session = CodeModeSession::new(SessionConfig {
+            root: workspace.clone(),
+            index_path: None,
+            limit: 8,
+            use_embed: false,
+            ..SessionConfig::default()
+        });
+        drop(
+            session
+                .searcher_for(nested.clone(), 8)
+                .expect("warm searcher on nested root"),
+        );
+        assert!(
+            session.searcher_cache_occupied(),
+            "precondition: searcher cache warm"
+        );
+
+        let bumped = ast_sgrep_core::bump_writer_generation(&nested, None).unwrap();
+        assert_eq!(
+            ast_sgrep_core::read_writer_generation(&workspace, None),
+            0,
+            "workspace stamp must stay untouched"
+        );
+
+        drop(
+            session
+                .searcher_for(nested, 8)
+                .expect("reopen after nested stamp bump"),
+        );
+        let gen = session
+            .searcher_cache
+            .lock()
+            .ok()
+            .and_then(|g| g.as_ref().map(|(k, _)| k.writer_generation));
+        assert_eq!(gen, Some(bumped));
+    }
+}
+
+#[cfg(test)]
+mod root_sandbox_tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn foreign_root_is_rejected_under_session_workspace() {
+        let workspace = TempDir::new().unwrap();
+        let outside = TempDir::new().unwrap();
+        let root = workspace.path().canonicalize().unwrap();
+        std::fs::write(root.join("ok.rs"), "fn ok() {}\n").unwrap();
+        let index_path = root.join("index.db");
+        {
+            let mut indexer = Indexer::new(IndexOptions {
+                root: root.clone(),
+                index_path: Some(index_path.clone()),
+                embed_semantic: false,
+                ..IndexOptions::default()
+            })
+            .expect("indexer");
+            indexer.index_all().expect("seed index");
+        }
+        let before = std::fs::metadata(&index_path).expect("seeded index").len();
+
+        let mut session = CodeModeSession::new(SessionConfig {
+            root: root.clone(),
+            index_path: Some(index_path.clone()),
+            limit: 8,
+            use_embed: false,
+            ..SessionConfig::default()
+        });
+
+        let foreign = outside.path().canonicalize().unwrap();
+        std::fs::write(foreign.join("evil.rs"), "fn evil() {}\n").unwrap();
+        let err = session
+            .index_repo(&json!({ "root": foreign.to_string_lossy() }))
+            .expect_err("foreign root must be refused");
+        assert!(
+            err.to_string().contains("outside")
+                || err.to_string().contains("escapes")
+                || err.to_string().contains("configured"),
+            "unexpected error: {err}"
+        );
+        let after = std::fs::metadata(&index_path)
+            .expect("index must remain")
+            .len();
+        assert_eq!(before, after, "foreign root must not rewrite pinned index");
     }
 }

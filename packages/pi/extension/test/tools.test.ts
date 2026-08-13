@@ -44,12 +44,12 @@ async function invoke(tool: Tool, params: Record<string, unknown> = {}, signal =
 
 test("registers Code Mode first, then direct one-shot tools", () => {
   const { tools, byName } = fixture();
-  assert.deepEqual(tools.map(({ name }) => name), ["asgrep_codemode", "asgrep_search", "asgrep_index", "asgrep_status"]);
+  assert.deepEqual(tools.map(({ name }) => name), ["asgrep", "asgrep_search", "asgrep_index", "asgrep_status"]);
   const search = byName("asgrep_search").parameters;
   assert.equal(search.additionalProperties, false);
   assert.equal(search.properties.query.minLength, 1);
   assert.equal(search.properties.query.maxLength, 4096);
-  assert.equal(search.properties.mode.default, "keyword");
+  assert.equal(search.properties.mode.default, "natural");
   assert.equal(search.properties.limit.minimum, 1);
   assert.equal(search.properties.limit.maximum, 100);
   assert.equal(search.properties.limit.default, 8);
@@ -58,20 +58,20 @@ test("registers Code Mode first, then direct one-shot tools", () => {
   assert.equal(search.properties.excerptLines.default, 0);
   assert.equal(byName("asgrep_index").parameters.properties.force.default, false);
   assert.equal(byName("asgrep_status").parameters.additionalProperties, false);
-  const codemode = byName("asgrep_codemode").parameters;
+  const codemode = byName("asgrep").parameters;
   assert.equal(codemode.additionalProperties, false);
   assert.equal(codemode.properties.code.minLength, 1);
   assert.equal(codemode.properties.code.maxLength, 32000);
 });
 
-test("asgrep_codemode runs JS against the connector and returns a shaped result", async () => {
+test("asgrep runs JS against the connector and returns a shaped result", async () => {
   const f = fixture({
     tool: "asgrep",
     schema_version: "1.0.0",
     ok: true,
     hits: [{ file: "src/a.ts", symbol: "auth_refresh", kind: "embed", score: 2 }],
   });
-  const { result } = await invoke(f.byName("asgrep_codemode"), {
+  const { result } = await invoke(f.byName("asgrep"), {
     code: `async () => {
       const seed = await asgrep.search({ query: "auth", limit: 3 });
       return { symbol: seed.hits[0].symbol, n: seed.hits.length };
@@ -87,24 +87,23 @@ test("asgrep_codemode runs JS against the connector and returns a shaped result"
 test("search defaults to a small zero-excerpt agent capsule", async () => {
   const f = fixture({ tool: "asgrep", schema_version: "1.0.0", ok: true, hits: new Array(500).fill({ preview: "x".repeat(500) }) });
   const { result } = await invoke(f.byName("asgrep_search"), { query: "where auth refreshes" });
-  assert.deepEqual(f.calls[0]?.args, ["--json", "--format", "agent-capsule", "--limit", "8", "--excerpt-lines", "0", "keyword", "--", "where auth refreshes", "."]);
+  assert.deepEqual(f.calls[0]?.args, ["--json", "--format", "agent-capsule", "--limit", "8", "--excerpt-lines", "0", "where auth refreshes", "."]);
   assert.ok(result.content[0]!.text.length <= 1200);
   assert.equal((result.details.response as MachineEnvelope).hits instanceof Array, true);
 });
 
 test("maps every query mode and bounded output option to argv arrays", async () => {
   const cases: Array<[string, string[]]> = [
-    ["keyword", ["--json", "--format", "agent-capsule", "--limit", "25", "--excerpt-lines", "3", "keyword", "--", "needle", "."]],
-    ["natural", ["--json", "--format", "agent-capsule", "--limit", "25", "--excerpt-lines", "3", "keyword", "--", "needle", "."]],
-    ["pattern", ["--json", "--format", "agent-capsule", "--limit", "25", "--excerpt-lines", "3", "--", "pattern: needle", "."]],
-    ["defs", ["--json", "--format", "agent-capsule", "--limit", "25", "--excerpt-lines", "3", "--", "defs: needle", "."]],
-    ["callers", ["--json", "--format", "agent-capsule", "--limit", "25", "--excerpt-lines", "3", "--", "callers: needle", "."]],
-    ["chain", ["--json", "--format", "agent-capsule", "--limit", "25", "--excerpt-lines", "3", "chain", "--", "needle", "."]],
-    ["semantic", ["--json", "--format", "agent-capsule", "--limit", "25", "--excerpt-lines", "3", "semantic", "--", "needle", "."]],
-    ["word", ["--json", "--format", "agent-capsule", "--limit", "25", "--excerpt-lines", "3", "--", "word: needle", "."]],
-    ["literal", ["--json", "--format", "agent-capsule", "--limit", "25", "--excerpt-lines", "3", "--", "literal: needle", "."]],
-    ["regex", ["--json", "--format", "agent-capsule", "--limit", "25", "--excerpt-lines", "3", "--", "regex: needle", "."]],
-    ["imports", ["--json", "--format", "agent-capsule", "--limit", "25", "--excerpt-lines", "3", "--", "imports: needle", "."]],
+    ["natural", ["--json", "--format", "agent-capsule", "--limit", "25", "--excerpt-lines", "3", "needle", "."]],
+    ["pattern", ["--json", "--format", "agent-capsule", "--limit", "25", "--excerpt-lines", "3", "pattern: needle", "."]],
+    ["defs", ["--json", "--format", "agent-capsule", "--limit", "25", "--excerpt-lines", "3", "defs: needle", "."]],
+    ["callers", ["--json", "--format", "agent-capsule", "--limit", "25", "--excerpt-lines", "3", "callers: needle", "."]],
+    ["chain", ["chain", "needle", ".", "--json", "--format", "agent-capsule", "--limit", "25", "--excerpt-lines", "3"]],
+    ["semantic", ["semantic", "needle", ".", "--json", "--format", "agent-capsule", "--limit", "25", "--excerpt-lines", "3"]],
+    ["word", ["--json", "--format", "agent-capsule", "--limit", "25", "--excerpt-lines", "3", "word: needle", "."]],
+    ["literal", ["--json", "--format", "agent-capsule", "--limit", "25", "--excerpt-lines", "3", "literal: needle", "."]],
+    ["regex", ["--json", "--format", "agent-capsule", "--limit", "25", "--excerpt-lines", "3", "regex: needle", "."]],
+    ["imports", ["--json", "--format", "agent-capsule", "--limit", "25", "--excerpt-lines", "3", "imports: needle", "."]],
   ];
   for (const [mode, expected] of cases) {
     const f = fixture();
@@ -173,7 +172,11 @@ test("search refreshes before querying and refuses unknown index health", async 
     async resolveRoot(context: { cwd: string }) { return context.cwd; },
     async run(args: readonly string[]) {
       calls.push(args[0]!);
-      return args[0] === "status" ? status : { tool: "asgrep" as const, schema_version: "1.0.0", ok: true, hits: [] };
+      if (args[0] === "status") return status;
+      if (args[0] === "index") {
+        return { tool: "asgrep" as const, schema_version: "1.0.0", ok: true, files_failed: 0, walk_errors: false };
+      }
+      return { tool: "asgrep" as const, schema_version: "1.0.0", ok: true, hits: [] };
     },
   };
   registerAstSgrepTools(pi, runtime);
@@ -204,4 +207,49 @@ test("maps runtime failures to concise structured tool errors", async () => {
     command: "search",
     error: { code: "CANCELLED", message: "execution cancelled", details: { source: "signal" } },
   });
+});
+
+test("missing CLI backend surfaces BACKEND_UNAVAILABLE from search", async () => {
+  const tools: Tool[] = [];
+  const pi = {
+    registerTool(tool: Tool) { tools.push(tool); },
+    on() {},
+  } as unknown as ExtensionAPI;
+  const runtime = {
+    async resolveRoot(context: { cwd: string }) { return context.cwd; },
+    resolveBinaryPath() { throw new RuntimeError("BINARY_RESOLUTION_FAILED", "Unable to resolve an ast-sgrep binary for this platform"); },
+    nativeEnv() { return { NO_COLOR: "1" }; },
+    async run() { throw new Error("should not reach run"); },
+  };
+  const freshness = { async ensureFresh() {}, markAffectedPath() {} };
+  registerAstSgrepTools(pi, runtime as never, freshness as never);
+  const search = tools.find((t) => t.name === "asgrep_search")!;
+  const out = await search.execute("c1", { query: "x" }, new AbortController().signal, () => {}, { cwd: "/project" });
+  assert.equal(out.details.ok, false);
+  assert.equal(out.details.error.code, "BACKEND_UNAVAILABLE");
+  assert.equal(out.details.error.details.backend, "unavailable");
+  assert.equal(out.details.error.details.napi, false);
+  assert.equal(out.details.error.details.cli, false);
+  assert.match(String(out.details.error.details.hint), /@ast-sgrep\//);
+  assert.match(out.content[0].text, /BACKEND_UNAVAILABLE/);
+});
+
+test("missing backend surfaces BACKEND_UNAVAILABLE from asgrep ensureFresh path", async () => {
+  const tools: Tool[] = [];
+  const pi = {
+    registerTool(tool: Tool) { tools.push(tool); },
+    on() {},
+  } as unknown as ExtensionAPI;
+  const runtime = {
+    async resolveRoot(context: { cwd: string }) { return context.cwd; },
+    resolveBinaryPath() { throw new RuntimeError("BINARY_RESOLUTION_FAILED", "Unable to resolve an ast-sgrep binary for this platform"); },
+    nativeEnv() { return { NO_COLOR: "1" }; },
+    async run() { throw new Error("should not reach run"); },
+  };
+  // Default FreshnessCoordinator — ensureFresh → nativeCall → BACKEND_UNAVAILABLE.
+  registerAstSgrepTools(pi, runtime as never);
+  const codemode = tools.find((t) => t.name === "asgrep")!;
+  const out = await codemode.execute("c1", { code: "async () => 1" }, new AbortController().signal, () => {}, { cwd: "/project" });
+  assert.equal(out.details.ok, false);
+  assert.equal((out.details.error as { code: string }).code, "BACKEND_UNAVAILABLE");
 });

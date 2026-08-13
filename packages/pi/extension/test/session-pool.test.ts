@@ -74,6 +74,22 @@ test("concurrent acquire shares one in-flight start", async () => {
   await pool.shutdown();
 });
 
+test("pre-aborted calls reject before starting a backend", async () => {
+  let starts = 0;
+  const pool = new NativeSessionPool(async () => {
+    starts += 1;
+    return fakeWorker([]);
+  });
+  pool.configure({ binary: "/fake/asgrep" });
+  const controller = new AbortController();
+  controller.abort();
+
+  await assert.rejects(pool.call("/p", "search", {}, { signal: controller.signal }), {
+    name: "AbortError",
+  });
+  assert.equal(starts, 0);
+});
+
 test("invalidate drops worker so next acquire restarts", async () => {
   const log: string[] = [];
   let starts = 0;
@@ -117,8 +133,18 @@ test("shutdown prevents an in-flight start from repopulating the pool", async ()
   });
   pool.configure({ binary: "/fake/asgrep" });
   const stale = pool.acquire("/project");
-  await pool.shutdown();
+  let shutdownComplete = false;
+  const shutdown = pool.shutdown().then(() => { shutdownComplete = true; });
+  await Promise.resolve();
+  assert.equal(shutdownComplete, false, "shutdown must wait for in-flight starts");
+  assert.equal(
+    await pool.acquire("/project"),
+    null,
+    "an acquire concurrent with shutdown must not start a replacement worker",
+  );
+  assert.equal(starts, 1);
   release();
+  await shutdown;
   assert.equal(await stale, null);
   assert.ok(log.includes("end"), "stale worker must be closed");
   assert.ok(await pool.acquire("/project"));

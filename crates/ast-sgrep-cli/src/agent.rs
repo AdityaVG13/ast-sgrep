@@ -32,12 +32,9 @@ pub(crate) fn run_capabilities(cli: &Cli, args: &CapabilitiesArgs) -> anyhow::Re
     let _ = (cli.json, args.json);
     crate::print_machine_json("capabilities", capabilities_json(cli)?)
 }
-pub(crate) fn run_robot_docs(_cli: &Cli, args: &RobotDocsArgs) -> anyhow::Result<()> {
+pub(crate) fn run_robot_docs(cli: &Cli, args: &RobotDocsArgs) -> anyhow::Result<()> {
     match args.command.as_ref().unwrap_or(&RobotDocsCommand::Guide) {
-        RobotDocsCommand::Guide => {
-            print_robot_guide();
-            Ok(())
-        }
+        RobotDocsCommand::Guide => emit_robot_guide(cli),
     }
 }
 pub(crate) fn run_doctor(cli: &Cli, root: &Path, args: &DoctorArgs) -> anyhow::Result<()> {
@@ -70,7 +67,7 @@ pub(crate) fn capabilities_json(_cli: &Cli) -> anyhow::Result<Value> {
             "precedence": "conflicting --root and positional ROOT is a usage error; effective_root prefers --root when set",
             "bin_aliases": ["asgrep", "ast-sgrep"]
         },
-        "environment": ["ASGREP_LIMIT", "ASGREP_INDEX_PATH", "ASGREP_NO_EMBED", "ASGREP_CLOUD_EMBED", "ASGREP_OLLAMA_EMBED", "ASGREP_NEURAL_EMBED", "ASGREP_NEURAL_FALLBACK", "ASGREP_EMBED_FALLBACK", "ASGREP_SEMANTIC_ONLY", "ASGREP_TANTIVY", "ASGREP_ANN_THRESHOLD", "ASGREP_ANN_PROBES", "ASGREP_RERANK", "ASGREP_RERANK_TOP_K", "ASGREP_EMBED_URL_ALLOWLIST", "ASGREP_ALLOW_AST_GREP", "ASGREP_AST_GREP", "ASGREP_LEDGER_PATH", "ASGREP_USE_CACHE", "XDG_CACHE_HOME", "NO_COLOR", "CI"],
+        "environment": ["ASGREP_LIMIT", "ASGREP_INDEX_PATH", "ASGREP_DURABILITY", "ASGREP_NO_EMBED", "ASGREP_CLOUD_EMBED", "ASGREP_OLLAMA_EMBED", "ASGREP_NEURAL_EMBED", "ASGREP_NEURAL_FALLBACK", "ASGREP_EMBED_FALLBACK", "ASGREP_SEMANTIC_ONLY", "ASGREP_TANTIVY", "ASGREP_ANN_THRESHOLD", "ASGREP_ANN_PROBES", "ASGREP_RERANK", "ASGREP_RERANK_TOP_K", "ASGREP_EMBED_URL_ALLOWLIST", "ASGREP_ALLOW_AST_GREP", "ASGREP_ALLOW_EXTERNAL_INDEX", "ASGREP_AST_GREP", "ASGREP_LEDGER_PATH", "ASGREP_USE_CACHE", "XDG_CACHE_HOME", "NO_COLOR", "CI"],
         "environment_bool_values": ["1", "0", "true", "false", "yes", "no", "on", "off"],
         "sibling_binaries": [
             {"name":"asgrep-mcp","purpose":"MCP stdio server","launch":"asgrep-mcp (stdio JSON-RPC)"},
@@ -98,20 +95,39 @@ pub(crate) fn capabilities_json(_cli: &Cli) -> anyhow::Result<Value> {
             "notes": "ok:true only on successful operations; doctor uses ok:false when healthy:false; operational faults use exit_code 2"
         },
         "search_formats": ["native", "agent", "agent-capsule", "compact", "github", "gitlab"],
-        "exit_codes": [{"code": 0, "meaning": "success"}, {"code": 1, "meaning": "user input / usage error"}, {"code": 2, "meaning": "index or search operation failed"}],
+        "exit_codes": [
+            {"code": 0, "meaning": "success"},
+            {"code": 1, "meaning": "usage error (missing required args, unknown flags, invalid --format, conflicting roots)"},
+            {"code": 2, "meaning": "operational failure (index/search/IO) or doctor healthy:false"}
+        ],
         "canonical_tasks": ["asgrep capabilities --json", "asgrep robot-docs guide", "asgrep doctor --robot-triage", "asgrep index . && asgrep --json --format compact \"where is auth refreshed\" ."],
         "notes": {
             "default_search": "Bare QUERY without a subcommand runs hybrid search; the word 'search' is not a required verb — use the `search`/`find`/`query` subcommand only when you want an explicit search command.",
-            "format_implies_json": true
+            "format_implies_json": true,
+            "safe_mutating": "index refreshes incrementally with transactional writes. reindex forces a full transactional rewrite -- prefer `asgrep reindex --dry-run <ROOT> --json` before a full reindex."
         }
     }))
 }
 
 fn clap_catalog(command: &clap::Command) -> (Vec<Value>, Vec<String>, Vec<String>) {
     const SEARCH_TUNING: &[&str] = &[
-        "--no-embed", "--cloud-embed", "--ollama-embed", "--neural-embed", "--semantic-only",
-        "--tantivy", "--ann-threshold", "--ann-probes", "--rerank", "--rerank-top-k",
-        "--format", "--excerpt-lines", "--snippet-tokens", "--response-snippet-tokens", "--dry-run",
+        "--no-embed",
+        "--cloud-embed",
+        "--ollama-embed",
+        "--neural-embed",
+        "--semantic-only",
+        "--tantivy",
+        "--ann-threshold",
+        "--ann-probes",
+        "--rerank",
+        "--rerank-top-k",
+        "--format",
+        "--excerpt-lines",
+        "--snippet-tokens",
+        "--response-snippet-tokens",
+        "--dry-run",
+        // m38g: whole-response token budget that picks per-result detail.
+        "--budget-tokens",
     ];
     let mut global_flags = Vec::new();
     let mut search_tuning_flags = Vec::new();
@@ -122,7 +138,10 @@ fn clap_catalog(command: &clap::Command) -> (Vec<Value>, Vec<String>, Vec<String
             global_flags.push(flag);
         } else if SEARCH_TUNING.iter().any(|s| *s == flag) {
             search_tuning_flags.push(flag);
-        } else if matches!(flag.as_str(), "--json" | "--robot-help" | "--root" | "--limit" | "--index-path" | "--lang") {
+        } else if matches!(
+            flag.as_str(),
+            "--json" | "--robot-help" | "--root" | "--limit" | "--index-path" | "--lang"
+        ) {
             // Non-global copies still documented as agent-visible globals when present on root.
             global_flags.push(flag);
         }
@@ -156,12 +175,52 @@ fn clap_catalog(command: &clap::Command) -> (Vec<Value>, Vec<String>, Vec<String
         }
         if matches!(name.as_str(), "search" | "keyword" | "semantic") {
             entry["robot_output"] = json!("--format implies --json; formats: native|agent|agent-capsule|compact|github|gitlab");
+            entry["example"] = json!(match name.as_str() {
+                "keyword" => r#"asgrep keyword --json "auth refresh" ."#,
+                "semantic" => r#"asgrep semantic --json "where is auth refreshed" ."#,
+                _ => r#"asgrep search --json --format compact "auth refresh" ."#,
+            });
+        }
+        if name == "reindex" {
+            entry["safe_mutating"] = json!({
+                "kind": "full_rebuild",
+                "prefer_first": "asgrep reindex --dry-run <ROOT> --json",
+                "note": "forces a full in-place transactional rewrite; dry-run reports plan without writing"
+            });
+        }
+        if name == "index" {
+            entry["safe_mutating"] = json!({
+                "kind": "incremental",
+                "prefer_first": "asgrep index <ROOT> --json",
+                "note": "incremental refresh with transactional index writes"
+            });
         }
         commands.push(entry);
     }
     commands.sort_by(|a, b| a["name"].as_str().cmp(&b["name"].as_str()));
     (commands, global_flags, search_tuning_flags)
 }
+/// Doctor issue when FastUnsafe durability is active (R-OPS-DOCS-FOOTGUNS).
+fn doctor_fast_unsafe_issue(
+    cli: &Cli,
+    status: Option<&ast_sgrep_core::IndexStatus>,
+) -> Option<Value> {
+    let from_status = status
+        .map(|st| st.durability.as_str())
+        .filter(|d| *d == "fast-unsafe");
+    let from_cli = cli
+        .durability
+        .filter(|d| *d == ast_sgrep_core::store::Durability::FastUnsafe)
+        .map(|_| "fast-unsafe");
+    if from_status.or(from_cli).is_none() {
+        return None;
+    }
+    Some(json!({
+        "kind": "durability_fast_unsafe",
+        "message": "ASGREP_DURABILITY=fast-unsafe (or --durability fast-unsafe) is active: power loss during a write batch can corrupt the index. Prefer balanced/strict outside trusted CI speed paths; MCP/Code Mode inherit this env."
+    }))
+}
+
 fn doctor_triage_json(cli: &Cli, root: &Path) -> anyhow::Result<Value> {
     crate::ensure_unambiguous_root(root, cli)?;
     let root = crate::effective_root(cli, root);
@@ -185,6 +244,10 @@ fn doctor_triage_json(cli: &Cli, root: &Path) -> anyhow::Result<Value> {
             }
         }
     };
+    if let Some(issue) = doctor_fast_unsafe_issue(cli, status.as_ref()) {
+        issues.push(issue);
+        next.push("unset ASGREP_DURABILITY  # or: asgrep --durability balanced …".to_string());
+    }
     let root_display = root.display().to_string();
     if status.is_none() {
         next.push(format!("asgrep index {root_display} --json"));
@@ -212,11 +275,11 @@ fn doctor_triage_json(cli: &Cli, root: &Path) -> anyhow::Result<Value> {
         json!({"robot_triage": true, "root": root, "index_path": cli.index_path, "status": status, "issues": issues, "suggested_commands": next, "healthy": issues.is_empty(), "tty": io::stdout().is_terminal()}),
     )
 }
-pub(crate) fn print_robot_guide() {
+/// Agent handbook body (markdown). Single source for human stdout and --json envelope.
+pub(crate) fn robot_guide_markdown() -> &'static str {
     // Handbook text is kept in sync with clap/capabilities (hceb): prefer capabilities --json
     // for the authoritative command/flag catalog derived from Cli::command().
-    print!(
-        r#"# asgrep — agent handbook (robot-docs guide)
+    r#"# asgrep — agent handbook (robot-docs guide)
 ## Agent triad (start here)
 1. `asgrep capabilities --json` — authoritative command/flag/env contract (derived from clap).
 2. `asgrep robot-docs guide` — this handbook.
@@ -238,16 +301,44 @@ See `capabilities --json` → `commands` (complete clap catalog). Notable: `sear
 - Machine mode emits one JSON value on stdout and no duplicate stderr diagnostics.
 ## Index cancel / dry-run
 - `asgrep index --dry-run` / `asgrep reindex --dry-run` report planned work without mutating the index.
-- SIGINT during a real index leaves the previous on-disk index if the build uses build-then-swap; incomplete writes are not promoted.
+- Index writes are transactional; an interrupted uncommitted write is rolled back when SQLite recovers.
 ## Exit codes
 - 0 success · 1 usage · 2 index/search failure
 ## Environment
-See `capabilities --json` → `environment`. Common: `ASGREP_INDEX_PATH`, `ASGREP_LIMIT`, `ASGREP_NO_EMBED`, `NO_COLOR`, `CI`.
+See `capabilities --json` → `environment`. Common: `ASGREP_INDEX_PATH`, `ASGREP_LIMIT`, `ASGREP_NO_EMBED`, `ASGREP_DURABILITY`, `NO_COLOR`, `CI`.
+## Ops footguns (privileged sinks)
+- `ASGREP_INDEX_PATH` / `--index-path` is a **privileged sink**: any absolute writable path is accepted. Treat it like a database URL; do not point it at untrusted locations.
+- Index rebuilds are in-place on the default `.asgrep/` DB or a pinned `ASGREP_INDEX_PATH` (SQLite transactional rollback). There is no build-then-swap generation layout. Pinning only chooses which file; it does not change atomicity.
+- `ASGREP_DURABILITY=fast-unsafe` (or `--durability fast-unsafe`) opts into power-loss corruption risk during write batches. `asgrep doctor` / `status` surface it; MCP/Code Mode inherit the env.
+- MCP and Code Mode / NAPI jail tool `root` under the configured workspace (`escapes configured workspace`). Host duty remains: set `ASGREP_ROOT` / Session root intentionally; NAPI inherits Session (not a free root).
 ## Common mistakes
 - Missing or empty index: run `asgrep index <root> --json` before searching.
 - Missing ROOT is an operational error; it is never reported as an empty result.
+- Full rebuild: prefer `asgrep reindex --dry-run <root> --json` before `reindex`.
+- Output format is not `json`: use `--json` and optionally `--format compact` (not `--format json`).
+- Piping: `asgrep --json … | head` is safe (broken pipe exits cleanly); always put data flags on asgrep, not the pipe consumer.
+- Watch + long-lived MCP/Code Mode on the same index: writers bump `writer_generation` beside the index home; warm Searchers poll and reopen. Prefer one shared `ASGREP_INDEX_PATH`. See `docs/index-consistency.md`.
 "#
-    );
+}
+
+pub(crate) fn print_robot_guide() {
+    print!("{}", robot_guide_markdown());
+}
+
+/// Emit handbook: markdown on stdout, or machine JSON envelope when `--json`.
+pub(crate) fn emit_robot_guide(cli: &Cli) -> anyhow::Result<()> {
+    if cli.json {
+        return crate::print_machine_json(
+            "robot-docs",
+            serde_json::json!({
+                "topic": "guide",
+                "format": "markdown",
+                "body": robot_guide_markdown(),
+            }),
+        );
+    }
+    print_robot_guide();
+    Ok(())
 }
 pub(crate) fn query_looks_like_subcommand_typo(query: &str) -> Option<&'static str> {
     let q = query.trim();
@@ -257,7 +348,13 @@ pub(crate) fn query_looks_like_subcommand_typo(query: &str) -> Option<&'static s
     let lower = q.to_ascii_lowercase();
     // Plausible search tokens that sit near a command name at edit-distance 2.
     const SEARCH_SAFE: &[&str] = &[
-        "static", "string", "struct", "switch", "symbol", "sample", "searchable",
+        "static",
+        "string",
+        "struct",
+        "switch",
+        "symbol",
+        "sample",
+        "searchable",
     ];
     if SEARCH_SAFE.contains(&lower.as_str()) {
         return None;
@@ -337,9 +434,81 @@ fn edit_distance(left: &str, right: &str) -> usize {
     }
     previous[right.len()]
 }
+
+/// Teach missing-QUERY and other clap usage gaps with an exact recoverable command.
+pub(crate) fn augment_clap_usage_message(msg: &str, command: &str) -> String {
+    let mut msg = msg.to_string();
+    let missing_query = msg.contains("required arguments were not provided")
+        && (msg.contains("<QUERY>") || msg.contains("QUERY"));
+    if missing_query {
+        let example = match command {
+            "keyword" => r#"Example: asgrep keyword --json "auth refresh" ."#,
+            "semantic" => r#"Example: asgrep semantic --json "where is auth refreshed" ."#,
+            "search" => r#"Example: asgrep search --json --format compact "auth refresh" ."#,
+            "chain" => r#"Example: asgrep chain "callers:process_request" ."#,
+            _ => r#"Example: asgrep --json --format compact "auth refresh" ."#,
+        };
+        msg.push('\n');
+        msg.push_str(example);
+        msg.push_str("\nTip: QUERY is required; optional ROOT defaults to `.`.");
+    }
+    msg
+}
+
 pub(crate) fn print_agent_help_footer() {
     eprintln!("\nAgent surfaces: {TOOL} capabilities --json | {TOOL} robot-docs guide | {TOOL} doctor --robot-triage");
     eprintln!(
         "Exit codes: 0=ok, 1=usage, 2=operation failed. Use --json for machine-readable stdout."
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    fn status_with_durability(durability: &str) -> ast_sgrep_core::IndexStatus {
+        ast_sgrep_core::IndexStatus {
+            root: "/tmp".into(),
+            index_path: "/tmp/.asgrep/index.db".into(),
+            file_count: 1,
+            line_count: 1,
+            symbol_count: 0,
+            caller_count: 0,
+            import_count: 0,
+            semantic_chunk_count: 0,
+            embed_backend: None,
+            embed_dim: None,
+            embed_cache_entries: 0,
+            embed_cache_capacity: 0,
+            embed_cache_hits: 0,
+            embed_cache_misses: 0,
+            semantic_ivf_present: false,
+            durability: durability.into(),
+            writer_generation: 0,
+        }
+    }
+
+    #[test]
+    fn doctor_surfaces_fast_unsafe_from_status() {
+        let cli = Cli::try_parse_from(["asgrep", "doctor", "."]).expect("parse");
+        let issue = doctor_fast_unsafe_issue(&cli, Some(&status_with_durability("fast-unsafe")));
+        assert_eq!(issue.as_ref().unwrap()["kind"], "durability_fast_unsafe");
+    }
+
+    #[test]
+    fn doctor_surfaces_fast_unsafe_from_cli_flag() {
+        let cli = Cli::try_parse_from(["asgrep", "--durability", "fast-unsafe", "doctor", "."])
+            .expect("parse");
+        let issue = doctor_fast_unsafe_issue(&cli, Some(&status_with_durability("balanced")));
+        assert_eq!(issue.as_ref().unwrap()["kind"], "durability_fast_unsafe");
+    }
+
+    #[test]
+    fn doctor_surfaces_silent_on_balanced() {
+        let cli = Cli::try_parse_from(["asgrep", "doctor", "."]).expect("parse");
+        assert!(
+            doctor_fast_unsafe_issue(&cli, Some(&status_with_durability("balanced"))).is_none()
+        );
+    }
 }

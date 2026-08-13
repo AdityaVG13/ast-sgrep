@@ -1,6 +1,6 @@
 [package]
 name = "ast-sgrep-mmap"
-description = "Sealed read-only mmap wrapper (sole intentional unsafe boundary)"
+description = "Sealed read-only mmap wrapper (sole hand-written unsafe boundary)"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

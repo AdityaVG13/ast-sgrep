@@ -219,7 +219,10 @@ const CASES: &[LanguageConformanceCase] = &[
             ("move", "touch"),
             ("make_widget", "render"),
         ],
-        patterns: &[("function $NAME($$$)", "make_widget"), ("render($$$)", "render")],
+        patterns: &[
+            ("function $NAME($$$)", "make_widget"),
+            ("render($$$)", "render"),
+        ],
         forbid: &["doc_only_cpp"],
     },
     LanguageConformanceCase {

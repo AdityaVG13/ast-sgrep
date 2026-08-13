@@ -5,8 +5,8 @@
  * Amdahl win over per-wave `codemode-batch` spawns.
  */
 import { spawn } from "node:child_process";
-import { createInterface } from "node:readline";
 import { asEnvelope } from "./dispatch.js";
+const DEFAULT_MAX_OUTPUT_BYTES = 4 * 1024 * 1024;
 export async function startStickyWorker(options) {
     if (options.signal?.aborted) {
         throw new Error("codemode-serve aborted before start");
@@ -20,7 +20,9 @@ export async function startStickyWorker(options) {
     let nextId = 0;
     let closed = false;
     let stderr = "";
-    const rl = createInterface({ input: child.stdout, crlfDelay: Infinity });
+    let stdout = Buffer.alloc(0);
+    const decoder = new TextDecoder("utf-8", { fatal: true });
+    const maxOutputBytes = options.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES;
     const failAll = (err) => {
         for (const p of pending.values())
             p.reject(err);
@@ -30,11 +32,13 @@ export async function startStickyWorker(options) {
         if (closed)
             return;
         closed = true;
+        options.signal?.removeEventListener("abort", onAbort);
         killChild(child);
         failAll(err);
-        rl.close();
+        child.stdout.destroy();
     };
-    rl.on("line", (line) => {
+    child.stdin.on("error", terminate);
+    const handleLine = (line) => {
         const trimmed = line.trim();
         if (!trimmed)
             return;
@@ -43,7 +47,7 @@ export async function startStickyWorker(options) {
             msg = JSON.parse(trimmed);
         }
         catch (cause) {
-            failAll(new Error(`codemode-serve bad JSON: ${trimmed.slice(0, 200)}`));
+            terminate(new Error(`codemode-serve bad JSON: ${trimmed.slice(0, 200)}`));
             void cause;
             return;
         }
@@ -58,6 +62,44 @@ export async function startStickyWorker(options) {
             return;
         pending.delete(id);
         waiter.resolve(msg);
+    };
+    child.stdout.on("data", (chunk) => {
+        if (closed)
+            return;
+        const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+        let offset = 0;
+        let newline;
+        while ((newline = bytes.indexOf(0x0a, offset)) >= 0) {
+            const segment = bytes.subarray(offset, newline);
+            const lineBytes = stdout.length + segment.length + 1;
+            if (lineBytes > maxOutputBytes) {
+                terminate(new Error(`codemode-serve output exceeded ${maxOutputBytes} bytes`));
+                return;
+            }
+            const line = stdout.length === 0
+                ? segment
+                : Buffer.concat([stdout, segment], stdout.length + segment.length);
+            stdout = Buffer.alloc(0);
+            try {
+                handleLine(decoder.decode(line));
+            }
+            catch {
+                terminate(new Error("codemode-serve output is not valid UTF-8"));
+                return;
+            }
+            if (closed)
+                return;
+            offset = newline + 1;
+        }
+        const tail = bytes.subarray(offset);
+        if (stdout.length + tail.length > maxOutputBytes) {
+            terminate(new Error(`codemode-serve output exceeded ${maxOutputBytes} bytes`));
+        }
+        else if (tail.length > 0) {
+            stdout = stdout.length === 0
+                ? Buffer.from(tail)
+                : Buffer.concat([stdout, tail], stdout.length + tail.length);
+        }
     });
     child.stderr.on("data", (chunk) => {
         stderr += String(chunk);
@@ -65,11 +107,11 @@ export async function startStickyWorker(options) {
             stderr = stderr.slice(-8_192);
     });
     child.on("error", (err) => {
-        closed = true;
-        failAll(err);
+        terminate(err);
     });
     child.on("close", (code, signal) => {
         closed = true;
+        options.signal?.removeEventListener("abort", onAbort);
         if (pending.size > 0) {
             failAll(new Error(`codemode-serve exited code=${code ?? "null"} signal=${signal ?? "null"} stderr=${stderr.slice(0, 512)}`));
         }
@@ -84,12 +126,15 @@ export async function startStickyWorker(options) {
         payload.id = id;
         return new Promise((resolve, reject) => {
             pending.set(id, { resolve, reject });
-            child.stdin.write(`${JSON.stringify(payload)}\n`, (err) => {
-                if (err) {
-                    pending.delete(id);
-                    reject(err);
-                }
-            });
+            try {
+                child.stdin.write(`${JSON.stringify(payload)}\n`, (err) => {
+                    if (err)
+                        terminate(err);
+                });
+            }
+            catch (cause) {
+                terminate(cause instanceof Error ? cause : new Error(String(cause)));
+            }
         });
     };
     const writeWithControls = (payload, label, signal) => {
@@ -151,21 +196,9 @@ export async function startStickyWorker(options) {
             return out;
         },
         async end() {
-            options.signal?.removeEventListener("abort", onAbort);
             if (closed)
                 return;
-            try {
-                if (child.stdin.writable) {
-                    child.stdin.write(`${JSON.stringify({ type: "end" })}\n`);
-                    child.stdin.end();
-                }
-            }
-            catch {
-                // ignore
-            }
-            killChild(child);
-            closed = true;
-            rl.close();
+            terminate(new Error("codemode-serve ended"));
         },
     };
 }
@@ -181,48 +214,72 @@ export async function runBatchViaStdin(options) {
         });
         let stdout = "";
         let stderr = "";
+        let outputBytes = 0;
+        let settled = false;
+        const maxOutputBytes = options.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES;
+        const cleanup = () => {
+            if (timer)
+                clearTimeout(timer);
+            options.signal?.removeEventListener("abort", onAbort);
+        };
+        const finish = (action) => {
+            if (settled)
+                return;
+            settled = true;
+            cleanup();
+            action();
+        };
+        const fail = (error) => finish(() => {
+            killChild(child);
+            reject(error);
+        });
+        child.stdin.on("error", fail);
         const timer = options.timeoutMs && options.timeoutMs > 0
             ? setTimeout(() => {
-                killChild(child);
-                reject(new Error(`codemode-batch timed out after ${options.timeoutMs}ms`));
+                fail(new Error(`codemode-batch timed out after ${options.timeoutMs}ms`));
             }, options.timeoutMs)
             : undefined;
         const onAbort = () => {
-            killChild(child);
-            reject(new Error("codemode-batch aborted"));
+            fail(new Error("codemode-batch aborted"));
         };
         options.signal?.addEventListener("abort", onAbort, { once: true });
         child.stdout.on("data", (c) => {
+            outputBytes += Buffer.byteLength(c);
+            if (outputBytes > maxOutputBytes) {
+                fail(new Error(`codemode-batch output exceeded ${maxOutputBytes} bytes`));
+                return;
+            }
             stdout += String(c);
         });
         child.stderr.on("data", (c) => {
+            outputBytes += Buffer.byteLength(c);
+            if (outputBytes > maxOutputBytes) {
+                fail(new Error(`codemode-batch output exceeded ${maxOutputBytes} bytes`));
+                return;
+            }
             stderr += String(c);
         });
         child.on("error", (err) => {
-            if (timer)
-                clearTimeout(timer);
-            options.signal?.removeEventListener("abort", onAbort);
-            reject(err);
+            fail(err);
         });
         child.on("close", (code) => {
-            if (timer)
-                clearTimeout(timer);
-            options.signal?.removeEventListener("abort", onAbort);
+            if (settled)
+                return;
             if (code !== 0) {
-                reject(new Error(`codemode-batch exited ${code}: ${stderr.slice(0, 512) || stdout.slice(0, 512)}`));
+                fail(new Error(`codemode-batch exited ${code}: ${stderr.slice(0, 512) || stdout.slice(0, 512)}`));
                 return;
             }
             try {
-                resolve(JSON.parse(stdout));
+                const value = JSON.parse(stdout);
+                finish(() => resolve(value));
             }
             catch (cause) {
-                reject(cause);
+                fail(cause instanceof Error ? cause : new Error(String(cause)));
             }
         });
         child.stdin.write(options.body, (err) => {
             if (err) {
-                killChild(child);
-                reject(err);
+                fail(err);
                 return;
             }
             child.stdin.end();

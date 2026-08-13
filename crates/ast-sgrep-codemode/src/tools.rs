@@ -72,7 +72,11 @@ pub enum CallError {
 }
 
 /// Dispatch a single tool call against a session.
-pub fn call_tool(session: &mut CodeModeSession, name: &str, args: Value) -> Result<Value, CallError> {
+pub fn call_tool(
+    session: &mut CodeModeSession,
+    name: &str,
+    args: Value,
+) -> Result<Value, CallError> {
     let tool = ToolName::parse(name).ok_or_else(|| CallError::UnknownTool(name.to_string()))?;
     match tool {
         ToolName::Search => session.search(&args).map_err(CallError::from),
@@ -123,7 +127,9 @@ pub fn call_tool(session: &mut CodeModeSession, name: &str, args: Value) -> Resu
             let name = require_str(&args, "name")?;
             match catalog_describe(name) {
                 Some(def) => Ok(serde_json::to_value(def)?),
-                None => Err(CallError::InvalidArgs(format!("unknown tool in catalog: {name}"))),
+                None => Err(CallError::InvalidArgs(format!(
+                    "unknown tool in catalog: {name}"
+                ))),
             }
         }
     }
@@ -158,7 +164,8 @@ fn filter_hits(args: &Value) -> Result<Value, CallError> {
         .get("limit")
         .and_then(|v| v.as_u64())
         .map(|n| n as usize)
-        .unwrap_or(usize::MAX);
+        .map(|n| n.clamp(1, ast_sgrep_core::MAX_OUTPUT_RESULTS))
+        .unwrap_or(ast_sgrep_core::MAX_OUTPUT_RESULTS);
 
     let out: Vec<Value> = hit_array(hits_val)?
         .into_iter()

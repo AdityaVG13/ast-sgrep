@@ -149,7 +149,9 @@ pub fn top_k_flat_similarity(
     limit: usize,
     min_similarity: Option<f32>,
 ) -> Vec<(usize, f32)> {
-    let n = flat.len() / dim;
+    // Guard dim/limit before any `/ dim` — bare integer division panics on dim=0
+    // (empty/corrupt embedding corpora must return no hits, not abort).
+    let n = flat.len().checked_div(dim).unwrap_or(0);
     if limit == 0 || n == 0 || dim == 0 || query_vec.len() != dim {
         return vec![];
     }
@@ -360,11 +362,7 @@ mod property_tests {
             let scored = Scored::new(i, sim);
             assert_eq!(scored.is_some(), sim.is_finite());
         }
-        let mixed: Vec<_> = seeds
-            .iter()
-            .enumerate()
-            .map(|(i, s)| (i, *s))
-            .collect();
+        let mixed: Vec<_> = seeds.iter().enumerate().map(|(i, s)| (i, *s)).collect();
         let ranked = top_by_similarity(mixed, 8, None);
         assert!(ranked.iter().all(|(_, s)| s.is_finite()));
         for window in ranked.windows(2) {
@@ -390,5 +388,31 @@ mod property_tests {
         };
         let hits = top_k_flat_similarity(&q, &flat, 3, 2, Some(MIN_SIMILARITY));
         assert!(hits.iter().all(|(_, s)| s.is_finite()));
+    }
+
+    /// Product edge paths: empty corpus, zero dim, limit 0 / max, dim mismatch.
+    /// Must return empty — never panic (div-by-zero on dim=0 was a real crash).
+    #[test]
+    fn top_k_flat_edge_paths_return_empty_without_panic() {
+        let row = [1.0f32, 0.0, 0.0];
+        let flat = {
+            let mut v = vec![1.0f32, 0.0, 0.0, 0.0, 1.0, 0.0];
+            normalize_vec_in_place(&mut v[0..3]);
+            normalize_vec_in_place(&mut v[3..6]);
+            v
+        };
+        // empty corpus
+        assert!(top_k_flat_similarity(&row, &[], 3, 5, Some(MIN_SIMILARITY)).is_empty());
+        // zero dim (empty and non-empty flat) — must not divide-by-zero
+        assert!(top_k_flat_similarity(&[], &[], 0, 5, None).is_empty());
+        assert!(top_k_flat_similarity(&[], &[1.0, 2.0], 0, 5, None).is_empty());
+        // limit 0
+        assert!(top_k_flat_similarity(&row, &flat, 3, 0, Some(MIN_SIMILARITY)).is_empty());
+        // query dim mismatch
+        assert!(top_k_flat_similarity(&[1.0, 0.0], &flat, 3, 5, None).is_empty());
+        // max limit: still ranks without OOM on tiny corpus
+        let hits = top_k_flat_similarity(&row, &flat, 3, usize::MAX, None);
+        assert_eq!(hits.len(), 2);
+        assert!(hits[0].1 >= hits[1].1);
     }
 }

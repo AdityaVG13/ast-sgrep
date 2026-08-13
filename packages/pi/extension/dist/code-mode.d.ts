@@ -2,17 +2,16 @@ import { type AstSgrepRuntime, type MachineEnvelope, type RunOptions, type Runti
 export type SgrepKind = "asgrep" | "def" | "caller" | "graph" | "anchor" | "import" | "pattern" | "embed";
 export type SgrepSignal = "exact" | "structural" | "semantic";
 export type SgrepRef = `${string}#L${number}-L${number}`;
+/**
+ * Trusted search hit. Location is solely `ref` (parsed once at the CLI/JSON boundary).
+ * Wire may still dual-encode file/lines; those are not live fields on this type.
+ */
 export interface SgrepHit {
     kind: SgrepKind;
     signal: SgrepSignal;
     contributors: SgrepKind[];
     score: number;
     margin: number;
-    file: string;
-    lines: {
-        start: number;
-        end: number;
-    };
     ref: SgrepRef;
     preview: string;
     symbol?: string | null;
@@ -36,15 +35,18 @@ export interface SgrepReadOptions {
     maxChars?: number;
     signal?: AbortSignal;
 }
+/**
+ * Trusted read window. Location is solely `ref` (actual lines returned; may expand the
+ * request via contextLines). Derive file/lines with `parseSgrepRef` -- no live twins.
+ */
 export interface SgrepReadResult {
     ref: SgrepRef;
-    file: string;
-    lines: {
-        start: number;
-        end: number;
-    };
     content: string;
     truncated: boolean;
+    /** Present when truncated: 1-indexed line to resume from (on the last shown line). */
+    resumeOffset?: number;
+    /** Named recovery hint for the model (empty/past-EOF/truncation). */
+    note?: string;
 }
 export interface SgrepApi {
     keywordSearch(query: string, options?: SgrepSearchOptions): Promise<SgrepSearchResponse>;
@@ -62,6 +64,12 @@ export interface SgrepApi {
 }
 export type SgrepPlan<T> = (sgrep: Readonly<SgrepApi>) => T | Promise<T>;
 type RuntimeLike = Pick<AstSgrepRuntime, "run" | "resolveRoot">;
+/** Derive file/lines from a branded ref (sole location encoding on SgrepHit). */
+export declare function parseSgrepRef(ref: SgrepRef): {
+    file: string;
+    start: number;
+    end: number;
+};
 export declare class SgrepCodeMode implements SgrepApi {
     #private;
     private readonly runtime;

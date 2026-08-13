@@ -8,6 +8,16 @@ pi install npm:pi-ast-sgrep
 
 This is the canonical package-user guide for the `1.4.0` contract. npm availability is established only by an authorized release, not by this repository documentation. For a project-local Pi installation, add `-l` to Pi package-management commands.
 
+
+## Pi packages.md compliance
+
+This package follows [Pi packages](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/packages.md):
+
+- `keywords` includes `pi-package`
+- `pi.extensions` / `pi.skills` / `pi.image` declared in `packages/pi/extension/package.json`
+- Pi core (`@earendil-works/pi-coding-agent`) is an optional peer constrained to the tested `>=0.80.6 <1` range and is not duplicated at runtime
+- Runtime dependencies that are not supplied by Pi (`ast-sgrep` and `typebox`) stay in `dependencies`
+
 ## Requirements and packaged platforms
 
 - Node.js `>=22.19.0`.
@@ -22,7 +32,7 @@ The npm layers are exact-version matched: the `pi-ast-sgrep` extension depends o
 
 Restart Pi after installation if the current session does not reload package resources. The package contributes:
 
-- Tools: **`asgrep_codemode`** (primary — JS Code Mode on an **in-process NAPI** `CodeModeSession`), plus `asgrep_search`, `asgrep_index`, and `asgrep_status` for simple one-shot calls. All share one warm in-process Searcher per project root — no CLI spawn on the hot path (MCP-class native feel).
+- Tools: **`asgrep`** (primary — JS Code Mode on an **in-process NAPI** `CodeModeSession`), plus `asgrep_search`, `asgrep_index`, and `asgrep_status` for one-shot search/index/status. Search tools share one warm in-process Searcher per project root — no CLI spawn on the hot path (MCP-class native feel).
 - Commands: `/asgrep-doctor`, `/asgrep-status`, `/asgrep-index`, and `/asgrep-reindex`. These commands accept no arguments.
 - Skill: `ast-sgrep`, which prefers Code Mode for multi-step/parallel retrieval and teaches when exact-text search is better.
 
@@ -30,7 +40,7 @@ Start in the project you want Pi to search. A first search (Code Mode or direct)
 
 ### Code Mode (preferred)
 
-Ask Pi to use `asgrep_codemode`, or call it with a JavaScript program:
+Ask Pi to use `asgrep`, or call it with a JavaScript program:
 
 ```json
 {
@@ -38,7 +48,7 @@ Ask Pi to use `asgrep_codemode`, or call it with a JavaScript program:
 }
 ```
 
-The executor runs that code with typed `asgrep.*` methods (native CLI under the hood). Use `Promise.all` for independent lookups; filter and shape results in JS; return only what the model needs. See [codemode.md](codemode.md). Code Mode is independent of MCP.
+The executor runs that code with typed `asgrep.*` methods backed by a warm in-process native session. Use `Promise.all` for independent lookups; filter and shape results in JS; return only what the model needs. See [codemode.md](codemode.md). Code Mode is independent of MCP — **do not also register `asgrep-mcp` in this Pi session** (Code Mode XOR MCP).
 
 ### Direct search examples
 
@@ -56,13 +66,15 @@ Use `natural` when you know the intent but not the spelling, `pattern` for a str
 
 ## Project data and freshness
 
-The first index or search that needs an index creates `<project-root>/.asgrep/`. It may contain the index database, embedding data, format metadata, locks, and atomic-rebuild state. The package respects ignore rules while indexing but **does not edit `.gitignore`**. If you do not want generated index data committed, add this entry yourself:
+The first index or search that needs an index creates `<project-root>/.asgrep/`. It may contain the index database, embedding data, format metadata, and locks. The package respects ignore rules while indexing but **does not edit `.gitignore`**. If you do not want generated index data committed, add this entry yourself:
 
 ```gitignore
 .asgrep/
 ```
 
-After a successful Pi `write` or `edit` tool call, the extension marks the affected path dirty and refreshes it before the next search. After the configured interval (30 seconds by default) without edits, the package rechecks index health via `status` and only rebuilds when the index is missing or incompatible—not on a pure wall-clock lease alone. Concurrent searches for the same root share one in-flight refresh and wait for it rather than starting duplicate index work. Wall-clock freshness is best-effort: large clock skew or a backward jump can delay expiry detection; prefer write/edit dirtying for correctness-critical workflows. Use `/asgrep-status` to inspect the root, index, backend, counts, IVF state, and capabilities; use `/asgrep-reindex` only for an explicit full rebuild or recovery.
+After a successful Pi `write` or `edit` tool call, the extension records the affected path and incrementally updates only those known created, changed, or deleted paths before the next search. A recursive project watcher does the same for unambiguous external file changes. Renames, directory events, ignore-file edits, watcher errors, and ambiguous events require a full incremental reconciliation; `.asgrep` self-writes are ignored. If recursive watching is unavailable, the extension performs one immediate correctness scan and relies on periodic scans. The configured interval (30 seconds by default) always forces a full incremental scan so dropped filesystem events cannot leave the index stale indefinitely. Missing indexes are built and incompatible indexes use the controlled rebuild path. Concurrent searches for the same root share one in-flight refresh and wait for it rather than starting duplicate index work.
+
+Run `/asgrep-index` when freshness is needed immediately after a large generator, branch switch, or other external operation rather than waiting for watcher/interval reconciliation. Use `/asgrep-status` to inspect the root, index, backend, counts, IVF state, and capabilities; use `/asgrep-reindex` only for an explicit strict full rebuild or recovery.
 
 ## Configuration and project boundary
 
@@ -117,7 +129,7 @@ Update this package alone with:
 pi update npm:pi-ast-sgrep
 ```
 
-`pi update --extensions` updates all installed packages. Compatible releases validate and reuse `.asgrep`. For an incompatible index format, the extension builds a replacement separately and swaps it only after validation; a failed rebuild reports an actionable error and leaves prior data recoverable. A newer, unreadable format is rejected and preserved rather than silently modified.
+`pi update --extensions` updates all installed packages. Compatible releases validate and reuse `.asgrep`. For an incompatible index format, the extension quiesces its warm session and performs a strict in-place rebuild: preparation and repository-walk failures abort before writes, and rewrites plus stale-row pruning commit together. A failed rebuild reports an actionable error and leaves prior rows recoverable. A newer, unreadable format is rejected and preserved rather than silently modified.
 
 To roll back, install an exact previously published package version as one matched unit:
 

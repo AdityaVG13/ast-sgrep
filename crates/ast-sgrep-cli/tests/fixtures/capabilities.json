@@ -20,6 +20,7 @@
       "flags": [
         "--ann-probes",
         "--ann-threshold",
+        "--budget-tokens",
         "--cloud-embed",
         "--excerpt-lines",
         "--fixture",
@@ -93,6 +94,7 @@
       "flags": [
         "--ann-probes",
         "--ann-threshold",
+        "--budget-tokens",
         "--cloud-embed",
         "--dry-run",
         "--excerpt-lines",
@@ -100,6 +102,7 @@
         "--neural-embed",
         "--no-embed",
         "--ollama-embed",
+        "--path",
         "--rerank",
         "--rerank-top-k",
         "--response-snippet-tokens",
@@ -108,13 +111,20 @@
         "--tantivy"
       ],
       "name": "index",
+      "safe_mutating": {
+        "kind": "incremental",
+        "note": "incremental refresh with transactional index writes",
+        "prefer_first": "asgrep index <ROOT> --json"
+      },
       "usage": "asgrep index"
     },
     {
       "about": "Lexical-only (FTS/trigram) search",
+      "example": "asgrep keyword --json \"auth refresh\" .",
       "flags": [
         "--ann-probes",
         "--ann-threshold",
+        "--budget-tokens",
         "--cloud-embed",
         "--excerpt-lines",
         "--format",
@@ -133,10 +143,11 @@
       "usage": "asgrep keyword"
     },
     {
-      "about": "Clear and rebuild an index",
+      "about": "Force a full transactional rebuild",
       "flags": [
         "--ann-probes",
         "--ann-threshold",
+        "--budget-tokens",
         "--cloud-embed",
         "--dry-run",
         "--excerpt-lines",
@@ -152,6 +163,11 @@
         "--tantivy"
       ],
       "name": "reindex",
+      "safe_mutating": {
+        "kind": "full_rebuild",
+        "note": "forces a full in-place transactional rewrite; dry-run reports plan without writing",
+        "prefer_first": "asgrep reindex --dry-run <ROOT> --json"
+      },
       "usage": "asgrep reindex"
     },
     {
@@ -166,9 +182,11 @@
         "find",
         "query"
       ],
+      "example": "asgrep search --json --format compact \"auth refresh\" .",
       "flags": [
         "--ann-probes",
         "--ann-threshold",
+        "--budget-tokens",
         "--cloud-embed",
         "--excerpt-lines",
         "--format",
@@ -188,9 +206,11 @@
     },
     {
       "about": "Embedding-only semantic search",
+      "example": "asgrep semantic --json \"where is auth refreshed\" .",
       "flags": [
         "--ann-probes",
         "--ann-threshold",
+        "--budget-tokens",
         "--cloud-embed",
         "--excerpt-lines",
         "--format",
@@ -235,6 +255,7 @@
   "environment": [
     "ASGREP_LIMIT",
     "ASGREP_INDEX_PATH",
+    "ASGREP_DURABILITY",
     "ASGREP_NO_EMBED",
     "ASGREP_CLOUD_EMBED",
     "ASGREP_OLLAMA_EMBED",
@@ -249,6 +270,7 @@
     "ASGREP_RERANK_TOP_K",
     "ASGREP_EMBED_URL_ALLOWLIST",
     "ASGREP_ALLOW_AST_GREP",
+    "ASGREP_ALLOW_EXTERNAL_INDEX",
     "ASGREP_AST_GREP",
     "ASGREP_LEDGER_PATH",
     "ASGREP_USE_CACHE",
@@ -274,14 +296,15 @@
     },
     {
       "code": 1,
-      "meaning": "user input / usage error"
+      "meaning": "usage error (missing required args, unknown flags, invalid --format, conflicting roots)"
     },
     {
       "code": 2,
-      "meaning": "index or search operation failed"
+      "meaning": "operational failure (index/search/IO) or doctor healthy:false"
     }
   ],
   "global_flags": [
+    "--durability",
     "--index-path",
     "--json",
     "--lang",
@@ -307,7 +330,8 @@
   },
   "notes": {
     "default_search": "Bare QUERY without a subcommand runs hybrid search; the word 'search' is not a required verb \u2014 use the `search`/`find`/`query` subcommand only when you want an explicit search command.",
-    "format_implies_json": true
+    "format_implies_json": true,
+    "safe_mutating": "index refreshes incrementally with transactional writes. reindex forces a full transactional rewrite -- prefer `asgrep reindex --dry-run <ROOT> --json` before a full reindex."
   },
   "ok": true,
   "output_limits": {
@@ -349,6 +373,7 @@
   "search_tuning_flags": [
     "--ann-probes",
     "--ann-threshold",
+    "--budget-tokens",
     "--cloud-embed",
     "--excerpt-lines",
     "--format",

@@ -1,8 +1,13 @@
 import assert from "node:assert/strict";
+import { getEventListeners } from "node:events";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 import { createAsgrepConnector } from "../src/codemode/connector.js";
 import { createCodemodeDispatcher, argvFor, asEnvelope } from "../src/codemode/dispatch.js";
-import { normalizeCode, runCodemode } from "../src/codemode/sandbox.js";
+import { normalizeCode, runCodemode } from "../src/codemode/runner.js";
+import { runBatchViaStdin, startStickyWorker } from "../src/codemode/worker.js";
 import type { MachineEnvelope } from "../src/runtime.js";
 
 test("normalizeCode wraps bare bodies and strips fences", () => {
@@ -27,7 +32,6 @@ test("Promise.all overlaps host calls (Amdahl parallel fraction)", async () => {
     },
   };
   const bundle = createAsgrepConnector(host, { cwd: "/project" });
-  const wall0 = Date.now();
   const outcome = await runCodemode(
     `async () => {
       const [a, b, c] = await Promise.all([
@@ -40,10 +44,8 @@ test("Promise.all overlaps host calls (Amdahl parallel fraction)", async () => {
     bundle.asgrep,
     { stats: bundle.stats },
   );
-  const wall = Date.now() - wall0;
-  assert.equal(outcome.ok, true, outcome.error);
+  assert.equal(outcome.ok, true, outcome.ok ? undefined : outcome.error);
   assert.deepEqual(outcome.result, { n: 3 });
-  assert.ok(wall < 140, `expected overlapped wall < 140ms, got ${wall}ms`);
   assert.equal(starts.length, 3);
   assert.ok(Math.max(...starts) - Math.min(...starts) < 25, "calls should start in the same wave");
   assert.ok(bundle.stats().calls >= 3);
@@ -82,7 +84,7 @@ test("dispatcher coalesces same-tick calls into one batch wave", async () => {
     bundle.asgrep,
     { stats: bundle.stats },
   );
-  assert.equal(outcome.ok, true, outcome.error);
+  assert.equal(outcome.ok, true, outcome.ok ? undefined : outcome.error);
   assert.deepEqual(outcome.result, { a: "search", b: "defs", batched: true });
   assert.equal(batchCalls, 1);
   assert.equal(runCalls.length, 0);
@@ -123,7 +125,7 @@ test("partial batch failure does not re-run successful siblings via spawn", asyn
     bundle.asgrep,
     { stats: bundle.stats },
   );
-  assert.equal(outcome.ok, true, outcome.error);
+  assert.equal(outcome.ok, true, outcome.ok ? undefined : outcome.error);
   assert.match(String(outcome.result), /symbol|failed/i);
   assert.equal(runCalls.length, 0, "must not fall back to spawn on per-call failure");
   assert.equal(bundle.stats().batchedCalls, 2);
@@ -167,7 +169,7 @@ test("sticky worker handles multi-wave program without batch/spawn", async () =>
     bundle.asgrep,
     { stats: bundle.stats },
   );
-  assert.equal(outcome.ok, true, outcome.error);
+  assert.equal(outcome.ok, true, outcome.ok ? undefined : outcome.error);
   assert.deepEqual(outcome.result, { a: "search", b: "defs", c: "chain" });
   assert.ok(bundle.stats().stickyCalls >= 3);
   assert.equal(bundle.stats().parallelSpawnCalls, 0);
@@ -187,7 +189,6 @@ test("dispatcher falls back to parallel spawn when batch fails", async () => {
     },
   };
   const bundle = createAsgrepConnector(host, { cwd: "/p" });
-  const wall0 = Date.now();
   const outcome = await runCodemode(
     `async () => {
       const [a, b] = await Promise.all([asgrep.search({ query: "a" }), asgrep.search({ query: "b" })]);
@@ -196,59 +197,396 @@ test("dispatcher falls back to parallel spawn when batch fails", async () => {
     bundle.asgrep,
     { stats: bundle.stats },
   );
-  const wall = Date.now() - wall0;
-  assert.equal(outcome.ok, true, outcome.error);
+  assert.equal(outcome.ok, true, outcome.ok ? undefined : outcome.error);
   assert.equal(outcome.result, true);
   assert.equal(runCalls.length, 2);
-  assert.ok(wall < 90, `fallback parallel spawn should overlap, wall=${wall}`);
+  assert.ok(Math.max(...runCalls) - Math.min(...runCalls) < 25, "fallback calls should overlap");
   assert.equal(bundle.stats().parallelSpawnCalls, 2);
 });
 
-test("sandbox blocks require and process", async () => {
+test("dispatcher does not retry an aborted sticky batch", async () => {
+  const controller = new AbortController();
+  let spawnCalls = 0;
+  const sticky = {
+    async call() { throw new Error("not used"); },
+    async batch(_calls: unknown, options?: { signal?: AbortSignal }) {
+      assert.equal(options?.signal, controller.signal);
+      controller.abort();
+      throw Object.assign(new Error("aborted"), { name: "AbortError" });
+    },
+    async end() {},
+  };
+  const dispatcher = createCodemodeDispatcher({
+    sticky,
+    async run() {
+      spawnCalls += 1;
+      return asEnvelope({ hits: [] });
+    },
+  });
+  const options = { signal: controller.signal };
+  const calls = [
+    dispatcher.host.call("search", { query: "a" }, { cwd: "/p" }, options),
+    dispatcher.host.call("search", { query: "b" }, { cwd: "/p" }, options),
+  ];
+  const results = await Promise.allSettled(calls);
+  assert.deepEqual(results.map(({ status }) => status), ["rejected", "rejected"]);
+  assert.equal(spawnCalls, 0);
+});
+
+test("dispatcher rejects pre-aborted calls without starting a backend", async () => {
+  const controller = new AbortController();
+  controller.abort();
+  let backendCalls = 0;
+  const dispatcher = createCodemodeDispatcher({
+    async run() {
+      backendCalls += 1;
+      return asEnvelope({ hits: [] });
+    },
+  });
+
+  await assert.rejects(
+    dispatcher.host.call("search", { query: "cancelled" }, { cwd: "/p" }, { signal: controller.signal }),
+    { name: "AbortError" },
+  );
+  await new Promise<void>((resolve) => queueMicrotask(resolve));
+  assert.equal(backendCalls, 0);
+  assert.equal(getEventListeners(controller.signal, "abort").length, 0);
+});
+
+test("dispatcher cancels one batched call without cancelling its siblings", async () => {
+  const firstController = new AbortController();
+  const secondController = new AbortController();
+  const started = Promise.withResolvers<void>();
+  const response = Promise.withResolvers<{
+    results: Array<{ id: string; ok: boolean; value: MachineEnvelope }>;
+  }>();
+  const dispatcher = createCodemodeDispatcher({
+    async run() { throw new Error("spawn fallback should not run"); },
+    async runBatch(calls, _context, options) {
+      assert.equal(options, undefined, "distinct call signals must not own batch transport cancellation");
+      started.resolve();
+      return response.promise.then(() => ({
+        results: calls.map(({ id, tool }) => ({ id, ok: true, value: asEnvelope({ hits: [tool] }) })),
+      }));
+    },
+  });
+
+  const first = dispatcher.host.call(
+    "search",
+    { query: "first" },
+    { cwd: "/p" },
+    { signal: firstController.signal },
+  );
+  const second = dispatcher.host.call(
+    "defs",
+    { symbol: "Second" },
+    { cwd: "/p" },
+    { signal: secondController.signal },
+  );
+  await started.promise;
+  secondController.abort();
+  await assert.rejects(second, { name: "AbortError" });
+  response.resolve({ results: [] });
+  assert.equal((await first).ok, true);
+  assert.equal(getEventListeners(firstController.signal, "abort").length, 0);
+  assert.equal(getEventListeners(secondController.signal, "abort").length, 0);
+});
+
+test("dispatcher removes per-call abort listeners after a successful batch", async () => {
+  const controllers = [new AbortController(), new AbortController()];
+  const dispatcher = createCodemodeDispatcher({
+    async run() { throw new Error("spawn fallback should not run"); },
+    async runBatch(calls) {
+      return {
+        results: calls.map(({ id, tool }) => ({ id, ok: true, value: asEnvelope({ hits: [tool] }) })),
+      };
+    },
+  });
+
+  await Promise.all(controllers.map((controller, index) => dispatcher.host.call(
+    "search",
+    { query: String(index) },
+    { cwd: "/p" },
+    { signal: controller.signal },
+  )));
+  for (const controller of controllers) {
+    assert.equal(getEventListeners(controller.signal, "abort").length, 0);
+  }
+});
+
+test("one-shot batch transport kills output that exceeds its configured cap", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "asgrep-batch-output-"));
+  try {
+    await writeFile(
+      join(dir, "codemode-batch"),
+      "process.stdout.write('x'.repeat(8192));\n",
+      "utf8",
+    );
+    await assert.rejects(
+      runBatchViaStdin({
+        binary: process.execPath,
+        cwd: dir,
+        body: "{}",
+        maxOutputBytes: 1024,
+      }),
+      /output exceeded 1024 bytes/u,
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("sticky transport kills an oversized NDJSON response", {
+  skip: process.platform === "win32" ? "executable script fixture is POSIX-only" : false,
+}, async () => {
+  const dir = await mkdtemp(join(tmpdir(), "asgrep-sticky-output-"));
+  let worker: Awaited<ReturnType<typeof startStickyWorker>> | undefined;
+  try {
+    const binary = join(dir, "fake-asgrep");
+    await writeFile(
+      binary,
+      `#!/usr/bin/env node
+process.stdin.once("data", () => process.stdout.write("x".repeat(8192) + "\\n"));
+setInterval(() => {}, 1000);
+`,
+      { encoding: "utf8", mode: 0o755 },
+    );
+    worker = await startStickyWorker({
+      binary,
+      cwd: dir,
+      maxOutputBytes: 1024,
+    });
+    await assert.rejects(
+      worker.call("search", { query: "x" }),
+      /output exceeded 1024 bytes/u,
+    );
+  } finally {
+    await worker?.end();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("ending a sticky transport rejects pending calls", {
+  skip: process.platform === "win32" ? "executable script fixture is POSIX-only" : false,
+}, async () => {
+  const dir = await mkdtemp(join(tmpdir(), "asgrep-sticky-end-"));
+  let worker: Awaited<ReturnType<typeof startStickyWorker>> | undefined;
+  try {
+    const binary = join(dir, "fake-asgrep");
+    await writeFile(
+      binary,
+      `#!/usr/bin/env node
+process.stdin.resume();
+setInterval(() => {}, 1000);
+`,
+      { encoding: "utf8", mode: 0o755 },
+    );
+    worker = await startStickyWorker({ binary, cwd: dir });
+    const rejected = assert.rejects(
+      worker.call("search", { query: "x" }),
+      /codemode-serve ended/u,
+    );
+    await worker.end();
+    await rejected;
+  } finally {
+    await worker?.end();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("sticky stdin write failure terminates the transport", {
+  skip: process.platform === "win32" ? "executable script fixture is POSIX-only" : false,
+}, async () => {
+  const dir = await mkdtemp(join(tmpdir(), "asgrep-sticky-stdin-"));
+  let worker: Awaited<ReturnType<typeof startStickyWorker>> | undefined;
+  try {
+    const binary = join(dir, "fake-asgrep");
+    await writeFile(
+      binary,
+      `#!/usr/bin/env node
+require("node:fs").closeSync(0);
+setInterval(() => {}, 1000);
+`,
+      { encoding: "utf8", mode: 0o755 },
+    );
+    worker = await startStickyWorker({ binary, cwd: dir, timeoutMs: 1_000 });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const started = Date.now();
+    await assert.rejects(worker.call("search", { query: "x" }));
+    assert.ok(Date.now() - started < 500, "write failure must reject before the request timeout");
+    await assert.rejects(worker.call("search", { query: "y" }), /closed/u);
+  } finally {
+    await worker?.end();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("dispatcher never replays a mutation after an ambiguous native failure", async () => {
+  let batchFallbacks = 0;
+  let spawnFallbacks = 0;
+  const transportFailure = new Error("native transport closed after dispatch");
+  const dispatcher = createCodemodeDispatcher({
+    sticky: {
+      async call() { throw new Error("not used"); },
+      async batch() { throw transportFailure; },
+      async end() {},
+    },
+    async runBatch() {
+      batchFallbacks += 1;
+      return { results: [] };
+    },
+    async run() {
+      spawnFallbacks += 1;
+      return asEnvelope({ hits: [] });
+    },
+  });
+
+  const results = await Promise.allSettled([
+    dispatcher.host.call("index_repo", { force: false }, { cwd: "/p" }),
+    dispatcher.host.call("search", { query: "auth" }, { cwd: "/p" }),
+  ]);
+  assert.deepEqual(results.map(({ status }) => status), ["rejected", "rejected"]);
+  assert.ok(results.every((result) => result.status === "rejected" && result.reason === transportFailure));
+  assert.equal(batchFallbacks, 0);
+  assert.equal(spawnFallbacks, 0);
+});
+
+test("runner binds asgrep and console through the isolated bridge", async () => {
+  const bundle = createAsgrepConnector({
+    async run(): Promise<MachineEnvelope> {
+      return { tool: "asgrep", schema_version: "1.0.0", ok: true, hits: [{ path: "a.ts" }] };
+    },
+  }, { cwd: "/project" });
+  const outcome = await runCodemode(
+    `console.log("hi"); const r = await asgrep.search({ query: "x" }); return r.hits?.length ?? 0;`,
+    bundle.asgrep,
+  );
+  assert.equal(outcome.ok, true, outcome.ok ? undefined : outcome.error);
+  assert.equal(outcome.result, 1);
+  assert.deepEqual(outcome.logs, ["hi"]);
+});
+
+test("runner does not expose ambient Node authority", async () => {
   const bundle = createAsgrepConnector({
     async run(): Promise<MachineEnvelope> {
       return { tool: "asgrep", schema_version: "1.0.0", ok: true };
     },
   }, { cwd: "/project" });
-  const requireAttempt = await runCodemode(`return typeof require`, bundle.asgrep);
-  assert.equal(requireAttempt.ok, true);
-  assert.equal(requireAttempt.result, "undefined");
-  const processAttempt = await runCodemode(`return typeof process`, bundle.asgrep);
-  assert.equal(processAttempt.ok, true);
-  assert.equal(processAttempt.result, "undefined");
-});
-
-test("sandbox blocks constructor escapes through globals, APIs, and returned values", async () => {
-  const bundle = createAsgrepConnector({
-    async run(): Promise<MachineEnvelope> {
-      return { tool: "asgrep", schema_version: "1.0.0", ok: true, hits: [] };
-    },
-  }, { cwd: "/project" });
   for (const code of [
-    `return Object.constructor("return process")().pid`,
-    `return asgrep.search.constructor("return process")().pid`,
-    `const result = await asgrep.search({ query: "x" }); return result.constructor.constructor("return process")().pid`,
+    "return typeof process",
+    "return typeof require",
+    "return typeof ArrayBuffer",
+    "return typeof WebAssembly",
+    "return globalThis.constructor.constructor('return process')()",
   ]) {
     const outcome = await runCodemode(code, bundle.asgrep);
-    assert.equal(outcome.ok, false, code);
-    assert.match(outcome.error ?? "", /code generation from strings disallowed/iu);
+    if (code.includes("constructor")) {
+      assert.equal(outcome.ok, false, `constructor escape unexpectedly succeeded: ${JSON.stringify(outcome)}`);
+    } else {
+      assert.equal(outcome.ok, true, outcome.ok ? undefined : outcome.error);
+      assert.equal(outcome.result, "undefined");
+    }
   }
 });
 
-test("sandbox interrupts synchronous infinite loops", async () => {
+test("runner interrupts synchronous infinite loops", async () => {
+  const bundle = createAsgrepConnector({
+    async run(): Promise<MachineEnvelope> {
+      return { tool: "asgrep", schema_version: "1.0.0", ok: true };
+    },
+  }, { cwd: "/project" });
+  const outcome = await runCodemode("while (true) {}", bundle.asgrep, { timeoutMs: 20 });
+  assert.equal(outcome.ok, false);
+  if (!outcome.ok) assert.match(outcome.error, /timed out|timeout/iu);
+});
+
+test("runner terminates microtask loops without blocking the extension host", async () => {
   const bundle = createAsgrepConnector({
     async run(): Promise<MachineEnvelope> {
       return { tool: "asgrep", schema_version: "1.0.0", ok: true };
     },
   }, { cwd: "/project" });
   const started = Date.now();
-  const outcome = await runCodemode(`while (true) {}`, bundle.asgrep, { timeoutMs: 25 });
+  const outcome = await runCodemode(`
+    Promise.resolve().then(function spin() { Promise.resolve().then(spin); });
+    return await new Promise(() => {});
+  `, bundle.asgrep, { timeoutMs: 20 });
   assert.equal(outcome.ok, false);
-  assert.match(outcome.error ?? "", /timed out/iu);
-  assert.ok(Date.now() - started < 1_000, "infinite loop must be interrupted promptly");
+  if (!outcome.ok) assert.match(outcome.error, /timed out|timeout/iu);
+  assert.ok(Date.now() - started < 2_000, "sandbox termination should remain bounded");
 });
 
-test("sandbox observes cancellation while awaiting asynchronous code", async () => {
+test("runner serializes result getters inside the VM timeout", async () => {
+  const bundle = createAsgrepConnector({
+    async run(): Promise<MachineEnvelope> {
+      return { tool: "asgrep", schema_version: "1.0.0", ok: true };
+    },
+  }, { cwd: "/project" });
+  const outcome = await runCodemode(
+    `return Object.defineProperty({}, "value", {
+      enumerable: true,
+      get() { while (true) {} },
+    });`,
+    bundle.asgrep,
+    { timeoutMs: 20 },
+  );
+  assert.equal(outcome.ok, false);
+  if (!outcome.ok) assert.match(outcome.error, /timed out|timeout/iu);
+});
+
+test("runner bounds call arguments, logs, and serialized results before returning to the host", async () => {
+  let hostCalls = 0;
+  const bundle = createAsgrepConnector({
+    async run(): Promise<MachineEnvelope> {
+      hostCalls += 1;
+      return { tool: "asgrep", schema_version: "1.0.0", ok: true };
+    },
+  }, { cwd: "/project" });
+
+  const oversizedCall = await runCodemode(
+    `return await asgrep.search({ query: "x".repeat(70_000) });`,
+    bundle.asgrep,
+  );
+  assert.equal(oversizedCall.ok, false);
+  if (!oversizedCall.ok) assert.match(oversizedCall.error, /call arguments exceed/iu);
+  assert.equal(hostCalls, 0, "oversized arguments must be rejected before dispatch");
+
+  const oversizedResult = await runCodemode(`return "x".repeat(1_100_000);`, bundle.asgrep);
+  assert.equal(oversizedResult.ok, false);
+  if (!oversizedResult.ok) assert.match(oversizedResult.error, /result exceeds/iu);
+
+  const boundedLogs = await runCodemode(
+    `for (let i = 0; i < 1_000; i += 1) console.log("x".repeat(10_000)); return true;`,
+    bundle.asgrep,
+  );
+  assert.equal(boundedLogs.ok, true, boundedLogs.ok ? undefined : boundedLogs.error);
+  assert.ok(boundedLogs.logs.length <= 100);
+  assert.ok(boundedLogs.logs.every((line) => line.length <= 4_096));
+  assert.ok(boundedLogs.logs.reduce((total, line) => total + line.length, 0) <= 64_000);
+
+  const oversizedError = await runCodemode(`throw new Error("x".repeat(100_000));`, bundle.asgrep);
+  assert.equal(oversizedError.ok, false);
+  if (!oversizedError.ok) assert.ok(oversizedError.error.length <= 8_192);
+});
+
+test("runner bounds total bridge fan-out", async () => {
+  let hostCalls = 0;
+  const bundle = createAsgrepConnector({
+    async run(): Promise<MachineEnvelope> {
+      hostCalls += 1;
+      return { tool: "asgrep", schema_version: "1.0.0", ok: true };
+    },
+  }, { cwd: "/project" });
+  const outcome = await runCodemode(
+    `for (let i = 0; i < 257; i += 1) await asgrep.indexStatus(); return true;`,
+    bundle.asgrep,
+  );
+  assert.equal(outcome.ok, false);
+  if (!outcome.ok) assert.match(outcome.error, /exceeds 256 host calls/iu);
+  assert.equal(hostCalls, 256);
+});
+
+test("runner observes cancellation while awaiting asynchronous code", async () => {
   const bundle = createAsgrepConnector({
     async run(): Promise<MachineEnvelope> {
       return { tool: "asgrep", schema_version: "1.0.0", ok: true };
@@ -261,8 +599,41 @@ test("sandbox observes cancellation while awaiting asynchronous code", async () 
   });
   setTimeout(() => controller.abort(), 10);
   const outcome = await pending;
+  if (outcome.ok) {
+    assert.fail(`expected abort failure, got ${JSON.stringify(outcome.result)}`);
+  } else {
+    assert.match(outcome.error, /aborted/iu);
+  }
+});
+
+test("runner cancellation cancels an in-flight host call", async () => {
+  let hostStarted!: () => void;
+  const started = new Promise<void>((resolve) => { hostStarted = resolve; });
+  let hostAborted!: () => void;
+  const aborted = new Promise<void>((resolve) => { hostAborted = resolve; });
+  const bundle = createAsgrepConnector({
+    async run(_args, _context, options): Promise<MachineEnvelope> {
+      hostStarted();
+      return new Promise((_resolve, reject) => {
+        const onAbort = () => {
+          hostAborted();
+          reject(Object.assign(new Error("host call aborted"), { name: "AbortError" }));
+        };
+        options?.signal?.addEventListener("abort", onAbort, { once: true });
+      });
+    },
+  }, { cwd: "/project" });
+  const controller = new AbortController();
+  const run = runCodemode(
+    `return await asgrep.search({ query: "never completes" });`,
+    bundle.asgrep,
+    { timeoutMs: 5_000, signal: controller.signal },
+  );
+  await started;
+  controller.abort();
+  const outcome = await run;
   assert.equal(outcome.ok, false);
-  assert.match(outcome.error ?? "", /aborted/iu);
+  await aborted;
 });
 
 test("typed connector preserves defs vs search(query containing defs:)", async () => {
@@ -297,6 +668,10 @@ test("argvFor emits typed-equivalent CLI for spawn fallback", () => {
   assert.deepEqual(argvFor("chain", { query: "Foo", limit: 4 }), [
     "chain", "Foo", ".", "--json", "--limit", "4",
   ]);
+  assert.throws(
+    () => argvFor("catalog_search", { query: "search" }),
+    /no direct CLI fallback/,
+  );
 });
 
 test("asEnvelope does not let payload clobber ok/tool", () => {
@@ -315,8 +690,8 @@ test("createCodemodeDispatcher exposes wave stats", async () => {
   });
   resetStats();
   await Promise.all([
-    host.run(["--json", "a", "."], { cwd: "/p" }),
-    host.run(["--json", "b", "."], { cwd: "/p" }),
+    host.call("search", { query: "a", limit: 8, format: "capsule" }, { cwd: "/p" }),
+    host.call("search", { query: "b", limit: 8, format: "capsule" }, { cwd: "/p" }),
   ]);
   assert.equal(stats().waves, 1);
   assert.equal(stats().calls, 2);

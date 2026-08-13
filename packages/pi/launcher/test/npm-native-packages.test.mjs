@@ -161,6 +161,44 @@ test("rejects empty native executable even when checksum matches empty digest", 
   finally { rmSync(f.root, { recursive: true, force: true }); }
 });
 
+test("does not execute an unverified PATH binary when the platform package is missing", () => {
+  const binDir = mkdtempSync(join(tmpdir(), "asgrep-path-bin-"));
+  const exe = join(binDir, "asgrep");
+  writeFileSync(exe, "#!/bin/sh\necho ok\n");
+  chmodSync(exe, 0o755);
+  try {
+    expectCode(
+      "ASGREP_PLATFORM_PACKAGE_MISSING",
+      () => resolveBinary({
+        platform: "darwin",
+        arch: "arm64",
+        env: { PATH: binDir },
+        requireResolve() { throw new Error("omitted"); },
+      }),
+    );
+  } finally {
+    rmSync(binDir, { recursive: true, force: true });
+  }
+});
+
+test("empty platform package remains a hard error even when PATH has asgrep", () => {
+  const EMPTY = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+  const f = fixture(targets[0], { checksum: EMPTY, payload: Buffer.alloc(0) });
+  const binDir = mkdtempSync(join(tmpdir(), "asgrep-path-empty-pkg-"));
+  const exe = join(binDir, "asgrep");
+  writeFileSync(exe, "#!/bin/sh\necho ok\n");
+  chmodSync(exe, 0o755);
+  try {
+    expectCode(
+      "ASGREP_EXECUTABLE_EMPTY",
+      () => resolveBinary({ ...f.options, env: { PATH: binDir } }),
+    );
+  } finally {
+    rmSync(f.root, { recursive: true, force: true });
+    rmSync(binDir, { recursive: true, force: true });
+  }
+});
+
 test("validates checksum, executable presence, mode, version, and metadata", () => {
   const cases = [
     ["ASGREP_CHECKSUM_MISMATCH", { checksum: "0".repeat(64) + "  asgrep\n" + "1".repeat(64) + "  ast-sgrep-codemode.node\n" }, /asgrep$/u],

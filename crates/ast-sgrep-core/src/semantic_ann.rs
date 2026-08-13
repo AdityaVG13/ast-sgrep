@@ -1,15 +1,17 @@
 use crate::semantic_ivf::{
     compute_ann_fingerprint, invalidate_semantic_ivf, load_semantic_ivf,
-    load_semantic_ivf_unchecked, save_semantic_ivf_with_publication, semantic_ivf_path, PersistedSemanticIvf,
+    load_semantic_ivf_unchecked, save_semantic_ivf_with_publication, semantic_ivf_path,
+    PersistedSemanticIvf,
 };
 use crate::store::IndexStore;
 use crate::Result;
 use ast_sgrep_embed::{
-    cosine_similarity, normalize_vec, normalize_vec_in_place, top_k_flat_similarity,
-    top_k_similarity, SemanticChunkRow, MIN_SIMILARITY, PARALLEL_CHUNK_THRESHOLD,
+    cosine_similarity, dot_similarity, normalize_vec, normalize_vec_in_place,
+    top_k_flat_similarity, top_k_similarity, SemanticChunkRow, MIN_SIMILARITY,
+    PARALLEL_CHUNK_THRESHOLD,
 };
 use rayon::prelude::*;
-use std::io::{Read, Write};
+use std::io::Write;
 use std::sync::{Arc, Mutex, PoisonError};
 pub const DEFAULT_ANN_THRESHOLD: usize = 2_000;
 /// Measured minimum satisfying recall@10 >= 0.99 at 2,048 and 10,000 vectors.
@@ -21,6 +23,11 @@ pub struct SemanticAnnIndex {
 }
 impl SemanticAnnIndex {
     pub fn build_from_flat(vectors: &[f32], dim: usize) -> Self {
+        let _span = crate::perf_profile::Span::start(
+            "semantic_ivf_build",
+            "semantic",
+            "SemanticAnnIndex::build_from_flat (kmeans)",
+        );
         let n = vectors.len().checked_div(dim).unwrap_or(0);
         if n == 0 || dim == 0 {
             return Self {
@@ -28,12 +35,17 @@ impl SemanticAnnIndex {
                 clusters: vec![],
             };
         }
-        let normalized = normalize_flat(vectors, dim);
-        let row_vecs: Vec<Vec<f32>> = (0..n)
-            .map(|i| normalized[i * dim..(i + 1) * dim].to_vec())
-            .collect();
+        // T1 lever A (IVF-COPY): one owned flat normalize only. Prior path did
+        // `normalize_flat` (full clone) then per-row `.to_vec()` into `Vec<Vec<f32>>`
+        // (second full materialize). k-means now reads row slices from this flat buffer.
+        // T1-B: parallel per-row assignment + serial row-order centroid reduction →
+        // bit-identical centroids/assignments vs the pre-T1 multi-copy serial path.
+        let mut flat = vectors.to_vec();
+        for i in 0..n {
+            normalize_vec_in_place(&mut flat[i * dim..(i + 1) * dim]);
+        }
         let (centroids, assignments) =
-            kmeans(&row_vecs, ((n as f64).sqrt() as usize).clamp(16, 256), 12);
+            kmeans(&flat, dim, ((n as f64).sqrt() as usize).clamp(16, 256), 12);
         let mut clusters = vec![Vec::new(); centroids.len()];
         for (idx, &c) in assignments.iter().enumerate() {
             clusters[c].push(idx);
@@ -44,7 +56,7 @@ impl SemanticAnnIndex {
         }
     }
     pub fn write_to<W: Write>(&self, writer: &mut W, dim: usize) -> std::io::Result<()> {
-        write_u32(writer, self.centroids.len() as u32)?;
+        write_usize_u32(writer, self.centroids.len())?;
         for c in &self.centroids {
             for &v in c {
                 writer.write_all(&v.to_le_bytes())?;
@@ -53,42 +65,14 @@ impl SemanticAnnIndex {
                 writer.write_all(&0.0f32.to_le_bytes())?;
             }
         }
-        write_u32(writer, self.clusters.len() as u32)?;
+        write_usize_u32(writer, self.clusters.len())?;
         for cluster in &self.clusters {
-            write_u32(writer, cluster.len() as u32)?;
+            write_usize_u32(writer, cluster.len())?;
             for &idx in cluster {
-                write_u32(writer, idx as u32)?;
+                write_usize_u32(writer, idx)?;
             }
         }
         Ok(())
-    }
-    pub fn read_clusters_from<R: Read>(
-        reader: &mut R,
-        k: usize,
-        dim: usize,
-    ) -> std::io::Result<Self> {
-        let mut centroids = Vec::with_capacity(k);
-        for _ in 0..k {
-            let mut c = vec![0.0f32; dim];
-            for v in &mut c {
-                *v = read_f32(reader)?;
-            }
-            centroids.push(c);
-        }
-        let cluster_count = read_u32(reader)? as usize;
-        let mut clusters = Vec::with_capacity(cluster_count);
-        for _ in 0..cluster_count {
-            let len = read_u32(reader)? as usize;
-            let mut members = Vec::with_capacity(len);
-            for _ in 0..len {
-                members.push(read_u32(reader)? as usize);
-            }
-            clusters.push(members);
-        }
-        Ok(Self {
-            centroids,
-            clusters,
-        })
     }
     pub fn read_clusters_bounded(
         bytes: &[u8],
@@ -238,7 +222,13 @@ impl SemanticAnnIndex {
         if n == 0 {
             return vec![];
         }
-        if n < DEFAULT_ANN_THRESHOLD || self.centroids.is_empty() {
+        // ANN eligibility (n vs ASGREP_ANN_THRESHOLD / options.ann_threshold) is a
+        // *build-time* decision (`should_use_ann` / load_or_build). Re-checking
+        // DEFAULT_ANN_THRESHOLD here forced every query with n < 2000 onto
+        // brute_force even when IVF was intentionally built under a lower
+        // override — so the override could never enable ANN search for mid-size
+        // corpora. Empty centroids still mean "no IVF"; fall back to exact.
+        if self.centroids.is_empty() {
             return brute_force_flat(flat, dim, query, limit);
         }
         let q = normalize_vec(query);
@@ -262,6 +252,14 @@ pub fn flatten_vectors_for_search(chunks: &[SemanticChunkRow], dim: usize) -> Re
             ))
         };
     }
+    // Reject before allocating or validating rows so hostile dim×len cannot OOM.
+    let total = chunks.len().checked_mul(dim).ok_or_else(|| {
+        crate::StoreError::Other(format!(
+            "semantic flatten overflow: {} chunks × dim {} exceeds addressable size",
+            chunks.len(),
+            dim
+        ))
+    })?;
     for (i, chunk) in chunks.iter().enumerate() {
         if chunk.5.len() != dim {
             return Err(crate::StoreError::Other(format!(
@@ -269,7 +267,7 @@ pub fn flatten_vectors_for_search(chunks: &[SemanticChunkRow], dim: usize) -> Re
             )));
         }
     }
-    let mut flat = vec![0.0f32; chunks.len() * dim];
+    let mut flat = vec![0.0f32; total];
     if chunks.len() >= PARALLEL_CHUNK_THRESHOLD {
         flat.par_chunks_mut(dim)
             .zip(chunks.par_iter())
@@ -289,6 +287,15 @@ pub fn flatten_vectors_for_search(chunks: &[SemanticChunkRow], dim: usize) -> Re
 fn write_u32<W: Write>(w: &mut W, v: u32) -> std::io::Result<()> {
     w.write_all(&v.to_le_bytes())
 }
+fn write_usize_u32<W: Write>(w: &mut W, value: usize) -> std::io::Result<()> {
+    let value = u32::try_from(value).map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "semantic IVF exceeds the u32 on-disk format",
+        )
+    })?;
+    write_u32(w, value)
+}
 fn invalid_ivf_index() -> std::io::Error {
     std::io::Error::new(
         std::io::ErrorKind::InvalidData,
@@ -307,16 +314,6 @@ fn take_u32(bytes: &[u8], offset: &mut usize) -> std::io::Result<u32> {
     Ok(u32::from_le_bytes(raw))
 }
 
-fn read_u32<R: Read>(r: &mut R) -> std::io::Result<u32> {
-    let mut b = [0u8; 4];
-    r.read_exact(&mut b)?;
-    Ok(u32::from_le_bytes(b))
-}
-fn read_f32<R: Read>(r: &mut R) -> std::io::Result<f32> {
-    let mut b = [0u8; 4];
-    r.read_exact(&mut b)?;
-    Ok(f32::from_le_bytes(b))
-}
 fn score_members(
     query: &[f32],
     flat: &[f32],
@@ -328,6 +325,10 @@ fn score_members(
     if members.is_empty() {
         return vec![];
     }
+    // Gate through top_k_similarity(..., Some(MIN_SIMILARITY)) so IVF member
+    // scoring uses the same ULP-stable exclusive predicate as brute_force_flat
+    // / top_k_flat_similarity (firi / jiyy.5). A plain `sim > MIN` would admit
+    // the first float above MIN while exceeds_threshold rejects it.
     let score = |idx: &usize| -> Option<(usize, f32)> {
         if *idx >= n {
             return None;
@@ -335,25 +336,21 @@ fn score_members(
         let start = idx * dim;
         (start + dim <= flat.len())
             .then(|| cosine_similarity(query, &flat[start..start + dim]))
-            .filter(|&sim| sim > MIN_SIMILARITY)
             .map(|sim| (*idx, sim))
     };
     if members.len() < PARALLEL_CHUNK_THRESHOLD {
-        top_k_similarity(members.iter().filter_map(score), limit, None)
+        top_k_similarity(
+            members.iter().filter_map(score),
+            limit,
+            Some(MIN_SIMILARITY),
+        )
     } else {
         top_k_similarity(
             members.par_iter().filter_map(score).collect::<Vec<_>>(),
             limit,
-            None,
+            Some(MIN_SIMILARITY),
         )
     }
-}
-fn normalize_flat(vectors: &[f32], dim: usize) -> Vec<f32> {
-    let mut out = vectors.to_vec();
-    for i in 0..vectors.len() / dim {
-        normalize_vec_in_place(&mut out[i * dim..(i + 1) * dim]);
-    }
-    out
 }
 fn brute_force_flat(flat: &[f32], dim: usize, query: &[f32], limit: usize) -> Vec<(usize, f32)> {
     top_k_flat_similarity(
@@ -364,55 +361,69 @@ fn brute_force_flat(flat: &[f32], dim: usize, query: &[f32], limit: usize) -> Ve
         Some(MIN_SIMILARITY),
     )
 }
+#[inline]
+fn flat_row(flat: &[f32], dim: usize, i: usize) -> &[f32] {
+    let start = i * dim;
+    &flat[start..start + dim]
+}
 fn nearest_centroid(vector: &[f32], centroids: &[Vec<f32>]) -> usize {
+    // Rows and centroids are L2-normalized during build and after updates, so
+    // cosine equals the plain inner product. Keep the same max and lowest-index
+    // tie-break as the previous cosine path.
     centroids
         .iter()
         .enumerate()
-        .map(|(ci, c)| (ci, cosine_similarity(vector, c)))
+        .map(|(ci, c)| (ci, dot_similarity(vector, c)))
         .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
         .map(|(ci, _)| ci)
         .unwrap_or(0)
 }
-fn kmeans(vectors: &[Vec<f32>], k: usize, max_iters: usize) -> (Vec<Vec<f32>>, Vec<usize>) {
-    let k = k.min(vectors.len()).max(1);
-    let dim = vectors[0].len();
+/// Deterministic k-means over a row-major flat matrix (`n * dim` floats).
+fn kmeans(flat: &[f32], dim: usize, k: usize, max_iters: usize) -> (Vec<Vec<f32>>, Vec<usize>) {
+    let n = flat.len().checked_div(dim).unwrap_or(0);
+    let k = k.min(n).max(1);
     let mut centroids = {
-        let mut c = vec![vectors[0].clone()];
+        let mut c = vec![flat_row(flat, dim, 0).to_vec()];
         while c.len() < k {
-            let best = vectors
-                .iter()
-                .enumerate()
-                .map(|(i, v)| {
+            let best = (0..n)
+                .map(|i| {
+                    let v = flat_row(flat, dim, i);
                     let nearest_sim = c
                         .iter()
-                        .map(|cent| cosine_similarity(v, cent))
+                        .map(|cent| dot_similarity(v, cent))
                         .fold(f32::NEG_INFINITY, f32::max);
                     (i, 1.0 - nearest_sim)
                 })
                 .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
                 .map(|(i, _)| i)
                 .unwrap_or(0);
-            c.push(vectors[best].clone());
+            c.push(flat_row(flat, dim, best).to_vec());
         }
         c
     };
-    let mut assignments = vec![0usize; vectors.len()];
+    let mut assignments = vec![0usize; n];
     for _ in 0..max_iters {
-        let mut changed = false;
-        for (i, v) in vectors.iter().enumerate() {
-            let best = nearest_centroid(v, &centroids);
-            changed |= assignments[i] != best;
-            assignments[i] = best;
-        }
+        // T1-B: assignment is embarrassingly parallel given fixed centroids.
+        // `(0..n).into_par_iter().map(...).collect()` preserves index order, so
+        // `next[i]` is the assignment for row `i`. No cross-row data dependence.
+        let next: Vec<usize> = (0..n)
+            .into_par_iter()
+            .map(|i| nearest_centroid(flat_row(flat, dim, i), &centroids))
+            .collect();
+        // Early exit: OR of per-row deltas (associative). Must match serial:
+        // first iteration where all rows stable skips centroid update.
+        let changed = next.iter().zip(assignments.iter()).any(|(a, b)| a != b);
+        assignments = next;
         if !changed {
             break;
         }
+        // Serial reduction in ascending row order so f32 sums match the serial
+        // algorithm bit-for-bit (parallel float reduce is forbidden).
         let mut sums = vec![vec![0.0f32; dim]; k];
         let mut counts = vec![0usize; k];
-        for (i, v) in vectors.iter().enumerate() {
-            let c = assignments[i];
+        for (i, &c) in assignments.iter().enumerate() {
             counts[c] += 1;
-            for (j, val) in v.iter().enumerate() {
+            for (j, val) in flat_row(flat, dim, i).iter().enumerate() {
                 sums[c][j] += val;
             }
         }
@@ -424,7 +435,12 @@ fn kmeans(vectors: &[Vec<f32>], k: usize, max_iters: usize) -> (Vec<Vec<f32>>, V
                 if count == 0 {
                     prev.clone()
                 } else {
-                    normalize_vec(&sum.iter().map(|v| v / count as f32).collect::<Vec<_>>())
+                    let mut mean = sum.clone();
+                    for value in &mut mean {
+                        *value /= count as f32;
+                    }
+                    normalize_vec_in_place(&mut mean);
+                    mean
                 }
             })
             .collect();
@@ -469,18 +485,14 @@ pub fn clear_semantic_ivf_session_cache() {
     lock_session_cache().clear();
 }
 
-pub fn mark_semantic_ivf_stale(store: &IndexStore) {
-    if store
-        .get_meta("semantic_ivf_stale")
-        .ok()
-        .flatten()
-        .as_deref()
-        != Some("1")
-    {
-        let _ = store.set_meta("semantic_ivf_stale", "1");
+/// Mark IVF sidecar dirty after semantic-affecting mutations.
+pub fn mark_semantic_ivf_stale(store: &IndexStore) -> Result<()> {
+    if store.get_meta("semantic_ivf_stale")?.as_deref() != Some("1") {
+        store.set_meta("semantic_ivf_stale", "1")?;
     }
     lock_session_cache().clear();
-    let _ = invalidate_semantic_ivf(store.db_path());
+    invalidate_semantic_ivf(store.db_path())?;
+    Ok(())
 }
 fn ann_session_key(store: &IndexStore, chunks: &[SemanticChunkRow]) -> Result<([u8; 32], String)> {
     let dim = chunks.first().map(|c| c.5.len()).unwrap_or(0);
@@ -522,7 +534,12 @@ pub fn load_or_build_semantic_ivf(
     let ivf_path = semantic_ivf_path(store.db_path());
     match load_semantic_ivf(&ivf_path, fingerprint) {
         Ok(Some(ivf)) => {
-            let _ = store.set_meta("semantic_ivf_stale", "0");
+            // Search holds a read snapshot. Do not attempt a read-to-write
+            // upgrade here: a concurrent index commit would make it fail with
+            // SQLITE_BUSY_SNAPSHOT. The fingerprint remains authoritative.
+            if store.connection().is_autocommit() {
+                store.set_meta("semantic_ivf_stale", "0")?;
+            }
             let ivf = Arc::new(ivf);
             cache_session(&db_key, fingerprint, Arc::clone(&ivf));
             return Ok(Some(ivf));
@@ -533,7 +550,9 @@ pub fn load_or_build_semantic_ivf(
     let flat = flatten_vectors_for_search(chunks, dim)?;
     let index = SemanticAnnIndex::build_from_flat(&flat, dim);
     let published = save_semantic_ivf_with_publication(&ivf_path, fingerprint, dim, &flat, &index)?;
-    let _ = store.set_meta("semantic_ivf_stale", if published { "0" } else { "1" });
+    if store.connection().is_autocommit() {
+        store.set_meta("semantic_ivf_stale", if published { "0" } else { "1" })?;
+    }
     let ivf = Arc::new(PersistedSemanticIvf::from_owned(
         fingerprint,
         dim,
@@ -573,10 +592,16 @@ pub fn rank_chunk_indices_flat(
     limit: usize,
     override_threshold: Option<usize>,
 ) -> Result<Vec<(usize, f32)>> {
-    if chunks.is_empty() {
+    if chunks.is_empty() || limit == 0 {
         return Ok(vec![]);
     }
     let dim = chunks[0].5.len();
+    // Zero-dim embeddings are corrupt/unset; never divide or rank them.
+    if dim == 0 {
+        return Err(crate::StoreError::Other(
+            "semantic embedding dimension is 0 (corrupt store or unset backend; reindex)".into(),
+        ));
+    }
     if let Some(ivf) = cached_semantic_ivf(store, chunks, override_threshold)? {
         return Ok(ivf.search(query_vec, limit));
     }
@@ -596,7 +621,7 @@ pub fn rebuild_semantic_ivf_sidecar(
     override_threshold: Option<usize>,
 ) -> Result<()> {
     if !should_use_ann(chunks.len(), override_threshold) {
-        let _ = invalidate_semantic_ivf(store.db_path());
+        invalidate_semantic_ivf(store.db_path())?;
         return Ok(());
     }
     let Some(first) = chunks.first().filter(|c| !c.5.is_empty()) else {
@@ -640,8 +665,144 @@ fn reassign_stale_ivf_partition(
     )?;
     let rebuilt = PersistedSemanticIvf::from_owned(fingerprint, dim, vectors, index);
     cache_session(&db_key, fingerprint, Arc::new(rebuilt));
-    let _ = store.set_meta("semantic_ivf_stale", if published { "0" } else { "1" });
+    store.set_meta("semantic_ivf_stale", if published { "0" } else { "1" })?;
     Ok(true)
+}
+
+#[cfg(test)]
+mod min_similarity_gate_tests {
+    use super::{score_members, write_usize_u32, SemanticAnnIndex, DEFAULT_ANN_THRESHOLD};
+    use ast_sgrep_embed::{top_k_flat_similarity, top_k_similarity, MIN_SIMILARITY};
+
+    #[cfg(target_pointer_width = "64")]
+    #[test]
+    fn ivf_writer_rejects_values_larger_than_its_u32_format() {
+        let mut bytes = Vec::new();
+        let error = write_usize_u32(&mut bytes, u32::MAX as usize + 1)
+            .expect_err("oversized IVF offsets must not truncate");
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+        assert!(bytes.is_empty());
+    }
+
+    /// IVF member scoring and flat top-k must share the ULP-stable exclusive gate.
+    #[test]
+    fn score_members_rejects_one_ulp_above_min_like_flat() {
+        let min = MIN_SIMILARITY;
+        let one = f32::from_bits(min.to_bits() + 1);
+        let two = f32::from_bits(min.to_bits() + 2);
+        // Direct top_k path (same predicate score_members now uses).
+        assert!(
+            top_k_similarity([(0, one)], 1, Some(min)).is_empty(),
+            "1 ULP above min must be excluded"
+        );
+        assert_eq!(top_k_similarity([(0, two)], 1, Some(min)), vec![(0, two)]);
+        // score_members on a 1-d "flat" of constant rows: cosine(query,row)=row[0]
+        // when query=[1] and rows are length-1 (cosine degenerates to sign-aware
+        // product / norms). Use dim=2 unit rows for true cosine.
+        let dim = 2usize;
+        let q = [1.0_f32, 0.0];
+        let y_one = (1.0 - one * one).sqrt();
+        let y_two = (1.0 - two * two).sqrt();
+        let flat = vec![one, y_one, two, y_two];
+        let members = vec![0usize, 1usize];
+        let hits = score_members(&q, &flat, dim, 2, &members, 2);
+        let idxs: Vec<usize> = hits.iter().map(|(i, _)| *i).collect();
+        assert!(
+            !idxs.contains(&0),
+            "score_members must exclude sim=1ulp above MIN, got {hits:?}"
+        );
+        assert!(
+            idxs.contains(&1),
+            "score_members must keep sim=2ulp above MIN, got {hits:?}"
+        );
+        let flat_hits = top_k_flat_similarity(&q, &flat, dim, 2, Some(MIN_SIMILARITY));
+        let flat_idxs: Vec<usize> = flat_hits.iter().map(|(i, _)| *i).collect();
+        assert_eq!(idxs, flat_idxs);
+    }
+
+    #[test]
+    fn mid_size_ivf_uses_score_members_not_default_threshold_gate() {
+        // Override-class corpus: n well below DEFAULT_ANN_THRESHOLD but IVF
+        // was built (as load_or_build would under a lowered ann_threshold).
+        // Query path must score via clusters (all probes) not silent brute-only.
+        let dim = 4usize;
+        let n = 128usize;
+        assert!(n < DEFAULT_ANN_THRESHOLD);
+        let mut flat = Vec::with_capacity(n * dim);
+        let mut state = 0xA11_u64;
+        for _ in 0..n {
+            let start = flat.len();
+            for _ in 0..dim {
+                state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+                flat.push((((state >> 32) as u32) as f32 / u32::MAX as f32) * 2.0 - 1.0);
+            }
+            ast_sgrep_embed::normalize_vec_in_place(&mut flat[start..start + dim]);
+        }
+        let index = SemanticAnnIndex::build_from_flat(&flat, dim);
+        let q = &flat[..dim];
+        assert!(
+            !index.candidate_indices(q, Some(usize::MAX)).is_empty(),
+            "built IVF must expose cluster members"
+        );
+        let ivf = index.search_flat_with_probes(&flat, dim, q, 10, Some(usize::MAX));
+        let brute = top_k_flat_similarity(
+            &ast_sgrep_embed::normalize_vec(q),
+            &flat,
+            dim,
+            10,
+            Some(MIN_SIMILARITY),
+        );
+        let ivf_idx: Vec<usize> = ivf.iter().map(|(i, _)| *i).collect();
+        let brute_idx: Vec<usize> = brute.iter().map(|(i, _)| *i).collect();
+        assert_eq!(
+            ivf_idx, brute_idx,
+            "mid-size IVF (all probes) must match flat; was query still gated on DEFAULT_ANN_THRESHOLD?"
+        );
+    }
+
+    #[test]
+    fn ivf_route_above_threshold_matches_flat_on_ulp_boundary_fixture() {
+        // Boundary fixture at default ANN size (production build gate).
+        let dim = 2usize;
+        let n = DEFAULT_ANN_THRESHOLD;
+        let min = MIN_SIMILARITY;
+        let one = f32::from_bits(min.to_bits() + 1);
+        let two = f32::from_bits(min.to_bits() + 2);
+        let y_one = (1.0 - one * one).sqrt();
+        let y_two = (1.0 - two * two).sqrt();
+        // Fill with low-similarity noise, then plant boundary rows at 0 and 1.
+        let mut flat = Vec::with_capacity(n * dim);
+        for i in 0..n {
+            if i == 0 {
+                flat.extend_from_slice(&[one, y_one]);
+            } else if i == 1 {
+                flat.extend_from_slice(&[two, y_two]);
+            } else {
+                // Nearly orthogonal to [1,0]
+                flat.extend_from_slice(&[0.0, 1.0]);
+            }
+        }
+        let index = SemanticAnnIndex::build_from_flat(&flat, dim);
+        let q = [1.0_f32, 0.0];
+        let ivf: Vec<usize> = index
+            .search_flat_with_probes(&flat, dim, &q, 8, Some(usize::MAX))
+            .into_iter()
+            .map(|(i, _)| i)
+            .collect();
+        let brute: Vec<usize> = top_k_flat_similarity(&q, &flat, dim, 8, Some(MIN_SIMILARITY))
+            .into_iter()
+            .map(|(i, _)| i)
+            .collect();
+        assert!(
+            !ivf.contains(&0) && !brute.contains(&0),
+            "1ulp row must be gated out on both paths: ivf={ivf:?} brute={brute:?}"
+        );
+        assert!(
+            ivf.contains(&1) && brute.contains(&1),
+            "2ulp row must pass both paths: ivf={ivf:?} brute={brute:?}"
+        );
+        assert_eq!(ivf, brute);
+    }
 }
 
 #[cfg(test)]
@@ -651,14 +812,8 @@ mod flatten_bounds_tests {
 
     #[test]
     fn flatten_rejects_zero_dim_with_chunks() {
-        let chunks: Vec<SemanticChunkRow> = vec![(
-            "a.rs".into(),
-            1u32,
-            1u32,
-            "sym".into(),
-            "x".into(),
-            vec![],
-        )];
+        let chunks: Vec<SemanticChunkRow> =
+            vec![("a.rs".into(), 1u32, 1u32, "sym".into(), "x".into(), vec![])];
         let err = flatten_vectors_for_search(&chunks, 0).expect_err("dim=0 must fail");
         assert!(
             err.to_string().contains("dimension is 0"),
@@ -670,5 +825,289 @@ mod flatten_bounds_tests {
     fn flatten_allows_empty_chunks_with_zero_dim() {
         let out = flatten_vectors_for_search(&[], 0).expect("empty ok");
         assert!(out.is_empty());
+    }
+
+    #[test]
+    fn flatten_rejects_len_times_dim_overflow() {
+        // Overflow is checked before row-length validation / allocation, so empty
+        // vectors are enough to exercise the edge without multi-GB allocs.
+        let dim = usize::MAX / 2 + 1;
+        let chunks: Vec<SemanticChunkRow> = vec![
+            ("a.rs".into(), 1u32, 1u32, "s".into(), "x".into(), vec![]),
+            ("b.rs".into(), 1u32, 1u32, "s".into(), "x".into(), vec![]),
+        ];
+        let err = flatten_vectors_for_search(&chunks, dim).expect_err("overflow");
+        assert!(err.to_string().contains("overflow"), "unexpected: {err}");
+    }
+}
+
+#[cfg(test)]
+mod kmeans_flat_tests {
+    use super::SemanticAnnIndex;
+
+    fn synthetic_flat(n: usize, dim: usize) -> Vec<f32> {
+        let mut flat = Vec::with_capacity(n * dim);
+        for i in 0..n {
+            for d in 0..dim {
+                flat.push(((i * 17 + d * 3) % 97) as f32 * 0.01 + 0.001);
+            }
+        }
+        flat
+    }
+
+    #[test]
+    fn build_from_flat_is_deterministic_bit_identical_sidecar() {
+        let dim = 8usize;
+        let n = 64usize;
+        let flat = synthetic_flat(n, dim);
+        let a = SemanticAnnIndex::build_from_flat(&flat, dim);
+        let b = SemanticAnnIndex::build_from_flat(&flat, dim);
+        assert!(a.validate_partition(n));
+        assert!(b.validate_partition(n));
+        let mut wa = Vec::new();
+        let mut wb = Vec::new();
+        a.write_to(&mut wa, dim).expect("serialize a");
+        b.write_to(&mut wb, dim).expect("serialize b");
+        assert_eq!(
+            wa, wb,
+            "two builds on same input must produce bit-identical IVF payload"
+        );
+        let q = &flat[..dim];
+        assert_eq!(
+            a.search_flat(&flat, dim, q, 10),
+            b.search_flat(&flat, dim, q, 10)
+        );
+    }
+
+    #[test]
+    fn build_from_flat_empty_and_zero_dim() {
+        let empty = SemanticAnnIndex::build_from_flat(&[], 8);
+        assert!(empty.candidate_indices(&[1.0; 8], Some(1)).is_empty());
+        let zero_dim = SemanticAnnIndex::build_from_flat(&[1.0, 2.0], 0);
+        assert!(zero_dim.candidate_indices(&[1.0], Some(1)).is_empty());
+    }
+
+    #[test]
+    fn search_flat_edge_paths_empty_zero_dim_limit() {
+        let dim = 4usize;
+        let flat = synthetic_flat(8, dim);
+        let empty_idx = SemanticAnnIndex::build_from_flat(&[], dim);
+        let q = &flat[..dim];
+        // empty corpus (n=0) → no hits
+        assert!(empty_idx.search_flat(&[], dim, q, 5).is_empty());
+        // zero dim → checked_div path, no panic
+        let built = SemanticAnnIndex::build_from_flat(&flat, dim);
+        assert!(built.search_flat(&flat, 0, q, 5).is_empty());
+        // limit 0 → empty
+        assert!(built.search_flat(&flat, dim, q, 0).is_empty());
+        // max limit caps to corpus size via top-k
+        let hits = built.search_flat(&flat, dim, q, usize::MAX);
+        assert!(!hits.is_empty());
+        assert!(hits.len() <= 8);
+    }
+
+    #[test]
+    fn ann_result_is_sufficient_edges() {
+        use super::ann_result_is_sufficient;
+        // empty / under-filled must not short-circuit flat
+        assert!(!ann_result_is_sufficient(0, 100, 50));
+        assert!(!ann_result_is_sufficient(10, 100, 50));
+        assert!(ann_result_is_sufficient(50, 100, 50));
+        // total smaller than limit
+        assert!(ann_result_is_sufficient(10, 10, 50));
+        // limit 0: vacuously sufficient (product clamps limit ≥ 1)
+        assert!(ann_result_is_sufficient(0, 0, 0));
+        assert!(ann_result_is_sufficient(0, 5, 0));
+    }
+
+    #[test]
+    fn kmeans_flat_matches_row_layout_reference() {
+        // Reference: same algorithm as pre-T1 `&[Vec<f32>]` k-means, for a small
+        // fixed matrix. Asserts flat-slice kmeans produces identical centroids.
+        let dim = 4usize;
+        let n = 12usize;
+        let flat = synthetic_flat(n, dim);
+        // Normalize like build_from_flat.
+        let mut norm = flat.clone();
+        for i in 0..n {
+            ast_sgrep_embed::normalize_vec_in_place(&mut norm[i * dim..(i + 1) * dim]);
+        }
+        let rows: Vec<Vec<f32>> = (0..n)
+            .map(|i| norm[i * dim..(i + 1) * dim].to_vec())
+            .collect();
+        let k = ((n as f64).sqrt() as usize).clamp(16, 256).min(n).max(1);
+        let (c_flat, a_flat) = super::kmeans(&norm, dim, k, 12);
+        let (c_rows, a_rows) = kmeans_row_reference(&rows, k, 12);
+        assert_eq!(a_flat, a_rows);
+        assert_eq!(c_flat.len(), c_rows.len());
+        for (a, b) in c_flat.iter().zip(c_rows.iter()) {
+            assert_eq!(a.len(), b.len());
+            for (x, y) in a.iter().zip(b.iter()) {
+                assert_eq!(
+                    x.to_bits(),
+                    y.to_bits(),
+                    "centroid float bits must match row-layout reference"
+                );
+            }
+        }
+    }
+
+    /// Serial row-layout k-means reference for isomorphism (same metric as
+    fn kmeans_row_reference(
+        vectors: &[Vec<f32>],
+        k: usize,
+        max_iters: usize,
+    ) -> (Vec<Vec<f32>>, Vec<usize>) {
+        use ast_sgrep_embed::{dot_similarity, normalize_vec};
+        let k = k.min(vectors.len()).max(1);
+        let dim = vectors[0].len();
+        let mut centroids = {
+            let mut c = vec![vectors[0].clone()];
+            while c.len() < k {
+                let best = vectors
+                    .iter()
+                    .enumerate()
+                    .map(|(i, v)| {
+                        let nearest_sim = c
+                            .iter()
+                            .map(|cent| dot_similarity(v, cent))
+                            .fold(f32::NEG_INFINITY, f32::max);
+                        (i, 1.0 - nearest_sim)
+                    })
+                    .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+                    .map(|(i, _)| i)
+                    .unwrap_or(0);
+                c.push(vectors[best].clone());
+            }
+            c
+        };
+        let mut assignments = vec![0usize; vectors.len()];
+        for _ in 0..max_iters {
+            let mut changed = false;
+            for (i, v) in vectors.iter().enumerate() {
+                let best = centroids
+                    .iter()
+                    .enumerate()
+                    .map(|(ci, c)| (ci, dot_similarity(v, c)))
+                    .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+                    .map(|(ci, _)| ci)
+                    .unwrap_or(0);
+                changed |= assignments[i] != best;
+                assignments[i] = best;
+            }
+            if !changed {
+                break;
+            }
+            let mut sums = vec![vec![0.0f32; dim]; k];
+            let mut counts = vec![0usize; k];
+            for (i, v) in vectors.iter().enumerate() {
+                let c = assignments[i];
+                counts[c] += 1;
+                for (j, val) in v.iter().enumerate() {
+                    sums[c][j] += val;
+                }
+            }
+            centroids = sums
+                .iter()
+                .zip(counts.iter())
+                .zip(centroids.iter())
+                .map(|((sum, &count), prev)| {
+                    if count == 0 {
+                        prev.clone()
+                    } else {
+                        normalize_vec(&sum.iter().map(|v| v / count as f32).collect::<Vec<_>>())
+                    }
+                })
+                .collect();
+        }
+        (centroids, assignments)
+    }
+
+    fn assert_kmeans_matches_serial_ref(flat: &[f32], dim: usize, max_iters: usize) {
+        let n = flat.len() / dim;
+        let mut norm = flat.to_vec();
+        for i in 0..n {
+            ast_sgrep_embed::normalize_vec_in_place(&mut norm[i * dim..(i + 1) * dim]);
+        }
+        let rows: Vec<Vec<f32>> = (0..n)
+            .map(|i| norm[i * dim..(i + 1) * dim].to_vec())
+            .collect();
+        let k = ((n as f64).sqrt() as usize).clamp(16, 256).min(n).max(1);
+        let (c_ref, a_ref) = kmeans_row_reference(&rows, k, max_iters);
+        let (c_par, a_par) = super::kmeans(&norm, dim, k, max_iters);
+        assert_eq!(
+            a_par, a_ref,
+            "assignments must match serial row-layout reference (n={n} dim={dim} k={k})"
+        );
+        assert_eq!(c_par.len(), c_ref.len());
+        for (ci, (a, b)) in c_par.iter().zip(c_ref.iter()).enumerate() {
+            assert_eq!(a.len(), b.len());
+            for (j, (x, y)) in a.iter().zip(b.iter()).enumerate() {
+                assert_eq!(
+                    x.to_bits(),
+                    y.to_bits(),
+                    "centroid[{ci}][{j}] bits must match serial ref (n={n} dim={dim})"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn kmeans_parallel_matches_serial_on_synthetics() {
+        // Deterministic seeds via synthetic_flat formula; vary n/dim to cover
+        // k-clamp paths (k=min(n, clamp(sqrt(n),16,256))).
+        for &(n, dim) in &[(12, 4), (32, 8), (64, 16), (100, 8), (256, 4)] {
+            let flat = synthetic_flat(n, dim);
+            assert_kmeans_matches_serial_ref(&flat, dim, 12);
+        }
+        // Fixed alternate pattern (still deterministic).
+        let dim = 6usize;
+        let n = 48usize;
+        let mut flat = Vec::with_capacity(n * dim);
+        for i in 0..n {
+            for d in 0..dim {
+                flat.push(((i * 31 + d * 7) % 53) as f32 * 0.02 - 0.1);
+            }
+        }
+        assert_kmeans_matches_serial_ref(&flat, dim, 12);
+    }
+
+    #[test]
+    fn kmeans_bit_identical_under_1_and_4_rayon_threads() {
+        // Local pools via install so thread count is controlled even if the
+        // global Rayon pool was already initialized by other tests.
+        let dim = 8usize;
+        let n = 128usize;
+        let flat = synthetic_flat(n, dim);
+        let mut norm = flat.clone();
+        for i in 0..n {
+            ast_sgrep_embed::normalize_vec_in_place(&mut norm[i * dim..(i + 1) * dim]);
+        }
+        let rows: Vec<Vec<f32>> = (0..n)
+            .map(|i| norm[i * dim..(i + 1) * dim].to_vec())
+            .collect();
+        let k = ((n as f64).sqrt() as usize).clamp(16, 256).min(n).max(1);
+        let (c_ref, a_ref) = kmeans_row_reference(&rows, k, 12);
+
+        for threads in [1usize, 4usize] {
+            let pool = rayon::ThreadPoolBuilder::new()
+                .num_threads(threads)
+                .build()
+                .expect("build rayon pool");
+            let (c_par, a_par) = pool.install(|| super::kmeans(&norm, dim, k, 12));
+            assert_eq!(
+                a_par, a_ref,
+                "assignments must match serial ref at RAYON threads={threads}"
+            );
+            for (a, b) in c_par.iter().zip(c_ref.iter()) {
+                for (x, y) in a.iter().zip(b.iter()) {
+                    assert_eq!(
+                        x.to_bits(),
+                        y.to_bits(),
+                        "centroid bits must match at threads={threads}"
+                    );
+                }
+            }
+        }
     }
 }

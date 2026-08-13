@@ -276,7 +276,14 @@ fn elapsed_ns(started: Instant) -> u64 {
     u64::try_from(started.elapsed().as_nanos()).unwrap_or(u64::MAX)
 }
 
+/// 99th percentile of latency samples (nanoseconds).
+///
+/// Empty input returns `0` without panicking (d2a1.3). Call sites currently
+/// only pass non-empty 100..=1000 sample sets; the empty path is defensive.
 fn percentile_99(mut samples: Vec<u64>) -> u64 {
+    if samples.is_empty() {
+        return 0;
+    }
     samples.sort_unstable();
     let index = samples
         .len()
@@ -410,5 +417,22 @@ mod tests {
             );
             assert!(expected.max_rank > 0, "{} has a vacuous rank", case.name);
         }
+    }
+
+    #[test]
+    fn percentile_99_empty_samples_returns_zero_without_panic() {
+        assert_eq!(percentile_99(Vec::new()), 0);
+    }
+
+    #[test]
+    fn percentile_99_single_sample_is_that_value() {
+        assert_eq!(percentile_99(vec![42]), 42);
+    }
+
+    #[test]
+    fn percentile_99_nonempty_is_near_top_of_sorted() {
+        let samples: Vec<u64> = (1..=100).collect();
+        // p99 of 1..=100 is the 99th percentile index → 99 after sort.
+        assert_eq!(percentile_99(samples), 99);
     }
 }

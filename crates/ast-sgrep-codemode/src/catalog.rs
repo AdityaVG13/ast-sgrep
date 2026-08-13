@@ -31,6 +31,9 @@ pub struct ToolDef {
     pub read_only: bool,
 }
 
+const ROOT_ARG_DESC: &str =
+    "Optional subdirectory under the session workspace root (foreign paths are refused)";
+
 /// Full catalog exposed to Code Mode / PTC runtimes.
 pub fn tool_catalog() -> Vec<ToolDef> {
     vec![
@@ -42,7 +45,7 @@ pub fn tool_catalog() -> Vec<ToolDef> {
                 "type": "object",
                 "properties": {
                     "query": {"type": "string", "description": "Search query"},
-                    "root": {"type": "string", "description": "Project root override"},
+                    "root": {"type": "string", "description": ROOT_ARG_DESC},
                     "limit": {"type": "integer", "minimum": 1, "maximum": 500},
                     "format": {"type": "string", "enum": ["agent", "capsule"], "default": "capsule"},
                     "excerpt_lines": {"type": "integer", "minimum": 0, "description": "Inline up to N excerpt lines in capsule mode"},
@@ -62,7 +65,7 @@ pub fn tool_catalog() -> Vec<ToolDef> {
                 "type": "object",
                 "properties": {
                     "query": {"type": "string"},
-                    "root": {"type": "string"},
+                    "root": {"type": "string", "description": ROOT_ARG_DESC},
                     "limit": {"type": "integer", "minimum": 1, "maximum": 500},
                     "format": {"type": "string", "enum": ["agent", "capsule"], "default": "capsule"},
                     "excerpt_lines": {"type": "integer", "minimum": 0}
@@ -81,7 +84,7 @@ pub fn tool_catalog() -> Vec<ToolDef> {
                 "type": "object",
                 "properties": {
                     "query": {"type": "string"},
-                    "root": {"type": "string"},
+                    "root": {"type": "string", "description": ROOT_ARG_DESC},
                     "max_depth": {"type": "integer", "minimum": 1, "maximum": 8, "default": 2},
                     "limit": {"type": "integer", "minimum": 1, "maximum": 500, "default": 100},
                     "top_n": {"type": "integer", "minimum": 1, "maximum": 50, "default": 20}
@@ -100,7 +103,7 @@ pub fn tool_catalog() -> Vec<ToolDef> {
                 "type": "object",
                 "properties": {
                     "symbol": {"type": "string"},
-                    "root": {"type": "string"},
+                    "root": {"type": "string", "description": ROOT_ARG_DESC},
                     "limit": {"type": "integer", "minimum": 1, "maximum": 500},
                     "format": {"type": "string", "enum": ["agent", "capsule"], "default": "capsule"}
                 },
@@ -118,7 +121,7 @@ pub fn tool_catalog() -> Vec<ToolDef> {
                 "type": "object",
                 "properties": {
                     "symbol": {"type": "string"},
-                    "root": {"type": "string"},
+                    "root": {"type": "string", "description": ROOT_ARG_DESC},
                     "limit": {"type": "integer", "minimum": 1, "maximum": 500},
                     "format": {"type": "string", "enum": ["agent", "capsule"], "default": "capsule"}
                 },
@@ -136,7 +139,7 @@ pub fn tool_catalog() -> Vec<ToolDef> {
                 "type": "object",
                 "properties": {
                     "module": {"type": "string"},
-                    "root": {"type": "string"},
+                    "root": {"type": "string", "description": ROOT_ARG_DESC},
                     "limit": {"type": "integer", "minimum": 1, "maximum": 500},
                     "format": {"type": "string", "enum": ["agent", "capsule"], "default": "capsule"}
                 },
@@ -153,7 +156,7 @@ pub fn tool_catalog() -> Vec<ToolDef> {
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "root": {"type": "string"}
+                    "root": {"type": "string", "description": ROOT_ARG_DESC}
                 },
                 "additionalProperties": false
             }),
@@ -162,13 +165,20 @@ pub fn tool_catalog() -> Vec<ToolDef> {
         },
         ToolDef {
             name: "index_repo",
-            description: "Build or incrementally update the .asgrep index. Use force=true for a full rebuild.",
+            description: "Build or incrementally update the .asgrep index. Pass known changed paths for a targeted update; use force=true for a full rebuild.",
             kind: ToolKind::Index,
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "root": {"type": "string"},
-                    "force": {"type": "boolean", "default": false}
+                    "root": {"type": "string", "description": ROOT_ARG_DESC},
+                    "force": {"type": "boolean", "default": false},
+                    "paths": {
+                        "type": "array",
+                        "items": {"type": "string", "minLength": 1},
+                        "minItems": 1,
+                        "maxItems": 1024,
+                        "description": "Known created, changed, or deleted paths under root"
+                    }
                 },
                 "additionalProperties": false
             }),

@@ -1,8 +1,7 @@
 name: CI
 
-# Manual-only to avoid burning GitHub Actions minutes on every push/PR.
-# Run from the Actions tab → CI → Run workflow.
 on:
+  pull_request:
   workflow_dispatch:
 
 jobs:
@@ -23,6 +22,29 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: cargo check workspace
         run: cargo check --workspace -j1
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: test workspace
+        run: cargo test --workspace -j1
+
+  pi:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.19.0
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npm run build --workspace pi-ast-sgrep
+      - run: npm test --workspace pi-ast-sgrep
+      - run: node --test packages/pi/launcher/test/*.test.mjs
+      - run: npm run check:pi-contract && npm run check:pi-release
 
   build-and-test:
     if: github.event_name == 'workflow_dispatch'
@@ -99,7 +121,6 @@ jobs:
           }
 
   clippy:
-    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -114,7 +135,6 @@ jobs:
         run: cargo clippy --workspace --release --all-targets -- -D warnings
 
   fmt:
-    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -127,7 +147,6 @@ jobs:
         run: cargo fmt --check
 
   audit:
-    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -161,9 +180,13 @@ jobs:
       - name: Install cargo-fuzz
         run: command -v cargo-fuzz >/dev/null || cargo install cargo-fuzz --locked
 
-      - name: Fuzz legacy query parser
+      - name: Sync L1 seed corpora into fuzz corpus
         working-directory: fuzz
-        run: cargo +nightly fuzz run parsed_query -- -max_total_time=30 -timeout=5
+        run: bash scripts/sync_seeds.sh
+
+      - name: Fuzz query grammar parser
+        working-directory: fuzz
+        run: cargo +nightly fuzz run query_grammar -- -max_total_time=30 -timeout=5 -dict=dictionaries/query_grammar.dict
 
       - name: Fuzz ranking invariants
         working-directory: fuzz

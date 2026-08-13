@@ -2,7 +2,7 @@
 use ast_sgrep_core::chain::{expand_chain, ChainConfig};
 use ast_sgrep_core::query::{ParsedQuery, QueryMode};
 use ast_sgrep_core::search::{SearchOptions, Searcher};
-use ast_sgrep_core::semantic_ann::SemanticAnnIndex;
+use ast_sgrep_core::semantic_ann::{SemanticAnnIndex, DEFAULT_ANN_THRESHOLD};
 use ast_sgrep_core::store::{CallerRow, SymbolRow, UpsertFileInput};
 use ast_sgrep_core::tantivy_index::{should_use_tantivy, TANTIVY_AUTO_THRESHOLD};
 use ast_sgrep_core::{IndexOptions, IndexStore, Indexer};
@@ -241,10 +241,19 @@ fn bead_ql1u_chain_seed_skips_first_symbol_invention() {
 }
 
 /// firi — IVF (all probes) and flat share MIN_SIMILARITY via exceeds_threshold.
+///
+/// Uses n >= DEFAULT_ANN_THRESHOLD to match production-scale IVF builds.
+/// Historical n=256 left the old query-time DEFAULT gate vacuous (both arms
+/// brute-forced). Predicate unity is now via score_members → top_k_similarity
+/// Some(MIN_SIMILARITY); mid-size override path is covered in unit tests.
 #[test]
 fn bead_firi_ivf_and_flat_min_similarity_agree() {
     let dim = 16usize;
-    let n = 256usize;
+    let n = DEFAULT_ANN_THRESHOLD.max(2048);
+    assert!(
+        n >= DEFAULT_ANN_THRESHOLD,
+        "firi must exercise IVF score_members, not brute-force early return"
+    );
     let mut flat = Vec::with_capacity(n * dim);
     let mut state = 0x00F1_0091_u64;
     for _ in 0..n {
@@ -266,7 +275,7 @@ fn bead_firi_ivf_and_flat_min_similarity_agree() {
     }
     let index = SemanticAnnIndex::build_from_flat(&flat, dim);
     let limit = 16usize;
-    for &qi in &[0usize, 41, 128, 200, 255] {
+    for &qi in &[0usize, 41, 128, 200, 255, 1024, 2000] {
         let query = flat[qi * dim..(qi + 1) * dim].to_vec();
         let mut qn = query.clone();
         let qnorm: f32 = qn.iter().map(|x| x * x).sum::<f32>().sqrt();
@@ -428,6 +437,10 @@ struct RankingCases {
 struct RankingCase {
     name: String,
     query: String,
+    /// Optional retrieval mode from cases.json (`"semantic"` → search_semantic).
+    /// Aligns with ranking_oracle.rs so embed must_include cases hard-assert.
+    #[serde(default)]
+    mode: Option<String>,
     top_k: usize,
     must_include: Vec<MustInclude>,
 }
@@ -444,6 +457,10 @@ struct MustInclude {
 }
 
 /// vwga — wire ranking/cases.json as CI self-oracle on the sample fixture.
+///
+/// Embed policy matches `ranking_oracle.rs`: `use_embed: true`, hashed semantic
+/// index, no soft-skip when embed must_include is empty. Empty embed hits after
+/// a semantic index is a hard fail (mock-free e2e gap lbx1.6).
 #[test]
 fn bead_vwga_ranking_cases_json_self_oracle() {
     let cases_path =
@@ -452,34 +469,36 @@ fn bead_vwga_ranking_cases_json_self_oracle() {
     let fixture: RankingCases = serde_json::from_str(&raw).expect("parse cases.json");
     let indexed = index_sample(IndexOptions {
         root: sample_root(),
+        force_reindex: true,
         ..IndexOptions::default()
     });
-    let searcher = searcher_from(
-        &indexed,
-        SearchOptions {
-            limit: 32,
-            // Ranking oracle cases that need embed are soft-skipped when absent;
-            // lexical/graph cases must pass with embed off for CI stability.
-            use_embed: false,
-            ..SearchOptions::default()
-        },
-    );
     for case in &fixture.cases {
-        let resp = searcher
-            .search(&case.query)
-            .unwrap_or_else(|e| panic!("vwga search failed for {}: {e}", case.name));
+        let limit = case.top_k.max(1);
+        let searcher = searcher_from(
+            &indexed,
+            SearchOptions {
+                limit,
+                // Hard policy: embed on (hashed/local production offline backend).
+                // Soft-skip of empty embed must_include is forbidden (lbx1.6).
+                use_embed: true,
+                ..SearchOptions::default()
+            },
+        );
+        let semantic = case
+            .mode
+            .as_deref()
+            .is_some_and(|m| m.eq_ignore_ascii_case("semantic"));
+        let resp = if semantic {
+            searcher.search_semantic(&case.query)
+        } else {
+            searcher.search(&case.query)
+        }
+        .unwrap_or_else(|e| panic!("vwga search failed for {}: {e}", case.name));
         for req in &case.must_include {
-            // Embed-only synonym may be empty without a live embed backend — soft-skip.
-            if req.kind == "embed" && resp.hits.iter().all(|h| h.kind.as_str() != "embed") {
-                eprintln!(
-                    "vwga: soft-skip {} (no embed hits; backend unavailable)",
-                    case.name
-                );
-                continue;
-            }
             // Prefixed modes: rank in the global top_k window.
             // Hybrid/NL: rank among same-kind hits so multi-lang graph/anchor
             // channels cannot falsely fail a def/embed oracle (vwga harden).
+            // Semantic mode: all hits are embed; kind filter is identity.
             let prefixed = case.query.contains(':');
             let ranked: Vec<_> = if prefixed {
                 resp.hits.iter().take(case.top_k).collect()
@@ -490,6 +509,15 @@ fn bead_vwga_ranking_cases_json_self_oracle() {
                     .take(case.top_k)
                     .collect()
             };
+            // Hard fail: empty embed channel after semantic index is a bug, not a skip.
+            if req.kind == "embed" {
+                assert!(
+                    resp.hits.iter().any(|h| h.kind.as_str() == "embed"),
+                    "vwga: case {} requires embed hits (use_embed + hashed semantic); got kinds={:?}",
+                    case.name,
+                    resp.hits.iter().map(|h| h.kind.as_str()).collect::<Vec<_>>()
+                );
+            }
             let found = ranked.iter().enumerate().find(|(_, h)| {
                 if h.kind.as_str() != req.kind {
                     return false;

@@ -155,9 +155,9 @@
         "policy": "Migrate schema 0 copies without mutating their rollback source; reject ambiguous or newer schemas."
       },
       "indexFormat": {
-        "current": 7,
+        "current": 9,
         "reusable": [
-          7
+          9
         ],
         "rebuild": [
           0,
@@ -166,16 +166,18 @@
           3,
           4,
           5,
-          6
+          6,
+          7,
+          8
         ],
         "newer": "reject-and-preserve",
-        "policy": "Reuse only an exact compatible format. Build an incompatible replacement separately and swap only after validation; failed replacement preserves recoverable prior data."
+        "policy": "Reuse only an exact compatible format. Migrate and strictly rebuild older formats transactionally in place after quiescing warm sessions; preparation failures abort before file rewrites, failed write transactions roll back, and newer formats are rejected without modification."
       }
     }
   },
   "surface": {
     "tools": [
-      "asgrep_codemode",
+      "asgrep",
       "asgrep_search",
       "asgrep_index",
       "asgrep_status"
@@ -191,7 +193,7 @@
       "ast-sgrep"
     ],
     "defaultSearchFormat": "agent-capsule",
-    "separation": "Pi tools use ExtensionAPI directly. Primary agent execution is Code Mode (asgrep_codemode JS sandbox). LSP and MCP remain separate integrations and must not be linked to Code Mode; pi-mcp-adapter is not used."
+    "separation": "Pi tools use ExtensionAPI directly. Primary agent execution is Code Mode (asgrep JS sandbox). LSP and MCP remain separate integrations and must not be linked to Code Mode; pi-mcp-adapter is not used."
   },
   "config": {
     "precedenceHighToLow": [
@@ -232,8 +234,8 @@
     ],
     "gitignoreMutation": false,
     "compatibleUpdate": "Reuse the index after compatibility validation.",
-    "incompatibleUpdate": "Build a replacement atomically; retain the previous usable index until replacement succeeds.",
-    "failedUpdate": "Leave the previous data recoverable and report an actionable error.",
+    "incompatibleUpdate": "Quiesce warm sessions, migrate the database transactionally, then strictly rewrite files and stale-row pruning together in place.",
+    "failedUpdate": "Abort before file rewrites on incomplete preparation, roll back failed write transactions, leave committed rows recoverable, and report an actionable error.",
     "uninstall": "Pi removal unloads the package but preserves project .asgrep data.",
     "deletion": "Only an explicit user request may remove .asgrep data."
   },

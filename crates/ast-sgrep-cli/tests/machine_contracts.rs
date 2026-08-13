@@ -146,6 +146,107 @@ fn index_reindex_status_and_doctor_have_stable_shapes() {
     assert_eq!(doctor["status"], Value::Null);
     assert!(!doctor["issues"].as_array().expect("issues").is_empty());
 }
+
+#[test]
+fn targeted_index_updates_are_bounded_deduplicated_and_confined() {
+    let bin = asgrep_bin();
+    let root = TempDir::new().expect("root");
+    let index_dir = TempDir::new().expect("index");
+    let index = index_dir.path().join("index.db");
+    let source = root.path().join("source.rs");
+    std::fs::write(&source, "fn before() {}\n").expect("source");
+    let root_str = root.path().to_str().expect("root utf8");
+    let index_str = index.to_str().expect("index utf8");
+    assert_success(
+        &run(
+            &bin,
+            &[
+                "--json",
+                "--no-embed",
+                "--index-path",
+                index_str,
+                "index",
+                root_str,
+            ],
+        ),
+        "index",
+    );
+
+    std::fs::write(&source, "fn after() {}\n").expect("modify");
+    let updated = assert_success(
+        &run(
+            &bin,
+            &[
+                "--json",
+                "--no-embed",
+                "--index-path",
+                index_str,
+                "index",
+                root_str,
+                "--path",
+                "source.rs",
+                "--path",
+                "source.rs",
+            ],
+        ),
+        "index",
+    );
+    assert_eq!(updated["targeted"], true);
+    assert_eq!(updated["path_count"], 1);
+    assert_eq!(updated["stats"]["files_indexed"], 1);
+
+    std::fs::remove_file(&source).expect("delete");
+    let removed = assert_success(
+        &run(
+            &bin,
+            &[
+                "--json",
+                "--no-embed",
+                "--index-path",
+                index_str,
+                "index",
+                root_str,
+                "--path",
+                "source.rs",
+            ],
+        ),
+        "index",
+    );
+    assert_eq!(removed["stats"]["files_removed"], 1);
+
+    let outside = index_dir.path().join("outside.rs");
+    std::fs::write(&outside, "fn outside() {}\n").expect("outside");
+    let escaped = run(
+        &bin,
+        &[
+            "--json",
+            "--no-embed",
+            "--index-path",
+            index_str,
+            "index",
+            root_str,
+            "--path",
+            outside.to_str().expect("outside utf8"),
+        ],
+    );
+    assert_eq!(escaped.status.code(), Some(1));
+    assert_eq!(parse_stdout(&escaped)["error"]["kind"], "usage");
+
+    let mut too_many = vec![
+        "--json",
+        "--no-embed",
+        "--index-path",
+        index_str,
+        "index",
+        root_str,
+    ];
+    for _ in 0..1_025 {
+        too_many.extend(["--path", "source.rs"]);
+    }
+    let rejected = run(&bin, &too_many);
+    assert_eq!(rejected.status.code(), Some(1));
+    assert_eq!(parse_stdout(&rejected)["error"]["kind"], "usage");
+}
 #[test]
 fn agent_search_modes_are_stable_and_bounded() {
     let session = CliSession::sample(asgrep_bin());
@@ -194,10 +295,114 @@ fn agent_search_modes_are_stable_and_bounded() {
     assert_shape(&compact, &shapes["compact"]);
     assert!(compact["h"].as_array().expect("compact hits").len() <= 2);
     assert!(compact["p"].is_object());
-    assert_eq!(compact["b"][0], 12);
-    assert_eq!(compact["b"][1], 16);
-    assert!(compact["b"][2].as_u64().expect("used budget") <= 16);
+    assert_eq!(compact["zb"][0], 12);
+    assert_eq!(compact["zb"][1], 16);
+    assert!(compact["zb"][2].as_u64().expect("used budget") <= 16);
 }
+/// Embed-default-ON machine contract (mock-free e2e gap lbx1.4).
+///
+/// Production default is embed-on; most CLI tests pass `--no-embed`. This
+/// contract indexes the sample fixture with hashed semantic (CLI default) and
+/// searches **without** `--no-embed`, asserting:
+/// - index status exposes embed backend + semantic chunks
+/// - agent hybrid search surfaces semantic/embed signal
+/// - `asgrep semantic` returns embed-kind hits
+///
+/// A suite that only runs with `--no-embed` must not satisfy this bead.
+#[test]
+fn agent_search_embed_default_on_surfaces_semantic_hits() {
+    let session = CliSession::sample(asgrep_bin());
+    let index = session.index_path.to_str().expect("index utf8");
+    let root = session.root.to_str().expect("root utf8");
+
+    // Status after default index (no --no-embed on index path).
+    let status = assert_success(
+        &run(
+            &session.bin,
+            &["--json", "--index-path", index, "status", root],
+        ),
+        "status",
+    );
+    let chunk_count = status["semantic_chunk_count"].as_u64().unwrap_or(0);
+    assert!(
+        chunk_count > 0,
+        "embed-on index must store semantic chunks; status={status}"
+    );
+    let backend = status["embed_backend"].as_str().unwrap_or("");
+    assert!(
+        !backend.is_empty(),
+        "status.embed_backend must be set after semantic index; status={status}"
+    );
+
+    // Hybrid agent search WITHOUT --no-embed (production default channel).
+    let agent = session.search_json(
+        "credential renewal",
+        &["--limit", "16", "--format", "agent"],
+    );
+    assert_eq!(agent["ok"], true);
+    assert_eq!(agent["command"], "search");
+    assert_eq!(agent["provider"], "ast-sgrep");
+    let hits = agent["hits"].as_array().expect("agent hits");
+    assert!(
+        !hits.is_empty(),
+        "embed-on hybrid agent search must return hits; agent={agent}"
+    );
+    let has_semantic_flag = agent["has_semantic_hits"].as_bool().unwrap_or(false);
+    let has_embed_kind = hits.iter().any(|h| h["kind"].as_str() == Some("embed"));
+    let has_semantic_contrib = hits
+        .iter()
+        .any(|h| h.get("semantic") == Some(&Value::Bool(true)));
+    assert!(
+        has_semantic_flag || has_embed_kind || has_semantic_contrib,
+        "embed-on agent JSON must surface semantic/embed path          (has_semantic_hits / kind=embed / hit.semantic);          has_semantic_hits={has_semantic_flag} hits={hits:?}"
+    );
+
+    // Pure semantic subcommand path — all hits must be embed-kind.
+    let semantic_out = session.run_success(&[
+        "--index-path",
+        index,
+        "--json",
+        "--format",
+        "agent",
+        "--limit",
+        "16",
+        "semantic",
+        "--",
+        "credential renewal",
+        root,
+    ]);
+    let semantic: Value =
+        serde_json::from_slice(&semantic_out.stdout).expect("semantic agent json");
+    assert_eq!(semantic["ok"], true);
+    assert_eq!(semantic["command"], "semantic");
+    let semantic_hits = semantic["hits"].as_array().expect("semantic hits");
+    assert!(
+        !semantic_hits.is_empty(),
+        "semantic CLI must return embed hits after hashed index; semantic={semantic}"
+    );
+    assert!(
+        semantic_hits
+            .iter()
+            .any(|h| h["kind"].as_str() == Some("embed")),
+        "semantic CLI hits must include kind=embed; hits={semantic_hits:?}"
+    );
+    // Soft-skip empty embed is forbidden: hard-require auth_refresh relevance.
+    assert!(
+        semantic_hits.iter().any(|h| {
+            h["symbol"].as_str() == Some("auth_refresh")
+                || h["preview"]
+                    .as_str()
+                    .map(|p| p.contains("auth_refresh"))
+                    .unwrap_or(false)
+                || h.get("excerpt")
+                    .and_then(|e| e.as_str())
+                    .map(|e| e.contains("auth_refresh"))
+                    .unwrap_or(false)
+        }),
+        "semantic embed path must surface auth_refresh; hits={semantic_hits:?}"
+    );
+}
+
 #[test]
 fn chain_eval_and_bench_successes_use_machine_envelope() {
     let session = CliSession::sample(asgrep_bin());
@@ -315,6 +520,7 @@ fn bounded_arguments_are_json_usage_errors() {
     let golden = &fixture("envelopes")["usage"];
     for args in [
         ["--json", "--limit", "1001", "query", "."],
+        ["--json", "--limit", "-1", "query", "."],
         ["--json", "--excerpt-lines", "101", "query", "."],
     ] {
         let output = run(&bin, &args);
@@ -348,11 +554,33 @@ fn agent_discovery_defaults_and_boolish_envs_are_round_trip_free() {
     let output = run(&bin, &["--robot-help"]);
     assert_eq!(output.status.code(), Some(0));
     assert!(String::from_utf8_lossy(&output.stdout).contains("agent handbook"));
+    // --json must wrap the handbook (agents parse stdout as JSON).
+    let json_help = run(&bin, &["--json", "--robot-help"]);
+    assert_eq!(json_help.status.code(), Some(0), "robot-help --json exit");
+    let help_v: Value =
+        serde_json::from_slice(&json_help.stdout).expect("robot-help --json envelope");
+    assert_eq!(help_v["ok"], true);
+    assert_eq!(help_v["command"], "robot-docs");
+    assert_eq!(help_v["format"], "markdown");
+    assert_eq!(help_v["topic"], "guide");
+    assert!(
+        help_v["body"]
+            .as_str()
+            .unwrap_or("")
+            .contains("agent handbook"),
+        "body should carry markdown handbook"
+    );
+    let json_docs = run(&bin, &["robot-docs", "--json"]);
+    assert_eq!(json_docs.status.code(), Some(0), "robot-docs --json exit");
+    let docs_v: Value =
+        serde_json::from_slice(&json_docs.stdout).expect("robot-docs --json envelope");
+    assert_eq!(docs_v["command"], "robot-docs");
+    assert!(docs_v["body"]
+        .as_str()
+        .unwrap_or("")
+        .contains("agent handbook"));
     let missing = TempDir::new().expect("tempdir").path().join("missing");
-    let doctor = assert_doctor_unhealthy(&run(
-        &bin,
-        &["doctor", missing.to_str().expect("utf8")],
-    ));
+    let doctor = assert_doctor_unhealthy(&run(&bin, &["doctor", missing.to_str().expect("utf8")]));
     assert_eq!(doctor["issues"][0]["kind"], "missing_root");
 }
 
@@ -384,6 +612,10 @@ fn format_aliases_typos_and_root_failures_are_unambiguous() {
         vec!["--json", "evall"],
         vec!["--format", "invalid", "query", "/definitely/missing"],
         vec!["--format", "compact", "status", root],
+        // d2a1.12: --format must not be silently accepted on index/reindex/bench
+        vec!["--format", "compact", "index", root],
+        vec!["--format", "compact", "reindex", root],
+        vec!["--format", "compact", "bench", root, "--query", "x"],
         vec!["--json", "--root", root, "status", root],
     ] {
         let output = run(&session.bin, &args);
@@ -465,19 +697,15 @@ fn doctor_suggested_commands_echo_effective_root() {
     let bin = asgrep_bin();
     let doctor = assert_doctor_unhealthy(&run(
         &bin,
-        &[
-            "doctor",
-            "--robot-triage",
-            root.to_str().expect("utf8"),
-        ],
+        &["doctor", "--robot-triage", root.to_str().expect("utf8")],
     ));
     let root_s = root.to_str().expect("utf8");
     assert_eq!(doctor["root"], root_s);
     let suggested = doctor["suggested_commands"].as_array().expect("cmds");
     assert!(
-        suggested
-            .iter()
-            .any(|c| c.as_str().is_some_and(|s| s.contains(root_s) && s.contains("index"))),
+        suggested.iter().any(|c| c
+            .as_str()
+            .is_some_and(|s| s.contains(root_s) && s.contains("index"))),
         "suggested_commands must echo effective root, got {suggested:?}"
     );
 }
@@ -500,7 +728,12 @@ fn format_alone_implies_json_machine_output() {
         ],
     );
     let value = assert_success(&output, "search");
-    assert!(value.get("hits").is_some() || value.get("hit_count").is_some() || value.get("q").is_some() || value.get("query").is_some());
+    assert!(
+        value.get("hits").is_some()
+            || value.get("hit_count").is_some()
+            || value.get("q").is_some()
+            || value.get("query").is_some()
+    );
 }
 
 #[test]
@@ -514,10 +747,25 @@ fn capabilities_lists_all_clap_subcommands_and_siblings() {
         .map(|c| c["name"].as_str().expect("name"))
         .collect();
     for required in [
-        "index", "status", "reindex", "search", "bench", "watch", "keyword", "semantic",
-        "chain", "capabilities", "version", "robot-docs", "doctor", "eval",
+        "index",
+        "status",
+        "reindex",
+        "search",
+        "bench",
+        "watch",
+        "keyword",
+        "semantic",
+        "chain",
+        "capabilities",
+        "version",
+        "robot-docs",
+        "doctor",
+        "eval",
     ] {
-        assert!(names.contains(&required), "missing command {required} in {names:?}");
+        assert!(
+            names.contains(&required),
+            "missing command {required} in {names:?}"
+        );
     }
     assert!(caps["sibling_binaries"].as_array().unwrap().len() >= 2);
     assert!(caps["integrations"]["mcp"]["binary"] == "asgrep-mcp");
@@ -566,17 +814,60 @@ fn index_dry_run_does_not_mutate() {
     let bin = asgrep_bin();
     let out = run(
         &bin,
-        &[
-            "--json",
-            "index",
-            "--dry-run",
-            root.to_str().expect("utf8"),
-        ],
+        &["--json", "index", "--dry-run", root.to_str().expect("utf8")],
     );
     let value = assert_success(&out, "index");
     assert_eq!(value["dry_run"], true);
     assert_eq!(value["mutates_index"], false);
+    assert_eq!(value["walk_errors"], false);
     assert!(!root.join(".asgrep").exists() || !root.join(".asgrep/index.db").exists());
+}
+
+#[test]
+fn index_dry_run_reports_walk_errors_when_read_dir_fails() {
+    // d2a1.11: unreadable subdirs must not silently under-count as files_would_index: 0.
+    let tmp = TempDir::new().expect("tempdir");
+    let root = tmp.path().join("proj");
+    let blocked = root.join("blocked");
+    std::fs::create_dir_all(&blocked).unwrap();
+    std::fs::write(blocked.join("hidden.rs"), "fn hidden() {}\n").unwrap();
+    std::fs::write(root.join("visible.rs"), "fn visible() {}\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&blocked).unwrap().permissions();
+        perms.set_mode(0o000);
+        std::fs::set_permissions(&blocked, perms).unwrap();
+    }
+    #[cfg(not(unix))]
+    {
+        // Non-unix: still assert the field exists on a clean walk.
+        let bin = asgrep_bin();
+        let out = run(
+            &bin,
+            &["--json", "index", "--dry-run", root.to_str().expect("utf8")],
+        );
+        let value = assert_success(&out, "index");
+        assert!(value.get("walk_errors").is_some());
+        return;
+    }
+    let bin = asgrep_bin();
+    let out = run(
+        &bin,
+        &["--json", "index", "--dry-run", root.to_str().expect("utf8")],
+    );
+    // Restore perms so TempDir cleanup can remove blocked/.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&blocked).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&blocked, perms).unwrap();
+    }
+    let value = assert_success(&out, "index");
+    assert_eq!(value["walk_errors"], true, "{value:#}");
+    // Visible file still counted; blocked subtree is incomplete, not total zero.
+    assert_eq!(value["files_would_index"], 1, "{value:#}");
 }
 
 #[test]
@@ -651,4 +942,134 @@ fn bench_suite_json_is_single_envelope_even_on_failure() {
     } else {
         assert_eq!(output.status.code(), Some(2));
     }
+}
+
+/// d2a1.9: oversized batch file is rejected before OOM; machine envelope on failure.
+#[test]
+fn codemode_batch_oversized_file_is_machine_failure() {
+    let dir = TempDir::new().expect("tempdir");
+    // MAX_BATCH_REQUEST_BYTES = 4 * MAX_STDIN_LINE_BYTES (1 MiB) = 4 MiB.
+    // Write slightly over the cap so metadata fast-path rejects.
+    let path = dir.path().join("huge.json");
+    {
+        use std::io::{Seek, SeekFrom, Write};
+        let mut f = std::fs::File::create(&path).expect("create");
+        // MAX_BATCH_REQUEST_BYTES = 4 * 1_048_576. One byte past the cap.
+        let over = (1_048_576u64 * 4) + 1;
+        f.write_all(b"{").unwrap();
+        f.seek(SeekFrom::Start(over - 1)).unwrap();
+        f.write_all(b"}").unwrap();
+        f.sync_all().unwrap();
+        assert!(
+            std::fs::metadata(&path).unwrap().len() >= over,
+            "fixture must exceed batch cap"
+        );
+    }
+    let bin = asgrep_bin();
+    // No --json: codemode-batch must still emit a machine failure envelope (d2a1.10).
+    let output = Command::new(&bin)
+        .args(["codemode-batch", "--requests", path.to_str().expect("utf8")])
+        .env("NO_COLOR", "1")
+        .output()
+        .expect("run");
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "stderr={} stdout={}",
+        String::from_utf8_lossy(&output.stderr),
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert!(
+        output.stderr.is_empty(),
+        "machine failure must not also print human stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let value = parse_stdout(&output);
+    assert_eq!(value["ok"], false);
+    assert_eq!(value["exit_code"], 2);
+    assert_eq!(value["command"], "codemode-batch");
+    assert_eq!(value["error"]["kind"], "operational");
+    let msg = value["error"]["message"].as_str().unwrap_or("");
+    assert!(
+        msg.contains("exceeds max") || msg.contains("batch requests"),
+        "unexpected message: {msg}"
+    );
+}
+
+/// d2a1.9: stdin path also caps (never fully slurp oversize); d2a1.10 envelope without --json.
+#[test]
+fn codemode_batch_oversized_stdin_is_machine_failure() {
+    use std::io::Write;
+    use std::process::Stdio;
+    let bin = asgrep_bin();
+    let mut child = Command::new(&bin)
+        .args(["codemode-batch", "--requests", "-"])
+        .env("NO_COLOR", "1")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn");
+    {
+        let mut stdin = child.stdin.take().expect("stdin");
+        // Stream more than 4 MiB; take() must stop allocation near the cap.
+        let chunk = vec![b'a'; 64 * 1024];
+        let target = (1_048_576usize * 4) + (128 * 1024);
+        let mut written = 0usize;
+        while written < target {
+            match stdin.write_all(&chunk) {
+                Ok(()) => written += chunk.len(),
+                Err(_) => break, // peer closed after rejecting
+            }
+        }
+        // Drop stdin to close pipe.
+    }
+    let output = child.wait_with_output().expect("wait");
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "stderr={} stdout={}",
+        String::from_utf8_lossy(&output.stderr),
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert!(
+        output.stderr.is_empty(),
+        "unexpected stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let value = parse_stdout(&output);
+    assert_eq!(value["ok"], false);
+    assert_eq!(value["exit_code"], 2);
+    assert_eq!(value["command"], "codemode-batch");
+    let msg = value["error"]["message"].as_str().unwrap_or("");
+    assert!(
+        msg.contains("exceeds max") || msg.contains("stdin") || msg.contains("batch"),
+        "unexpected message: {msg}"
+    );
+}
+
+/// d2a1.10: missing batch file without --json still yields machine operational envelope.
+#[test]
+fn codemode_batch_missing_file_machine_envelope_without_json_flag() {
+    let bin = asgrep_bin();
+    let missing = TempDir::new().expect("temp").path().join("nope.json");
+    let output = Command::new(&bin)
+        .args([
+            "codemode-batch",
+            "--requests",
+            missing.to_str().expect("utf8"),
+        ])
+        .env("NO_COLOR", "1")
+        .output()
+        .expect("run");
+    assert_eq!(output.status.code(), Some(2));
+    assert!(
+        output.stderr.is_empty(),
+        "stderr should be empty in machine mode: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let value = parse_stdout(&output);
+    assert_eq!(value["ok"], false);
+    assert_eq!(value["command"], "codemode-batch");
+    assert_eq!(value["error"]["kind"], "operational");
 }

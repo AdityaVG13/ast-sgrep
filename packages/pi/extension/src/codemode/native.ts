@@ -15,6 +15,8 @@ import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+export const CODEMODE_BINDING_VERSION = "1.4.0";
+
 export type NativeSessionConfig = {
   root?: string;
   indexPath?: string;
@@ -44,23 +46,17 @@ export type NativeBatchResponse = {
 };
 
 export type NativeSession = {
-  call(tool: string, args?: Record<string, unknown>): unknown;
+  call(tool: string, args?: Record<string, unknown>, signal?: AbortSignal): Promise<unknown>;
+  batch(calls: NativeBatchCall[], signal?: AbortSignal): Promise<NativeBatchResponse>;
   readonly callCount: number;
   readonly root: string;
 };
 
 export type CodemodeNativeBinding = {
   Session: new (config?: NativeSessionConfig) => NativeSession;
-  batch(request: {
-    root?: string;
-    indexPath?: string;
-    useEmbed?: boolean;
-    limit?: number;
-    parallelMode?: string;
-    calls: NativeBatchCall[];
-  }): NativeBatchResponse;
   bindingVersion(): string;
   isNative(): boolean;
+  asyncApiVersion(): number;
 };
 
 let cached: CodemodeNativeBinding | null | undefined;
@@ -134,7 +130,14 @@ export function loadCodemodeNative(): CodemodeNativeBinding | null {
     if (!existsSync(path)) continue;
     try {
       const binding = require(path) as CodemodeNativeBinding;
-      if (typeof binding?.isNative === "function" && binding.isNative()) {
+      if (
+        typeof binding?.isNative === "function" &&
+        binding.isNative() &&
+        typeof binding.bindingVersion === "function" &&
+        binding.bindingVersion() === CODEMODE_BINDING_VERSION &&
+        typeof binding.asyncApiVersion === "function" &&
+        binding.asyncApiVersion() === 1
+      ) {
         cached = binding;
         return cached;
       }

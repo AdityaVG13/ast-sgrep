@@ -110,6 +110,12 @@ editors/**/*.vsix
 
 # Tests
 tests/artifacts/perf/
+# Local audit reports are review aids, not product fixtures.
+tests/artifacts/cyclomatic-reduction/
+tests/artifacts/rotational-code-analysis/
+tests/artifacts/state-space-collapse/
+# Golden mismatch dumps (assert_golden writes these on failure; never commit)
+*.actual
 
 # Local bench history ratchet (written by `asgrep bench`)
 .bench-history.json
@@ -138,3 +144,18 @@ fuzz/corpus/
 
 # CLI benchmark-history state (regenerated on runs)
 **/.bench-history.json
+
+# Local tool/audit state (not product)
+.house-odds/**/.fszero/
+/beads_compliance_audit/
+
+# state-space-collapse skill artifacts
+.state-space-collapse/
+/.papercuts.jsonl
+/.skill-loop-progress-*.md
+
+# module-coupling-topology skill artifacts (local books)
+.module-coupling-topology/
+.rotational-code-analysis/
+.rotational-code-analysis
+*.rotational-code-analysis/

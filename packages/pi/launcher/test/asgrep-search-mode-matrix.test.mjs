@@ -17,7 +17,6 @@ const guide = readFileSync(
 );
 
 const SCHEMA_MODES = [
-  "keyword",
   "natural",
   "pattern",
   "defs",
@@ -46,7 +45,7 @@ function queryForMode(query, mode) {
 }
 
 function searchArgs(params) {
-  const mode = params.mode ?? "keyword";
+  const mode = params.mode ?? "natural";
   const query = queryForMode(params.query, mode);
   const output = [
     "--json",
@@ -57,10 +56,9 @@ function searchArgs(params) {
     "--excerpt-lines",
     String(params.excerptLines ?? 0),
   ];
-  if (mode === "keyword" || mode === "natural") return [...output, "keyword", "--", query, "."];
   return mode === "chain" || mode === "semantic"
-    ? [...output, mode, "--", query, "."]
-    : [...output, "--", query, "."];
+    ? [mode, query, ".", ...output]
+    : [...output, query, "."];
 }
 
 test("schema mode literals are declared in extension source", () => {
@@ -71,17 +69,16 @@ test("schema mode literals are declared in extension source", () => {
 
 test("every schema mode has argv routing coverage", () => {
   const cases = {
-    keyword: ["keyword", "--", "needle", "."],
-    natural: ["keyword", "--", "needle", "."],
-    pattern: ["--", "pattern: needle", "."],
-    defs: ["--", "defs: needle", "."],
-    callers: ["--", "callers: needle", "."],
-    chain: ["chain", "--", "needle", "."],
-    semantic: ["semantic", "--", "needle", "."],
-    word: ["--", "word: needle", "."],
-    literal: ["--", "literal: needle", "."],
-    regex: ["--", "regex: needle", "."],
-    imports: ["--", "imports: needle", "."],
+    natural: ["needle", "."],
+    pattern: ["pattern: needle", "."],
+    defs: ["defs: needle", "."],
+    callers: ["callers: needle", "."],
+    chain: ["chain", "needle", ".", "--json", "--format", "agent-capsule", "--limit", "25", "--excerpt-lines", "3"],
+    semantic: ["semantic", "needle", ".", "--json", "--format", "agent-capsule", "--limit", "25", "--excerpt-lines", "3"],
+    word: ["word: needle", "."],
+    literal: ["literal: needle", "."],
+    regex: ["regex: needle", "."],
+    imports: ["imports: needle", "."],
   };
   for (const mode of SCHEMA_MODES) {
     const args = searchArgs({ query: "needle", mode, limit: 25, excerptLines: 3 });
@@ -91,7 +88,6 @@ test("every schema mode has argv routing coverage", () => {
 
 test("skill docs mention every schema mode", () => {
   for (const mode of SCHEMA_MODES) {
-    if (mode === "natural") continue; // documented as keyword alias
     assert.match(skill + "\n" + guide, new RegExp(`\\b${mode}\\b`), mode);
   }
 });

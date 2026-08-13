@@ -10,6 +10,15 @@ pub enum HitSignal {
 impl HitSignal {
     pub const ALL: [Self; 3] = [Self::Exact, Self::Structural, Self::Semantic];
 
+    /// Evidence strength ordering: exact beats structural beats semantic (vh65).
+    pub fn rank(self) -> u8 {
+        match self {
+            Self::Exact => 2,
+            Self::Structural => 1,
+            Self::Semantic => 0,
+        }
+    }
+
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Exact => "exact",
@@ -74,6 +83,13 @@ pub struct SearchHit {
     pub signal: HitSignal,
     pub contributors: Vec<HitKind>,
     pub margin: f64,
+    /// Calibrated-independent relevance estimate, deliberately separate from
+    #[serde(default)]
+    pub confidence: f64,
+    /// How a graph edge was resolved, when this hit came from one (dvc4).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolution: Option<crate::resolution::Resolution>,
+    #[serde(serialize_with = "serialize_excerpt")]
     pub excerpt: String,
 }
 #[derive(serde::Deserialize)]
@@ -93,6 +109,10 @@ struct SearchHitWire {
     contributors: Vec<HitKind>,
     #[serde(default)]
     margin: f64,
+    /// Preserved on JSON round-trip so agents that cache/re-parse hits keep trust.
+    /// Non-finite wire values sanitize to 0.0 (same policy as `margin`).
+    #[serde(default)]
+    confidence: f64,
     excerpt: String,
 }
 impl<'de> serde::Deserialize<'de> for SearchHit {
@@ -115,12 +135,19 @@ impl<'de> serde::Deserialize<'de> for SearchHit {
             score: wire.score,
             signal: wire.kind.signal(),
             contributors: vec![wire.kind],
+            confidence: if wire.confidence.is_finite() {
+                wire.confidence
+            } else {
+                0.0
+            },
             margin: if wire.margin.is_finite() {
                 wire.margin.max(0.0)
             } else {
                 0.0
             },
-            excerpt: wire.excerpt,
+            // dvc4: resolution is engine-derived, never trusted from the wire.
+            resolution: None,
+            excerpt: bound_excerpt(wire.excerpt),
         })
     }
 }
@@ -157,7 +184,9 @@ impl SearchHit {
             signal: kind.signal(),
             contributors: vec![kind],
             margin: 0.0,
-            excerpt,
+            confidence: 0.0,
+            resolution: None,
+            excerpt: bound_excerpt(excerpt),
         }
     }
     pub fn span(input: SpanHitInput) -> Self {
@@ -183,7 +212,7 @@ impl SearchHit {
         Self {
             symbol: Some(module_path.clone()),
             language,
-            excerpt: format!("import {module_path}"),
+            excerpt: bound_excerpt(format!("import {module_path}")),
             ..Self::base(HitKind::Import, file, line_no, line_no, 2.0, String::new())
         }
     }
@@ -200,7 +229,7 @@ impl SearchHit {
             caller: Some(caller),
             callee: Some(callee),
             language,
-            excerpt,
+            excerpt: bound_excerpt(excerpt),
             ..Self::base(
                 HitKind::Caller,
                 file,
@@ -224,11 +253,52 @@ impl SearchHit {
             caller: Some(caller.clone()),
             callee: Some(callee.clone()),
             language,
-            excerpt: format!("{caller} calls {callee}"),
+            excerpt: bound_excerpt(format!("{caller} calls {callee}")),
             score,
             ..Self::base(HitKind::Graph, file, line_no, line_no, score, String::new())
         }
     }
+}
+
+pub(crate) fn bound_excerpt(mut excerpt: String) -> String {
+    const MARKER: &str = "\n…";
+    let max = crate::limits::MAX_SEARCH_HIT_EXCERPT_BYTES;
+    if excerpt.len() <= max {
+        return excerpt;
+    }
+    let mut end = max.saturating_sub(MARKER.len());
+    while end > 0 && !excerpt.is_char_boundary(end) {
+        end -= 1;
+    }
+    excerpt.truncate(end);
+    excerpt.push_str(MARKER);
+    excerpt
+}
+
+pub(crate) fn bound_excerpt_ref(excerpt: &str) -> String {
+    const MARKER: &str = "\n…";
+    let max = crate::limits::MAX_SEARCH_HIT_EXCERPT_BYTES;
+    if excerpt.len() <= max {
+        return excerpt.to_owned();
+    }
+    let mut end = max.saturating_sub(MARKER.len());
+    while end > 0 && !excerpt.is_char_boundary(end) {
+        end -= 1;
+    }
+    let mut bounded = String::with_capacity(end + MARKER.len());
+    bounded.push_str(&excerpt[..end]);
+    bounded.push_str(MARKER);
+    bounded
+}
+
+fn serialize_excerpt<S>(excerpt: &str, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    if excerpt.len() <= crate::limits::MAX_SEARCH_HIT_EXCERPT_BYTES {
+        return serializer.serialize_str(excerpt);
+    }
+    serializer.serialize_str(&bound_excerpt_ref(excerpt))
 }
 #[derive(Debug, Clone)]
 pub struct SearchOptions {
@@ -330,13 +400,50 @@ impl SearchOptions {
         )
     }
 }
+/// Identity of the index snapshot a response was built from (d3l5).
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct SnapshotStamp {
+    /// Monotonic index generation every indexing transaction bumps.
+    pub generation: i64,
+    /// Database schema version the response was read under.
+    pub schema_version: i64,
+    /// Highest indexed file mtime: what the index believes about the worktree.
+    pub worktree_revision: i64,
+    /// Resolved git HEAD, when the root is a git worktree.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub git_head: Option<String>,
+    /// Semantic sidecar fingerprint, when a semantic sidecar was consulted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub semantic_manifest: Option<String>,
+    /// Channels that could not run, or ran against a mismatched sidecar.
+    /// A degraded channel must be visible, never silently dropped.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub degraded_channels: Vec<DegradedChannel>,
+}
+
+/// One learned association applied to a query (ufk7).
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct QueryExpansion {
+    pub term: String,
+    pub related: String,
+    /// Co-occurrence count behind the association: the checkable number.
+    pub support: u32,
+    /// Human-readable justification.
+    pub because: String,
+}
+
+/// A channel that failed or was skipped, and why (d3l5).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct DegradedChannel {
+    pub channel: String,
+    pub reason: String,
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SearchResponse {
     pub query: String,
     pub limit: usize,
     /// Ranked results after result gates. Hybrid search promotes at most three hits per
-    /// file ahead of overflow before applying `limit`, so this is a diversity-aware
-    /// ranking rather than a pure global score top-k.
     pub hits: Vec<SearchHit>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub counts: Vec<(String, u32)>,
@@ -346,6 +453,12 @@ pub struct SearchResponse {
     pub returned_excerpt_bytes: u64,
     #[serde(default)]
     pub prevented_read_bytes: u64,
+    /// Index snapshot this response was built from (d3l5).
+    #[serde(default)]
+    pub snapshot: SnapshotStamp,
+    /// Repository associations that widened this query (ufk7).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub query_expansions: Vec<QueryExpansion>,
 }
 pub fn format_hit_line(hit: &SearchHit) -> String {
     let f = &hit.file;
@@ -443,12 +556,22 @@ pub fn assign_signal_margins(hits: &mut [SearchHit]) {
     }
 }
 
+/// Assign heuristic confidence on every hit (vh65 / pass5).
+pub fn assign_hit_confidence(hits: &mut [SearchHit]) {
+    for hit in hits.iter_mut() {
+        hit.confidence = estimate_confidence(hit);
+    }
+}
+
 pub fn dedup_hits(hits: Vec<SearchHit>) -> Vec<SearchHit> {
     let mut best: Vec<SearchHit> = Vec::with_capacity(hits.len());
     let mut positions: std::collections::HashMap<_, usize> = std::collections::HashMap::new();
     for hit in hits {
+        // vh65: identity is the LOCATION. Channel kind is evidence about a
+        // location, not part of what a location is -- keying on it let one
+        // physical span survive three times as three near-identical rows with
+        // three opaque scores.
         let key = (
-            hit.kind.as_str(),
             hit.file.clone(),
             hit.line_start,
             hit.line_end,
@@ -457,13 +580,231 @@ pub fn dedup_hits(hits: Vec<SearchHit>) -> Vec<SearchHit> {
             hit.callee.clone(),
         );
         if let Some(&index) = positions.get(&key) {
-            if hit.score > best[index].score {
-                best[index] = hit;
-            }
+            merge_channel_evidence(&mut best[index], hit);
         } else {
             positions.insert(key, best.len());
             best.push(hit);
         }
     }
+    assign_hit_confidence(&mut best);
     best
+}
+
+/// Fold a duplicate observation of the same location into the kept hit (vh65).
+fn merge_channel_evidence(kept: &mut SearchHit, other: SearchHit) {
+    for contributor in other
+        .contributors
+        .iter()
+        .copied()
+        .chain(std::iter::once(other.kind))
+    {
+        if !kept.contributors.contains(&contributor) {
+            kept.contributors.push(contributor);
+        }
+    }
+    // Strongest signal observed for this location wins.
+    if other.signal.rank() > kept.signal.rank() {
+        kept.signal = other.signal;
+    }
+    if other.score > kept.score {
+        // Preserve the previous best-score semantics: the higher-scoring row
+        // supplies score, kind, and excerpt.
+        kept.score = other.score;
+        kept.kind = other.kind;
+        if !other.excerpt.is_empty() {
+            kept.excerpt = bound_excerpt(other.excerpt);
+        }
+        kept.margin = other.margin;
+    } else if kept.excerpt.is_empty() && !other.excerpt.is_empty() {
+        kept.excerpt = bound_excerpt(other.excerpt);
+    }
+    // Fill in identity details the kept row happened to lack.
+    kept.symbol = kept.symbol.take().or(other.symbol);
+    kept.caller = kept.caller.take().or(other.caller);
+    kept.callee = kept.callee.take().or(other.callee);
+    kept.language = kept.language.take().or(other.language);
+}
+
+/// Heuristic confidence from channel agreement and signal strength (vh65).
+fn estimate_confidence(hit: &SearchHit) -> f64 {
+    let strongest = hit
+        .contributors
+        .iter()
+        .map(|kind| kind.signal())
+        .chain(std::iter::once(hit.kind.signal()))
+        .max_by_key(|signal| signal.rank())
+        .unwrap_or(hit.signal);
+    let base = match strongest {
+        HitSignal::Exact => 0.75,
+        HitSignal::Structural => 0.60,
+        HitSignal::Semantic => 0.35,
+    };
+    let agreement = hit.contributors.len().saturating_sub(1).min(3) as f64 * 0.08;
+    (base + agreement).clamp(0.0, 0.99)
+}
+
+/// Human- and agent-readable reasons this location was returned (vh65).
+pub fn hit_why(hit: &SearchHit) -> Vec<String> {
+    let mut why = Vec::new();
+    for contributor in &hit.contributors {
+        why.push(match contributor {
+            HitKind::Asgrep => "exact_text".to_owned(),
+            HitKind::Def => "exact_symbol".to_owned(),
+            HitKind::Caller => match &hit.caller {
+                Some(caller) => format!("called_by:{caller}"),
+                None => "caller_edge".to_owned(),
+            },
+            HitKind::Graph => "graph_edge".to_owned(),
+            HitKind::Anchor => "anchor".to_owned(),
+            HitKind::Import => "import_edge".to_owned(),
+            HitKind::Pattern => "structural_pattern".to_owned(),
+            HitKind::Embed => "semantic_similarity".to_owned(),
+        });
+    }
+    why.dedup();
+    why
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn hit(kind: HitKind, file: &str, line: u32, score: f64) -> SearchHit {
+        SearchHit {
+            kind,
+            file: file.into(),
+            line_start: line,
+            line_end: line,
+            symbol: None,
+            caller: None,
+            callee: None,
+            language: None,
+            score,
+            signal: kind.signal(),
+            contributors: vec![kind],
+            margin: 0.0,
+            confidence: 0.0,
+            resolution: None,
+            excerpt: String::new(),
+        }
+    }
+
+    #[test]
+    fn confidence_uses_strongest_contributor_not_display_signal() {
+        // Higher-scoring Embed wins kind/score; lower-scoring Asgrep still contributes
+        // exact evidence. After margins rewrite display signal to Semantic, confidence
+        // must keep Exact base + one agreement step (0.75 + 0.08).
+        let mut merged = dedup_hits(vec![
+            hit(HitKind::Embed, "a.rs", 1, 0.9),
+            hit(HitKind::Asgrep, "a.rs", 1, 0.4),
+        ]);
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].kind, HitKind::Embed);
+        assert!(merged[0].contributors.contains(&HitKind::Asgrep));
+        assert!(merged[0].contributors.contains(&HitKind::Embed));
+
+        assign_signal_margins(&mut merged);
+        assert_eq!(merged[0].signal, HitSignal::Semantic);
+        // Re-assign as finish_response does after margins (pass5).
+        assign_hit_confidence(&mut merged);
+        let expected = 0.75 + 0.08;
+        assert!(
+            (merged[0].confidence - expected).abs() < 1e-12,
+            "confidence={} expected {expected}",
+            merged[0].confidence
+        );
+    }
+
+    #[test]
+    fn semantic_only_confidence_is_nonzero_without_dedup() {
+        // search_semantic uses dedup=false; confidence must still be populated.
+        let mut hits = vec![hit(HitKind::Embed, "sem.rs", 3, 2.5)];
+        assign_signal_margins(&mut hits);
+        assign_hit_confidence(&mut hits);
+        assert!((hits[0].confidence - 0.35).abs() < 1e-12);
+        assert!(hits[0].confidence > 0.0);
+    }
+
+    #[test]
+    fn empty_hits_confidence_assign_is_noop() {
+        let mut hits: Vec<SearchHit> = vec![];
+        assign_hit_confidence(&mut hits);
+        assert!(hits.is_empty());
+    }
+
+    #[test]
+    fn search_hit_json_round_trip_preserves_confidence() {
+        // d2a1.8: custom Deserialize used SearchHitWire without confidence, so
+        // round-trip always forced 0.0 even when finish_response had assigned it.
+        let mut original = hit(HitKind::Asgrep, "lib.rs", 10, 1.0);
+        original.confidence = 0.83;
+        original.excerpt = "fn foo() {}".into();
+        original.symbol = Some("foo".into());
+
+        let json = serde_json::to_string(&original).expect("serialize");
+        assert!(
+            json.contains("\"confidence\""),
+            "serialized JSON must emit confidence: {json}"
+        );
+        let back: SearchHit = serde_json::from_str(&json).expect("deserialize");
+        assert!(
+            (back.confidence - 0.83).abs() < 1e-12,
+            "round-trip confidence={} expected 0.83",
+            back.confidence
+        );
+        assert_eq!(back.file, "lib.rs");
+        assert_eq!(back.kind, HitKind::Asgrep);
+        assert_eq!(back.symbol.as_deref(), Some("foo"));
+    }
+
+    #[test]
+    fn search_hit_json_missing_confidence_defaults_zero() {
+        let json = r#"{
+            "kind": "embed",
+            "file": "a.rs",
+            "line_start": 1,
+            "line_end": 1,
+            "score": 0.5,
+            "excerpt": "x"
+        }"#;
+        let hit: SearchHit = serde_json::from_str(json).expect("deserialize without confidence");
+        assert_eq!(hit.confidence, 0.0);
+        assert_eq!(hit.kind, HitKind::Embed);
+    }
+
+    #[test]
+    fn constructed_and_deserialized_excerpts_are_utf8_safely_bounded() {
+        let oversized = "🦀".repeat(crate::limits::MAX_SEARCH_HIT_EXCERPT_BYTES);
+        let hit = SearchHit::span(SpanHitInput {
+            kind: HitKind::Asgrep,
+            file: "large.rs".into(),
+            line_start: 1,
+            line_end: 1,
+            score: 1.0,
+            excerpt: oversized.clone(),
+            symbol: None,
+            language: Some("rust".into()),
+        });
+        assert!(hit.excerpt.len() <= crate::limits::MAX_SEARCH_HIT_EXCERPT_BYTES);
+        assert!(hit.excerpt.ends_with("\n…"));
+
+        let wire = serde_json::json!({
+            "kind": "asgrep",
+            "file": "large.rs",
+            "line_start": 1,
+            "line_end": 1,
+            "score": 1.0,
+            "excerpt": oversized,
+        });
+        let decoded: SearchHit = serde_json::from_value(wire).expect("bounded hit");
+        assert!(decoded.excerpt.len() <= crate::limits::MAX_SEARCH_HIT_EXCERPT_BYTES);
+        assert!(decoded.excerpt.ends_with("\n…"));
+
+        let mut externally_mutated = hit;
+        externally_mutated.excerpt = "🦀".repeat(crate::limits::MAX_SEARCH_HIT_EXCERPT_BYTES);
+        let encoded = serde_json::to_value(externally_mutated).expect("bounded serialization");
+        let excerpt = encoded["excerpt"].as_str().expect("serialized excerpt");
+        assert!(excerpt.len() <= crate::limits::MAX_SEARCH_HIT_EXCERPT_BYTES);
+        assert!(excerpt.ends_with("\n…"));
+    }
 }

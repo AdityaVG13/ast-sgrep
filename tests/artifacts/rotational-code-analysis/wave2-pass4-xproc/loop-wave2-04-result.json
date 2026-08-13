@@ -1,0 +1,24 @@
+{
+  "schema": "rotational-code-analysis/loop-result",
+  "wave": 2,
+  "pass": 4,
+  "mode": "harden",
+  "residual": "R-XPROC-MULTIWRITER",
+  "product_decision": "C-lite",
+  "status": "complete",
+  "PRODUCTIVE": true,
+  "braid_resolve": "Continue",
+  "axes_changed": 4,
+  "axes": {
+    "representation": "interleaving",
+    "observer": "scheduler",
+    "time": "reorder",
+    "scale": "process"
+  },
+  "tests": {
+    "ast-sgrep-core --lib writer_generation": "3 passed",
+    "ast-sgrep-mcp --lib cache_tests": "4 passed",
+    "ast-sgrep-codemode --lib": "3 passed"
+  },
+  "NEXT_PASS": "Harden R-OPS-DOCS-FOOTGUNS"
+}

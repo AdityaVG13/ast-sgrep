@@ -11,6 +11,7 @@ pub mod intent;
 pub mod io_bounds;
 pub mod limits;
 pub mod pattern;
+pub mod perf_profile;
 pub mod pipeline_parts;
 pub mod query;
 pub mod rank;
@@ -52,18 +53,26 @@ pub use fusion::{
     FusionExample, LearnedFusionModel, WeightSensitivity,
 };
 pub use index::{
-    indexed_rel_path, EmbedBackend, FileIndexStats, IndexOptions, IndexStats, Indexer,
+    canonicalize_affected_path, force_sidecar_rebuild_err, indexed_rel_path, EmbedBackend,
+    FileIndexStats, ForceSidecarRebuildErr, IndexOptions, IndexStats, Indexer,
+    MAX_INCREMENTAL_PATHS,
 };
 pub use io_bounds::{read_text_capped, MAX_INDEX_FILE_BYTES};
 pub use limits::{
-    clamp_agent_limit, clamp_output_limit, DEFAULT_AGENT_LIMIT, MAX_EXCERPT_LINES,
-    MAX_OUTPUT_RESULTS,
+    clamp_agent_limit, clamp_output_limit, validate_query_len, DEFAULT_AGENT_LIMIT,
+    MAX_EXCERPT_LINES, MAX_FILE_FILTER_CHARS, MAX_OUTPUT_RESULTS, MAX_QUERY_CHARS,
+    MAX_REGEX_PATTERN_CHARS, MAX_SEARCH_HIT_EXCERPT_BYTES, MAX_STDIN_LINE_BYTES,
 };
-pub use search::format_hit_line;
+pub mod lexicon;
+pub mod resolution;
 pub use pattern::search_pattern;
 pub use query::{ParsedQuery, QueryMode};
+pub use search::format_hit_line;
 pub use search::{HitSignal, SearchHit, SearchOptions, SearchResponse, Searcher};
-pub use store::{index_db_path, try_index_db_path, IndexStatus, IndexStore};
+pub use store::{
+    bump_writer_generation, index_db_path, read_writer_generation, try_index_db_path,
+    writer_generation_path, IndexStatus, IndexStore, WRITER_GENERATION_FILE,
+};
 #[derive(Debug, Error)]
 pub enum StoreError {
     #[error("database error: {0}")]
@@ -72,6 +81,18 @@ pub enum StoreError {
     Io(#[from] std::io::Error),
     #[error("{0}")]
     Other(String),
+}
+impl StoreError {
+    pub(crate) fn is_corrupt_database(&self) -> bool {
+        matches!(
+            self,
+            Self::Database(rusqlite::Error::SqliteFailure(error, _))
+                if matches!(
+                    error.code,
+                    rusqlite::ErrorCode::DatabaseCorrupt | rusqlite::ErrorCode::NotADatabase
+                )
+        )
+    }
 }
 impl From<String> for StoreError {
     fn from(s: String) -> Self {

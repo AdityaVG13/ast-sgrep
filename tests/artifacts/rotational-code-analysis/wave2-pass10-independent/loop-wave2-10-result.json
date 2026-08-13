@@ -1,0 +1,67 @@
+{
+  "schema_version": "1.0",
+  "loop_id": 27,
+  "campaign_pass": 10,
+  "wave": 2,
+  "shard_id": "wave2-closed-residuals",
+  "status": "COMPLETE",
+  "mode": "attack-iteration",
+  "product_outcome": "ZERO_CHANGE",
+  "productive": false,
+  "scope_examined": [
+    "crates/ast-sgrep-mcp/src/lib.rs",
+    "crates/ast-sgrep-codemode/src/session.rs",
+    "crates/ast-sgrep-core/src/store/mod.rs",
+    "crates/ast-sgrep-core/src/store/sqlite.rs",
+    "crates/ast-sgrep-core/src/store/writer_generation.rs",
+    "crates/ast-sgrep-core/src/index.rs",
+    "crates/ast-sgrep-cli/src/agent.rs",
+    "crates/ast-sgrep-cli/tests/watch_incremental.rs",
+    "crates/ast-sgrep-core/tests/generation_swap.rs",
+    "crates/ast-sgrep-core/tests/semantic_chunk_migration.rs"
+  ],
+  "axes": {
+    "observer": "skeptic",
+    "evidence": "independent-reproduction",
+    "representation": "crossing-record",
+    "axes_changed_vs_prior": 3
+  },
+  "verdicts": [
+    {"id": "R-INDEX-ERR-CACHE-SYNC", "verdict": "TRUE", "confidence": "high"},
+    {"id": "R-CM-ROOT-POLICY", "verdict": "TRUE", "confidence": "high"},
+    {"id": "R-XPROC-MULTIWRITER", "verdict": "TRUE", "confidence": "high", "scope_note": "polling peers only"},
+    {"id": "R-OPS-DOCS-FOOTGUNS", "verdict": "TRUE", "confidence": "high"},
+    {"id": "R-MISSING-GEN-FALLTHROUGH", "verdict": "TRUE", "confidence": "high"},
+    {"id": "R-NEWER-SCHEMA-SILENT-OPEN", "verdict": "TRUE", "confidence": "high"},
+    {"id": "R-WATCH-SYMLINK-ESCAPE", "verdict": "TRUE", "confidence": "high"}
+  ],
+  "queued_not_expanded": [
+    "R-EMBED-HTTP-TIMEOUT-BODY",
+    "R-PATTERN-UNBOUNDED-READ",
+    "R-CM-SOFT-TIMEOUT-ORPHAN",
+    "R-PI-EDIT-SYMLINK-LEXICAL"
+  ],
+  "commands_run": [
+    {"cmd": "rch exec -- cargo test -p ast-sgrep-mcp --lib invalidates", "exit": 0, "passed": 3},
+    {"cmd": "rch exec -- cargo test -p ast-sgrep-codemode --lib", "exit": 0, "passed": 3},
+    {"cmd": "rch exec -- cargo test -p ast-sgrep-core --lib writer_generation", "exit": 0, "passed": 3},
+    {"cmd": "rch exec -- cargo test -p ast-sgrep-cli --lib doctor_surfaces", "exit": 0, "passed": 3},
+    {"cmd": "rch exec -- cargo test -p ast-sgrep-core --test generation_swap", "exit": 0, "passed": 5},
+    {"cmd": "rch exec -- cargo test -p ast-sgrep-core --test semantic_chunk_migration", "exit": 0, "passed": 4},
+    {"cmd": "rch exec -- cargo test -p ast-sgrep-cli --test watch_incremental", "exit": 0, "passed": 2}
+  ],
+  "frozen_revision": "5ddd43b8cf5c3aa394bae163375242a8ed5e4ddc",
+  "braid_resolve": "Continue",
+  "independent_loop27": true,
+  "handoff": {
+    "new_facts": [
+      "All seven wave-2 harden closes independently TRUE under dual evidence",
+      "ZERO-CHANGE product this pass"
+    ],
+    "contradictions": [],
+    "next_questions": [
+      "Seal wave-2 or continue Loop 15 risk-ring?",
+      "Queue packets for pass-9 GAPs without expanding now?"
+    ]
+  }
+}

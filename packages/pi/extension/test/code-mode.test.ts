@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promis
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, describe, it } from "node:test";
-import { createSgrepCodeMode, type SgrepRef } from "../src/code-mode.js";
+import { createSgrepCodeMode, parseSgrepRef, type SgrepRef } from "../src/code-mode.js";
 import { MACHINE_SCHEMA_VERSION, RuntimeError, type MachineEnvelope, type RunOptions, type RuntimeContext } from "../src/runtime.js";
 
 const temporary: string[] = [];
@@ -79,6 +79,10 @@ describe("SgrepCodeMode", () => {
 
     assert.equal(result.length, 3);
     assert.deepEqual(result[0]!.hits[0]!.contributors, ["def", "embed"]);
+    assert.equal(result[0]!.hits[0]!.ref, "src/auth.ts#L2-L4");
+    assert.equal("file" in result[0]!.hits[0]!, false);
+    assert.equal("lines" in result[0]!.hits[0]!, false);
+    assert.deepEqual(parseSgrepRef(result[0]!.hits[0]!.ref), { file: "src/auth.ts", start: 2, end: 4 });
     assert.deepEqual(runtime.calls[0]!.args, [
       "--json", "--format", "agent-capsule", "--limit", "7", "--excerpt-lines", "0", "keyword", "--", "renew token", ".",
     ]);
@@ -97,8 +101,12 @@ describe("SgrepCodeMode", () => {
     const mode = createSgrepCodeMode(new FakeRuntime(root), { cwd: root });
     const [read] = await mode.codeRead(hit.ref as SgrepRef, { contextLines: 1, maxChars: 48 });
     assert.ok(read);
-    assert.equal(read.lines.start, 1);
-    assert.ok(read.lines.end <= 5);
+    assert.equal("file" in read, false);
+    assert.equal("lines" in read, false);
+    const loc = parseSgrepRef(read.ref);
+    assert.equal(loc.file, "src/auth.ts");
+    assert.equal(loc.start, 1);
+    assert.ok(loc.end <= 5);
     assert.ok(read.content.length <= 48);
     assert.equal(read.truncated, true);
   });
@@ -196,5 +204,60 @@ describe("SgrepCodeMode", () => {
     });
     await runtimeError(() => createSgrepCodeMode(invalidOptional, { cwd: root }).find("query"), "PROTOCOL_MISMATCH");
     await runtimeError(() => mode.execute(null as never), "INVALID_PLAN");
+  });
+
+  it("parses hit location once from ref and drops wire file/lines dual", async () => {
+    const root = await project();
+    const inconsistent = new FakeRuntime(root, {
+      tool: "asgrep",
+      schema_version: MACHINE_SCHEMA_VERSION,
+      ok: true,
+      hits: [{
+        ...hit,
+        file: "src/other.ts",
+        lines: { start: 9, end: 9 },
+        ref: "src/auth.ts#L2-L4",
+      }],
+    });
+    const trusted = await createSgrepCodeMode(inconsistent, { cwd: root }).find("query");
+    assert.equal(trusted.hits[0]!.ref, "src/auth.ts#L2-L4");
+    assert.equal("file" in trusted.hits[0]!, false);
+    assert.equal("lines" in trusted.hits[0]!, false);
+
+    const refOnly = new FakeRuntime(root, {
+      tool: "asgrep",
+      schema_version: MACHINE_SCHEMA_VERSION,
+      ok: true,
+      hits: [{
+        kind: "def",
+        signal: "structural",
+        contributors: ["def"],
+        score: 1,
+        margin: 0,
+        ref: "src/auth.ts#L1-L1",
+        preview: "const token = 1;",
+      }],
+    });
+    const fromRef = await createSgrepCodeMode(refOnly, { cwd: root }).find("query");
+    assert.equal(fromRef.hits[0]!.ref, "src/auth.ts#L1-L1");
+
+    const structuredOnly = new FakeRuntime(root, {
+      tool: "asgrep",
+      schema_version: MACHINE_SCHEMA_VERSION,
+      ok: true,
+      hits: [{
+        kind: "def",
+        signal: "structural",
+        contributors: ["def"],
+        score: 1,
+        margin: 0,
+        file: "src/auth.ts",
+        lines: { start: 3, end: 4 },
+        preview: "  return token;",
+      }],
+    });
+    const fromLines = await createSgrepCodeMode(structuredOnly, { cwd: root }).find("query");
+    assert.equal(fromLines.hits[0]!.ref, "src/auth.ts#L3-L4");
+    assert.equal("file" in fromLines.hits[0]!, false);
   });
 });

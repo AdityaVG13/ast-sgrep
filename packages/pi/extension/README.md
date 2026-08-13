@@ -4,7 +4,7 @@ Native Code Mode, structural, graph, and semantic code search for [Pi](https://g
 
 [![pi-ast-sgrep: native code search inside Pi](https://cdn.jsdelivr.net/npm/pi-ast-sgrep/assets/preview.png)](https://pi.dev/packages/pi-ast-sgrep?name=pi-ast-sgrep)
 
-`pi-ast-sgrep` gives Pi a warm, project-aware search engine for understanding code. It finds behavior by intent, resolves definitions and callers, traces relationships, matches syntax-aware patterns, and searches local semantic embeddings. The primary `asgrep_codemode` tool lets Pi compose several searches in one JavaScript program instead of spending one model round trip per lookup.
+`pi-ast-sgrep` gives Pi a warm, project-aware search engine for understanding code. It finds behavior by intent, resolves definitions and callers, traces relationships, matches syntax-aware patterns, and searches local semantic embeddings. The primary `asgrep` tool lets Pi compose several searches in one JavaScript program instead of spending one model round trip per lookup.
 
 ## Install
 
@@ -24,7 +24,7 @@ No Rust toolchain or separate MCP server is required. The npm package selects th
 
 | Resource | Purpose |
 |---|---|
-| `asgrep_codemode` | Primary tool. Run a bounded JavaScript program that composes typed `asgrep.*` calls. |
+| `asgrep` | Primary tool. Run a bounded JavaScript program that composes typed `asgrep.*` calls. |
 | `asgrep_search` | Run one natural, structural, symbol, graph, semantic, word, literal, or regex lookup. |
 | `asgrep_index` | Create, refresh, or explicitly rebuild the current project index. |
 | `asgrep_status` | Inspect the selected root, index, backend, counts, and capabilities. |
@@ -38,7 +38,7 @@ Ask Pi:
 
 > Use ast-sgrep Code Mode to find where access tokens are refreshed, trace the top result's callers, and return only the relevant files, symbols, and lines.
 
-Pi can make one `asgrep_codemode` call like this:
+Pi can make one `asgrep` call like this:
 
 ```json
 {
@@ -50,7 +50,7 @@ This workflow narrows the first result, runs independent follow-up searches toge
 
 ### Code Mode API
 
-The sandbox exposes these asynchronous methods:
+The Code Mode program receives these asynchronous methods on `asgrep`:
 
 | Method | Use |
 |---|---|
@@ -67,7 +67,15 @@ The sandbox exposes these asynchronous methods:
 
 Use `Promise.all` for independent calls. Filter, map, sort, and slice intermediate values in JavaScript. Return only the evidence needed for the next reasoning step.
 
-Code Mode includes `Promise`, `JSON`, arrays, objects, `Map`, `Set`, and `Math`. It does not expose `require`, `process`, `fetch`, or filesystem APIs. This is a capability boundary for generated code, not an OS sandbox for the installed Pi package.
+Code Mode runs in a disposable worker with a restricted `node:vm` context that exposes only a serialized `asgrep.*` bridge and console. String and WebAssembly code generation are disabled, ambient Node globals such as `process` and `require` are not exposed, and terminating the worker contains synchronous and microtask CPU loops. Node does not consider `vm` an adversarial-code security boundary, however, and the installed Pi package has full OS-user access; do not treat Code Mode as an OS jail. Prefer Code Mode **or** MCP for a client, never both.
+
+The bridge rejects oversized call arguments and serialized results, allows at
+most 256 host calls per program, and caps collected console output before it
+reaches the extension host. Raw-memory and WebAssembly globals are unavailable;
+worker heap/stack limits contain the remaining accidental memory growth. Native
+tool values are capped at 1 MiB each and complete batch responses at 4 MiB before
+Node-API converts them into extension-host objects. These bounds do not turn `node:vm` into an OS
+sandbox.
 
 ## Direct one-shot search
 
@@ -97,6 +105,8 @@ Available modes:
 
 Official platform packages include `ast-sgrep-codemode.node`. The extension loads an in-process native `CodeModeSession` and keeps one warm Searcher per project root for Code Mode, direct tools, and freshness checks. Normal searches do not spawn a CLI process.
 
+Native index and search calls run as Promise-returning N-API worker tasks rather than on Node's event-loop thread. Calls for one warm session are serialized before entering libuv so concurrent Pi work does not occupy worker threads waiting on the same SQLite session.
+
 Independent calls created in the same JavaScript turn are coalesced into a batch. `Promise.all` can therefore fan out several lookups while the model makes one tool call. If the native addon is unavailable, the bundled CLI service is a degraded fallback; `/asgrep-doctor` reports the active backend.
 
 Code Mode and `ast-sgrep-mcp` are separate front ends over the same Rust search core. Pi uses Code Mode directly and does not use an MCP adapter.
@@ -105,7 +115,9 @@ Code Mode and `ast-sgrep-mcp` are separate front ends over the same Rust search 
 
 Start Pi in the repository you want to search. The first search validates the index and lazily creates `<project-root>/.asgrep/` when needed. Run `/asgrep-index` if you want to build it before searching.
 
-After a successful Pi `write` or `edit`, the extension marks the affected path dirty and refreshes it before the next search. Concurrent searches for the same root share one in-flight refresh. Use `/asgrep-reindex` only for an incompatible or corrupt index, or when you explicitly need a full rebuild.
+After a successful Pi `write` or `edit`, the extension marks the affected path dirty and updates only known changed paths before the next search. It also watches the project for external filesystem changes: known file changes receive the same targeted update, while renames, directory changes, ignore-file edits, watcher errors, and ambiguous events trigger a correctness scan. `.asgrep` writes are excluded so indexing cannot dirty itself. If recursive watching is unavailable, an immediate scan plus the periodic full scan preserve correctness. Concurrent searches for the same root share one in-flight refresh.
+
+The periodic interval forces a full incremental reconciliation even when the watcher reports nothing, covering dropped or coalesced filesystem events. Run `/asgrep-index` when you need freshness immediately after a large external operation; use `/asgrep-reindex` only for an incompatible or corrupt index, or when you explicitly need a strict full rebuild.
 
 The package never edits `.gitignore`. Add this entry yourself if index data must stay untracked:
 
@@ -120,7 +132,7 @@ The package never edits `.gitignore`. Add this entry yourself if index data must
 | `/asgrep-doctor` | Check package versions, native runtime, protocol, index, and project settings. |
 | `/asgrep-status` | Show the current root and index state. |
 | `/asgrep-index` | Create or incrementally refresh the index. |
-| `/asgrep-reindex` | Build and atomically replace the index from scratch. |
+| `/asgrep-reindex` | Strictly rebuild the index in one transaction while preserving the prior usable rows on failure. |
 
 These commands take no arguments.
 
@@ -200,7 +212,7 @@ pi remove npm:pi-ast-sgrep
 pi install npm:pi-ast-sgrep@<previous-version>
 ```
 
-Then run `/asgrep-doctor`. Compatible updates reuse validated data. Incompatible formats rebuild atomically and preserve recoverable prior data when a rebuild fails.
+Then run `/asgrep-doctor`. Compatible updates reuse validated data. Incompatible formats rebuild transactionally in place and preserve recoverable prior rows when a rebuild fails.
 
 ## More documentation
 

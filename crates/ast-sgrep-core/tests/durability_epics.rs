@@ -309,19 +309,27 @@ fn cosine_threshold_paths_are_unified() {
     );
 }
 
-/// esyi.3 — open runs integrity_check; corruption fails closed / quarantines.
+/// Ordinary opens fail closed; explicit reindex quarantines corruption first.
 #[test]
-fn open_integrity_check_quarantines_corrupt_db() {
+fn explicit_reindex_quarantines_corrupt_db() {
     let temp = TempDir::new().unwrap();
     let root = temp.path();
+    write_src(root, "a.py", "def recovered_needle():\n    return 1\n");
     {
         let store = IndexStore::open(root, None).unwrap();
         let lines = [(1, "ok".into())];
         store.upsert_file(base("a.py", &lines, "h")).unwrap();
     }
     let db = root.join(".asgrep").join("index.db");
+    let old_quarantine = root.join(".asgrep/index.db.corrupt");
+    std::fs::write(&old_quarantine, b"older recovery copy").unwrap();
+    let lexical = root.join(".asgrep/lexical.db");
+    let semantic = root.join(".asgrep/semantic.ivf");
+    std::fs::write(&lexical, b"stale lexical sidecar").unwrap();
+    std::fs::write(&semantic, b"stale semantic sidecar").unwrap();
     // Truncate into an obviously corrupt SQLite header.
-    std::fs::write(&db, b"NOT A SQLITE DATABASE............").unwrap();
+    let corrupt_bytes = b"NOT A SQLITE DATABASE............";
+    std::fs::write(&db, corrupt_bytes).unwrap();
     let err = match IndexStore::open(root, None) {
         Ok(_) => panic!("corrupt DB must not open successfully"),
         Err(e) => e,
@@ -335,6 +343,43 @@ fn open_integrity_check_quarantines_corrupt_db() {
             || msg.contains("database"),
         "corrupt open must fail closed, got: {msg}"
     );
+    assert_eq!(std::fs::read(&db).unwrap(), corrupt_bytes);
+    assert_eq!(
+        std::fs::read(&old_quarantine).unwrap(),
+        b"older recovery copy"
+    );
+    assert!(!root.join(".asgrep/index.db.corrupt.1").exists());
+
+    let mut indexer = Indexer::new(IndexOptions {
+        root: root.to_path_buf(),
+        force_reindex: true,
+        embed_semantic: false,
+        ..IndexOptions::default()
+    })
+    .expect("explicit reindex should quarantine the corrupt DB");
+    indexer.reindex_all().expect("replacement should index");
+    assert_eq!(
+        std::fs::read(root.join(".asgrep/index.db.corrupt.1")).unwrap(),
+        corrupt_bytes
+    );
+    assert!(!lexical.exists(), "stale lexical sidecar must be removed");
+    assert!(!semantic.exists(), "stale semantic sidecar must be removed");
+    assert_eq!(indexer.store().status().unwrap().file_count, 1);
+    assert!(indexer.store().index_data_version().unwrap() > 1_000_000);
+    drop(indexer);
+
+    let searcher = Searcher::new(SearchOptions {
+        root: root.to_path_buf(),
+        use_embed: false,
+        ..SearchOptions::default()
+    })
+    .unwrap();
+    assert!(searcher
+        .search("recovered_needle")
+        .unwrap()
+        .hits
+        .iter()
+        .any(|hit| hit.file == "a.py"));
 }
 
 /// esyi.4 — busy_timeout + NORMAL sync configured on open (documented concurrent writers).
@@ -379,7 +424,10 @@ fn hybrid_response_cache_invalidates_on_index_generation() {
         .upsert_file(base("h.py", &lines_b, "hb"))
         .unwrap();
     let v2 = searcher.store().index_data_version().unwrap();
-    assert!(v2 > v1, "upsert must bump index_data_version ({v1} -> {v2})");
+    assert!(
+        v2 > v1,
+        "upsert must bump index_data_version ({v1} -> {v2})"
+    );
     assert!(
         searcher.search("alpha").unwrap().hits.is_empty(),
         "generation bump must invalidate hybrid/response cache; hits={:?}",
@@ -408,11 +456,7 @@ fn body_hash_meta_persisted_after_index() {
     .unwrap();
     indexer.index_all().unwrap();
     assert!(
-        indexer
-            .store()
-            .get_meta("body:m.py")
-            .unwrap()
-            .is_some(),
+        indexer.store().get_meta("body:m.py").unwrap().is_some(),
         "body hash meta must be persisted (3ddd)"
     );
 }
@@ -445,5 +489,79 @@ fn remove_file_clears_graph_rows() {
             .query_row("SELECT COUNT(*) FROM imports", [], |r| r.get::<_, i64>(0))
             .unwrap(),
         0
+    );
+}
+
+/// ubs-body-hash-set-meta-1vrm: structure-skip path must only fire when body meta
+/// matches; a deliberate mismatch forces a full re-upsert (not refresh_lines_only).
+#[test]
+fn body_hash_mismatch_prevents_structure_skip() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    write_src(root, "skip.py", "def original():\n    return 1\n");
+    let mut indexer = Indexer::new(IndexOptions {
+        root: root.to_path_buf(),
+        embed_semantic: false,
+        ..IndexOptions::default()
+    })
+    .unwrap();
+    indexer.index_all().unwrap();
+    let body = indexer
+        .store()
+        .get_meta("body:skip.py")
+        .unwrap()
+        .expect("body meta after first index");
+    // Corrupt body fingerprint so the next index cannot structure-skip.
+    indexer
+        .store()
+        .set_meta("body:skip.py", "stale-body-fp")
+        .unwrap();
+    // Trailing trivia only -- real body hash is unchanged.
+    write_src(
+        root,
+        "skip.py",
+        "def original():\n    return 1\n# trailing\n",
+    );
+    indexer.index_all().unwrap();
+    let after = indexer
+        .store()
+        .get_meta("body:skip.py")
+        .unwrap()
+        .expect("body meta after reindex");
+    assert_ne!(
+        after.as_str(),
+        "stale-body-fp",
+        "reindex must rewrite body meta when prior value was wrong"
+    );
+    assert_eq!(
+        after, body,
+        "trailing trivia must restore the original body fingerprint"
+    );
+}
+
+/// ubs-semantic-ivf-stale-swallow-skif: mark_semantic_ivf_stale must set the gate
+/// bit and remove an on-disk sidecar (Result, not fire-and-forget).
+#[test]
+fn mark_semantic_ivf_stale_sets_flag_and_invalidates_sidecar() {
+    let temp = TempDir::new().unwrap();
+    let store = IndexStore::open(temp.path(), None).unwrap();
+    let sidecar = ast_sgrep_core::semantic_ivf::semantic_ivf_path(store.db_path());
+    std::fs::write(&sidecar, b"stale-ivf-bytes").unwrap();
+    assert!(sidecar.is_file());
+    ast_sgrep_core::semantic_ann::mark_semantic_ivf_stale(&store).unwrap();
+    assert_eq!(
+        store.get_meta("semantic_ivf_stale").unwrap().as_deref(),
+        Some("1"),
+        "stale flag must be durable so rebuild gate cannot miss it"
+    );
+    assert!(
+        !sidecar.exists(),
+        "IVF sidecar must be invalidated when mark succeeds"
+    );
+    // Idempotent second mark still Ok and keeps the flag.
+    ast_sgrep_core::semantic_ann::mark_semantic_ivf_stale(&store).unwrap();
+    assert_eq!(
+        store.get_meta("semantic_ivf_stale").unwrap().as_deref(),
+        Some("1")
     );
 }
