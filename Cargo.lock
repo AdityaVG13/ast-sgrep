@@ -247,6 +247,7 @@ dependencies = [
  "anyhow",
  "ast-sgrep-core",
  "ast-sgrep-plugins",
+ "ast-sgrep-testkit",
  "serde",
  "serde_json",
  "tempfile",

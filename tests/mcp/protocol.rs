@@ -1,6 +1,7 @@
+use ast_sgrep_testkit::{assert_golden_json_at, Scrubber};
 use serde_json::{json, Value};
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 /// Locate asgrep-mcp. `env!(CARGO_BIN_EXE_asgrep-mcp)` is unavailable when the
 /// workspace rustc-wrapper is a shell script; honor `CARGO_TARGET_DIR` next.
@@ -648,4 +649,34 @@ fn zero_hit_search_returns_a_diagnostic_miss_envelope() {
         .len();
     let hit_bytes = hit["result"]["content"][0]["text"].as_str().unwrap().len();
     assert!(miss_bytes < hit_bytes, "{miss_bytes} vs {hit_bytes}");
+}
+
+fn mcp_fixture(name: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/mcp/fixtures")
+        .join(name)
+}
+
+/// nz7i.3: freeze initialize + full tools/list descriptors (not just names).
+#[test]
+fn initialize_and_tools_list_match_goldens() {
+    let init = rpc(json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}));
+    let scrubbed: Value = serde_json::from_str(
+        &Scrubber::machine_contract()
+            .apply(&serde_json::to_string(&init["result"]).expect("serialize initialize")),
+    )
+    .expect("scrubbed initialize parses");
+    assert_eq!(scrubbed["protocolVersion"], "2025-11-25");
+    assert_eq!(scrubbed["serverInfo"]["name"], "ast-sgrep");
+    assert_eq!(scrubbed["serverInfo"]["version"], "<version>");
+    assert_golden_json_at(&mcp_fixture("initialize.json"), &scrubbed);
+
+    let listed = rpc(json!({"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}));
+    let tools = listed["result"]["tools"].clone();
+    assert!(tools.as_array().expect("tools").iter().all(|tool| {
+        tool.get("name").is_some()
+            && tool.get("description").is_some()
+            && tool.get("inputSchema").is_some()
+    }));
+    assert_golden_json_at(&mcp_fixture("tools_list.json"), &tools);
 }

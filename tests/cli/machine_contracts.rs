@@ -11,7 +11,9 @@
 //! MJ-011 — `search_hit_dumps_match_goldens_for_agent_capsule_and_compact` (nz7i.2)
 //! MJ-012 disc — MCP non-envelope (`DISC-mcp-not-full-suite`)
 //! NL-008 — `compact_omits_native_hit_array_and_excerpt_blobs`
-use ast_sgrep_testkit::{assert_golden_json_at, CliSession, Scrubber};
+use ast_sgrep_testkit::{
+    assert_golden_at, assert_golden_json_at, canonicalize_text, CliSession, Scrubber,
+};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -1209,4 +1211,20 @@ fn path_free_usage_teaching_messages_match_goldens() {
         "expected agent teaching, got {format_msg}"
     );
     assert_golden_json_at(&cli_fixture("teaching_format_agnt.json"), &format);
+}
+
+/// nz7i.3: freeze the agent handbook body (exact; canonicalize_text only).
+#[test]
+fn robot_docs_guide_body_matches_golden() {
+    let bin = asgrep_bin();
+    let markdown = String::from_utf8(run(&bin, &["robot-docs"]).stdout).expect("handbook utf8");
+    assert_golden_at(&cli_fixture("robot_guide.md"), &markdown);
+    let envelope = parse_stdout(&run(&bin, &["robot-docs", "--json"]));
+    assert_eq!(envelope["command"], "robot-docs");
+    assert_eq!(envelope["topic"], "guide");
+    assert_eq!(envelope["format"], "markdown");
+    assert_eq!(
+        canonicalize_text(envelope["body"].as_str().expect("body")),
+        canonicalize_text(&markdown)
+    );
 }

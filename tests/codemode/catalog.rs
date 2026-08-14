@@ -2,6 +2,8 @@ use ast_sgrep_codemode::adapters::{
     anthropic_tools, cloudflare_connector, openai_tools, surface_manifest,
 };
 use ast_sgrep_codemode::{catalog_describe, catalog_search, tool_catalog};
+use ast_sgrep_testkit::assert_golden_json_at;
+use std::path::{Path, PathBuf};
 
 #[test]
 fn catalog_exposes_core_and_discovery_tools() {
@@ -54,4 +56,23 @@ fn adapters_emit_host_shaped_tool_lists() {
     assert_eq!(cf["name"], "ast-sgrep");
     assert_eq!(cf["progressiveDiscovery"]["search"], "catalog_search");
     assert!(cf["methods"].as_array().unwrap().len() >= 10);
+}
+
+fn catalog_fixture(name: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/codemode/fixtures")
+        .join(name)
+}
+
+/// nz7i.3: freeze ToolDef catalog and host adapter lists.
+#[test]
+fn catalog_and_host_adapters_match_goldens() {
+    let catalog = serde_json::to_value(tool_catalog()).expect("catalog serializes");
+    assert_golden_json_at(&catalog_fixture("tool_catalog.json"), &catalog);
+    assert_golden_json_at(&catalog_fixture("anthropic_tools.json"), &anthropic_tools());
+    assert_golden_json_at(&catalog_fixture("openai_tools.json"), &openai_tools());
+    assert_golden_json_at(
+        &catalog_fixture("cloudflare_connector.json"),
+        &cloudflare_connector(),
+    );
 }

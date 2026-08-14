@@ -36,3 +36,15 @@ These predate this helper and stay next to `machine_contracts`:
 | `tests/plugins/fixtures/compact_sample.json` | same | 2026-08-13 | none | `format_response_with(sample(), Compact, 0)` |
 | `tests/plugins/fixtures/github_sample.json` | same | 2026-08-13 | none | `to_github_json(&sample())` |
 | `tests/plugins/fixtures/gitlab_sample.json` | same | 2026-08-13 | none | `to_gitlab_json(&sample())` |
+
+## nz7i.3 agent / protocol freezes
+
+| File | Command | Date | Scrub | Notes |
+|---|---|---|---|---|
+| `tests/cli/fixtures/robot_guide.md` | `ast-sgrep-cli` `robot_docs_guide_body_matches_golden` | 2026-08-13 | `none` + `canonicalize_text` | `asgrep robot-docs` stdout; JSON `body` must match |
+| `tests/mcp/fixtures/initialize.json` | `ast-sgrep-mcp` `initialize_and_tools_list_match_goldens` | 2026-08-13 | `machine_contract` (`serverInfo.version` → `<version>`) | Keep `protocolVersion` and `serverInfo.name` |
+| `tests/mcp/fixtures/tools_list.json` | same | 2026-08-13 | none | Full `result.tools[]` including `inputSchema` |
+| `tests/codemode/fixtures/tool_catalog.json` | `ast-sgrep-codemode` `catalog_and_host_adapters_match_goldens` | 2026-08-13 | none | All `ToolDef` values |
+| `tests/codemode/fixtures/anthropic_tools.json` | same | 2026-08-13 | none | `anthropic_tools()` |
+| `tests/codemode/fixtures/openai_tools.json` | same | 2026-08-13 | none | `openai_tools()` |
+| `tests/codemode/fixtures/cloudflare_connector.json` | same | 2026-08-13 | none | `cloudflare_connector()` |

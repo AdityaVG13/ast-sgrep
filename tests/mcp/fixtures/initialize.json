@@ -1,0 +1,10 @@
+{
+  "capabilities": {
+    "tools": {}
+  },
+  "protocolVersion": "2025-11-25",
+  "serverInfo": {
+    "name": "ast-sgrep",
+    "version": "<version>"
+  }
+}
