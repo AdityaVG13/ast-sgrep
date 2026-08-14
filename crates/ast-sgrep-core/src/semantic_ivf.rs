@@ -16,6 +16,10 @@ const VECTOR_ALIGNMENT: usize = 4096;
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 pub const SEMANTIC_IVF_FILE: &str = "semantic.ivf";
 
+/// Concatenated single-vector field layout (body-first render, 7d5x.1).
+/// Bump when per-field vectors land (7d5x.2.2) so a stale sidecar cannot match.
+pub const SEMANTIC_IVF_FIELD_LAYOUT: u32 = 1;
+
 pub fn semantic_ivf_path(index_db: &Path) -> std::path::PathBuf {
     index_db
         .parent()
@@ -54,16 +58,15 @@ pub fn compute_ann_fingerprint(
     embed_backend: Option<&str>,
     source_generation: i64,
 ) -> [u8; 32] {
-    let mut hasher = Hasher::new();
-    hasher.update(b"asgrep-semantic-ivf-v2");
-    hasher.update(&(chunk_count as u64).to_le_bytes());
-    hasher.update(&max_chunk_id.to_le_bytes());
-    hasher.update(&(dim as u32).to_le_bytes());
-    hasher.update(embed_backend.unwrap_or("semantic").as_bytes());
-    // source_generation (index_data_version) disambiguates delete+re-add where
-    // max_chunk_id is reused but chunk content/vectors differ (44a4 / e2hc.15).
-    hasher.update(&source_generation.to_le_bytes());
-    *hasher.finalize().as_bytes()
+    fingerprint(
+        chunk_count,
+        max_chunk_id,
+        dim,
+        embed_backend,
+        source_generation,
+        SEMANTIC_IVF_FIELD_LAYOUT,
+        None,
+    )
 }
 /// Content-identity digest over flat vectors (additional IVF binding when vectors
 /// are already loaded). Combined with data_version at build/load sites.
@@ -86,15 +89,40 @@ pub fn compute_ann_fingerprint_with_content(
     data_version: i64,
     content_digest: &[u8; 32],
 ) -> [u8; 32] {
-    let mut h = Hasher::new();
-    h.update(b"asgrep-semantic-ivf-v2");
-    h.update(&(chunk_count as u64).to_le_bytes());
-    h.update(&max_chunk_id.to_le_bytes());
-    h.update(&(dim as u32).to_le_bytes());
-    h.update(embed_backend.unwrap_or("semantic").as_bytes());
-    h.update(&data_version.to_le_bytes());
-    h.update(content_digest);
-    *h.finalize().as_bytes()
+    fingerprint(
+        chunk_count,
+        max_chunk_id,
+        dim,
+        embed_backend,
+        data_version,
+        SEMANTIC_IVF_FIELD_LAYOUT,
+        Some(content_digest),
+    )
+}
+
+fn fingerprint(
+    chunk_count: usize,
+    max_chunk_id: i64,
+    dim: usize,
+    embed_backend: Option<&str>,
+    source_generation: i64,
+    field_layout: u32,
+    content_digest: Option<&[u8; 32]>,
+) -> [u8; 32] {
+    let mut hasher = Hasher::new();
+    hasher.update(b"asgrep-semantic-ivf-v2");
+    hasher.update(&field_layout.to_le_bytes());
+    hasher.update(&(chunk_count as u64).to_le_bytes());
+    hasher.update(&max_chunk_id.to_le_bytes());
+    hasher.update(&(dim as u32).to_le_bytes());
+    hasher.update(embed_backend.unwrap_or("semantic").as_bytes());
+    // source_generation (index_data_version) disambiguates delete+re-add where
+    // max_chunk_id is reused but chunk content/vectors differ (44a4 / e2hc.15).
+    hasher.update(&source_generation.to_le_bytes());
+    if let Some(digest) = content_digest {
+        hasher.update(digest);
+    }
+    *hasher.finalize().as_bytes()
 }
 
 #[derive(Debug, Clone)]
@@ -586,3 +614,7 @@ fn replace_file(source: &Path, destination: &Path) -> std::io::Result<bool> {
     sync_parent(destination)?;
     Ok(true)
 }
+
+#[cfg(test)]
+#[path = "../../../tests/unit/core/semantic_ivf__field_layout_tests.rs"]
+mod field_layout_tests;
