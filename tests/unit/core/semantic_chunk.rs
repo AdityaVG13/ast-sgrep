@@ -171,6 +171,34 @@ fn rust_derive_attribute_is_not_doc_comment() {
 }
 
 #[test]
+fn render_chunk_text_puts_body_before_metadata() {
+    let chunk = SemanticChunkInput {
+        symbol_name: "renew_account".into(),
+        kind: "function".into(),
+        line_start: 1,
+        line_end: 3,
+        excerpt: "fn renew_account() { charge(subscription) }".into(),
+        callers: vec!["main".into()],
+        callees: vec!["charge".into()],
+        doc: "renews the billing account".into(),
+        scope: "Billing".into(),
+    };
+    let rendered = render_chunk_text(&chunk);
+    let excerpt_at = rendered.find("excerpt:").expect("excerpt field");
+    for field in ["symbol:", "kind:", "scope:", "doc:", "called_by:", "calls:"] {
+        let at = rendered.find(field).unwrap_or_else(|| panic!("{field}"));
+        assert!(
+            excerpt_at < at,
+            "body must precede {field} so metadata is what truncates; got {rendered}"
+        );
+    }
+    assert!(
+        rendered.starts_with("excerpt:"),
+        "rendered text must start with the body; got {rendered}"
+    );
+}
+
+#[test]
 fn rust_line_doc_comments_still_captured() {
     let symbols = [SymbolRow {
         name: "foo".into(),

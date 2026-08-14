@@ -184,7 +184,13 @@ fn child_priority(signature: &str) -> u8 {
 }
 
 pub fn render_chunk_text(chunk: &SemanticChunkInput) -> String {
-    let mut raw = format!("symbol: {} kind: {}", chunk.symbol_name, chunk.kind);
+    // Body first (7d5x.1): metadata used to precede the excerpt, so a long
+    // graph/doc prefix was what survived when embedders truncated.
+    let mut raw = format!("excerpt: {}", chunk.excerpt);
+    raw.push_str(&format!(
+        " symbol: {} kind: {}",
+        chunk.symbol_name, chunk.kind
+    ));
     if !chunk.scope.is_empty() {
         raw.push_str(&format!(" scope: {}", chunk.scope));
     }
@@ -197,7 +203,6 @@ pub fn render_chunk_text(chunk: &SemanticChunkInput) -> String {
     if !chunk.callees.is_empty() {
         raw.push_str(&format!(" calls: {}", chunk.callees.join(" ")));
     }
-    raw.push_str(&format!(" excerpt: {}", chunk.excerpt));
     expand_concepts(&raw)
 }
 fn enclosing_scope(symbols: &[SymbolRow], sym: &SymbolRow) -> String {
