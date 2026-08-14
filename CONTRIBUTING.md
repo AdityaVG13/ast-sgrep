@@ -30,24 +30,27 @@ New workspace members **must** set `[lints] workspace = true` so they inherit
 `unsafe_code = "forbid"`. The only sealed exception is `ast-sgrep-mmap`
 (see [SECURITY.md](SECURITY.md)).
 
-Before a release, run the same gate used by official release acceptance:
+Before a crates/workspace release, humans may run:
 
 ```bash
 bash scripts/local-release-gate.sh
 ```
 
-The release gate checks formatting, workspace clippy and tests, then exercises
-ranking invariants with a bounded 30-second fuzz run. It requires stable Rust,
-nightly Rust, and `cargo-fuzz`. Ordinary changes should keep using the cheaper,
-targeted default bar above.
+That gate checks formatting, workspace clippy and tests, then a bounded 30-second
+fuzz run. It is **local prep**, not the Pi npm publisher. Official Pi publication
+uses `packages/pi/scripts/release-acceptance.mjs` (see [docs/RELEASING.md](docs/RELEASING.md)).
+Ordinary changes should keep using the cheaper, targeted default bar above.
+
+Merge honesty (optional, does not replace T0): `bash scripts/run-proof-pack.sh`
+writes `tests/artifacts/compliance/COMPLIANCE_REPORT.md`. See
+[docs/validation/proof-pack.md](docs/validation/proof-pack.md).
 
 GitHub Actions on every `pull_request` runs `forbid-soundness`, `cargo-check`,
 ubuntu `test` (`cargo test --workspace`, compare-only goldens), `pi`, `clippy`,
 `fmt`, and `audit`. The ubuntu+macos **release** matrix (`build-and-test`),
 Windows smoke, and bounded fuzz stay `workflow_dispatch` (Actions tab). Speed
 and bake-off workflows execute real harnesses and fail on correctness, identity,
-or latency threshold breaches. The official package release invokes
-`scripts/local-release-gate.sh` through the release-acceptance command.
+or latency threshold breaches.
 
 ## Golden files
 

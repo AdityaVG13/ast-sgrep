@@ -110,6 +110,7 @@ editors/**/*.vsix
 
 # Tests
 tests/artifacts/perf/
+tests/artifacts/compliance/
 # Local audit reports are review aids, not product fixtures.
 tests/artifacts/cyclomatic-reduction/
 tests/artifacts/rotational-code-analysis/
