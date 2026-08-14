@@ -58,6 +58,18 @@ fn embed_http_agent_disables_redirects() {
         rendered.contains("redirects: 0") || rendered.contains("redirects:0"),
         "embed agent must disable redirects so allowlist is final hop: {rendered}"
     );
+    assert!(
+        rendered.contains("timeout_read: Some("),
+        "embed agent must set timeout_read (ureq default is None): {rendered}"
+    );
+    assert!(
+        !rendered.contains("timeout_read: None"),
+        "embed agent must not leave timeout_read unset: {rendered}"
+    );
+    assert!(
+        rendered.contains("timeout: Some("),
+        "embed agent must set overall timeout (ureq default is None): {rendered}"
+    );
 }
 
 #[test]

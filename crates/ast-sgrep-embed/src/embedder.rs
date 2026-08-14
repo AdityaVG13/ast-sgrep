@@ -1,6 +1,12 @@
 use anyhow::{anyhow, Result};
 #[cfg(feature = "cloud")]
+use serde::de::DeserializeOwned;
+#[cfg(feature = "cloud")]
 use serde::{Deserialize, Serialize};
+#[cfg(feature = "cloud")]
+use std::io::Read;
+#[cfg(feature = "cloud")]
+use std::time::Duration;
 
 fn is_boolish_true(value: &str) -> bool {
     matches!(
@@ -138,15 +144,57 @@ struct EmbedData {
     embedding: Vec<f32>,
 }
 
-/// HTTP agent for cloud/ollama embeds: **no redirects**.
+/// HTTP agent for cloud/ollama embeds: **no redirects**, bounded time and body.
 ///
 /// Host allowlisting (`embed_url_is_allowed`) only inspects the configured URL.
 /// ureq's default agent follows up to 5 redirects, so an allowlisted host that
 /// 30x-redirects to e.g. `169.254.169.254` would bypass the allowlist (pass10 /
 /// j0x4 residual). `redirects(0)` makes the allowlisted URL the final hop.
+///
+/// ureq defaults `timeout_read` / overall `timeout` to `None` (block forever).
+/// Hang or multi-GB JSON would stall index/MCP (R-EMBED-HTTP-TIMEOUT-BODY).
+#[cfg(feature = "cloud")]
+const EMBED_HTTP_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+#[cfg(feature = "cloud")]
+const EMBED_HTTP_READ_TIMEOUT: Duration = Duration::from_secs(8);
+#[cfg(feature = "cloud")]
+const EMBED_HTTP_WRITE_TIMEOUT: Duration = Duration::from_secs(8);
+#[cfg(feature = "cloud")]
+const EMBED_HTTP_TIMEOUT: Duration = Duration::from_secs(12);
+/// Cap for cloud/ollama JSON bodies (embedding payloads are tiny).
+#[cfg(feature = "cloud")]
+const MAX_EMBED_HTTP_BODY_BYTES: u64 = 1024 * 1024;
+
 #[cfg(feature = "cloud")]
 fn embed_http_agent() -> ureq::Agent {
-    ureq::builder().redirects(0).build()
+    ureq::builder()
+        .redirects(0)
+        .timeout_connect(EMBED_HTTP_CONNECT_TIMEOUT)
+        .timeout_read(EMBED_HTTP_READ_TIMEOUT)
+        .timeout_write(EMBED_HTTP_WRITE_TIMEOUT)
+        .timeout(EMBED_HTTP_TIMEOUT)
+        .build()
+}
+
+#[cfg(feature = "cloud")]
+fn parse_embed_response_json<T: DeserializeOwned>(response: ureq::Response) -> Result<T, String> {
+    read_capped_embed_json(response.into_reader())
+}
+
+#[cfg(feature = "cloud")]
+fn read_capped_embed_json<T: DeserializeOwned>(reader: impl Read) -> Result<T, String> {
+    let mut limited = reader.take(MAX_EMBED_HTTP_BODY_BYTES.saturating_add(1));
+    let mut buf = Vec::new();
+    let read_err = limited.read_to_end(&mut buf).err();
+    if buf.len() as u64 > MAX_EMBED_HTTP_BODY_BYTES {
+        return Err(format!(
+            "embed HTTP body exceeds {MAX_EMBED_HTTP_BODY_BYTES} byte cap"
+        ));
+    }
+    if let Some(error) = read_err {
+        return Err(error.to_string());
+    }
+    serde_json::from_slice(&buf).map_err(|e| e.to_string())
 }
 
 #[cfg(feature = "cloud")]
@@ -163,7 +211,7 @@ pub fn embed_via_api(text: &str, config: &CloudEmbeddingConfig) -> Result<Vec<f3
         .set("Content-Type", "application/json")
         .send_string(&json)
         .map_err(|e| e.to_string())?;
-    let parsed: EmbedResponse = response.into_json().map_err(|e| e.to_string())?;
+    let parsed: EmbedResponse = parse_embed_response_json(response)?;
     parsed
         .data
         .into_iter()
@@ -228,7 +276,7 @@ pub fn embed_via_ollama(text: &str, config: &OllamaEmbeddingConfig) -> Result<Ve
         .set("Content-Type", "application/json")
         .send_string(&json)
         .map_err(|e| e.to_string())?;
-    let parsed: OllamaEmbedResponse = response.into_json().map_err(|e| e.to_string())?;
+    let parsed: OllamaEmbedResponse = parse_embed_response_json(response)?;
     if parsed.embedding.is_empty() {
         return Err("empty ollama embedding response".to_string());
     }
@@ -617,3 +665,7 @@ mod dim_probe_tests;
 #[cfg(test)]
 #[path = "../../../tests/unit/embed/embedder__preference_tests.rs"]
 mod preference_tests;
+
+#[cfg(test)]
+#[path = "../../../tests/unit/embed/embedder__http_bounds_tests.rs"]
+mod http_bounds_tests;
