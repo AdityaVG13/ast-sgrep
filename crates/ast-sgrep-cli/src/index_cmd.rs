@@ -451,7 +451,7 @@ pub(crate) fn open_searcher(root: &Path, cli: &Cli) -> anyhow::Result<ast_sgrep_
 pub(crate) fn search_options(root: &Path, cli: &Cli) -> SearchOptions {
     let (root, index_path) = resolve_root_index(cli, root);
     let t = cli.active_tuning();
-    SearchOptions {
+    let mut opts = SearchOptions {
         root,
         index_path,
         // Remap 0 / oversize here so CLI envelope `limit` matches Searcher (docs: 0 → default).
@@ -459,14 +459,23 @@ pub(crate) fn search_options(root: &Path, cli: &Cli) -> SearchOptions {
         lang_filter: cli.lang.clone(),
         use_embed: !t.no_embed,
         use_tantivy: t.tantivy,
-        use_cloud_embed: t.cloud_embed,
-        use_ollama_embed: t.ollama_embed,
-        use_neural_embed: t.neural_embed,
-        use_semantic_only: t.semantic_only,
         ann_threshold: t.ann_threshold,
         ann_probes: t.ann_probes,
         use_rerank: t.rerank,
         rerank_top_k: t.rerank_top_k.clamp(1, ast_sgrep_core::MAX_OUTPUT_RESULTS),
         ..SearchOptions::default()
-    }
+    };
+    // f4ce.2: exclusive collapse (Cloud > Ollama > Neural > Semantic > Auto).
+    // Public --cloud-embed/--ollama-embed/--neural-embed/--semantic-only flags stay.
+    opts.set_embed_backend(EmbedBackend::from_flags(
+        t.cloud_embed,
+        t.ollama_embed,
+        t.neural_embed,
+        t.semantic_only,
+    ));
+    opts
 }
+
+#[cfg(test)]
+#[path = "../../../tests/unit/cli/index_cmd.rs"]
+mod tests;

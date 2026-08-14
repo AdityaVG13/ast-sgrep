@@ -871,6 +871,30 @@ fn compact_omits_native_hit_array_and_excerpt_blobs() {
     );
 }
 
+/// f4ce.2: public embed flags stay independently settable. Exclusive collapse
+/// is SearchOptions-side (`from_flags` / `set_embed_backend`), not a clap conflict.
+#[test]
+fn concurrent_cloud_and_ollama_embed_flags_are_not_usage_errors() {
+    let session = CliSession::sample(asgrep_bin());
+    let index = session.index_path.to_str().expect("index utf8");
+    let root = session.root.to_str().expect("root utf8");
+    let output = run(
+        &session.bin,
+        &[
+            "--json",
+            "--no-embed",
+            "--cloud-embed",
+            "--ollama-embed",
+            "--index-path",
+            index,
+            "search",
+            "process_request",
+            root,
+        ],
+    );
+    assert_success(&output, "search");
+}
+
 #[test]
 fn format_alone_implies_json_machine_output() {
     let session = CliSession::sample(asgrep_bin());
