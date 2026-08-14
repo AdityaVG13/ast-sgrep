@@ -86,12 +86,13 @@ not reliably covered by V8 heap limits. The native Code Mode boundary also caps
 each encoded tool value at 1 MiB and complete batch responses at 4 MiB, before
 Node-API converts them into extension-host objects.
 
-One deadline covers freshness work and the Code Mode program. Cancellation
-rejects queued and future host calls and is checked between native batch calls.
-The parent terminates the disposable worker, so synchronous loops, microtask
-loops, and asynchronous JavaScript cannot outlive that deadline. A single
-SQLite/native call already in progress may finish its current operation before
-observing cancellation; its late response is discarded.
+One deadline covers freshness work and the Code Mode program. The soft wall
+aborts the run's `AbortSignal` and terminates the disposable worker, so
+queued host calls, later bridge calls, and the JavaScript program cannot keep
+calling the pooled NAPI `Session` after timeout. Waiters that have not yet
+taken the session mutex return `operation cancelled` instead of blocking the
+pool. A single SQLite/native call that already holds the mutex may finish its
+current operation before observing cancellation; its late response is discarded.
 
 **Root jail (host duty):** `CodeModeSession` / NAPI tool `root` args are jailed
 under the configured session workspace the same way MCP jails under

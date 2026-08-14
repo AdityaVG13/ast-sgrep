@@ -606,6 +606,46 @@ test("runner observes cancellation while awaiting asynchronous code", async () =
   }
 });
 
+test("runner timeout cancels in-flight host work and stops later bridge calls", async () => {
+  let hostCalls = 0;
+  let hostAborted = false;
+  let hostStarted!: () => void;
+  const started = new Promise<void>((resolve) => { hostStarted = resolve; });
+  const bundle = createAsgrepConnector({
+    async run(_args, _context, options): Promise<MachineEnvelope> {
+      hostCalls += 1;
+      hostStarted();
+      return new Promise((_resolve, reject) => {
+        const onAbort = () => {
+          hostAborted = true;
+          reject(Object.assign(new Error("host call aborted"), { name: "AbortError" }));
+        };
+        if (options?.signal?.aborted) {
+          onAbort();
+          return;
+        }
+        options?.signal?.addEventListener("abort", onAbort, { once: true });
+      });
+    },
+  }, { cwd: "/project" });
+  const pending = runCodemode(
+    `await asgrep.search({ query: "one" });
+     await asgrep.search({ query: "two" });
+     return true;`,
+    bundle.asgrep,
+    { timeoutMs: 250 },
+  );
+  await started;
+  const outcome = await pending;
+  assert.equal(outcome.ok, false);
+  if (!outcome.ok) assert.match(outcome.error, /timeout/iu);
+  assert.equal(hostAborted, true, "soft timeout must abort the in-flight host call");
+  const callsAtTimeout = hostCalls;
+  await new Promise((resolve) => setTimeout(resolve, 80));
+  assert.equal(hostCalls, callsAtTimeout, "timed-out program must not keep dispatching host calls");
+  assert.ok(hostCalls <= 2, `orphaned AsyncFunction kept calling the session: ${hostCalls}`);
+});
+
 test("runner cancellation cancels an in-flight host call", async () => {
   let hostStarted!: () => void;
   const started = new Promise<void>((resolve) => { hostStarted = resolve; });

@@ -9,6 +9,13 @@
 //! `starts_with` / contained-in-root contract as MCP `sandbox_root`. NAPI does
 //! not bypass this: every `Session::call` / `batch` goes through
 //! `CodeModeSession::root_arg`.
+//!
+//! # Cancel (R-CM-SOFT-TIMEOUT-ORPHAN)
+//!
+//! Soft-timeout abort must not leave waiters parked on the session mutex or a
+//! fail-fast `session is busy` gate. Tasks poll `try_lock` so a cancelled
+//! waiter returns `operation cancelled` without taking the session. A call that
+//! already holds the mutex may finish its current `session.call`.
 
 #![deny(clippy::all)]
 
@@ -24,8 +31,8 @@ use serde_json::Value;
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::sync::{Arc, Mutex, MutexGuard, TryLockError};
+use std::time::{Duration, Instant};
 
 fn map_err(err: impl std::fmt::Display) -> Error {
     Error::from_reason(err.to_string())
@@ -88,17 +95,45 @@ pub struct JsBatchResponse {
 pub struct Session {
     inner: Arc<Mutex<CodeModeSession>>,
     call_count: Arc<AtomicU32>,
-    busy: Arc<AtomicBool>,
     root: String,
 }
 
-struct Admission {
-    busy: Arc<AtomicBool>,
+fn cancelled_error() -> Error {
+    Error::from_reason("operation cancelled")
 }
 
-impl Drop for Admission {
-    fn drop(&mut self) {
-        self.busy.store(false, Ordering::Release);
+fn watch_cancel(signal: Option<&AbortSignal>, cancelled: &Arc<AtomicBool>) {
+    let Some(signal) = signal else {
+        return;
+    };
+    let cancelled = Arc::clone(cancelled);
+    signal.on_abort(move || cancelled.store(true, Ordering::Release));
+}
+
+/// Abortable mutex acquire. A blocking `lock()` would keep cancelled waiters
+/// parked on a pooled session after Code Mode's soft wall fires.
+fn lock_session<'a>(
+    inner: &'a Mutex<CodeModeSession>,
+    cancelled: &AtomicBool,
+) -> Result<MutexGuard<'a, CodeModeSession>> {
+    loop {
+        if cancelled.load(Ordering::Acquire) {
+            return Err(cancelled_error());
+        }
+        match inner.try_lock() {
+            Ok(guard) => {
+                if cancelled.load(Ordering::Acquire) {
+                    return Err(cancelled_error());
+                }
+                return Ok(guard);
+            }
+            Err(TryLockError::WouldBlock) => {
+                std::thread::sleep(Duration::from_millis(2));
+            }
+            Err(TryLockError::Poisoned(_)) => {
+                return Err(Error::from_reason("session lock poisoned"));
+            }
+        }
     }
 }
 
@@ -108,7 +143,6 @@ pub struct SessionCallTask {
     tool: String,
     args: Value,
     cancelled: Arc<AtomicBool>,
-    _admission: Admission,
 }
 
 #[napi]
@@ -117,13 +151,7 @@ impl<'task> ScopedTask<'task> for SessionCallTask {
     type JsValue = Unknown<'task>;
 
     fn compute(&mut self) -> Result<Self::Output> {
-        if self.cancelled.load(Ordering::Acquire) {
-            return Err(Error::from_reason("operation cancelled"));
-        }
-        let mut session = self
-            .inner
-            .lock()
-            .map_err(|_| Error::from_reason("session lock poisoned"))?;
+        let mut session = lock_session(&self.inner, &self.cancelled)?;
         let result = session.call(&self.tool, std::mem::take(&mut self.args));
         self.call_count.store(
             session.call_count().min(u32::MAX as usize) as u32,
@@ -142,7 +170,6 @@ pub struct SessionBatchTask {
     call_count: Arc<AtomicU32>,
     calls: Vec<JsBatchCall>,
     cancelled: Arc<AtomicBool>,
-    _admission: Admission,
 }
 
 #[napi]
@@ -152,16 +179,13 @@ impl Task for SessionBatchTask {
 
     fn compute(&mut self) -> Result<Self::Output> {
         let started = Instant::now();
-        let mut session = self
-            .inner
-            .lock()
-            .map_err(|_| Error::from_reason("session lock poisoned"))?;
+        let mut session = lock_session(&self.inner, &self.cancelled)?;
         let mut all_ok = true;
         let mut results = Vec::with_capacity(self.calls.len());
         let mut response_bytes = MAX_BATCH_RESPONSE_BYTES - MAX_BATCH_VALUE_BYTES;
         for call in std::mem::take(&mut self.calls) {
             if self.cancelled.load(Ordering::Acquire) {
-                return Err(Error::from_reason("operation cancelled"));
+                return Err(cancelled_error());
             }
             let result = match session.call(
                 &call.tool,
@@ -295,17 +319,7 @@ impl Session {
         Ok(Self {
             inner: Arc::new(Mutex::new(session)),
             call_count: Arc::new(AtomicU32::new(0)),
-            busy: Arc::new(AtomicBool::new(false)),
             root,
-        })
-    }
-
-    fn admit(&self) -> Result<Admission> {
-        self.busy
-            .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
-            .map_err(|_| Error::from_reason("session is busy"))?;
-        Ok(Admission {
-            busy: Arc::clone(&self.busy),
         })
     }
 
@@ -318,10 +332,7 @@ impl Session {
         signal: Option<AbortSignal>,
     ) -> Result<AsyncTask<SessionCallTask>> {
         let cancelled = Arc::new(AtomicBool::new(false));
-        if let Some(signal) = signal.as_ref() {
-            let cancelled = Arc::clone(&cancelled);
-            signal.on_abort(move || cancelled.store(true, Ordering::Release));
-        }
+        watch_cancel(signal.as_ref(), &cancelled);
         Ok(AsyncTask::with_optional_signal(
             SessionCallTask {
                 inner: Arc::clone(&self.inner),
@@ -329,7 +340,6 @@ impl Session {
                 tool,
                 args: args.unwrap_or(Value::Object(Default::default())),
                 cancelled,
-                _admission: self.admit()?,
             },
             signal,
         ))
@@ -344,17 +354,13 @@ impl Session {
     ) -> Result<AsyncTask<SessionBatchTask>> {
         validate_session_batch(&calls)?;
         let cancelled = Arc::new(AtomicBool::new(false));
-        if let Some(signal) = signal.as_ref() {
-            let cancelled = Arc::clone(&cancelled);
-            signal.on_abort(move || cancelled.store(true, Ordering::Release));
-        }
+        watch_cancel(signal.as_ref(), &cancelled);
         Ok(AsyncTask::with_optional_signal(
             SessionBatchTask {
                 inner: Arc::clone(&self.inner),
                 call_count: Arc::clone(&self.call_count),
                 calls,
                 cancelled,
-                _admission: self.admit()?,
             },
             signal,
         ))
