@@ -212,6 +212,7 @@ dependencies = [
  "anyhow",
  "ast-sgrep-testkit",
  "serde",
+ "serde_json",
  "tree-sitter",
  "tree-sitter-c",
  "tree-sitter-c-sharp",

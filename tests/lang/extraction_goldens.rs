@@ -1,5 +1,9 @@
 use ast_sgrep_lang::{Language, SymbolKind};
-use ast_sgrep_testkit::{assert_language_conformance, LanguageConformanceCase};
+use ast_sgrep_testkit::{
+    assert_golden_json_at, assert_language_conformance, canonicalize_extraction,
+    LanguageConformanceCase,
+};
+use std::path::Path;
 
 const RUST: &str = include_str!("fixtures/extract/rust.rs");
 const TS: &str = include_str!("fixtures/extract/typescript.ts");
@@ -20,7 +24,15 @@ use SymbolKind::*;
 #[test]
 fn all_languages_satisfy_shared_parse_extract_and_pattern_contract() {
     for case in CASES {
-        assert_language_conformance(case);
+        let dump = canonicalize_extraction(assert_language_conformance(case));
+        // Full dump is the extra-symbol / kind-name-drift gate; tuples stay presence/forbid.
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/lang/fixtures/extract_dumps")
+            .join(format!("{}.json", case.language.as_str()));
+        assert_golden_json_at(
+            &path,
+            &serde_json::to_value(&dump).expect("extraction dump serializes"),
+        );
     }
 }
 

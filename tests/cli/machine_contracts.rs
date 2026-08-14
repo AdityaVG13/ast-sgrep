@@ -11,8 +11,10 @@
 //! MJ-011 — `search_hit_dumps_match_goldens_for_agent_capsule_and_compact` (nz7i.2)
 //! MJ-012 disc — MCP non-envelope (`DISC-mcp-not-full-suite`)
 //! NL-008 — `compact_omits_native_hit_array_and_excerpt_blobs`
+use ast_sgrep_core::chain::ChainResponse;
 use ast_sgrep_testkit::{
-    assert_golden_at, assert_golden_json_at, canonicalize_text, CliSession, Scrubber,
+    assert_golden_at, assert_golden_json_at, canonicalize_chain_response, canonicalize_text,
+    CliSession, Scrubber,
 };
 use serde_json::Value;
 use std::path::{Path, PathBuf};
@@ -1211,6 +1213,42 @@ fn path_free_usage_teaching_messages_match_goldens() {
         "expected agent teaching, got {format_msg}"
     );
     assert_golden_json_at(&cli_fixture("teaching_format_agnt.json"), &format);
+}
+
+/// nz7i.4: freeze `chain process_request` nodes/edges (sorted; scores kept).
+#[test]
+fn chain_expand_sample_dump_matches_golden() {
+    let session = CliSession::sample(asgrep_bin());
+    let index = session.index_path.to_str().expect("index utf8");
+    let root = session.root.to_str().expect("root utf8");
+    let envelope = assert_success(
+        &run(
+            &session.bin,
+            &[
+                "--json",
+                "--no-embed",
+                "--index-path",
+                index,
+                "chain",
+                "process_request",
+                root,
+            ],
+        ),
+        "chain",
+    );
+    let chain: ChainResponse =
+        serde_json::from_value(envelope.clone()).expect("chain envelope deserializes");
+    let mut dump = serde_json::to_value(canonicalize_chain_response(chain))
+        .expect("canonical chain serializes");
+    if let Some(object) = dump.as_object_mut() {
+        for key in ["schema_version", "tool", "command", "ok", "exit_code"] {
+            object.insert(key.to_string(), envelope[key].clone());
+        }
+    }
+    assert_golden_json_at(
+        &cli_fixture("chain_expand_process_request.json"),
+        &scrub_search_dump(&session.root, &dump),
+    );
 }
 
 /// nz7i.3: freeze the agent handbook body (exact; canonicalize_text only).

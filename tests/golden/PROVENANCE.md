@@ -48,3 +48,15 @@ These predate this helper and stay next to `machine_contracts`:
 | `tests/codemode/fixtures/anthropic_tools.json` | same | 2026-08-13 | none | `anthropic_tools()` |
 | `tests/codemode/fixtures/openai_tools.json` | same | 2026-08-13 | none | `openai_tools()` |
 | `tests/codemode/fixtures/cloudflare_connector.json` | same | 2026-08-13 | none | `cloudflare_connector()` |
+
+## nz7i.4 extraction dumps + chain expand
+
+Full extraction dumps live under `tests/lang/fixtures/extract_dumps/` (not next to
+source fixtures in `extract/`). Presence/forbid tuples stay in
+`assert_language_conformance`; extra symbols and kind/name drift fail the dump
+compare. Spans freeze because the extract fixtures are immutable.
+
+| File | Command | Date | Scrub | Notes |
+|---|---|---|---|---|
+| `tests/lang/fixtures/extract_dumps/{lang}.json` (13 langs) | `ast-sgrep-lang` `all_languages_satisfy_shared_parse_extract_and_pattern_contract` | 2026-08-13 | none (`canonicalize_extraction` sort only) | Symbols `(name, kind, byte_start)`, imports `(module_path, line)`, calls `(caller, callee, line, byte_start)`, pattern nodes `(signature, line_start, excerpt)` |
+| `tests/cli/fixtures/chain_expand_process_request.json` | `ast-sgrep-cli` `chain_expand_sample_dump_matches_golden` | 2026-08-13 | `search_dump(sample_root)` then `machine_contract` | `NO_COLOR=1 asgrep --json --no-embed --index-path <tmp> chain process_request <sample>`; nodes/edges via `canonicalize_chain_response`; scores kept |

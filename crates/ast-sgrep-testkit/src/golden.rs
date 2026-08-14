@@ -17,6 +17,7 @@
 //! trailing spaces/tabs per line. UTF-8 is required (`&str`).
 
 use ast_sgrep_core::chain::{ChainEdge, ChainNode, ChainResponse};
+use ast_sgrep_lang::{ExtractionResult, SymbolKind};
 use serde_json::Value;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -79,6 +80,53 @@ pub fn canonicalize_chain_response(mut response: ChainResponse) -> ChainResponse
     response.nodes.sort_by(|a, b| node_sort_key(a).cmp(&node_sort_key(b)));
     response.edges.sort_by(|a, b| edge_sort_key(a).cmp(&edge_sort_key(b)));
     response
+}
+
+/// Sort extraction dumps so parser HashMap order cannot flake.
+///
+/// Symbols: `(name, kind, byte_start)`. Imports: `(module_path, line)`.
+/// Calls: `(caller, callee, line, byte_start)`. Pattern nodes: `(signature, line_start, excerpt)`.
+pub fn canonicalize_extraction(mut result: ExtractionResult) -> ExtractionResult {
+    result.symbols.sort_by(|a, b| {
+        (a.name.as_str(), kind_sort_key(a.kind), a.byte_start).cmp(&(
+            b.name.as_str(),
+            kind_sort_key(b.kind),
+            b.byte_start,
+        ))
+    });
+    result.imports.sort_by(|a, b| {
+        a.module_path
+            .cmp(&b.module_path)
+            .then(a.line.cmp(&b.line))
+    });
+    result.calls.sort_by(|a, b| {
+        (a.caller.as_str(), a.callee.as_str(), a.line, a.byte_start).cmp(&(
+            b.caller.as_str(),
+            b.callee.as_str(),
+            b.line,
+            b.byte_start,
+        ))
+    });
+    result.pattern_nodes.sort_by(|a, b| {
+        (a.signature.as_str(), a.line_start, a.excerpt.as_str()).cmp(&(
+            b.signature.as_str(),
+            b.line_start,
+            b.excerpt.as_str(),
+        ))
+    });
+    result
+}
+
+fn kind_sort_key(kind: SymbolKind) -> &'static str {
+    match kind {
+        SymbolKind::Function => "function",
+        SymbolKind::Method => "method",
+        SymbolKind::Class => "class",
+        SymbolKind::Type => "type",
+        SymbolKind::Interface => "interface",
+        SymbolKind::Enum => "enum",
+        SymbolKind::Doc => "doc",
+    }
 }
 
 fn node_sort_key(node: &ChainNode) -> (String, String, u32, u32) {
@@ -227,8 +275,11 @@ fn unified_diff(expected: &str, actual: &str, max_hunks: usize) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{canonicalize_chain_response, canonicalize_text, updating_goldens};
+    use super::{
+        canonicalize_chain_response, canonicalize_extraction, canonicalize_text, updating_goldens,
+    };
     use ast_sgrep_core::chain::{ChainEdge, ChainNode, ChainResponse, EdgeLabel};
+    use ast_sgrep_lang::{CallSite, ExtractionResult, ImportSite, SymbolDef, SymbolKind};
 
     fn node(file: &str, symbol: &str, line: u32) -> ChainNode {
         ChainNode {
@@ -282,6 +333,72 @@ mod tests {
         assert_eq!(ca.edges[0].from_file, cb.edges[0].from_file);
         assert_eq!(ca.edges[1].from_file, cb.edges[1].from_file);
         assert_eq!(ca.seeds[0].file, "a.rs");
+    }
+
+    #[test]
+    fn extraction_canonicalize_matches_across_insertion_orders() {
+        fn symbol(name: &str, kind: SymbolKind, start: usize) -> SymbolDef {
+            SymbolDef {
+                name: name.to_string(),
+                kind,
+                line_start: 1,
+                line_end: 1,
+                byte_start: start,
+                byte_end: start + 1,
+            }
+        }
+        fn call(caller: &str, callee: &str, line: u32) -> CallSite {
+            CallSite {
+                caller: caller.to_string(),
+                callee: callee.to_string(),
+                line,
+                byte_start: 0,
+                byte_end: 1,
+            }
+        }
+        let a = ExtractionResult {
+            symbols: vec![
+                symbol("b", SymbolKind::Method, 10),
+                symbol("a", SymbolKind::Function, 1),
+            ],
+            calls: vec![call("b", "a", 2), call("a", "b", 1)],
+            imports: vec![
+                ImportSite {
+                    module_path: "z".into(),
+                    line: 1,
+                },
+                ImportSite {
+                    module_path: "a".into(),
+                    line: 2,
+                },
+            ],
+            pattern_nodes: Vec::new(),
+        };
+        let b = ExtractionResult {
+            symbols: vec![
+                symbol("a", SymbolKind::Function, 1),
+                symbol("b", SymbolKind::Method, 10),
+            ],
+            calls: vec![call("a", "b", 1), call("b", "a", 2)],
+            imports: vec![
+                ImportSite {
+                    module_path: "a".into(),
+                    line: 2,
+                },
+                ImportSite {
+                    module_path: "z".into(),
+                    line: 1,
+                },
+            ],
+            pattern_nodes: Vec::new(),
+        };
+        let ca = canonicalize_extraction(a);
+        let cb = canonicalize_extraction(b);
+        assert_eq!(ca.symbols[0].name, "a");
+        assert_eq!(ca.symbols[1].name, "b");
+        assert_eq!(ca.imports[0].module_path, "a");
+        assert_eq!(ca.calls[0].caller, "a");
+        assert_eq!(ca, cb);
     }
 
     #[test]

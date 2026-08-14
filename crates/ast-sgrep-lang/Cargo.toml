@@ -34,6 +34,7 @@ tree-sitter-php = "0.24"
 
 [dev-dependencies]
 ast-sgrep-testkit = { path = "../ast-sgrep-testkit" }
+serde_json.workspace = true
 
 # Integration tests live in the repo-root tests/ tree.
 [[test]]

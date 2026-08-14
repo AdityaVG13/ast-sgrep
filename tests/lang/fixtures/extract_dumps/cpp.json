@@ -1,0 +1,369 @@
+{
+  "calls": [
+    {
+      "byte_end": 499,
+      "byte_start": 486,
+      "callee": "render",
+      "caller": "make_widget",
+      "line": 31
+    },
+    {
+      "byte_end": 326,
+      "byte_start": 319,
+      "callee": "touch",
+      "caller": "move",
+      "line": 17
+    },
+    {
+      "byte_end": 260,
+      "byte_start": 248,
+      "callee": "helper",
+      "caller": "render",
+      "line": 11
+    }
+  ],
+  "imports": [
+    {
+      "line": 2,
+      "module_path": "<string>"
+    },
+    {
+      "line": 3,
+      "module_path": "local.hpp"
+    }
+  ],
+  "pattern_nodes": [
+    {
+      "excerpt": "GoldenPoint",
+      "line_end": 15,
+      "line_start": 15,
+      "signature": "GoldenPoint"
+    },
+    {
+      "excerpt": "GoldenState",
+      "line_end": 21,
+      "line_start": 21,
+      "signature": "GoldenState"
+    },
+    {
+      "excerpt": "GoldenWidget",
+      "line_end": 7,
+      "line_start": 7,
+      "signature": "GoldenWidget"
+    },
+    {
+      "excerpt": "GoldenWidget",
+      "line_end": 30,
+      "line_start": 30,
+      "signature": "GoldenWidget"
+    },
+    {
+      "excerpt": "Ready",
+      "line_end": 22,
+      "line_start": 22,
+      "signature": "Ready"
+    },
+    {
+      "excerpt": "Spent",
+      "line_end": 23,
+      "line_start": 23,
+      "signature": "Spent"
+    },
+    {
+      "excerpt": "helper(name)",
+      "line_end": 11,
+      "line_start": 11,
+      "signature": "call-name:helper"
+    },
+    {
+      "excerpt": "w.render(\"x\")",
+      "line_end": 31,
+      "line_start": 31,
+      "signature": "call-name:render"
+    },
+    {
+      "excerpt": "touch()",
+      "line_end": 17,
+      "line_start": 17,
+      "signature": "call-name:touch"
+    },
+    {
+      "excerpt": "helper(name)",
+      "line_end": 11,
+      "line_start": 11,
+      "signature": "call:helper"
+    },
+    {
+      "excerpt": "touch()",
+      "line_end": 17,
+      "line_start": 17,
+      "signature": "call:touch"
+    },
+    {
+      "excerpt": "w.render(\"x\")",
+      "line_end": 31,
+      "line_start": 31,
+      "signature": "call:w.render"
+    },
+    {
+      "excerpt": "class GoldenWidget {",
+      "line_end": 13,
+      "line_start": 7,
+      "signature": "class GoldenWidget"
+    },
+    {
+      "excerpt": "class GoldenWidget {",
+      "line_end": 13,
+      "line_start": 7,
+      "signature": "decl:class:GoldenWidget"
+    },
+    {
+      "excerpt": "enum class GoldenState {\n    Ready,\n    Spent\n}",
+      "line_end": 24,
+      "line_start": 21,
+      "signature": "decl:enum:GoldenState"
+    },
+    {
+      "excerpt": "struct GoldenPoint {\n    void move() {\n        touch();\n    }\n}",
+      "line_end": 19,
+      "line_start": 15,
+      "signature": "decl:struct:GoldenPoint"
+    },
+    {
+      "excerpt": "enum class GoldenState {\n    Ready,\n    Spent\n}",
+      "line_end": 24,
+      "line_start": 21,
+      "signature": "enum GoldenState"
+    },
+    {
+      "excerpt": "fixtures",
+      "line_end": 5,
+      "line_start": 5,
+      "signature": "fixtures"
+    },
+    {
+      "excerpt": "helper",
+      "line_end": 11,
+      "line_start": 11,
+      "signature": "helper"
+    },
+    {
+      "excerpt": "helper",
+      "line_end": 26,
+      "line_start": 26,
+      "signature": "helper"
+    },
+    {
+      "excerpt": "helper(name)",
+      "line_end": 11,
+      "line_start": 11,
+      "signature": "kind:call_expression"
+    },
+    {
+      "excerpt": "touch()",
+      "line_end": 17,
+      "line_start": 17,
+      "signature": "kind:call_expression"
+    },
+    {
+      "excerpt": "w.render(\"x\")",
+      "line_end": 31,
+      "line_start": 31,
+      "signature": "kind:call_expression"
+    },
+    {
+      "excerpt": "class",
+      "line_end": 7,
+      "line_start": 7,
+      "signature": "kind:class"
+    },
+    {
+      "excerpt": "class",
+      "line_end": 21,
+      "line_start": 21,
+      "signature": "kind:class"
+    },
+    {
+      "excerpt": "class GoldenWidget {",
+      "line_end": 13,
+      "line_start": 7,
+      "signature": "kind:class_specifier"
+    },
+    {
+      "excerpt": "enum class GoldenState {\n    Ready,\n    Spent\n}",
+      "line_end": 24,
+      "line_start": 21,
+      "signature": "kind:enum_specifier"
+    },
+    {
+      "excerpt": "void render(const std::string& name) {\n        helper(name);\n    }",
+      "line_end": 12,
+      "line_start": 10,
+      "signature": "kind:function_definition"
+    },
+    {
+      "excerpt": "void move() {\n        touch();\n    }",
+      "line_end": 18,
+      "line_start": 16,
+      "signature": "kind:function_definition"
+    },
+    {
+      "excerpt": "void make_widget() {\n    GoldenWidget w;\n    w.render(\"x\");\n}",
+      "line_end": 32,
+      "line_start": 29,
+      "signature": "kind:function_definition"
+    },
+    {
+      "excerpt": "struct GoldenPoint {\n    void move() {\n        touch();\n    }\n}",
+      "line_end": 19,
+      "line_start": 15,
+      "signature": "kind:struct_specifier"
+    },
+    {
+      "excerpt": "make_widget",
+      "line_end": 29,
+      "line_start": 29,
+      "signature": "make_widget"
+    },
+    {
+      "excerpt": "move",
+      "line_end": 16,
+      "line_start": 16,
+      "signature": "move"
+    },
+    {
+      "excerpt": "name",
+      "line_end": 10,
+      "line_start": 10,
+      "signature": "name"
+    },
+    {
+      "excerpt": "name",
+      "line_end": 11,
+      "line_start": 11,
+      "signature": "name"
+    },
+    {
+      "excerpt": "name",
+      "line_end": 26,
+      "line_start": 26,
+      "signature": "name"
+    },
+    {
+      "excerpt": "render",
+      "line_end": 10,
+      "line_start": 10,
+      "signature": "render"
+    },
+    {
+      "excerpt": "render",
+      "line_end": 31,
+      "line_start": 31,
+      "signature": "render"
+    },
+    {
+      "excerpt": "std",
+      "line_end": 10,
+      "line_start": 10,
+      "signature": "std"
+    },
+    {
+      "excerpt": "std",
+      "line_end": 26,
+      "line_start": 26,
+      "signature": "std"
+    },
+    {
+      "excerpt": "string",
+      "line_end": 10,
+      "line_start": 10,
+      "signature": "string"
+    },
+    {
+      "excerpt": "string",
+      "line_end": 26,
+      "line_start": 26,
+      "signature": "string"
+    },
+    {
+      "excerpt": "struct GoldenPoint {\n    void move() {\n        touch();\n    }\n}",
+      "line_end": 19,
+      "line_start": 15,
+      "signature": "struct GoldenPoint"
+    },
+    {
+      "excerpt": "touch",
+      "line_end": 17,
+      "line_start": 17,
+      "signature": "touch"
+    },
+    {
+      "excerpt": "touch",
+      "line_end": 27,
+      "line_start": 27,
+      "signature": "touch"
+    },
+    {
+      "excerpt": "w",
+      "line_end": 30,
+      "line_start": 30,
+      "signature": "w"
+    },
+    {
+      "excerpt": "w",
+      "line_end": 31,
+      "line_start": 31,
+      "signature": "w"
+    }
+  ],
+  "symbols": [
+    {
+      "byte_end": 335,
+      "byte_start": 272,
+      "kind": "type",
+      "line_end": 19,
+      "line_start": 15,
+      "name": "GoldenPoint"
+    },
+    {
+      "byte_end": 385,
+      "byte_start": 338,
+      "kind": "enum",
+      "line_end": 24,
+      "line_start": 21,
+      "name": "GoldenState"
+    },
+    {
+      "byte_end": 269,
+      "byte_start": 127,
+      "kind": "class",
+      "line_end": 13,
+      "line_start": 7,
+      "name": "GoldenWidget"
+    },
+    {
+      "byte_end": 502,
+      "byte_start": 441,
+      "kind": "function",
+      "line_end": 32,
+      "line_start": 29,
+      "name": "make_widget"
+    },
+    {
+      "byte_end": 333,
+      "byte_start": 297,
+      "kind": "method",
+      "line_end": 18,
+      "line_start": 16,
+      "name": "move"
+    },
+    {
+      "byte_end": 267,
+      "byte_start": 201,
+      "kind": "method",
+      "line_end": 12,
+      "line_start": 10,
+      "name": "render"
+    }
+  ]
+}

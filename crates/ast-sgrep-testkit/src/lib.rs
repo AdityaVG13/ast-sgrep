@@ -14,7 +14,7 @@ pub use cli::CliSession;
 pub use fixture::{sample_file, sample_root};
 pub use golden::{
     assert_golden, assert_golden_at, assert_golden_json, assert_golden_json_at,
-    canonicalize_chain_response, canonicalize_text, updating_goldens,
+    canonicalize_chain_response, canonicalize_extraction, canonicalize_text, updating_goldens,
 };
 pub use hit::{hit_keys, HitKey};
 pub use index::{
