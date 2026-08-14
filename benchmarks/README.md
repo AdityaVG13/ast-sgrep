@@ -28,6 +28,7 @@ benchmarks/
     bakeoff.md
     losses.md
     baselines.md
+    FLOOR_PROMOTION_PROTOCOL.md
   studies/                  ← focused analyses
     intent-confusion.md
     prevented-read.md
@@ -42,6 +43,7 @@ benchmarks/
 | [results/bakeoff.md](results/bakeoff.md) | Offline bake-off narrative and scores |
 | [results/losses.md](results/losses.md) | Where we lose (published deliberately) |
 | [results/baselines.md](results/baselines.md) | Pinned floors and provenance |
+| [results/FLOOR_PROMOTION_PROTOCOL.md](results/FLOOR_PROMOTION_PROTOCOL.md) | S2 MEASURED FLOOR MATCH axes (C1 4.304 s stays until checklist + human ACK) |
 
 ## Studies
 
