@@ -45,7 +45,7 @@ signal-hook = "0.3"
 
 [dev-dependencies]
 ast-sgrep-core = { path = "../ast-sgrep-core", version = "1.4.0" }
-ast-sgrep-testkit = { path = "../ast-sgrep-testkit" }
+ast-sgrep-testkit = { path = "../ast-sgrep-testkit", features = ["lsp"] }
 serde_json.workspace = true
 tempfile.workspace = true
 

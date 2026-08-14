@@ -1,5 +1,10 @@
 #![forbid(unsafe_code)]
 
+//! Shared integration-test harness.
+//!
+//! The `lsp` feature (E17 B3) is the only path that prod-depends
+//! `ast-sgrep-lsp`. Default Bill is core + lang only.
+
 mod cli;
 mod fixture;
 mod golden;
@@ -7,6 +12,7 @@ mod hit;
 mod index;
 mod isolation;
 mod lang;
+#[cfg(feature = "lsp")]
 mod lsp;
 mod scrub;
 mod verdict;
@@ -26,6 +32,7 @@ pub use lang::{
     assert_has_callee, assert_has_symbol, assert_language_conformance, parse, ExpectedCall,
     ExpectedPattern, ExpectedSymbol, LanguageConformanceCase,
 };
+#[cfg(feature = "lsp")]
 pub use lsp::{lsp_search_hit_keys, sample_backend};
 pub use scrub::Scrubber;
 pub use verdict::TestVerdict;
