@@ -19,6 +19,26 @@ Use `asgrep semantic "<query>"` or `Searcher::search_semantic` when repository-w
 
 > **Historical note:** Earlier drafts of this doc claimed empty structural stopped the cascade. That mismatched `search_hybrid` and `cascade_planner` tests (C1 / INV-CASCADE-STRUCT-EMPTY). Current text matches code.
 
+## Causal follow-up planner
+
+The agent envelope's `follow_up_queries` and `suggested_next` are computed by
+a deterministic planner (`search/planner.rs`) from the evidence each returned
+hit actually carries, not from a template:
+
+- A hit missing definition evidence gets `defs:<symbol>`; one missing usage
+  evidence (caller/graph) gets `callers:<symbol>`.
+- A hit with complete evidence but an indecisive within-signal margin (below
+  10% of its own score) gets `literal:<symbol>` for exact-text confirmation.
+- A hit whose definition, usage, and ordering are all settled gets no
+  follow-ups: an empty list means "you are done", not "nothing to offer".
+- A critic-flagged identifier collision drills into the compound identifier
+  the query named, not the colliding fragment.
+
+`suggested_next` starts from the actual top hit's follow-ups, adds a
+`asgrep semantic "<query>"` re-run only when the shortlist contains no
+semantic evidence, and always ends with the agent-format re-run. Every entry
+is an executable `asgrep` command.
+
 ## Work bounds
 
 - Structural rows outside lexical candidate files are discarded before they can become survivors.

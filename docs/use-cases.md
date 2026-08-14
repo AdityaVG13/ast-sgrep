@@ -27,7 +27,6 @@ asgrep semantic "credential renewal" --json
   "has_semantic_hits": true,
   "stack_hint": "Use asgrep for hybrid search; defs:/callers:/literal: prefixes for graph and exact text; asgrep semantic for embedding-only.",
   "suggested_next": [
-    "asgrep semantic \"credential renewal\"",
     "asgrep \"defs:auth_refresh\"",
     "asgrep \"callers:auth_refresh\"",
     "asgrep --json --format agent \"credential renewal\""

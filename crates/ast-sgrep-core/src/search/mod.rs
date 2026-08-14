@@ -2,6 +2,7 @@ pub(crate) mod critic;
 pub(crate) mod field_weight;
 mod fusion;
 pub mod passes;
+pub(crate) mod planner;
 mod types;
 use crate::query::{ParsedQuery, QueryMode};
 use crate::store::IndexStore;
@@ -17,6 +18,7 @@ use passes::symbol::{
     anchor_pass, anchor_pass_for_files, search_callers, search_defs, search_imports, symbol_pass,
     symbol_pass_for_files,
 };
+pub use planner::{follow_ups_for_hit, margin_is_decisive, plan_suggested_next};
 use std::collections::HashSet;
 use std::fs::OpenOptions;
 use std::io::Write;
