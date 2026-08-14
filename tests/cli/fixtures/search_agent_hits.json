@@ -29,7 +29,13 @@
       "score": 0.0693416181914331,
       "semantic": false,
       "signal": "structural",
-      "symbol": "process_request"
+      "symbol": "process_request",
+      "why": [
+        "exact_text",
+        "exact_symbol",
+        "anchor",
+        "structural_pattern"
+      ]
     },
     {
       "callee": null,
@@ -56,7 +62,13 @@
       "score": 0.06791834677419355,
       "semantic": false,
       "signal": "structural",
-      "symbol": "process_request"
+      "symbol": "process_request",
+      "why": [
+        "exact_text",
+        "exact_symbol",
+        "anchor",
+        "structural_pattern"
+      ]
     }
   ],
   "limit": 2,

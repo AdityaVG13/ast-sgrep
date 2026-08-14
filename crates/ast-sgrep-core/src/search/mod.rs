@@ -1,3 +1,4 @@
+pub(crate) mod critic;
 pub(crate) mod field_weight;
 mod fusion;
 pub mod passes;
@@ -5,6 +6,7 @@ mod types;
 use crate::query::{ParsedQuery, QueryMode};
 use crate::store::IndexStore;
 use crate::Result;
+pub use critic::CriticNote;
 pub use field_weight::EmbedFieldScores;
 pub use fusion::dedup_hits;
 use passes::embed::{embed_pass_for_files, run_embed_pass, SemanticCache};
@@ -447,8 +449,13 @@ impl Searcher {
                     } else {
                         let mut hits = self.search_hybrid(&parsed)?;
                         crate::intent::route_hits(&parsed, &mut hits);
-                        let weights = crate::intent::weights_for(crate::intent::classify(&parsed));
+                        let intent = crate::intent::classify(&parsed);
+                        let weights = crate::intent::weights_for(intent);
                         crate::fusion::apply_weighted_rrf(&mut hits, &weights);
+                        // The in-process critic: corroboration gate, agreement
+                        // boost, and identifier-collision penalty on the fused
+                        // shortlist (P0 critic-on-shortlist).
+                        critic::apply_critic(&parsed, intent, &mut hits);
                         hits
                     }
                 }

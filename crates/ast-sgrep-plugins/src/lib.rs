@@ -118,6 +118,7 @@ pub fn to_agent_json(response: &SearchResponse) -> serde_json::Value {
             "score": hit.score, "margin": hit.margin,
             "file": hit.file, "lines": {"start": hit.line_start, "end": hit.line_end},
             "symbol": hit.symbol, "caller": hit.caller, "callee": hit.callee, "language": hit.language,
+            "why": hit_why(hit),
             "excerpt": hit.excerpt, "follow_up_queries": follow_ups, })
     }).collect();
     let has_semantic = hits.iter().any(|h| h["semantic"] == true);

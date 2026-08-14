@@ -16,6 +16,7 @@ fn hit(file: &str, line: u32, score: f64) -> SearchHit {
         confidence: 0.0,
         resolution: None,
         embed_fields: None,
+        critic: Vec::new(),
         excerpt: String::new(),
     }
 }

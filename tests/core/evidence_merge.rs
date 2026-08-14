@@ -19,6 +19,7 @@ fn hit(kind: HitKind, score: f64, excerpt: &str) -> SearchHit {
         confidence: 0.0,
         resolution: None,
         embed_fields: None,
+        critic: Vec::new(),
         excerpt: excerpt.into(),
     }
 }
