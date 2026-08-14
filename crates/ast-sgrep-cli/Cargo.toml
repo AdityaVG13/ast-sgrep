@@ -62,3 +62,6 @@ path = "../../tests/cli/no_embed_hit_key_parity.rs"
 [[test]]
 name = "watch_incremental"
 path = "../../tests/cli/watch_incremental.rs"
+[[test]]
+name = "watch_daemon_e2e"
+path = "../../tests/cli/watch_daemon_e2e.rs"
