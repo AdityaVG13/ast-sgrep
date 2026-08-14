@@ -162,6 +162,12 @@ pub(crate) struct IndexCmd {
         help = "Update one changed file path (repeatable; index only, max 1024)"
     )]
     pub(crate) paths: Vec<PathBuf>,
+    #[arg(
+        long,
+        value_name = "PATH",
+        help = "Optional SCIP JSON overlay; missing or malformed degrades, never fails the index"
+    )]
+    pub(crate) scip: Option<PathBuf>,
 }
 
 #[derive(Args, Clone, Debug)]
@@ -172,6 +178,12 @@ pub(crate) struct ReindexCmd {
     pub(crate) tuning: SearchTuning,
     #[arg(long, help = "Report planned index work without writing")]
     pub(crate) dry_run: bool,
+    #[arg(
+        long,
+        value_name = "PATH",
+        help = "Optional SCIP JSON overlay; missing or malformed degrades, never fails the index"
+    )]
+    pub(crate) scip: Option<PathBuf>,
 }
 
 #[derive(Args, Clone, Debug)]

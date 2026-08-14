@@ -2,10 +2,10 @@
 
 mod agent;
 mod bench;
-mod keep_gate;
 mod cli_args;
 mod eval;
 mod index_cmd;
+mod keep_gate;
 mod machine;
 mod search_cmd;
 pub mod supervisor;
@@ -14,9 +14,7 @@ mod watch;
 use anyhow::Context;
 use clap::Parser;
 use cli_args::{Cli, Commands, VersionArgs};
-use index_cmd::{
-    print_index_stats, print_status_command, run_index_dry_run, run_targeted_index, with_index,
-};
+use index_cmd::{print_status_command, run_full_index, run_index_dry_run, run_targeted_index};
 use machine::{
     print_machine_failure, print_machine_json, raw_command_name, raw_machine_output_requested,
     MACHINE_SCHEMA_VERSION,
@@ -145,43 +143,19 @@ fn run_command(cli: &Cli, command: &Commands) -> anyhow::Result<()> {
                 if c.dry_run {
                     return Err(usage_error("--dry-run and --path are mutually exclusive"));
                 }
-                return run_targeted_index(&c.root.root, cli, &c.paths);
+                return run_targeted_index(&c.root.root, cli, &c.paths, c.scip.as_deref());
             }
             if c.dry_run {
                 return run_index_dry_run("index", &c.root.root, cli);
             }
-            with_index(
-                "index",
-                &c.root.root,
-                cli,
-                false,
-                |i| {
-                    if !cli.json {
-                        eprintln!("asgrep: indexing {} ...", c.root.root.display());
-                    }
-                    i.index_all().context("indexing failed")
-                },
-                print_index_stats,
-            )
+            run_full_index("index", &c.root.root, cli, false, c.scip.as_deref())
         }
         Commands::Status(r) => print_status_command(cli, &r.root),
         Commands::Reindex(c) => {
             if c.dry_run {
                 return run_index_dry_run("reindex", &c.root.root, cli);
             }
-            with_index(
-                "reindex",
-                &c.root.root,
-                cli,
-                true,
-                |i| {
-                    if !cli.json {
-                        eprintln!("asgrep: reindexing {} ...", c.root.root.display());
-                    }
-                    i.reindex_all().context("reindex failed")
-                },
-                print_index_stats,
-            )
+            run_full_index("reindex", &c.root.root, cli, true, c.scip.as_deref())
         }
         Commands::Search(q) => search_cmd::run_search(&q.query.root, cli, &q.query.query, false),
         Commands::Bench {

@@ -3,6 +3,8 @@
 use crate::cli_args::{usage_error, Cli};
 use crate::machine::print_machine_json;
 use anyhow::Context;
+use ast_sgrep_core::scip::{load_scip_index, ScipLoad, SCIP_CHANNEL};
+use ast_sgrep_core::search::DegradedChannel;
 use ast_sgrep_core::{
     canonicalize_affected_path, index_db_path, EmbedBackend, IndexOptions, IndexStats, Indexer,
     SearchOptions, MAX_INCREMENTAL_PATHS,
@@ -113,10 +115,78 @@ pub(crate) fn with_index<T: serde::Serialize>(
     print_json_or(cli.json, command, &v, || human(&v))
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
+struct IndexCommandResult {
+    #[serde(flatten)]
+    stats: IndexStats,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    degraded_channels: Vec<DegradedChannel>,
+}
+
+fn ingest_scip(indexer: &Indexer, scip: Option<&Path>) -> anyhow::Result<Vec<DegradedChannel>> {
+    let Some(path) = scip else {
+        return Ok(Vec::new());
+    };
+    match load_scip_index(path) {
+        ScipLoad::Loaded(index) => {
+            indexer.store().apply_scip(&index)?;
+            Ok(Vec::new())
+        }
+        ScipLoad::Degraded { reason } => Ok(vec![DegradedChannel {
+            channel: SCIP_CHANNEL.to_owned(),
+            reason,
+        }]),
+    }
+}
+
+fn index_command_result(
+    indexer: &Indexer,
+    stats: IndexStats,
+    scip: Option<&Path>,
+) -> anyhow::Result<IndexCommandResult> {
+    Ok(IndexCommandResult {
+        stats,
+        degraded_channels: ingest_scip(indexer, scip)?,
+    })
+}
+
+pub(crate) fn run_full_index(
+    command: &str,
+    root: &Path,
+    cli: &Cli,
+    force_reindex: bool,
+    scip: Option<&Path>,
+) -> anyhow::Result<()> {
+    with_index(
+        command,
+        root,
+        cli,
+        force_reindex,
+        |indexer| {
+            if !cli.json {
+                let verb = if force_reindex {
+                    "reindexing"
+                } else {
+                    "indexing"
+                };
+                eprintln!("asgrep: {verb} {} ...", root.display());
+            }
+            let stats = if force_reindex {
+                indexer.reindex_all().context("reindex failed")?
+            } else {
+                indexer.index_all().context("indexing failed")?
+            };
+            index_command_result(indexer, stats, scip)
+        },
+        print_index_result,
+    )
+}
+
 pub(crate) fn run_targeted_index(
     root_arg: &Path,
     cli: &Cli,
     raw_paths: &[PathBuf],
+    scip: Option<&Path>,
 ) -> anyhow::Result<()> {
     if raw_paths.is_empty() || raw_paths.len() > MAX_INCREMENTAL_PATHS {
         return Err(usage_error(format!(
@@ -172,11 +242,16 @@ pub(crate) fn run_targeted_index(
         |indexer| {
             let stats = indexer.update_paths(&paths)?;
             indexer.flush_deferred_rebuilds()?;
-            Ok(serde_json::json!({
+            let degraded = ingest_scip(indexer, scip)?;
+            let mut value = serde_json::json!({
                 "targeted": true,
                 "path_count": paths.len(),
                 "stats": stats,
-            }))
+            });
+            if !degraded.is_empty() {
+                value["degraded_channels"] = serde_json::to_value(degraded)?;
+            }
+            Ok(value)
         },
         |value| {
             let stats = &value["stats"];
@@ -304,6 +379,13 @@ pub(crate) fn print_index_stats(stats: &IndexStats) {
     );
     if stats.walk_errors {
         eprintln!("Warning: directory walk errors left the index unpruned; stale paths may remain until a clean reindex");
+    }
+}
+
+fn print_index_result(result: &IndexCommandResult) {
+    print_index_stats(&result.stats);
+    for channel in &result.degraded_channels {
+        eprintln!("Warning: {} degraded: {}", channel.channel, channel.reason);
     }
 }
 

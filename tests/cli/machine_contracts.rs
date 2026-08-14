@@ -204,6 +204,75 @@ fn index_reindex_status_and_doctor_have_stable_shapes() {
 }
 
 #[test]
+fn index_scip_missing_or_malformed_degrades_without_failing() {
+    let session = CliSession::sample(asgrep_bin());
+    let index = session.index_path.to_str().expect("index utf8");
+    let root = session.root.to_str().expect("root utf8");
+    let missing = assert_success(
+        &run(
+            &session.bin,
+            &[
+                "--json",
+                "--no-embed",
+                "--index-path",
+                index,
+                "index",
+                root,
+                "--scip",
+                "/tmp/asgrep-kgvi3-missing.scip.json",
+            ],
+        ),
+        "index",
+    );
+    let missing_channels = missing["degraded_channels"]
+        .as_array()
+        .expect("degraded_channels");
+    assert_eq!(missing_channels.len(), 1);
+    assert_eq!(missing_channels[0]["channel"], "scip");
+    assert!(
+        missing_channels[0]["reason"]
+            .as_str()
+            .unwrap_or("")
+            .contains("not found"),
+        "missing SCIP reason: {}",
+        missing_channels[0]["reason"]
+    );
+
+    let bad_dir = TempDir::new().expect("tempdir");
+    let bad = bad_dir.path().join("bad.json");
+    std::fs::write(&bad, "{").expect("malformed scip");
+    let malformed = assert_success(
+        &run(
+            &session.bin,
+            &[
+                "--json",
+                "--no-embed",
+                "--index-path",
+                index,
+                "index",
+                root,
+                "--scip",
+                bad.to_str().expect("utf8"),
+            ],
+        ),
+        "index",
+    );
+    let malformed_channels = malformed["degraded_channels"]
+        .as_array()
+        .expect("degraded_channels");
+    assert_eq!(malformed_channels.len(), 1);
+    assert_eq!(malformed_channels[0]["channel"], "scip");
+    assert!(
+        malformed_channels[0]["reason"]
+            .as_str()
+            .unwrap_or("")
+            .contains("malformed"),
+        "malformed SCIP reason: {}",
+        malformed_channels[0]["reason"]
+    );
+}
+
+#[test]
 fn targeted_index_updates_are_bounded_deduplicated_and_confined() {
     let bin = asgrep_bin();
     let root = TempDir::new().expect("root");

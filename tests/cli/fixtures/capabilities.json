@@ -106,6 +106,7 @@
         "--rerank",
         "--rerank-top-k",
         "--response-snippet-tokens",
+        "--scip",
         "--semantic-only",
         "--snippet-tokens",
         "--tantivy"
@@ -158,6 +159,7 @@
         "--rerank",
         "--rerank-top-k",
         "--response-snippet-tokens",
+        "--scip",
         "--semantic-only",
         "--snippet-tokens",
         "--tantivy"
