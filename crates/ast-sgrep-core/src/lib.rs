@@ -1,5 +1,11 @@
 #![forbid(unsafe_code)]
 
+//! L1 search kernel. L2/L3 consumers should prefer crate-root reexports
+//! (`HitKind`, `SearchHit`, `Durability`, `SymbolRow`, `hit_why`, and the
+//! other `pub use` items below). Intentional module paths remain: `search`,
+//! `store`, `query`, `intent`, `chain`, `env_flag`, `semantic_ann`, `pattern`.
+//! Do not split this crate to lower fan_in.
+
 use thiserror::Error;
 pub mod bench_suite;
 pub mod chain;
@@ -67,11 +73,13 @@ pub mod lexicon;
 pub mod resolution;
 pub use pattern::{run_external_ast_grep, search_pattern, ExternalAstGrepMatch};
 pub use query::{ParsedQuery, QueryMode};
-pub use search::format_hit_line;
-pub use search::{HitSignal, SearchHit, SearchOptions, SearchResponse, Searcher};
+pub use search::{
+    format_hit_line, hit_why, HitKind, HitSignal, SearchHit, SearchOptions, SearchResponse,
+    Searcher,
+};
 pub use store::{
     bump_writer_generation, index_db_path, read_writer_generation, try_index_db_path,
-    writer_generation_path, IndexStatus, IndexStore, WRITER_GENERATION_FILE,
+    writer_generation_path, Durability, IndexStatus, IndexStore, SymbolRow, WRITER_GENERATION_FILE,
 };
 #[derive(Debug, Error)]
 pub enum StoreError {

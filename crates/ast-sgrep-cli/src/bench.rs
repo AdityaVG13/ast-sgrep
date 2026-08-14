@@ -208,7 +208,10 @@ fn update_bench_history(
     run_doc["schema_version"] = serde_json::json!("1");
     run_doc["label"] = serde_json::json!(label);
     run_doc["placeholder"] = serde_json::json!(false);
-    run_doc["keep_eligible"] = serde_json::json!(matches!(verdict, crate::keep_gate::KeepVerdict::Keep { .. }));
+    run_doc["keep_eligible"] = serde_json::json!(matches!(
+        verdict,
+        crate::keep_gate::KeepVerdict::Keep { .. }
+    ));
     std::fs::write(&run_path, serde_json::to_string_pretty(&run_doc)?)?;
 
     if crate::keep_gate::history_commit_enabled()
@@ -374,7 +377,7 @@ fn run_bench_suite(
             ast_sgrep_core::bench_suite::benchmark_expectation(case).ok_or_else(|| {
                 anyhow::anyhow!("benchmark case '{}' has no identity contract", case.name)
             })?;
-        let semantic_only = expected.kind == Some(ast_sgrep_core::search::HitKind::Embed);
+        let semantic_only = expected.kind == Some(ast_sgrep_core::HitKind::Embed);
         let (times, last) = timed_searches(&searcher, case.query, semantic_only, iterations)?;
         let hits = last.as_ref().map_or(0, |r| r.hits.len());
         let identity_ok = last.as_ref().is_some_and(|response| {

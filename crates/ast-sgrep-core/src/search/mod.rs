@@ -1,9 +1,10 @@
-pub mod passes;
 mod fusion;
+pub mod passes;
 mod types;
 use crate::query::{ParsedQuery, QueryMode};
 use crate::store::IndexStore;
 use crate::Result;
+pub use fusion::dedup_hits;
 use passes::embed::{embed_pass_for_files, run_embed_pass, SemanticCache};
 use passes::lexical::lexical_pass;
 use passes::literal::literal_pass;
@@ -19,7 +20,6 @@ use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{SystemTime, UNIX_EPOCH};
 use types::{assign_hit_confidence, assign_signal_margins};
-pub use fusion::dedup_hits;
 pub use types::{
     format_hit_line, hit_why, DegradedChannel, HitKind, HitSignal, QueryExpansion, SearchHit,
     SearchOptions, SearchResponse, SnapshotStamp, SpanHitInput,

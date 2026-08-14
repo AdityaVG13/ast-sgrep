@@ -435,17 +435,14 @@ pub fn run_external_ast_grep(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|error| {
-            crate::StoreError::Other(format!("failed to spawn ast-grep: {error}"))
-        })?;
+        .map_err(|error| crate::StoreError::Other(format!("failed to spawn ast-grep: {error}")))?;
     // ast-grep exits 1 on zero matches; still parse JSON stdout.
-    if wait_child_deadline(&mut child, Instant::now() + Duration::from_secs(30), false).is_none()
-    {
+    if wait_child_deadline(&mut child, Instant::now() + Duration::from_secs(30), false).is_none() {
         return Err(crate::StoreError::Other("ast-grep run timed out".into()));
     }
-    let output = child.wait_with_output().map_err(|error| {
-        crate::StoreError::Other(format!("ast-grep wait failed: {error}"))
-    })?;
+    let output = child
+        .wait_with_output()
+        .map_err(|error| crate::StoreError::Other(format!("ast-grep wait failed: {error}")))?;
     match parse_ast_grep_json(&output.stdout) {
         Ok(parsed) => Ok(parsed),
         Err(parse_error) if output.status.success() => Err(parse_error),

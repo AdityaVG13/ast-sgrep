@@ -3,9 +3,7 @@ use crate::types::{
     SYMBOL_KIND_FUNCTION, SYMBOL_KIND_INTERFACE, SYMBOL_KIND_METHOD, SYMBOL_KIND_STRING,
     SYMBOL_KIND_STRUCT,
 };
-use ast_sgrep_core::search::HitKind;
-use ast_sgrep_core::store::SymbolRow;
-use ast_sgrep_core::{EmbedBackend, IndexOptions, SearchHit, SearchOptions};
+use ast_sgrep_core::{EmbedBackend, HitKind, IndexOptions, SearchHit, SearchOptions, SymbolRow};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::io::{self, BufRead, Write};

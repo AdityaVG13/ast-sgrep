@@ -210,7 +210,7 @@ fn doctor_fast_unsafe_issue(
         .filter(|d| *d == "fast-unsafe");
     let from_cli = cli
         .durability
-        .filter(|d| *d == ast_sgrep_core::store::Durability::FastUnsafe)
+        .filter(|d| *d == ast_sgrep_core::Durability::FastUnsafe)
         .map(|_| "fast-unsafe");
     if from_status.or(from_cli).is_none() {
         return None;
