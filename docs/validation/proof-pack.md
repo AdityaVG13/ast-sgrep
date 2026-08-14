@@ -68,6 +68,8 @@ non-zero vs expected 0). That skip is not a Pass for the bench case.
 - `docs/validation/stage-timers-post-T1R.md`
 - `docs/validation/ann-threshold-cliff-post-T1R.md`
 - `docs/validation/t1r-sidecar-bit-identity.md`
+- `docs/validation/certification-readiness.md`
+- `docs/validation/multi-ref-checklist.md`
 - `docs/QUERY_GRAMMAR.md`
 - `docs/contracts/oracle_dispatch.toml`
 - `EPIC_EVIDENCE.md`
