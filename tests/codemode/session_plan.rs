@@ -186,3 +186,57 @@ fn session_root_override_cannot_escape_configured_project() {
         .to_string()
         .contains("outside the configured session root"));
 }
+
+/// lbx1.11: real session with `use_embed: true` must index hashed chunks and
+/// return embed hits (not a flag-only green).
+#[test]
+fn session_embed_on_indexes_and_returns_semantic_hits() {
+    let root = TempDir::new().expect("root");
+    let index_dir = TempDir::new().expect("index dir");
+    fs::write(
+        root.path().join("planted.rs"),
+        "pub fn planted_lbx111_embed() { let _ = \"unique lbx111 semantic phrase\"; }\n",
+    )
+    .expect("write");
+    let mut session = CodeModeSession::new(SessionConfig {
+        root: root.path().to_path_buf(),
+        index_path: Some(index_dir.path().join("index.db")),
+        limit: 8,
+        use_embed: true,
+        ..SessionConfig::default()
+    });
+    session
+        .call("index_repo", json!({ "force": false }))
+        .expect("embed-on index");
+    let status = session.call("index_status", json!({})).expect("status");
+    assert!(
+        status["semantic_chunk_count"].as_u64().unwrap_or(0) > 0,
+        "embed-on index must store semantic chunks: {status}"
+    );
+    assert!(
+        status["embed_backend"].as_str().is_some(),
+        "embed-on index must record backend: {status}"
+    );
+
+    let out = session
+        .call(
+            "search",
+            json!({
+                "query": "unique lbx111 semantic phrase",
+                "semantic_only": true,
+                "format": "agent",
+                "limit": 8
+            }),
+        )
+        .expect("semantic search");
+    let hits = out["hits"].as_array().expect("hits array");
+    assert!(
+        !hits.is_empty(),
+        "semantic_only must not be empty through the session API: {out}"
+    );
+    assert!(
+        hits.iter()
+            .any(|hit| hit["kind"] == "embed" || hit["semantic"] == true),
+        "expected embed hits through the session API: {out}"
+    );
+}
