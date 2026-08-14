@@ -1,4 +1,5 @@
 use crate::gitignore::{should_skip_dir, should_skip_file};
+use crate::io_bounds::MAX_INDEX_FILE_BYTES;
 use crate::rank::SCORE_PATTERN;
 use crate::search::{HitKind, SearchHit, SpanHitInput};
 use crate::Result;
@@ -8,11 +9,13 @@ use ast_sgrep_lang::{
 };
 use rayon::prelude::*;
 use serde::Serialize;
-use std::fs;
+use std::fs::File;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 use walkdir::WalkDir;
+
 /// Convert a simple query or `defs:` / `callers:` prefix into an ast-grep pattern.
 pub fn ast_grep_pattern_for_query(query: &str) -> Option<String> {
     let q = query.trim();
@@ -202,6 +205,25 @@ fn ratio(numerator: u128, denominator: u128) -> f64 {
     }
 }
 
+/// Load a pattern-search file only when it fits the index size cap.
+/// Oversized files are skipped (same 64 MiB bound as `index_file`) so a
+/// rayon walk cannot `fs::read` an unbounded blob into RAM (R-PATTERN-UNBOUNDED-READ).
+fn read_pattern_bytes_capped(path: &Path) -> Option<Vec<u8>> {
+    let file = File::open(path).ok()?;
+    let metadata = file.metadata().ok()?;
+    if !metadata.is_file() || metadata.len() > MAX_INDEX_FILE_BYTES {
+        return None;
+    }
+    let mut bytes = Vec::new();
+    match file
+        .take(MAX_INDEX_FILE_BYTES.saturating_add(1))
+        .read_to_end(&mut bytes)
+    {
+        Ok(_) if (bytes.len() as u64) <= MAX_INDEX_FILE_BYTES => Some(bytes),
+        _ => None,
+    }
+}
+
 fn search_pattern_native_profiled(
     pattern: &str,
     root: &Path,
@@ -236,7 +258,7 @@ fn search_pattern_native_profiled(
         .par_iter()
         .map(|path| {
             let prefilter_started = Instant::now();
-            let Ok(bytes) = fs::read(path) else {
+            let Some(bytes) = read_pattern_bytes_capped(path) else {
                 return NativeFileResult::default();
             };
             let bytes_scanned = bytes.len() as u64;
