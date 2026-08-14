@@ -50,6 +50,8 @@ At **index** and **search** time, the same chain is used:
 | Semantic only | `--semantic-only` | `ASGREP_SEMANTIC_ONLY=1` |
 | Disabled | `--no-embed` | `ASGREP_NO_EMBED=1` |
 
+Concurrent backend flags (CLI `--cloud-embed --ollama-embed`, LSP `cloudEmbed` + `ollamaEmbed`, or several `SearchOptions::use_*` trues) collapse to one backend: **Cloud > Ollama > Neural > Semantic > Auto**. `SearchOptions` still exposes the four `use_*` adapter fields in 1.x; removing them is a SemVer major.
+
 `asgrep status` reports the stored `embed_backend` and `embed_dim`. For best results, query with the same backend used at index time.
 
 ### Semantic local (default, no API key)

@@ -313,6 +313,9 @@ pub struct SearchOptions {
     pub lang_filter: Option<String>,
     pub use_embed: bool,
     pub use_tantivy: bool,
+    /// Adapter flags for `embed_backend()`. Concurrent trues collapse
+    /// Cloud > Ollama > Neural > Semantic > Auto. These fields stay public
+    /// through 1.x; removing them is a SemVer major.
     pub use_cloud_embed: bool,
     pub use_ollama_embed: bool,
     pub use_neural_embed: bool,
@@ -375,7 +378,7 @@ impl SearchOptions {
     }
 
     /// Canonical embed backend for these options (f4ce.1). `use_*` flags remain
-    /// the public adapters so CLI/LSP do not need a SemVer bump yet.
+    /// public adapters in 1.x (CLI + LSP already cascade through this method).
     pub fn embed_backend(&self) -> EmbedBackend {
         EmbedBackend::from_flags(
             self.use_cloud_embed,

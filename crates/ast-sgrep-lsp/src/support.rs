@@ -144,23 +144,32 @@ impl AsgrepSettings {
         }
     }
 
+    /// Cloud > Ollama > Neural > Semantic > Auto, matching CLI `from_flags`.
+    /// String `embedBackend` applies first; bool keys overlay when `Some`.
+    fn resolved_embed_backend(&self, current: EmbedBackend) -> EmbedBackend {
+        let backend = self
+            .embed_backend
+            .as_deref()
+            .map(EmbedBackend::parse)
+            .unwrap_or(current);
+        let (mut cloud, mut ollama, neural, mut semantic) = backend.to_flags();
+        if let Some(v) = self.cloud_embed {
+            cloud = v;
+        }
+        if let Some(v) = self.ollama_embed {
+            ollama = v;
+        }
+        if let Some(v) = self.semantic_only {
+            semantic = v;
+        }
+        EmbedBackend::from_flags(cloud, ollama, neural, semantic)
+    }
+
     pub fn apply_to_index_options(&self, opts: &mut IndexOptions) {
         if let Some(no) = self.no_embed {
             opts.embed_semantic = !no;
         }
-        if let Some(ref backend) = self.embed_backend {
-            opts.embed_backend = EmbedBackend::parse(backend);
-        }
-        // Boolean flags override string backend when set (product priority).
-        if self.cloud_embed == Some(true) {
-            opts.embed_backend = EmbedBackend::Cloud;
-        }
-        if self.ollama_embed == Some(true) {
-            opts.embed_backend = EmbedBackend::Ollama;
-        }
-        if self.semantic_only == Some(true) {
-            opts.embed_backend = EmbedBackend::Semantic;
-        }
+        opts.embed_backend = self.resolved_embed_backend(opts.embed_backend);
         self.apply_ann(&mut opts.ann_threshold);
     }
 
@@ -168,15 +177,7 @@ impl AsgrepSettings {
         if let Some(no) = self.no_embed {
             opts.use_embed = !no;
         }
-        if let Some(c) = self.cloud_embed {
-            opts.use_cloud_embed = c;
-        }
-        if let Some(o) = self.ollama_embed {
-            opts.use_ollama_embed = o;
-        }
-        if let Some(s) = self.semantic_only {
-            opts.use_semantic_only = s;
-        }
+        opts.set_embed_backend(self.resolved_embed_backend(opts.embed_backend()));
         self.apply_ann(&mut opts.ann_threshold);
     }
 }
@@ -518,3 +519,7 @@ pub fn call_hierarchy_endpoint(root: &Path, file: &str, line: u32, name: &str) -
 fn line_utf16_len(line: &str) -> u32 {
     line.chars().map(|c| c.len_utf16() as u32).sum()
 }
+
+#[cfg(test)]
+#[path = "../../../tests/unit/lsp/support__embed_cascade.rs"]
+mod embed_cascade_tests;
