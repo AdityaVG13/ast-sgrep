@@ -65,6 +65,7 @@ non-zero vs expected 0). That skip is not a Pass for the bench case.
 - `docs/progress/README.md`
 - `docs/validation/oracle-dispatch.md`
 - `docs/validation/residual-leaf-shares-post-T1R.md`
+- `docs/validation/stage-timers-post-T1R.md`
 - `docs/QUERY_GRAMMAR.md`
 - `docs/contracts/oracle_dispatch.toml`
 - `EPIC_EVIDENCE.md`
