@@ -56,6 +56,9 @@ Checksum 100.00% (method error band ±5% on classification of `other` / unresolv
 - **C12** residual-as-mix still holds for the IVF/upsert/blake3 trio (none is a majority of wall). Extract/parse is a majority of **this** cold-index exclusive CPU; that is parse, not an IVF T3 lever.
 - Active T3/UPSERT product queue is **not** empty by the 5% rule (ivf_build and sqlite_upsert). Do not open product beads from this packet without a Score≥2 opportunity matrix and human review.
 
+T1-R sidecar bytes are **not** bit-identical to pre-T1 cosine-path dumps
+([t1r-sidecar-bit-identity.md](t1r-sidecar-bit-identity.md), C9).
+
 ## Reproduce
 
 ```bash
