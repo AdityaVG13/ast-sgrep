@@ -199,6 +199,48 @@ fn render_chunk_text_puts_body_before_metadata() {
 }
 
 #[test]
+fn chunk_field_texts_split_name_docs_body_graph() {
+    let chunk = SemanticChunkInput {
+        symbol_name: "renew_account".into(),
+        kind: "function".into(),
+        line_start: 1,
+        line_end: 3,
+        excerpt: "fn renew_account() { charge(subscription) }".into(),
+        callers: vec!["main".into()],
+        callees: vec!["charge".into()],
+        doc: "renews the billing account".into(),
+        scope: "Billing".into(),
+    };
+    let fields = chunk_field_texts(&chunk);
+    assert!(fields.name.contains("renew_account"), "{}", fields.name);
+    assert!(fields.name.contains("Billing"), "{}", fields.name);
+    assert!(
+        fields.docs.contains("renews the billing account"),
+        "{}",
+        fields.docs
+    );
+    assert!(
+        fields
+            .body
+            .contains("fn renew_account() { charge(subscription) }"),
+        "{}",
+        fields.body
+    );
+    assert!(fields.graph.contains("main"), "{}", fields.graph);
+    assert!(fields.graph.contains("charge"), "{}", fields.graph);
+    assert!(
+        !fields.body.contains("called_by:"),
+        "body field must not mix graph text: {}",
+        fields.body
+    );
+    assert!(
+        !fields.name.contains("excerpt:"),
+        "name field must not mix body text: {}",
+        fields.name
+    );
+}
+
+#[test]
 fn rust_line_doc_comments_still_captured() {
     let symbols = [SymbolRow {
         name: "foo".into(),

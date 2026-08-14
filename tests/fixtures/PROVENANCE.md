@@ -51,12 +51,12 @@ conformance result and `assert_golden_json_at`. Do not reimplement scrub/compare
 | `tests/fixtures/ivf/bad_magic.ivf` | Reject: first byte flipped | same | fail-closed, no panic | none |
 | `tests/fixtures/ivf/truncated.ivf` | Reject: last 4 bytes dropped | same | fail-closed, no panic | none |
 
-Fingerprint: `compute_ann_fingerprint(4, 4, 4, Some("fixture"), 0)`. Vectors:
+Fingerprint: `compute_ann_fingerprint(4, 4, 4, Some("fixture"), 0)` (includes `SEMANTIC_IVF_FIELD_LAYOUT`). Vectors:
 `i * 0.25` for `i in 0..16`. Adaptive ANN recall is `DISC-ivf-adaptive-threshold`.
 
 ## Schema migration DBs
 
-Current `SCHEMA_VERSION` is **9** (not 7). Recreate:
+Current `SCHEMA_VERSION` is **10** (not 7). Recreate:
 
 ```bash
 python3 tests/fixtures/migration/build_legacy.py

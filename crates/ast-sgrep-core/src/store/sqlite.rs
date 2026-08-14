@@ -32,9 +32,9 @@ thread_local! {
     static FORCE_BEGIN_FAILURE: Cell<bool> = const { Cell::new(false) };
 }
 // 6 = symbols_name_lower. 7 = semantic-layout-v2 wipe. 8 = unstemmed code FTS.
-// 9 = repository lexicon.
+// 9 = repository lexicon. 10 = per-field semantic vectors (name/docs/body/graph).
 // Never reuse a SCHEMA_VERSION for two different migrations.
-const SCHEMA_VERSION: i64 = 9;
+const SCHEMA_VERSION: i64 = 10;
 const IMPORT_SELECT: &str =
     "SELECT f.path, f.language, i.module_path, i.line_no FROM imports i JOIN files f ON f.id = i.file_id";
 const SYM_LOC: &str = "SELECT f.path, s.name, f.language, s.line_start, s.line_end FROM symbols s JOIN files f ON f.id = s.file_id";
@@ -57,6 +57,22 @@ fn sql_i64_from_byte_offset(value: usize) -> rusqlite::Result<i64> {
 fn sql_usize_from_byte_offset(row: &rusqlite::Row<'_>, idx: usize) -> rusqlite::Result<usize> {
     let raw: i64 = row.get(idx)?;
     usize::try_from(raw).map_err(|_| rusqlite::Error::IntegralValueOutOfRange(idx, raw))
+}
+
+fn ensure_semantic_field_vector_columns(conn: &Connection) -> Result<()> {
+    let mut stmt = conn.prepare("PRAGMA table_info(semantic_chunks)")?;
+    let existing = stmt
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    for column in ["vector_name", "vector_docs", "vector_body", "vector_graph"] {
+        if !existing.iter().any(|name| name == column) {
+            conn.execute(
+                &format!("ALTER TABLE semantic_chunks ADD COLUMN {column} BLOB"),
+                [],
+            )?;
+        }
+    }
+    Ok(())
 }
 pub struct PatternNodeRow {
     pub path: String,
@@ -210,12 +226,15 @@ impl IndexStore {
         // A legacy semantic sidecar is only a derived acceleration structure.
         // Remove it before migration; if the DB transaction then rolls back,
         // searches safely fall back rather than observing stale ANN contents.
-        if version < 7 {
+        if version < 10 {
             crate::semantic_ivf::invalidate_semantic_ivf(&self.db_path)?;
         }
         self.conn.execute_batch("BEGIN IMMEDIATE")?;
         let migration = (|| -> Result<()> {
             self.conn.execute_batch(SCHEMA_DDL)?;
+            if version < 10 {
+                ensure_semantic_field_vector_columns(&self.conn)?;
+            }
             if version < 3 {
                 self.conn.execute_batch(
                     "INSERT INTO lines_trigram(rowid, content) SELECT rowid, content FROM lines;",
@@ -305,6 +324,28 @@ impl IndexStore {
     /// Schema version this database was built with (d3l5).
     pub fn schema_version(&self) -> i64 {
         SCHEMA_VERSION
+    }
+
+    /// Per-field embedding blobs for 7d5x.2.2 persist / 7d5x.3 weighting.
+    pub fn semantic_chunk_field_vectors(
+        &self,
+    ) -> Result<Vec<(i64, crate::semantic_chunk::SemanticFieldVectors)>> {
+        query_map_rows(
+            &self.conn,
+            "SELECT id, vector_name, vector_docs, vector_body, vector_graph FROM semantic_chunks ORDER BY id",
+            None,
+            |r| {
+                Ok((
+                    r.get(0)?,
+                    crate::semantic_chunk::SemanticFieldVectors {
+                        name: r.get(1)?,
+                        docs: r.get(2)?,
+                        body: r.get(3)?,
+                        graph: r.get(4)?,
+                    },
+                ))
+            },
+        )
     }
 
     /// Highest indexed file mtime, as a worktree revision proxy (d3l5).
@@ -1125,7 +1166,7 @@ impl IndexStore {
             .map(|(s, id)| (format!("{}:{}", s.name, s.line_start), *id))
             .collect();
         let mut st = self.conn.prepare_cached(
-            "INSERT INTO semantic_chunks(file_id, symbol_id, chunk_kind, line_start, line_end, symbol_name, text, vector) VALUES(?1,?2,?3,?4,?5,?6,?7,?8)", )?;
+            "INSERT INTO semantic_chunks(file_id, symbol_id, chunk_kind, line_start, line_end, symbol_name, text, vector, vector_name, vector_docs, vector_body, vector_graph) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)", )?;
         for (c, e) in chunks.iter().zip(emb.iter()) {
             let sid = name_to_id
                 .get(&format!("{}:{}", c.symbol_name, c.line_start))
@@ -1138,7 +1179,11 @@ impl IndexStore {
                 c.line_end,
                 c.symbol_name,
                 c.excerpt,
-                e.vector_bytes
+                e.vector_bytes,
+                e.name.clone(),
+                e.docs.clone(),
+                e.body.clone(),
+                e.graph.clone(),
             ])?;
         }
         self.persist_embed_metadata(Some(first.dim), Some(first.backend), preference)

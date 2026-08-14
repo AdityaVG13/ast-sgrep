@@ -77,7 +77,7 @@ fn schema_upgrade_invalidates_legacy_semantic_layouts() {
         .connection()
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(version, 9, "migration must land on the current schema");
+    assert_eq!(version, 10, "migration must land on the current schema");
 }
 
 #[test]
@@ -121,7 +121,7 @@ fn schema_6_main_indexes_still_get_semantic_wipe_at_7() {
         .connection()
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(version, 9);
+    assert_eq!(version, 10);
 }
 
 #[test]
@@ -159,18 +159,19 @@ fn migration_fixture(name: &str) -> PathBuf {
         .join(name)
 }
 
-/// ghiw.4: checked-in user_version=5 DB migrates to current schema (9).
+/// ghiw.4: checked-in user_version=5 DB migrates to current schema (10).
 #[test]
 fn committed_v5_sqlite_migrates_to_current_schema() {
     let temp = TempDir::new().unwrap();
     let dest = temp.path().join("index.db");
     std::fs::copy(migration_fixture("v5_empty.sqlite"), &dest).expect("copy v5 fixture");
-    let store = IndexStore::open(temp.path(), Some(&dest)).expect("v5 fixture must open and migrate");
+    let store =
+        IndexStore::open(temp.path(), Some(&dest)).expect("v5 fixture must open and migrate");
     let version: i64 = store
         .connection()
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(version, 9, "migration must land on SCHEMA_VERSION=9");
+    assert_eq!(version, 10, "migration must land on SCHEMA_VERSION=10");
 }
 
 /// ghiw.4: newer-than-supported user_version fails closed (no panic).
@@ -186,6 +187,93 @@ fn committed_v99_sqlite_is_rejected_without_panic() {
             assert!(
                 message.contains("newer than supported"),
                 "unexpected error: {message}"
+            );
+        }
+    }
+}
+
+#[test]
+fn schema_9_adds_field_vector_columns_without_wiping_chunks() {
+    let temp = TempDir::new().unwrap();
+    let dest = temp.path().join("index.db");
+    let conn = rusqlite::Connection::open(&dest).unwrap();
+    conn.execute_batch(
+        "CREATE TABLE files (id INTEGER PRIMARY KEY, path TEXT NOT NULL UNIQUE, language TEXT,
+           mtime_secs INTEGER NOT NULL, mtime_nanos INTEGER NOT NULL, content_hash TEXT NOT NULL);
+         CREATE TABLE semantic_chunks (id INTEGER PRIMARY KEY, file_id INTEGER NOT NULL, symbol_id INTEGER,
+           chunk_kind TEXT NOT NULL, line_start INTEGER NOT NULL, line_end INTEGER NOT NULL, symbol_name TEXT,
+           text TEXT NOT NULL, vector BLOB NOT NULL,
+           FOREIGN KEY (file_id) REFERENCES files(id) ON DELETE CASCADE);
+         INSERT INTO files(path, language, mtime_secs, mtime_nanos, content_hash)
+           VALUES('legacy.rs', 'rust', 1, 0, 'keep-me');
+         INSERT INTO semantic_chunks(file_id, symbol_id, chunk_kind, line_start, line_end, symbol_name, text, vector)
+           VALUES(1, NULL, 'symbol', 1, 3, 'legacy', 'whole parent', x'00000000');
+         PRAGMA user_version = 9;",
+    )
+    .unwrap();
+    drop(conn);
+
+    let migrated = IndexStore::open(temp.path(), Some(&dest)).unwrap();
+    let version: i64 = migrated
+        .connection()
+        .query_row("PRAGMA user_version", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(version, 10);
+    let count: i64 = migrated
+        .connection()
+        .query_row("SELECT COUNT(*) FROM semantic_chunks", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(count, 1, "v9 to v10 must not wipe concatenated vectors");
+    let cols: Vec<String> = {
+        let mut stmt = migrated
+            .connection()
+            .prepare("PRAGMA table_info(semantic_chunks)")
+            .unwrap();
+        stmt.query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect()
+    };
+    for col in ["vector_name", "vector_docs", "vector_body", "vector_graph"] {
+        assert!(cols.iter().any(|c| c == col), "missing {col} in {cols:?}");
+    }
+}
+
+#[test]
+fn persist_per_field_vectors_on_index() {
+    let temp = TempDir::new().unwrap();
+    let content =
+        "/// renews billing\nfn renew_account() { charge(); }\nfn main() { renew_account(); }\n";
+    let mut indexer = Indexer::new(IndexOptions {
+        root: temp.path().to_path_buf(),
+        embed_semantic: true,
+        embed_backend: EmbedBackend::Semantic,
+        ..IndexOptions::default()
+    })
+    .unwrap();
+    indexer.index_content("account.rs", content).unwrap();
+    let store = indexer.store();
+    assert_eq!(store.schema_version(), 10);
+    let fields = store.semantic_chunk_field_vectors().unwrap();
+    assert!(
+        !fields.is_empty(),
+        "indexing with embed must persist semantic chunks"
+    );
+    let with_body = fields
+        .iter()
+        .filter(|(_, v)| v.body.is_some() && v.name.is_some())
+        .count();
+    assert!(
+        with_body > 0,
+        "at least one chunk must store name and body field vectors"
+    );
+    let docs = fields.iter().filter(|(_, v)| v.docs.is_some()).count();
+    assert!(docs > 0, "doc comment must produce a docs field vector");
+    for (_, v) in &fields {
+        if let (Some(name), Some(body)) = (&v.name, &v.body) {
+            assert_ne!(
+                name, body,
+                "name and body field vectors must not be identical"
             );
         }
     }
