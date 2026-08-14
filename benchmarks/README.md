@@ -29,6 +29,7 @@ benchmarks/
     losses.md
     baselines.md
     FLOOR_PROMOTION_PROTOCOL.md
+    fusion-scorecard.md
   studies/                  ← focused analyses
     intent-confusion.md
     prevented-read.md
@@ -44,6 +45,7 @@ benchmarks/
 | [results/losses.md](results/losses.md) | Where we lose (published deliberately) |
 | [results/baselines.md](results/baselines.md) | Pinned floors and provenance |
 | [results/FLOOR_PROMOTION_PROTOCOL.md](results/FLOOR_PROMOTION_PROTOCOL.md) | S2 MEASURED FLOOR MATCH axes (C1 4.304 s stays until checklist + human ACK) |
+| [results/fusion-scorecard.md](results/fusion-scorecard.md) | Sub-1ms in-process parts vs multi-ms CLI competitor rows (e2hc.31) |
 
 ## Studies
 

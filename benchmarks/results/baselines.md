@@ -200,6 +200,13 @@ Every suite was run twice back-to-back on the same build:
 - **Wall-clock timings: informational, +-30% run-to-run** on a busy machine;
   hyperfine p50 figures are stable to ~10%.
 
+## Fusion / stage budget map (e2hc.31)
+
+**Status: `historical` (index, no new fingerprint).** Sub-1ms median is the
+in-process `CORE_PARTS` gate (`tests/core/sub1ms.rs`), not CLI vs competitors.
+Scorecard: [`fusion-scorecard.md`](fusion-scorecard.md). CLI p95 vs ripgrep /
+ast-grep: [`speed.md`](speed.md). Quality ids above unchanged.
+
 ## Rules
 
 1. No number may be quoted without a section status tag plus a row in this
