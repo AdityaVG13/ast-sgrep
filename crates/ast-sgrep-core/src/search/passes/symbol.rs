@@ -139,8 +139,9 @@ fn caller_rows_to_hits_resolved(
     attach_indexed_excerpts(excerpt_store, &mut caller_hits)?;
     if let Some(store) = store {
         let mut candidate_counts = HashMap::new();
-        attach_caller_resolutions(store, &mut candidate_counts, &mut caller_hits)?;
-        attach_caller_resolutions(store, &mut candidate_counts, &mut graph_hits)?;
+        let scip_refs = store.scip_fact_set(false)?;
+        attach_caller_resolutions(store, &mut candidate_counts, &scip_refs, &mut caller_hits)?;
+        attach_caller_resolutions(store, &mut candidate_counts, &scip_refs, &mut graph_hits)?;
     }
     caller_hits.extend(graph_hits);
     Ok(caller_hits)
@@ -169,6 +170,7 @@ fn attach_indexed_excerpts(store: &IndexStore, hits: &mut [SearchHit]) -> Result
 fn attach_caller_resolutions(
     store: &IndexStore,
     candidate_counts: &mut HashMap<String, (HashMap<String, usize>, usize)>,
+    scip_refs: &HashSet<(String, u32, String)>,
     hits: &mut [SearchHit],
 ) -> Result<()> {
     for hit in hits {
@@ -183,11 +185,15 @@ fn attach_caller_resolutions(
         }
         let (by_file, repo) = &candidate_counts[callee];
         let same_file = by_file.get(&hit.file).copied().unwrap_or(0);
-        hit.resolution = Some(crate::resolution::Resolution::from_candidates(
-            same_file,
-            *repo,
-            std::iter::empty(),
-        ));
+        let counted =
+            crate::resolution::Resolution::from_candidates(same_file, *repo, std::iter::empty());
+        hit.resolution = Some(
+            if scip_refs.contains(&(hit.file.clone(), hit.line_start, callee.to_string())) {
+                counted.upgrade(crate::resolution::Resolution::ScipExact)
+            } else {
+                counted
+            },
+        );
     }
     Ok(())
 }
@@ -244,7 +250,30 @@ fn symbol_span_rows_to_hits(
     }
     retain_scored_hits(&mut hits, options);
     attach_indexed_excerpts(store, &mut hits)?;
+    if kind == HitKind::Def {
+        attach_scip_def_resolutions(store, &mut hits)?;
+    }
     Ok(hits)
+}
+
+fn attach_scip_def_resolutions(store: &IndexStore, hits: &mut [SearchHit]) -> Result<()> {
+    let scip_defs = store.scip_fact_set(true)?;
+    if scip_defs.is_empty() {
+        return Ok(());
+    }
+    for hit in hits {
+        let Some(name) = hit.symbol.as_deref() else {
+            continue;
+        };
+        if scip_defs.contains(&(hit.file.clone(), hit.line_start, name.to_string())) {
+            let current = hit
+                .resolution
+                .clone()
+                .unwrap_or(crate::resolution::Resolution::NameOnly);
+            hit.resolution = Some(current.upgrade(crate::resolution::Resolution::ScipExact));
+        }
+    }
+    Ok(())
 }
 pub fn symbol_pass(
     store: &IndexStore,

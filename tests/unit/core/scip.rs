@@ -71,3 +71,23 @@ fn camel_case_relative_path_alias_loads() {
         ScipLoad::Degraded { reason } => panic!("alias must load, got {reason}"),
     }
 }
+
+#[test]
+fn scip_symbol_ident_takes_last_identifier() {
+    assert_eq!(
+        scip_symbol_ident("rust+crate+auth+refresh().").as_deref(),
+        Some("refresh")
+    );
+    assert_eq!(scip_symbol_ident("send").as_deref(), Some("send"));
+    assert_eq!(scip_symbol_ident("").as_deref(), None);
+}
+
+#[test]
+fn occurrence_line_is_one_based() {
+    let occ = ScipOccurrence {
+        symbol: "send".into(),
+        symbol_roles: 0,
+        range: vec![1, 4, 1, 8],
+    };
+    assert_eq!(occ.start_line_1based(), Some(2));
+}

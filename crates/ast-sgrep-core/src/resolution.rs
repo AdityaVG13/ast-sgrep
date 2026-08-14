@@ -95,6 +95,15 @@ impl Resolution {
         }
     }
 
+    /// Keep the stronger of two tiers. SCIP may only upgrade, never downgrade.
+    pub fn upgrade(self, other: Self) -> Self {
+        if other.rank() < self.rank() {
+            other
+        } else {
+            self
+        }
+    }
+
     /// Strength ordering, strongest first (0 is strongest).
     pub fn rank(&self) -> u8 {
         match self {

@@ -49,6 +49,10 @@ CREATE TABLE IF NOT EXISTS semantic_chunks (id INTEGER PRIMARY KEY, file_id INTE
   FOREIGN KEY (symbol_id) REFERENCES symbols(id) ON DELETE CASCADE);\
 CREATE INDEX IF NOT EXISTS idx_semantic_chunks_symbol ON semantic_chunks(symbol_name);\
 CREATE INDEX IF NOT EXISTS idx_semantic_chunks_file_id ON semantic_chunks(file_id);\
+CREATE TABLE IF NOT EXISTS scip_facts (file_id INTEGER NOT NULL, line_no INTEGER NOT NULL, name TEXT NOT NULL,\
+  is_def INTEGER NOT NULL, PRIMARY KEY (file_id, line_no, name, is_def),\
+  FOREIGN KEY (file_id) REFERENCES files(id) ON DELETE CASCADE);\
+CREATE INDEX IF NOT EXISTS idx_scip_facts_file_id ON scip_facts(file_id);\
 CREATE TABLE IF NOT EXISTS embed_cache (chunk_hash TEXT NOT NULL, model_id TEXT NOT NULL, backend TEXT NOT NULL,\
   dim INTEGER NOT NULL, vector BLOB NOT NULL, accessed_at INTEGER NOT NULL, PRIMARY KEY (chunk_hash, model_id));\
 CREATE INDEX IF NOT EXISTS idx_embed_cache_accessed ON embed_cache(accessed_at);";
@@ -80,6 +84,7 @@ pub const COUNT_TABLE_ALLOWLIST: &[&str] = &[
     "pattern_nodes",
     "embeddings",
     "semantic_chunks",
+    "scip_facts",
     "embed_cache",
     "lines_fts",
     "lines_trigram",
@@ -91,6 +96,7 @@ pub const FILE_CHILD_TABLE_ALLOWLIST: &[&str] = &[
     "pattern_nodes",
     "embeddings",
     "semantic_chunks",
+    "scip_facts",
 ];
 pub fn assert_sql_ident(name: &str, allowlist: &[&str]) -> Result<()> {
     if allowlist.contains(&name) {
@@ -333,7 +339,7 @@ pub const CLEAR_ALL_META_WHITELIST: &[&str] = &[
 pub const CLEAR_ALL_SQL: &str = "\
 DELETE FROM lines_trigram; DELETE FROM lines_fts; DELETE FROM lines_code_fts; DELETE FROM lexicon; DELETE FROM semantic_chunks; \
 DELETE FROM pattern_nodes; DELETE FROM embeddings; DELETE FROM imports; \
-DELETE FROM callers; DELETE FROM symbols; DELETE FROM lines; DELETE FROM files; \
+DELETE FROM scip_facts; DELETE FROM callers; DELETE FROM symbols; DELETE FROM lines; DELETE FROM files; \
 DELETE FROM embed_cache; \
 DELETE FROM meta WHERE key NOT IN ('root', 'semantic_data_version', 'index_data_version', 'lexicon_data_version');";
 

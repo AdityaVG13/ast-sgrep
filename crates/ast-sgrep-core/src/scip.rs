@@ -1,9 +1,9 @@
-//! Optional SCIP index load (kgvi.1).
+//! Optional SCIP index load and graph-edge overlay (kgvi.1 / kgvi.2).
 //!
-//! Missing or malformed input degrades; it never fails the caller. Graph
-//! mutation and CLI wiring are kgvi.2 / kgvi.3. The interchange for this
-//! slice is a JSON projection of SCIP documents/occurrences. Protobuf wire
-//! files degrade until a later parser lands.
+//! Missing or malformed input degrades; it never fails the caller. CLI wiring
+//! is kgvi.3. The interchange for this slice is a JSON projection of SCIP
+//! documents/occurrences. Protobuf wire files degrade until a later parser
+//! lands. Graph mutation only upgrades existing symbols/callers.
 
 use crate::MAX_INDEX_FILE_BYTES;
 use serde::Deserialize;
@@ -66,6 +66,38 @@ impl ScipOccurrence {
     pub fn is_definition(&self) -> bool {
         self.symbol_roles & SCIP_ROLE_DEFINITION != 0
     }
+
+    /// SCIP ranges are 0-based; indexed lines are 1-based.
+    pub fn start_line_1based(&self) -> Option<u32> {
+        self.range.first().map(|line| line.saturating_add(1))
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ScipApplyStats {
+    pub defs_upgraded: usize,
+    pub refs_upgraded: usize,
+    pub skipped: usize,
+}
+
+/// Slash-normalize a SCIP relative path for lookup against `files.path`.
+pub fn normalize_scip_path(path: &str) -> String {
+    path.replace('\\', "/").trim_start_matches("./").to_string()
+}
+
+/// Last identifier in a SCIP symbol string (`rust+crate+auth+refresh().` → `refresh`).
+pub fn scip_symbol_ident(symbol: &str) -> Option<String> {
+    let trimmed = symbol.trim().trim_end_matches(['.', '`']);
+    if trimmed.is_empty() {
+        return None;
+    }
+    let last = trimmed
+        .rsplit(['/', '+', ' ', '#'])
+        .next()
+        .unwrap_or(trimmed);
+    let ident = last.split('(').next().unwrap_or(last);
+    let ident = ident.rsplit("::").next().unwrap_or(ident).trim();
+    (!ident.is_empty()).then(|| ident.to_string())
 }
 
 /// Load a SCIP index from `path`. Missing, unreadable, oversized, binary, or

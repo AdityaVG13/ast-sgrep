@@ -77,7 +77,7 @@ fn schema_upgrade_invalidates_legacy_semantic_layouts() {
         .connection()
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(version, 10, "migration must land on the current schema");
+    assert_eq!(version, 11, "migration must land on the current schema");
 }
 
 #[test]
@@ -121,7 +121,7 @@ fn schema_6_main_indexes_still_get_semantic_wipe_at_7() {
         .connection()
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(version, 10);
+    assert_eq!(version, 11);
 }
 
 #[test]
@@ -159,7 +159,7 @@ fn migration_fixture(name: &str) -> PathBuf {
         .join(name)
 }
 
-/// ghiw.4: checked-in user_version=5 DB migrates to current schema (10).
+/// ghiw.4: checked-in user_version=5 DB migrates to current schema (11).
 #[test]
 fn committed_v5_sqlite_migrates_to_current_schema() {
     let temp = TempDir::new().unwrap();
@@ -171,7 +171,7 @@ fn committed_v5_sqlite_migrates_to_current_schema() {
         .connection()
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(version, 10, "migration must land on SCHEMA_VERSION=10");
+    assert_eq!(version, 11, "migration must land on SCHEMA_VERSION=11");
 }
 
 /// ghiw.4: newer-than-supported user_version fails closed (no panic).
@@ -218,12 +218,12 @@ fn schema_9_adds_field_vector_columns_without_wiping_chunks() {
         .connection()
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(version, 10);
+    assert_eq!(version, 11);
     let count: i64 = migrated
         .connection()
         .query_row("SELECT COUNT(*) FROM semantic_chunks", [], |row| row.get(0))
         .unwrap();
-    assert_eq!(count, 1, "v9 to v10 must not wipe concatenated vectors");
+    assert_eq!(count, 1, "v9 to current must not wipe concatenated vectors");
     let cols: Vec<String> = {
         let mut stmt = migrated
             .connection()
@@ -253,7 +253,7 @@ fn persist_per_field_vectors_on_index() {
     .unwrap();
     indexer.index_content("account.rs", content).unwrap();
     let store = indexer.store();
-    assert_eq!(store.schema_version(), 10);
+    assert_eq!(store.schema_version(), 11);
     let fields = store.semantic_chunk_field_vectors().unwrap();
     assert!(
         !fields.is_empty(),
