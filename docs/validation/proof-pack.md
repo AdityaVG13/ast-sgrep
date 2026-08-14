@@ -40,7 +40,7 @@ Score in the report is Pass / Fail / Not-run only. Not-run is not Pass. No MUST%
 | T0 | `verify-forbid-soundness` + `cargo check --workspace` | Local default bar |
 | T1 | Proof-pack (`scripts/run-proof-pack.sh`) | Local / merge honesty |
 | T2 | GitHub `pull_request` jobs already in `ci.yml` (ubuntu `test`, clippy, fmt, …) | PRs. **Does not** regenerate this report |
-| T3 | `workflow_dispatch` release matrix (`build-and-test`, Windows, fuzz) | Actions tab |
+| T3 | `workflow_dispatch` release matrix (`build-and-test`, Windows, fuzz, `ann-ivf-scale`) | Actions tab |
 | T4 | Human `scripts/local-release-gate.sh` (crates) and Pi `release-acceptance.mjs` (npm) | Release prep. Distinct tools |
 
 Until a dedicated report job exists, compliance reports are **local or dispatch**,

@@ -320,7 +320,7 @@ fn adaptive_ivf_recall_at_10_stays_within_quality_error_budget() {
 }
 
 #[test]
-#[ignore = "release-mode ANN recall/latency tradeoff"]
+#[ignore = "release-mode ANN recall/latency tradeoff; gated by workflow_dispatch job ann-ivf-scale"]
 fn adaptive_ivf_tradeoff_at_2048_and_10000_vectors() {
     let dim = 32usize;
     let limit = 10usize;

@@ -48,7 +48,8 @@ writes `tests/artifacts/compliance/COMPLIANCE_REPORT.md`. See
 GitHub Actions on every `pull_request` runs `forbid-soundness`, `cargo-check`,
 ubuntu `test` (`cargo test --workspace`, compare-only goldens), `pi`, `clippy`,
 `fmt`, and `audit`. The ubuntu+macos **release** matrix (`build-and-test`),
-Windows smoke, and bounded fuzz stay `workflow_dispatch` (Actions tab). Speed
+Windows smoke, bounded fuzz, and **ANN IVF scale** (`ann-ivf-scale`, ignored
+release test at 2048+10000 vectors) stay `workflow_dispatch` (Actions tab). Speed
 and bake-off workflows execute real harnesses and fail on correctness, identity,
 or latency threshold breaches.
 

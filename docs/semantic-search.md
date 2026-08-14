@@ -124,6 +124,19 @@ at 10,000 vectors on the same run. Timings are comparative within that run;
 the enforced invariant is recall@10 at least 0.99 with no more than 95% of
 candidates. `--ann-probes` can still request an explicit probe count.
 
+Those µs columns are **host-comparative / `UNREPRODUCIBLE` as a universal SLO**.
+The fail-closed gate is recall@10 ≥ 0.99 and candidate fraction ≤ 0.95 at the
+default ≤90% probe, for both 2,048 and 10,000 vectors:
+
+```bash
+cargo test -p ast-sgrep-core --release --test semantic_ivf_roundtrip \
+  adaptive_ivf_tradeoff_at_2048_and_10000_vectors -- --ignored --nocapture
+```
+
+PR CI already runs `adaptive_ivf_recall_at_10_stays_within_quality_error_budget`
+(2,048 vectors, un-ignored). The 10k tradeoff stays `#[ignore]` on PRs and runs
+hard-fail on the `ann-ivf-scale` `workflow_dispatch` job (`lbx1.7`).
+
 Tune threshold:
 
 ```bash

@@ -43,6 +43,6 @@ Published numbers follow Agents.md honesty (fingerprint + status tag, or
 Pull requests already run the ubuntu `test` job (`cargo test --workspace`,
 compare-only) plus `forbid-soundness`, `cargo-check`, `clippy`, `fmt`, `audit`,
 and `pi`. The macos/ubuntu **release** matrix (`build-and-test`) and
-Windows/fuzz jobs stay `workflow_dispatch`. Do not add a second silent full
+Windows/fuzz/`ann-ivf-scale` jobs stay `workflow_dispatch`. Do not add a second silent full
 matrix on every PR. The cheaper local gate is
 [`proof-pack.md`](proof-pack.md).

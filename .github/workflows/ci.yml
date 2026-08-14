@@ -243,3 +243,18 @@ jobs:
       - name: Fuzz ranking invariants
         working-directory: fuzz
         run: cargo +nightly fuzz run rank -- -max_total_time=30 -timeout=5
+
+  ann-ivf-scale:
+    if: github.event_name == 'workflow_dispatch'
+    name: ANN IVF scale quality (release, ignored)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: adaptive IVF tradeoff at 2048 and 10000
+        run: |
+          cargo test -p ast-sgrep-core --release --test semantic_ivf_roundtrip \
+            adaptive_ivf_tradeoff_at_2048_and_10000_vectors -- --ignored --nocapture
+        # Fail hard. Do not --skip. Do not treat timeout as pass.
