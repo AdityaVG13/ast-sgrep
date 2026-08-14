@@ -41,18 +41,30 @@ ranking invariants with a bounded 30-second fuzz run. It requires stable Rust,
 nightly Rust, and `cargo-fuzz`. Ordinary changes should keep using the cheaper,
 targeted default bar above.
 
-GitHub Actions runs `forbid-soundness` and `cargo check` on every `pull_request`.
-Full build/test/clippy/audit/fuzz matrices remain `workflow_dispatch` (Actions tab).
-The speed and bake-off workflows execute real harnesses and fail on correctness,
-identity, or latency threshold breaches. The official package release invokes
+GitHub Actions on every `pull_request` runs `forbid-soundness`, `cargo-check`,
+ubuntu `test` (`cargo test --workspace`, compare-only goldens), `pi`, `clippy`,
+`fmt`, and `audit`. The ubuntu+macos **release** matrix (`build-and-test`),
+Windows smoke, and bounded fuzz stay `workflow_dispatch` (Actions tab). Speed
+and bake-off workflows execute real harnesses and fail on correctness, identity,
+or latency threshold breaches. The official package release invokes
 `scripts/local-release-gate.sh` through the release-acceptance command.
+
+## Golden files
+
+CI compares frozen dumps; it never rewrites them (`ASGREP_UPDATE_GOLDENS=0`).
+To refresh a freeze locally, set `ASGREP_UPDATE_GOLDENS=1`, run the targeted
+test, review `git diff` file-by-file, and commit. Never commit `*.actual`.
+Full SOP: [docs/validation/golden-files.md](docs/validation/golden-files.md).
+Do not treat `benchmarks/results/baselines.md` as a golden.
 
 ## Pull requests
 
 - Keep changes focused; extend `tests/core/parity.rs` (or a targeted unit test) when behavior changes.
+- Review golden/fixture diffs file-by-file; do not commit `*.actual`.
 - Do not commit local agent/tool caches or skill-run trees -- they are gitignored.
 - Do not commit secrets, `.env`, local caches, or `fuzz/target/`.
 - Prefer conventional commits: `feat:`, `fix:`, `refactor:`, `docs:`, `test:`, `ci:`, `chore:`.
+- Metric claims must cite `benchmarks/results/baselines.md` or be tagged `UNREPRODUCIBLE`.
 
 ## Crate layout
 

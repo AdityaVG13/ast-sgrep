@@ -40,7 +40,28 @@ jobs:
             exit 1
           fi
       - name: test workspace
+        env:
+          # Compare-only. Never set ASGREP_UPDATE_GOLDENS=1 under .github/.
+          # SOP: docs/validation/golden-files.md
+          ASGREP_UPDATE_GOLDENS: "0"
         run: cargo test --workspace -j1
+      - name: upload golden mismatch dumps
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: golden-actuals-test
+          path: "**/*.actual"
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: no leftover golden actuals
+        if: success()
+        run: |
+          leftovers=$(find . -name '*.actual' ! -path './target/*' ! -path './.git/*' || true)
+          if [ -n "$leftovers" ]; then
+            echo "unexpected *.actual files (CI is compare-only):" >&2
+            echo "$leftovers" >&2
+            exit 1
+          fi
 
   pi:
     runs-on: ubuntu-latest
@@ -73,7 +94,28 @@ jobs:
         run: cargo build --workspace --release
 
       - name: Test (release)
+        env:
+          # Compare-only. Never set ASGREP_UPDATE_GOLDENS=1 under .github/.
+          # SOP: docs/validation/golden-files.md
+          ASGREP_UPDATE_GOLDENS: "0"
         run: cargo test --workspace --release
+      - name: upload golden mismatch dumps
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: golden-actuals-build-and-test-${{ matrix.os }}
+          path: "**/*.actual"
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: no leftover golden actuals
+        if: success()
+        run: |
+          leftovers=$(find . -name '*.actual' ! -path './target/*' ! -path './.git/*' || true)
+          if [ -n "$leftovers" ]; then
+            echo "unexpected *.actual files (CI is compare-only):" >&2
+            echo "$leftovers" >&2
+            exit 1
+          fi
 
   windows-smoke:
     if: github.event_name == 'workflow_dispatch'
