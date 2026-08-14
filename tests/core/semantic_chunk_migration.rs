@@ -1,6 +1,7 @@
 use ast_sgrep_core::semantic_ivf::semantic_ivf_path;
 use ast_sgrep_core::{EmbedBackend, IndexOptions, IndexStore, Indexer};
 use rusqlite::params;
+use std::path::PathBuf;
 use tempfile::TempDir;
 
 #[test]
@@ -150,4 +151,42 @@ fn enabling_embeddings_rebuilds_an_unchanged_file() {
     let stats = enabled.index_content("account.rs", content).unwrap();
     assert!(!stats.skipped);
     assert!(enabled.store().semantic_chunk_stats(None).unwrap().count > 0);
+}
+
+fn migration_fixture(name: &str) -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/migration")
+        .join(name)
+}
+
+/// ghiw.4: checked-in user_version=5 DB migrates to current schema (9).
+#[test]
+fn committed_v5_sqlite_migrates_to_current_schema() {
+    let temp = TempDir::new().unwrap();
+    let dest = temp.path().join("index.db");
+    std::fs::copy(migration_fixture("v5_empty.sqlite"), &dest).expect("copy v5 fixture");
+    let store = IndexStore::open(temp.path(), Some(&dest)).expect("v5 fixture must open and migrate");
+    let version: i64 = store
+        .connection()
+        .query_row("PRAGMA user_version", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(version, 9, "migration must land on SCHEMA_VERSION=9");
+}
+
+/// ghiw.4: newer-than-supported user_version fails closed (no panic).
+#[test]
+fn committed_v99_sqlite_is_rejected_without_panic() {
+    let temp = TempDir::new().unwrap();
+    let dest = temp.path().join("index.db");
+    std::fs::copy(migration_fixture("v99_unsupported.sqlite"), &dest).expect("copy v99 fixture");
+    match IndexStore::open(temp.path(), Some(&dest)) {
+        Ok(_) => panic!("newer schema must fail closed"),
+        Err(err) => {
+            let message = err.to_string();
+            assert!(
+                message.contains("newer than supported"),
+                "unexpected error: {message}"
+            );
+        }
+    }
 }

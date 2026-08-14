@@ -5,7 +5,9 @@ use ast_sgrep_core::semantic_ivf::{
     load_semantic_ivf_unchecked, save_semantic_ivf, save_semantic_ivf_with_publication,
 };
 use ast_sgrep_embed::{top_k_flat_similarity, MIN_SIMILARITY};
+use ast_sgrep_testkit::updating_goldens;
 use std::collections::HashSet;
+use std::path::PathBuf;
 #[test]
 fn invalidating_a_missing_sidecar_is_idempotent() {
     let dir = tempfile::tempdir().unwrap();
@@ -372,4 +374,54 @@ fn adaptive_ivf_tradeoff_at_2048_and_10000_vectors() {
             }
         }
     }
+}
+
+fn ivf_fixture(name: &str) -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/ivf")
+        .join(name)
+}
+
+fn fixture_vectors() -> (usize, Vec<f32>, [u8; 32]) {
+    let dim = 4usize;
+    let vectors: Vec<f32> = (0..16).map(|i| i as f32 * 0.25).collect();
+    let fingerprint = compute_ann_fingerprint(4, 4, dim, Some("fixture"), 0);
+    (dim, vectors, fingerprint)
+}
+
+/// ghiw.4: committed VERSION=2 frame + reject samples (wrong magic / truncated).
+#[test]
+fn committed_v2_frame_opens_and_reject_samples_fail_closed() {
+    let (dim, vectors, fingerprint) = fixture_vectors();
+    let good = ivf_fixture("good_v2.ivf");
+    let bad_magic = ivf_fixture("bad_magic.ivf");
+    let truncated = ivf_fixture("truncated.ivf");
+    if updating_goldens() {
+        std::fs::create_dir_all(good.parent().expect("ivf dir")).expect("create ivf dir");
+        let index = SemanticAnnIndex::build_from_flat(&vectors, dim);
+        save_semantic_ivf(&good, fingerprint, dim, &vectors, &index).expect("write good_v2");
+        let bytes = std::fs::read(&good).expect("read good_v2");
+        let mut flipped = bytes.clone();
+        flipped[0] ^= 0xff;
+        std::fs::write(&bad_magic, flipped).expect("write bad_magic");
+        std::fs::write(&truncated, &bytes[..bytes.len().saturating_sub(4)]).expect("write truncated");
+        return;
+    }
+    let loaded = load_semantic_ivf(&good, fingerprint)
+        .expect("open good_v2")
+        .expect("good v2 frame");
+    assert_eq!(loaded.dim, dim);
+    assert_eq!(loaded.vectors(), vectors);
+    assert!(
+        load_semantic_ivf(&bad_magic, fingerprint)
+            .expect("open bad_magic")
+            .is_none(),
+        "wrong magic must fail closed"
+    );
+    assert!(
+        load_semantic_ivf(&truncated, fingerprint)
+            .expect("open truncated")
+            .is_none(),
+        "truncated frame must fail closed"
+    );
 }
