@@ -366,13 +366,27 @@ impl SearchOptions {
         )
     }
     pub fn embed_preference(&self) -> ast_sgrep_embed::EmbedPreference {
+        self.embed_backend().to_preference()
+    }
+
+    /// Canonical embed backend for these options (f4ce.1). `use_*` flags remain
+    /// the public adapters so CLI/LSP do not need a SemVer bump yet.
+    pub fn embed_backend(&self) -> EmbedBackend {
         EmbedBackend::from_flags(
             self.use_cloud_embed,
             self.use_ollama_embed,
             self.use_neural_embed,
             self.use_semantic_only,
         )
-        .to_preference()
+    }
+
+    /// Set the backend and sync the `use_*` adapter flags (f4ce.1).
+    pub fn set_embed_backend(&mut self, backend: EmbedBackend) {
+        let (cloud, ollama, neural, semantic_only) = backend.to_flags();
+        self.use_cloud_embed = cloud;
+        self.use_ollama_embed = ollama;
+        self.use_neural_embed = neural;
+        self.use_semantic_only = semantic_only;
     }
 
     /// Hard-error text when a non-hashed backend is requested but cannot run.

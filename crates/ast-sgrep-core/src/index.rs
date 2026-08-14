@@ -181,6 +181,18 @@ impl EmbedBackend {
             Self::Auto
         }
     }
+
+    /// Adapter flags for SearchOptions `use_*` fields (f4ce.1). Exclusive:
+    /// Cloud wins over Ollama over Neural over Semantic over Auto.
+    pub fn to_flags(self) -> (bool, bool, bool, bool) {
+        match self {
+            Self::Cloud => (true, false, false, false),
+            Self::Ollama => (false, true, false, false),
+            Self::Neural => (false, false, true, false),
+            Self::Semantic => (false, false, false, true),
+            Self::Auto => (false, false, false, false),
+        }
+    }
 }
 #[derive(Debug, Clone)]
 pub struct IndexOptions {

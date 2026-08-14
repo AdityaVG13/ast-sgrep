@@ -139,3 +139,35 @@ fn constructed_and_deserialized_excerpts_are_utf8_safely_bounded() {
     assert!(excerpt.len() <= crate::limits::MAX_SEARCH_HIT_EXCERPT_BYTES);
     assert!(excerpt.ends_with("\n…"));
 }
+
+#[test]
+fn embed_backend_roundtrips_through_use_star_flags() {
+    use crate::EmbedBackend;
+    let mut options = SearchOptions::default();
+    for backend in [
+        EmbedBackend::Auto,
+        EmbedBackend::Cloud,
+        EmbedBackend::Ollama,
+        EmbedBackend::Neural,
+        EmbedBackend::Semantic,
+    ] {
+        options.set_embed_backend(backend);
+        assert_eq!(options.embed_backend(), backend);
+        assert_eq!(options.embed_preference(), backend.to_preference());
+        let (cloud, ollama, neural, semantic) = backend.to_flags();
+        assert_eq!(options.use_cloud_embed, cloud);
+        assert_eq!(options.use_ollama_embed, ollama);
+        assert_eq!(options.use_neural_embed, neural);
+        assert_eq!(options.use_semantic_only, semantic);
+    }
+}
+
+#[test]
+fn embed_backend_from_flags_prefers_cloud_over_later_adapters() {
+    let mut options = SearchOptions::default();
+    options.use_cloud_embed = true;
+    options.use_ollama_embed = true;
+    options.use_neural_embed = true;
+    options.use_semantic_only = true;
+    assert_eq!(options.embed_backend(), crate::EmbedBackend::Cloud);
+}
