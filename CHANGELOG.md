@@ -4,7 +4,13 @@ All notable changes to **ast-sgrep** — hybrid code search that understands int
 
 This changelog follows [Keep a Changelog](https://keepachangelog.com/) conventions. Version numbering follows the project release policy in [`docs/RELEASING.md`](docs/RELEASING.md): additive, backward-compatible functionality increments the minor version after 1.0.
 
-**Scope window:** v1.0.0-alpha (2026-07-11) → v1.4.0 (unreleased). The v1.4.0 section covers all seven open PRs (#14, #20, #21, #22, #23, #25, #26) plus direct-to-main commits since v1.3.2; research evidence is logged in [`CHANGELOG_RESEARCH.md`](CHANGELOG_RESEARCH.md).
+**Scope window:** v1.0.0-alpha (2026-07-11) → unreleased (HTTP embed removal on PR #30). The v1.4.0 section covers seven earlier PRs plus direct-to-main commits since v1.3.2; research evidence is logged in [`CHANGELOG_RESEARCH.md`](CHANGELOG_RESEARCH.md).
+
+## Unreleased
+
+### Breaking: HTTP embed backends removed
+
+Cloud (`--cloud-embed`, `ASGREP_EMBED_API_KEY`, OpenAI-compatible HTTP) and Ollama (`--ollama-embed`, `ASGREP_OLLAMA_URL`) embedding clients are gone. Embeddings are in-process only: hashed semantic (default) and optional ONNX neural (`--features neural-embed`). Indexes that still store `embed_backend=cloud|ollama` fail closed until `asgrep reindex`. The Cloudflare Code Mode adapter is unrelated and stays.
 
 ## Version Timeline
 

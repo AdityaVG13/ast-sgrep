@@ -16,7 +16,7 @@ Open Pi in the project you want to search. The extension immediately provides th
 2. `/asgrep-status` to inspect the current project.
 3. Ask Pi to use `asgrep` for multi-step lookup, or `asgrep_search` with `mode: "defs"`, `"callers"`, or `"semantic"` for one-shot queries.
 
-No Cargo build, source checkout, PATH configuration, MCP adapter, API key, or runtime executable download is part of the Pi package path. Read the [canonical Pi package guide](pi-package.md) before configuring external embeddings, updating, rolling back, or removing the package; it also documents supported hosts, `.asgrep` retention, security, and complete troubleshooting.
+No Cargo build, source checkout, PATH configuration, MCP adapter, API key, or runtime executable download is part of the Pi package path. Read the [canonical Pi package guide](pi-package.md) before updating, rolling back, or removing the package; it also documents supported hosts, `.asgrep` retention, security, and complete troubleshooting.
 
 ### Standalone CLI/LSP from source
 
@@ -160,10 +160,8 @@ Machine-oriented catalog: `asgrep capabilities --json` (clap-derived; preferred 
 | `--excerpt-lines` | | Extra excerpt lines in structured formats (capped) |
 | `--no-embed` | `ASGREP_NO_EMBED=1` | Disable semantic indexing + search |
 | `--tantivy` | `ASGREP_TANTIVY=1` | Force secondary FTS5 lexical DB (`.asgrep/lexical.db`; flag name is historical) |
-| `--cloud-embed` | `ASGREP_CLOUD_EMBED=1` | Prefer cloud neural embeddings |
-| `--ollama-embed` | `ASGREP_OLLAMA_EMBED=1` | Prefer Ollama embeddings |
-| `--neural-embed` | `ASGREP_NEURAL_EMBED=1` | Prefer local neural embeddings (feature-gated) |
-| `--semantic-only` | `ASGREP_SEMANTIC_ONLY=1` | Force offline semantic only |
+| `--neural-embed` | `ASGREP_NEURAL_EMBED=1` | Prefer local in-process neural embeddings (feature-gated) |
+| `--semantic-only` | `ASGREP_SEMANTIC_ONLY=1` | Force offline hashed semantic only |
 | `--ann-threshold` | `ASGREP_ANN_THRESHOLD` | Symbol count before IVF-ANN (default 2000) |
 | `--ann-probes` | `ASGREP_ANN_PROBES` | IVF clusters to probe |
 | `--rerank` | `ASGREP_RERANK` | Local cross-encoder rerank (feature-gated) |
@@ -200,21 +198,17 @@ GRAPH: src/main.rs: main calls auth_refresh
 ANCHOR: src/main.rs:19-22: fn auth_refresh() { ... }
 ```
 
-## Neural embedding backends (optional)
+## Neural embeddings (optional, in-process)
 
-Default workflow needs **no API key**. To upgrade vectors:
+Default workflow needs **no API key** and makes **no network calls**. To upgrade from hashed vectors to ONNX MiniLM/BGE:
 
 ```bash
-# Cloud (OpenAI-compatible)
-export ASGREP_EMBED_API_KEY=sk-...
-asgrep --cloud-embed index .
-
-# Ollama (e.g. nomic-embed-text)
-asgrep --ollama-embed index .
-# ASGREP_OLLAMA_URL=http://127.0.0.1:11434 (default)
+# Build with the neural feature, then:
+export ASGREP_NEURAL_EMBED=1
+asgrep --neural-embed index .
 ```
 
-Query vectors should match the backend used at index time for best results. `asgrep status` shows the stored backend and dimension.
+Hashed (256-d) and neural (384-d) indexes are different model identities. Query with the same backend used at index time. `asgrep status` shows the stored backend and dimension. Indexes that still record `cloud` or `ollama` must be rebuilt (`asgrep reindex`).
 
 ## Large repos
 

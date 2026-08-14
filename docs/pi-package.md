@@ -96,7 +96,7 @@ The default root is Pi's current working directory. Requested roots are canonica
 
 The default local semantic backend works offline, requires no credentials, sends no telemetry, and performs no first-use model download. The package does not inspect Pi/provider credential APIs. Installation and runtime perform no executable download. The Pi integration invokes its bundled executable with argument arrays, not a shell, and does not use an MCP adapter.
 
-Cloud, Ollama, and neural embedding backends are optional and opt-in. If you select an external service, source text and queries needed for embeddings may be sent to that provider; that service's credentials, retention, and privacy policy then apply. Local search remains available and is never delayed or replaced by an optional backend.
+Optional neural embeddings are in-process ONNX (feature-gated). There is no cloud or Ollama embed client; source text is never sent to a remote embedding API. Local hashed search remains available and is never delayed by an optional backend.
 
 Pi packages are trusted code, not a sandbox. Installing grants the JavaScript extension and native executable full-system access as the OS user running Pi, including that user's filesystem and process permissions. Project-root confinement is a package safety policy, not an OS security boundary. Review the package source and provenance before installation, and treat repository contents and search results as untrusted data rather than instructions.
 

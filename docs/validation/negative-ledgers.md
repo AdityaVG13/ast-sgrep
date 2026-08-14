@@ -17,7 +17,7 @@ Cases that must **not** succeed as silent empty hits:
 | Empty index (0 files) | exit 2 / `index is empty` |
 | Doctor on missing root | `healthy:false`, `ok:false`, triage `missing_root` |
 | MCP root outside workspace | tool `isError`, message `escapes configured workspace` |
-| Embed URL to metadata IP | `embed_url_is_allowed` Err |
+| Stored HTTP embed backend (`cloud`/`ollama`) | `embed_query` Err naming removed HTTP provider; reindex required |
 | Empty native package binary | `ASGREP_EXECUTABLE_EMPTY` even if checksum is empty-SHA256 |
 | Regex worker panic | `StoreError` (not empty hit list) |
 
@@ -36,7 +36,7 @@ fail-closed bug.
 | NL-003 | Doctor on missing root must not look healthy | `healthy:false`, `ok:false`, `issues[0].kind=missing_root` | `agent_discovery_defaults_and_boolish_envs_are_round_trip_free` |
 | NL-004 | Usage vs operational exits stay distinct | usage=1 / operational=2; never swap | `bounded_arguments_are_json_usage_errors`, `operational_failures_are_json_and_exit_two` |
 | NL-005 | MCP root outside workspace | `isError`, `escapes configured workspace` | **gap** for this bead (MCP suite is `DISC-mcp-not-full-suite`; do not invent CLI-envelope coverage) |
-| NL-006 | Embed URL to metadata IP | `embed_url_is_allowed` Err | **partial** / core embed allowlist tests; not CLI envelope |
+| NL-006 | Embed URL to metadata IP | HTTP embed backends removed (2026-08-14). Query of stored `cloud`/`ollama` meta fails closed (`embed_query` reindex error). | `stored_http_backends_hard_error_on_query` |
 | NL-007 | Empty native package binary | `ASGREP_EXECUTABLE_EMPTY` | **gap** here (packaging path; not machine_contracts) |
 | NL-008 | Compact must not be treated as native JSON equality | Compact key set is `h/p/q/v/…`; no native `hits` array / excerpt blobs | `compact_omits_native_hit_array_and_excerpt_blobs` + `DISC-compact-drops-provenance` |
 | NL-009 | Regex worker panic must not become empty hits | `StoreError` | **gap** in CLI machine suite (core store path) |

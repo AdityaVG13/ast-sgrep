@@ -51,7 +51,7 @@ ast-sgrep/
 ├── crates/ast-sgrep-core/    # Index + hybrid search engine
 ├── crates/ast-sgrep-cli/     # asgrep / ast-sgrep binaries
 ├── crates/ast-sgrep-lang/    # tree-sitter parsers (13 languages)
-├── crates/ast-sgrep-embed/   # Semantic local + Ollama + cloud
+├── crates/ast-sgrep-embed/   # Hashed semantic + optional in-process neural
 ├── crates/ast-sgrep-plugins/ # GitHub / GitLab / agent JSON
 ├── crates/ast-sgrep-lsp/     # asgrep-lsp
 └── tests/fixtures/           # Polyglot sample + regression fixtures
@@ -173,8 +173,7 @@ let searcher = Searcher::new(SearchOptions {
     lang_filter: None,
     use_embed: true,
     use_tantivy: false,
-    use_cloud_embed: false,
-    use_ollama_embed: false,
+    use_neural_embed: false,
     use_semantic_only: false,
     ann_threshold: None,
 })?;

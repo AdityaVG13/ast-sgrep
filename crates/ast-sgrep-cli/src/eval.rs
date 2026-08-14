@@ -252,12 +252,7 @@ pub(crate) fn run_eval(cli: &Cli, args: &EvalArgs) -> anyhow::Result<()> {
     idx_opts.index_path = Some(index_path.clone());
     idx_opts.embed_semantic = true;
     let tuning = cli.active_tuning();
-    idx_opts.embed_backend = ast_sgrep_core::EmbedBackend::from_flags(
-        tuning.cloud_embed,
-        tuning.ollama_embed,
-        tuning.neural_embed,
-        false,
-    );
+    idx_opts.embed_backend = ast_sgrep_core::EmbedBackend::from_flags(tuning.neural_embed, false);
     Indexer::new(idx_opts)
         .context("failed to open index for eval")?
         .index_all()

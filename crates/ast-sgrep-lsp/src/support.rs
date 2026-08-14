@@ -120,8 +120,7 @@ pub fn send_error(writer: &mut impl Write, id: &Value, code: i64, message: &str)
 #[serde(rename_all = "camelCase")]
 pub struct AsgrepSettings {
     pub no_embed: Option<bool>,
-    pub cloud_embed: Option<bool>,
-    pub ollama_embed: Option<bool>,
+    pub neural_embed: Option<bool>,
     pub semantic_only: Option<bool>,
     pub ann_threshold: Option<usize>,
     pub embed_backend: Option<String>,
@@ -144,7 +143,7 @@ impl AsgrepSettings {
         }
     }
 
-    /// Cloud > Ollama > Neural > Semantic > Auto, matching CLI `from_flags`.
+    /// Neural > Semantic > Auto, matching CLI `from_flags`.
     /// String `embedBackend` applies first; bool keys overlay when `Some`.
     fn resolved_embed_backend(&self, current: EmbedBackend) -> EmbedBackend {
         let backend = self
@@ -152,17 +151,14 @@ impl AsgrepSettings {
             .as_deref()
             .map(EmbedBackend::parse)
             .unwrap_or(current);
-        let (mut cloud, mut ollama, neural, mut semantic) = backend.to_flags();
-        if let Some(v) = self.cloud_embed {
-            cloud = v;
-        }
-        if let Some(v) = self.ollama_embed {
-            ollama = v;
+        let (mut neural, mut semantic) = backend.to_flags();
+        if let Some(v) = self.neural_embed {
+            neural = v;
         }
         if let Some(v) = self.semantic_only {
             semantic = v;
         }
-        EmbedBackend::from_flags(cloud, ollama, neural, semantic)
+        EmbedBackend::from_flags(neural, semantic)
     }
 
     pub fn apply_to_index_options(&self, opts: &mut IndexOptions) {

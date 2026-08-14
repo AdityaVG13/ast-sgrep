@@ -7,13 +7,44 @@ Skill headers: gauntlet WP3 / K-3. Predicate forms: `docs/progress/README.md`.
 Product parity table: `docs/validation/surface-parity.md`.
 DISC register: `docs/validation/DISCREPANCIES.md`.
 
-**Closed:** empty on seed.
+**Closed:** HTTP embed clients removed 2026-08-14 (product decision: native/in-process only).
 
 ## Closed
 
-_(none -- no invented "we shipped parity" closes)_
+### `http-cloud-embed-removed`
+
+- **date:** 2026-08-14
+- **candidate_name:** `http-cloud-embed-removed`
+- **target_workload:** OpenAI-compatible HTTP embed client (`--cloud-embed`, `ASGREP_EMBED_API_KEY`)
+- **files_touched:** `crates/ast-sgrep-embed`, CLI/LSP/MCP flags, capabilities golden, semantic-search docs
+- **correctness_proof:** not-measured (product removal, not a quality experiment)
+- **evidence_artifact_paths:** `docs/semantic-search.md`, `docs/env-trust.md`, this ledger
+- **baseline_configuration:** pointer-only
+- **candidate_configuration:** pointer-only
+- **retry_condition_predicate:** Not worth retrying as a standalone HTTP embed client. Reconsider only inside a broader hosted-model product that is explicitly not ast-sgrep's default path.
+- **bead_id:** (none -- withdrawn with `lbx1.1`)
+
+### `http-ollama-embed-removed`
+
+- **date:** 2026-08-14
+- **candidate_name:** `http-ollama-embed-removed`
+- **target_workload:** Ollama HTTP embed client (`--ollama-embed`, `ASGREP_OLLAMA_URL`)
+- **files_touched:** `crates/ast-sgrep-embed`, CLI/LSP/MCP flags, capabilities golden, semantic-search docs
+- **correctness_proof:** not-measured (product removal, not a quality experiment)
+- **evidence_artifact_paths:** `docs/semantic-search.md`, `docs/env-trust.md`, this ledger
+- **baseline_configuration:** pointer-only
+- **candidate_configuration:** pointer-only
+- **retry_condition_predicate:** Not worth retrying as a standalone HTTP embed client. In-process ONNX neural is the only non-hashed vector path.
+- **bead_id:** (none -- withdrawn with `lbx1.2`)
 
 ## Open (pointer imports)
+
+### `cass-unavailable-http-embed-strip-2026-08-14`
+
+- **target_workload:** 60-day cass failure-term mine before surface-affecting embed changes
+- **evidence_artifact_paths:** this ledger
+- **retry_condition_predicate:** Blocked until `cass` is on PATH; re-run the 60-day mine for `rejected|reverted|cloud-embed|ollama|keep gate` before resurrecting any HTTP embed client.
+- **bead_id:** (none)
 
 ### `mcp-no-auto-fusion`
 

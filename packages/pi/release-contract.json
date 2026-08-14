@@ -217,11 +217,9 @@
     "credentialsRequired": false,
     "lazyIndexOnFirstSearch": true,
     "optionalBackends": [
-      "cloud",
-      "ollama",
       "neural"
     ],
-    "policy": "A clean supported install performs local semantic indexing and search offline. Optional backends are opt-in and never replace or delay the local default."
+    "policy": "A clean supported install performs local hashed semantic indexing and search offline. Optional neural is in-process ONNX, opt-in, and never a network embedding API."
   },
   "dataLifecycle": {
     "path": "<project-root>/.asgrep",

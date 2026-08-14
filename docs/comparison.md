@@ -78,7 +78,7 @@ Only **ast-sgrep** ships a **semantic pass** by default:
 
 - Symbol-chunk embeddings with call-graph context
 - Offline concept expansion (no API key)
-- Optional neural upgrade (Ollama, cloud)
+- Optional in-process neural upgrade (ONNX MiniLM / BGE; never HTTP)
 
 ast-grep matches **structure**, not **meaning**. ripgrep matches **text**, not **intent**.
 

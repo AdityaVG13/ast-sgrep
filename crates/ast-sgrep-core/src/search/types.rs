@@ -314,10 +314,7 @@ pub struct SearchOptions {
     pub use_embed: bool,
     pub use_tantivy: bool,
     /// Adapter flags for `embed_backend()`. Concurrent trues collapse
-    /// Cloud > Ollama > Neural > Semantic > Auto. These fields stay public
-    /// through 1.x; removing them is a SemVer major.
-    pub use_cloud_embed: bool,
-    pub use_ollama_embed: bool,
+    /// Neural > Semantic > Auto.
     pub use_neural_embed: bool,
     pub use_semantic_only: bool,
     pub ann_threshold: Option<usize>,
@@ -341,8 +338,6 @@ impl Default for SearchOptions {
             lang_filter: None,
             use_embed: !env_flag("ASGREP_NO_EMBED"),
             use_tantivy: env_flag("ASGREP_TANTIVY"),
-            use_cloud_embed: env_flag("ASGREP_CLOUD_EMBED"),
-            use_ollama_embed: env_flag("ASGREP_OLLAMA_EMBED"),
             use_neural_embed: env_flag("ASGREP_NEURAL_EMBED"),
             use_semantic_only: env_flag("ASGREP_SEMANTIC_ONLY"),
             ann_threshold: std::env::var("ASGREP_ANN_THRESHOLD")
@@ -377,49 +372,25 @@ impl SearchOptions {
         self.embed_backend().to_preference()
     }
 
-    /// Canonical embed backend for these options (f4ce.1). `use_*` flags remain
-    /// public adapters in 1.x (CLI + LSP already cascade through this method).
+    /// Canonical embed backend for these options. `use_*` flags remain
+    /// public adapters (Neural > Semantic > Auto).
     pub fn embed_backend(&self) -> EmbedBackend {
-        EmbedBackend::from_flags(
-            self.use_cloud_embed,
-            self.use_ollama_embed,
-            self.use_neural_embed,
-            self.use_semantic_only,
-        )
+        EmbedBackend::from_flags(self.use_neural_embed, self.use_semantic_only)
     }
 
-    /// Set the backend and sync the `use_*` adapter flags (f4ce.1).
+    /// Set the backend and sync the `use_*` adapter flags.
     pub fn set_embed_backend(&mut self, backend: EmbedBackend) {
-        let (cloud, ollama, neural, semantic_only) = backend.to_flags();
-        self.use_cloud_embed = cloud;
-        self.use_ollama_embed = ollama;
+        let (neural, semantic_only) = backend.to_flags();
         self.use_neural_embed = neural;
         self.use_semantic_only = semantic_only;
     }
 
     /// Hard-error text when a non-hashed backend is requested but cannot run.
     ///
-    /// Hashed (`Semantic`) and `Auto` stay available. Cloud/Ollama/Neural must
-    /// not silently swap to hashed hits (lbx1.10).
+    /// Hashed (`Semantic`) and `Auto` stay available. Neural must not silently
+    /// swap to hashed hits unless `ASGREP_NEURAL_FALLBACK=1`.
     pub fn unavailable_non_hashed_embed(&self) -> Option<String> {
-        use ast_sgrep_embed::{CloudEmbeddingConfig, OllamaEmbeddingConfig};
         match self.embed_preference() {
-            ast_sgrep_embed::EmbedPreference::Cloud
-                if CloudEmbeddingConfig::from_env().is_none() =>
-            {
-                Some(
-                    "semantic_search requested cloud embed but it is not configured (need ASGREP_EMBED_API_KEY); refusing hashed fallback"
-                        .into(),
-                )
-            }
-            ast_sgrep_embed::EmbedPreference::Ollama
-                if OllamaEmbeddingConfig::from_env().is_none() =>
-            {
-                Some(
-                    "semantic_search requested ollama embed but it is not configured (need ASGREP_OLLAMA_EMBED/ASGREP_OLLAMA_URL, and ASGREP_NO_OLLAMA must be unset); refusing hashed fallback"
-                        .into(),
-                )
-            }
             ast_sgrep_embed::EmbedPreference::Neural => {
                 #[cfg(not(feature = "neural-embed"))]
                 {
@@ -446,15 +417,13 @@ impl SearchOptions {
     /// Stable fingerprint of options that affect search results (nyui).
     pub fn cache_identity(&self) -> String {
         format!(
-            "root={}\0idx={:?}\0lim={}\0lang={:?}\0embed={}\0tantivy={}\0cloud={}\0ollama={}\0neural={}\0sem={}\0ann_t={:?}\0ann_p={:?}\0rerank={}\0rk={}\0ci={}\0cb={}\0ca={}\0co={}\0ff={:?}",
+            "root={}\0idx={:?}\0lim={}\0lang={:?}\0embed={}\0tantivy={}\0neural={}\0sem={}\0ann_t={:?}\0ann_p={:?}\0rerank={}\0rk={}\0ci={}\0cb={}\0ca={}\0co={}\0ff={:?}",
             self.root.display(),
             self.index_path,
             self.limit,
             self.lang_filter,
             self.use_embed,
             self.use_tantivy,
-            self.use_cloud_embed,
-            self.use_ollama_embed,
             self.use_neural_embed,
             self.use_semantic_only,
             self.ann_threshold,

@@ -15,8 +15,7 @@ documentation = "https://docs.rs/ast-sgrep-cli"
 workspace = true
 
 [features]
-default = ["cloud-embed"]
-cloud-embed = ["ast-sgrep-core/cloud-embed"]
+default = []
 # Real neural embeddings (fastembed/ONNX). Heavy dependency, opt-in: off by
 # default in the workspace, enabled with `--features neural-embed`.
 neural-embed = ["ast-sgrep-core/neural-embed"]

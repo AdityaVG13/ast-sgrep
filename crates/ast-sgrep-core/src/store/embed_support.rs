@@ -76,12 +76,8 @@ fn cache_model_id_for_pref(p: ast_sgrep_embed::EmbedPreference) -> Option<String
     match p {
         Semantic => Some(semantic_mid()),
         Neural => Some(neural_mid()),
-        Cloud | Ollama => None,
         Auto => {
-            let skip = std::env::var_os("ASGREP_EMBED_API_KEY").is_some()
-                || std::env::var_os("ASGREP_OLLAMA_EMBED").is_some()
-                || std::env::var_os("ASGREP_OLLAMA_URL").is_some()
-                || crate::env_flag::env_flag("ASGREP_NEURAL_EMBED");
+            let skip = crate::env_flag::env_flag("ASGREP_NEURAL_EMBED");
             (!skip).then(semantic_mid)
         }
     }
@@ -90,22 +86,12 @@ fn cache_model_id_for_backend(backend: ast_sgrep_embed::EmbedBackendKind) -> Opt
     ast_sgrep_embed::configured_backend_model_id(backend, ast_sgrep_embed::default_semantic_dim())
 }
 pub(super) fn requested_model_identity(preference: ast_sgrep_embed::EmbedPreference) -> String {
-    use ast_sgrep_embed::{EmbedBackendKind, EmbedPreference};
-    let configured = |kind| {
-        ast_sgrep_embed::configured_backend_model_id(kind, ast_sgrep_embed::default_semantic_dim())
-    };
+    use ast_sgrep_embed::EmbedPreference;
     match preference {
-        EmbedPreference::Cloud => {
-            configured(EmbedBackendKind::Cloud).unwrap_or_else(|| "cloud:unconfigured".into())
-        }
-        EmbedPreference::Ollama => {
-            configured(EmbedBackendKind::Ollama).unwrap_or_else(|| "ollama:unconfigured".into())
-        }
         EmbedPreference::Neural => neural_mid(),
         EmbedPreference::Semantic => semantic_mid(),
-        EmbedPreference::Auto => configured(EmbedBackendKind::Cloud)
-            .or_else(|| configured(EmbedBackendKind::Ollama))
-            .or_else(|| crate::env_flag::env_flag("ASGREP_NEURAL_EMBED").then(neural_mid))
+        EmbedPreference::Auto => crate::env_flag::env_flag("ASGREP_NEURAL_EMBED")
+            .then(neural_mid)
             .unwrap_or_else(semantic_mid),
     }
 }

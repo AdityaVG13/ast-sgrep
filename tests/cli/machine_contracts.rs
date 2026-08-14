@@ -665,8 +665,6 @@ fn agent_discovery_defaults_and_boolish_envs_are_round_trip_free() {
         let output = Command::new(&bin)
             .arg("capabilities")
             .env("ASGREP_NO_EMBED", value)
-            .env("ASGREP_CLOUD_EMBED", value)
-            .env("ASGREP_OLLAMA_EMBED", value)
             .env("ASGREP_NEURAL_EMBED", value)
             .env("ASGREP_SEMANTIC_ONLY", value)
             .env("ASGREP_TANTIVY", value)
@@ -871,10 +869,10 @@ fn compact_omits_native_hit_array_and_excerpt_blobs() {
     );
 }
 
-/// f4ce.2: public embed flags stay independently settable. Exclusive collapse
+/// Public embed flags stay independently settable. Exclusive collapse
 /// is SearchOptions-side (`from_flags` / `set_embed_backend`), not a clap conflict.
 #[test]
-fn concurrent_cloud_and_ollama_embed_flags_are_not_usage_errors() {
+fn concurrent_neural_and_semantic_embed_flags_are_not_usage_errors() {
     let session = CliSession::sample(asgrep_bin());
     let index = session.index_path.to_str().expect("index utf8");
     let root = session.root.to_str().expect("root utf8");
@@ -883,8 +881,7 @@ fn concurrent_cloud_and_ollama_embed_flags_are_not_usage_errors() {
         &[
             "--json",
             "--no-embed",
-            "--cloud-embed",
-            "--ollama-embed",
+            "--neural-embed",
             "--index-path",
             index,
             "search",

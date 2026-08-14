@@ -428,10 +428,7 @@ fn archived_pi_fixture_graph_modes_match_indexed_keys() {
 
 #[test]
 fn parity_embed_backend_and_search_option_wiring() {
-    assert_eq!(
-        EmbedBackend::from_flags(false, false, true, false),
-        EmbedBackend::Neural
-    );
+    assert_eq!(EmbedBackend::from_flags(true, false), EmbedBackend::Neural);
     assert_eq!(
         EmbedBackend::Neural.to_preference(),
         EmbedPreference::Neural

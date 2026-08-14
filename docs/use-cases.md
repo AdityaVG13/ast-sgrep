@@ -69,7 +69,7 @@ Each hit includes `follow_up_queries` so agents can drill into defs/callers with
 
 ### No API key required
 
-Default offline semantic path is fully functional. Cloud and Ollama are optional upgrades, see [semantic-search.md](semantic-search.md).
+Default offline semantic path is fully functional (hashed vectors). Optional neural is in-process ONNX, see [semantic-search.md](semantic-search.md).
 
 ---
 
@@ -90,8 +90,7 @@ cargo install --path crates/ast-sgrep-lsp  # from a cloned checkout
     "transport": "stdio",
     "initializationOptions": {
       "asgrep": {
-        "cloudEmbed": false,
-        "ollamaEmbed": false,
+        "neuralEmbed": false,
         "semanticOnly": false,
         "annThreshold": 2000,
         "embedBackend": "auto"
@@ -108,11 +107,10 @@ Settings may be nested under `"asgrep"` or at the top level of `initializationOp
 | Key | Type | Description |
 |-----|------|-------------|
 | `noEmbed` | bool | Disable semantic indexing and search |
-| `cloudEmbed` | bool | Prefer cloud neural embeddings |
-| `ollamaEmbed` | bool | Prefer Ollama embeddings |
-| `semanticOnly` | bool | Offline semantic only |
+| `neuralEmbed` | bool | Prefer in-process neural embeddings (feature-gated) |
+| `semanticOnly` | bool | Offline hashed semantic only |
 | `annThreshold` | number | Symbol count before IVF-ANN (default 2000) |
-| `embedBackend` | string | `auto`, `cloud`, `ollama`, `semantic` |
+| `embedBackend` | string | `auto`, `neural`, `semantic` |
 | `indexPath` | string | Trusted custom `index.db` path. Disabled unless the operator sets `ASGREP_ALLOW_EXTERNAL_INDEX=1`; otherwise LSP indexes use the private user cache. |
 
 ### Capabilities

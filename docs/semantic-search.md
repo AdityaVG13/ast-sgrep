@@ -17,7 +17,7 @@ Each function or method contributes up to 32 distinct child spans. One-line func
 
 At search time, child vectors are compared by cosine similarity (or IVF-ANN at scale), grouped by parent, and ranked by the maximum child score. One parent result is returned with up to three highest-scoring raw source children as its snippet; enrichment text is used only to produce vectors and is never exposed as source. This gives fine-grained matching without losing a meaningful read unit or letting a large function consume multiple result slots.
 
-Schema version 6 clears legacy whole-symbol vectors, cached vectors, backend/model identity, and stored file fingerprints. The next index refresh rebuilds every file into the child-to-parent layout, so old and new layouts cannot mix. Backend model identity is persisted for semantic, neural, cloud, and Ollama vectors; indexing refreshes and search refuses stale vectors after a configured model change.
+Schema version 6 clears legacy whole-symbol vectors, cached vectors, backend/model identity, and stored file fingerprints. The next index refresh rebuilds every file into the child-to-parent layout, so old and new layouts cannot mix. Backend model identity is persisted for hashed semantic and in-process neural vectors; indexing refreshes and search refuses stale vectors after a configured model change. Indexes that still record `cloud` or `ollama` hard-error until `asgrep reindex`.
 
 ## Concept expansion
 
@@ -30,27 +30,27 @@ Before embedding, chunks are expanded with **code-domain concept groups**, synon
 | Validation / sanitization | validate, sanitize, check, verify |
 | Persistence / storage | persist, store, save, cache |
 
-Expansion is applied in the offline **semantic local** embedder (char n-grams + concept tokens). Neural backends (Ollama, cloud) rely on model semantics but still index the enriched chunk text.
+Expansion is applied in the offline **semantic local** embedder (char n-grams + concept tokens). In-process neural still indexes the enriched chunk text; the model supplies the similarity geometry.
 
 ## Provider chain
 
-At **index** and **search** time, the same chain is used:
+At **index** and **search** time, the same in-process chain is used:
 
 ```
-1. Cloud    , if ASGREP_EMBED_API_KEY is set
-2. Ollama   , if Ollama is reachable (ASGREP_OLLAMA_URL)
-3. Semantic local, always available (offline hashed embedder; see dimension note below)
+1. Neural, if built with --features neural-embed and ASGREP_NEURAL_EMBED is set
+2. Semantic local, always available (offline hashed embedder; see dimension note below)
 ```
+
+There is no cloud or Ollama embed client. Source text never leaves the process for embeddings.
 
 | Backend | Flag | Env |
 |---------|------|-----|
-| Auto (chain) | (default) |, |
-| Cloud | `--cloud-embed` | `ASGREP_EMBED_API_KEY`, `ASGREP_CLOUD_EMBED=1` |
-| Ollama | `--ollama-embed` | `ASGREP_OLLAMA_URL`, `ASGREP_OLLAMA_EMBED=1` |
+| Auto (chain) | (default) | |
+| Neural | `--neural-embed` | `ASGREP_NEURAL_EMBED=1` |
 | Semantic only | `--semantic-only` | `ASGREP_SEMANTIC_ONLY=1` |
 | Disabled | `--no-embed` | `ASGREP_NO_EMBED=1` |
 
-Concurrent backend flags (CLI `--cloud-embed --ollama-embed`, LSP `cloudEmbed` + `ollamaEmbed`, or several `SearchOptions::use_*` trues) collapse to one backend: **Cloud > Ollama > Neural > Semantic > Auto**. `SearchOptions` still exposes the four `use_*` adapter fields in 1.x; removing them is a SemVer major.
+Concurrent backend flags (CLI `--neural-embed --semantic-only`, LSP `neuralEmbed` + `semanticOnly`, or several `SearchOptions::use_*` trues) collapse to one backend: **Neural > Semantic > Auto**. Explicit Neural does not silently swap to hashed unless `ASGREP_NEURAL_FALLBACK=1`.
 
 `asgrep status` reports the stored `embed_backend` and `embed_dim`. For best results, query with the same backend used at index time.
 
@@ -62,21 +62,15 @@ Concurrent backend flags (CLI `--cloud-embed --ollama-embed`, LSP `cloudEmbed` +
 - Deterministic, offline, fast
 - Regression-tested: zero token-overlap queries must rank the correct symbol on the fixture suite (not a statistical guarantee on arbitrary corpora)
 
-### Ollama (optional)
+### Neural (optional, in-process)
 
 ```bash
-asgrep --ollama-embed index .
-# Default model: nomic-embed-text via ASGREP_OLLAMA_URL
+# Requires a build with --features neural-embed
+export ASGREP_NEURAL_EMBED=1
+asgrep --neural-embed index .
 ```
 
-### Cloud (optional)
-
-```bash
-export ASGREP_EMBED_API_KEY=sk-...
-asgrep --cloud-embed index .
-```
-
-OpenAI-compatible embedding API. Dimension depends on model; stored in index metadata.
+ONNX MiniLM / BGE via `fastembed` (default `all-minilm-l6-v2-q`, 384-d). First load may download weights into `ASGREP_NEURAL_CACHE_DIR` unless the model is already cached. This is not an HTTP embedding API: inference stays in-process.
 
 ## Search passes
 

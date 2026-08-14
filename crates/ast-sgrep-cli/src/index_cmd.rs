@@ -79,12 +79,7 @@ pub(crate) fn index_options(root: &Path, cli: &Cli) -> IndexOptions {
         respect_gitignore: true,
         use_tantivy: t.tantivy,
         embed_semantic: !t.no_embed,
-        embed_backend: EmbedBackend::from_flags(
-            t.cloud_embed,
-            t.ollama_embed,
-            t.neural_embed,
-            t.semantic_only,
-        ),
+        embed_backend: EmbedBackend::from_flags(t.neural_embed, t.semantic_only),
         force_reindex: false,
         ann_threshold: t.ann_threshold,
         // 0obi: explicit flag wins; otherwise the safe default.
@@ -465,14 +460,8 @@ pub(crate) fn search_options(root: &Path, cli: &Cli) -> SearchOptions {
         rerank_top_k: t.rerank_top_k.clamp(1, ast_sgrep_core::MAX_OUTPUT_RESULTS),
         ..SearchOptions::default()
     };
-    // f4ce.2: exclusive collapse (Cloud > Ollama > Neural > Semantic > Auto).
-    // Public --cloud-embed/--ollama-embed/--neural-embed/--semantic-only flags stay.
-    opts.set_embed_backend(EmbedBackend::from_flags(
-        t.cloud_embed,
-        t.ollama_embed,
-        t.neural_embed,
-        t.semantic_only,
-    ));
+    // Exclusive collapse: Neural > Semantic > Auto.
+    opts.set_embed_backend(EmbedBackend::from_flags(t.neural_embed, t.semantic_only));
     opts
 }
 

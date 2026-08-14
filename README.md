@@ -67,7 +67,7 @@ Most code search is either **fast text** (ripgrep) or **pattern matching** (ast-
 
 **ast-sgrep** builds a **persistent index**: symbols, caller/callee edges, imports, lexical FTS, and **symbol-level semantic vectors** enriched with call-graph context. Query in natural language or with graph prefixes; get ranked hits with excerpts for humans or agents.
 
-**No API key required.** Offline semantic search works out of the box. Cloud, Ollama, and optional neural embeddings are upgrades.
+**No API key required.** Offline hashed semantic search works out of the box. Optional in-process neural embeddings (ONNX / MiniLM) are a local upgrade, never a network call.
 
 | You need... | ast-sgrep gives you... |
 |-------------|------------------------|
@@ -122,7 +122,7 @@ Query: "credential renewal"
   → semantic pass ranks auth_refresh (zero token overlap)
 ```
 
-Provider chain: **Cloud** (if key) → **Ollama** (if configured) → **neural** (optional feature) → **local semantic** (always available). Large repos may use a persisted IVF-ANN sidecar (`.asgrep/semantic.ivf`).
+Provider chain: **neural** (optional `--features neural-embed` + `ASGREP_NEURAL_EMBED`) → **local hashed semantic** (always available). Large repos may use a persisted IVF-ANN sidecar (`.asgrep/semantic.ivf`). There is no cloud or Ollama embed client.
 
 [Semantic layer →](docs/semantic-search.md)
 

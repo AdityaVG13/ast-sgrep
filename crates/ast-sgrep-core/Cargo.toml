@@ -15,8 +15,7 @@ documentation = "https://docs.rs/ast-sgrep-core"
 workspace = true
 
 [features]
-default = ["cloud-embed"]
-cloud-embed = ["ast-sgrep-embed/cloud"]
+default = []
 # Real neural embeddings (fastembed/ONNX). Heavy dependency, opt-in: off by
 # default in the workspace, enabled with --features neural-embed.
 neural-embed = ["ast-sgrep-embed/neural-embed"]
@@ -66,9 +65,6 @@ path = "../../tests/core/cascade_planner.rs"
 [[test]]
 name = "chain_case"
 path = "../../tests/core/chain_case.rs"
-[[test]]
-name = "cloud_feature_gate"
-path = "../../tests/core/cloud_feature_gate.rs"
 [[test]]
 name = "code_prose_fields"
 path = "../../tests/core/code_prose_fields.rs"

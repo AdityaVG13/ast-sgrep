@@ -83,7 +83,7 @@ pub struct Searcher {
 }
 /// Fail closed when callers request optional neural/rerank paths that were
 pub fn validate_search_feature_flags(options: &SearchOptions) -> Result<()> {
-    if options.use_neural_embed {
+    if options.use_embed && options.use_neural_embed {
         #[cfg(not(feature = "neural-embed"))]
         {
             return Err(crate::StoreError::Other(

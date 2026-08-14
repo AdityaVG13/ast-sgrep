@@ -43,22 +43,6 @@ pub(crate) struct SearchTuning {
     pub(crate) no_embed: bool,
     #[arg(
         long,
-        env = "ASGREP_CLOUD_EMBED",
-        action = clap::ArgAction::SetTrue,
-        value_parser = clap::builder::BoolishValueParser::new(),
-        help = "Prefer cloud embeddings"
-    )]
-    pub(crate) cloud_embed: bool,
-    #[arg(
-        long,
-        env = "ASGREP_OLLAMA_EMBED",
-        action = clap::ArgAction::SetTrue,
-        value_parser = clap::builder::BoolishValueParser::new(),
-        help = "Prefer Ollama embeddings"
-    )]
-    pub(crate) ollama_embed: bool,
-    #[arg(
-        long,
         env = "ASGREP_NEURAL_EMBED",
         action = clap::ArgAction::SetTrue,
         value_parser = clap::builder::BoolishValueParser::new(),
@@ -482,8 +466,6 @@ impl Cli {
         };
         if let Some(o) = overlay {
             t.no_embed |= o.no_embed;
-            t.cloud_embed |= o.cloud_embed;
-            t.ollama_embed |= o.ollama_embed;
             t.neural_embed |= o.neural_embed;
             t.semantic_only |= o.semantic_only;
             t.tantivy |= o.tantivy;

@@ -167,8 +167,6 @@ struct SearcherKey {
     index_path: Option<PathBuf>,
     limit: usize,
     use_embed: bool,
-    use_cloud_embed: bool,
-    use_ollama_embed: bool,
     use_neural_embed: bool,
     use_semantic_only: bool,
 }
@@ -187,8 +185,6 @@ pub struct McpServer {
     index_path: Option<PathBuf>,
     limit: usize,
     use_embed: bool,
-    use_cloud_embed: bool,
-    use_ollama_embed: bool,
     use_neural_embed: bool,
     use_semantic_only: bool,
     /// Reused across search-channel calls; cleared after index mutations.
@@ -223,8 +219,6 @@ impl McpServer {
                     ast_sgrep_core::clamp_agent_limit(None, SearchOptions::default_limit())
                 }),
             use_embed: !ast_sgrep_core::env_flag::env_flag("ASGREP_NO_EMBED"),
-            use_cloud_embed: ast_sgrep_core::env_flag::env_flag("ASGREP_CLOUD_EMBED"),
-            use_ollama_embed: ast_sgrep_core::env_flag::env_flag("ASGREP_OLLAMA_EMBED"),
             use_neural_embed: ast_sgrep_core::env_flag::env_flag("ASGREP_NEURAL_EMBED"),
             use_semantic_only: ast_sgrep_core::env_flag::env_flag("ASGREP_SEMANTIC_ONLY"),
             searcher_cache: Mutex::new(SearcherCache::default()),
@@ -623,8 +617,6 @@ impl McpServer {
             index_path: self.index_path.clone(),
             limit,
             use_embed: self.use_embed,
-            use_cloud_embed: self.use_cloud_embed,
-            use_ollama_embed: self.use_ollama_embed,
             use_neural_embed: self.use_neural_embed,
             use_semantic_only: self.use_semantic_only,
         }
@@ -636,8 +628,6 @@ impl McpServer {
             index_path: self.index_path.clone(),
             limit,
             use_embed: self.use_embed,
-            use_cloud_embed: self.use_cloud_embed,
-            use_ollama_embed: self.use_ollama_embed,
             use_neural_embed: self.use_neural_embed,
             use_semantic_only: self.use_semantic_only,
             ..SearchOptions::default()
@@ -958,12 +948,7 @@ impl McpServer {
         let mut indexer = Indexer::new(IndexOptions {
             embed_semantic: self.use_embed,
             embed_backend: if self.use_embed {
-                EmbedBackend::from_flags(
-                    self.use_cloud_embed,
-                    self.use_ollama_embed,
-                    self.use_neural_embed,
-                    self.use_semantic_only,
-                )
+                EmbedBackend::from_flags(self.use_neural_embed, self.use_semantic_only)
             } else {
                 EmbedBackend::Semantic
             },
