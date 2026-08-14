@@ -121,6 +121,9 @@ path = "../../tests/core/pattern_routing.rs"
 name = "pattern_diff"
 path = "../../tests/core/pattern_diff.rs"
 [[test]]
+name = "external_ast_grep_e2e"
+path = "../../tests/core/external_ast_grep_e2e.rs"
+[[test]]
 name = "properties"
 path = "../../tests/core/properties.rs"
 [[test]]

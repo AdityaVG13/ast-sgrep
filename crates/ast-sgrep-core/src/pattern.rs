@@ -396,6 +396,93 @@ fn wait_child_deadline(child: &mut Child, deadline: Instant, require_success: bo
         }
     }
 }
+/// One row from opt-in `ast-grep run --json` (lbx1.9).
+/// `line_start` is 1-based, matching `SearchHit`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExternalAstGrepMatch {
+    pub file: String,
+    pub line_start: u32,
+}
+
+/// Spawn allowed external `ast-grep` and parse `--json` matches.
+///
+/// `None` when the allow gate is off or the binary is unset/invalid (no PATH
+/// search). `Err` when the gate is on but spawn, timeout, or JSON parse fails.
+/// Does **not** feed `search_pattern` (`DISC-pattern-native-subset`).
+///
+/// `lang` maps to `ast-grep --lang` when set (required for reliable structural
+/// matches). `--json=compact` is required by ast-grep 0.45+.
+pub fn run_external_ast_grep(
+    pattern: &str,
+    root: &Path,
+    lang: Option<&str>,
+) -> Result<Option<Vec<ExternalAstGrepMatch>>> {
+    let Some(bin) = find_ast_grep_binary() else {
+        return Ok(None);
+    };
+    let root = root
+        .canonicalize()
+        .unwrap_or_else(|_| root.to_path_buf())
+        .to_string_lossy()
+        .into_owned();
+    let mut command = Command::new(&bin);
+    command.args(["run", "--pattern", pattern, "--json=compact"]);
+    if let Some(lang) = lang {
+        command.args(["--lang", lang]);
+    }
+    let mut child = command
+        .arg(&root)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| {
+            crate::StoreError::Other(format!("failed to spawn ast-grep: {error}"))
+        })?;
+    // ast-grep exits 1 on zero matches; still parse JSON stdout.
+    if wait_child_deadline(&mut child, Instant::now() + Duration::from_secs(30), false).is_none()
+    {
+        return Err(crate::StoreError::Other("ast-grep run timed out".into()));
+    }
+    let output = child.wait_with_output().map_err(|error| {
+        crate::StoreError::Other(format!("ast-grep wait failed: {error}"))
+    })?;
+    match parse_ast_grep_json(&output.stdout) {
+        Ok(parsed) => Ok(parsed),
+        Err(parse_error) if output.status.success() => Err(parse_error),
+        Err(parse_error) => Err(crate::StoreError::Other(format!(
+            "{parse_error}; stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        ))),
+    }
+}
+
+fn parse_ast_grep_json(stdout: &[u8]) -> Result<Option<Vec<ExternalAstGrepMatch>>> {
+    let value: serde_json::Value = serde_json::from_slice(stdout).map_err(|error| {
+        crate::StoreError::Other(format!("ast-grep JSON parse failed: {error}"))
+    })?;
+    let rows = value.as_array().ok_or_else(|| {
+        crate::StoreError::Other("ast-grep --json did not return an array".into())
+    })?;
+    let mut matches = Vec::with_capacity(rows.len());
+    for row in rows {
+        let file = row
+            .get("file")
+            .or_else(|| row.get("path"))
+            .and_then(|value| value.as_str())
+            .unwrap_or("")
+            .to_string();
+        let line0 = row
+            .get("range")
+            .and_then(|range| range.get("start"))
+            .and_then(|start| start.get("line"))
+            .and_then(|line| line.as_u64())
+            .unwrap_or(0);
+        let line_start = u32::try_from(line0.saturating_add(1)).unwrap_or(u32::MAX);
+        matches.push(ExternalAstGrepMatch { file, line_start });
+    }
+    Ok(Some(matches))
+}
+
 /// Optional external `ast-grep` for **bench comparison only**.
 /// Disabled by default: never searches PATH or executes untrusted binaries
 /// (`ast-sgrep-j0x4` / `agent-security-rl1p.5`). Requires both
