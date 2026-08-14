@@ -374,6 +374,53 @@ impl SearchOptions {
         )
         .to_preference()
     }
+
+    /// Hard-error text when a non-hashed backend is requested but cannot run.
+    ///
+    /// Hashed (`Semantic`) and `Auto` stay available. Cloud/Ollama/Neural must
+    /// not silently swap to hashed hits (lbx1.10).
+    pub fn unavailable_non_hashed_embed(&self) -> Option<String> {
+        use ast_sgrep_embed::{CloudEmbeddingConfig, OllamaEmbeddingConfig};
+        match self.embed_preference() {
+            ast_sgrep_embed::EmbedPreference::Cloud
+                if CloudEmbeddingConfig::from_env().is_none() =>
+            {
+                Some(
+                    "semantic_search requested cloud embed but it is not configured (need ASGREP_EMBED_API_KEY); refusing hashed fallback"
+                        .into(),
+                )
+            }
+            ast_sgrep_embed::EmbedPreference::Ollama
+                if OllamaEmbeddingConfig::from_env().is_none() =>
+            {
+                Some(
+                    "semantic_search requested ollama embed but it is not configured (need ASGREP_OLLAMA_EMBED/ASGREP_OLLAMA_URL, and ASGREP_NO_OLLAMA must be unset); refusing hashed fallback"
+                        .into(),
+                )
+            }
+            ast_sgrep_embed::EmbedPreference::Neural => {
+                #[cfg(not(feature = "neural-embed"))]
+                {
+                    Some(
+                        "semantic_search requested neural embed but this build has no neural-embed feature; refusing hashed fallback"
+                            .into(),
+                    )
+                }
+                #[cfg(feature = "neural-embed")]
+                {
+                    if ast_sgrep_embed::NeuralEmbeddingConfig::from_env().is_none() {
+                        Some(
+                            "semantic_search requested neural embed but it is not configured; refusing hashed fallback"
+                                .into(),
+                        )
+                    } else {
+                        None
+                    }
+                }
+            }
+            _ => None,
+        }
+    }
     /// Stable fingerprint of options that affect search results (nyui).
     pub fn cache_identity(&self) -> String {
         format!(

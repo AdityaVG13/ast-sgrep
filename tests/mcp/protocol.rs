@@ -36,10 +36,28 @@ fn rpc_at(payload: Value, root: Option<&std::path::Path>) -> Value {
 /// Drive several requests through ONE server process. Compact path ids (kxmc)
 /// are session state, so search-then-read must share a process to be realistic.
 fn rpc_session(payloads: Vec<Value>, root: Option<&std::path::Path>) -> Vec<Value> {
+    rpc_session_env(payloads, root, &[])
+}
+
+fn rpc_session_env(
+    payloads: Vec<Value>,
+    root: Option<&std::path::Path>,
+    extra_env: &[(&str, Option<&str>)],
+) -> Vec<Value> {
     let mut command = Command::new(mcp_bin());
     command.stdin(Stdio::piped()).stdout(Stdio::piped());
     if let Some(root) = root {
         command.env("ASGREP_ROOT", root);
+    }
+    for (key, value) in extra_env {
+        match value {
+            Some(value) => {
+                command.env(key, value);
+            }
+            None => {
+                command.env_remove(key);
+            }
+        }
     }
     let mut child = command.spawn().expect("spawn MCP");
     {
@@ -679,4 +697,51 @@ fn initialize_and_tools_list_match_goldens() {
             && tool.get("inputSchema").is_some()
     }));
     assert_golden_json_at(&mcp_fixture("tools_list.json"), &tools);
+}
+
+/// lbx1.10: selecting cloud via env must not return hashed embed hits when the
+/// backend is unconfigured. Real asgrep-mcp process; hard error, not empty/kind=e.
+#[test]
+fn semantic_search_cloud_without_key_is_hard_error_not_hashed_hits() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("src");
+    std::fs::create_dir(&source).unwrap();
+    std::fs::write(source.join("lib.rs"), "fn target_symbol() { helper(); }\nfn helper() {}\n")
+        .unwrap();
+    ast_sgrep_core::Indexer::new(ast_sgrep_core::IndexOptions {
+        root: temp.path().to_path_buf(),
+        embed_semantic: true,
+        ..ast_sgrep_core::IndexOptions::default()
+    })
+    .unwrap()
+    .index_all()
+    .unwrap();
+
+    let search = json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"semantic_search","arguments":{"query":"target symbol","limit":8}}});
+    let responses = rpc_session_env(
+        vec![search],
+        Some(temp.path()),
+        &[
+            ("ASGREP_CLOUD_EMBED", Some("1")),
+            ("ASGREP_EMBED_API_KEY", None),
+            ("ASGREP_EMBED_FALLBACK", None),
+        ],
+    );
+    assert_eq!(responses.len(), 1, "{responses:#?}");
+    let response = &responses[0];
+    assert_eq!(
+        response["result"]["isError"], true,
+        "misconfigured cloud must be a tool error, not hashed hits: {response:#}"
+    );
+    let text = response["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap_or("");
+    assert!(
+        text.contains("cloud") && text.contains("ASGREP_EMBED_API_KEY"),
+        "error must name the missing cloud config: {text}"
+    );
+    assert!(
+        !text.contains("\"h\""),
+        "must not return a hit envelope: {text}"
+    );
 }
