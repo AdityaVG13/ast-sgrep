@@ -71,6 +71,7 @@ pub use limits::{
 };
 pub mod lexicon;
 pub mod resolution;
+pub mod scip;
 pub use pattern::{run_external_ast_grep, search_pattern, ExternalAstGrepMatch};
 pub use query::{ParsedQuery, QueryMode};
 pub use search::{
