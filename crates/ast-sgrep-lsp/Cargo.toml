@@ -35,3 +35,6 @@ path = "../../tests/lsp/fuzz_oracles.rs"
 [[test]]
 name = "lsp"
 path = "../../tests/lsp/lsp.rs"
+[[test]]
+name = "lsp_stdio_e2e"
+path = "../../tests/lsp/lsp_stdio_e2e.rs"
