@@ -153,6 +153,7 @@ impl<'task> ScopedTask<'task> for SessionCallTask {
     fn compute(&mut self) -> Result<Self::Output> {
         let mut session = lock_session(&self.inner, &self.cancelled)?;
         let result = session.call(&self.tool, std::mem::take(&mut self.args));
+        // Saturate at u32::MAX; session cap 10_000 makes wrap unreachable (pb2w).
         self.call_count.store(
             session.call_count().min(u32::MAX as usize) as u32,
             Ordering::Relaxed,

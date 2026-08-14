@@ -41,6 +41,23 @@ const SYM_LOC: &str = "SELECT f.path, s.name, f.language, s.line_start, s.line_e
 pub type IndexedLineRow = (Arc<str>, u32, String, Option<Arc<str>>);
 pub type ImportQueryRow = (String, Option<String>, String, u32);
 pub type CallRow = (String, u32, String, String);
+
+/// INTEGER byte offsets must fit `i64` on write (pb2w). Wrapping `as i64`
+/// would store a negative and later wrap to `usize::MAX` on a 64-bit host.
+fn sql_i64_from_byte_offset(value: usize) -> rusqlite::Result<i64> {
+    i64::try_from(value).map_err(|_| {
+        rusqlite::Error::ToSqlConversionFailure(Box::new(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("byte offset {value} exceeds SQLite INTEGER storage"),
+        )))
+    })
+}
+
+/// Reject negative / out-of-range INTEGER byte offsets on read (pb2w).
+fn sql_usize_from_byte_offset(row: &rusqlite::Row<'_>, idx: usize) -> rusqlite::Result<usize> {
+    let raw: i64 = row.get(idx)?;
+    usize::try_from(raw).map_err(|_| rusqlite::Error::IntegralValueOutOfRange(idx, raw))
+}
 pub struct PatternNodeRow {
     pub path: String,
     pub language: Option<String>,
@@ -1026,8 +1043,8 @@ impl IndexStore {
                 s.kind,
                 s.line_start,
                 s.line_end,
-                s.byte_start as i64,
-                s.byte_end as i64
+                sql_i64_from_byte_offset(s.byte_start)?,
+                sql_i64_from_byte_offset(s.byte_end)?
             ])?;
             ids.push(self.conn.last_insert_rowid());
         }
@@ -1173,8 +1190,8 @@ impl IndexStore {
                     c.caller,
                     c.callee,
                     c.line_no,
-                    c.byte_start as i64,
-                    c.byte_end as i64
+                    sql_i64_from_byte_offset(c.byte_start)?,
+                    sql_i64_from_byte_offset(c.byte_end)?
                 ])?;
                 Ok(())
             },
@@ -1559,8 +1576,8 @@ impl IndexStore {
                     kind: r.get(1)?,
                     line_start: r.get(2)?,
                     line_end: r.get(3)?,
-                    byte_start: r.get(4)?,
-                    byte_end: r.get(5)?,
+                    byte_start: sql_usize_from_byte_offset(r, 4)?,
+                    byte_end: sql_usize_from_byte_offset(r, 5)?,
                 })
             },
         )
