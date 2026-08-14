@@ -28,6 +28,23 @@ source tree
 
 The dependency direction is intentionally toward `ast-sgrep-core`: front ends translate their protocol into core operations instead of reimplementing retrieval.
 
+### Prod Bill vs with-dev SCC
+
+Primary (prod path deps) is a DAG. Do not file a "break prod cycle" bead.
+
+`ast-sgrep-testkit` default prod edges are `core` and `lang` only (E14/E16 Keep). `ast-sgrep-lsp` is optional behind the testkit `lsp` feature (E17 B3, `e32f004`). `ast-sgrep-embed` is not a testkit path dep (E15 cut).
+
+With-dev still has harness tax: `core` and `lang` `--dev-->` testkit, and testkit `--prod-->` those crates, so `{core, lang, testkit}` remain mutually reachable. `lsp --dev--> testkit` (D05) stays; default testkit does not depend on lsp, so lsp is not in that component. Keep under the Cargo dev/prod split. Break options (extract fixtures, move LSP helpers into `ast-sgrep-lsp` tests) need a separate transform wave.
+
+Re-measure (2026-08-14, this worktree, `cargo tree --edges normal[,dev] --depth 1 --offline`):
+
+| Graph | Evidence |
+|---|---|
+| testkit prod | `ast-sgrep-core`, `ast-sgrep-lang` (no `ast-sgrep-lsp` package in the tree) |
+| lsp with-dev | prod `core`; dev `testkit` |
+| core with-dev | prod `lang` + embed/mmap; dev `testkit` |
+| lang with-dev | dev `testkit` |
+
 ## Persistent index
 
 The default index is `<root>/.asgrep/index.db`. File updates are incremental and stored transactionally. The schema separates source facts from derived acceleration structures:
