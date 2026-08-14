@@ -1,9 +1,11 @@
+pub(crate) mod field_weight;
 mod fusion;
 pub mod passes;
 mod types;
 use crate::query::{ParsedQuery, QueryMode};
 use crate::store::IndexStore;
 use crate::Result;
+pub use field_weight::EmbedFieldScores;
 pub use fusion::dedup_hits;
 use passes::embed::{embed_pass_for_files, run_embed_pass, SemanticCache};
 use passes::lexical::lexical_pass;

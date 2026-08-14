@@ -91,6 +91,7 @@ fn weighted_rrf_aggregates_channels_by_result_location() {
             margin: 0.0,
             confidence: 0.0,
             resolution: None,
+            embed_fields: None,
             excerpt: String::new(),
         }
     }
@@ -138,6 +139,7 @@ fn same_channel_duplicates_do_not_consume_rrf_positions() {
             margin: 0.0,
             confidence: 0.0,
             resolution: None,
+            embed_fields: None,
             excerpt: symbol.unwrap_or_default().into(),
         }
     }

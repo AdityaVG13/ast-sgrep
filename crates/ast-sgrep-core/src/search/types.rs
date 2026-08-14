@@ -89,6 +89,9 @@ pub struct SearchHit {
     /// How a graph edge was resolved, when this hit came from one (dvc4).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resolution: Option<crate::resolution::Resolution>,
+    /// Per-field embed similarities when multi-field vectors were used (7d5x.3).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub embed_fields: Option<super::field_weight::EmbedFieldScores>,
     #[serde(serialize_with = "serialize_excerpt")]
     pub excerpt: String,
 }
@@ -147,6 +150,7 @@ impl<'de> serde::Deserialize<'de> for SearchHit {
             },
             // dvc4: resolution is engine-derived, never trusted from the wire.
             resolution: None,
+            embed_fields: None,
             excerpt: bound_excerpt(wire.excerpt),
         })
     }
@@ -186,6 +190,7 @@ impl SearchHit {
             margin: 0.0,
             confidence: 0.0,
             resolution: None,
+            embed_fields: None,
             excerpt: bound_excerpt(excerpt),
         }
     }
@@ -694,6 +699,9 @@ pub fn hit_why(hit: &SearchHit) -> Vec<String> {
             HitKind::Pattern => "structural_pattern".to_owned(),
             HitKind::Embed => "semantic_similarity".to_owned(),
         });
+    }
+    if let Some(fields) = &hit.embed_fields {
+        why.extend(fields.why_terms());
     }
     why.dedup();
     why

@@ -33,6 +33,7 @@ fn hit(name: &str, score: f64) -> SearchHit {
         margin: 0.0,
         confidence: 0.8,
         resolution: None,
+        embed_fields: None,
         excerpt: long_function(name),
     }
 }

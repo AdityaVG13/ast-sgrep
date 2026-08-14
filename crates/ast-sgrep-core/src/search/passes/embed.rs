@@ -1,7 +1,10 @@
+use crate::intent::{classify, QueryIntent};
 use crate::query::ParsedQuery;
 use crate::rank::SCORE_EMBED;
+use crate::search::field_weight::{rescore_similarity, EmbedFieldScores};
 use crate::search::types::{HitKind, SearchHit, SearchOptions, SpanHitInput};
 use crate::semantic_ann::{flatten_vectors_for_search, rank_chunk_indices_flat};
+use crate::semantic_chunk::SemanticFieldVectors;
 use crate::store::IndexStore;
 use crate::Result;
 use ast_sgrep_embed::{embed_query, SemanticChunkRow};
@@ -161,14 +164,25 @@ pub fn embed_pass_lazy_ivf(
         .into_iter()
         .collect();
     let mut chunks = Vec::with_capacity(candidate_ids.len());
-    for id in candidate_ids {
-        let Some(row) = rows.remove(&id) else {
+    for id in &candidate_ids {
+        let Some(row) = rows.remove(id) else {
             return Ok(None);
         };
         chunks.push(row);
     }
     let ranked = ast_sgrep_embed::rank_chunk_indices_by_vector(&query_vec, &chunks, chunks.len());
-    Ok(Some(embed_similarity_hits(&chunks, ranked)))
+    let field_map = store.semantic_field_vectors_by_ids(&candidate_ids)?;
+    let fields: Vec<SemanticFieldVectors> = candidate_ids
+        .iter()
+        .map(|id| field_map.get(id).cloned().unwrap_or_default())
+        .collect();
+    Ok(Some(embed_hits_rescored(
+        &chunks,
+        ranked,
+        &query_vec,
+        &fields,
+        classify(parsed),
+    )))
 }
 pub fn embed_pass_for_files(
     store: &IndexStore,
@@ -204,7 +218,13 @@ pub fn embed_pass_for_files(
     )?;
     let ranked =
         ast_sgrep_embed::rank_chunk_indices_by_vector(&query_vec, &survivors, survivors.len());
-    Ok(embed_similarity_hits(&survivors, ranked))
+    Ok(embed_hits_rescored(
+        &survivors,
+        ranked,
+        &query_vec,
+        &[],
+        classify(parsed),
+    ))
 }
 
 pub fn embed_pass_with_context(
@@ -237,7 +257,21 @@ pub fn embed_pass_with_context(
     };
     let indices =
         rank_chunk_indices_flat(store, &query_vec, chunks, flat, chunks.len(), ann_threshold)?;
-    Ok(embed_similarity_hits(chunks, indices))
+    let field_rows = store.semantic_field_vectors_filtered(options.lang_filter.as_deref())?;
+    // Same JOIN + ORDER BY sc.id as all_semantic_chunks. Length mismatch
+    // means skip rescoring rather than pairing the wrong field vectors.
+    let fields: Vec<SemanticFieldVectors> = if field_rows.len() == chunks.len() {
+        field_rows.into_iter().map(|(_, f)| f).collect()
+    } else {
+        Vec::new()
+    };
+    Ok(embed_hits_rescored(
+        chunks,
+        indices,
+        &query_vec,
+        &fields,
+        classify(parsed),
+    ))
 }
 /// Process-wide query embedding cache (query|backend|model|dim|pref → vector).
 /// Poison fails closed: clear the map before reuse (sxjc / pass11).
@@ -308,7 +342,36 @@ fn embed_query_vector(
     }
     Ok(vector)
 }
-fn embed_similarity_hits(chunks: &[SemanticChunkRow], ranked: Vec<(usize, f32)>) -> Vec<SearchHit> {
+fn embed_hits_rescored(
+    chunks: &[SemanticChunkRow],
+    ranked: Vec<(usize, f32)>,
+    query_vec: &[f32],
+    fields: &[SemanticFieldVectors],
+    intent: QueryIntent,
+) -> Vec<SearchHit> {
+    let mut notes = vec![None; chunks.len()];
+    let ranked = ranked
+        .into_iter()
+        .map(|(idx, primary)| {
+            if let Some(field) = fields.get(idx) {
+                let (score, note) = rescore_similarity(primary, query_vec, field, intent);
+                if idx < notes.len() {
+                    notes[idx] = note;
+                }
+                (idx, score)
+            } else {
+                (idx, primary)
+            }
+        })
+        .collect();
+    embed_similarity_hits(chunks, ranked, &notes)
+}
+
+fn embed_similarity_hits(
+    chunks: &[SemanticChunkRow],
+    ranked: Vec<(usize, f32)>,
+    field_notes: &[Option<EmbedFieldScores>],
+) -> Vec<SearchHit> {
     #[derive(Debug)]
     struct ParentMatch {
         best_index: usize,
@@ -358,7 +421,7 @@ fn embed_similarity_hits(chunks: &[SemanticChunkRow], ranked: Vec<(usize, f32)>)
             });
             parent.children.truncate(3);
             let (file, line_start, line_end, symbol, _, _) = &chunks[parent.best_index];
-            SearchHit::span(SpanHitInput {
+            let mut hit = SearchHit::span(SpanHitInput {
                 kind: HitKind::Embed,
                 file: file.clone(),
                 line_start: *line_start,
@@ -372,7 +435,9 @@ fn embed_similarity_hits(chunks: &[SemanticChunkRow], ranked: Vec<(usize, f32)>)
                     .join("\n...\n"),
                 symbol: (!symbol.is_empty()).then_some(symbol.clone()),
                 language: None,
-            })
+            });
+            hit.embed_fields = field_notes.get(parent.best_index).cloned().flatten();
+            hit
         })
         .collect()
 }
@@ -389,6 +454,7 @@ fn embed_legacy_hits(
     Ok(embed_similarity_hits(
         &chunks,
         ast_sgrep_embed::rank_chunk_indices_by_vector(&query_vec, &chunks, chunks.len()),
+        &[],
     ))
 }
 

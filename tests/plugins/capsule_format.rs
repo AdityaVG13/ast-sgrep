@@ -28,6 +28,7 @@ fn sample() -> SearchResponse {
                 margin: 0.0,
                 confidence: 0.0,
                 resolution: None,
+                embed_fields: None,
                 excerpt: "fn auth_refresh() {\n    renew_token();\n    log();\n}".into(),
             },
             SearchHit {
@@ -45,6 +46,7 @@ fn sample() -> SearchResponse {
                 margin: 0.0,
                 confidence: 0.0,
                 resolution: None,
+                embed_fields: None,
                 excerpt: format!("   \n{long}"),
             },
         ],
@@ -350,6 +352,7 @@ fn many_file_sample() -> SearchResponse {
             margin: 0.1,
             confidence: 0.0,
             resolution: None,
+            embed_fields: None,
             excerpt: format!("fn handler_{index}(session: &Session) -> Result<Token> {{\n    rotate(session)\n}}"),
         })
         .collect();

@@ -18,6 +18,7 @@ fn hit(kind: HitKind, score: f64, excerpt: &str) -> SearchHit {
         margin: 0.0,
         confidence: 0.0,
         resolution: None,
+        embed_fields: None,
         excerpt: excerpt.into(),
     }
 }
