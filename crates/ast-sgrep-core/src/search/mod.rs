@@ -303,9 +303,11 @@ impl Searcher {
         ))
     }
 
-    /// Repository associations that apply to this query (ufk7).
-    fn query_expansions(&self, query: &str, lexicon_generation: i64) -> Vec<QueryExpansion> {
-        let terms: Vec<String> = crate::lexicon::prose_terms(query);
+    fn repository_associations(
+        &self,
+        terms: &[String],
+        lexicon_generation: i64,
+    ) -> Vec<crate::lexicon::Association> {
         if terms.is_empty() {
             return Vec::new();
         }
@@ -325,8 +327,13 @@ impl Searcher {
         if lexicon.is_empty() {
             return Vec::new();
         }
-        lexicon
-            .expand(&terms, MAX_QUERY_EXPANSIONS)
+        lexicon.expand(terms, MAX_QUERY_EXPANSIONS)
+    }
+
+    /// Repository associations that apply to this query (ufk7).
+    fn query_expansions(&self, query: &str, lexicon_generation: i64) -> Vec<QueryExpansion> {
+        let terms = crate::lexicon::prose_terms(query);
+        self.repository_associations(&terms, lexicon_generation)
             .into_iter()
             .map(|association| QueryExpansion {
                 because: crate::lexicon::explain(&association),
@@ -335,6 +342,31 @@ impl Searcher {
                 support: association.support,
             })
             .collect()
+    }
+
+    /// Add bounded repository vocabulary only to conceptual semantic work.
+    /// The original query still owns exact/structural scoring and the response.
+    fn repository_expanded_query(&self, parsed: &ParsedQuery) -> Result<Option<ParsedQuery>> {
+        if !self.options.use_embed
+            || !self.options.use_repository_vocabulary
+            || crate::intent::classify(parsed) != crate::intent::QueryIntent::Conceptual
+        {
+            return Ok(None);
+        }
+        let (_, lexicon_generation) = self.store.search_data_versions()?;
+        let terms = crate::lexicon::prose_terms(&parsed.raw);
+        let associations = self.repository_associations(&terms, lexicon_generation);
+        let mut expanded = parsed.clone();
+        for association in associations {
+            if !expanded.terms.contains(&association.related) {
+                expanded.terms.push(association.related);
+            }
+        }
+        if expanded.terms.len() == parsed.terms.len() {
+            Ok(None)
+        } else {
+            Ok(Some(expanded))
+        }
     }
 
     /// Describe the snapshot a response was read from (d3l5).
@@ -498,22 +530,32 @@ impl Searcher {
                 // ChannelQuery::parse never yields Hybrid; stay total anyway.
                 QueryMode::Hybrid => Ok(Vec::new()),
             },
-            conjunction::ChannelQuery::Semantic(query) => run_embed_pass(
-                &self.store,
-                &self.options,
-                &ParsedQuery::parse(query),
-                &self.semantic_cache,
-            ),
+            conjunction::ChannelQuery::Semantic(query) => {
+                let parsed = ParsedQuery::parse(query);
+                let expanded = self.repository_expanded_query(&parsed)?;
+                run_embed_pass(
+                    &self.store,
+                    &self.options,
+                    expanded.as_ref().unwrap_or(&parsed),
+                    &self.semantic_cache,
+                )
+            }
         }
     }
     pub fn search_semantic(&self, query_str: &str) -> Result<SearchResponse> {
         validate_query_arg(query_str)?;
         self.cached("sem", query_str, || {
             let parsed = ParsedQuery::parse(query_str);
+            let expanded = self.repository_expanded_query(&parsed)?;
             finish_response_checked(
                 &parsed,
                 &self.options,
-                run_embed_pass(&self.store, &self.options, &parsed, &self.semantic_cache)?,
+                run_embed_pass(
+                    &self.store,
+                    &self.options,
+                    expanded.as_ref().unwrap_or(&parsed),
+                    &self.semantic_cache,
+                )?,
                 false,
             )
         })
@@ -557,7 +599,13 @@ impl Searcher {
     fn search_hybrid(&self, parsed: &ParsedQuery) -> Result<Vec<SearchHit>> {
         // Constraint cascade: each stage receives only files that survived the prior stage.
         let mut lexical = literal_prefilter_pass(&self.store, &self.options, parsed)?;
-        let lexical_files = lexical
+        let expanded = self.repository_expanded_query(parsed)?;
+        let semantic_query = expanded.as_ref().unwrap_or(parsed);
+        let candidate_lexical = match &expanded {
+            Some(expanded) => literal_prefilter_pass(&self.store, &self.options, expanded)?,
+            None => lexical.clone(),
+        };
+        let lexical_files = candidate_lexical
             .iter()
             .map(|hit| hit.file.clone())
             .collect::<HashSet<_>>();
@@ -596,7 +644,7 @@ impl Searcher {
         hits.extend(structural);
         if self.options.use_embed {
             let semantic =
-                embed_pass_for_files(&self.store, &self.options, parsed, &working_files)?;
+                embed_pass_for_files(&self.store, &self.options, semantic_query, &working_files)?;
             if crate::intent::classify(parsed) == crate::intent::QueryIntent::Conceptual {
                 hits.extend(conceptual_fanout_pass(
                     &self.store,

@@ -162,12 +162,16 @@ struct EvalConfig {
     /// 7d5x.4: rank embed hits by the concatenated chunk vector only,
     /// skipping the intent-weighted per-field rescore.
     concat_embed: bool,
+    /// Keep repository vocabulary reportable but out of ranking, providing the
+    /// native semantic A/B control arm (ozcq).
+    no_repository_vocabulary: bool,
 }
 impl EvalConfig {
     const HYBRID: Self = Self {
         no_embed: false,
         semantic_only: false,
         concat_embed: false,
+        no_repository_vocabulary: false,
     };
     fn label(self) -> &'static str {
         if self.semantic_only {
@@ -176,12 +180,14 @@ impl EvalConfig {
             "no-embed"
         } else if self.concat_embed {
             "concat-embed"
+        } else if self.no_repository_vocabulary {
+            "no-repository-vocabulary"
         } else {
             "hybrid"
         }
     }
     fn json(self, root: &Path, index_path: &Path) -> Value {
-        json!({"root": root.display().to_string(), "index_path": index_path.display().to_string(), "no_embed": self.no_embed, "semantic_only": self.semantic_only, "concat_embed": self.concat_embed})
+        json!({"root": root.display().to_string(), "index_path": index_path.display().to_string(), "no_embed": self.no_embed, "semantic_only": self.semantic_only, "concat_embed": self.concat_embed, "repository_vocabulary": !self.no_repository_vocabulary})
     }
 }
 fn ab_config(mode: &str) -> anyhow::Result<EvalConfig> {
@@ -198,8 +204,12 @@ fn ab_config(mode: &str) -> anyhow::Result<EvalConfig> {
             concat_embed: true,
             ..EvalConfig::HYBRID
         }),
+        "no-repository-vocabulary" => Ok(EvalConfig {
+            no_repository_vocabulary: true,
+            ..EvalConfig::HYBRID
+        }),
         other => bail!(
-            "unknown --ab mode {other:?}; expected \"no-embed\", \"semantic-only\", or \"concat-embed\""
+            "unknown --ab mode {other:?}; expected \"no-embed\", \"semantic-only\", \"concat-embed\", or \"no-repository-vocabulary\""
         ),
     }
 }
@@ -217,6 +227,7 @@ fn run_single(
     opts.use_embed = !cfg.no_embed;
     opts.use_semantic_only = false;
     opts.use_field_rescoring = !cfg.concat_embed;
+    opts.use_repository_vocabulary = !cfg.no_repository_vocabulary;
     let searcher = Searcher::new(opts)
         .with_context(|| format!("failed to open searcher for eval ({})", cfg.label()))?;
     let evals: Vec<QueryEval> = gold
@@ -296,6 +307,7 @@ pub(crate) fn run_eval(cli: &Cli, args: &EvalArgs) -> anyhow::Result<()> {
                 no_embed: tuning.no_embed,
                 semantic_only: tuning.semantic_only,
                 concat_embed: false,
+                no_repository_vocabulary: false,
             };
             let (evals, agg) = run_single(cli, &root, &index_path, limit, &gold, cfg)?;
             print_single(

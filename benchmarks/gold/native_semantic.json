@@ -1,0 +1,33 @@
+{
+  "corpus": "fixed-native-semantic",
+  "notes": "Human-judged lexical-gap queries. Training contexts establish each repository association at the support floor; targets intentionally omit the query prose.",
+  "queries": [
+    {
+      "name": "renewal-to-rotate",
+      "query": "renewal",
+      "k": 5,
+      "relevant": [
+        { "file": "training.rs" },
+        { "file": "targets.rs", "symbol": "rotate_live_token" }
+      ]
+    },
+    {
+      "name": "eviction-to-prune",
+      "query": "eviction",
+      "k": 5,
+      "relevant": [
+        { "file": "training.rs" },
+        { "file": "targets.rs", "symbol": "prune_stale_cache" }
+      ]
+    },
+    {
+      "name": "redaction-to-scrub",
+      "query": "redaction",
+      "k": 5,
+      "relevant": [
+        { "file": "training.rs" },
+        { "file": "targets.rs", "symbol": "scrub_secret_output" }
+      ]
+    }
+  ]
+}

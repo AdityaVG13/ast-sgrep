@@ -236,10 +236,14 @@ impl Lexicon {
     pub fn from_associations(associations: Vec<Association>) -> Self {
         let mut by_term: HashMap<String, Vec<Association>> = HashMap::new();
         for association in associations {
-            by_term
-                .entry(association.term.clone())
-                .or_default()
-                .push(association);
+            let reverse = Association {
+                term: association.related.clone(),
+                related: association.term.clone(),
+                ppmi: association.ppmi,
+                support: association.support,
+            };
+            insert_bounded(&mut by_term, association);
+            insert_bounded(&mut by_term, reverse);
         }
         Self { by_term }
     }
@@ -279,6 +283,25 @@ impl Lexicon {
         added.truncate(max_added);
         added
     }
+}
+
+fn insert_bounded(by_term: &mut HashMap<String, Vec<Association>>, association: Association) {
+    let entries = by_term.entry(association.term.clone()).or_default();
+    if entries
+        .iter()
+        .any(|existing| existing.related == association.related)
+    {
+        return;
+    }
+    entries.push(association);
+    entries.sort_by(|a, b| {
+        b.ppmi
+            .partial_cmp(&a.ppmi)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| b.support.cmp(&a.support))
+            .then_with(|| a.related.cmp(&b.related))
+    });
+    entries.truncate(MAX_PER_TERM);
 }
 
 /// Human-readable justification for one learned association (ufk7).

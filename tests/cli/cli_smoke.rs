@@ -165,6 +165,40 @@ fn conceptual_query_fans_out_through_the_real_cli() {
 }
 
 #[test]
+fn repository_vocabulary_closes_a_real_cli_lexical_gap() {
+    let temp = TempDir::new().unwrap();
+    let root =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../benchmarks/fixtures/native_semantic");
+    let session = CliSession {
+        index_path: temp.path().join("index.db"),
+        bin: asgrep_bin(),
+        root,
+        _temp: temp,
+    };
+    session.run_success(&[
+        "--index-path",
+        session.index_path.to_str().unwrap(),
+        "index",
+        session.root.to_str().unwrap(),
+    ]);
+
+    let response = session.search_json("renewal", &["--limit", "5"]);
+    assert!(
+        response["hits"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|hit| { hit["file"] == "targets.rs" && hit["symbol"] == "rotate_live_token" }),
+        "repository-learned vocabulary must recover the judged target: {response}"
+    );
+    assert!(response["query_expansions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|expansion| expansion["term"] == "renewal" && expansion["related"] == "rotate"));
+}
+
+#[test]
 fn codemod_dry_run_and_apply_use_the_real_indexed_fixture() {
     let temp = TempDir::new().unwrap();
     let root = temp.path().join("fixture");

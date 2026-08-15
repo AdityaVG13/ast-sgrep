@@ -327,6 +327,9 @@ pub struct SearchOptions {
     /// of the intent-weighted per-field mix (7d5x.4 concat A/B arm). On by
     /// default; only the eval harness is expected to turn it off.
     pub use_field_rescoring: bool,
+    /// Use bounded repository-learned vocabulary to widen conceptual semantic
+    /// work. On by default; the eval harness may disable it for an A/B arm.
+    pub use_repository_vocabulary: bool,
     pub ann_threshold: Option<usize>,
     /// IVF clusters to probe (0/None = adaptive, at most 90% populated; ≥ n_clusters = exact).
     pub ann_probes: Option<usize>,
@@ -351,6 +354,7 @@ impl Default for SearchOptions {
             use_neural_embed: env_flag("ASGREP_NEURAL_EMBED"),
             use_semantic_only: env_flag("ASGREP_SEMANTIC_ONLY"),
             use_field_rescoring: true,
+            use_repository_vocabulary: true,
             ann_threshold: std::env::var("ASGREP_ANN_THRESHOLD")
                 .ok()
                 .and_then(|v| v.parse().ok()),
@@ -428,7 +432,7 @@ impl SearchOptions {
     /// Stable fingerprint of options that affect search results (nyui).
     pub fn cache_identity(&self) -> String {
         format!(
-            "root={}\0idx={:?}\0lim={}\0lang={:?}\0embed={}\0tantivy={}\0neural={}\0sem={}\0fr={}\0ann_t={:?}\0ann_p={:?}\0rerank={}\0rk={}\0ci={}\0cb={}\0ca={}\0co={}\0ff={:?}",
+            "root={}\0idx={:?}\0lim={}\0lang={:?}\0embed={}\0tantivy={}\0neural={}\0sem={}\0fr={}\0rv={}\0ann_t={:?}\0ann_p={:?}\0rerank={}\0rk={}\0ci={}\0cb={}\0ca={}\0co={}\0ff={:?}",
             self.root.display(),
             self.index_path,
             self.limit,
@@ -438,6 +442,7 @@ impl SearchOptions {
             self.use_neural_embed,
             self.use_semantic_only,
             self.use_field_rescoring,
+            self.use_repository_vocabulary,
             self.ann_threshold,
             self.ann_probes,
             self.use_rerank,

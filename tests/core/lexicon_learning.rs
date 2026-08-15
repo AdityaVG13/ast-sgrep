@@ -112,6 +112,14 @@ fn expansion_carries_checkable_evidence() {
     assert!(!added.is_empty(), "expansion must fire");
     assert_eq!(added[0].related, "credentials");
 
+    let reverse = lexicon.expand(&["credentials".to_string()], 5);
+    assert!(
+        reverse
+            .iter()
+            .any(|association| association.related == "rotate"),
+        "symmetric PPMI must let repository prose recover its identifier: {reverse:?}"
+    );
+
     let reason = explain(&added[0]);
     assert!(reason.contains("rotate"), "{reason}");
     assert!(reason.contains("credentials"), "{reason}");
