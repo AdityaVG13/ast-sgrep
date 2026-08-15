@@ -1,0 +1,58 @@
+{
+  "corpus": "fixed-graph-resolution",
+  "queries": [],
+  "graph_edges": [
+    {
+      "name": "file-local-unique",
+      "query": "callers:local_target",
+      "k": 20,
+      "relevant": [
+        {
+          "file": "local.rs",
+          "line": 2,
+          "caller": "local_caller",
+          "callee": "local_target"
+        }
+      ]
+    },
+    {
+      "name": "scip-exact",
+      "query": "callers:remote_target",
+      "k": 20,
+      "relevant": [
+        {
+          "file": "calls.rs",
+          "line": 1,
+          "caller": "remote_caller",
+          "callee": "remote_target"
+        }
+      ]
+    },
+    {
+      "name": "repository-unique",
+      "query": "callers:other_target",
+      "k": 20,
+      "relevant": [
+        {
+          "file": "calls.rs",
+          "line": 2,
+          "caller": "other_caller",
+          "callee": "other_target"
+        }
+      ]
+    },
+    {
+      "name": "name-only",
+      "query": "callers:shared_target",
+      "k": 20,
+      "relevant": [
+        {
+          "file": "calls.rs",
+          "line": 3,
+          "caller": "ambiguous_caller",
+          "callee": "shared_target"
+        }
+      ]
+    }
+  ]
+}

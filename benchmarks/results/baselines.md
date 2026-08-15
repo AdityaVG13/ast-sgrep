@@ -109,10 +109,14 @@ containing a blank line (`substr` of an empty BLOB is NULL);
 `ast-sgrep-5vur`, fixed in `d18725e` with a regression test. The first eval
 attempt died on it, which is exactly what the eval pack is for.
 
-Still unmeasured here: foreign-corpus quality and token efficiency, confidence
-calibration, graph precision by resolution tier, multi-field rescoring on a
-foreign or judged paraphrase corpus (the self-gold A/B above is a null
-result, not coverage), and agent-in-the-loop token/tool-call outcomes.
+The candidate pack now emits graph-edge precision by resolution tier from a
+fixed, completely labeled fixture, including explicit nulls for unobserved
+tiers. No graph precision value is canonical until a reviewed clean-worktree
+run is promoted here with its commit fingerprint. Still unmeasured here:
+foreign-corpus quality and token efficiency, confidence calibration,
+multi-field rescoring on a foreign or judged paraphrase corpus (the self-gold
+A/B above is a null result, not coverage), and agent-in-the-loop
+token/tool-call outcomes.
 
 ## Provenance
 

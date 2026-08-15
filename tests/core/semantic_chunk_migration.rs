@@ -71,7 +71,7 @@ fn schema_upgrade_invalidates_legacy_semantic_layouts() {
     assert_eq!(migrated.get_meta("embed_dim").unwrap(), None);
     assert_eq!(
         migrated.file_hash("legacy.rs").unwrap().as_deref(),
-        Some("semantic-layout-v2:original-hash")
+        Some("semantic-layout-v3:original-hash")
     );
     let version: i64 = migrated
         .connection()
@@ -193,7 +193,7 @@ fn committed_v99_sqlite_is_rejected_without_panic() {
 }
 
 #[test]
-fn schema_9_adds_field_vector_columns_without_wiping_chunks() {
+fn schema_9_invalidates_legacy_semantic_state() {
     let temp = TempDir::new().unwrap();
     let dest = temp.path().join("index.db");
     let conn = rusqlite::Connection::open(&dest).unwrap();
@@ -223,7 +223,12 @@ fn schema_9_adds_field_vector_columns_without_wiping_chunks() {
         .connection()
         .query_row("SELECT COUNT(*) FROM semantic_chunks", [], |row| row.get(0))
         .unwrap();
-    assert_eq!(count, 1, "v9 to current must not wipe concatenated vectors");
+    assert_eq!(count, 0, "v9 chunks use the obsolete rendering and vectors");
+    let content_hash: String = migrated
+        .connection()
+        .query_row("SELECT content_hash FROM files", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(content_hash, "semantic-layout-v3:keep-me");
     let cols: Vec<String> = {
         let mut stmt = migrated
             .connection()

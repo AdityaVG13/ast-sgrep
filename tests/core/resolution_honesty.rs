@@ -15,7 +15,6 @@ fn symbol_identity_is_more_than_a_name() {
 fn only_disambiguated_resolutions_are_precise() {
     for precise in [
         Resolution::CompilerExact,
-        Resolution::ScipExact,
         Resolution::ImportResolved,
         Resolution::FileLocalUnique,
     ] {
@@ -24,6 +23,7 @@ fn only_disambiguated_resolutions_are_precise() {
     // The honesty gate: these are guesses.
     assert!(!Resolution::NameOnly.is_precise());
     assert!(!Resolution::RepositoryUnique.is_precise());
+    assert!(!Resolution::ScipOccurrence.is_precise());
     assert!(!Resolution::Ambiguous {
         candidates: vec![SymbolId::new("a.rs", "send"), SymbolId::new("b.rs", "send"),],
     }
@@ -34,9 +34,9 @@ fn only_disambiguated_resolutions_are_precise() {
 fn resolution_strength_is_ordered() {
     let ordered = [
         Resolution::CompilerExact,
-        Resolution::ScipExact,
         Resolution::ImportResolved,
         Resolution::FileLocalUnique,
+        Resolution::ScipOccurrence,
         Resolution::RepositoryUnique,
         Resolution::NameOnly,
     ];
@@ -188,7 +188,7 @@ fn scip_upgrades_an_ambiguous_call_without_inventing_edges() {
     let temp = tempfile::tempdir().unwrap();
     let src = temp.path().join("src");
     std::fs::create_dir_all(&src).unwrap();
-    std::fs::write(src.join("client.rs"), "fn send() {}\n").unwrap();
+    std::fs::write(src.join("client.rs"), "fn send(\n) {\n}\n").unwrap();
     std::fs::write(src.join("queue.rs"), "fn send() {}\n").unwrap();
     std::fs::write(src.join("login.rs"), "fn handle_login() { send(); }\n").unwrap();
 
@@ -235,7 +235,7 @@ fn scip_upgrades_an_ambiguous_call_without_inventing_edges() {
                     occurrences: vec![ScipOccurrence {
                         symbol: "rust+crate+send().".into(),
                         symbol_roles: SCIP_ROLE_DEFINITION,
-                        range: vec![0, 3, 0, 7],
+                        range: vec![1, 0, 1, 1],
                     }],
                 },
                 ScipDocument {
@@ -274,13 +274,13 @@ fn scip_upgrades_an_ambiguous_call_without_inventing_edges() {
         .iter()
         .find(|hit| hit.file.ends_with("login.rs"))
         .expect("login.rs caller hit");
-    assert_eq!(login.resolution, Some(Resolution::ScipExact));
-    assert!(login.resolution.as_ref().unwrap().is_precise());
+    assert_eq!(login.resolution, Some(Resolution::ScipOccurrence));
+    assert!(!login.resolution.as_ref().unwrap().is_precise());
 
     let defs = searcher.search("defs:send").expect("defs");
     assert!(
         defs.hits.iter().any(|hit| {
-            hit.file.ends_with("client.rs") && hit.resolution == Some(Resolution::ScipExact)
+            hit.file.ends_with("client.rs") && hit.resolution == Some(Resolution::ScipOccurrence)
         }),
         "SCIP def must upgrade client.rs send: {:?}",
         defs.hits
@@ -300,15 +300,15 @@ fn scip_upgrades_an_ambiguous_call_without_inventing_edges() {
 #[test]
 fn scip_never_downgrades_a_stronger_tier() {
     assert_eq!(
-        Resolution::CompilerExact.upgrade(Resolution::ScipExact),
+        Resolution::CompilerExact.upgrade(Resolution::ScipOccurrence),
         Resolution::CompilerExact
     );
     assert_eq!(
-        Resolution::NameOnly.upgrade(Resolution::ScipExact),
-        Resolution::ScipExact
+        Resolution::NameOnly.upgrade(Resolution::ScipOccurrence),
+        Resolution::ScipOccurrence
     );
     assert_eq!(
-        Resolution::ScipExact.upgrade(Resolution::FileLocalUnique),
-        Resolution::ScipExact
+        Resolution::ScipOccurrence.upgrade(Resolution::FileLocalUnique),
+        Resolution::FileLocalUnique
     );
 }
