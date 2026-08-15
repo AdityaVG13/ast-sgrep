@@ -3,16 +3,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::rc::Rc;
-pub const DEFAULT_SKIP_DIR_NAMES: &[&str] = &[
-    ".git",
-    ".asgrep",
-    "target",
-    "node_modules",
-    "dist",
-    "build",
-    ".cargo",
-    "~",
-];
+pub const DEFAULT_SKIP_DIR_NAMES: &[&str] = &[".git", ".asgrep"];
 pub const INDEXABLE_EXTENSIONS: &[&str] = &[
     "rs", "ts", "tsx", "js", "jsx", "mjs", "cjs", "py", "pyi", "go", "java", "cs", "rb", "swift",
     "c", "h", "cpp", "cc", "cxx", "hpp", "hxx", "hh", "ipp", "kt", "kts", "php", "toml", "md",

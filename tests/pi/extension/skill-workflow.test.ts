@@ -3,24 +3,26 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { registerAstSgrepCommands, registerAstSgrepTools } from "../../../packages/pi/extension/src/index.js";
+import { ASGREP_PROMPT_GUIDELINES, ASGREP_PROMPT_SNIPPET } from "../../../packages/pi/extension/src/present.js";
 import type { MachineEnvelope } from "../../../packages/pi/extension/src/runtime.js";
 
-test("a deterministic agent can discover and complete the documented fixture workflow", async () => {
+test("tools auto-register so a deterministic agent can complete the workflow without a skill file", async () => {
   const packageRoot = new URL("../../../packages/pi/extension/", import.meta.url);
   const manifest = JSON.parse(await readFile(new URL("package.json", packageRoot), "utf8")) as {
-    pi: { skills: string[] };
+    pi: { extensions: string[]; skills?: string[] };
+    files: string[];
   };
-  assert.deepEqual(manifest.pi.skills, ["./skills"]);
-  const skill = await readFile(new URL("skills/ast-sgrep/SKILL.md", packageRoot), "utf8");
-  for (const instruction of ["exact-text search", "`natural`:", "`defs`:", "`callers`:", "/asgrep-doctor", "/asgrep-index", "asgrep"]) {
-    assert.match(skill, new RegExp(instruction.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
-  }
+  assert.deepEqual(manifest.pi.extensions, ["./dist/index.js"]);
+  assert.equal(manifest.pi.skills, undefined);
+  assert.equal(manifest.files.includes("skills"), false);
 
   type RegisteredCommand = { description: string; handler(args: string, context: unknown): Promise<void> };
   type RegisteredTool = {
     name: string;
     description: string;
-    execute(id: string, params: Record<string, unknown>, signal: AbortSignal, update: undefined, context: { cwd: string }): Promise<unknown>;
+    promptSnippet?: string;
+    promptGuidelines?: string[];
+    execute(id: string, params: Record<string, unknown>, signal: AbortSignal, update: undefined, context: { cwd: string }): Promise<{ content: Array<{ text: string }> }>;
   };
   const commands = new Map<string, RegisteredCommand>();
   const tools = new Map<string, RegisteredTool>();
@@ -54,9 +56,14 @@ test("a deterministic agent can discover and complete the documented fixture wor
   const search = tools.get("asgrep_search")!;
   assert.match(search.description, /Prefer asgrep/i);
   const codemode = tools.get("asgrep")!;
+  assert.equal(codemode.promptSnippet, ASGREP_PROMPT_SNIPPET);
+  assert.deepEqual(codemode.promptGuidelines, [...ASGREP_PROMPT_GUIDELINES]);
+  assert.match(codemode.description, /do not wait for the user to mention asgrep/i);
   assert.match(codemode.description, /Promise\.all/i);
   const signal = new AbortController().signal;
-  await search.execute("intent", { query: "refresh the index after edits", mode: "natural" }, signal, undefined, { cwd: "/fixture" });
+  const lookup = await search.execute("intent", { query: "refresh the index after edits", mode: "natural" }, signal, undefined, { cwd: "/fixture" });
+  assert.match(lookup.content[0]!.text, /asgrep/);
+  assert.match(lookup.content[0]!.text, /refresh the index after edits/);
   await search.execute("callers", { query: "ensureFresh", mode: "callers", limit: 8 }, signal, undefined, { cwd: "/fixture" });
   await codemode.execute("compose", {
     code: `async () => {

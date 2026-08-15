@@ -57,7 +57,12 @@ pub fn writer_generation_path(root: &Path, index_path: Option<&Path>) -> PathBuf
     writer_generation_home(root, index_path).join(WRITER_GENERATION_FILE)
 }
 
-/// Read the current writer generation, or `0` when the stamp is absent/unreadable.
+/// Read the current writer generation.
+///
+/// Returns `0` when the stamp is absent or unreadable. That `0` is the
+/// first-run / cold-start protocol (no stamp yet), not a soft error: peers
+/// treat epoch `0` as "no advertised external writer yet." Do not fail closed
+/// on absence -- see `docs/index-consistency.md` (writer-generation fail-open).
 pub fn read_writer_generation(root: &Path, index_path: Option<&Path>) -> u64 {
     let path = writer_generation_path(root, index_path);
     std::fs::read_to_string(&path)

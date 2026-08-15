@@ -2,9 +2,20 @@ use super::{should_skip_dir, should_skip_file};
 use std::path::Path;
 
 #[test]
-fn skips_path_escape_noise_directory() {
-    assert!(should_skip_dir(Path::new("~")));
-    assert!(!should_skip_dir(Path::new("src")));
+fn hard_skips_only_owned_internal_directories() {
+    assert!(should_skip_dir(Path::new(".git")));
+    assert!(should_skip_dir(Path::new(".asgrep")));
+    for user_controlled in [
+        "target",
+        "node_modules",
+        "dist",
+        "build",
+        ".cargo",
+        "~",
+        ".user-cache",
+    ] {
+        assert!(!should_skip_dir(Path::new(user_controlled)));
+    }
 }
 
 #[test]
