@@ -1562,8 +1562,11 @@ impl IndexStore {
         line_end: u32,
     ) -> Result<String> {
         let mut stmt = self.conn.prepare_cached(
-            "SELECT CAST(substr(CAST(l.content AS BLOB), 1, ?4) AS BLOB),
-                    length(CAST(l.content AS BLOB))
+            // COALESCE both columns: SQLite substr() over an empty BLOB
+            // (a blank line) yields NULL, which must read as an empty
+            // excerpt line, not an InvalidColumnType error (ast-sgrep-5vur).
+            "SELECT COALESCE(CAST(substr(CAST(l.content AS BLOB), 1, ?4) AS BLOB), x''),
+                    COALESCE(length(CAST(l.content AS BLOB)), 0)
              FROM lines l JOIN files f ON f.id = l.file_id
              WHERE f.path = ?1 AND l.line_no >= ?2 AND l.line_no <= ?3
              ORDER BY l.line_no",

@@ -625,3 +625,47 @@ fn parity_index_defs_hybrid_chain() {
     );
     assert_eq!(again.index_all().unwrap().files_indexed, 0);
 }
+
+/// Regression for ast-sgrep-5vur: SQLite `substr()` over an empty BLOB (a
+/// blank line inside a def's span) yields NULL. The excerpt query must read
+/// that as an empty line, not fail with InvalidColumnType, so `defs:` on any
+/// function containing a blank line keeps working.
+#[test]
+fn defs_excerpt_survives_blank_lines_inside_the_span() {
+    let corpus = tempfile::tempdir().unwrap();
+    let index_dir = tempfile::tempdir().unwrap();
+    fs::write(
+        corpus.path().join("gap.rs"),
+        "fn spans_blank() {\n    let first = 1;\n\n    let second = first;\n    let _ = second;\n}\n",
+    )
+    .unwrap();
+    let index_path = index_dir.path().join("index.db");
+    let mut indexer = Indexer::new(IndexOptions {
+        root: corpus.path().to_path_buf(),
+        index_path: Some(index_path.clone()),
+        force_reindex: true,
+        embed_semantic: false,
+        ..IndexOptions::default()
+    })
+    .unwrap();
+    indexer.index_all().unwrap();
+    let searcher = Searcher::new(SearchOptions {
+        root: corpus.path().to_path_buf(),
+        index_path: Some(index_path),
+        use_embed: false,
+        ..SearchOptions::default()
+    })
+    .unwrap();
+    let response = searcher.search("defs:spans_blank").unwrap();
+    let hit = response
+        .hits
+        .iter()
+        .find(|hit| hit.kind == HitKind::Def)
+        .expect("def hit for spans_blank");
+    assert!(hit.excerpt.contains("spans_blank"));
+    assert!(
+        hit.excerpt.contains("second"),
+        "excerpt must continue past the blank line: {:?}",
+        hit.excerpt
+    );
+}
