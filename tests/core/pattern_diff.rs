@@ -1,9 +1,9 @@
 //! Pattern-1 differential (ghiw.3): native `pattern:` subset vs ast-grep CLI.
 //!
 //! Default CI: native supported hits + unsupported fail-closed. Equality vs
-//! ast-grep is **not-run** unless `ASGREP_DIFF_AST_GREP` points at an absolute
-//! `ast-grep` binary (`DISC-pattern-native-subset`). Unset env must not be
-//! reported as match-set Pass.
+//! ast-grep is **not-run** unless `ASGREP_DIFF_AST_GREP` points at an absolute,
+//! pinned `ast-grep` binary (`DISC-pattern-native-subset`). Unset env must not
+//! be reported as match-set Pass.
 use ast_sgrep_core::{IndexOptions, SearchOptions};
 use ast_sgrep_testkit::{isolated_index_session, IsolatedIndexSession};
 use std::collections::BTreeSet;
@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 const FIXTURE: &str = include_str!("../fixtures/pattern_diff/lib.rs");
+const PINNED_AST_GREP_VERSION: &str = "0.45.1";
 
 const SUPPORTED: &[&str] = &[
     "process_request",
@@ -87,7 +88,29 @@ fn search_pattern(
 fn competitor_bin() -> Option<PathBuf> {
     let raw = std::env::var_os("ASGREP_DIFF_AST_GREP")?;
     let path = PathBuf::from(raw);
-    path.is_absolute().then_some(path)
+    assert!(
+        path.is_absolute(),
+        "ASGREP_DIFF_AST_GREP must be absolute: {}",
+        path.display()
+    );
+    Some(path)
+}
+
+fn assert_pinned_competitor(bin: &Path) {
+    let output = Command::new(bin)
+        .arg("--version")
+        .output()
+        .unwrap_or_else(|e| panic!("run ast-grep --version: {e}"));
+    assert!(
+        output.status.success(),
+        "ast-grep --version failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).trim(),
+        format!("ast-grep {PINNED_AST_GREP_VERSION}"),
+        "Pattern-1 keep-gate requires the pinned ast-grep version"
+    );
 }
 
 /// ast-grep `run --json` rows: 0-based `range.start.line` in current CLI JSON.
@@ -203,19 +226,20 @@ fn unsupported_shapes_are_empty_or_fail_closed() {
 }
 
 /// Pattern-1 equality. Not-run without `ASGREP_DIFF_AST_GREP` (DISC-pattern-native-subset).
-#[ignore = "not-run: set ASGREP_DIFF_AST_GREP to an absolute ast-grep binary; DISC-pattern-native-subset"]
 #[test]
-fn supported_match_sets_equal_ast_grep_when_env_set() {
+fn supported_match_sets_equal_pinned_ast_grep_when_configured() {
     let Some(bin) = competitor_bin() else {
-        panic!(
-            "ignored test executed without ASGREP_DIFF_AST_GREP; not claiming equality (DISC-pattern-native-subset)"
+        eprintln!(
+            "not-run: set ASGREP_DIFF_AST_GREP to pinned ast-grep {PINNED_AST_GREP_VERSION}; not claiming equality (DISC-pattern-native-subset)"
         );
+        return;
     };
     assert!(
         bin.is_file(),
         "ASGREP_DIFF_AST_GREP must be a file: {}",
         bin.display()
     );
+    assert_pinned_competitor(&bin);
     let session = indexed_fixture();
     for pattern in SUPPORTED {
         let dut: BTreeSet<_> = search_pattern(&session, pattern)

@@ -59,18 +59,21 @@ counts, so serving these shapes from it would over-match
 
 Bounded match-set compare vs `ast-grep` lives in `tests/core/pattern_diff.rs`
 (fixture `tests/fixtures/pattern_diff/lib.rs`). Default `cargo test` runs the
-native in/out rows only.
+native in/out rows and leaves the external row Not-run when its environment
+variable is absent.
 
 ```bash
-# Not-run (CI default): equality test is #[ignore]
+# Native contract only; external equality remains Not-run
 cargo test -p ast-sgrep-core --test pattern_diff
 
-# Local, when ast-grep is installed (do not enable on PR CI without sign-off):
+# Local keep-gate; the test hard-requires ast-grep 0.45.1
 ASGREP_DIFF_AST_GREP=/absolute/path/to/ast-grep \
-  cargo test -p ast-sgrep-core --test pattern_diff -- --ignored
+  cargo test -p ast-sgrep-core --test pattern_diff --
 ```
 
-Unset `ASGREP_DIFF_AST_GREP` must not be reported as match-set Pass.
+Unset `ASGREP_DIFF_AST_GREP` must not be reported as match-set Pass. The
+conformance registry records the row as Not-run unless the variable is set;
+an unpinned competitor is a hard failure.
 
 The equality list holds only patterns where ast-grep's token-exact parse
 agrees with the native match set (`process_request`, `process_request($$$)`,

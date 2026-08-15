@@ -12,7 +12,7 @@ bead fills them. Do not treat blanks as Pass.
 | S1 | Hybrid / NL search | partial | Ranking must_include oracle only (`DISC-ranking-soft-oracle`) |
 | S2 | Lexical / keyword | partial | FTS, not rg (`DISC-lexical-not-rg`). Query prefix MUST matrix: `docs/QUERY_GRAMMAR.md` QG-001…026 (parse covered; search identity still FTS). |
 | S3 | Graph (defs/callers/imports) | partial | `tests/core/graph_oracle.rs` |
-| S4 | Native `pattern:` | partial | Supported native hits + unsupported fail-closed in `tests/core/pattern_diff.rs`. Full ast-grep identity is **disc** (`DISC-pattern-native-subset`); Pattern-1 equality is `#[ignore]` / `ASGREP_DIFF_AST_GREP`. |
+| S4 | Native `pattern:` | partial | Supported native hits + unsupported fail-closed in `tests/core/pattern_diff.rs`. The bounded Pattern-1 list is a local keep-gate against pinned ast-grep 0.45.1 when `ASGREP_DIFF_AST_GREP` is set; full ast-grep identity remains **disc** (`DISC-pattern-native-subset`). |
 | S5 | Semantic / ANN | partial | Adaptive IVF (`DISC-ivf-adaptive-threshold`) |
 | S6 | Machine JSON / CLI envelopes | partial | MJ-001…013 in `machine_contracts.rs` (MJ-011 hit dumps landed nz7i.2). **MJ-012** MCP envelope = `DISC-mcp-not-full-suite`. |
 | S7 | Compact / agent formats | disc | `DISC-compact-drops-provenance` (NL-008 asserts compact ≠ native hit array) |
@@ -34,7 +34,8 @@ Clause IDs landed. **Score TBD** after a full run (ghiw.5). Do not claim ≥0.95
 
 | Oracle | Status | Pointer |
 |---|---|---|
-| ast-grep CLI identity | deferred | `DISC-pattern-native-subset`, `DISC-no-jell-harness` |
+| ast-grep Pattern-1 bounded subset | local gate | `tests/core/pattern_diff.rs`; pinned 0.45.1 |
+| ast-grep full CLI identity | deferred | `DISC-pattern-native-subset`, `DISC-no-jell-harness` |
 | ripgrep identity | deferred | `DISC-lexical-not-rg` |
 | jell harness | deferred | `docs/validation/jell-deferral.md` |
 

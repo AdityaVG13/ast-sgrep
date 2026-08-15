@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 import tomllib
@@ -35,6 +36,9 @@ def run_suite(suite: dict[str, Any], *, registry_only: bool, simulate_fail: str 
     if simulate_fail == ident:
         return "Fail"
     if registry_only:
+        return "Not-run"
+    required_env = [str(name) for name in suite.get("required_env", [])]
+    if any(not os.environ.get(name) for name in required_env):
         return "Not-run"
     command = [str(part) for part in suite["command"]]
     completed = subprocess.run(command, cwd=ROOT, check=False)
