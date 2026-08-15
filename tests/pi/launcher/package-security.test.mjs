@@ -83,6 +83,6 @@ test("provenance gate and user-facing security disclosures are explicit", () => 
     /leaves `\.asgrep` behind/iu,
     /sends no telemetry/iu,
     /does not inspect Pi\/provider credential APIs/iu,
-    /source text and queries needed for embeddings may be sent/iu,
+    /source text is never sent to a remote embedding API/iu,
   ]) assert.match(docs, disclosure);
 });
