@@ -64,8 +64,9 @@ already moving that way without a sidecar model:
 - **Causal follow-ups**: `follow_up_queries` are derived from the actual
   top hit (kind, symbol, margin), so the drill-down an agent would have
   asked a second model for is already in the envelope.
-- **Two-channel conjunction**: `callers:x AND pattern:...`, `AND NOT`
-  subtraction. Graph and structure intersect inside the index. See
+- **Two-channel conjunction**: `pattern:... AND callers:x` performs a
+  span-level graph/structure join; other pairs retain file-level intersection,
+  and `AND NOT` subtracts at the corresponding scope. See
   `docs/QUERY_GRAMMAR.md`.
 
 The two bounded keep-gates now exist: indexed-language fixture file presence

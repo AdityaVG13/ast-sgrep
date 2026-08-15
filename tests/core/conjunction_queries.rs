@@ -117,6 +117,30 @@ fn conjunction_with_pattern_channel_joins_graph_and_structure() {
 }
 
 #[test]
+fn pattern_callers_join_excludes_non_calling_functions_in_the_same_file() {
+    let temp = TempDir::new().unwrap();
+    write_src(
+        temp.path(),
+        "src/app.rs",
+        "fn target() {\n    helper();\n}\n\nfn false_positive() {\n    unrelated();\n}\n\nfn helper() {}\nfn unrelated() {}\n",
+    );
+    let searcher = indexed_searcher(temp.path());
+
+    let response = searcher
+        .search("pattern:fn $NAME($$$) AND callers:helper")
+        .unwrap();
+    assert_eq!(
+        response.hits.len(),
+        1,
+        "span join must remove same-file noise"
+    );
+    assert_eq!(response.hits[0].kind, HitKind::Pattern);
+    assert!(response.hits[0].excerpt.contains("fn target()"));
+    assert!(!response.hits[0].excerpt.contains("false_positive"));
+    assert!(response.hits[0].contributors.contains(&HitKind::Caller));
+}
+
+#[test]
 fn plain_english_and_still_searches_hybrid() {
     let temp = sample_root();
     let searcher = indexed_searcher(temp.path());
