@@ -85,9 +85,10 @@ jobs:
           node-version: 22.19.0
           cache: npm
       - run: npm ci --ignore-scripts
-      - run: npm run build --workspace pi-ast-sgrep
+      - run: npm run check:pi-dist
       - run: npm test --workspace pi-ast-sgrep
       - run: node --test tests/pi/launcher/*.test.mjs
+      - run: npm run check:agent-plugin
       - run: npm run check:pi-contract && npm run check:pi-release
 
   build-and-test:

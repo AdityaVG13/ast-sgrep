@@ -6,7 +6,7 @@
 | Semantic-only | `--semantic-only` / `semantic` | `semantic_search` | `asgrep.search.semantic` | yes |
 | Limit clamp | `MAX_OUTPUT_RESULTS` | `clamp_agent_limit` (100) | default_limit | timeout/bytes caps |
 | Index | `index`/`reindex` | `index_repo` (single-flight) | background index | rebuild helpers |
-| Doctor/triage | `doctor` | — | — | handbook |
+| Doctor/triage | `doctor` | — | — | `/asgrep-doctor` |
 | Boolish env | clap Boolish + core `env_flag` | NO_EMBED boolish | settings | env aliases |
 
 Intentional deltas: MCP does not auto-fuse channels (`excluded`, not a bug);
