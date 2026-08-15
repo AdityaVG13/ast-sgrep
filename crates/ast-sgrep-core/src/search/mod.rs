@@ -1,3 +1,4 @@
+pub(crate) mod conjunction;
 pub(crate) mod critic;
 pub(crate) mod field_weight;
 mod fusion;
@@ -428,6 +429,14 @@ impl Searcher {
             "Searcher::search (mode dispatch + finish)",
         );
         self.cached("search", query_str, || {
+            // Two-channel conjunction (P0 channel-conjunction). Detected on
+            // the raw query because a left prefix such as `callers:` would
+            // otherwise claim the whole string as its target.
+            if let Some(conj) = conjunction::parse(query_str) {
+                let hits = conjunction::run(self, &conj)?;
+                let response_query = conjunction::response_query(query_str, &conj);
+                return finish_response_checked(&response_query, &self.options, hits, true);
+            }
             let parsed = ParsedQuery::parse(query_str);
             let hits = match parsed.mode {
                 QueryMode::Callers => search_callers(&self.store, &self.options, &parsed)?,
@@ -464,6 +473,36 @@ impl Searcher {
             };
             finish_response_checked(&parsed, &self.options, hits, true)
         })
+    }
+    /// Raw hits for one side of a conjunction (P0 channel-conjunction).
+    /// Dispatches exactly like `search` does for the same prefix; the
+    /// semantic channel runs the embedding-only pass.
+    fn channel_hits(&self, channel: &conjunction::ChannelQuery) -> Result<Vec<SearchHit>> {
+        match channel {
+            conjunction::ChannelQuery::Mode(parsed) => match parsed.mode {
+                QueryMode::Callers => search_callers(&self.store, &self.options, parsed),
+                QueryMode::Defs => search_defs(&self.store, &self.options, parsed),
+                QueryMode::Imports => search_imports(&self.store, &self.options, parsed),
+                QueryMode::Pattern => crate::pattern::search_pattern(
+                    parsed.terms.first().map(|s| s.as_str()).unwrap_or(""),
+                    &self.store,
+                    &self.options.root,
+                    self.options.lang_filter.as_deref(),
+                ),
+                QueryMode::Literal | QueryMode::Word => {
+                    literal_pass(&self.store, &self.options, parsed)
+                }
+                QueryMode::Regex => regex_pass(&self.store, &self.options, parsed),
+                // ChannelQuery::parse never yields Hybrid; stay total anyway.
+                QueryMode::Hybrid => Ok(Vec::new()),
+            },
+            conjunction::ChannelQuery::Semantic(query) => run_embed_pass(
+                &self.store,
+                &self.options,
+                &ParsedQuery::parse(query),
+                &self.semantic_cache,
+            ),
+        }
     }
     pub fn search_semantic(&self, query_str: &str) -> Result<SearchResponse> {
         validate_query_arg(query_str)?;

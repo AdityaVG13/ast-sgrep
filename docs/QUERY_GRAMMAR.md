@@ -1,8 +1,10 @@
 # Query prefixes
 
 Normative surface for `ParsedQuery::parse` in `crates/ast-sgrep-core/src/query.rs`.
-There is no composable `AND` / `path:` / `lang:` / `sem:` grammar — unprefixed
+The parser has no composable `path:` / `lang:` / `sem:` grammar — unprefixed
 input is hybrid retrieval; one leading mode prefix selects a single channel.
+One layer above the parser, `Searcher::search` recognizes exactly one
+two-channel conjunction form; see "Two-channel conjunction" below.
 
 Clause IDs **QG-xxx** (ghiw.2). Tests: `tests/unit/core/query.rs` (lib
 `query::tests`) and `tests/core/properties.rs` (`parse_never_panics`). Score is
@@ -67,7 +69,7 @@ selects the first leading mode prefix or Hybrid-as-text.
 | QG-020 | No `sem:` query filter | `sem:foo` is Hybrid; the string is scored as text | `qg_must_matrix` |
 | QG-021 | No `path:` query filter | `path:src/` is Hybrid-as-text | `qg_must_matrix` |
 | QG-022 | No `lang:` query filter | `lang:rust foo` is Hybrid-as-text | `qg_must_matrix` |
-| QG-023 | No composable AND / multi-prefix | `callers:Foo defs:Bar` is Callers with target `Foo defs:Bar` | `qg_must_matrix` |
+| QG-023 | No composable AND / multi-prefix **in the parser** | `callers:Foo defs:Bar` is Callers with target `Foo defs:Bar`; `Searcher::search` layers the two-channel `AND` form above the parser | `qg_must_matrix` |
 | QG-024 | Nested / parenthesized boolean unsupported | `(defs:Foo AND callers:Bar)` is Hybrid-as-text (no leading prefix) | `qg_must_matrix` |
 | QG-025 | Prefix match is case-sensitive | `Callers:Foo` is Hybrid, not Callers | `qg_must_matrix` |
 | QG-026 | Unknown prefix is Hybrid-as-text | `xyzzy:Foo` is Hybrid | `qg_must_matrix` |
@@ -76,9 +78,43 @@ Use CLI/MCP/LSP options (language filter, semantic-only search) for filters
 that are not part of the query string. `pattern:` completeness vs ast-grep is
 **ghiw.3** (`DISC-pattern-native-subset`), not this matrix.
 
+## Two-channel conjunction (Searcher level)
+
+`Searcher::search` recognizes exactly one composed form before the parser
+runs (`crates/ast-sgrep-core/src/search/conjunction.rs`):
+
+```text
+<channel> AND <channel>
+<channel> AND NOT <channel>
+```
+
+- Both sides must be prefixed channel queries: `defs:`, `callers:`,
+  `imports:`, `pattern:`, `literal:`, `regex:`, `word:`, or
+  `semantic:"..."` (embedding-only retrieval, quotes optional).
+- `AND` is uppercase and space-delimited; `NOT` / `not` both negate.
+- Exactly two channels. More `AND`s, unprefixed sides, or parenthesized
+  forms fall through to ordinary search, so plain English "AND" keeps its
+  meaning (QG-023 / QG-024 still hold at the parser).
+- The left channel is the result identity. `AND` keeps left hits whose file
+  also matched the right channel; `AND NOT` keeps left hits whose file did
+  not. Right evidence overlapping a kept hit's span merges into its
+  contributor set. The join is file-level in this version.
+- Empty channels stay honest: empty left is empty; empty right makes `AND`
+  empty and `AND NOT` a no-op.
+
+```text
+callers:process_request AND pattern:fn $NAME($$$)
+imports: rusqlite AND semantic:"parameterized query"
+defs:handle AND NOT callers:test_
+```
+
+Tests: `tests/unit/core/search__conjunction.rs` and
+`tests/core/conjunction_queries.rs`.
+
 ## What is not supported
 
-- Clause conjunction (`AND`, multiple prefixes in one query)
+- More than two channels in one conjunction
+- Unprefixed (hybrid text) sides in a conjunction
 - `sem:`, `path:`, `lang:` filter clauses
 - Nested / parenthesized boolean expressions
 
