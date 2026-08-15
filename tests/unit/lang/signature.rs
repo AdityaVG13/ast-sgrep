@@ -35,6 +35,50 @@ fn cached_signatures_stay_byte_identical_for_legacy_shapes() {
 }
 
 #[test]
+fn nested_body_templates_are_not_indexable() {
+    // Index signatures cannot express statement counts; serving these from
+    // `pattern_nodes` would over-match. Native scan is the sole source.
+    assert_eq!(cached_pattern_signatures("fn $N($$$) { $STMT }"), None);
+    assert_eq!(cached_pattern_signatures("fn process($$$) {}"), None);
+    assert_eq!(cached_pattern_signatures("if ($COND) { $BODY }"), None);
+    assert_eq!(cached_pattern_signatures("if $COND { $BODY }"), None);
+    // Brace-free shapes keep their legacy keys.
+    assert_eq!(
+        cached_pattern_signatures("fn $NAME($$$)").unwrap(),
+        vec!["kind:function_item".to_string()]
+    );
+}
+
+#[test]
+fn malformed_declarations_have_no_cached_signature() {
+    for malformed in [
+        "fn $NAME($$$",
+        "fn $NAME($$$) trailing",
+        "def $NAME nonsense",
+    ] {
+        assert_eq!(cached_pattern_signatures(malformed), None, "{malformed:?}");
+    }
+}
+
+#[test]
+fn if_templates_prefilter_on_the_if_keyword() {
+    assert_eq!(
+        required_pattern_literal("if ($COND) { $BODY }").as_deref(),
+        Some("if")
+    );
+    assert_eq!(
+        required_pattern_literal("if $COND { $BODY }").as_deref(),
+        Some("if")
+    );
+    // Function body templates keep the concrete-name literal.
+    assert_eq!(
+        required_pattern_literal("fn process($$$) { $STMT }").as_deref(),
+        Some("process")
+    );
+    assert_eq!(required_pattern_literal("fn $N($$$) { $STMT }"), None);
+}
+
+#[test]
 fn structural_term_signatures_match_legacy_formats() {
     assert_eq!(
         structural_term_signatures("renew"),

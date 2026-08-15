@@ -58,12 +58,65 @@ for retrieval-quality deltas. Use a frozen or foreign corpus before claiming a
 quality change. The repository PPMI lexicon is reported as explainable evidence
 but is deliberately not fed into ranking; no retrieval lift is claimed.
 
+## 7d5x.4 A/B — multi-field rescoring vs concat vector (self @ d18725e)
+
+**Status: `reproducible-in-tree` (A/B delta rows, not canonical quality
+fingerprints).** These rows exist to answer one question: does the
+intent-weighted per-field embed rescore (7d5x.3) change fused retrieval
+outcomes on the self gold? They must not be quoted as "the" self-corpus MRR;
+the corpus, gold (17 queries), and commit differ from `self-hybrid-d3eab74`.
+
+| fingerprint id | comparison | delta MRR | delta nDCG | delta Recall@20 | verdict |
+|----------------|------------|----------:|-----------:|----------------:|---------|
+| `self-ab-concat-7d5x4-d18725e` | hybrid (multi-field) vs `--ab concat-embed` | 0.000 | 0.000 | 0.000 | **null result**: zero delta on all 17 queries |
+| `self-ab-noembed-7d5x4-d18725e` | hybrid vs `--ab no-embed` | +0.008 | +0.020 | +0.059 | embed channel contributes (1 conceptual query found only with embed) |
+
+Absolute aggregates for the hybrid arm of both runs: MRR 0.491, nDCG 0.534,
+Recall@20 0.735 over 17 gold queries (12 prior + 5 conceptual added for this
+eval). Do not cite these as canonical; they are the A-arm context for the
+deltas above.
+
+Both arms run the identical fused pipeline including the deterministic
+post-fusion critic; the only variable is embed-channel scoring (per-field
+mix vs concatenated vector). Hashed-256 in both arms; no ONNX involved.
+
+Interpretation, kept small: on this gold, per-field rescoring reorders
+nothing that fusion had not already decided — lexical/def/graph channels
+dominate the final top-k, and the query set contains no paraphrase the
+concat vector misses but the field mix catches. The embed channel as a
+whole earns its seat (`conceptual-query-vector-reuse` is found at rank 7
+only with embed on). The ONNX gate (`ast-sgrep-onnx-only-if-eval-hole`)
+stays closed: no measured hole here justifies a model download, and a
+judged paraphrase eval on a foreign corpus remains the missing evidence.
+
+Reproduce (clean worktree at `d18725e`, macOS arm64, hashed-256 backend,
+rustc per `Cargo.lock` toolchain):
+
+```bash
+cargo build --release -p ast-sgrep-cli
+target/release/asgrep eval --gold benchmarks/gold/self.json . --json
+target/release/asgrep eval --gold benchmarks/gold/self.json . --json --ab concat-embed
+target/release/asgrep eval --gold benchmarks/gold/self.json . --json --ab no-embed
+```
+
+or run `./benchmarks/run_eval.sh`, which now emits
+`self-ab-concat-embed.json` beside the existing artifacts. The mechanism
+itself is falsifiable in-tree: `tests/core/concat_embed_ab.rs` proves the
+concat arm strips per-field scores while the default arm attaches them.
+
+Found by this run and fixed before measuring: `defs:` crashed on any span
+containing a blank line (`substr` of an empty BLOB is NULL);
+`ast-sgrep-5vur`, fixed in `d18725e` with a regression test. The first eval
+attempt died on it, which is exactly what the eval pack is for.
+
 The candidate pack now emits graph-edge precision by resolution tier from a
 fixed, completely labeled fixture, including explicit nulls for unobserved
 tiers. No graph precision value is canonical until a reviewed clean-worktree
 run is promoted here with its commit fingerprint. Still unmeasured here:
 foreign-corpus quality and token efficiency, confidence calibration,
-multi-field semantic vectors, and agent-in-the-loop token/tool-call outcomes.
+multi-field rescoring on a foreign or judged paraphrase corpus (the self-gold
+A/B above is a null result, not coverage), and agent-in-the-loop
+token/tool-call outcomes.
 
 ## Provenance
 

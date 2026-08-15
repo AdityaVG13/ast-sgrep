@@ -16,7 +16,6 @@
       "excerpt": "def process_request(input)\n  validate_input(input)\n  \"processed: #{input}\"\nend",
       "file": "src/app.rb",
       "follow_up_queries": [
-        "defs:process_request",
         "callers:process_request"
       ],
       "kind": "def",
@@ -29,7 +28,13 @@
       "score": 0.0693416181914331,
       "semantic": false,
       "signal": "structural",
-      "symbol": "process_request"
+      "symbol": "process_request",
+      "why": [
+        "exact_text",
+        "exact_symbol",
+        "anchor",
+        "structural_pattern"
+      ]
     },
     {
       "callee": null,
@@ -43,7 +48,6 @@
       "excerpt": "def process_request(input: str) -> str:\n    validate_input(input)\n    return f\"processed: {input}\"",
       "file": "src/main.py",
       "follow_up_queries": [
-        "defs:process_request",
         "callers:process_request"
       ],
       "kind": "def",
@@ -56,7 +60,13 @@
       "score": 0.06791834677419355,
       "semantic": false,
       "signal": "structural",
-      "symbol": "process_request"
+      "symbol": "process_request",
+      "why": [
+        "exact_text",
+        "exact_symbol",
+        "anchor",
+        "structural_pattern"
+      ]
     }
   ],
   "limit": 2,
@@ -69,10 +79,9 @@
   "schema_version": "1.0.0",
   "stack_hint": "Use asgrep for hybrid search; defs:/callers:/literal: prefixes for graph and exact text; asgrep semantic for embedding-only.",
   "suggested_next": [
-    "asgrep \"defs:process_request\"",
     "asgrep \"callers:process_request\"",
-    "asgrep --json --format agent \"process_request\"",
-    "asgrep \"literal:process_request\""
+    "asgrep semantic \"process_request\"",
+    "asgrep --json --format agent \"process_request\""
   ],
   "tool": "asgrep",
   "version": "<version>"

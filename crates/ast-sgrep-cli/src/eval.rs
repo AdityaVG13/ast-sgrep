@@ -312,36 +312,48 @@ fn graph_precision(
 struct EvalConfig {
     no_embed: bool,
     semantic_only: bool,
+    /// 7d5x.4: rank embed hits by the concatenated chunk vector only,
+    /// skipping the intent-weighted per-field rescore.
+    concat_embed: bool,
 }
 impl EvalConfig {
     const HYBRID: Self = Self {
         no_embed: false,
         semantic_only: false,
+        concat_embed: false,
     };
     fn label(self) -> &'static str {
         if self.semantic_only {
             "semantic-only"
         } else if self.no_embed {
             "no-embed"
+        } else if self.concat_embed {
+            "concat-embed"
         } else {
             "hybrid"
         }
     }
     fn json(self, root: &Path, index_path: &Path) -> Value {
-        json!({"root": root.display().to_string(), "index_path": index_path.display().to_string(), "no_embed": self.no_embed, "semantic_only": self.semantic_only})
+        json!({"root": root.display().to_string(), "index_path": index_path.display().to_string(), "no_embed": self.no_embed, "semantic_only": self.semantic_only, "concat_embed": self.concat_embed})
     }
 }
 fn ab_config(mode: &str) -> anyhow::Result<EvalConfig> {
     match mode {
         "no-embed" => Ok(EvalConfig {
             no_embed: true,
-            semantic_only: false,
+            ..EvalConfig::HYBRID
         }),
         "semantic-only" => Ok(EvalConfig {
-            no_embed: false,
             semantic_only: true,
+            ..EvalConfig::HYBRID
         }),
-        other => bail!("unknown --ab mode {other:?}; expected \"no-embed\" or \"semantic-only\""),
+        "concat-embed" => Ok(EvalConfig {
+            concat_embed: true,
+            ..EvalConfig::HYBRID
+        }),
+        other => bail!(
+            "unknown --ab mode {other:?}; expected \"no-embed\", \"semantic-only\", or \"concat-embed\""
+        ),
     }
 }
 fn run_single(
@@ -359,7 +371,8 @@ fn run_single(
     opts.use_embed = !cfg.no_embed;
     opts.use_semantic_only = false;
     let searcher = Searcher::new(opts)
-        .with_context(|| format!("failed to open searcher for eval ({})", cfg.label()))?;
+        .with_context(|| format!("failed to open searcher for eval ({})", cfg.label()))?
+        .with_field_rescoring(!cfg.concat_embed);
     let evals: Vec<QueryEval> = gold
         .queries
         .iter()
@@ -456,6 +469,7 @@ pub(crate) fn run_eval(cli: &Cli, args: &EvalArgs) -> anyhow::Result<()> {
             let cfg = EvalConfig {
                 no_embed: tuning.no_embed,
                 semantic_only: tuning.semantic_only,
+                concat_embed: false,
             };
             let run = run_single(cli, &root, &index_path, limit, &gold, cfg, scip)?;
             print_single(cli, &args.gold, &gold, &root, &index_path, cfg, &run)

@@ -3,7 +3,7 @@
 pub mod budget;
 pub use budget::{DetailLevel, OutputBudget, RenderedHit};
 
-use ast_sgrep_core::{hit_why, HitKind, SearchResponse};
+use ast_sgrep_core::{follow_ups_for_hit, hit_why, plan_suggested_next, HitKind, SearchResponse};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OutputFormat {
     Native,
@@ -110,36 +110,20 @@ fn hit_symbol(hit: &ast_sgrep_core::SearchHit) -> Option<&str> {
 }
 pub fn to_agent_json(response: &SearchResponse) -> serde_json::Value {
     let hits: Vec<_> = response.hits.iter().map(|hit| {
-        let symbol = hit_symbol(hit);
-        let mut follow_ups = Vec::new();
-        if let Some(sym) = symbol { follow_ups.push(format!("defs:{sym}")); follow_ups.push(format!("callers:{sym}")); }
+        // Causal planner: follow-ups reflect this hit's actual evidence gap
+        // (missing def/usage channels, critic notes, margin), not a template.
+        let follow_ups = follow_ups_for_hit(&response.query, hit);
         serde_json::json!({
             "kind": hit.kind.as_str(), "signal": hit.signal, "contributors": hit.contributors, "semantic": hit.contributors.contains(&HitKind::Embed),
             "score": hit.score, "margin": hit.margin,
             "file": hit.file, "lines": {"start": hit.line_start, "end": hit.line_end},
             "symbol": hit.symbol, "caller": hit.caller, "callee": hit.callee, "language": hit.language,
+            "why": hit_why(hit),
             "excerpt": hit.excerpt, "follow_up_queries": follow_ups, })
     }).collect();
     let has_semantic = hits.iter().any(|h| h["semantic"] == true);
-    let top_symbol = response
-        .hits
-        .first()
-        .and_then(|h| h.symbol.clone().or(h.callee.clone()));
-    let mut suggested = Vec::new();
-    if has_semantic {
-        suggested.push(format!("asgrep semantic \"{}\"", response.query));
-    }
-    if let Some(sym) = &top_symbol {
-        suggested.push(format!("asgrep \"defs:{sym}\""));
-        suggested.push(format!("asgrep \"callers:{sym}\""));
-    }
-    suggested.push(format!(
-        "asgrep --json --format agent \"{}\"",
-        response.query
-    ));
-    if let Some(sym) = &top_symbol {
-        suggested.push(format!("asgrep \"literal:{sym}\""));
-    }
+    // Causal planner: suggested_next is derived from the actual top hit.
+    let suggested = plan_suggested_next(response);
     serde_json::json!({
         "provider": "ast-sgrep", "version": env!("CARGO_PKG_VERSION"), "query": response.query, "limit": response.limit, "hit_count": hits.len(),
         "read_bytes_estimate": response.read_bytes_estimate, "returned_excerpt_bytes": response.returned_excerpt_bytes,

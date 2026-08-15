@@ -93,7 +93,7 @@ fn index_repo_invalidates_searcher_on_index_err() {
     let args = server
         .parse_index_repo(&json!({}))
         .expect("empty index_repo args should parse");
-    let _fail = force_sidecar_rebuild_err();
+    let _fail = ast_sgrep_core::force_sidecar_rebuild_err();
     let err = server
         .tool_index_repo(args)
         .expect_err("forced sidecar rebuild must surface as index_repo Err");

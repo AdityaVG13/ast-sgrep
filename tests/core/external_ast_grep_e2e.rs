@@ -47,13 +47,28 @@ fn fail_closed_without_allow_does_not_spawn() {
         limit: 8,
         ..session.search_options()
     });
+    // Multi-statement templates stay exotic (single-statement `{ $BODY }` is
+    // native since ast-sgrep-yira and is asserted below).
     let err = searcher
-        .search("pattern: if ($COND) { $BODY }")
+        .search("pattern: if ($COND) { $A; $B }")
         .expect_err("exotic pattern must fail-closed when ast-grep is unavailable");
     let msg = err.to_string();
     assert!(
         msg.contains("fail-closed") || msg.contains("ast-grep is unavailable"),
         "expected fail-closed, got {msg}"
+    );
+
+    // Native nested template must serve hits in-process even though spawning
+    // is disallowed: proof it never rides the external ast-grep path.
+    let native = searcher
+        .search("pattern: if ($COND) { $BODY }")
+        .expect("native nested template must not require ast-grep");
+    assert!(
+        native
+            .hits
+            .iter()
+            .any(|h| h.excerpt.contains("planted_lbx19")),
+        "native if-template must hit the planted single-statement if: {native:?}"
     );
 }
 

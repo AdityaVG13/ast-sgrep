@@ -101,6 +101,46 @@
         { "file": "crates/ast-sgrep-core/src/search/mod.rs" },
         { "file": "crates/ast-sgrep-core/src/search/types.rs" }
       ]
+    },
+    {
+      "name": "conceptual-ranking-collision-penalty",
+      "query": "penalize misleading identifier collisions when ranking results",
+      "k": 20,
+      "relevant": [
+        { "file": "crates/ast-sgrep-core/src/search/critic.rs" }
+      ]
+    },
+    {
+      "name": "conceptual-follow-up-derivation",
+      "query": "derive the next command to run from the best result",
+      "k": 20,
+      "relevant": [
+        { "file": "crates/ast-sgrep-core/src/search/planner.rs" }
+      ]
+    },
+    {
+      "name": "conceptual-channel-intersection",
+      "query": "combine two search channels in a single query",
+      "k": 20,
+      "relevant": [
+        { "file": "crates/ast-sgrep-core/src/search/conjunction.rs" }
+      ]
+    },
+    {
+      "name": "conceptual-rank-fusion",
+      "query": "reciprocal rank fusion across evidence channels",
+      "k": 20,
+      "relevant": [
+        { "file": "crates/ast-sgrep-core/src/search/fusion.rs" }
+      ]
+    },
+    {
+      "name": "conceptual-query-vector-reuse",
+      "query": "remember query embeddings between searches",
+      "k": 20,
+      "relevant": [
+        { "file": "crates/ast-sgrep-core/src/search/passes/embed.rs" }
+      ]
     }
   ]
 }

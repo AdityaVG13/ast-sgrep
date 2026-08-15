@@ -19,7 +19,11 @@ Formal id: **`DISC-pattern-native-subset`**.
 | `fn $NAME($$$)` (and sibling decl metavars) | **in** | `$NAME` = one identifier; `$$$` = args |
 | Free call `process_request($$$)` / `$FUNC($$$)` | **in** | |
 | Member call `$OBJ.$METHOD($$$)` | **in** | Same family as `$OBJECT.$METHOD($$$)` in the narrative examples |
-| Nested statement templates (`if ($COND) { $BODY }`, `fn $N($$$) { $STMT }`) | **out** | Empty or fail-closed; not delegated |
+| Function body templates (`fn $N($$$) { $STMT }`, `fn $N($$$) {}`) | **in** | `{ $STMT }` = exactly one statement; `{}` = empty body; `{ $$$ }` = any body |
+| If templates (`if ($COND) { $BODY }`, `if $COND { $BODY }`, `if $COND: $BODY`) | **in** | Condition must be a metavariable; paren/brace/colon forms are normalized |
+| Concrete if conditions (`if (x > 0) { $BODY }`) | **out** | Fail-closed |
+| Multi-statement body templates (`{ $A; $B }`) | **out** | Fail-closed |
+| Statement-count templates on type bodies (`struct $N { $FIELD }`) | **out** | Fail-closed |
 | Relational metavariable constraints (`$A == $B`) | **out** | |
 | Rule YAML / rewrites / autofix | **out** | Use standalone ast-grep CLI |
 | Predicates beyond indexed `kind:` | **out** | |
@@ -27,6 +31,29 @@ Formal id: **`DISC-pattern-native-subset`**.
 `$NAME` matches one identifier. `$$$` matches an argument sequence. Exact
 signatures are compared by indexed equality, so `struct App` does not match
 `struct AppContext`.
+
+## Nested statement templates
+
+Body templates count named non-comment statements in the body/consequence
+node: `{ $STMT }` (any single metavariable) matches exactly one statement,
+`{}` matches an empty body, and `{ $$$ }` / `{ $$$BODY }` matches any body.
+This mirrors ast-grep semantics on brace languages.
+
+If templates are **normalized, not token-exact**: `if ($COND) { $BODY }`,
+`if $COND { $BODY }`, and `if $COND: $BODY` are the same template, matched
+against if-nodes in every indexed language (a paren pattern still matches a
+Rust `if x > 0 { ... }`, and a brace pattern still matches a Python suite).
+This intentionally diverges from ast-grep, which parses the pattern with one
+language grammar; the Pattern-1 differential therefore compares only the
+token-exact Rust forms against ast-grep. Ruby modifier-ifs and ternaries do
+not match. `else if` / `elif` chains match only where the grammar nests a real
+if-node (Rust/TS/Go/Java `else if`; Python `elif` is a distinct node and does
+not match).
+
+Body templates are matched only by the native tree-sitter scan, never by
+indexed `pattern_nodes` signatures — the index cannot express statement
+counts, so serving these shapes from it would over-match
+(`cached_pattern_signatures` returns `None` for any `{` pattern).
 
 ## Pattern-1 differential
 
@@ -45,13 +72,23 @@ ASGREP_DIFF_AST_GREP=/absolute/path/to/ast-grep \
 
 Unset `ASGREP_DIFF_AST_GREP` must not be reported as match-set Pass.
 
+The equality list holds only patterns where ast-grep's token-exact parse
+agrees with the native match set (`process_request`, `process_request($$$)`,
+`$OBJ.$METHOD($$$)`, `if $COND { $BODY }`); last verified locally against
+ast-grep 0.45.1 on the fixture. Native-normalized forms are asserted
+separately: ast-grep parses `fn $NAME($$$)` as a trait signature item
+(matching no declarations), is visibility-exact (`pub fn` never matches a
+pattern without `pub`), and does not match `struct AppContext` against
+`struct AppContext {}`. The native engine normalizes all of these; the test
+comments in `tests/core/pattern_diff.rs` carry the per-pattern rationale.
+
 ## Unsupported
 
-Nested statement templates, relational metavariable constraints, rule YAML,
-rewrites, and predicates beyond the indexed `kind:` signature return no hits
-or fail-closed. Use the standalone `ast-grep` CLI directly when those features
-are required. They are not silently delegated, so structural search latency
-has no process startup tail.
+Multi-statement body templates, concrete if conditions, relational
+metavariable constraints, rule YAML, rewrites, and predicates beyond the
+indexed `kind:` signature return no hits or fail-closed. Use the standalone
+`ast-grep` CLI directly when those features are required. They are not
+silently delegated, so structural search latency has no process startup tail.
 
 Smoke coverage lives in `crates/ast-sgrep-lang` pattern tests, ranking oracle
 pattern modes, and `tests/core/pattern_diff.rs`.

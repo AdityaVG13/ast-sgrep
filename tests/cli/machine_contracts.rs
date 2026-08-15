@@ -1074,6 +1074,10 @@ fn bench_json_emits_cv_pct_and_skips_vacuous_ast_grep_speedup() {
         ])
         .env("NO_COLOR", "1")
         .env("ASGREP_BENCH_HISTORY_PATH", &history)
+        // This contract covers the JSON envelope, not the perf ratchet: a
+        // 3-iteration debug run legitimately quarantines on cv_pct > 5%.
+        // The keep-gate verdicts are covered by keep_gate unit tests.
+        .env("ASGREP_BENCH_RATCHET", "0")
         .output()
         .expect("bench");
     let value = assert_success(&output, "bench");

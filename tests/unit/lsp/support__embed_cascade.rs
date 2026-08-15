@@ -9,9 +9,11 @@ fn settings(neural: Option<bool>, semantic: Option<bool>) -> AsgrepSettings {
 }
 
 fn exclusive_search(settings: &AsgrepSettings) -> SearchOptions {
-    let mut opts = SearchOptions::default();
-    opts.use_neural_embed = false;
-    opts.use_semantic_only = false;
+    let mut opts = SearchOptions {
+        use_neural_embed: false,
+        use_semantic_only: false,
+        ..SearchOptions::default()
+    };
     settings.apply_to_search_options(&mut opts);
     opts
 }

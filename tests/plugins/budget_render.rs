@@ -34,6 +34,7 @@ fn hit(name: &str, score: f64) -> SearchHit {
         confidence: 0.8,
         resolution: None,
         embed_fields: None,
+        critic: Vec::new(),
         excerpt: long_function(name),
     }
 }

@@ -26,8 +26,6 @@
 mod sandbox;
 
 use anyhow::Context;
-#[cfg(test)]
-use ast_sgrep_core::force_sidecar_rebuild_err;
 use ast_sgrep_core::io_bounds::{read_bounded_line, BoundedLine};
 use ast_sgrep_core::{EmbedBackend, IndexOptions, Indexer, SearchOptions, Searcher};
 use ast_sgrep_plugins::{

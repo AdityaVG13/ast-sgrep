@@ -92,6 +92,7 @@ fn weighted_rrf_aggregates_channels_by_result_location() {
             confidence: 0.0,
             resolution: None,
             embed_fields: None,
+            critic: Vec::new(),
             excerpt: String::new(),
         }
     }
@@ -140,6 +141,7 @@ fn same_channel_duplicates_do_not_consume_rrf_positions() {
             confidence: 0.0,
             resolution: None,
             embed_fields: None,
+            critic: Vec::new(),
             excerpt: symbol.unwrap_or_default().into(),
         }
     }

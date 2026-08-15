@@ -92,6 +92,10 @@ pub struct SearchHit {
     /// Per-field embed similarities when multi-field vectors were used (7d5x.3).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub embed_fields: Option<super::field_weight::EmbedFieldScores>,
+    /// Deterministic critic annotations (P0 critic-on-shortlist). Engine-derived,
+    /// never trusted from the wire (same policy as `resolution`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub critic: Vec<super::critic::CriticNote>,
     #[serde(serialize_with = "serialize_excerpt")]
     pub excerpt: String,
 }
@@ -151,6 +155,7 @@ impl<'de> serde::Deserialize<'de> for SearchHit {
             // dvc4: resolution is engine-derived, never trusted from the wire.
             resolution: None,
             embed_fields: None,
+            critic: Vec::new(),
             excerpt: bound_excerpt(wire.excerpt),
         })
     }
@@ -191,6 +196,7 @@ impl SearchHit {
             confidence: 0.0,
             resolution: None,
             embed_fields: None,
+            critic: Vec::new(),
             excerpt: bound_excerpt(excerpt),
         }
     }
@@ -634,6 +640,13 @@ pub(super) fn merge_channel_evidence(kept: &mut SearchHit, other: SearchHit) {
     kept.caller = kept.caller.take().or(other.caller);
     kept.callee = kept.callee.take().or(other.callee);
     kept.language = kept.language.take().or(other.language);
+    kept.embed_fields = kept.embed_fields.take().or(other.embed_fields);
+    // Critic annotations are evidence about the location, not the row.
+    for note in other.critic {
+        if !kept.critic.contains(&note) {
+            kept.critic.push(note);
+        }
+    }
 }
 
 /// Heuristic confidence from channel agreement and signal strength (vh65).
@@ -674,6 +687,9 @@ pub fn hit_why(hit: &SearchHit) -> Vec<String> {
     }
     if let Some(fields) = &hit.embed_fields {
         why.extend(fields.why_terms());
+    }
+    for note in &hit.critic {
+        why.push(format!("critic:{}", note.as_str()));
     }
     why.dedup();
     why

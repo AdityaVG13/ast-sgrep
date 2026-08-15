@@ -1,5 +1,6 @@
 use super::*;
 use crate::search::dedup_hits;
+use crate::search::field_weight::EmbedFieldScores;
 
 fn hit(kind: HitKind, file: &str, line: u32, score: f64) -> SearchHit {
     SearchHit {
@@ -18,6 +19,7 @@ fn hit(kind: HitKind, file: &str, line: u32, score: f64) -> SearchHit {
         confidence: 0.0,
         resolution: None,
         embed_fields: None,
+        critic: Vec::new(),
         excerpt: String::new(),
     }
 }
@@ -56,6 +58,23 @@ fn semantic_only_confidence_is_nonzero_without_dedup() {
     assign_hit_confidence(&mut hits);
     assert!((hits[0].confidence - 0.35).abs() < 1e-12);
     assert!(hits[0].confidence > 0.0);
+}
+
+#[test]
+fn evidence_merge_preserves_semantic_field_scores() {
+    let exact = hit(HitKind::Def, "a.rs", 1, 1.0);
+    let mut semantic = hit(HitKind::Embed, "a.rs", 1, 0.5);
+    semantic.embed_fields = Some(EmbedFieldScores {
+        name: Some(0.8),
+        docs: None,
+        body: Some(0.4),
+        graph: None,
+    });
+    let expected = semantic.embed_fields.clone();
+
+    let merged = dedup_hits(vec![exact, semantic]);
+    assert_eq!(merged.len(), 1);
+    assert_eq!(merged[0].embed_fields, expected);
 }
 
 #[test]
@@ -161,8 +180,10 @@ fn embed_backend_roundtrips_through_use_star_flags() {
 
 #[test]
 fn embed_backend_from_flags_prefers_neural_over_semantic() {
-    let mut options = SearchOptions::default();
-    options.use_neural_embed = true;
-    options.use_semantic_only = true;
+    let options = SearchOptions {
+        use_neural_embed: true,
+        use_semantic_only: true,
+        ..SearchOptions::default()
+    };
     assert_eq!(options.embed_backend(), crate::EmbedBackend::Neural);
 }

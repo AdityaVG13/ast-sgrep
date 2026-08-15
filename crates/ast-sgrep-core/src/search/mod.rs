@@ -1,11 +1,15 @@
+pub(crate) mod conjunction;
+pub(crate) mod critic;
 pub(crate) mod field_weight;
 mod finish;
 mod fusion;
 pub mod passes;
+pub(crate) mod planner;
 mod types;
 use crate::query::{ParsedQuery, QueryMode};
 use crate::store::IndexStore;
 use crate::Result;
+pub use critic::CriticNote;
 pub use field_weight::EmbedFieldScores;
 #[cfg(test)]
 use finish::apply_rerank_order;
@@ -16,7 +20,7 @@ use finish::{
     definition_query_affinity, enforce_result_gates, excerpt_term_coverage, rerank_candidate_limit,
 };
 pub use fusion::dedup_hits;
-use passes::embed::{embed_pass_for_files, run_embed_pass, SemanticCache};
+use passes::embed::{run_embed_pass, SemanticCache};
 use passes::lexical::lexical_pass;
 use passes::literal::literal_pass;
 use passes::regex::regex_pass;
@@ -24,6 +28,7 @@ use passes::symbol::{
     anchor_pass, anchor_pass_for_files, search_callers, search_defs, search_imports, symbol_pass,
     symbol_pass_for_files,
 };
+pub use planner::{follow_ups_for_hit, margin_is_decisive, plan_suggested_next};
 use std::collections::HashSet;
 use std::fs::OpenOptions;
 use std::io::Write;
@@ -84,6 +89,7 @@ const RESPONSE_CACHE_CAP: usize = 128;
 pub struct Searcher {
     store: IndexStore,
     options: SearchOptions,
+    use_field_rescoring: bool,
     semantic_cache: Arc<Mutex<Option<SemanticCache>>>,
     lexicon_cache: Mutex<Option<(i64, crate::lexicon::Lexicon)>>,
     response_cache: Mutex<ResponseCache>,
@@ -151,6 +157,7 @@ impl Searcher {
         Self {
             store,
             options,
+            use_field_rescoring: true,
             semantic_cache: Arc::new(Mutex::new(None)),
             lexicon_cache: Mutex::new(None),
             response_cache: Mutex::new(ResponseCache {
@@ -171,6 +178,13 @@ impl Searcher {
     pub fn options(&self) -> &SearchOptions {
         &self.options
     }
+    /// Select concatenated-vector scoring (`false`) or the default per-field
+    /// semantic rescoring (`true`). This eval-oriented setting lives on the
+    /// searcher so adding it does not break exhaustive `SearchOptions` literals.
+    pub fn with_field_rescoring(mut self, enabled: bool) -> Self {
+        self.use_field_rescoring = enabled;
+        self
+    }
     fn index_gen(&self) -> Option<IndexGeneration> {
         // PRAGMA failure disables caching rather than pinning gen=0 (hdwh).
         let external = self
@@ -187,7 +201,11 @@ impl Searcher {
     }
     fn cache_key(&self, kind: &str, query: &str) -> String {
         // Full SearchOptions identity (nyui).
-        format!("{kind}\0{query}\0{}", self.options.cache_identity())
+        format!(
+            "{kind}\0{query}\0{}\0fr={}",
+            self.options.cache_identity(),
+            self.use_field_rescoring
+        )
     }
     /// Run one multi-pass search inside a single read snapshot and stamp the
     fn fenced(&self, compute: impl FnOnce() -> Result<SearchResponse>) -> Result<SearchResponse> {
@@ -431,6 +449,14 @@ impl Searcher {
             "Searcher::search (mode dispatch + finish)",
         );
         self.cached("search", query_str, || {
+            // Two-channel conjunction (P0 channel-conjunction). Detected on
+            // the raw query because a left prefix such as `callers:` would
+            // otherwise claim the whole string as its target.
+            if let Some(conj) = conjunction::parse(query_str) {
+                let hits = conjunction::run(self, &conj)?;
+                let response_query = conjunction::response_query(query_str, &conj);
+                return finish_response_checked(&response_query, &self.options, hits, true);
+            }
             let parsed = ParsedQuery::parse(query_str);
             let hits = match parsed.mode {
                 QueryMode::Callers => search_callers(&self.store, &self.options, &parsed)?,
@@ -454,14 +480,61 @@ impl Searcher {
                     } else {
                         let mut hits = self.search_hybrid(&parsed)?;
                         crate::intent::route_hits(&parsed, &mut hits);
-                        let weights = crate::intent::weights_for(crate::intent::classify(&parsed));
+                        let intent = crate::intent::classify(&parsed);
+                        let weights = crate::intent::weights_for(intent);
                         crate::fusion::apply_weighted_rrf(&mut hits, &weights);
+                        // The in-process critic: corroboration gate, agreement
+                        // boost, and identifier-collision penalty on the fused
+                        // shortlist (P0 critic-on-shortlist).
+                        critic::apply_critic(&parsed, intent, &mut hits);
                         hits
                     }
                 }
             };
             finish_response_checked(&parsed, &self.options, hits, true)
         })
+    }
+    /// Raw hits for one side of a conjunction (P0 channel-conjunction).
+    /// Dispatches exactly like `search` does for the same prefix; the
+    /// semantic channel runs the embedding-only pass.
+    fn channel_hits(&self, channel: &conjunction::ChannelQuery) -> Result<Vec<SearchHit>> {
+        let status = self.store.status()?;
+        let exhaustive_limit = status
+            .line_count
+            .saturating_add(status.symbol_count)
+            .saturating_add(status.caller_count)
+            .saturating_add(status.import_count)
+            .saturating_add(status.semantic_chunk_count)
+            .max(1);
+        let mut options = self.options.clone();
+        options.limit = exhaustive_limit;
+        options.use_rerank = false;
+        options.rerank_top_k = exhaustive_limit;
+        options.ann_probes = Some(usize::MAX);
+        match channel {
+            conjunction::ChannelQuery::Mode(parsed) => match parsed.mode {
+                QueryMode::Callers => search_callers(&self.store, &options, parsed),
+                QueryMode::Defs => search_defs(&self.store, &options, parsed),
+                QueryMode::Imports => search_imports(&self.store, &options, parsed),
+                QueryMode::Pattern => crate::pattern::search_pattern(
+                    parsed.terms.first().map(|s| s.as_str()).unwrap_or(""),
+                    &self.store,
+                    &self.options.root,
+                    self.options.lang_filter.as_deref(),
+                ),
+                QueryMode::Literal | QueryMode::Word => literal_pass(&self.store, &options, parsed),
+                QueryMode::Regex => regex_pass(&self.store, &options, parsed),
+                // ChannelQuery::parse never yields Hybrid; stay total anyway.
+                QueryMode::Hybrid => Ok(Vec::new()),
+            },
+            conjunction::ChannelQuery::Semantic(query) => run_embed_pass(
+                &self.store,
+                &options,
+                &ParsedQuery::parse(query),
+                &self.semantic_cache,
+                self.use_field_rescoring,
+            ),
+        }
     }
     pub fn search_semantic(&self, query_str: &str) -> Result<SearchResponse> {
         validate_query_arg(query_str)?;
@@ -470,7 +543,13 @@ impl Searcher {
             finish_response_checked(
                 &parsed,
                 &self.options,
-                run_embed_pass(&self.store, &self.options, &parsed, &self.semantic_cache)?,
+                run_embed_pass(
+                    &self.store,
+                    &self.options,
+                    &parsed,
+                    &self.semantic_cache,
+                    self.use_field_rescoring,
+                )?,
                 false,
             )
         })
@@ -552,11 +631,12 @@ impl Searcher {
         let mut hits = lexical;
         hits.extend(structural);
         if self.options.use_embed {
-            hits.extend(embed_pass_for_files(
+            hits.extend(passes::embed::embed_pass_for_files_with_rescoring(
                 &self.store,
                 &self.options,
                 parsed,
                 &working_files,
+                self.use_field_rescoring,
             )?);
         }
         Ok(hits)

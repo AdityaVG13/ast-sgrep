@@ -78,8 +78,8 @@ DISC register: `docs/validation/DISCREPANCIES.md`.
 
 - **target_workload:** ast-grep YAML rules / rewrites
 - **evidence_artifact_paths:** `docs/structural-patterns.md`, `docs/comparison.md`
-- **retry_condition_predicate:** Reconsider only inside the broader rewrite/codemod product (not this indexer). Use standalone ast-grep; do not silently delegate.
-- **bead_id:** (none)
+- **retry_condition_predicate:** Reconsider only inside the broader rewrite/codemod product (not this indexer). Use standalone ast-grep; do not silently delegate. **Reopened 2026-08-14 (engine-supremacy campaign): the codemod product is now planned work.** Stays Open until dry-run apply ships with a real artifact path.
+- **bead_id:** `ast-sgrep-2t4q` (blocked on `ast-sgrep-yira` nested patterns)
 
 ### `dual-banner-process-cli-mcp`
 

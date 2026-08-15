@@ -78,8 +78,9 @@ pub mod scip;
 pub use pattern::{run_external_ast_grep, search_pattern, ExternalAstGrepMatch};
 pub use query::{ParsedQuery, QueryMode};
 pub use search::{
-    format_hit_line, hit_why, EmbedFieldScores, HitKind, HitSignal, SearchHit, SearchOptions,
-    SearchResponse, Searcher,
+    follow_ups_for_hit, format_hit_line, hit_why, margin_is_decisive, plan_suggested_next,
+    CriticNote, EmbedFieldScores, HitKind, HitSignal, SearchHit, SearchOptions, SearchResponse,
+    Searcher,
 };
 pub use store::{
     bump_writer_generation, index_db_path, read_writer_generation, try_index_db_path,

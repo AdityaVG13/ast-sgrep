@@ -44,6 +44,9 @@ echo "commit=$commit dirty=false"
 echo "== retrieval quality (self corpus) =="
 "$bin" eval --gold "$gold" . --json > "$out/self-quality.json"
 "$bin" eval --gold "$gold" . --json --ab no-embed > "$out/self-ab-no-embed.json"
+# 7d5x.4: intent-weighted per-field rescoring vs the concatenated chunk
+# vector alone. Same index, same gold, same fusion; only embed scoring moves.
+"$bin" eval --gold "$gold" . --json --ab concat-embed > "$out/self-ab-concat-embed.json"
 
 # 2. Graph-edge precision by resolution tier over a fixed, completely labeled
 #    corpus. Zero-sample tiers remain explicit `null`, never synthetic 0.000.

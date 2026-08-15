@@ -13,6 +13,10 @@ use std::collections::{HashMap, HashSet};
 const SYMBOL_SQL_LIMIT: usize = 500;
 const CALLER_SQL_LIMIT: usize = 500;
 const MODE_SQL_LIMIT: usize = 200;
+
+fn mode_sql_limit(options: &SearchOptions) -> usize {
+    MODE_SQL_LIMIT.max(options.limit)
+}
 const TYPE_SYMBOL_WEIGHT: f64 = 0.65;
 const SYMBOL_KIND_ORDER: &str =
     " ORDER BY CASE WHEN s.kind IN ('function','method') THEN 0 ELSE 1 END, s.id";
@@ -470,7 +474,7 @@ pub fn search_callers(
         store.connection(),
         &sql,
         bind,
-        MODE_SQL_LIMIT,
+        mode_sql_limit(options),
         map_caller_row,
     )?;
     caller_rows_to_hits_resolved(
@@ -496,7 +500,7 @@ pub fn search_defs(
         return Ok(vec![]);
     }
     let (where_clause, bind) = exact_eq_filter("s.name", name, options.lang_filter.as_deref());
-    let rows = query_symbol_spans(store, &where_clause, bind, MODE_SQL_LIMIT)?;
+    let rows = query_symbol_spans(store, &where_clause, bind, mode_sql_limit(options))?;
     symbol_span_rows_to_hits(store, rows, options, HitKind::Def, |n| {
         score_def(&q.terms, n)
     })
@@ -509,7 +513,11 @@ pub fn search_imports(
     let module = parsed.lookup_symbol();
     let module = (!module.is_empty()).then_some(module.as_str());
     Ok(store
-        .query_imports(module, options.lang_filter.as_deref(), MODE_SQL_LIMIT)?
+        .query_imports(
+            module,
+            options.lang_filter.as_deref(),
+            mode_sql_limit(options),
+        )?
         .into_iter()
         .map(|(path, language, module_path, line_no)| {
             SearchHit::import(path, language, module_path, line_no)

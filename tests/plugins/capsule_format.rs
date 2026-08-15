@@ -29,6 +29,7 @@ fn sample() -> SearchResponse {
                 confidence: 0.0,
                 resolution: None,
                 embed_fields: None,
+                critic: Vec::new(),
                 excerpt: "fn auth_refresh() {\n    renew_token();\n    log();\n}".into(),
             },
             SearchHit {
@@ -47,6 +48,7 @@ fn sample() -> SearchResponse {
                 confidence: 0.0,
                 resolution: None,
                 embed_fields: None,
+                critic: Vec::new(),
                 excerpt: format!("   \n{long}"),
             },
         ],
@@ -353,6 +355,7 @@ fn many_file_sample() -> SearchResponse {
             confidence: 0.0,
             resolution: None,
             embed_fields: None,
+            critic: Vec::new(),
             excerpt: format!("fn handler_{index}(session: &Session) -> Result<Token> {{\n    rotate(session)\n}}"),
         })
         .collect();

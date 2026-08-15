@@ -19,3 +19,12 @@ impl App {
 pub fn demo(app: App) {
     app.tick();
 }
+
+pub fn guard(x: i32) -> i32 {
+    if x > 0 { return x; }
+    if x < -10 {
+        let y = -x;
+        return y + 1;
+    }
+    0
+}
