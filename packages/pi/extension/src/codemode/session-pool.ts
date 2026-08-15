@@ -36,9 +36,8 @@ type Entry = {
 
 const abortError = (): Error => Object.assign(new Error("native call aborted"), { name: "AbortError" });
 
-/** Tools cheap enough to run on the JS thread once the Searcher is warm. */
+/** Bounded metadata and symbol lookups that may run on the JS thread. */
 const FAST_LOOKUP = new Set([
-  "search",
   "defs",
   "callers",
   "imports",

@@ -31,12 +31,12 @@ fn map_err(err: impl std::fmt::Display) -> Error {
     Error::from_reason(err.to_string())
 }
 
-/// Lookups that are sub-millisecond on a warm Searcher. Heavier tools stay on
-/// the libuv pool so they cannot stall Node's event loop.
+/// Bounded metadata and symbol lookups that may run on the JS thread. Search
+/// and other potentially expensive tools stay on libuv's worker pool.
 fn is_fast_lookup(tool: &str) -> bool {
     matches!(
         tool,
-        "search" | "defs" | "callers" | "imports" | "index_status" | "catalog_search" | "catalog_describe"
+        "defs" | "callers" | "imports" | "index_status" | "catalog_search" | "catalog_describe"
     )
 }
 
@@ -344,16 +344,16 @@ impl Session {
         ))
     }
 
-    /// Warm lookup on the JS thread (search/defs/callers/imports/status).
+    /// Bounded metadata or symbol lookup on the JS thread.
     ///
-    /// Index, semantic, and chain stay on [`Self::call`] so they cannot stall
-    /// Node's event loop. Returns "session is busy" when a worker-pool task
-    /// already holds the session so the JS host can fall back to `call`.
+    /// Search, index, semantic, and chain stay on [`Self::call`] so they cannot
+    /// stall Node's event loop. Returns "session is busy" when a worker-pool
+    /// task already holds the session so the JS host can fall back to `call`.
     #[napi]
     pub fn call_now(&self, tool: String, args: Option<Value>) -> Result<Value> {
         if !is_fast_lookup(&tool) {
             return Err(Error::from_reason(
-                "callNow is only for warm lookups; use call() for index/semantic/chain",
+                "callNow is only for bounded metadata/symbol lookups; use call() for search/index/semantic/chain",
             ));
         }
         if self.busy.load(Ordering::Acquire) {

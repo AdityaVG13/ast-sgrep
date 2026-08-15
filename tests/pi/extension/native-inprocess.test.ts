@@ -136,7 +136,7 @@ test("session pool uses napi backend", async (t) => {
   await pool.shutdown();
 });
 
-test("warm in-process search activation is under 1ms", async (t) => {
+test("only bounded warm lookups use callNow and pool search stays async", async (t) => {
   const binding = requireNative();
   if (!binding) {
     t.skip("native addon not built");
@@ -145,27 +145,26 @@ test("warm in-process search activation is under 1ms", async (t) => {
   const indexed = await indexedNative(binding);
   t.after(() => rm(indexed.dir, { recursive: true, force: true }));
   const session = new binding.Session({ root: sample, indexPath: indexed.indexPath, useEmbed: false, limit: 8 });
-  assert.equal(typeof session.callNow, "function", "warm lookups need Session.callNow");
-  await session.callNow!("search", { query: "token", limit: 2, format: "capsule" });
+  assert.equal(typeof session.callNow, "function", "bounded warm lookups need Session.callNow");
   assert.throws(
-    () => session.callNow!("index_repo", { force: false }),
-    /warm lookups|callNow/i,
+    () => session.callNow!("search", { query: "token", limit: 2, format: "capsule" }),
+    /metadata\/symbol|callNow/i,
   );
+  const status = session.callNow!("index_status", {}) as Record<string, unknown>;
+  assert.equal(typeof status, "object");
+  const defs = session.callNow!("defs", { symbol: "auth_refresh", limit: 2 }) as Record<string, unknown>;
+  assert.ok(Array.isArray(defs.hits));
+
   const pool = new NativeSessionPool();
   pool.configure({ useEmbed: false, indexPath: indexed.indexPath });
   const worker = await pool.acquire(sample);
   assert.ok(worker);
-  await worker!.call("search", { query: "token", limit: 2, format: "capsule" });
-  const samples: number[] = [];
-  for (let i = 0; i < 25; i += 1) {
-    const started = performance.now();
-    await worker!.call("search", { query: "token", limit: 2, format: "capsule" });
-    samples.push(performance.now() - started);
-  }
-  samples.sort((a, b) => a - b);
-  const p50 = samples[Math.floor(samples.length / 2)]!;
-  console.error(`warm search p50=${p50.toFixed(3)}ms`);
-  assert.ok(p50 < 1, `warm search p50 was ${p50.toFixed(3)}ms; expected < 1ms (${samples.map((ms) => ms.toFixed(3)).join(", ")})`);
+  let eventLoopAdvanced = false;
+  setImmediate(() => { eventLoopAdvanced = true; });
+  const search = worker!.call("search", { query: "token", limit: 2, format: "capsule" });
+  assert.equal(eventLoopAdvanced, false, "pool search must not complete synchronously");
+  await search;
+  assert.equal(eventLoopAdvanced, true, "pool search must dispatch through the async native path");
   await pool.shutdown();
 });
 
