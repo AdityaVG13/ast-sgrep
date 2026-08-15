@@ -3,6 +3,10 @@
 MEASURE only. No product source change. Existing `ASGREP_PERF_PROFILE` events already
 separate prepare vs serial upsert vs IVF kmeans. No new probe points.
 
+**Status: historical / `UNREPRODUCIBLE`.** The raw timer JSONL and exact
+corpus snapshot are not retained in this tree. The recorded values below are
+noncanonical evidence and must not be quoted as reproducible benchmarks.
+
 ## Provenance
 
 | Field | Value |
@@ -12,13 +16,13 @@ separate prepare vs serial upsert vs IVF kmeans. No new probe points.
 | Binary | `target/release-perf/asgrep` (Mach-O arm64, mtime 2026-08-13 17:22) |
 | Host | Darwin arm64, macOS 26.5 |
 | Isolation | local Darwin (same host class as hoy3.1 samply; not the C4 Linux 1.934 s mean) |
-| Corpus root | `/Users/aditya/AI/ast-sgrep-wt-nz7i` |
+| Corpus | local development worktree; exact snapshot not retained |
 | Files indexed | **443** (61 skipped) |
 | Semantic chunks | **5675** |
 | ANN / IVF | **on** (`semantic_ivf_present: true`, hashed `semantic-v2`, dim 256) |
 | e2e `/usr/bin/time` | **3.00 s** real / 5.03 s user |
 | `index_all` wall | **2.979 s** (`perf.profile.run_complete.wall_us`) |
-| Raw JSONL | `tests/artifacts/perf/20260814T013200Z/stage_timers_post_T1R.jsonl` (gitignored) |
+| Raw JSONL | not retained; the original file was gitignored |
 
 This is **not** C4 residual mean 1.934 s / p95 1.965 s (different host, SHA, file count).
 Do not overwrite C4. Ratios on this host are the deliverable.
@@ -52,7 +56,7 @@ C15 (upsert residual impact) moves from open [E] toward **[V] on this host/SHA**
 serial upsert is the majority of cold-index wall. Do not treat that as a C4
 absolute or as license to ship multi-conn here.
 
-## Reproduce
+## Method replay (not exact reproduction)
 
 ```bash
 rm -f /tmp/asgrep-hoy32-s2-cold.db /tmp/asgrep-hoy32-s2-cold.db-wal /tmp/asgrep-hoy32-s2-cold.db-shm

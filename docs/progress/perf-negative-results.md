@@ -91,8 +91,8 @@ _(no invented measurement closes)_
 ### `ivf-residual-unmeasured`
 
 - **target_workload:** IVF/ANN post-T1R worker residual
-- **evidence_artifact_paths:** `docs/validation/residual-leaf-shares-post-T1R.md`, `tests/artifacts/perf/20260813T212430Z/`
-- **retry_condition_predicate:** Retry only if a profiler attributes a clearly-above-noise share to IVF residual leaf work on a frozen corpus (hoy3.1 MEASURE). Current exclusive ivf_build is 7.56% (`simsimd_dot_f32_neon`); reopen_gate true pending Score≥2 + human review. Do not treat pre-T1 build_from_flat 34% as current.
+- **evidence_artifact_paths:** `docs/validation/residual-leaf-shares-post-T1R.md` (`UNREPRODUCIBLE`; raw profile and exact corpus snapshot missing)
+- **retry_condition_predicate:** Retry only if a profiler attributes a clearly-above-noise share to IVF residual leaf work on a frozen corpus. The historical hoy3.1 values are noncanonical until rerun with retained raw evidence. Do not treat pre-T1 build_from_flat as current.
 - **bead_id:** `ast-sgrep-ho-ivf-residual-ho-20260807-hoy3.1`
 
 ## Retired
