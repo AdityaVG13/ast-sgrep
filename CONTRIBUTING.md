@@ -27,19 +27,21 @@ cargo build --release -p ast-sgrep-cli -j1
 ```
 
 New workspace members **must** set `[lints] workspace = true` so they inherit
-`unsafe_code = "forbid"`. The only sealed exception is `ast-sgrep-mmap`
-(see [SECURITY.md](SECURITY.md)).
+`unsafe_code = "forbid"`. Sealed exceptions are exactly two (see
+[SECURITY.md](SECURITY.md)): `ast-sgrep-mmap` (sole hand-written `unsafe`) and
+`ast-sgrep-codemode-napi` (generated Node-API FFI only).
 
-Before a crates/workspace release, humans may run:
+Before a Rust release cut, run the local release gate manually:
 
 ```bash
 bash scripts/local-release-gate.sh
 ```
 
-That gate checks formatting, workspace clippy and tests, then a bounded 30-second
-fuzz run. It is **local prep**, not the Pi npm publisher. Official Pi publication
-uses `packages/pi/scripts/release-acceptance.mjs` (see [docs/RELEASING.md](docs/RELEASING.md)).
-Ordinary changes should keep using the cheaper, targeted default bar above.
+That gate checks formatting, workspace clippy and tests, then exercises ranking
+invariants with a bounded 30-second fuzz run. It requires stable Rust, nightly
+Rust, and `cargo-fuzz`. It is **not** invoked by Pi `release-acceptance` (npm
+pack/verify/gate/publish). Ordinary changes should keep using the cheaper,
+targeted default bar above.
 
 Merge honesty (optional, does not replace T0): `bash scripts/run-proof-pack.sh`
 writes `tests/artifacts/compliance/COMPLIANCE_REPORT.md`. See
@@ -80,6 +82,9 @@ Do not treat `benchmarks/results/baselines.md` as a golden.
 | `ast-sgrep-embed` | Embeddings (+ optional neural/rerank features) |
 | `ast-sgrep-lsp` | Language server |
 | `ast-sgrep-mcp` | MCP server for agents |
+| `ast-sgrep-mmap` | Sealed read-only mmap wrapper (sole hand-written unsafe boundary) |
+| `ast-sgrep-codemode` | Code Mode / programmatic tool-calling |
+| `ast-sgrep-codemode-napi` | Node-API bindings for in-process Code Mode |
 | `ast-sgrep-plugins` | Output formats (native/github/gitlab/agent/capsule) |
 | `ast-sgrep-testkit` | Shared fixtures for integration tests |
 

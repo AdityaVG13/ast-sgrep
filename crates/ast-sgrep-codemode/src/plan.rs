@@ -113,7 +113,9 @@ fn resolve_ref(expr: &str, outputs: &HashMap<String, Value>) -> Result<Value, Ca
         return Err(CallError::InvalidArgs("empty $ref".into()));
     }
     let mut parts = expr.split('.');
-    let id = parts.next().unwrap();
+    let id = parts
+        .next()
+        .expect("non-empty expr yields at least one split part");
     let mut cur = outputs
         .get(id)
         .cloned()

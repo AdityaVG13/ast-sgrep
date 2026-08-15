@@ -108,13 +108,8 @@ editors/**/node_modules/
 editors/**/out/
 editors/**/*.vsix
 
-# Tests
-tests/artifacts/perf/
-tests/artifacts/compliance/
-# Local audit reports are review aids, not product fixtures.
-tests/artifacts/cyclomatic-reduction/
-tests/artifacts/rotational-code-analysis/
-tests/artifacts/state-space-collapse/
+# Tests -- local dumps only; never ship
+tests/artifacts/
 # Golden mismatch dumps (assert_golden writes these on failure; never commit)
 *.actual
 
@@ -161,3 +156,4 @@ fuzz/corpus/
 .rotational-code-analysis/
 .rotational-code-analysis
 *.rotational-code-analysis/
+.code-upgrade-enterprise/

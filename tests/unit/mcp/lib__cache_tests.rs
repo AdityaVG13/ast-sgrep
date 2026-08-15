@@ -6,6 +6,8 @@ fn test_server(root: PathBuf) -> McpServer {
         index_path: None,
         limit: 10,
         use_embed: false,
+        use_neural_embed: false,
+        use_semantic_only: false,
         searcher_cache: Mutex::new(SearcherCache::default()),
         index_lock: Mutex::new(()),
         path_registry: Mutex::new(HashMap::new()),

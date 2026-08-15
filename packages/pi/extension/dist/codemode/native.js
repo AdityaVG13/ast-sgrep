@@ -58,6 +58,9 @@ function candidatePaths() {
         // Workspace release output
         join(here, "..", "..", "..", "..", "target", "release"),
     ];
+    const cargoTarget = process.env.CARGO_TARGET_DIR;
+    if (cargoTarget)
+        dirs.push(join(cargoTarget, "release"));
     const out = [];
     const override = process.env.ASGREP_CODEMODE_NAPI_PATH;
     if (override)

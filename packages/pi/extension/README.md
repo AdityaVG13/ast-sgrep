@@ -24,11 +24,10 @@ No Rust toolchain or separate MCP server is required. The npm package selects th
 
 | Resource | Purpose |
 |---|---|
-| `asgrep` | Primary tool. Run a bounded JavaScript program that composes typed `asgrep.*` calls. |
+| `asgrep` | Primary tool. Run a bounded JavaScript program that composes typed `asgrep.*` calls. Auto-registered with Pi (no skill file). |
 | `asgrep_search` | Run one natural, structural, symbol, graph, semantic, word, literal, or regex lookup. |
 | `asgrep_index` | Create, refresh, or explicitly rebuild the current project index. |
 | `asgrep_status` | Inspect the selected root, index, backend, counts, and capabilities. |
-| `ast-sgrep` skill | Teach Pi when and how to use Code Mode, direct search, or exact-text search. |
 
 The package also registers `/asgrep-doctor`, `/asgrep-status`, `/asgrep-index`, and `/asgrep-reindex`.
 

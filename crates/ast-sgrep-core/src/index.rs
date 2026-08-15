@@ -1,25 +1,28 @@
 use crate::gitignore::{should_skip_dir, should_skip_file};
-use crate::store::{
-    CallerRow, ImportRow, IndexStore, RefreshLinesInput, SymbolRow, UpsertFileInput,
+use crate::index_prepare::{
+    body_structure_hash, hash_content, materialize_upsert, prepare_file, rows_from_extraction,
+    should_prune_missing_files, system_time_to_parts, ExtractedRows, PrepareOutcome,
 };
+use crate::index_recovery::recover_corrupt_index;
+use crate::index_watch::{normalize_watch_path, should_skip_watch_path};
+use crate::store::{IndexStore, RefreshLinesInput, UpsertFileInput};
 use crate::Result;
-use ast_sgrep_lang::{detect_language, ExtractionResult, Language, ParserRegistry};
-use blake3::Hasher;
+use ast_sgrep_lang::{detect_language, Language, ParserRegistry};
 use rayon::prelude::*;
 use std::cell::Cell;
 use std::collections::HashSet;
-use std::ffi::OsString;
-use std::fs::{self, File, OpenOptions};
-use std::io::ErrorKind;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 use walkdir::WalkDir;
+
+pub use crate::index_watch::canonicalize_affected_path;
 
 thread_local! {
     /// Test-only: when set, [`Indexer::rebuild_dirty_sidecars`] returns Err after the
     /// bulk SQLite commit so callers can pin Err-path cache invalidation.
     /// Thread-local so parallel `cargo test` workers do not cross-contaminate.
-    static FORCE_SIDECAR_REBUILD_ERR: Cell<bool> = Cell::new(false);
+    static FORCE_SIDECAR_REBUILD_ERR: Cell<bool> = const { Cell::new(false) };
 }
 
 /// RAII guard that forces sidecar rebuild to fail on this thread (simulates
@@ -123,12 +126,6 @@ pub fn split_content_lines(content: &str) -> SplitLines {
             .collect(),
     }
 }
-type ExtractedRows = (
-    Vec<SymbolRow>,
-    Vec<CallerRow>,
-    Vec<ImportRow>,
-    Vec<ast_sgrep_lang::PatternNode>,
-);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum EmbedBackend {
     #[default]
@@ -253,103 +250,7 @@ pub struct WatchUpdateStats {
     pub files_failed: usize,
 }
 
-fn suffixed_path(path: &Path, suffix: &str) -> Result<PathBuf> {
-    let mut name = path
-        .file_name()
-        .map(OsString::from)
-        .ok_or_else(|| crate::StoreError::Other("index path has no file name".into()))?;
-    name.push(suffix);
-    Ok(path.with_file_name(name))
-}
-
-const SQLITE_SIDECAR_SUFFIXES: [&str; 3] = ["-wal", "-shm", "-journal"];
-
-fn remove_file_if_present(path: &Path) -> Result<()> {
-    match fs::remove_file(path) {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(error.into()),
-    }
-}
-
-/// Derived sidecars are not recovery sources. Remove them before replacing the
-/// authoritative DB so a coincidentally equal generation cannot admit stale
-/// lexical or ANN rows from the corrupt index.
-fn remove_derived_sidecars(index_path: &Path) -> Result<()> {
-    let lexical = index_path
-        .parent()
-        .unwrap_or_else(|| Path::new("."))
-        .join(crate::tantivy_index::LEXICAL_DB);
-    remove_file_if_present(&lexical)?;
-    for suffix in SQLITE_SIDECAR_SUFFIXES {
-        remove_file_if_present(&suffixed_path(&lexical, suffix)?)?;
-    }
-    remove_file_if_present(&crate::semantic_ivf::semantic_ivf_path(index_path))
-}
-
-/// Preserve a corrupt database and its SQLite sidecars without overwriting an
-/// earlier quarantine. Recovery callers hold the adjacent recovery lock, and
-/// hard-link admission prevents accidental overwrite. If the filesystem cannot
-/// preserve the old inode, recovery fails closed and leaves the original path.
-fn quarantine_corrupt_index(path: &Path) -> Result<PathBuf> {
-    'candidate: for attempt in 0..1_000 {
-        let suffix = if attempt == 0 {
-            ".corrupt".to_owned()
-        } else {
-            format!(".corrupt.{attempt}")
-        };
-        let quarantine = suffixed_path(path, &suffix)?;
-        match fs::hard_link(path, &quarantine) {
-            Ok(()) => {}
-            Err(error) if error.kind() == ErrorKind::AlreadyExists => continue,
-            Err(error) => return Err(error.into()),
-        }
-
-        let mut preserved = vec![quarantine.clone()];
-        for sidecar_suffix in SQLITE_SIDECAR_SUFFIXES {
-            let source = suffixed_path(path, sidecar_suffix)?;
-            let destination = suffixed_path(&quarantine, sidecar_suffix)?;
-            match fs::hard_link(&source, &destination) {
-                Ok(()) => preserved.push(destination),
-                Err(error) if error.kind() == ErrorKind::NotFound => {}
-                Err(error) => {
-                    for created in preserved.into_iter().rev() {
-                        let _ = fs::remove_file(created);
-                    }
-                    if error.kind() == ErrorKind::AlreadyExists {
-                        continue 'candidate;
-                    }
-                    return Err(error.into());
-                }
-            }
-        }
-
-        // Remove sidecars before the main name so a failed cleanup never lets
-        // SQLite attach an old WAL to a newly created replacement database.
-        for sidecar_suffix in SQLITE_SIDECAR_SUFFIXES {
-            remove_file_if_present(&suffixed_path(path, sidecar_suffix)?)?;
-        }
-        fs::remove_file(path)?;
-        return Ok(quarantine);
-    }
-    Err(crate::StoreError::Other(
-        "could not allocate a unique corrupt-index quarantine path".into(),
-    ))
-}
-
-fn recovery_lock(path: &Path) -> Result<File> {
-    let lock_path = suffixed_path(path, ".reindex.lock")?;
-    let lock = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .open(lock_path)?;
-    lock.lock()?;
-    Ok(lock)
-}
-
-fn open_index_store(options: &IndexOptions) -> Result<IndexStore> {
+pub(crate) fn open_index_store(options: &IndexOptions) -> Result<IndexStore> {
     IndexStore::open_with_durability(
         &options.root,
         options.index_path.as_deref(),
@@ -357,70 +258,10 @@ fn open_index_store(options: &IndexOptions) -> Result<IndexStore> {
     )
 }
 
-fn quick_check(store: &IndexStore) -> Result<String> {
+pub(crate) fn quick_check(store: &IndexStore) -> Result<String> {
     Ok(store
         .connection()
         .query_row("PRAGMA quick_check(1)", [], |row| row.get(0))?)
-}
-
-fn replacement_generation_seed() -> i64 {
-    let nanos = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    nanos.min((i64::MAX / 2) as u128) as i64
-}
-
-fn recover_corrupt_index(
-    options: &IndexOptions,
-    cause: impl std::fmt::Display,
-) -> Result<IndexStore> {
-    let db_path = crate::try_index_db_path(&options.root, options.index_path.as_deref())?;
-    let _recovery_lock = recovery_lock(&db_path).map_err(|error| {
-        crate::StoreError::Other(format!(
-            "corrupt index at {} could not acquire its recovery lock ({cause}): {error}",
-            db_path.display()
-        ))
-    })?;
-
-    // Another explicit reindex may have repaired the path while this caller
-    // waited for the lock. Re-check before moving any inode.
-    match open_index_store(options) {
-        Ok(store) => match quick_check(&store) {
-            Ok(result) if result.eq_ignore_ascii_case("ok") => return Ok(store),
-            Ok(_) => drop(store),
-            Err(error) if error.is_corrupt_database() => drop(store),
-            Err(error) => return Err(error),
-        },
-        Err(error) if error.is_corrupt_database() => {}
-        Err(error) => return Err(error),
-    }
-
-    remove_derived_sidecars(&db_path).map_err(|error| {
-        crate::StoreError::Other(format!(
-            "corrupt index at {} could not invalidate derived sidecars ({cause}): {error}",
-            db_path.display()
-        ))
-    })?;
-    let quarantine = quarantine_corrupt_index(&db_path).map_err(|error| {
-        crate::StoreError::Other(format!(
-            "corrupt index at {} could not be quarantined ({cause}): {error}",
-            db_path.display()
-        ))
-    })?;
-    let replacement = open_index_store(options).map_err(|error| {
-        crate::StoreError::Other(format!(
-            "corrupt index was quarantined at {}, but its replacement could not be created: {error}",
-            quarantine.display()
-        ))
-    })?;
-    // A fresh database would otherwise restart both counters at zero. Seed
-    // them once so any undeletable/out-of-process stale sidecar fails identity
-    // checks even when the rebuilt row counts happen to match the old index.
-    let seed = replacement_generation_seed().to_string();
-    replacement.set_meta("index_data_version", &seed)?;
-    replacement.set_meta("semantic_data_version", &seed)?;
-    Ok(replacement)
 }
 
 impl Indexer {
@@ -515,7 +356,9 @@ impl Indexer {
             && prepared.iter().all(|outcome| {
                 matches!(
                     outcome,
-                    PrepareOutcome::Ready(_) | PrepareOutcome::Unchanged
+                    PrepareOutcome::Ready(_)
+                        | PrepareOutcome::Unchanged
+                        | PrepareOutcome::SkippedBinary
                 )
             });
         let mut semantic_ivf_dirty = false;
@@ -579,6 +422,12 @@ impl Indexer {
                     // --lang must not destructively wipe other languages (y1oy.8):
                     // filtered paths are skipped here; prune_missing_files also
                     // respects lang_filter when removing absent files.
+                }
+                PrepareOutcome::SkippedBinary => {
+                    // Binary assets with text-like extensions are expected walk
+                    // noise, not index failures. Leave them unseen so a stale
+                    // row from an earlier text version is pruned below.
+                    stats.files_skipped += 1;
                 }
                 PrepareOutcome::Failed(msg) => {
                     eprintln!("[asgrep] failed to index {rel_str}: {msg}");
@@ -810,113 +659,127 @@ impl Indexer {
         }
         let mut stats = WatchUpdateStats::default();
         let mut changed = false;
-        for input_path in paths {
-            let Some(abs) = normalize_watch_path(&self.options.root, input_path) else {
-                continue;
-            };
-            let Ok(rel) = abs.strip_prefix(&self.options.root) else {
-                continue;
-            };
-            // Empty relative path or directory events are not "skipped" files.
-            if rel.as_os_str().is_empty() || abs.is_dir() {
-                continue;
-            }
-            let rel_str = indexed_rel_path(rel)?;
-            let mut path_stats = WatchUpdateStats::default();
-            let mut path_changed = false;
-            let mut index_failure = false;
-            let descendant_prefix = format!("{rel_str}/");
-            let transactional_replace = self.store.has_file_with_prefix(&descendant_prefix)?;
-            if transactional_replace {
-                self.store.begin_file_tx()?;
-            }
-            let update_result = (|| -> Result<()> {
-                // Filesystem paths cannot simultaneously be files and directories.
-                // Delete stale descendants in the same transaction as a replacement
-                // file upsert, so an unreadable replacement preserves the last usable
-                // directory-shaped index state.
-                let descendants = if transactional_replace {
-                    self.store.remove_files_with_prefix(&descendant_prefix)?
-                } else {
-                    0
+        // Isolate `?` so a later path error cannot skip the writer stamp after
+        // earlier paths already committed (watch batches / multi-path CLI).
+        let result = (|| -> Result<()> {
+            for input_path in paths {
+                let Some(abs) = normalize_watch_path(&self.options.root, input_path) else {
+                    continue;
                 };
-                path_stats.files_removed += descendants;
-                path_changed |= descendants > 0;
-                if !abs.exists() {
-                    if self.store.file_hash(&rel_str)?.is_some() {
-                        self.store.remove_file(&rel_str)?;
-                        path_stats.files_removed += 1;
-                        path_changed = true;
-                    }
-                    return Ok(());
+                let Ok(rel) = abs.strip_prefix(&self.options.root) else {
+                    continue;
+                };
+                // Empty relative path or directory events are not "skipped" files.
+                if rel.as_os_str().is_empty() || abs.is_dir() {
+                    continue;
                 }
-                if should_skip_watch_path(&abs, rel, self.options.respect_gitignore, &self.ignore) {
-                    if self.store.file_hash(&rel_str)?.is_some() {
-                        self.store.remove_file(&rel_str)?;
-                        path_stats.files_removed += 1;
-                        path_changed = true;
+                let rel_str = indexed_rel_path(rel)?;
+                let mut path_stats = WatchUpdateStats::default();
+                let mut path_changed = false;
+                let mut index_failure = false;
+                let descendant_prefix = format!("{rel_str}/");
+                let transactional_replace = self.store.has_file_with_prefix(&descendant_prefix)?;
+                if transactional_replace {
+                    self.store.begin_file_tx()?;
+                }
+                let update_result = (|| -> Result<()> {
+                    // Filesystem paths cannot simultaneously be files and directories.
+                    // Delete stale descendants in the same transaction as a replacement
+                    // file upsert, so an unreadable replacement preserves the last usable
+                    // directory-shaped index state.
+                    let descendants = if transactional_replace {
+                        self.store.remove_files_with_prefix(&descendant_prefix)?
                     } else {
-                        path_stats.files_skipped += 1;
-                    }
-                    return Ok(());
-                }
-                let leaf_is_symlink = fs::symlink_metadata(&abs)
-                    .is_ok_and(|metadata| metadata.file_type().is_symlink());
-                if leaf_is_symlink {
-                    if self.store.file_hash(&rel_str)?.is_some() {
-                        self.store.remove_file(&rel_str)?;
-                        path_stats.files_removed += 1;
-                        path_changed = true;
-                    }
-                } else if abs.is_file() {
-                    match self.index_file_outcome(&abs, &rel_str) {
-                        Ok(outcome) if outcome.removed => {
+                        0
+                    };
+                    path_stats.files_removed += descendants;
+                    path_changed |= descendants > 0;
+                    if !abs.exists() {
+                        if self.store.file_hash(&rel_str)?.is_some() {
+                            self.store.remove_file(&rel_str)?;
                             path_stats.files_removed += 1;
                             path_changed = true;
                         }
-                        Ok(outcome) if outcome.stats.skipped => path_stats.files_skipped += 1,
-                        Ok(_) => {
-                            path_stats.files_indexed += 1;
+                        return Ok(());
+                    }
+                    if should_skip_watch_path(
+                        &abs,
+                        rel,
+                        self.options.respect_gitignore,
+                        &self.ignore,
+                    ) {
+                        if self.store.file_hash(&rel_str)?.is_some() {
+                            self.store.remove_file(&rel_str)?;
+                            path_stats.files_removed += 1;
+                            path_changed = true;
+                        } else {
+                            path_stats.files_skipped += 1;
+                        }
+                        return Ok(());
+                    }
+                    let leaf_is_symlink = fs::symlink_metadata(&abs)
+                        .is_ok_and(|metadata| metadata.file_type().is_symlink());
+                    if leaf_is_symlink {
+                        if self.store.file_hash(&rel_str)?.is_some() {
+                            self.store.remove_file(&rel_str)?;
+                            path_stats.files_removed += 1;
                             path_changed = true;
                         }
-                        Err(error) => {
-                            index_failure = true;
+                    } else if abs.is_file() {
+                        match self.index_file_outcome(&abs, &rel_str) {
+                            Ok(outcome) if outcome.removed => {
+                                path_stats.files_removed += 1;
+                                path_changed = true;
+                            }
+                            Ok(outcome) if outcome.stats.skipped => path_stats.files_skipped += 1,
+                            Ok(_) => {
+                                path_stats.files_indexed += 1;
+                                path_changed = true;
+                            }
+                            Err(error) => {
+                                index_failure = true;
+                                return Err(error);
+                            }
+                        }
+                    } else if self.store.file_hash(&rel_str)?.is_some() {
+                        self.store.remove_file(&rel_str)?;
+                        path_stats.files_removed += 1;
+                        path_changed = true;
+                    }
+                    Ok(())
+                })();
+                match update_result {
+                    Ok(()) => {
+                        if transactional_replace {
+                            self.store.commit_file_tx()?;
+                        }
+                        stats.files_indexed += path_stats.files_indexed;
+                        stats.files_skipped += path_stats.files_skipped;
+                        stats.files_removed += path_stats.files_removed;
+                        changed |= path_changed;
+                    }
+                    Err(error) => {
+                        if transactional_replace {
+                            self.store.rollback_file_tx()?;
+                        }
+                        if !index_failure {
                             return Err(error);
                         }
+                        eprintln!("[asgrep] failed to index {rel_str}: {error}");
+                        stats.files_failed += 1;
                     }
-                } else if self.store.file_hash(&rel_str)?.is_some() {
-                    self.store.remove_file(&rel_str)?;
-                    path_stats.files_removed += 1;
-                    path_changed = true;
-                }
-                Ok(())
-            })();
-            match update_result {
-                Ok(()) => {
-                    if transactional_replace {
-                        self.store.commit_file_tx()?;
-                    }
-                    stats.files_indexed += path_stats.files_indexed;
-                    stats.files_skipped += path_stats.files_skipped;
-                    stats.files_removed += path_stats.files_removed;
-                    changed |= path_changed;
-                }
-                Err(error) => {
-                    if transactional_replace {
-                        self.store.rollback_file_tx()?;
-                    }
-                    if !index_failure {
-                        return Err(error);
-                    }
-                    eprintln!("[asgrep] failed to index {rel_str}: {error}");
-                    stats.files_failed += 1;
                 }
             }
-        }
+            Ok(())
+        })();
         if changed {
-            self.mark_sidecars_dirty()?;
+            // Advertise even when `result` is Err: earlier paths may already be
+            // durable. Prefer peer reopen over silencing the stamp on mark failure.
+            let mark = self.mark_sidecars_dirty();
             self.advertise_writer_generation();
+            mark?;
         }
+        result?;
         Ok(stats)
     }
     pub fn flush_deferred_rebuilds(&mut self) -> Result<()> {
@@ -936,13 +799,25 @@ impl Indexer {
         Ok(())
     }
 
-    /// Bump the cross-process writer stamp (best-effort; never fails the index).
+    /// Bump the cross-process writer stamp after a durable index mutation.
+    ///
+    /// Fail-open by contract: stamp I/O must never fail the index once SQLite
+    /// has committed. A missed bump only delays peer Searcher reopen; failing
+    /// the command would report error after durable rows are already visible.
+    /// See `docs/index-consistency.md` (writer-generation fail-open).
     fn advertise_writer_generation(&self) {
+        let stamp = crate::store::writer_generation_path(
+            &self.options.root,
+            self.options.index_path.as_deref(),
+        );
         if let Err(error) = crate::store::bump_writer_generation(
             &self.options.root,
             self.options.index_path.as_deref(),
         ) {
-            eprintln!("asgrep: writer_generation stamp skipped: {error}");
+            eprintln!(
+                "asgrep: writer_generation stamp skipped (index commit already durable; path {}): {error}",
+                stamp.display()
+            );
         }
     }
     pub fn deferred_rebuilds_pending(&self) -> bool {
@@ -970,9 +845,26 @@ impl Indexer {
     }
     fn index_file_outcome(&mut self, abs_path: &Path, rel_path: &str) -> Result<IndexFileOutcome> {
         let rel_path = indexed_rel_path(Path::new(rel_path))?;
-        let source = self
+        let source = match self
             .root_dir
-            .read_text_capped(Path::new(&rel_path), crate::io_bounds::MAX_INDEX_FILE_BYTES)?;
+            .read_text_capped(Path::new(&rel_path), crate::io_bounds::MAX_INDEX_FILE_BYTES)
+        {
+            Ok(source) => source,
+            Err(error) if error.is_binary_file() && detect_language(abs_path, None).is_none() => {
+                let removed = self.store.file_hash(&rel_path)?.is_some();
+                if removed {
+                    self.store.remove_file(&rel_path)?;
+                }
+                return Ok(IndexFileOutcome {
+                    stats: FileIndexStats {
+                        skipped: !removed,
+                        ..Default::default()
+                    },
+                    removed,
+                });
+            }
+            Err(error) => return Err(error),
+        };
         let mtime = source.metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH);
         let (mtime_secs, mtime_nanos) = system_time_to_parts(mtime);
         self.index_content_at(&rel_path, &source.text, abs_path, mtime_secs, mtime_nanos)
@@ -1180,316 +1072,6 @@ impl Indexer {
         })?;
         Ok(rows_from_extraction(&extraction))
     }
-}
-struct PreparedFile {
-    hash: String,
-    body_hash: String,
-    language: Option<String>,
-    mtime_secs: i64,
-    mtime_nanos: u32,
-    lines: Vec<(u32, String)>,
-    eol: String,
-    symbols: Vec<SymbolRow>,
-    callers: Vec<CallerRow>,
-    imports: Vec<ImportRow>,
-    pattern_nodes: Vec<ast_sgrep_lang::PatternNode>,
-    semantic_chunks: Vec<crate::semantic_chunk::SemanticChunkInput>,
-}
-#[allow(clippy::large_enum_variant)]
-enum PrepareOutcome {
-    Unchanged,
-    Filtered,
-    Failed(String),
-    Ready(PreparedFile),
-}
-/// Hash with trailing blank/line-comment trivia removed. Equal ⇒ structure unchanged for trailing edits.
-fn body_structure_hash(content: &str, language: Option<Language>) -> String {
-    let mut end = content.len();
-    let bytes = content.as_bytes();
-    while end > 0 {
-        while end > 0 && (bytes[end - 1] == b'\n' || bytes[end - 1] == b'\r') {
-            end -= 1;
-        }
-        if end == 0 {
-            break;
-        }
-        let line_start = content[..end].rfind('\n').map(|i| i + 1).unwrap_or(0);
-        let line = content[line_start..end].trim();
-        if !is_trailing_trivia_line(line, language) {
-            break;
-        }
-        end = line_start;
-        if end > 0 && bytes[end - 1] == b'\n' {
-            end -= 1;
-        }
-        if end > 0 && bytes[end - 1] == b'\r' {
-            end -= 1;
-        }
-    }
-    let mut h = Hasher::new();
-    h.update(&bytes[..end]);
-    h.finalize().to_hex().to_string()
-}
-
-/// Table-driven trailing trivia: hash-style vs C-family line/block comment prefixes.
-fn is_trailing_trivia_line(line: &str, language: Option<Language>) -> bool {
-    if line.is_empty() {
-        return true;
-    }
-    const HASH_PREFIXES: &[&str] = &["#"];
-    const C_FAMILY_PREFIXES: &[&str] = &["//", "/*", "*"];
-    let prefixes: &[&str] = match language {
-        Some(Language::Python | Language::Ruby) => HASH_PREFIXES,
-        Some(
-            Language::Rust
-            | Language::TypeScript
-            | Language::JavaScript
-            | Language::Go
-            | Language::Java
-            | Language::CSharp
-            | Language::Swift
-            | Language::C
-            | Language::Cpp
-            | Language::Kotlin
-            | Language::Php,
-        ) => C_FAMILY_PREFIXES,
-        None => return false,
-    };
-    prefixes.iter().any(|p| line.starts_with(p))
-}
-
-fn hash_content(content: &str) -> String {
-    let mut h = Hasher::new();
-    h.update(content.as_bytes());
-    h.finalize().to_hex().to_string()
-}
-
-/// Shared prepare→upsert materialization: line split, body hash, optional semantic chunks.
-struct UpsertMaterial {
-    split: SplitLines,
-    body_hash: String,
-    semantic_chunks: Vec<crate::semantic_chunk::SemanticChunkInput>,
-}
-
-fn materialize_upsert(
-    content: &str,
-    language: Option<Language>,
-    symbols: &[SymbolRow],
-    callers: &[CallerRow],
-    pattern_nodes: &[ast_sgrep_lang::PatternNode],
-    embed_semantic: bool,
-    body_hash: String,
-) -> UpsertMaterial {
-    let split = split_content_lines(content);
-    let semantic_chunks = if embed_semantic {
-        crate::semantic_chunk::build_semantic_chunks_with_patterns(
-            symbols,
-            callers,
-            pattern_nodes,
-            &split.lines,
-            language.map(|l| l.as_str()),
-        )
-    } else {
-        vec![]
-    };
-    UpsertMaterial {
-        split,
-        body_hash,
-        semantic_chunks,
-    }
-}
-
-/// Normalize a watcher path against a canonicalized index root.
-fn normalize_watch_path(root: &Path, input_path: &Path) -> Option<PathBuf> {
-    let candidate = if input_path.is_absolute() {
-        input_path.to_path_buf()
-    } else {
-        root.join(input_path)
-    };
-    canonicalize_affected_path(&candidate)
-        .ok()
-        .filter(|canonical| canonical.starts_with(root))
-}
-
-/// Resolve the nearest existing ancestor without following the final path
-/// component. This confines intermediate symlinks while preserving the indexed
-/// key for a newly created or deleted file.
-pub fn canonicalize_affected_path(path: &Path) -> std::io::Result<PathBuf> {
-    let Some(name) = path.file_name() else {
-        return path.canonicalize();
-    };
-    let mut existing = path
-        .parent()
-        .unwrap_or_else(|| Path::new("."))
-        .to_path_buf();
-    let mut suffix = vec![name.to_os_string()];
-    loop {
-        match existing.canonicalize() {
-            Ok(mut canonical) => {
-                for component in suffix.iter().rev() {
-                    canonical.push(component);
-                }
-                return Ok(canonical);
-            }
-            Err(error)
-                if matches!(error.kind(), ErrorKind::NotFound | ErrorKind::NotADirectory) =>
-            {
-                let Some(name) = existing.file_name().map(ToOwned::to_owned) else {
-                    return Err(error);
-                };
-                suffix.push(name);
-                if !existing.pop() {
-                    return Err(error);
-                }
-            }
-            Err(error) => return Err(error),
-        }
-    }
-}
-
-/// Guard predicate for watch updates: skip-dir components, skip-file policy, gitignore.
-/// Callers still handle empty-rel / directory continues separately (those do not bump files_skipped).
-fn should_skip_watch_path(
-    abs: &Path,
-    rel: &Path,
-    respect_gitignore: bool,
-    ignore: &crate::gitignore::IgnoreMatcher,
-) -> bool {
-    // Same short-circuit order as the former inline condition in `update_paths`.
-    rel.components()
-        .any(|c| should_skip_dir(Path::new(c.as_os_str())))
-        || should_skip_file(abs)
-        || (respect_gitignore && ignore.is_ignored(rel))
-}
-
-fn prepare_file(
-    abs: &Path,
-    rel: &str,
-    current_hash: Option<&str>,
-    options: &IndexOptions,
-    root_dir: &crate::io_bounds::RootDir,
-    semantic_identity_ok: bool,
-    perf_run_id: Option<u64>,
-) -> PrepareOutcome {
-    let source =
-        match root_dir.read_text_capped(Path::new(rel), crate::io_bounds::MAX_INDEX_FILE_BYTES) {
-            Ok(source) => source,
-            Err(error) => return PrepareOutcome::Failed(error.to_string()),
-        };
-    let mtime = source.metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH);
-    let (mtime_secs, mtime_nanos) = system_time_to_parts(mtime);
-    let content = source.text;
-    let hash = {
-        let t0 = std::time::Instant::now();
-        let h = hash_content(&content);
-        if crate::perf_profile::enabled() {
-            crate::perf_profile::record_sample_for(
-                perf_run_id,
-                "embed_hash",
-                "index",
-                "blake3 hash_content per file",
-                t0.elapsed().as_micros() as u64,
-                false,
-            );
-        }
-        h
-    };
-    let language = detect_language(abs, Some(&content));
-    if let Some(filter) = options.lang_filter.as_deref() {
-        if language.is_none_or(|l| l.as_str() != filter) {
-            return PrepareOutcome::Filtered;
-        }
-    }
-    if !options.force_reindex && current_hash == Some(hash.as_str()) && semantic_identity_ok {
-        return PrepareOutcome::Unchanged;
-    }
-    let (symbols, callers, imports, pattern_nodes) = match language {
-        Some(lang) => {
-            // One ParserRegistry per rayon worker — building all language parsers
-            // on every file was pure fixed cost on the hot index path.
-            thread_local! {
-                static REGISTRY: ParserRegistry = ParserRegistry::new();
-            }
-            match REGISTRY.with(|registry| registry.parse(lang, &content)) {
-                Ok(extraction) => rows_from_extraction(&extraction),
-                Err(e) => {
-                    return PrepareOutcome::Failed(format!(
-                        "failed to parse {rel} as {}: {e}",
-                        lang.as_str()
-                    ))
-                }
-            }
-        }
-        None => (vec![], vec![], vec![], vec![]),
-    };
-    let material = materialize_upsert(
-        &content,
-        language,
-        &symbols,
-        &callers,
-        &pattern_nodes,
-        options.embed_semantic,
-        body_structure_hash(&content, language),
-    );
-    PrepareOutcome::Ready(PreparedFile {
-        hash,
-        body_hash: material.body_hash,
-        language: language.map(|l| l.as_str().to_string()),
-        mtime_secs,
-        mtime_nanos,
-        lines: material.split.lines,
-        eol: material.split.eol.to_string(),
-        symbols,
-        callers,
-        imports,
-        pattern_nodes,
-        semantic_chunks: material.semantic_chunks,
-    })
-}
-fn rows_from_extraction(extraction: &ExtractionResult) -> ExtractedRows {
-    (
-        extraction
-            .symbols
-            .iter()
-            .map(|s| SymbolRow {
-                name: s.name.clone(),
-                kind: format!("{:?}", s.kind).to_lowercase(),
-                line_start: s.line_start,
-                line_end: s.line_end,
-                byte_start: s.byte_start,
-                byte_end: s.byte_end,
-            })
-            .collect(),
-        extraction
-            .calls
-            .iter()
-            .map(|c| CallerRow {
-                caller: c.caller.clone(),
-                callee: c.callee.clone(),
-                line_no: c.line,
-                byte_start: c.byte_start,
-                byte_end: c.byte_end,
-            })
-            .collect(),
-        extraction
-            .imports
-            .iter()
-            .map(|i| ImportRow {
-                module_path: i.module_path.clone(),
-                line_no: i.line,
-            })
-            .collect(),
-        extraction.pattern_nodes.clone(),
-    )
-}
-fn should_prune_missing_files(walk_errors: bool) -> bool {
-    !walk_errors
-}
-fn system_time_to_parts(time: SystemTime) -> (i64, u32) {
-    let d = time
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap_or_default();
-    (d.as_secs() as i64, d.subsec_nanos())
 }
 
 #[cfg(test)]

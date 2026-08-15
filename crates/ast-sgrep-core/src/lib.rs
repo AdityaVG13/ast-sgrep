@@ -13,6 +13,9 @@ pub mod env_flag;
 pub mod fusion;
 pub mod gitignore;
 pub mod index;
+mod index_prepare;
+mod index_recovery;
+mod index_watch;
 pub mod intent;
 pub mod io_bounds;
 pub mod limits;
@@ -101,6 +104,10 @@ impl StoreError {
                     rusqlite::ErrorCode::DatabaseCorrupt | rusqlite::ErrorCode::NotADatabase
                 )
         )
+    }
+
+    pub(crate) fn is_binary_file(&self) -> bool {
+        matches!(self, Self::Other(message) if message.starts_with("binary file: "))
     }
 }
 impl From<String> for StoreError {
