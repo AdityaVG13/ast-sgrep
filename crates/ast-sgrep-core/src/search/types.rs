@@ -323,10 +323,6 @@ pub struct SearchOptions {
     /// Neural > Semantic > Auto.
     pub use_neural_embed: bool,
     pub use_semantic_only: bool,
-    /// When false, embed hits keep the concatenated-chunk similarity instead
-    /// of the intent-weighted per-field mix (7d5x.4 concat A/B arm). On by
-    /// default; only the eval harness is expected to turn it off.
-    pub use_field_rescoring: bool,
     pub ann_threshold: Option<usize>,
     /// IVF clusters to probe (0/None = adaptive, at most 90% populated; ≥ n_clusters = exact).
     pub ann_probes: Option<usize>,
@@ -350,7 +346,6 @@ impl Default for SearchOptions {
             use_tantivy: env_flag("ASGREP_TANTIVY"),
             use_neural_embed: env_flag("ASGREP_NEURAL_EMBED"),
             use_semantic_only: env_flag("ASGREP_SEMANTIC_ONLY"),
-            use_field_rescoring: true,
             ann_threshold: std::env::var("ASGREP_ANN_THRESHOLD")
                 .ok()
                 .and_then(|v| v.parse().ok()),
@@ -428,7 +423,7 @@ impl SearchOptions {
     /// Stable fingerprint of options that affect search results (nyui).
     pub fn cache_identity(&self) -> String {
         format!(
-            "root={}\0idx={:?}\0lim={}\0lang={:?}\0embed={}\0tantivy={}\0neural={}\0sem={}\0fr={}\0ann_t={:?}\0ann_p={:?}\0rerank={}\0rk={}\0ci={}\0cb={}\0ca={}\0co={}\0ff={:?}",
+            "root={}\0idx={:?}\0lim={}\0lang={:?}\0embed={}\0tantivy={}\0neural={}\0sem={}\0ann_t={:?}\0ann_p={:?}\0rerank={}\0rk={}\0ci={}\0cb={}\0ca={}\0co={}\0ff={:?}",
             self.root.display(),
             self.index_path,
             self.limit,
@@ -437,7 +432,6 @@ impl SearchOptions {
             self.use_tantivy,
             self.use_neural_embed,
             self.use_semantic_only,
-            self.use_field_rescoring,
             self.ann_threshold,
             self.ann_probes,
             self.use_rerank,
@@ -646,6 +640,7 @@ pub(super) fn merge_channel_evidence(kept: &mut SearchHit, other: SearchHit) {
     kept.caller = kept.caller.take().or(other.caller);
     kept.callee = kept.callee.take().or(other.callee);
     kept.language = kept.language.take().or(other.language);
+    kept.embed_fields = kept.embed_fields.take().or(other.embed_fields);
     // Critic annotations are evidence about the location, not the row.
     for note in other.critic {
         if !kept.critic.contains(&note) {

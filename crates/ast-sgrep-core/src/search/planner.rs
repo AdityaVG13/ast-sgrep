@@ -15,6 +15,11 @@
 use crate::search::critic::CriticNote;
 use crate::search::types::{HitKind, SearchHit, SearchResponse};
 
+/// Quote one arbitrary argument for a POSIX shell without interpolation.
+fn quote_shell_arg(argument: &str) -> String {
+    format!("'{}'", argument.replace('\'', "'\\''"))
+}
+
 /// A hit's margin must be at least this fraction of its score before the
 /// ordering counts as decisive. Margins are absolute within-signal score gaps
 /// (`assign_signal_margins`), so they are compared relative to the hit's own
@@ -95,11 +100,14 @@ pub fn plan_suggested_next(response: &SearchResponse) -> Vec<String> {
         None => {
             // Nothing came back: the semantic channel is the widest remaining
             // probe for an indexed corpus.
-            suggested.push(format!("asgrep semantic \"{}\"", response.query));
+            suggested.push(format!(
+                "asgrep semantic {}",
+                quote_shell_arg(&response.query)
+            ));
         }
         Some(top) => {
             for follow_up in follow_ups_for_hit(&response.query, top) {
-                suggested.push(format!("asgrep \"{follow_up}\""));
+                suggested.push(format!("asgrep {}", quote_shell_arg(&follow_up)));
             }
             let has_semantic = response
                 .hits
@@ -108,13 +116,16 @@ pub fn plan_suggested_next(response: &SearchResponse) -> Vec<String> {
             if !has_semantic {
                 // No semantic evidence anywhere in the shortlist: a semantic
                 // re-run is the one channel the caller has not seen.
-                suggested.push(format!("asgrep semantic \"{}\"", response.query));
+                suggested.push(format!(
+                    "asgrep semantic {}",
+                    quote_shell_arg(&response.query)
+                ));
             }
         }
     }
     suggested.push(format!(
-        "asgrep --json --format agent \"{}\"",
-        response.query
+        "asgrep --json --format agent {}",
+        quote_shell_arg(&response.query)
     ));
     suggested.dedup();
     suggested

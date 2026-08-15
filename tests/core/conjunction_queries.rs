@@ -15,6 +15,10 @@ fn write_src(root: &std::path::Path, rel: &str, body: &str) {
 }
 
 fn indexed_searcher(root: &std::path::Path) -> Searcher {
+    indexed_searcher_with_limit(root, SearchOptions::default().limit)
+}
+
+fn indexed_searcher_with_limit(root: &std::path::Path, limit: usize) -> Searcher {
     let index_path = root.join("index.db");
     let mut indexer = Indexer::new(IndexOptions {
         root: root.to_path_buf(),
@@ -28,6 +32,7 @@ fn indexed_searcher(root: &std::path::Path) -> Searcher {
     Searcher::new(SearchOptions {
         root: root.to_path_buf(),
         index_path: Some(index_path),
+        limit,
         use_embed: false,
         ..SearchOptions::default()
     })
@@ -143,4 +148,52 @@ fn conjunction_results_are_deterministic() {
             .collect::<Vec<_>>()
     };
     assert_eq!(key(&first), key(&second));
+}
+
+#[test]
+fn conjunction_finds_intersection_beyond_normal_channel_page() {
+    let temp = TempDir::new().unwrap();
+    for index in 0..205 {
+        let marker = if index == 204 {
+            "late_intersection();"
+        } else {
+            ""
+        };
+        write_src(
+            temp.path(),
+            &format!("src/caller_{index:03}.rs"),
+            &format!("fn caller_{index:03}() {{ helper(); {marker} }}\n"),
+        );
+    }
+    let searcher = indexed_searcher_with_limit(temp.path(), 1);
+    let response = searcher
+        .search("callers:helper AND literal:late_intersection")
+        .unwrap();
+    assert_eq!(response.hits.len(), 1);
+    assert_eq!(response.hits[0].file, "src/caller_204.rs");
+}
+
+#[test]
+fn and_not_removes_right_match_beyond_normal_channel_page() {
+    let temp = TempDir::new().unwrap();
+    for index in 0..205 {
+        let marker = if index == 204 {
+            "late_left_marker();"
+        } else {
+            ""
+        };
+        write_src(
+            temp.path(),
+            &format!("src/caller_{index:03}.rs"),
+            &format!("fn caller_{index:03}() {{ helper(); {marker} }}\n"),
+        );
+    }
+    let searcher = indexed_searcher_with_limit(temp.path(), 1);
+    let response = searcher
+        .search("literal:late_left_marker AND NOT callers:helper")
+        .unwrap();
+    assert!(
+        response.hits.is_empty(),
+        "late right match must subtract left"
+    );
 }

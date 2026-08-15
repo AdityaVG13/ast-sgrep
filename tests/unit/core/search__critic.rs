@@ -36,7 +36,7 @@ fn with_contributors(mut hit: SearchHit, contributors: &[HitKind]) -> SearchHit 
 }
 
 #[test]
-fn uncorroborated_embed_only_hit_is_dropped_for_symbol_queries() {
+fn unrelated_structural_hit_does_not_delete_embed_hit_for_symbol_queries() {
     let parsed = ParsedQuery::parse("auth_refresh");
     // Embed hit in a file with no other evidence; a structural hit elsewhere
     // proves the structural stage was not empty.
@@ -51,8 +51,9 @@ fn uncorroborated_embed_only_hit_is_dropped_for_symbol_queries() {
         ),
     ];
     apply_critic(&parsed, QueryIntent::Symbol, &mut hits);
-    assert_eq!(hits.len(), 1);
-    assert_eq!(hits[0].file, "src/auth.rs");
+    assert_eq!(hits.len(), 2);
+    let embed = hits.iter().find(|hit| hit.kind == HitKind::Embed).unwrap();
+    assert!(embed.critic.contains(&CriticNote::SemanticUncorroborated));
 }
 
 #[test]
@@ -106,7 +107,7 @@ fn conceptual_query_with_empty_structural_keeps_embed_hits_labeled() {
 }
 
 #[test]
-fn conceptual_query_with_structural_evidence_still_drops_uncorroborated_embed() {
+fn conceptual_query_with_unrelated_structural_evidence_keeps_embed_labeled() {
     let parsed = ParsedQuery::parse("where do we renew expired sessions");
     let mut hits = vec![
         with_symbol(
@@ -119,8 +120,9 @@ fn conceptual_query_with_structural_evidence_still_drops_uncorroborated_embed() 
         ),
     ];
     apply_critic(&parsed, QueryIntent::Conceptual, &mut hits);
-    assert_eq!(hits.len(), 1);
-    assert_eq!(hits[0].file, "src/auth.rs");
+    assert_eq!(hits.len(), 2);
+    let embed = hits.iter().find(|hit| hit.kind == HitKind::Embed).unwrap();
+    assert!(embed.critic.contains(&CriticNote::SemanticUncorroborated));
 }
 
 #[test]

@@ -14,10 +14,10 @@ After weighted RRF, a deterministic critic pass reviews the fused shortlist
 (`search/critic.rs`). It is the in-process replacement for "have a second model
 check the results": no model, no network, pure evidence rules.
 
-- **Corroboration gate.** An embed-only hit whose parent span has no lexical or
-  structural corroboration anywhere in the shortlist is dropped. Exception: a
-  conceptual query whose structural stage produced nothing keeps the semantic
-  path, and retained hits carry the `semantic_uncorroborated` note.
+- **Corroboration annotation.** An embed-only hit whose parent span has no local
+  same-file span or symbol corroboration is retained with the
+  `semantic_uncorroborated` note. Unrelated structural evidence elsewhere never
+  deletes it.
 - **Agreement boost.** Semantic plus structural agreement on the same span
   multiplies the fused score by 1.15 (`channel_agreement`); definition plus
   usage plus semantic agreement multiplies it by 1.25 (`full_agreement`).

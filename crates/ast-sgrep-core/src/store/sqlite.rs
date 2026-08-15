@@ -1764,6 +1764,34 @@ impl IndexStore {
         })
     }
 
+    pub(crate) fn semantic_field_vectors_for_files(
+        &self,
+        files: &std::collections::HashSet<String>,
+        lang: Option<&str>,
+    ) -> Result<Vec<crate::semantic_chunk::SemanticFieldVectors>> {
+        Self::map_sorted_files(files, |path| {
+            let rows = match lang {
+                Some(language) => query_cached_map(
+                    &self.conn,
+                    "SELECT sc.id, sc.vector_name, sc.vector_docs, sc.vector_body, sc.vector_graph \
+                     FROM semantic_chunks sc JOIN files f ON f.id=sc.file_id \
+                     WHERE f.path=?1 AND f.language=?2 ORDER BY sc.id",
+                    params![path, language],
+                    read_field_vector_row,
+                ),
+                None => query_cached_map(
+                    &self.conn,
+                    "SELECT sc.id, sc.vector_name, sc.vector_docs, sc.vector_body, sc.vector_graph \
+                     FROM semantic_chunks sc JOIN files f ON f.id=sc.file_id \
+                     WHERE f.path=?1 ORDER BY sc.id",
+                    params![path],
+                    read_field_vector_row,
+                ),
+            }?;
+            Ok(rows.into_iter().map(|(_, fields)| fields).collect())
+        })
+    }
+
     pub(crate) fn legacy_embeddings_for_files(
         &self,
         files: &std::collections::HashSet<String>,

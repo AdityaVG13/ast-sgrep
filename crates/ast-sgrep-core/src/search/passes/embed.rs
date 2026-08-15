@@ -100,12 +100,21 @@ pub(crate) fn run_embed_pass(
     options: &SearchOptions,
     parsed: &ParsedQuery,
     cache: &Mutex<Option<SemanticCache>>,
+    use_field_rescoring: bool,
 ) -> Result<Vec<SearchHit>> {
-    if let Some(hits) = embed_pass_lazy_ivf(store, options, parsed)? {
+    if let Some(hits) =
+        embed_pass_lazy_ivf_with_rescoring(store, options, parsed, use_field_rescoring)?
+    {
         return Ok(hits);
     }
     match load_semantic_context(store, options, cache)? {
-        Some(ctx) => embed_pass_with_context(store, options, parsed, Some(ctx)),
+        Some(ctx) => embed_pass_with_context_and_rescoring(
+            store,
+            options,
+            parsed,
+            Some(ctx),
+            use_field_rescoring,
+        ),
         None => Ok(vec![]),
     }
 }
@@ -114,6 +123,15 @@ pub fn embed_pass_lazy_ivf(
     store: &IndexStore,
     options: &SearchOptions,
     parsed: &ParsedQuery,
+) -> Result<Option<Vec<SearchHit>>> {
+    embed_pass_lazy_ivf_with_rescoring(store, options, parsed, true)
+}
+
+pub(crate) fn embed_pass_lazy_ivf_with_rescoring(
+    store: &IndexStore,
+    options: &SearchOptions,
+    parsed: &ParsedQuery,
+    use_field_rescoring: bool,
 ) -> Result<Option<Vec<SearchHit>>> {
     if parsed.terms.is_empty() || !options.use_embed {
         return Ok(Some(Vec::new()));
@@ -173,7 +191,7 @@ pub fn embed_pass_lazy_ivf(
     let ranked = ast_sgrep_embed::rank_chunk_indices_by_vector(&query_vec, &chunks, chunks.len());
     // 7d5x.4 concat arm: skip the per-field fetch entirely so hits keep the
     // concatenated-chunk similarity.
-    let fields: Vec<SemanticFieldVectors> = if options.use_field_rescoring {
+    let fields: Vec<SemanticFieldVectors> = if use_field_rescoring {
         let field_map = store.semantic_field_vectors_by_ids(&candidate_ids)?;
         candidate_ids
             .iter()
@@ -188,6 +206,7 @@ pub fn embed_pass_lazy_ivf(
         &query_vec,
         &fields,
         classify(parsed),
+        EMBED_HIT_LIMIT.max(options.limit),
     )))
 }
 pub fn embed_pass_for_files(
@@ -196,12 +215,30 @@ pub fn embed_pass_for_files(
     parsed: &ParsedQuery,
     allowed_files: &HashSet<String>,
 ) -> Result<Vec<SearchHit>> {
+    embed_pass_for_files_with_rescoring(store, options, parsed, allowed_files, true)
+}
+
+pub(crate) fn embed_pass_for_files_with_rescoring(
+    store: &IndexStore,
+    options: &SearchOptions,
+    parsed: &ParsedQuery,
+    allowed_files: &HashSet<String>,
+    use_field_rescoring: bool,
+) -> Result<Vec<SearchHit>> {
     if parsed.terms.is_empty() || !options.use_embed || allowed_files.is_empty() {
         return Ok(Vec::new());
     }
     let query = parsed.terms.join(" ");
     let mut survivors =
         store.semantic_chunks_for_files(allowed_files, options.lang_filter.as_deref())?;
+    let mut fields = if use_field_rescoring {
+        store.semantic_field_vectors_for_files(allowed_files, options.lang_filter.as_deref())?
+    } else {
+        Vec::new()
+    };
+    if !fields.is_empty() && fields.len() != survivors.len() {
+        fields.clear();
+    }
     let modern_files = survivors
         .iter()
         .map(|chunk| chunk.0.clone())
@@ -213,6 +250,9 @@ pub fn embed_pass_for_files(
     survivors.extend(
         store.legacy_embeddings_for_files(&legacy_only_files, options.lang_filter.as_deref())?,
     );
+    if !fields.is_empty() {
+        fields.resize(survivors.len(), SemanticFieldVectors::default());
+    }
     if survivors.is_empty() {
         return Ok(Vec::new());
     }
@@ -228,8 +268,9 @@ pub fn embed_pass_for_files(
         &survivors,
         ranked,
         &query_vec,
-        &[],
+        &fields,
         classify(parsed),
+        EMBED_HIT_LIMIT.max(options.limit),
     ))
 }
 
@@ -238,6 +279,16 @@ pub fn embed_pass_with_context(
     options: &SearchOptions,
     parsed: &ParsedQuery,
     ctx: Option<EmbedContext>,
+) -> Result<Vec<SearchHit>> {
+    embed_pass_with_context_and_rescoring(store, options, parsed, ctx, true)
+}
+
+pub(crate) fn embed_pass_with_context_and_rescoring(
+    store: &IndexStore,
+    options: &SearchOptions,
+    parsed: &ParsedQuery,
+    ctx: Option<EmbedContext>,
+    use_field_rescoring: bool,
 ) -> Result<Vec<SearchHit>> {
     if parsed.terms.is_empty() || !options.use_embed {
         return Ok(Vec::new());
@@ -266,7 +317,7 @@ pub fn embed_pass_with_context(
     // Same JOIN + ORDER BY sc.id as all_semantic_chunks. Length mismatch
     // means skip rescoring rather than pairing the wrong field vectors.
     // 7d5x.4 concat arm: `use_field_rescoring = false` skips the fetch.
-    let fields: Vec<SemanticFieldVectors> = if options.use_field_rescoring {
+    let fields: Vec<SemanticFieldVectors> = if use_field_rescoring {
         let field_rows = store.semantic_field_vectors_filtered(options.lang_filter.as_deref())?;
         if field_rows.len() == chunks.len() {
             field_rows.into_iter().map(|(_, f)| f).collect()
@@ -282,6 +333,7 @@ pub fn embed_pass_with_context(
         &query_vec,
         &fields,
         classify(parsed),
+        EMBED_HIT_LIMIT.max(options.limit),
     ))
 }
 /// Process-wide query embedding cache (query|backend|model|dim|pref → vector).
@@ -359,6 +411,7 @@ fn embed_hits_rescored(
     query_vec: &[f32],
     fields: &[SemanticFieldVectors],
     intent: QueryIntent,
+    hit_limit: usize,
 ) -> Vec<SearchHit> {
     let mut notes = vec![None; chunks.len()];
     let ranked = ranked
@@ -375,13 +428,14 @@ fn embed_hits_rescored(
             }
         })
         .collect();
-    embed_similarity_hits(chunks, ranked, &notes)
+    embed_similarity_hits(chunks, ranked, &notes, hit_limit)
 }
 
 fn embed_similarity_hits(
     chunks: &[SemanticChunkRow],
     ranked: Vec<(usize, f32)>,
     field_notes: &[Option<EmbedFieldScores>],
+    hit_limit: usize,
 ) -> Vec<SearchHit> {
     #[derive(Debug)]
     struct ParentMatch {
@@ -420,7 +474,7 @@ fn embed_similarity_hits(
             .then_with(|| chunks[left.best_index].2.cmp(&chunks[right.best_index].2))
             .then_with(|| chunks[left.best_index].3.cmp(&chunks[right.best_index].3))
     });
-    parents.truncate(EMBED_HIT_LIMIT);
+    parents.truncate(hit_limit);
     parents
         .into_iter()
         .map(|mut parent| {
@@ -466,6 +520,7 @@ fn embed_legacy_hits(
         &chunks,
         ast_sgrep_embed::rank_chunk_indices_by_vector(&query_vec, &chunks, chunks.len()),
         &[],
+        EMBED_HIT_LIMIT.max(options.limit),
     ))
 }
 

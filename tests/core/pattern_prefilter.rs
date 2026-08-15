@@ -78,3 +78,17 @@ fn oversize_files_are_skipped_without_parsing() {
     assert_eq!(profile.hits, 1);
     assert!(profile.bytes_scanned < MAX_INDEX_FILE_BYTES);
 }
+
+#[test]
+fn malformed_function_tail_cannot_match_through_cached_signatures() {
+    let corpus = tempfile::tempdir().unwrap();
+    fs::write(corpus.path().join("functions.rs"), "fn real() {}\n").unwrap();
+
+    let profile = profile_pattern_search(
+        "fn $NAME($$$) trailing shell garbage",
+        corpus.path(),
+        Some("rust"),
+    )
+    .unwrap();
+    assert_eq!(profile.hits, 0);
+}

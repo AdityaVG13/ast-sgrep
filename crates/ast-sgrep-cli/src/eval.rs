@@ -370,9 +370,9 @@ fn run_single(
     opts.limit = limit;
     opts.use_embed = !cfg.no_embed;
     opts.use_semantic_only = false;
-    opts.use_field_rescoring = !cfg.concat_embed;
     let searcher = Searcher::new(opts)
-        .with_context(|| format!("failed to open searcher for eval ({})", cfg.label()))?;
+        .with_context(|| format!("failed to open searcher for eval ({})", cfg.label()))?
+        .with_field_rescoring(!cfg.concat_embed);
     let evals: Vec<QueryEval> = gold
         .queries
         .iter()

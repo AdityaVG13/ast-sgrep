@@ -50,6 +50,17 @@ fn nested_body_templates_are_not_indexable() {
 }
 
 #[test]
+fn malformed_declarations_have_no_cached_signature() {
+    for malformed in [
+        "fn $NAME($$$",
+        "fn $NAME($$$) trailing",
+        "def $NAME nonsense",
+    ] {
+        assert_eq!(cached_pattern_signatures(malformed), None, "{malformed:?}");
+    }
+}
+
+#[test]
 fn if_templates_prefilter_on_the_if_keyword() {
     assert_eq!(
         required_pattern_literal("if ($COND) { $BODY }").as_deref(),

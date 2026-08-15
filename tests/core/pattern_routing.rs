@@ -28,6 +28,21 @@ fn pattern_prefix_routes_to_native_or_index_hits() {
 }
 
 #[test]
+fn malformed_function_tail_does_not_use_broad_cached_signature() {
+    let session = indexed_rs("fn first() {}\nfn second() {}\n");
+    let searcher = session.searcher(SearchOptions {
+        use_embed: false,
+        limit: 32,
+        ..session.search_options()
+    });
+    let result = searcher.search("pattern:fn $NAME($$$) trailing garbage");
+    assert!(
+        result.is_err() || result.is_ok_and(|response| response.hits.is_empty()),
+        "malformed pattern must not return broad cached matches"
+    );
+}
+
+#[test]
 fn exotic_pattern_without_ast_grep_is_structured_empty_not_panic() {
     let session = indexed_rs("fn alpha() {}\n");
     let searcher = session.searcher(SearchOptions {

@@ -34,10 +34,11 @@ hit actually carries, not from a template:
 - A critic-flagged identifier collision drills into the compound identifier
   the query named, not the colliding fragment.
 
-`suggested_next` starts from the actual top hit's follow-ups, adds a
-`asgrep semantic "<query>"` re-run only when the shortlist contains no
-semantic evidence, and always ends with the agent-format re-run. Every entry
-is an executable `asgrep` command.
+`suggested_next` starts from the actual top hit's follow-ups, adds an
+`asgrep semantic '<query>'` re-run only when the shortlist contains no
+semantic evidence, and always ends with the agent-format re-run. Every query
+argument is POSIX single-quoted (including embedded quote encoding), so every
+entry is a safe executable `asgrep` command.
 
 ## Work bounds
 

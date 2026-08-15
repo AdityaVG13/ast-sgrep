@@ -1,4 +1,4 @@
-//! Evidence for the 7d5x.4 concat A/B arm: `use_field_rescoring = false`
+//! Evidence for the 7d5x.4 concat A/B arm: `Searcher::with_field_rescoring(false)`
 //! ranks embed hits by the concatenated chunk vector alone, so no hit may
 //! carry per-field embed scores, while the default arm attaches them.
 use ast_sgrep_core::search::{SearchOptions, Searcher};
@@ -47,10 +47,10 @@ fn searcher(root: &std::path::Path, use_field_rescoring: bool) -> Searcher {
         root: root.to_path_buf(),
         index_path: Some(root.join("index.db")),
         use_embed: true,
-        use_field_rescoring,
         ..SearchOptions::default()
     })
     .unwrap()
+    .with_field_rescoring(use_field_rescoring)
 }
 
 const QUERY: &str = "renew the session credential";
@@ -74,6 +74,25 @@ fn concat_arm_never_attaches_per_field_embed_scores() {
     assert!(
         response.hits.iter().all(|hit| hit.embed_fields.is_none()),
         "concat arm must rank by the concatenated vector only"
+    );
+}
+
+#[test]
+fn hybrid_search_preserves_the_rescoring_choice_after_evidence_merge() {
+    let temp = embedded_root();
+    let rescored = searcher(temp.path(), true).search(QUERY).unwrap();
+    assert!(
+        rescored.hits.iter().any(|hit| hit.embed_fields.is_some()),
+        "hybrid evidence merge must preserve per-field scores"
+    );
+
+    let concatenated = searcher(temp.path(), false).search(QUERY).unwrap();
+    assert!(
+        concatenated
+            .hits
+            .iter()
+            .all(|hit| hit.embed_fields.is_none()),
+        "concat hybrid arm must not expose per-field scores"
     );
 }
 

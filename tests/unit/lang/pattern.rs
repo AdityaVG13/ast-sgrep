@@ -81,6 +81,26 @@ fn unsupported_nested_shapes_stay_out_of_subset() {
 }
 
 #[test]
+fn function_declaration_tails_fail_closed() {
+    for malformed in [
+        "fn $NAME($$$",
+        "fn $NAME($$$) trailing",
+        "def $NAME nonsense",
+        "fn $NAME(concrete)",
+        "fn $NAME($ARG) garbage",
+    ] {
+        assert!(
+            classify_native(malformed).is_none(),
+            "accepted {malformed:?}"
+        );
+    }
+    assert!(classify_native("def $NAME").is_some());
+    assert!(classify_native("fn $NAME($$$)").is_some());
+    assert!(classify_native("fn $NAME($$$) { $STMT }").is_some());
+    assert!(classify_native("def $NAME($ARG): $BODY").is_some());
+}
+
+#[test]
 fn native_fn_meta_matches_rust() {
     let src = "fn process_request(x: i32) {}\nfn other() {}\n";
     let hits = match_pattern(Language::Rust, src, "fn $NAME($$$)").unwrap();

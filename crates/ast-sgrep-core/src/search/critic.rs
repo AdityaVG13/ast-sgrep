@@ -142,15 +142,10 @@ fn push_note(hit: &mut SearchHit, note: CriticNote) {
 ///
 /// Runs after `fusion::apply_weighted_rrf` (contributor sets are final) and
 /// before `finish_response` (margins/confidence see critiqued scores).
-pub(crate) fn apply_critic(parsed: &ParsedQuery, intent: QueryIntent, hits: &mut Vec<SearchHit>) {
+pub(crate) fn apply_critic(parsed: &ParsedQuery, _intent: QueryIntent, hits: &mut Vec<SearchHit>) {
     if hits.is_empty() {
         return;
     }
-    let structural_present = hits
-        .iter()
-        .any(|hit| hit.contributors.iter().copied().any(is_structural_kind));
-    let semantic_only_allowed = intent == QueryIntent::Conceptual && !structural_present;
-
     // Non-embed witnesses per file: spans and symbols that can corroborate an
     // embed-only parent (child chunks map to parent symbols).
     let mut witnesses: HashMap<&str, Vec<Corroborator>> = HashMap::new();
@@ -168,7 +163,6 @@ pub(crate) fn apply_critic(parsed: &ParsedQuery, intent: QueryIntent, hits: &mut
                 callee: hit.callee.clone(),
             });
     }
-    let mut drop: HashSet<usize> = HashSet::new();
     let mut uncorroborated: HashSet<usize> = HashSet::new();
     for (index, hit) in hits.iter().enumerate() {
         if !embed_only(hit) {
@@ -184,19 +178,12 @@ pub(crate) fn apply_critic(parsed: &ParsedQuery, intent: QueryIntent, hits: &mut
         if corroborated {
             continue;
         }
-        if semantic_only_allowed {
-            uncorroborated.insert(index);
-        } else {
-            drop.insert(index);
-        }
+        uncorroborated.insert(index);
     }
 
     let fragments = identifier_fragments(parsed);
     let mut kept = Vec::with_capacity(hits.len());
     for (index, mut hit) in hits.drain(..).enumerate() {
-        if drop.contains(&index) {
-            continue;
-        }
         if uncorroborated.contains(&index) {
             push_note(&mut hit, CriticNote::SemanticUncorroborated);
         }
