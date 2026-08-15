@@ -191,9 +191,17 @@ pub struct ChunkFieldTexts {
     pub docs: String,
     pub body: String,
     pub graph: String,
+    pub tests_examples: String,
 }
 
 pub fn chunk_field_texts(chunk: &SemanticChunkInput) -> ChunkFieldTexts {
+    chunk_field_texts_for_path(chunk, "")
+}
+
+pub(crate) fn chunk_field_texts_for_path(
+    chunk: &SemanticChunkInput,
+    source_path: &str,
+) -> ChunkFieldTexts {
     let name = if chunk.symbol_name.is_empty() && chunk.kind.is_empty() && chunk.scope.is_empty() {
         String::new()
     } else {
@@ -228,12 +236,53 @@ pub fn chunk_field_texts(chunk: &SemanticChunkInput) -> ChunkFieldTexts {
     } else {
         expand_concepts(&graph)
     };
+    let tests_examples = test_example_text(chunk, source_path);
     ChunkFieldTexts {
         name,
         docs,
         body,
         graph,
+        tests_examples,
     }
+}
+
+fn test_example_text(chunk: &SemanticChunkInput, source_path: &str) -> String {
+    let path = source_path.to_ascii_lowercase();
+    let file = path.rsplit(['/', '\\']).next().unwrap_or(&path);
+    let path_marks_test_or_example = path.split(['/', '\\']).any(|part| {
+        matches!(
+            part,
+            "test" | "tests" | "__tests__" | "example" | "examples"
+        )
+    }) || file.starts_with("test_")
+        || file.contains("_test.")
+        || file.contains(".test.")
+        || file.contains("_spec.")
+        || file.contains(".spec.")
+        || matches!(file, "tests.rs" | "test.rs" | "examples.rs" | "example.rs");
+    let symbol = chunk.symbol_name.to_ascii_lowercase();
+    let symbol_marks_test_or_example = symbol.starts_with("test_")
+        || symbol.ends_with("_test")
+        || symbol.starts_with("example_")
+        || symbol.ends_with("_example");
+    let doc = chunk.doc.to_ascii_lowercase();
+    let doc_contains_example = doc.contains("# example")
+        || doc.contains("examples:")
+        || doc.contains("usage:")
+        || doc.contains("```");
+    if !path_marks_test_or_example && !symbol_marks_test_or_example && !doc_contains_example {
+        return String::new();
+    }
+    let mut raw = String::from("test_or_example:");
+    if path_marks_test_or_example || symbol_marks_test_or_example {
+        raw.push(' ');
+        raw.push_str(&chunk.excerpt);
+    }
+    if doc_contains_example {
+        raw.push_str(" usage: ");
+        raw.push_str(&chunk.doc);
+    }
+    expand_concepts(&raw)
 }
 
 /// Persisted per-field embedding blobs (NULL when the field text was empty).
@@ -243,6 +292,7 @@ pub struct SemanticFieldVectors {
     pub docs: Option<Vec<u8>>,
     pub body: Option<Vec<u8>>,
     pub graph: Option<Vec<u8>>,
+    pub tests_examples: Option<Vec<u8>>,
 }
 
 pub fn render_chunk_text(chunk: &SemanticChunkInput) -> String {

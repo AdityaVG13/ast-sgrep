@@ -17,6 +17,8 @@ Each function or method contributes up to 32 distinct child spans. One-line func
 
 At search time, child vectors are compared by cosine similarity (or IVF-ANN at scale), grouped by parent, and ranked by the maximum child score. One parent result is returned with up to three highest-scoring raw source children as its snippet; enrichment text is used only to produce vectors and is never exposed as source. This gives fine-grained matching without losing a meaningful read unit or letting a large function consume multiple result slots.
 
+Each chunk also stores separate vectors for its name metadata, documentation, body, graph neighborhood, and tests or usage examples. Test/example text is recognized from conventional test/example paths and symbols, plus example-bearing documentation. Conceptual queries weight docs, body, and examples; symbol queries weight names; structural behavior queries weight body, graph, and examples. JSON embed hits expose the available similarities in `embed_fields`, and human-readable evidence includes `embed_field:<field>=<score>` terms.
+
 Schema version 6 clears legacy whole-symbol vectors, cached vectors, backend/model identity, and stored file fingerprints. The next index refresh rebuilds every file into the child-to-parent layout, so old and new layouts cannot mix. Backend model identity is persisted for hashed semantic and in-process neural vectors; indexing refreshes and search refuses stale vectors after a configured model change. Indexes that still record `cloud` or `ollama` hard-error until `asgrep reindex`.
 
 ## Concept expansion

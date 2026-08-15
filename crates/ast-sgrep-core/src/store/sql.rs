@@ -44,7 +44,7 @@ CREATE TABLE IF NOT EXISTS embeddings (file_id INTEGER NOT NULL, line_no INTEGER
 CREATE TABLE IF NOT EXISTS semantic_chunks (id INTEGER PRIMARY KEY, file_id INTEGER NOT NULL, symbol_id INTEGER,\
   chunk_kind TEXT NOT NULL, line_start INTEGER NOT NULL, line_end INTEGER NOT NULL, symbol_name TEXT,\
   text TEXT NOT NULL, vector BLOB NOT NULL,\
-  vector_name BLOB, vector_docs BLOB, vector_body BLOB, vector_graph BLOB,\
+  vector_name BLOB, vector_docs BLOB, vector_body BLOB, vector_graph BLOB, vector_tests_examples BLOB,\
   FOREIGN KEY (file_id) REFERENCES files(id) ON DELETE CASCADE,\
   FOREIGN KEY (symbol_id) REFERENCES symbols(id) ON DELETE CASCADE);\
 CREATE INDEX IF NOT EXISTS idx_semantic_chunks_symbol ON semantic_chunks(symbol_name);\

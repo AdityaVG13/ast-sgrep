@@ -8,9 +8,9 @@ fn unit(x: f32, y: f32) -> Vec<u8> {
 }
 
 #[test]
-fn conceptual_weights_docs_and_body_only() {
+fn conceptual_weights_docs_body_and_examples() {
     let w = field_weights(QueryIntent::Conceptual);
-    assert!(w.docs > 0.0 && w.body > 0.0);
+    assert!(w.docs > 0.0 && w.body > 0.0 && w.tests_examples > 0.0);
     assert_eq!(w.name, 0.0);
     assert_eq!(w.graph, 0.0);
 }
@@ -22,12 +22,13 @@ fn symbol_weights_name_only() {
     assert_eq!(w.docs, 0.0);
     assert_eq!(w.body, 0.0);
     assert_eq!(w.graph, 0.0);
+    assert_eq!(w.tests_examples, 0.0);
 }
 
 #[test]
-fn structural_weights_body_and_graph() {
+fn structural_weights_body_graph_and_examples() {
     let w = field_weights(QueryIntent::Structural);
-    assert!(w.body > 0.0 && w.graph > 0.0);
+    assert!(w.body > 0.0 && w.graph > 0.0 && w.tests_examples > 0.0);
     assert_eq!(w.name, 0.0);
     assert_eq!(w.docs, 0.0);
 }
@@ -39,6 +40,7 @@ fn combine_renormalizes_over_present_fields() {
         docs: Some(0.2),
         body: None,
         graph: None,
+        tests_examples: None,
     };
     let mixed = combine_field_scores(field_weights(QueryIntent::Conceptual), &scores).unwrap();
     assert!(
@@ -55,6 +57,7 @@ fn symbol_intent_prefers_name_over_docs() {
         docs: Some(unit(0.0, 1.0)),
         body: None,
         graph: None,
+        tests_examples: None,
     };
     let (symbol_score, _) = rescore_similarity(0.1, &query, &fields, QueryIntent::Symbol);
     let (conceptual_score, _) = rescore_similarity(0.1, &query, &fields, QueryIntent::Conceptual);
@@ -79,10 +82,14 @@ fn why_terms_include_present_fields() {
         docs: None,
         body: Some(0.25),
         graph: None,
+        tests_examples: Some(0.75),
     }
     .why_terms();
     assert!(why.iter().any(|t| t.starts_with("embed_field:name=")));
     assert!(why.iter().any(|t| t.starts_with("embed_field:body=")));
+    assert!(why
+        .iter()
+        .any(|t| t.starts_with("embed_field:tests_examples=")));
     assert!(why.iter().all(|t| !t.contains("docs")));
 }
 
@@ -104,6 +111,7 @@ fn hit_why_appends_embed_field_terms() {
         docs: None,
         body: Some(0.25),
         graph: None,
+        tests_examples: None,
     });
     let why = hit_why(&hit);
     assert!(why.iter().any(|t| t == "semantic_similarity"));

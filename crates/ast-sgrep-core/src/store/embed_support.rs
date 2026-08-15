@@ -16,6 +16,7 @@ pub(super) struct EmbeddedChunk {
     pub docs: Option<Vec<u8>>,
     pub body: Option<Vec<u8>>,
     pub graph: Option<Vec<u8>>,
+    pub tests_examples: Option<Vec<u8>>,
 }
 #[derive(Clone)]
 struct CacheRow {
@@ -208,6 +209,7 @@ pub(super) fn evict_embed_cache(conn: &Connection, max_entries: usize) -> Result
 pub(super) fn embed_chunks(
     conn: &Connection,
     chunks: &[crate::semantic_chunk::SemanticChunkInput],
+    source_path: &str,
     do_embed: bool,
     backend: ast_sgrep_embed::EmbedPreference,
 ) -> Result<EmbeddedChunks> {
@@ -215,7 +217,8 @@ pub(super) fn embed_chunks(
         return Ok(EmbeddedChunks::empty());
     }
     let mid = cache_model_id_for_pref(backend);
-    let (chunks, cache_entries, cache_hits) = embed_parallel(conn, chunks, backend, &mid)?;
+    let (chunks, cache_entries, cache_hits) =
+        embed_parallel(conn, chunks, source_path, backend, &mid)?;
     Ok(EmbeddedChunks {
         chunks,
         cache_entries,
@@ -229,11 +232,13 @@ enum EmbedSlot {
     Docs,
     Body,
     Graph,
+    TestsExamples,
 }
 
 fn embed_parallel(
     conn: &Connection,
     chunks: &[crate::semantic_chunk::SemanticChunkInput],
+    source_path: &str,
     backend: ast_sgrep_embed::EmbedPreference,
     expected_mid: &Option<String>,
 ) -> Result<(Vec<EmbeddedChunk>, Vec<CacheEntry>, Vec<CacheHit>)> {
@@ -244,12 +249,13 @@ fn embed_parallel(
             EmbedSlot::Primary,
             crate::semantic_chunk::render_chunk_text(chunk),
         ));
-        let fields = crate::semantic_chunk::chunk_field_texts(chunk);
+        let fields = crate::semantic_chunk::chunk_field_texts_for_path(chunk, source_path);
         for (slot, text) in [
             (EmbedSlot::Name, fields.name),
             (EmbedSlot::Docs, fields.docs),
             (EmbedSlot::Body, fields.body),
             (EmbedSlot::Graph, fields.graph),
+            (EmbedSlot::TestsExamples, fields.tests_examples),
         ] {
             if !text.is_empty() {
                 jobs.push((i, slot, text));
@@ -310,6 +316,7 @@ fn embed_parallel(
             docs: None,
             body: None,
             graph: None,
+            tests_examples: None,
         })
         .collect();
     let mut filled_primary = vec![false; chunks.len()];
@@ -335,6 +342,7 @@ fn embed_parallel(
             EmbedSlot::Docs => dest.docs = Some(row.vector),
             EmbedSlot::Body => dest.body = Some(row.vector),
             EmbedSlot::Graph => dest.graph = Some(row.vector),
+            EmbedSlot::TestsExamples => dest.tests_examples = Some(row.vector),
         }
     }
     if filled_primary.iter().any(|ok| !ok) {

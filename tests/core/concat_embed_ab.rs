@@ -30,6 +30,11 @@ fn embedded_root() -> TempDir {
         "/// Repaint the widget after a theme change.\n\
          fn refresh_widget() {}\n",
     );
+    write_src(
+        root,
+        "tests/session_test.rs",
+        "fn renews_expired_session() { refresh_auth_token(); }\n",
+    );
     let mut indexer = Indexer::new(IndexOptions {
         root: root.to_path_buf(),
         index_path: Some(root.join("index.db")),
@@ -63,6 +68,25 @@ fn default_arm_attaches_per_field_embed_scores() {
     assert!(
         response.hits.iter().any(|hit| hit.embed_fields.is_some()),
         "multi-field arm must expose per-field embed scores on some hit"
+    );
+}
+
+#[test]
+fn test_hit_reports_test_example_similarity() {
+    let temp = embedded_root();
+    let response = searcher(temp.path(), true).search_semantic(QUERY).unwrap();
+    let test_hit = response
+        .hits
+        .iter()
+        .find(|hit| hit.file == "tests/session_test.rs")
+        .expect("test fixture must be returned");
+    assert!(
+        test_hit
+            .embed_fields
+            .as_ref()
+            .and_then(|scores| scores.tests_examples)
+            .is_some(),
+        "test hit must report its tests/examples similarity: {test_hit:#?}"
     );
 }
 

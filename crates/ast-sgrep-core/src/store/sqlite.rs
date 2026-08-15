@@ -33,8 +33,9 @@ thread_local! {
 }
 // 6 = symbols_name_lower. 7 = semantic-layout-v2 wipe. 8 = unstemmed code FTS.
 // 9 = repository lexicon. 10 = per-field semantic vectors (name/docs/body/graph).
-// 11 = scip_facts overlay (kgvi.2). Never reuse a SCHEMA_VERSION for two migrations.
-const SCHEMA_VERSION: i64 = 11;
+// 11 = scip_facts overlay (kgvi.2). 12 = tests/examples semantic vector.
+// Never reuse a SCHEMA_VERSION for two migrations.
+const SCHEMA_VERSION: i64 = 12;
 const IMPORT_SELECT: &str =
     "SELECT f.path, f.language, i.module_path, i.line_no FROM imports i JOIN files f ON f.id = i.file_id";
 const SYM_LOC: &str = "SELECT f.path, s.name, f.language, s.line_start, s.line_end FROM symbols s JOIN files f ON f.id = s.file_id";
@@ -69,6 +70,7 @@ fn read_field_vector_row(
             docs: r.get(2)?,
             body: r.get(3)?,
             graph: r.get(4)?,
+            tests_examples: r.get(5)?,
         },
     ))
 }
@@ -78,7 +80,13 @@ fn ensure_semantic_field_vector_columns(conn: &Connection) -> Result<()> {
     let existing = stmt
         .query_map([], |row| row.get::<_, String>(1))?
         .collect::<std::result::Result<Vec<_>, _>>()?;
-    for column in ["vector_name", "vector_docs", "vector_body", "vector_graph"] {
+    for column in [
+        "vector_name",
+        "vector_docs",
+        "vector_body",
+        "vector_graph",
+        "vector_tests_examples",
+    ] {
         if !existing.iter().any(|name| name == column) {
             conn.execute(
                 &format!("ALTER TABLE semantic_chunks ADD COLUMN {column} BLOB"),
@@ -251,13 +259,13 @@ impl IndexStore {
         // A legacy semantic sidecar is only a derived acceleration structure.
         // Remove it before migration; if the DB transaction then rolls back,
         // searches safely fall back rather than observing stale ANN contents.
-        if version < 10 {
+        if version < 12 {
             crate::semantic_ivf::invalidate_semantic_ivf(&self.db_path)?;
         }
         self.conn.execute_batch("BEGIN IMMEDIATE")?;
         let migration = (|| -> Result<()> {
             self.conn.execute_batch(SCHEMA_DDL)?;
-            if version < 10 {
+            if version < 12 {
                 ensure_semantic_field_vector_columns(&self.conn)?;
             }
             if version < 11 {
@@ -481,7 +489,7 @@ impl IndexStore {
         lang: Option<&str>,
     ) -> Result<Vec<(i64, crate::semantic_chunk::SemanticFieldVectors)>> {
         let sql = format!(
-            "SELECT sc.id, sc.vector_name, sc.vector_docs, sc.vector_body, sc.vector_graph \
+            "SELECT sc.id, sc.vector_name, sc.vector_docs, sc.vector_body, sc.vector_graph, sc.vector_tests_examples \
              FROM semantic_chunks sc JOIN files f ON f.id=sc.file_id WHERE 1=1{} ORDER BY sc.id",
             lang_and_clause(lang)
         );
@@ -498,7 +506,7 @@ impl IndexStore {
                 .collect::<Vec<_>>()
                 .join(",");
             let sql = format!(
-                "SELECT id, vector_name, vector_docs, vector_body, vector_graph \
+                "SELECT id, vector_name, vector_docs, vector_body, vector_graph, vector_tests_examples \
                  FROM semantic_chunks WHERE id IN ({ph})"
             );
             let mut stmt = self.conn.prepare(&sql)?;
@@ -1058,6 +1066,7 @@ impl IndexStore {
         let emb = embed_chunks(
             &self.conn,
             input.semantic_chunks,
+            input.rel_path,
             input.embed_semantic,
             input.embed_backend,
         )?;
@@ -1332,7 +1341,7 @@ impl IndexStore {
             .map(|(s, id)| (format!("{}:{}", s.name, s.line_start), *id))
             .collect();
         let mut st = self.conn.prepare_cached(
-            "INSERT INTO semantic_chunks(file_id, symbol_id, chunk_kind, line_start, line_end, symbol_name, text, vector, vector_name, vector_docs, vector_body, vector_graph) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)", )?;
+            "INSERT INTO semantic_chunks(file_id, symbol_id, chunk_kind, line_start, line_end, symbol_name, text, vector, vector_name, vector_docs, vector_body, vector_graph, vector_tests_examples) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)", )?;
         for (c, e) in chunks.iter().zip(emb.iter()) {
             let sid = name_to_id
                 .get(&format!("{}:{}", c.symbol_name, c.line_start))
@@ -1350,6 +1359,7 @@ impl IndexStore {
                 e.docs.clone(),
                 e.body.clone(),
                 e.graph.clone(),
+                e.tests_examples.clone(),
             ])?;
         }
         self.persist_embed_metadata(Some(first.dim), Some(first.backend), preference)
