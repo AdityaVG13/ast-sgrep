@@ -77,6 +77,12 @@ pub(crate) fn capabilities_json(_cli: &Cli) -> anyhow::Result<Value> {
             "mcp": {"binary": "asgrep-mcp", "transport": "stdio"},
             "lsp": {"binary": "asgrep-lsp", "transport": "stdio"}
         },
+        "indexed_source": {
+            "policy": "Do not spawn rg on indexed source.",
+            "exact_text": "Use literal:<term> for exact substring presence in indexed languages.",
+            "freshness": "CLI: run asgrep watch <ROOT>; Pi and Code Mode refresh before search with a 30-second default correctness lease; LSP applies document open/change/save/close before the next request.",
+            "outside_contract": "Use ripgrep only for logs and unindexed or unsupported files."
+        },
         "aliases": ["ast-sgrep"],
         "query_prefixes": ["callers:", "defs:", "imports:", "pattern:", "literal:", "regex:", "word:"],
         "output_limits": {
@@ -283,6 +289,11 @@ pub(crate) fn robot_guide_markdown() -> &'static str {
 ## Quick start
 1. `asgrep index . --json` — build or refresh the index (required once per checkout).
 2. `asgrep --json --format compact "natural language intent" .` — ranked hits with bounded snippets.
+## Indexed source / freshness
+- Do not spawn `rg` on indexed source. Use `literal:<term>` for exact substring presence and unprefixed search for ranked code navigation.
+- For a long-running CLI session, run `asgrep watch <root>`. A pending batch starts after the debounce quiet period or after at most three debounce windows under continuous events; indexing time still depends on the project.
+- Pi and Code Mode refresh before search, with a configurable 30-second correctness lease by default. LSP applies document open/change/save/close notifications before processing the next request.
+- Ripgrep remains the tool for logs and unindexed or unsupported files. ast-sgrep never spawns it as a compatibility layer.
 ## Subcommands
 See `capabilities --json` → `commands` (complete clap catalog). Notable: `search`/`find`/`query`, `keyword`, `semantic`, `chain`, `index`/`reindex` (`--dry-run`), `status`, `bench`, `watch`, `eval`, `doctor`, `version`.
 ## Integrations / sibling binaries

@@ -50,11 +50,11 @@ Each hit includes `follow_up_queries` so agents can drill into defs/callers with
 
 ### Recommended agent loop
 
-1. `asgrep index .`, build persistent index (once per repo revision)
+1. `asgrep index .`, then keep long-running CLI work current with `asgrep watch .` (Pi and Code Mode refresh automatically)
 2. `asgrep --json --format agent "<user intent>"`, ranked hits with follow-ups
 3. For each symbol: `asgrep "defs:…"` and `asgrep "callers:…"`
 4. Structural shapes: `asgrep "pattern:…"` (native tree-sitter)
-5. Logs / unindexed files: ripgrep (outside asgrep)
+5. Do not spawn ripgrep for indexed source; reserve it for logs and unindexed or unsupported files
 
 ### Tool stack for LLM pipelines
 

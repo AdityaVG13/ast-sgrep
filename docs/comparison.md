@@ -74,6 +74,15 @@ ast-grep. They do not establish full tool identity, cover unindexed files, or
 justify a replacement claim. This document therefore still describes
 complements, and the table above stays honest about the current subsets.
 
+### Agent policy for indexed source
+
+Do not spawn `rg` for source already covered by a current ast-sgrep index. Use
+`literal:` for exact substring presence and the normal hybrid query for ranked
+navigation. Keep a terminal index current with `asgrep watch`; Pi and Code Mode
+refresh before search, while LSP applies open/change/save/close document updates
+before its next request. Ripgrep remains appropriate for logs and unindexed or
+unsupported files. ast-sgrep never invokes it as a hidden fallback.
+
 ## Feature deep dive
 
 ### Persistent index vs stateless scan

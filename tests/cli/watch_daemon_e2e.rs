@@ -5,6 +5,7 @@ use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -174,4 +175,57 @@ fn cli_watch_reindexes_after_real_fs_create() {
         }
         thread::sleep(Duration::from_millis(100));
     }
+}
+
+#[test]
+fn cli_watch_reindexes_during_sustained_same_file_writes() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path().join("proj");
+    fs::create_dir_all(&root).expect("proj");
+    fs::write(root.join("busy.rs"), "pub fn seed_watch_file() {}\n").expect("seed");
+    let index_path = dir.path().join("idx").join("index.db");
+    fs::create_dir_all(index_path.parent().expect("idx parent")).expect("idx");
+
+    let bin = asgrep_bin();
+    let mut watch = WatchProcess::spawn(&bin, &root, &index_path, 100);
+    assert!(
+        watch.wait_for("initial index", Duration::from_secs(20)),
+        "watch never finished initial index.\nstderr:\n{}",
+        watch.log_text()
+    );
+
+    let writer_active = Arc::new(AtomicBool::new(true));
+    let writer_state = Arc::clone(&writer_active);
+    let busy_file = root.join("busy.rs");
+    let writer = thread::spawn(move || {
+        for revision in 0..240 {
+            fs::write(
+                &busy_file,
+                format!("pub fn sustained_watch_token() -> usize {{ {revision} }}\n"),
+            )
+            .expect("rewrite busy.rs");
+            thread::sleep(Duration::from_millis(25));
+        }
+        writer_state.store(false, Ordering::SeqCst);
+    });
+
+    let started = Instant::now();
+    let timeout = Duration::from_secs(5);
+    let observed_while_writing = loop {
+        let result = search_keyword(&bin, &root, &index_path, "sustained_watch_token");
+        if hit_mentions(&result, "sustained_watch_token") {
+            break writer_active.load(Ordering::SeqCst);
+        }
+        if started.elapsed() > timeout {
+            break false;
+        }
+        thread::sleep(Duration::from_millis(50));
+    };
+
+    writer.join().expect("sustained writer");
+    assert!(
+        observed_while_writing,
+        "keyword search did not observe sustained_watch_token while writes were still arriving.\nstderr:\n{}",
+        watch.log_text()
+    );
 }
