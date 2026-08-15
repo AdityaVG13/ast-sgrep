@@ -66,6 +66,29 @@
       "usage": "asgrep chain"
     },
     {
+      "about": "Plan or apply an indexed structural rewrite in process",
+      "flags": [
+        "--ann-probes",
+        "--ann-threshold",
+        "--budget-tokens",
+        "--dry-run",
+        "--excerpt-lines",
+        "--format",
+        "--neural-embed",
+        "--no-embed",
+        "--pattern",
+        "--rerank",
+        "--rerank-top-k",
+        "--response-snippet-tokens",
+        "--rewrite",
+        "--semantic-only",
+        "--snippet-tokens",
+        "--tantivy"
+      ],
+      "name": "codemod",
+      "usage": "asgrep codemod"
+    },
+    {
       "about": "Run many Code Mode tool calls in one warm process",
       "flags": [
         "--requests"
@@ -334,7 +357,7 @@
   "notes": {
     "default_search": "Bare QUERY without a subcommand runs hybrid search; the word 'search' is not a required verb \u2014 use the `search`/`find`/`query` subcommand only when you want an explicit search command.",
     "format_implies_json": true,
-    "safe_mutating": "index refreshes incrementally with transactional writes. reindex forces a full transactional rewrite -- prefer `asgrep reindex --dry-run <ROOT> --json` before a full reindex."
+    "safe_mutating": "index refreshes incrementally with transactional writes. reindex forces a full transactional rewrite -- prefer `asgrep reindex --dry-run <ROOT> --json` before a full reindex. codemod dry-run always emits a JSON edit plan; apply commits one source transaction before a separate incremental index transaction. A source-apply failure rolls back source files; an index-refresh failure leaves the source edits applied and reports `asgrep index` as recovery."
   },
   "ok": true,
   "output_limits": {

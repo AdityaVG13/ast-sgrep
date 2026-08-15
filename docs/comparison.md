@@ -69,11 +69,14 @@ already moving that way without a sidecar model:
   and `AND NOT` subtracts at the corresponding scope. See
   `docs/QUERY_GRAMMAR.md`.
 
-The two bounded keep-gates now exist: indexed-language fixture file presence
-for `literal:` vs pinned ripgrep, and native Pattern-1 match sets vs pinned
-ast-grep. They do not establish full tool identity, cover unindexed files, or
-justify a replacement claim. This document therefore still describes
-complements, and the table above stays honest about the current subsets.
+Two bounded, opt-in local keep-gates now exist: indexed-language fixture file
+presence for `literal:` vs pinned ripgrep, and native Pattern-1 match sets vs
+pinned ast-grep. Default test runs leave both external rows Not-run unless the
+pinned binaries are explicitly provisioned through `ASGREP_DIFF_RG` and
+`ASGREP_DIFF_AST_GREP`. They do not establish full tool identity, cover
+unindexed files, or justify a replacement claim. This document therefore still
+describes complements, and the table above stays honest about the current
+subsets.
 
 ### Agent policy for indexed source
 

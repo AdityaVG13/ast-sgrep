@@ -283,3 +283,47 @@ fn codemod_dry_run_and_apply_use_the_real_indexed_fixture() {
         std::collections::BTreeSet::from(["first.rs", "second.rs"])
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn codemod_apply_refuses_parent_symlink_swap() {
+    use ast_sgrep_core::codemod::{apply_codemod, plan_codemod};
+    use std::os::unix::fs::symlink;
+
+    let temp = TempDir::new().unwrap();
+    let root = temp.path().join("fixture");
+    let source_dir = root.join("src");
+    fs::create_dir_all(&source_dir).unwrap();
+    fs::write(source_dir.join("lib.rs"), "fn run() { legacy(alpha); }\n").unwrap();
+    let session = CliSession {
+        index_path: temp.path().join("index.db"),
+        bin: asgrep_bin(),
+        root,
+        _temp: temp,
+    };
+    session.run_success(&[
+        "--index-path",
+        session.index_path.to_str().unwrap(),
+        "index",
+        "--no-embed",
+        session.root.to_str().unwrap(),
+    ]);
+    let plan = plan_codemod(
+        &session.root,
+        Some(&session.index_path),
+        "legacy($ARG)",
+        "modern($ARG)",
+    )
+    .unwrap();
+
+    let outside = tempfile::tempdir().unwrap();
+    let outside_file = outside.path().join("lib.rs");
+    let original = "fn run() { legacy(alpha); }\n";
+    fs::write(&outside_file, original).unwrap();
+    fs::rename(&source_dir, session.root.join("saved-src")).unwrap();
+    symlink(outside.path(), &source_dir).unwrap();
+
+    let error = apply_codemod(&plan).expect_err("symlink escape must be rejected");
+    assert!(error.to_string().contains("failed to verify"), "{error:#}");
+    assert_eq!(fs::read_to_string(outside_file).unwrap(), original);
+}

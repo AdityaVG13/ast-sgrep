@@ -6,9 +6,10 @@ use anyhow::{bail, Context};
 use ast_sgrep_lang::{
     classify_native, detect_language, match_pattern, required_pattern_literal, PatternMatch,
 };
+use cap_std::ambient_authority;
+use cap_std::fs::{Dir, OpenOptions};
 use serde::Serialize;
 use std::collections::BTreeSet;
-use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -165,23 +166,29 @@ pub fn apply_codemod(plan: &CodemodPlan) -> anyhow::Result<CodemodApplyResult> {
         });
     }
 
+    // Keep every apply operation capability-relative to one stable project
+    // root handle. A parent replaced by a symlink after planning therefore
+    // cannot redirect reads, staging, renames, or rollback outside the root.
+    let root_dir = Dir::open_ambient_dir(&plan.root, ambient_authority())
+        .with_context(|| format!("failed to open project root: {}", plan.root.display()))?;
     let mut staged = Vec::with_capacity(plan.files.len());
     for (index, file) in plan.files.iter().enumerate() {
         let prepared = (|| -> anyhow::Result<StagedFile> {
-            let absolute = plan.root.join(confined_relative_path(&file.path)?);
-            let current = fs::read_to_string(&absolute)
+            let relative = confined_relative_path(&file.path)?.to_path_buf();
+            let current = root_dir
+                .read_to_string(&relative)
                 .with_context(|| format!("failed to verify {} before apply", file.path))?;
             if current != file.original {
                 bail!("source changed after codemod planning: {}", file.path);
             }
-            let permissions = fs::metadata(&absolute)?.permissions();
-            let staged_path = write_staged_file(&absolute, &file.rewritten, index)?;
-            if let Err(error) = fs::set_permissions(&staged_path, permissions) {
-                let _ = fs::remove_file(&staged_path);
+            let permissions = root_dir.metadata(&relative)?.permissions();
+            let staged_path = write_staged_file(&root_dir, &relative, &file.rewritten, index)?;
+            if let Err(error) = root_dir.set_permissions(&staged_path, permissions) {
+                let _ = root_dir.remove_file(&staged_path);
                 return Err(error).with_context(|| format!("failed to stage {}", file.path));
             }
             Ok(StagedFile {
-                absolute,
+                relative,
                 staged: staged_path,
                 backup: None,
             })
@@ -189,32 +196,44 @@ pub fn apply_codemod(plan: &CodemodPlan) -> anyhow::Result<CodemodApplyResult> {
         match prepared {
             Ok(prepared) => staged.push(prepared),
             Err(error) => {
-                cleanup_staged(&staged);
+                cleanup_staged(&root_dir, &staged);
                 return Err(error);
             }
         }
     }
 
     for index in 0..staged.len() {
-        let backup = unique_sibling_path(&staged[index].absolute, "backup", index)?;
-        if let Err(error) = fs::rename(&staged[index].absolute, &backup) {
-            let rollback = rollback_committed(&mut staged, index);
-            cleanup_staged(&staged);
-            return Err(transaction_error(error, rollback, &staged[index].absolute));
+        let backup = unique_sibling_path(&staged[index].relative, "backup", index)?;
+        if let Err(error) = root_dir.rename(&staged[index].relative, &root_dir, &backup) {
+            let rollback = rollback_committed(&root_dir, &mut staged, index);
+            cleanup_staged(&root_dir, &staged);
+            return Err(transaction_error(
+                error,
+                rollback,
+                &plan.root.join(&staged[index].relative),
+            ));
         }
         staged[index].backup = Some(backup.clone());
-        if let Err(error) = fs::rename(&staged[index].staged, &staged[index].absolute) {
-            let restore_current = fs::rename(&backup, &staged[index].absolute).err();
+        if let Err(error) =
+            root_dir.rename(&staged[index].staged, &root_dir, &staged[index].relative)
+        {
+            let restore_current = root_dir
+                .rename(&backup, &root_dir, &staged[index].relative)
+                .err();
             staged[index].backup = None;
-            let rollback = rollback_committed(&mut staged, index).or(restore_current);
-            cleanup_staged(&staged);
-            return Err(transaction_error(error, rollback, &staged[index].absolute));
+            let rollback = rollback_committed(&root_dir, &mut staged, index).or(restore_current);
+            cleanup_staged(&root_dir, &staged);
+            return Err(transaction_error(
+                error,
+                rollback,
+                &plan.root.join(&staged[index].relative),
+            ));
         }
     }
 
     for file in &staged {
         if let Some(backup) = &file.backup {
-            let _ = fs::remove_file(backup);
+            let _ = root_dir.remove_file(backup);
         }
     }
     Ok(CodemodApplyResult {
@@ -317,19 +336,22 @@ fn apply_edits(original: &str, edits: &[CodemodEdit]) -> String {
 }
 
 struct StagedFile {
-    absolute: PathBuf,
+    relative: PathBuf,
     staged: PathBuf,
     backup: Option<PathBuf>,
 }
 
-fn write_staged_file(path: &Path, contents: &str, index: usize) -> anyhow::Result<PathBuf> {
+fn write_staged_file(
+    root_dir: &Dir,
+    path: &Path,
+    contents: &str,
+    index: usize,
+) -> anyhow::Result<PathBuf> {
     for attempt in 0..100 {
         let staged = unique_sibling_path(path, "stage", index * 100 + attempt)?;
-        match OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&staged)
-        {
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        match root_dir.open_with(&staged, &options) {
             Ok(mut file) => {
                 let write_result = file
                     .write_all(contents.as_bytes())
@@ -338,7 +360,7 @@ fn write_staged_file(path: &Path, contents: &str, index: usize) -> anyhow::Resul
                     Ok(()) => return Ok(staged),
                     Err(error) => {
                         drop(file);
-                        let _ = fs::remove_file(staged);
+                        let _ = root_dir.remove_file(staged);
                         return Err(error.into());
                     }
                 }
@@ -371,30 +393,34 @@ fn unique_sibling_path(path: &Path, role: &str, nonce: usize) -> anyhow::Result<
     )))
 }
 
-fn rollback_committed(staged: &mut [StagedFile], count: usize) -> Option<std::io::Error> {
+fn rollback_committed(
+    root_dir: &Dir,
+    staged: &mut [StagedFile],
+    count: usize,
+) -> Option<std::io::Error> {
     let mut first_error = None;
     for file in staged[..count].iter_mut().rev() {
         let Some(backup) = file.backup.take() else {
             continue;
         };
-        if let Err(error) = fs::remove_file(&file.absolute) {
+        if let Err(error) = root_dir.remove_file(&file.relative) {
             first_error.get_or_insert(error);
             continue;
         }
-        if let Err(error) = fs::rename(backup, &file.absolute) {
+        if let Err(error) = root_dir.rename(backup, root_dir, &file.relative) {
             first_error.get_or_insert(error);
         }
     }
     first_error
 }
 
-fn cleanup_staged(staged: &[StagedFile]) {
+fn cleanup_staged(root_dir: &Dir, staged: &[StagedFile]) {
     let mut paths = BTreeSet::new();
     for file in staged {
         paths.insert(file.staged.clone());
     }
     for path in paths {
-        let _ = fs::remove_file(path);
+        let _ = root_dir.remove_file(path);
     }
 }
 

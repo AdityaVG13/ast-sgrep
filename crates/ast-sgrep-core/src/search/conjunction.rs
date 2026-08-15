@@ -120,6 +120,51 @@ fn spans_overlap(a: &SearchHit, b: &SearchHit) -> bool {
     a.line_start <= b.line_end && b.line_start <= a.line_end
 }
 
+fn excerpt_contains_callee(pattern: &SearchHit, caller: &SearchHit) -> bool {
+    let Some(callee) = caller.callee.as_deref() else {
+        return false;
+    };
+    let caller_excerpt = caller.excerpt.trim();
+    if caller_excerpt.is_empty() {
+        return false;
+    }
+    if pattern.excerpt.contains(caller_excerpt) && caller_excerpt.contains(callee) {
+        return true;
+    }
+    let Some(pattern_start) = caller.excerpt.find(&pattern.excerpt) else {
+        return false;
+    };
+    let pattern_end = pattern_start + pattern.excerpt.len();
+    caller
+        .excerpt
+        .match_indices(callee)
+        .any(|(start, matched)| {
+            let end = start + matched.len();
+            pattern_start <= start && end <= pattern_end
+        })
+}
+
+fn pattern_caller_spans_overlap(a: &SearchHit, b: &SearchHit) -> bool {
+    if !spans_overlap(a, b) {
+        return false;
+    }
+    let (pattern, caller) = if a.kind == crate::search::types::HitKind::Pattern {
+        (a, b)
+    } else {
+        (b, a)
+    };
+    if caller.line_start < pattern.line_start || caller.line_end > pattern.line_end {
+        return false;
+    }
+    // A caller strictly inside a multiline pattern is contained by line
+    // bounds alone. Calls on either boundary need excerpt evidence because
+    // another statement can share the pattern's first or last source line.
+    if pattern.line_start < caller.line_start && caller.line_end < pattern.line_end {
+        return true;
+    }
+    excerpt_contains_callee(pattern, caller)
+}
+
 fn uses_span_join(conjunction: &Conjunction) -> bool {
     let (ChannelQuery::Mode(left), ChannelQuery::Mode(right)) =
         (&conjunction.left, &conjunction.right)
@@ -151,9 +196,12 @@ pub(crate) fn combine(
             .push(hit);
     }
     let joined = |left: &SearchHit| {
-        right_by_file
-            .get(left.file.as_str())
-            .is_some_and(|right| !span_join || right.iter().any(|right| spans_overlap(left, right)))
+        right_by_file.get(left.file.as_str()).is_some_and(|right| {
+            !span_join
+                || right
+                    .iter()
+                    .any(|right| pattern_caller_spans_overlap(left, right))
+        })
     };
     let mut kept: Vec<SearchHit> = if negated {
         left_hits.into_iter().filter(|hit| !joined(hit)).collect()
@@ -164,10 +212,14 @@ pub(crate) fn combine(
         return kept;
     }
     for right in right_hits {
-        if let Some(target) = kept
-            .iter_mut()
-            .find(|kept| kept.file == right.file && spans_overlap(kept, &right))
-        {
+        if let Some(target) = kept.iter_mut().find(|kept| {
+            kept.file == right.file
+                && if span_join {
+                    pattern_caller_spans_overlap(kept, &right)
+                } else {
+                    spans_overlap(kept, &right)
+                }
+        }) {
             let left_kind = target.kind;
             let left_excerpt = target.excerpt.clone();
             merge_channel_evidence(target, right);

@@ -53,6 +53,19 @@ fn a_busy_queue_cannot_postpone_a_required_full_scan() {
 }
 
 #[test]
+fn incremental_flush_waits_only_one_quiet_period() {
+    let now = Instant::now();
+    let debounce = Duration::from_millis(300);
+    let max_latency_deadline = now + debounce.saturating_mul(3);
+
+    assert_eq!(
+        next_event_wait(debounce, Some(max_latency_deadline), now),
+        Some(debounce),
+        "the max-latency bound must not replace quiet-period debounce"
+    );
+}
+
+#[test]
 fn sustained_incremental_events_keep_the_first_wall_clock_deadline() {
     let now = Instant::now();
     let debounce = Duration::from_millis(300);

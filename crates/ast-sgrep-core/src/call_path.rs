@@ -65,6 +65,10 @@ fn normalized(symbol: &str) -> String {
     symbol.to_ascii_lowercase()
 }
 
+fn has_unique_definition(store: &IndexStore, symbol: &str) -> Result<bool> {
+    Ok(store.symbols_named(symbol, 2)?.len() == 1)
+}
+
 fn unresolved_response(source: &str, sink: &str, config: &CallPathConfig) -> CallPathResponse {
     CallPathResponse {
         source: source.to_owned(),
@@ -84,7 +88,7 @@ fn unresolved_response(source: &str, sink: &str, config: &CallPathConfig) -> Cal
 
 fn hop_resolution(store: &IndexStore, call: &CallEvidenceRow) -> Result<Resolution> {
     if call.scip_exact {
-        return Ok(Resolution::ScipExact);
+        return Ok(Resolution::ScipOccurrence);
     }
     let (by_file, repository_candidates) = store.symbol_name_candidate_counts(&call.callee)?;
     let same_file_candidates = by_file.get(&call.file).copied().unwrap_or(0);
@@ -161,9 +165,13 @@ pub fn find_call_path(
 
     let mut seen = HashSet::from([source_key.clone()]);
     let mut predecessors = HashMap::new();
-    let mut frontier = VecDeque::from([(source.to_owned(), 0u32)]);
+    let mut frontier = VecDeque::from([(
+        source.to_owned(),
+        0u32,
+        has_unique_definition(store, source)?,
+    )]);
 
-    'search: while let Some((caller, depth)) = frontier.pop_front() {
+    'search: while let Some((caller, depth, may_continue)) = frontier.pop_front() {
         if depth >= config.max_depth {
             continue;
         }
@@ -200,7 +208,12 @@ pub fn find_call_path(
                 response.depth = Some(response.path.len() as u32);
                 break 'search;
             }
-            frontier.push_back((call.callee, depth + 1));
+            // Name-only call rows cannot identify which duplicate definition
+            // owns outgoing edges. Inspect direct edges honestly, but never
+            // continue through an ambiguous source or intermediate symbol.
+            if may_continue && has_unique_definition(store, &call.callee)? {
+                frontier.push_back((call.callee, depth + 1, true));
+            }
         }
     }
     response.visited_nodes = seen.len();

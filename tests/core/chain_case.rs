@@ -281,8 +281,8 @@ fn bounded_call_path_reports_scip_evidence_without_claiming_value_flow() {
     assert_eq!(response.semantics, "call_graph_only");
     assert_eq!(response.depth, Some(2));
     assert_eq!(response.path.len(), 2);
-    assert_eq!(response.path[0].resolution, Resolution::ScipExact);
-    assert!(response.path.iter().all(|hop| hop.precise));
+    assert_eq!(response.path[0].resolution, Resolution::ScipOccurrence);
+    assert!(!response.path[0].precise);
 
     let node_capped = find_call_path(
         &store,
@@ -297,4 +297,54 @@ fn bounded_call_path_reports_scip_evidence_without_claiming_value_flow() {
     .unwrap();
     assert!(!node_capped.found);
     assert!(node_capped.truncated);
+}
+
+#[test]
+fn call_path_does_not_splice_duplicate_callee_definitions() {
+    let temp = TempDir::new().unwrap();
+    let store = IndexStore::open(temp.path(), None).unwrap();
+
+    for (path, caller, callee) in [
+        ("source.rs", "source", "duplicate"),
+        ("first.rs", "duplicate", "sink"),
+    ] {
+        let symbols = [SymbolRow {
+            name: caller.into(),
+            kind: "function".into(),
+            line_start: 1,
+            line_end: 1,
+            byte_start: 0,
+            byte_end: 32,
+        }];
+        let calls = [CallerRow {
+            caller: caller.into(),
+            callee: callee.into(),
+            line_no: 1,
+            byte_start: 14,
+            byte_end: 20,
+        }];
+        let lines = [(1, format!("fn {caller}() {{ {callee}(); }}"))];
+        store
+            .upsert_file(base(path, &lines, path, &symbols, &calls))
+            .unwrap();
+    }
+    let duplicate = [SymbolRow {
+        name: "duplicate".into(),
+        kind: "function".into(),
+        line_start: 1,
+        line_end: 1,
+        byte_start: 0,
+        byte_end: 17,
+    }];
+    let lines = [(1, "fn duplicate() {}".into())];
+    store
+        .upsert_file(base("second.rs", &lines, "second", &duplicate, &[]))
+        .unwrap();
+
+    let response = find_call_path(&store, "source", "sink", &CallPathConfig::default()).unwrap();
+    assert!(
+        !response.found,
+        "duplicate definitions must not splice edges"
+    );
+    assert_eq!(response.explored_edges, 1);
 }

@@ -357,8 +357,9 @@ impl Searcher {
             .collect()
     }
 
-    /// Add bounded repository vocabulary only to conceptual semantic work.
-    /// The original query still owns exact/structural scoring and the response.
+    /// Add bounded repository vocabulary to conceptual candidate discovery and
+    /// semantic scoring. The original query still owns returned lexical hits,
+    /// structural matching, final scoring, and the response text.
     fn repository_expanded_query(&self, parsed: &ParsedQuery) -> Result<Option<ParsedQuery>> {
         if !self.options.use_embed
             || !self.options.use_repository_vocabulary

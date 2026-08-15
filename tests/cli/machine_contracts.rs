@@ -938,6 +938,7 @@ fn capabilities_lists_all_clap_subcommands_and_siblings() {
         "keyword",
         "semantic",
         "chain",
+        "codemod",
         "capabilities",
         "version",
         "robot-docs",

@@ -3,7 +3,7 @@
 use crate::cli_args::{Cli, CodemodCmd};
 use crate::index_cmd::{ensure_existing_root, index_options};
 use crate::machine::print_machine_json;
-use anyhow::Context;
+use anyhow::{bail, Context};
 use ast_sgrep_core::codemod::{apply_codemod, plan_codemod};
 use ast_sgrep_core::Indexer;
 
@@ -29,13 +29,20 @@ pub(crate) fn run_codemod(cli: &Cli, command: &CodemodCmd) -> anyhow::Result<()>
     let changed_paths = plan.changed_paths();
     let result = apply_codemod(&plan)?;
     let mut options = index_options(&root, cli);
-    options.root = root;
-    let mut indexer = Indexer::new(options).context(
-        "source files changed successfully, but the index could not be opened for refresh",
-    )?;
-    let refresh = indexer
-        .update_paths(&changed_paths)
-        .context("source files changed successfully, but the index refresh did not complete")?;
+    options.root = root.clone();
+    let refresh = (|| -> anyhow::Result<_> {
+        let mut indexer = Indexer::new(options).context("could not open the index")?;
+        indexer
+            .update_paths(&changed_paths)
+            .context("incremental refresh did not complete")
+    })();
+    let refresh = match refresh {
+        Ok(refresh) => refresh,
+        Err(error) => bail!(
+            "codemod source transaction committed, but index refresh failed: {error:#}. Source changes remain applied; recover by running `asgrep index` for project root {}",
+            root.display()
+        ),
+    };
 
     if cli.json {
         print_machine_json(

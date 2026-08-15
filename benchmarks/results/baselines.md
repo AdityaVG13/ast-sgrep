@@ -55,9 +55,10 @@ may cite it.** This note remains as the required negative ledger.
 
 The live `self` corpus changes with the worktree and is therefore weak evidence
 for retrieval-quality deltas. Use a frozen or foreign corpus before claiming a
-quality change. The repository PPMI lexicon now widens the semantic candidate
-pass for conceptual queries; exact, lexical, and structural scoring still use
-the original query. The frozen A/B below measures that change. It is not
+quality change. The repository PPMI lexicon now widens conceptual candidate-file
+discovery and semantic scoring. Returned lexical evidence plus final lexical
+and structural scoring still use the original query, but the expanded terms do
+increase candidate work. The frozen A/B below measures that change. It is not
 evidence of broader retrieval quality.
 
 ## Native repository-vocabulary A/B (fixed fixture @ 19a7eb0)

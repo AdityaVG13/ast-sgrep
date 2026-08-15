@@ -34,9 +34,9 @@ Clause IDs landed. **Score TBD** after a full run (ghiw.5). Do not claim ≥0.95
 
 | Oracle | Status | Pointer |
 |---|---|---|
-| ast-grep Pattern-1 bounded subset | local gate | `tests/core/pattern_diff.rs`; pinned 0.45.1 |
+| ast-grep Pattern-1 bounded subset | opt-in local gate / otherwise Not-run | `tests/core/pattern_diff.rs`; pinned 0.45.1; requires `ASGREP_DIFF_AST_GREP` |
 | ast-grep full CLI identity | deferred | `DISC-pattern-native-subset`, `DISC-no-jell-harness` |
-| ripgrep literal indexed-language fixture | local gate | `tests/core/literal_diff.rs`; pinned 15.1.0 |
+| ripgrep literal indexed-language fixture | opt-in local gate / otherwise Not-run | `tests/core/literal_diff.rs`; pinned 15.1.0; requires `ASGREP_DIFF_RG` |
 | ripgrep full identity | deferred | `DISC-lexical-not-rg` |
 | jell harness | deferred | `docs/validation/jell-deferral.md` |
 

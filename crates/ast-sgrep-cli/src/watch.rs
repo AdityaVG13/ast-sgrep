@@ -49,7 +49,9 @@ fn next_event_wait(
 ) -> Option<Duration> {
     match full_deadline {
         Some(deadline) if deadline <= now => None,
-        Some(deadline) => Some(deadline.duration_since(now)),
+        // Flush after one quiet period, or at the first-event max-latency
+        // deadline under sustained traffic, whichever arrives first.
+        Some(deadline) => Some(debounce.min(deadline.duration_since(now))),
         None => Some(debounce),
     }
 }
