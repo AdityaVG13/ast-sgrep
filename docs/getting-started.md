@@ -40,10 +40,11 @@ cargo build --release -j1
 ./target/release/asgrep semantic 'credential renewal' . --limit 3
 ./target/release/asgrep chain 'auth_refresh' . --limit 3  # graph node cap; chain seeds use top_n=1
 ./target/release/asgrep call-path main validate_input .    # directed calls only; not value flow
+./target/release/asgrep 'callers:process_request AND pattern:fn $NAME($$$)' .
 ./target/release/asgrep bench . --query auth_refresh --iterations 1
 ```
 
-The commands above cover installation from source, incremental indexing, grammar-directed search, semantic-only retrieval, relationship traversal, and a one-iteration local benchmark smoke test. See the [query prefixes](QUERY_GRAMMAR.md) for mode prefixes, the [architecture](ARCHITECTURE.md) for data flow, and [benchmark methodology](benchmarks.md) before interpreting timing output.
+The commands above cover installation from source, incremental indexing, grammar-directed search, semantic-only retrieval, relationship traversal, two-channel conjunction, and a one-iteration local benchmark smoke test. See the [query prefixes](QUERY_GRAMMAR.md) for mode prefixes, the [architecture](ARCHITECTURE.md) for data flow, and [benchmark methodology](benchmarks.md) before interpreting timing output.
 
 ## First index
 
@@ -95,6 +96,18 @@ Combines lexical FTS, symbol name match, caller/callee graph, anchor excerpts ar
 
 See [QUERY_GRAMMAR.md](QUERY_GRAMMAR.md) for the normative prefix table and unsupported grammar.
 
+### Two-channel conjunction
+
+Exactly two prefixed channels, uppercase `AND` / `AND NOT`. The left channel is the result identity. `pattern:` + `callers:` join by overlapping span; other pairs join by file.
+
+```bash
+asgrep 'callers:process_request AND pattern:fn $NAME($$$)'
+asgrep 'imports: rusqlite AND semantic:"parameterized query"'
+asgrep 'defs:handle AND NOT callers:test_'
+```
+
+Unprefixed text, lowercase `and`, parenthesized forms, or more than two channels fall through to ordinary hybrid search, so plain English keeps its meaning.
+
 ### Semantic / synonym queries
 
 Semantic search is **on by default**, no API key.
@@ -129,7 +142,7 @@ Details and examples: [use-cases.md](use-cases.md).
 ## CLI reference
 
 Full query mode prefixes: [QUERY_GRAMMAR.md](QUERY_GRAMMAR.md)
-(`callers:`, `defs:`, `imports:`, `pattern:`, `literal:`, `regex:`, `word:`, or unprefixed hybrid).
+(`callers:`, `defs:`, `imports:`, `pattern:`, `literal:`, `regex:`, `word:`, unprefixed hybrid, plus two-channel `AND` / `AND NOT`).
 Machine-oriented catalog: `asgrep capabilities --json` (clap-derived; preferred for agents).
 
 ### Commands
@@ -137,12 +150,13 @@ Machine-oriented catalog: `asgrep capabilities --json` (clap-derived; preferred 
 | Command | Description |
 |---------|-------------|
 | `asgrep "QUERY" [ROOT]` | Hybrid search (default when no subcommand) |
-| `asgrep index [ROOT]` | Build or incrementally update the index |
-| `asgrep reindex [ROOT]` | Force full reindex |
+| `asgrep index [ROOT]` | Build or incrementally update the index (`--scip PATH` overlays JSON SCIP facts; missing/malformed degrades, never fails) |
+| `asgrep reindex [ROOT]` | Force full reindex (same `--scip` overlay) |
 | `asgrep status [ROOT]` | Index statistics |
 | `asgrep semantic "QUERY" [ROOT]` | Semantic-only search |
 | `asgrep chain "QUERY" [ROOT]` | Relationship / neighborhood expansion |
 | `asgrep call-path SOURCE SINK [ROOT]` | Bounded directed call path with resolution evidence; not value flow |
+| `asgrep codemod --pattern P --rewrite R [ROOT]` | Indexed native rewrite; `--dry-run` emits a JSON plan without writing |
 | `asgrep bench [ROOT]` | Search latency benchmark (`--query`, `--iterations`, `--suite`, `--fixture`, `--queries-file`, `--skip-index`) |
 | `asgrep watch [ROOT]` | Incremental reindex on save (`--debounce-ms`) |
 | `asgrep eval` | Gold / A/B evaluation harness |

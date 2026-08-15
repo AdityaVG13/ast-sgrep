@@ -12,7 +12,7 @@ This changelog follows [Keep a Changelog](https://keepachangelog.com/) conventio
 
 | Version | Date | Summary |
 |---------|------|---------|
-| [v2.0.0](#v200-2026-08-15) | 2026-08-15 | Local-first major release: remote embedding APIs removed, Pi results fixed, indexing and retrieval hardened |
+| [v2.0.0](#v200-2026-08-15) | 2026-08-15 | Local-first major: five PRs (#27, #29–#32). Remote embed APIs removed; critic, conjunction, SCIP, Pi results |
 | [v1.4.0](#v140-2026-08-06) | 2026-08-06 | 7-PR release: Code Mode (PTC), 13-language pattern surface, search/ranking correctness, LSP symbol fixes, watch freshness, durability hardening, quality gates + anti-bloat |
 | [v1.3.2](https://github.com/AdityaVG13/ast-sgrep/releases/tag/v1.3.2) | 2026-07-23 | **The Pi Package Update** — "Out of the Alpha and into the Light" |
 | [v1.2.0-alpha](#v120-alpha-draft-superseded) | 2026-07-21 | *The Fast Update* — draft release, superseded by 1.3.2 |
@@ -24,13 +24,23 @@ This changelog follows [Keep a Changelog](https://keepachangelog.com/) conventio
 
 ## v2.0.0 (2026-08-15)
 
-2.0 is a direct, stable major release. It makes ast-sgrep local-first, fixes the Pi result path, and incorporates the indexing, storage, graph, ranking, and Code Mode work from PRs [#29](https://github.com/AdityaVG13/ast-sgrep/pull/29), [#30](https://github.com/AdityaVG13/ast-sgrep/pull/30), [#31](https://github.com/AdityaVG13/ast-sgrep/pull/31), and [#32](https://github.com/AdityaVG13/ast-sgrep/pull/32).
+2.0 is a direct, stable major release. It makes ast-sgrep local-first, fixes the Pi result path, and lands five merged PRs on top of v1.4.0: [#27](https://github.com/AdityaVG13/ast-sgrep/pull/27), [#29](https://github.com/AdityaVG13/ast-sgrep/pull/29), [#30](https://github.com/AdityaVG13/ast-sgrep/pull/30), [#31](https://github.com/AdityaVG13/ast-sgrep/pull/31), and [#32](https://github.com/AdityaVG13/ast-sgrep/pull/32), plus stacked and follow-on commits.
 
 ### Breaking changes
 
 Cloud (`--cloud-embed`, `ASGREP_EMBED_API_KEY`, OpenAI-compatible HTTP) and Ollama (`--ollama-embed`, `ASGREP_OLLAMA_URL`) embedding clients are gone. Embeddings are in-process only: hashed semantic (default) and optional ONNX neural (`--features neural-embed`). Indexes that still store `embed_backend=cloud|ollama` fail closed until `asgrep reindex`. The Cloudflare Code Mode adapter is unrelated and stays.
 
 The associated CLI flags, environment settings, configuration variants, and public Rust APIs were removed. Pi users can update the package normally, but this API removal and the index-format update make 2.0 a breaking semver release.
+
+### Capability map
+
+| Track | What landed | Evidence |
+|-------|-------------|----------|
+| [#27](https://github.com/AdityaVG13/ast-sgrep/pull/27) Index / retrieval / agents | Atomic index generations and durability profiles; separate code vs prose FTS; repository-learned PPMI expansions; graph resolution tiers; staged planner; IVF k-means; MCP `structuredContent` / `outputSchema`; Agent Plugins package | `00c430ba` and the #27 merge |
+| [#29](https://github.com/AdityaVG13/ast-sgrep/pull/29) Maintainability + Pi | Isomorphic store/index/search/MCP splits behind façades; native hybrid search off the Node event loop; writer-generation advertised after partial watch-batch errors | `778caec5` |
+| [#30](https://github.com/AdityaVG13/ast-sgrep/pull/30) Honesty + local embed | Golden asserts; default-on keep-gates vs committed benches; per-field semantic vectors + intent weighting; SCIP JSON overlay (`index\|reindex --scip`); HTTP embed clients removed | `38960f02` |
+| [#31](https://github.com/AdityaVG13/ast-sgrep/pull/31) Critic / planner / conjunction | Deterministic post-fusion critic; causal `follow_up_queries`; two-channel `AND` / `AND NOT`; native nested structural templates | `80c8f3f2` |
+| [#32](https://github.com/AdityaVG13/ast-sgrep/pull/32) Gates / freshness / joins | Pattern-1 vs pinned ast-grep and `literal:` vs pinned ripgrep keep-gates (Not-run unless provisioned); watch freshness bound under sustained writes; `pattern:`+`callers:` span joins; `call-path` and indexed `codemod` on the stacked branch | `9a3b4cd6` |
 
 ### Fixed and improved
 

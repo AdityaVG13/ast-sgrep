@@ -17,8 +17,10 @@ Canonical entry points for humans and agents. Prefer this list over scavenging t
 |-----|----------|
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Crates, index schema, search pipeline, fusion, agent surfaces |
 | [how-it-works.md](how-it-works.md) | Pipeline narrative and incremental indexing |
-| [QUERY_GRAMMAR.md](QUERY_GRAMMAR.md) | Mode prefixes and routing (no composable AND) |
+| [QUERY_GRAMMAR.md](QUERY_GRAMMAR.md) | Mode prefixes plus two-channel `AND` / `AND NOT` |
 | [semantic-search.md](semantic-search.md) | Symbol chunks, provider chain, IVF-ANN, tuning |
+| [fusion-ranking.md](fusion-ranking.md) | Weighted RRF, post-fusion critic, agent `why` |
+| [cascade-query-planner.md](cascade-query-planner.md) | Retrieval cascade and causal follow-ups |
 | [mcp.md](mcp.md) | `asgrep-mcp` setup for agents |
 | [codemode.md](codemode.md) | Code Mode: JS program orchestration (Pi primary); XOR with MCP — never both |
 | [use-cases.md](use-cases.md) | Agents, LSP, JSON formats, CI patterns |
@@ -48,8 +50,9 @@ folder README rather than duplicating that index here.
 
 ```text
 ast-sgrep-lang   → extract symbols / calls / imports
-ast-sgrep-core   → index + hybrid search + chain
-ast-sgrep-embed  → embedding providers (+ optional neural/rerank)
+ast-sgrep-core   → index + hybrid search + critic + planner
+ast-sgrep-embed  → in-process embedding providers (+ optional neural/rerank)
+ast-sgrep-mmap   → memory-map helpers
 ast-sgrep-cli    → asgrep / ast-sgrep binaries
 ast-sgrep-lsp    → language server
 ast-sgrep-mcp    → MCP stdio server

@@ -4,11 +4,23 @@ Native Code Mode, structural, graph, and semantic code search for [Pi](https://g
 
 [![pi-ast-sgrep: native code search inside Pi](https://cdn.jsdelivr.net/npm/pi-ast-sgrep/assets/preview.png)](https://pi.dev/packages/pi-ast-sgrep?name=pi-ast-sgrep)
 
-`pi-ast-sgrep` gives Pi a warm, project-aware search engine for understanding code. It finds behavior by intent, resolves definitions and callers, traces relationships, matches syntax-aware patterns, and searches local semantic embeddings. The primary `asgrep` tool lets Pi compose several searches in one JavaScript program instead of spending one model round trip per lookup.
+`pi-ast-sgrep` gives Pi a warm, project-aware search engine for understanding code. It finds behavior by intent, resolves definitions and callers, traces relationships, matches syntax-aware patterns, joins two indexed channels, and searches local semantic embeddings. The primary `asgrep` tool lets Pi compose several searches in one JavaScript program instead of spending one model round trip per lookup.
 
-**v2.0.0** · 13 languages · lexical + AST graph + **semantic symbol search** + **Code Mode** (on by default, no API key)
+**v2.0.0** · 13 languages · local-first semantic · critic + two-channel `AND` · **Code Mode** (on by default, no API key)
 
-**Upgrading to 2.0:** this is a breaking semver release because the cloud/Ollama embedding backends were removed. Update the Pi package normally; local hashed semantic search remains the default, optional neural embeddings remain in-process, and older indexes are rebuilt through the normal compatibility path.
+**Upgrading to 2.0:** this is a breaking semver release because the cloud/Ollama embedding backends were removed. Update the Pi package normally; local hashed semantic search remains the default, optional neural embeddings remain in-process, and indexes that still store `embed_backend=cloud|ollama` fail closed until `/asgrep-reindex`. One-shot tools and Code Mode now put bounded hits in `content` so the model sees them, not only display-only `details`.
+
+### What's new for Pi in 2.0
+
+| Change | What you get |
+|--------|----------------|
+| Local-first embeddings | No `ASGREP_EMBED_API_KEY` / Ollama URL. Hashed semantic is default; optional ONNX stays in-process. |
+| Results on the model path | `asgrep_search` and Code Mode serialize hits into `content`. |
+| Two-channel queries | `asgrep.search({ query: 'callers:process_request AND pattern:fn $NAME($$$)' })` joins by span; `AND NOT` subtracts. Plain English `and` stays hybrid. |
+| Critic + follow-ups | Agent envelopes include `why` (`critic:` notes) and causal `follow_up_queries` from the actual top hit. |
+| Native work off the event loop | Index/search run as N-API worker tasks so Pi JS is not blocked on SQLite. |
+| Auto-registered tools | `asgrep` lands without requiring a skill file. |
+| Schema 12 | Older indexes rebuild through the normal compatibility path; `/asgrep-reindex` is the explicit full rebuild. |
 
 ## Install
 
@@ -89,13 +101,15 @@ Use `asgrep_search` when one lookup is enough:
 {"query":"auth_refresh","mode":"callers","limit":8}
 {"query":"where are credentials renewed?","mode":"semantic","limit":8}
 {"query":"$CLIENT.post($URL)","mode":"pattern","limit":8}
+{"query":"callers:process_request AND pattern:fn $NAME($$$)", "mode":"natural","limit":8}
+{"query":"defs:handle AND NOT callers:test_","mode":"natural","limit":8}
 ```
 
 Available modes:
 
 | Mode | Best for |
 |---|---|
-| `natural` | Intent or mixed code-language queries when exact spelling is unknown. |
+| `natural` | Intent or mixed code-language queries when exact spelling is unknown. Also the mode for two-channel `AND` / `AND NOT` query strings. |
 | `pattern` | Syntax-aware ast-sgrep patterns with metavariables. |
 | `defs`, `callers`, `imports` | Symbol and module navigation. |
 | `chain` | Multi-hop relationship tracing. |
@@ -221,7 +235,8 @@ Then run `/asgrep-doctor`. Compatible updates reuse validated data. Incompatible
 
 - [Complete Pi package guide](https://github.com/AdityaVG13/ast-sgrep/blob/main/docs/pi-package.md)
 - [Code Mode architecture and performance](https://github.com/AdityaVG13/ast-sgrep/blob/main/docs/codemode.md)
-- [Query grammar](https://github.com/AdityaVG13/ast-sgrep/blob/main/docs/QUERY_GRAMMAR.md)
+- [Query grammar](https://github.com/AdityaVG13/ast-sgrep/blob/main/docs/QUERY_GRAMMAR.md) (prefixes and two-channel `AND`)
+- [Fusion ranking and critic](https://github.com/AdityaVG13/ast-sgrep/blob/main/docs/fusion-ranking.md)
 - [Release provenance](https://github.com/AdityaVG13/ast-sgrep/blob/main/docs/RELEASING.md)
 
 MIT
