@@ -102,7 +102,7 @@ fn and_intersects_by_file_and_merges_overlapping_evidence() {
         hit(HitKind::Pattern, "src/auth.rs", (12, 18), 0.7),
         hit(HitKind::Pattern, "src/unrelated.rs", (1, 3), 0.6),
     ];
-    let combined = combine(left, right, false);
+    let combined = combine(left, right, false, false);
     assert_eq!(combined.len(), 1);
     assert_eq!(combined[0].file, "src/auth.rs");
     assert!(combined[0].contributors.contains(&HitKind::Caller));
@@ -119,7 +119,7 @@ fn and_not_subtracts_right_channel_files() {
         hit(HitKind::Def, "tests/handle_test.rs", (1, 10), 0.8),
     ];
     let right = vec![hit(HitKind::Caller, "tests/handle_test.rs", (5, 5), 0.7)];
-    let combined = combine(left, right, true);
+    let combined = combine(left, right, true, false);
     assert_eq!(combined.len(), 1);
     assert_eq!(combined[0].file, "src/handle.rs");
 }
@@ -127,8 +127,73 @@ fn and_not_subtracts_right_channel_files() {
 #[test]
 fn empty_right_channel_is_honest() {
     let left = vec![hit(HitKind::Def, "src/a.rs", (1, 2), 0.9)];
-    assert!(combine(left.clone(), Vec::new(), false).is_empty());
-    assert_eq!(combine(left, Vec::new(), true).len(), 1);
+    assert!(combine(left.clone(), Vec::new(), false, false).is_empty());
+    assert_eq!(combine(left, Vec::new(), true, false).len(), 1);
+}
+
+#[test]
+fn pattern_callers_join_requires_span_overlap() {
+    let patterns = vec![
+        hit(HitKind::Pattern, "src/app.rs", (1, 3), 0.9),
+        hit(HitKind::Pattern, "src/app.rs", (5, 7), 0.8),
+    ];
+    let callers = vec![hit(HitKind::Caller, "src/app.rs", (2, 2), 0.7)];
+
+    let combined = combine(patterns, callers, false, true);
+    assert_eq!(combined.len(), 1);
+    assert_eq!((combined[0].line_start, combined[0].line_end), (1, 3));
+    assert!(combined[0].contributors.contains(&HitKind::Caller));
+}
+
+#[test]
+fn pattern_callers_join_rejects_same_line_non_overlap() {
+    let mut pattern = hit(HitKind::Pattern, "src/app.rs", (1, 1), 0.9);
+    pattern.excerpt = "fn compact() {}".into();
+    let mut caller = hit(HitKind::Caller, "src/app.rs", (1, 1), 0.7);
+    caller.callee = Some("helper".into());
+    caller.excerpt = "fn compact() {} helper();".into();
+
+    assert!(combine(vec![pattern], vec![caller], false, true).is_empty());
+}
+
+#[test]
+fn pattern_callers_join_checks_multiline_boundary_columns() {
+    let mut pattern = hit(HitKind::Pattern, "src/app.rs", (1, 3), 0.9);
+    pattern.excerpt = "fn target() {\n    inside();\n}".into();
+    let mut outside = hit(HitKind::Caller, "src/app.rs", (1, 1), 0.7);
+    outside.callee = Some("outside".into());
+    outside.excerpt = "outside(); fn target() {".into();
+    let mut inside = hit(HitKind::Caller, "src/app.rs", (2, 2), 0.7);
+    inside.callee = Some("inside".into());
+    inside.excerpt = "    inside();".into();
+
+    assert!(
+        combine(vec![pattern.clone()], vec![outside], false, true).is_empty(),
+        "a call before the opening boundary must not join"
+    );
+    let combined = combine(vec![pattern], vec![inside], false, true);
+    assert_eq!(
+        combined.len(),
+        1,
+        "the interior call must retain the pattern"
+    );
+    assert_eq!(
+        combined[0].contributors,
+        vec![HitKind::Pattern, HitKind::Caller]
+    );
+}
+
+#[test]
+fn negated_pattern_callers_join_subtracts_only_overlapping_spans() {
+    let patterns = vec![
+        hit(HitKind::Pattern, "src/app.rs", (1, 3), 0.9),
+        hit(HitKind::Pattern, "src/app.rs", (5, 7), 0.8),
+    ];
+    let callers = vec![hit(HitKind::Caller, "src/app.rs", (2, 2), 0.7)];
+
+    let combined = combine(patterns, callers, true, true);
+    assert_eq!(combined.len(), 1);
+    assert_eq!((combined[0].line_start, combined[0].line_end), (5, 7));
 }
 
 #[test]

@@ -36,12 +36,12 @@ regex.workspace = true
 memchr.workspace = true
 ast-sgrep-mmap = { path = "../ast-sgrep-mmap", version = "1.4.0" }
 bytemuck.workspace = true
+cap-std.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 rustix.workspace = true
 
 [target.'cfg(windows)'.dependencies]
-cap-std.workspace = true
 cap-fs-ext.workspace = true
 
 [dev-dependencies]
@@ -104,6 +104,9 @@ path = "../../tests/core/lexicon_learning.rs"
 [[test]]
 name = "literal_glob"
 path = "../../tests/core/literal_glob.rs"
+[[test]]
+name = "literal_diff"
+path = "../../tests/core/literal_diff.rs"
 [[test]]
 name = "metamorphic"
 path = "../../tests/core/metamorphic.rs"

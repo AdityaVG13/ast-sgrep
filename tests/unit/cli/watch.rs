@@ -1,4 +1,8 @@
-use super::{begin_full_scan, next_event_wait, queue_event, take_full_rescan};
+use super::{
+    begin_full_scan, is_watch_self_event, next_event_wait, queue_event, schedule_deadline,
+    take_full_rescan,
+};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
@@ -46,4 +50,61 @@ fn a_busy_queue_cannot_postpone_a_required_full_scan() {
         next_event_wait(debounce, Some(deadline), deadline + debounce),
         None
     );
+}
+
+#[test]
+fn incremental_flush_waits_only_one_quiet_period() {
+    let now = Instant::now();
+    let debounce = Duration::from_millis(300);
+    let max_latency_deadline = now + debounce.saturating_mul(3);
+
+    assert_eq!(
+        next_event_wait(debounce, Some(max_latency_deadline), now),
+        Some(debounce),
+        "the max-latency bound must not replace quiet-period debounce"
+    );
+}
+
+#[test]
+fn sustained_incremental_events_keep_the_first_wall_clock_deadline() {
+    let now = Instant::now();
+    let debounce = Duration::from_millis(300);
+    let first_deadline = now + debounce.saturating_mul(3);
+    let mut deadline = None;
+    schedule_deadline(&mut deadline, first_deadline);
+
+    // A later event may restart the quiet-period wait, but must not move the
+    // first event's max-latency deadline.
+    schedule_deadline(&mut deadline, first_deadline + debounce);
+    assert_eq!(deadline, Some(first_deadline));
+    assert_eq!(next_event_wait(debounce, deadline, first_deadline), None);
+}
+
+#[test]
+fn index_artifacts_do_not_retrigger_watch() {
+    let root = Path::new("/repo");
+    let default_db = root.join(".asgrep/index.db");
+    assert!(is_watch_self_event(
+        &[root.join(".asgrep/index.db-wal")],
+        root,
+        &default_db
+    ));
+
+    let custom_db = root.join("custom/index.db");
+    assert!(is_watch_self_event(
+        &[
+            root.join("custom/index.db-shm"),
+            root.join("custom/lexical.db-wal"),
+            root.join("custom/semantic.ivf"),
+            root.join("custom/writer_generation"),
+        ],
+        root,
+        &custom_db
+    ));
+    assert!(!is_watch_self_event(
+        &[PathBuf::from("/repo/src/lib.rs")],
+        root,
+        &custom_db
+    ));
+    assert!(!is_watch_self_event(&[], root, &custom_db));
 }

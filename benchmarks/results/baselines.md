@@ -55,8 +55,40 @@ may cite it.** This note remains as the required negative ledger.
 
 The live `self` corpus changes with the worktree and is therefore weak evidence
 for retrieval-quality deltas. Use a frozen or foreign corpus before claiming a
-quality change. The repository PPMI lexicon is reported as explainable evidence
-but is deliberately not fed into ranking; no retrieval lift is claimed.
+quality change. The repository PPMI lexicon now widens conceptual candidate-file
+discovery and semantic scoring. Returned lexical evidence plus final lexical
+and structural scoring still use the original query, but the expanded terms do
+increase candidate work. The frozen A/B below measures that change. It is not
+evidence of broader retrieval quality.
+
+## Native repository-vocabulary A/B (fixed fixture @ 19a7eb0)
+
+**Status: `reproducible-in-tree` (A/B delta rows, not a canonical quality
+fingerprint).** The three human-judged queries each have two relevant results:
+one literal training context and one held-out target symbol whose source omits
+the query term. This isolates whether a repository-learned association can
+close the lexical gap without model weights, downloads, network access, or an
+external process.
+
+| fingerprint id | config | MRR | nDCG | Recall@1 | Recall@5 | Recall@20 |
+|----------------|--------|----:|-----:|---------:|---------:|----------:|
+| `native-vocab-ab-19a7eb0` | default hybrid, repository vocabulary on | 1.000 | 0.877 | 0.500 | 1.000 | 1.000 |
+| `native-vocab-ab-19a7eb0-control` | `--ab no-repository-vocabulary` control | 1.000 | 0.613 | 0.500 | 0.500 | 0.500 |
+
+Candidate minus control: +0.264 nDCG and +0.500 Recall@5/20; MRR and
+Recall@1 are unchanged because the literal training context ranks first in
+both arms. All three held-out target symbols enter the top five only in the
+candidate arm. This small purpose-built fixture proves the mechanism, not
+general semantic-search quality.
+
+Reproduce at implementation commit `19a7eb0` (hashed-256 in-process backend,
+three queries, `benchmarks/fixtures/native_semantic`):
+
+```bash
+ASGREP_BENCH_RATCHET=0 cargo run -q -p ast-sgrep-cli --bin asgrep -- \
+  --json eval --gold benchmarks/gold/native_semantic.json \
+  benchmarks/fixtures/native_semantic --ab no-repository-vocabulary
+```
 
 ## 7d5x.4 A/B — multi-field rescoring vs concat vector (self @ d18725e)
 

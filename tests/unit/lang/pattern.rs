@@ -115,6 +115,30 @@ fn native_call_matches_exact_callee() {
     assert!(hits[0].excerpt.contains("process_request"));
 }
 
+#[test]
+fn argument_templates_constrain_and_capture_calls() {
+    let src = "fn main() { legacy(); legacy(alpha); legacy(alpha, beta); }\n";
+    let empty = match_pattern(Language::Rust, src, "legacy()").unwrap();
+    assert!(
+        empty.is_empty(),
+        "patterns without metavariables are literal"
+    );
+
+    let one = match_pattern(Language::Rust, src, "legacy($ARG)").unwrap();
+    assert_eq!(one.len(), 1, "one={one:?}");
+    assert_eq!(one[0].captures["ARG"], "alpha");
+
+    let two = match_pattern(Language::Rust, src, "legacy($LEFT, $RIGHT)").unwrap();
+    assert_eq!(two.len(), 1, "two={two:?}");
+    assert_eq!(two[0].captures["LEFT"], "alpha");
+    assert_eq!(two[0].captures["RIGHT"], "beta");
+
+    let any = match_pattern(Language::Rust, src, "legacy($$$ARGS)").unwrap();
+    assert_eq!(any.len(), 3, "any={any:?}");
+    assert_eq!(any[0].captures["ARGS"], "");
+    assert_eq!(any[2].captures["ARGS"], "alpha, beta");
+}
+
 /// `self.helper()` / `this.render()` are two-segment method calls: keyword
 /// receivers must satisfy `$OBJ` exactly like identifier receivers (ast-grep
 /// agrees on this match set).

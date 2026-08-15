@@ -10,6 +10,9 @@ shared corpora with identical hit IDs) is **deferred**. This tree ships:
 What is intentionally **not** claimed: bit-identical result sets versus
 external tools. Structural patterns are a native subset (see
 `docs/structural-patterns.md`); lexical modes are FTS-backed, not rg-compatible.
+The bounded `literal:` file-presence gate in `tests/core/literal_diff.rs` covers
+only the checked-in 13-language fixture and does not close this full-identity
+deferral.
 
 Proof pack entry: `docs/validation/proof-pack.md`. Registered ids:
 `DISC-no-jell-harness`, `DISC-lexical-not-rg`, `DISC-pattern-native-subset`

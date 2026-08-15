@@ -30,6 +30,37 @@ pub(crate) struct QueryRootArg {
     pub(crate) root: PathBuf,
 }
 
+#[derive(Args, Clone, Debug)]
+pub(crate) struct CallPathArgs {
+    #[arg(help = "Starting caller symbol")]
+    pub(crate) source: String,
+    #[arg(help = "Target callee symbol")]
+    pub(crate) sink: String,
+    #[arg(default_value = ".", help = "Project root directory")]
+    pub(crate) root: PathBuf,
+    #[arg(
+        long,
+        default_value_t = 8,
+        value_parser = clap::value_parser!(u32).range(1..=64),
+        help = "Maximum caller-to-callee hops (1..=64)"
+    )]
+    pub(crate) max_depth: u32,
+    #[arg(
+        long,
+        default_value_t = 10_000,
+        value_parser = clap::value_parser!(u64).range(1..=100_000),
+        help = "Maximum distinct symbols visited (1..=100000)"
+    )]
+    pub(crate) max_nodes: u64,
+    #[arg(
+        long,
+        default_value_t = 50_000,
+        value_parser = clap::value_parser!(u64).range(1..=500_000),
+        help = "Maximum call edges inspected (1..=500000)"
+    )]
+    pub(crate) max_edges: u64,
+}
+
 /// Search/index tuning flags — scoped to search/index/bench, not global (vdqo).
 #[derive(Args, Clone, Debug, Default)]
 pub(crate) struct SearchTuning {
@@ -171,6 +202,28 @@ pub(crate) struct ReindexCmd {
 }
 
 #[derive(Args, Clone, Debug)]
+pub(crate) struct CodemodCmd {
+    #[command(flatten)]
+    pub(crate) root: RootArg,
+    #[command(flatten)]
+    pub(crate) tuning: SearchTuning,
+    #[arg(
+        long,
+        value_name = "PATTERN",
+        help = "Native structural search pattern"
+    )]
+    pub(crate) pattern: String,
+    #[arg(
+        long,
+        value_name = "TEMPLATE",
+        help = "Replacement template using matched metavariables or $MATCH"
+    )]
+    pub(crate) rewrite: String,
+    #[arg(long, help = "Emit an edit plan without writing source files")]
+    pub(crate) dry_run: bool,
+}
+
+#[derive(Args, Clone, Debug)]
 pub(crate) struct QueryCmd {
     #[command(flatten)]
     pub(crate) query: QueryRootArg,
@@ -254,6 +307,9 @@ pub(crate) enum Commands {
     /// Force a full transactional rebuild
     #[command(about = "Force a full transactional rebuild")]
     Reindex(ReindexCmd),
+    /// Plan or apply an indexed structural rewrite in process
+    #[command(about = "Plan or apply an indexed structural rewrite in process")]
+    Codemod(CodemodCmd),
     /// Search explicitly; aliases: find, query
     #[command(
         about = "Hybrid search (aliases: find, query)",
@@ -298,6 +354,9 @@ pub(crate) enum Commands {
     /// Expand a bounded symbol/caller/import graph
     #[command(about = "Expand a bounded symbol/caller/import graph")]
     Chain(QueryRootArg),
+    /// Find a bounded directed call path; this does not track values
+    #[command(about = "Find a bounded call path (call graph only, not value flow)")]
+    CallPath(CallPathArgs),
     /// Print the machine-readable CLI contract
     #[command(about = "Print the machine-readable CLI contract (JSON)")]
     Capabilities(agent::CapabilitiesArgs),
@@ -458,6 +517,7 @@ impl Cli {
         let overlay = match self.command.as_ref() {
             Some(Commands::Index(c)) => Some(&c.tuning),
             Some(Commands::Reindex(c)) => Some(&c.tuning),
+            Some(Commands::Codemod(c)) => Some(&c.tuning),
             Some(Commands::Search(c) | Commands::Keyword(c) | Commands::Semantic(c)) => {
                 Some(&c.tuning)
             }
@@ -500,6 +560,7 @@ impl Cli {
 
     pub(crate) fn machine_output_requested(&self) -> bool {
         self.search_machine_output()
+            || matches!(self.command.as_ref(), Some(Commands::Codemod(c)) if c.dry_run)
             || matches!(self.command.as_ref(), Some(Commands::Capabilities(_)))
             || matches!(self.command.as_ref(), Some(Commands::Version(a)) if a.json)
             || matches!(self.command.as_ref(), Some(Commands::Doctor { .. }))
@@ -513,12 +574,14 @@ impl Cli {
             Some(Commands::Index(_)) => "index",
             Some(Commands::Status(_)) => "status",
             Some(Commands::Reindex(_)) => "reindex",
+            Some(Commands::Codemod(_)) => "codemod",
             Some(Commands::Search(_)) => "search",
             Some(Commands::Bench { .. }) => "bench",
             Some(Commands::Watch { .. }) => "watch",
             Some(Commands::Keyword(_)) => "keyword",
             Some(Commands::Semantic(_)) => "semantic",
             Some(Commands::Chain(_)) => "chain",
+            Some(Commands::CallPath(_)) => "call-path",
             Some(Commands::Capabilities(_)) => "capabilities",
             Some(Commands::Version(_)) => "version",
             Some(Commands::RobotDocs(_)) => "robot-docs",

@@ -50,6 +50,7 @@ impl IndexStore {
         let emb = embed_chunks(
             &self.conn,
             input.semantic_chunks,
+            input.rel_path,
             input.embed_semantic,
             input.embed_backend,
         )?;
@@ -324,7 +325,7 @@ impl IndexStore {
             .map(|(s, id)| (format!("{}:{}", s.name, s.line_start), *id))
             .collect();
         let mut st = self.conn.prepare_cached(
-            "INSERT INTO semantic_chunks(file_id, symbol_id, chunk_kind, line_start, line_end, symbol_name, text, vector, vector_name, vector_docs, vector_body, vector_graph) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)", )?;
+            "INSERT INTO semantic_chunks(file_id, symbol_id, chunk_kind, line_start, line_end, symbol_name, text, vector, vector_name, vector_docs, vector_body, vector_graph, vector_tests_examples) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)", )?;
         for (c, e) in chunks.iter().zip(emb.iter()) {
             let sid = name_to_id
                 .get(&format!("{}:{}", c.symbol_name, c.line_start))
@@ -342,6 +343,7 @@ impl IndexStore {
                 e.docs.clone(),
                 e.body.clone(),
                 e.graph.clone(),
+                e.tests_examples.clone(),
             ])?;
         }
         self.persist_embed_metadata(Some(first.dim), Some(first.backend), preference)

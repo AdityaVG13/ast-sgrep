@@ -114,10 +114,11 @@ pub(crate) fn raw_machine_output_requested(args: &[std::ffi::OsString]) -> bool 
             || a == "--robot-triage"
             || a == "--format"
             || a.to_str().is_some_and(|raw| raw.starts_with("--format="))
-    }) || args.iter().any(|a| {
-        // Always-machine commands (success path is JSON even without --json).
-        a == "capabilities" || a == "doctor" || a == "codemode-batch"
-    })
+    }) || (args.iter().any(|a| a == "codemod") && args.iter().any(|a| a == "--dry-run"))
+        || args.iter().any(|a| {
+            // Always-machine commands (success path is JSON even without --json).
+            a == "capabilities" || a == "doctor" || a == "codemode-batch"
+        })
 }
 
 pub(crate) fn raw_command_name(args: &[std::ffi::OsString]) -> &'static str {
@@ -125,12 +126,14 @@ pub(crate) fn raw_command_name(args: &[std::ffi::OsString]) -> &'static str {
         "index",
         "status",
         "reindex",
+        "codemod",
         "search",
         "bench",
         "watch",
         "keyword",
         "semantic",
         "chain",
+        "call-path",
         "capabilities",
         "version",
         "robot-docs",

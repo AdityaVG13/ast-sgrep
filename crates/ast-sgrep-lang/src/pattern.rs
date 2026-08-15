@@ -16,7 +16,7 @@ use crate::extract::{
 use crate::pattern_queries::{class_queries_for, queries_for, FUNCTION_QUERY_TABLE};
 use crate::{Language, PatternNode};
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, OnceLock, RwLock};
 use tree_sitter::{Node, Parser, Query, QueryCursor, StreamingIterator};
 
@@ -24,7 +24,12 @@ use tree_sitter::{Node, Parser, Query, QueryCursor, StreamingIterator};
 pub struct PatternMatch {
     pub line_start: u32,
     pub line_end: u32,
+    pub byte_start: usize,
+    pub byte_end: usize,
     pub excerpt: String,
+    /// Metavariable bindings without the leading `$`. `MATCH` is always the
+    /// complete matched node and is available to rewrite templates.
+    pub captures: BTreeMap<String, String>,
 }
 
 /// Declaration / type keyword prefixes used by native classification and prefilters.
@@ -97,7 +102,7 @@ pub fn match_pattern(
         return match_literal_pattern(lang, source, pattern);
     }
     match classify_native(pattern) {
-        Some(kind) => match_structural(lang, source, &kind),
+        Some(kind) => match_structural(lang, source, pattern, &kind),
         None => Ok(Vec::new()), // caller may fall back to external ast-grep
     }
 }
@@ -130,6 +135,12 @@ pub enum BodyTemplate {
     /// `{ $$$ }` / `{ $$$BODY }` — any statements, but a body must exist.
     Any,
     /// `{}` → 0 statements, `{ $STMT }` → exactly 1 statement.
+    Exactly(usize),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ArgumentTemplate {
+    Any,
     Exactly(usize),
 }
 
@@ -218,9 +229,7 @@ pub fn classify_native(pattern: &str) -> Option<NativeKind> {
     }
     let args = p[open + 1..close].trim();
     // Args must be empty, $$$, or pure metavars separated by commas.
-    if !args.is_empty() && args != "$$$" && !args.split(',').all(is_pure_metavariable) {
-        return None;
-    }
+    validate_argument_pattern(args)?;
     let callee = p[..open].trim();
     if callee.is_empty() {
         return None;
@@ -327,6 +336,38 @@ fn is_pure_metavariable(arg: &str) -> bool {
         .is_some_and(is_pattern_ident)
 }
 
+fn validate_argument_pattern(arguments: &str) -> Option<()> {
+    let arguments = arguments.trim();
+    if arguments.is_empty() || arguments == "$$$" {
+        return Some(());
+    }
+    let parts = arguments.split(',').map(str::trim).collect::<Vec<_>>();
+    if !parts.iter().all(|part| is_pure_metavariable(part))
+        || (parts.len() > 1 && parts.iter().any(|part| part.starts_with("$$$")))
+    {
+        return None;
+    }
+    Some(())
+}
+
+fn pattern_argument_text(pattern: &str) -> Option<&str> {
+    let open = pattern.find('(')?;
+    let tail = pattern.get(open + 1..)?;
+    let close = tail.find(')')?;
+    Some(tail[..close].trim())
+}
+
+fn argument_template(pattern: &str) -> Option<ArgumentTemplate> {
+    let arguments = pattern_argument_text(pattern)?;
+    if arguments.starts_with("$$$") {
+        Some(ArgumentTemplate::Any)
+    } else if arguments.is_empty() {
+        Some(ArgumentTemplate::Exactly(0))
+    } else {
+        Some(ArgumentTemplate::Exactly(arguments.split(',').count()))
+    }
+}
+
 fn parse_call_path(callee: &str) -> Option<Vec<Option<String>>> {
     let callee = callee.strip_prefix("::").unwrap_or(callee);
     let normalized = callee.replace("::", ".");
@@ -402,11 +443,13 @@ fn compiled_query(
 fn match_structural(
     lang: Language,
     source: &str,
+    pattern: &str,
     kind: &NativeKind,
 ) -> anyhow::Result<Vec<PatternMatch>> {
     let language = tree_sitter_language(lang);
     let tree = parse_source(lang, source)?;
     let mut out = Vec::new();
+    let arguments = argument_template(pattern);
     match kind {
         NativeKind::Function { name, body } => {
             run_queries(
@@ -418,6 +461,8 @@ fn match_structural(
                 name.as_deref(),
                 None,
                 body.as_ref(),
+                arguments.as_ref(),
+                pattern,
                 &mut out,
             )?;
         }
@@ -431,14 +476,23 @@ fn match_structural(
                 name.as_deref(),
                 Some((lang, *keyword)),
                 None,
+                None,
+                pattern,
                 &mut out,
             )?;
         }
         NativeKind::Call { path } => {
-            walk_calls(tree.root_node(), source, path, &mut out);
+            walk_calls(
+                tree.root_node(),
+                source,
+                pattern,
+                path,
+                arguments.as_ref(),
+                &mut out,
+            );
         }
         NativeKind::If { body } => {
-            walk_ifs(tree.root_node(), source, body.as_ref(), &mut out);
+            walk_ifs(tree.root_node(), source, pattern, body.as_ref(), &mut out);
         }
     }
     Ok(out)
@@ -454,6 +508,8 @@ fn run_queries(
     name_filter: Option<&str>,
     class_filter: Option<(Language, &str)>,
     body_filter: Option<&BodyTemplate>,
+    argument_filter: Option<&ArgumentTemplate>,
+    pattern: &str,
     out: &mut Vec<PatternMatch>,
 ) -> anyhow::Result<()> {
     for qsrc in queries {
@@ -497,7 +553,10 @@ fn run_queries(
                     continue;
                 }
             }
-            push_match(&node, source, name_text.unwrap_or(""), out);
+            if !arguments_match(&node, argument_filter, &["parameters"]) {
+                continue;
+            }
+            push_match(&node, source, pattern, name_text, out);
         }
     }
     Ok(())
@@ -535,13 +594,63 @@ fn kotlin_class_keyword(node: &Node, source: &str) -> &'static str {
     "class"
 }
 
-fn walk_calls(node: Node, source: &str, path: &[Option<String>], out: &mut Vec<PatternMatch>) {
-    if let Some(callee) = call_match_path(&node, source, path) {
-        push_match(&node, source, &callee.join("."), out);
+fn arguments_match(node: &Node, template: Option<&ArgumentTemplate>, fields: &[&str]) -> bool {
+    let Some(template) = template else {
+        return true;
+    };
+    let count = argument_nodes(node, fields).map_or(0, |arguments| arguments.len());
+    match template {
+        ArgumentTemplate::Any => true,
+        ArgumentTemplate::Exactly(expected) => count == *expected,
+    }
+}
+
+fn argument_container<'a>(node: &Node<'a>, fields: &[&str]) -> Option<Node<'a>> {
+    if let Some(container) = fields
+        .iter()
+        .find_map(|field| node.child_by_field_name(field))
+    {
+        return Some(container);
+    }
+    let mut cursor = node.walk();
+    for child in node.named_children(&mut cursor) {
+        if BLOCK_KINDS.contains(&child.kind()) {
+            continue;
+        }
+        if let Some(container) = argument_container(&child, fields) {
+            return Some(container);
+        }
+    }
+    None
+}
+
+fn argument_nodes<'a>(node: &Node<'a>, fields: &[&str]) -> Option<Vec<Node<'a>>> {
+    let container = argument_container(node, fields)?;
+    let mut cursor = container.walk();
+    Some(
+        container
+            .named_children(&mut cursor)
+            .filter(|child| !is_trivia_kind(child.kind()))
+            .collect(),
+    )
+}
+
+fn walk_calls(
+    node: Node,
+    source: &str,
+    pattern: &str,
+    path: &[Option<String>],
+    arguments: Option<&ArgumentTemplate>,
+    out: &mut Vec<PatternMatch>,
+) {
+    let callee = call_match_path(&node, source, path)
+        .filter(|_| arguments_match(&node, arguments, &["arguments"]));
+    if let Some(callee) = callee {
+        push_match(&node, source, pattern, Some(&callee.join(".")), out);
     }
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
-        walk_calls(child, source, path, out);
+        walk_calls(child, source, pattern, path, arguments, out);
     }
 }
 
@@ -568,16 +677,22 @@ fn is_trivia_kind(kind: &str) -> bool {
     kind.contains("comment")
 }
 
-fn walk_ifs(node: Node, source: &str, body: Option<&BodyTemplate>, out: &mut Vec<PatternMatch>) {
+fn walk_ifs(
+    node: Node,
+    source: &str,
+    pattern: &str,
+    body: Option<&BodyTemplate>,
+    out: &mut Vec<PatternMatch>,
+) {
     if IF_KINDS.contains(&node.kind())
         && !is_in_comment_or_string(&node)
         && if_body_matches(&node, body)
     {
-        push_match(&node, source, "if", out);
+        push_match(&node, source, pattern, Some("if"), out);
     }
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
-        walk_ifs(child, source, body, out);
+        walk_ifs(child, source, pattern, body, out);
     }
 }
 
@@ -737,11 +852,11 @@ fn path_matches(actual: &[String], pattern: &[Option<String>]) -> bool {
 fn walk_literal(node: Node, source: &str, pattern: &str, out: &mut Vec<PatternMatch>) {
     if !is_in_comment_or_string(&node) {
         if identifier_matches(&node, source, pattern) {
-            push_match(&node, source, pattern, out);
+            push_match(&node, source, pattern, Some(pattern), out);
         }
         if let Some(name_node) = node.child_by_field_name("name") {
             if identifier_matches(&name_node, source, pattern) {
-                push_match(&node, source, pattern, out);
+                push_match(&node, source, pattern, Some(pattern), out);
             }
         }
     }
@@ -906,20 +1021,191 @@ fn push_pattern_node(
     });
 }
 
-fn push_match(node: &Node, source: &str, pattern: &str, out: &mut Vec<PatternMatch>) {
+fn push_match(
+    node: &Node,
+    source: &str,
+    pattern: &str,
+    name_text: Option<&str>,
+    out: &mut Vec<PatternMatch>,
+) {
     let (line_start, line_end) = node_lines(node, source);
     let excerpt = excerpt_for_node(node, source, pattern);
+    let byte_start = node.start_byte();
+    let byte_end = node.end_byte();
     if out
         .iter()
-        .any(|m| m.line_start == line_start && m.excerpt == excerpt)
+        .any(|matched| matched.byte_start == byte_start && matched.byte_end == byte_end)
     {
         return;
     }
     out.push(PatternMatch {
         line_start,
         line_end,
+        byte_start,
+        byte_end,
         excerpt,
+        captures: captures_for_node(node, source, pattern, name_text),
     });
+}
+
+fn captures_for_node(
+    node: &Node,
+    source: &str,
+    pattern: &str,
+    name_text: Option<&str>,
+) -> BTreeMap<String, String> {
+    let mut captures = BTreeMap::new();
+    if let Some(text) = node_text(node, source) {
+        captures.insert("MATCH".to_string(), text.to_string());
+    }
+    if let (Some(variable), Some(name)) = (declaration_name_capture(pattern), name_text) {
+        captures.insert(variable.to_string(), name.to_string());
+    }
+    capture_arguments(node, source, pattern, &mut captures);
+    if let Some(variable) = body_capture(pattern) {
+        let body = if is_if_prefixed(pattern.trim()) {
+            if_consequence(node)
+        } else {
+            function_body_node(node)
+        };
+        if let Some(text) = body.and_then(|body| node_text(&body, source)) {
+            captures.insert(variable.to_string(), strip_container(text).to_string());
+        }
+    }
+    if let Some(variable) = if_condition_capture(pattern) {
+        if let Some(condition) = node.child_by_field_name("condition") {
+            if let Some(text) = node_text(&condition, source) {
+                captures.insert(variable.to_string(), strip_container(text).to_string());
+            }
+        }
+    }
+    capture_call_path(node, source, pattern, &mut captures);
+    captures
+}
+
+fn capture_name(token: &str) -> Option<&str> {
+    let token = token.trim();
+    let name = token
+        .strip_prefix("$$$")
+        .or_else(|| token.strip_prefix('$'))?;
+    is_pattern_ident(name).then_some(name)
+}
+
+fn declaration_name_capture(pattern: &str) -> Option<&str> {
+    DECL_PATTERN_PREFIXES.iter().find_map(|(prefix, _)| {
+        let rest = pattern.trim().strip_prefix(prefix)?;
+        let head = rest
+            .split(|c: char| c == '(' || c == '{' || c == '<' || c.is_whitespace())
+            .next()?;
+        capture_name(head)
+    })
+}
+
+fn capture_arguments(
+    node: &Node,
+    source: &str,
+    pattern: &str,
+    captures: &mut BTreeMap<String, String>,
+) {
+    let Some(arguments) = pattern_argument_text(pattern) else {
+        return;
+    };
+    let fields = if is_call_kind(node.kind()) {
+        &["arguments"][..]
+    } else {
+        &["parameters"][..]
+    };
+    if arguments.starts_with("$$$") {
+        if let Some(variable) = capture_name(arguments) {
+            let text = argument_container(node, fields)
+                .and_then(|container| node_text(&container, source))
+                .map(strip_container)
+                .unwrap_or_default();
+            captures.insert(variable.to_string(), text.to_string());
+        }
+        return;
+    }
+    let names = arguments
+        .split(',')
+        .filter_map(capture_name)
+        .collect::<Vec<_>>();
+    let Some(nodes) = argument_nodes(node, fields) else {
+        return;
+    };
+    for (name, argument) in names.into_iter().zip(nodes) {
+        if let Some(text) = node_text(&argument, source) {
+            captures.insert(name.to_string(), text.to_string());
+        }
+    }
+}
+
+fn body_capture(pattern: &str) -> Option<&str> {
+    if let Some(open) = pattern.find('{') {
+        let close = pattern.rfind('}')?;
+        return capture_name(pattern.get(open + 1..close)?.trim());
+    }
+    if is_if_prefixed(pattern.trim()) {
+        return pattern
+            .rsplit_once(':')
+            .and_then(|(_, body)| capture_name(body));
+    }
+    None
+}
+
+fn if_condition_capture(pattern: &str) -> Option<&str> {
+    let rest = pattern.trim().strip_prefix("if")?.trim_start();
+    if let Some(inner) = rest.strip_prefix('(') {
+        let close = inner.find(')')?;
+        capture_name(&inner[..close])
+    } else {
+        let end = rest
+            .find(|c: char| c.is_whitespace() || c == '{' || c == ':')
+            .unwrap_or(rest.len());
+        capture_name(&rest[..end])
+    }
+}
+
+fn strip_container(text: &str) -> &str {
+    let trimmed = text.trim();
+    for (open, close) in [('(', ')'), ('[', ']'), ('{', '}')] {
+        if trimmed.starts_with(open) && trimmed.ends_with(close) {
+            return trimmed[open.len_utf8()..trimmed.len() - close.len_utf8()].trim();
+        }
+    }
+    trimmed
+}
+
+fn capture_call_path(
+    node: &Node,
+    source: &str,
+    pattern: &str,
+    captures: &mut BTreeMap<String, String>,
+) {
+    let Some(open) = pattern.find('(') else {
+        return;
+    };
+    let callee = pattern[..open]
+        .trim()
+        .strip_prefix("::")
+        .unwrap_or(pattern[..open].trim())
+        .replace("::", ".");
+    let pattern_segments = callee.split('.').collect::<Vec<_>>();
+    let Some(actual) = call_target_path(node, source) else {
+        return;
+    };
+    if pattern_segments.len() == actual.len() {
+        for (pattern_segment, actual_segment) in pattern_segments.iter().zip(&actual) {
+            if let Some(variable) = capture_name(pattern_segment) {
+                captures.insert(variable.to_string(), actual_segment.clone());
+            }
+        }
+    } else if pattern_segments.len() == 1 {
+        if let (Some(variable), Some(actual_segment)) =
+            (capture_name(pattern_segments[0]), actual.last())
+        {
+            captures.insert(variable.to_string(), actual_segment.clone());
+        }
+    }
 }
 
 fn excerpt_for_node(node: &Node, source: &str, pattern: &str) -> String {

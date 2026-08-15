@@ -64,15 +64,28 @@ already moving that way without a sidecar model:
 - **Causal follow-ups**: `follow_up_queries` are derived from the actual
   top hit (kind, symbol, margin), so the drill-down an agent would have
   asked a second model for is already in the envelope.
-- **Two-channel conjunction**: `callers:x AND pattern:...`, `AND NOT`
-  subtraction. Graph and structure intersect inside the index. See
+- **Two-channel conjunction**: `pattern:... AND callers:x` performs a
+  span-level graph/structure join; other pairs retain file-level intersection,
+  and `AND NOT` subtracts at the corresponding scope. See
   `docs/QUERY_GRAMMAR.md`.
 
-What must exist before any "replaces X" claim is made here: a green
-keep-gate against the tool being replaced (rg file-set presence for
-`literal:`, pinned ast-grep match sets for the native pattern subset).
-Until those gates exist and pass, this document describes complements,
-and the table above stays honest about the current subset.
+Two bounded, opt-in local keep-gates now exist: indexed-language fixture file
+presence for `literal:` vs pinned ripgrep, and native Pattern-1 match sets vs
+pinned ast-grep. Default test runs leave both external rows Not-run unless the
+pinned binaries are explicitly provisioned through `ASGREP_DIFF_RG` and
+`ASGREP_DIFF_AST_GREP`. They do not establish full tool identity, cover
+unindexed files, or justify a replacement claim. This document therefore still
+describes complements, and the table above stays honest about the current
+subsets.
+
+### Agent policy for indexed source
+
+Do not spawn `rg` for source already covered by a current ast-sgrep index. Use
+`literal:` for exact substring presence and the normal hybrid query for ranked
+navigation. Keep a terminal index current with `asgrep watch`; Pi and Code Mode
+refresh before search, while LSP applies open/change/save/close document updates
+before its next request. Ripgrep remains appropriate for logs and unindexed or
+unsupported files. ast-sgrep never invokes it as a hidden fallback.
 
 ## Feature deep dive
 

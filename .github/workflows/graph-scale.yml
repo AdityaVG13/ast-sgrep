@@ -1,0 +1,44 @@
+name: Large graph E2E
+
+on:
+  schedule:
+    - cron: "17 5 * * 0"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  senpi-graph-modes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check out pinned Senpi corpus
+        uses: actions/checkout@v4
+        with:
+          repository: code-yeongyu/senpi
+          ref: 8e489041fd9fc7c2a937ea59f85c6a7f99650eca
+          path: senpi-fixture
+      - name: Verify corpus revision
+        run: |
+          test "$(git -C senpi-fixture rev-parse HEAD)" = \
+            "8e489041fd9fc7c2a937ea59f85c6a7f99650eca"
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Index real corpus and verify graph modes
+        env:
+          ASGREP_REAL_PI_FIXTURE: ${{ github.workspace }}/senpi-fixture
+        run: |
+          set -o pipefail
+          cargo test --locked -p ast-sgrep-core --release --test e2e_smoke \
+            archived_pi_fixture_graph_modes_match_indexed_keys -- \
+            --ignored --nocapture 2>&1 | tee "$RUNNER_TEMP/senpi-graph-e2e.log"
+      - name: Upload graph E2E evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: senpi-graph-e2e
+          path: ${{ runner.temp }}/senpi-graph-e2e.log
+          if-no-files-found: error
+          retention-days: 14

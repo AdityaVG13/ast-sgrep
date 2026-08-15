@@ -16,9 +16,9 @@ const VECTOR_ALIGNMENT: usize = 4096;
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 pub const SEMANTIC_IVF_FILE: &str = "semantic.ivf";
 
-/// Per-field SQLite vectors (name/docs/body/graph) beside concatenated primary.
+/// Per-field SQLite vectors (name/docs/body/graph/tests-examples) beside concatenated primary.
 /// Bump when the stored field set or packing changes so a stale sidecar cannot match.
-pub const SEMANTIC_IVF_FIELD_LAYOUT: u32 = 2;
+pub const SEMANTIC_IVF_FIELD_LAYOUT: u32 = 3;
 
 pub fn semantic_ivf_path(index_db: &Path) -> std::path::PathBuf {
     index_db

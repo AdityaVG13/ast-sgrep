@@ -7,6 +7,7 @@ use crate::{
 };
 use anyhow::Context;
 use ast_sgrep_core::{
+    call_path::{find_call_path, CallPathConfig},
     chain::{expand_chain, ChainConfig},
     format_hit_line, IndexStore, SearchResponse, Searcher,
 };
@@ -52,6 +53,61 @@ pub(crate) fn run_chain(root: &Path, cli: &Cli, query: &str) -> anyhow::Result<(
         write_stdout_line(&format!(
             "  depth {} {:?}: {}::{from} -> {}::{to}",
             e.depth, e.label, e.from_file, e.to_file
+        ))?;
+    }
+    Ok(())
+}
+
+pub(crate) fn run_call_path(args: &crate::cli_args::CallPathArgs, cli: &Cli) -> anyhow::Result<()> {
+    let root = ensure_existing_root(&args.root, cli)?;
+    let (_, index_path) = resolve_root_index(cli, &root);
+    let store = IndexStore::open_with_durability(
+        &root,
+        index_path.as_deref(),
+        cli.durability.unwrap_or_default(),
+    )
+    .context("failed to open index")?;
+    ensure_nonempty_index(&root, store.status()?.file_count)?;
+    let response = find_call_path(
+        &store,
+        &args.source,
+        &args.sink,
+        &CallPathConfig {
+            max_depth: args.max_depth,
+            max_nodes: usize::try_from(args.max_nodes).expect("clap max-nodes bound fits usize"),
+            max_edges: usize::try_from(args.max_edges).expect("clap max-edges bound fits usize"),
+        },
+    )
+    .context("call-path search failed")?;
+    if cli.json {
+        return print_machine_json("call-path", &response);
+    }
+    if !response.found {
+        let suffix = if response.truncated {
+            "; resource cap reached"
+        } else {
+            ""
+        };
+        write_stdout_line(&format!(
+            "no call path from {:?} to {:?} within depth {}{} (call graph only)",
+            response.source, response.sink, response.max_depth, suffix
+        ))?;
+        return Ok(());
+    }
+    write_stdout_line(&format!(
+        "call-graph path {:?} -> {:?}: {} hops (no value flow)",
+        response.source,
+        response.sink,
+        response.path.len()
+    ))?;
+    for hop in &response.path {
+        write_stdout_line(&format!(
+            "  {}:{} {} -> {} [{}]",
+            hop.file,
+            hop.line,
+            hop.caller,
+            hop.callee,
+            hop.resolution.as_str()
         ))?;
     }
     Ok(())

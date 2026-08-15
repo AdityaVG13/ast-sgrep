@@ -77,7 +77,7 @@ fn schema_upgrade_invalidates_legacy_semantic_layouts() {
         .connection()
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(version, 11, "migration must land on the current schema");
+    assert_eq!(version, 12, "migration must land on the current schema");
 }
 
 #[test]
@@ -121,7 +121,7 @@ fn schema_6_main_indexes_still_get_semantic_wipe_at_7() {
         .connection()
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(version, 11);
+    assert_eq!(version, 12);
 }
 
 #[test]
@@ -159,7 +159,7 @@ fn migration_fixture(name: &str) -> PathBuf {
         .join(name)
 }
 
-/// ghiw.4: checked-in user_version=5 DB migrates to current schema (11).
+/// ghiw.4: checked-in user_version=5 DB migrates to current schema (12).
 #[test]
 fn committed_v5_sqlite_migrates_to_current_schema() {
     let temp = TempDir::new().unwrap();
@@ -171,7 +171,7 @@ fn committed_v5_sqlite_migrates_to_current_schema() {
         .connection()
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(version, 11, "migration must land on SCHEMA_VERSION=11");
+    assert_eq!(version, 12, "migration must land on SCHEMA_VERSION=12");
 }
 
 /// ghiw.4: newer-than-supported user_version fails closed (no panic).
@@ -218,7 +218,7 @@ fn schema_9_invalidates_legacy_semantic_state() {
         .connection()
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(version, 11);
+    assert_eq!(version, 12);
     let count: i64 = migrated
         .connection()
         .query_row("SELECT COUNT(*) FROM semantic_chunks", [], |row| row.get(0))
@@ -239,7 +239,13 @@ fn schema_9_invalidates_legacy_semantic_state() {
             .map(|r| r.unwrap())
             .collect()
     };
-    for col in ["vector_name", "vector_docs", "vector_body", "vector_graph"] {
+    for col in [
+        "vector_name",
+        "vector_docs",
+        "vector_body",
+        "vector_graph",
+        "vector_tests_examples",
+    ] {
         assert!(cols.iter().any(|c| c == col), "missing {col} in {cols:?}");
     }
 }
@@ -256,9 +262,11 @@ fn persist_per_field_vectors_on_index() {
         ..IndexOptions::default()
     })
     .unwrap();
-    indexer.index_content("account.rs", content).unwrap();
+    indexer
+        .index_content("tests/account_test.rs", content)
+        .unwrap();
     let store = indexer.store();
-    assert_eq!(store.schema_version(), 11);
+    assert_eq!(store.schema_version(), 12);
     let fields = store.semantic_chunk_field_vectors().unwrap();
     assert!(
         !fields.is_empty(),
@@ -274,6 +282,14 @@ fn persist_per_field_vectors_on_index() {
     );
     let docs = fields.iter().filter(|(_, v)| v.docs.is_some()).count();
     assert!(docs > 0, "doc comment must produce a docs field vector");
+    let tests_examples = fields
+        .iter()
+        .filter(|(_, v)| v.tests_examples.is_some())
+        .count();
+    assert!(
+        tests_examples > 0,
+        "test path must produce a tests/examples field vector"
+    );
     for (_, v) in &fields {
         if let (Some(name), Some(body)) = (&v.name, &v.body) {
             assert_ne!(

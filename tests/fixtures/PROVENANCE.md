@@ -56,7 +56,7 @@ Fingerprint: `compute_ann_fingerprint(4, 4, 4, Some("fixture"), 0)` (includes `S
 
 ## Schema migration DBs
 
-Current `SCHEMA_VERSION` is **11** (not 7). Recreate:
+Current `SCHEMA_VERSION` is **12** (not 7). Recreate:
 
 ```bash
 python3 tests/fixtures/migration/build_legacy.py

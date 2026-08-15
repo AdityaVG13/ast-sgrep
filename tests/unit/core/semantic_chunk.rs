@@ -199,7 +199,7 @@ fn render_chunk_text_puts_body_before_metadata() {
 }
 
 #[test]
-fn chunk_field_texts_split_name_docs_body_graph() {
+fn chunk_field_texts_split_name_docs_body_graph_and_examples() {
     let chunk = SemanticChunkInput {
         symbol_name: "renew_account".into(),
         kind: "function".into(),
@@ -228,6 +228,7 @@ fn chunk_field_texts_split_name_docs_body_graph() {
     );
     assert!(fields.graph.contains("main"), "{}", fields.graph);
     assert!(fields.graph.contains("charge"), "{}", fields.graph);
+    assert!(fields.tests_examples.is_empty());
     assert!(
         !fields.body.contains("called_by:"),
         "body field must not mix graph text: {}",
@@ -237,6 +238,37 @@ fn chunk_field_texts_split_name_docs_body_graph() {
         !fields.name.contains("excerpt:"),
         "name field must not mix body text: {}",
         fields.name
+    );
+}
+
+#[test]
+fn test_and_usage_chunks_get_a_separate_field() {
+    let mut chunk = SemanticChunkInput {
+        symbol_name: "renews_expired_session".into(),
+        kind: "function".into(),
+        line_start: 1,
+        line_end: 3,
+        excerpt: "fn renews_expired_session() { refresh_token(); }".into(),
+        callers: Vec::new(),
+        callees: vec!["refresh_token".into()],
+        doc: String::new(),
+        scope: String::new(),
+    };
+    let test_fields = chunk_field_texts_for_path(&chunk, "tests/session_test.rs");
+    assert!(
+        test_fields
+            .tests_examples
+            .contains("renews_expired_session"),
+        "{}",
+        test_fields.tests_examples
+    );
+
+    chunk.doc = "# Examples\n```rust\nrefresh_token();\n```".into();
+    let usage_fields = chunk_field_texts(&chunk);
+    assert!(
+        usage_fields.tests_examples.contains("refresh_token"),
+        "{}",
+        usage_fields.tests_examples
     );
 }
 

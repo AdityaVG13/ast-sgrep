@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import subprocess
 import tempfile
+import textwrap
 import unittest
 from pathlib import Path
 
@@ -66,6 +67,41 @@ class ComplianceEmitterTest(unittest.TestCase):
             body = out.read_text()
             self.assertIn("| `ranking_oracle` |", body)
             self.assertIn("| **Fail** |", body)
+
+    def test_missing_required_env_is_not_run(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            temp = Path(raw)
+            registry = temp / "registry.toml"
+            registry.write_text(
+                textwrap.dedent(
+                    """
+                    [[suite]]
+                    id = "external"
+                    label = "external oracle"
+                    tier = "extended"
+                    required_env = ["ASGREP_TEST_MISSING_ORACLE"]
+                    command = ["python3", "-c", "raise SystemExit(99)"]
+                    """
+                )
+            )
+            out = temp / "COMPLIANCE_REPORT.md"
+            completed = subprocess.run(
+                [
+                    "python3",
+                    str(EMITTER),
+                    "--registry",
+                    str(registry),
+                    "--out",
+                    str(out),
+                    "--no-jsonl",
+                    "--tier",
+                    "extended",
+                ],
+                cwd=ROOT,
+                check=False,
+            )
+            self.assertEqual(completed.returncode, 0)
+            self.assertIn("| `external` | external oracle | extended | **Not-run** |", out.read_text())
 
 
 if __name__ == "__main__":

@@ -16,6 +16,7 @@ Intentional deltas: [`docs/progress/surface-deferrals.md`](../progress/surface-d
 | `pattern_search` | `pattern:` / MCP `ast_search` | Native tree-sitter + index signatures |
 | `defs_callers_imports` | Query prefixes | Graph modes |
 | `chain` | CLI `chain` | Call-chain traversal |
+| `call_path` | CLI `call-path` | Bounded directed call graph path; no value-flow claim |
 | `compact_output` | `--format compact` | Token-budgeted agent output |
 | `doctor` | CLI `doctor` | Fail-closed triage envelope |
 | `mcp_index_repo` | MCP | Single-flight + deadline |

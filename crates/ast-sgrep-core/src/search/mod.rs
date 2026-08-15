@@ -42,6 +42,8 @@ pub use types::{
 const CASCADE_PREFILTER_FILE_LIMIT: usize = 100;
 /// Cap on reported query expansions (ufk7).
 const MAX_QUERY_EXPANSIONS: usize = 5;
+const NL_FANOUT_SYMBOL_LIMIT: usize = 4;
+const NL_FANOUT_HITS_PER_CHANNEL: usize = 16;
 
 /// On mutex poison, clear cached state before continuing so a panicked
 /// computation cannot leave a half-written entry visible (sxjc).
@@ -321,9 +323,11 @@ impl Searcher {
         ))
     }
 
-    /// Repository associations that apply to this query (ufk7).
-    fn query_expansions(&self, query: &str, lexicon_generation: i64) -> Vec<QueryExpansion> {
-        let terms: Vec<String> = crate::lexicon::prose_terms(query);
+    fn repository_associations(
+        &self,
+        terms: &[String],
+        lexicon_generation: i64,
+    ) -> Vec<crate::lexicon::Association> {
         if terms.is_empty() {
             return Vec::new();
         }
@@ -343,8 +347,13 @@ impl Searcher {
         if lexicon.is_empty() {
             return Vec::new();
         }
-        lexicon
-            .expand(&terms, MAX_QUERY_EXPANSIONS)
+        lexicon.expand(terms, MAX_QUERY_EXPANSIONS)
+    }
+
+    /// Repository associations that apply to this query (ufk7).
+    fn query_expansions(&self, query: &str, lexicon_generation: i64) -> Vec<QueryExpansion> {
+        let terms = crate::lexicon::prose_terms(query);
+        self.repository_associations(&terms, lexicon_generation)
             .into_iter()
             .map(|association| QueryExpansion {
                 because: crate::lexicon::explain(&association),
@@ -353,6 +362,32 @@ impl Searcher {
                 support: association.support,
             })
             .collect()
+    }
+
+    /// Add bounded repository vocabulary to conceptual candidate discovery and
+    /// semantic scoring. The original query still owns returned lexical hits,
+    /// structural matching, final scoring, and the response text.
+    fn repository_expanded_query(&self, parsed: &ParsedQuery) -> Result<Option<ParsedQuery>> {
+        if !self.options.use_embed
+            || !self.options.use_repository_vocabulary
+            || crate::intent::classify(parsed) != crate::intent::QueryIntent::Conceptual
+        {
+            return Ok(None);
+        }
+        let (_, lexicon_generation) = self.store.search_data_versions()?;
+        let terms = crate::lexicon::prose_terms(&parsed.raw);
+        let associations = self.repository_associations(&terms, lexicon_generation);
+        let mut expanded = parsed.clone();
+        for association in associations {
+            if !expanded.terms.contains(&association.related) {
+                expanded.terms.push(association.related);
+            }
+        }
+        if expanded.terms.len() == parsed.terms.len() {
+            Ok(None)
+        } else {
+            Ok(Some(expanded))
+        }
     }
 
     /// Describe the snapshot a response was read from (d3l5).
@@ -527,26 +562,31 @@ impl Searcher {
                 // ChannelQuery::parse never yields Hybrid; stay total anyway.
                 QueryMode::Hybrid => Ok(Vec::new()),
             },
-            conjunction::ChannelQuery::Semantic(query) => run_embed_pass(
-                &self.store,
-                &options,
-                &ParsedQuery::parse(query),
-                &self.semantic_cache,
-                self.use_field_rescoring,
-            ),
+            conjunction::ChannelQuery::Semantic(query) => {
+                let parsed = ParsedQuery::parse(query);
+                let expanded = self.repository_expanded_query(&parsed)?;
+                run_embed_pass(
+                    &self.store,
+                    &options,
+                    expanded.as_ref().unwrap_or(&parsed),
+                    &self.semantic_cache,
+                    self.use_field_rescoring,
+                )
+            }
         }
     }
     pub fn search_semantic(&self, query_str: &str) -> Result<SearchResponse> {
         validate_query_arg(query_str)?;
         self.cached("sem", query_str, || {
             let parsed = ParsedQuery::parse(query_str);
+            let expanded = self.repository_expanded_query(&parsed)?;
             finish_response_checked(
                 &parsed,
                 &self.options,
                 run_embed_pass(
                     &self.store,
                     &self.options,
-                    &parsed,
+                    expanded.as_ref().unwrap_or(&parsed),
                     &self.semantic_cache,
                     self.use_field_rescoring,
                 )?,
@@ -593,7 +633,13 @@ impl Searcher {
     fn search_hybrid(&self, parsed: &ParsedQuery) -> Result<Vec<SearchHit>> {
         // Constraint cascade: each stage receives only files that survived the prior stage.
         let mut lexical = literal_prefilter_pass(&self.store, &self.options, parsed)?;
-        let lexical_files = lexical
+        let expanded = self.repository_expanded_query(parsed)?;
+        let semantic_query = expanded.as_ref().unwrap_or(parsed);
+        let candidate_lexical = match &expanded {
+            Some(expanded) => literal_prefilter_pass(&self.store, &self.options, expanded)?,
+            None => lexical.clone(),
+        };
+        let lexical_files = candidate_lexical
             .iter()
             .map(|hit| hit.file.clone())
             .collect::<HashSet<_>>();
@@ -631,17 +677,98 @@ impl Searcher {
         let mut hits = lexical;
         hits.extend(structural);
         if self.options.use_embed {
-            hits.extend(passes::embed::embed_pass_for_files_with_rescoring(
+            let semantic = passes::embed::embed_pass_for_files_with_rescoring(
                 &self.store,
                 &self.options,
-                parsed,
+                semantic_query,
                 &working_files,
                 self.use_field_rescoring,
-            )?);
+            )?;
+            if crate::intent::classify(parsed) == crate::intent::QueryIntent::Conceptual {
+                hits.extend(conceptual_fanout_pass(
+                    &self.store,
+                    &self.options,
+                    &semantic,
+                )?);
+            }
+            hits.extend(semantic);
         }
         Ok(hits)
     }
 }
+
+fn conceptual_fanout_pass(
+    store: &IndexStore,
+    options: &SearchOptions,
+    semantic: &[SearchHit],
+) -> Result<Vec<SearchHit>> {
+    let mut seen_symbols = HashSet::new();
+    let symbols = semantic
+        .iter()
+        .filter_map(|hit| hit.symbol.as_deref())
+        .filter(|symbol| !symbol.is_empty())
+        .filter(|symbol| seen_symbols.insert(symbol.to_lowercase()))
+        .take(NL_FANOUT_SYMBOL_LIMIT);
+    let mut hits = Vec::new();
+    let mut fanout_options = options.clone();
+    fanout_options.limit = NL_FANOUT_HITS_PER_CHANNEL;
+    for symbol in symbols {
+        let caller_query = ParsedQuery::parse(&format!("callers:{symbol}"));
+        let mut caller_count = 0;
+        let mut graph_count = 0;
+        for hit in search_callers(store, &fanout_options, &caller_query)? {
+            let count = match hit.kind {
+                HitKind::Caller => &mut caller_count,
+                HitKind::Graph => &mut graph_count,
+                _ => continue,
+            };
+            if *count < NL_FANOUT_HITS_PER_CHANNEL {
+                hits.push(hit);
+                *count += 1;
+            }
+        }
+        hits.extend(structural_symbol_hits(
+            store,
+            options.lang_filter.as_deref(),
+            symbol,
+        )?);
+    }
+    Ok(hits)
+}
+
+fn structural_symbol_hits(
+    store: &IndexStore,
+    lang: Option<&str>,
+    symbol: &str,
+) -> Result<Vec<SearchHit>> {
+    use crate::rank::SCORE_PATTERN;
+
+    let mut hits = Vec::new();
+    let mut seen = HashSet::new();
+    for signature in &ast_sgrep_lang::structural_term_signatures(symbol) {
+        let remaining = NL_FANOUT_HITS_PER_CHANNEL.saturating_sub(hits.len());
+        if remaining == 0 {
+            break;
+        }
+        for row in store.pattern_nodes_matching_limited(signature, lang, remaining)? {
+            if !seen.insert((row.path.clone(), row.line_start, row.line_end)) {
+                continue;
+            }
+            hits.push(SearchHit::span(SpanHitInput {
+                kind: HitKind::Pattern,
+                file: row.path,
+                line_start: row.line_start,
+                line_end: row.line_end,
+                score: SCORE_PATTERN * 0.85,
+                excerpt: row.excerpt,
+                symbol: Some(symbol.to_owned()),
+                language: row.language,
+            }));
+        }
+    }
+    Ok(hits)
+}
+
 fn literal_prefilter_pass(
     store: &IndexStore,
     options: &SearchOptions,

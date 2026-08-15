@@ -14,6 +14,7 @@ stay separate. DISC ids come from
 | Class | Meaning |
 |---|---|
 | `correctness` | Fail = product contract broken |
+| `local_correctness` | Explicit local dependency; Fail when configured, Not-run otherwise |
 | `peer_parity` | Same process, two APIs; not an external tool |
 | `latency_only` | Timing / keep-gate; **never** a hit-identity oracle |
 | `never_correctness` | Explicitly not allowed as a Pass for answers |
@@ -27,10 +28,11 @@ Subject is always this tree (`asgrep` / `ast-sgrep-*`). Oracle IDs name the
 | Channel | Scenario | authoritative_mode | subject_id | oracle_id | comparator | disc_ids | suite_path | gate_class |
 |---|---|---|---|---|---|---|---|---|
 | lexical | keyword / FTS hits | fixture | `asgrep` | `tests/core/parity.rs` + FTS contract | must_include / hit keys | `DISC-lexical-not-rg` | `tests/core/parity.rs` | `correctness` |
+| lexical | `literal:` indexed-language fixture | pinned local | `asgrep` | ripgrep 15.1.0 | file-set presence | `DISC-lexical-not-rg` | `tests/core/literal_diff.rs` | `local_correctness`; Not-run until `ASGREP_DIFF_RG` |
 | lexical | vs ripgrep identity | excluded | `asgrep` | `rg` | hit-ID equality | `DISC-lexical-not-rg`, `DISC-no-jell-harness` | `docs/validation/jell-deferral.md` | `deferred_excluded` |
 | graph | defs / callers / imports | fixture | `asgrep` | `tests/fixtures` graph cases | expected edges / symbols | | `tests/core/graph_oracle.rs` | `correctness` |
 | structural-native | `pattern:` indexed subset | spec+fixture | `asgrep` | `docs/structural-patterns.md` | supported shapes hit; unsupported empty | `DISC-pattern-native-subset` | `crates/ast-sgrep-lang` pattern tests | `correctness` |
-| structural-native | vs ast-grep CLI | env-gated Pattern-1 | `asgrep` | `ast-grep` CLI | match-set differential | `DISC-pattern-native-subset` | `tests/core/pattern_diff.rs` | `deferred_excluded` until `ASGREP_DIFF_AST_GREP` |
+| structural-native | vs ast-grep CLI | pinned local Pattern-1 | `asgrep` | ast-grep 0.45.1 | match-set differential | `DISC-pattern-native-subset` | `tests/core/pattern_diff.rs` | `local_correctness`; Not-run until `ASGREP_DIFF_AST_GREP` |
 | semantic/ANN | cosine / IVF adaptive | math+spec | `asgrep` | `ast-sgrep-embed` math + IVF docs | unit math; threshold honesty | `DISC-ivf-adaptive-threshold` | `ast-sgrep-embed` `math::` | `correctness` |
 | semantic/ANN | published MRR | ledger | `asgrep` | `benchmarks/results/baselines.md` | provenance only | `DISC-baselines-unreproducible` | `benchmarks/results/baselines.md` | `never_correctness` |
 | hybrid/NL | ranking must_include | fixture | `asgrep` | `tests/fixtures/ranking/cases.json` | must_include bag (not gold ranks) | `DISC-ranking-soft-oracle`, `DISC-casefold-ascii` | `tests/core/ranking_oracle.rs` | `correctness` |
@@ -60,5 +62,6 @@ list on purpose: it must not be cited as ranking correctness.
 
 ## Explicit non-ownership
 
-Pattern×ast-grep match-set differential is **ghiw.3**. This table only routes
-that scenario to `deferred_excluded` until that bead lands.
+Pattern×ast-grep match-set differential is **ghiw.3**. Its bounded equality
+list is a pinned local gate; full ast-grep CLI parity remains outside the
+native subset contract.

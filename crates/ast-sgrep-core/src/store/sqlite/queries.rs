@@ -5,8 +5,9 @@ use super::super::sql::{
     where_clause,
 };
 use super::{
-    sql_usize_from_byte_offset, CallRow, ImportQueryRow, ImportRow, IndexStore, IndexedLineRow,
-    PatternNodeRow, SemanticChunkStats, SymbolLocationRow, SymbolRow, IMPORT_SELECT, SYM_LOC,
+    sql_usize_from_byte_offset, CallEvidenceRow, CallRow, ImportQueryRow, ImportRow, IndexStore,
+    IndexedLineRow, PatternNodeRow, SemanticChunkStats, SymbolLocationRow, SymbolRow,
+    IMPORT_SELECT, SYM_LOC,
 };
 use crate::{IndexStatus, Result};
 use rusqlite::types::{Type, ValueRef};
@@ -23,6 +24,7 @@ fn read_field_vector_row(
             docs: row.get(2)?,
             body: row.get(3)?,
             graph: row.get(4)?,
+            tests_examples: row.get(5)?,
         },
     ))
 }
@@ -281,7 +283,7 @@ impl IndexStore {
         lang: Option<&str>,
     ) -> Result<Vec<(i64, crate::semantic_chunk::SemanticFieldVectors)>> {
         let sql = format!(
-            "SELECT sc.id, sc.vector_name, sc.vector_docs, sc.vector_body, sc.vector_graph \
+            "SELECT sc.id, sc.vector_name, sc.vector_docs, sc.vector_body, sc.vector_graph, sc.vector_tests_examples \
              FROM semantic_chunks sc JOIN files f ON f.id=sc.file_id WHERE 1=1{} ORDER BY sc.id",
             lang_and_clause(lang)
         );
@@ -298,7 +300,7 @@ impl IndexStore {
                 .collect::<Vec<_>>()
                 .join(",");
             let sql = format!(
-                "SELECT id, vector_name, vector_docs, vector_body, vector_graph \
+                "SELECT id, vector_name, vector_docs, vector_body, vector_graph, vector_tests_examples \
                  FROM semantic_chunks WHERE id IN ({placeholders})"
             );
             let mut stmt = self.conn.prepare(&sql)?;
@@ -360,7 +362,7 @@ impl IndexStore {
             let rows = match lang {
                 Some(language) => query_cached_map(
                     &self.conn,
-                    "SELECT sc.id, sc.vector_name, sc.vector_docs, sc.vector_body, sc.vector_graph \
+                    "SELECT sc.id, sc.vector_name, sc.vector_docs, sc.vector_body, sc.vector_graph, sc.vector_tests_examples \
                      FROM semantic_chunks sc JOIN files f ON f.id=sc.file_id \
                      WHERE f.path=?1 AND f.language=?2 ORDER BY sc.id",
                     params![path, language],
@@ -368,7 +370,7 @@ impl IndexStore {
                 ),
                 None => query_cached_map(
                     &self.conn,
-                    "SELECT sc.id, sc.vector_name, sc.vector_docs, sc.vector_body, sc.vector_graph \
+                    "SELECT sc.id, sc.vector_name, sc.vector_docs, sc.vector_body, sc.vector_graph, sc.vector_tests_examples \
                      FROM semantic_chunks sc JOIN files f ON f.id=sc.file_id \
                      WHERE f.path=?1 ORDER BY sc.id",
                     params![path],
@@ -429,6 +431,33 @@ impl IndexStore {
     }
     pub fn outgoing_calls(&self, caller: &str) -> Result<Vec<CallRow>> {
         calls_matching(&self.conn, "caller", caller)
+    }
+    pub(crate) fn outgoing_calls_with_scip(
+        &self,
+        caller: &str,
+        limit: usize,
+    ) -> Result<Vec<CallEvidenceRow>> {
+        let limit = i64::try_from(limit).unwrap_or(i64::MAX);
+        query_cached_map(
+            &self.conn,
+            "SELECT f.path, c.line_no, c.caller, c.callee,
+                    EXISTS(SELECT 1 FROM scip_facts sf
+                           WHERE sf.file_id=c.file_id AND sf.line_no=c.line_no
+                             AND sf.name=c.callee AND sf.is_def=0) AS scip_exact
+             FROM callers c JOIN files f ON f.id=c.file_id
+             WHERE lower(c.caller)=lower(?1)
+             ORDER BY scip_exact DESC, f.path, c.line_no, c.callee LIMIT ?2",
+            params![caller, limit],
+            |row| {
+                Ok(CallEvidenceRow {
+                    file: row.get(0)?,
+                    line: row.get(1)?,
+                    caller: row.get(2)?,
+                    callee: row.get(3)?,
+                    scip_exact: row.get(4)?,
+                })
+            },
+        )
     }
     pub fn symbol_at_line(&self, path: &str, line: u32) -> Result<Option<SymbolLocationRow>> {
         optional_row(
@@ -499,6 +528,22 @@ impl IndexStore {
         signature: &str,
         lang: Option<&str>,
     ) -> Result<Vec<PatternNodeRow>> {
+        self.pattern_nodes_matching_inner(signature, lang, None)
+    }
+    pub(crate) fn pattern_nodes_matching_limited(
+        &self,
+        signature: &str,
+        lang: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<PatternNodeRow>> {
+        self.pattern_nodes_matching_inner(signature, lang, Some(limit))
+    }
+    fn pattern_nodes_matching_inner(
+        &self,
+        signature: &str,
+        lang: Option<&str>,
+        limit: Option<usize>,
+    ) -> Result<Vec<PatternNodeRow>> {
         let mut sql = String::from(
             "SELECT f.path, f.language, n.line_start, n.line_end, n.excerpt FROM pattern_nodes n JOIN files f ON f.id=n.file_id WHERE n.signature=?1",
         );
@@ -506,6 +551,9 @@ impl IndexStore {
             sql.push_str(" AND f.language=?2");
         }
         sql.push_str(" ORDER BY f.path, n.line_start");
+        if let Some(limit) = limit {
+            sql.push_str(&format!(" LIMIT {limit}"));
+        }
         let map = |r: &rusqlite::Row<'_>| {
             Ok(PatternNodeRow {
                 path: r.get(0)?,

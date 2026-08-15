@@ -69,6 +69,7 @@ fn evidence_merge_preserves_semantic_field_scores() {
         docs: None,
         body: Some(0.4),
         graph: None,
+        tests_examples: None,
     });
     let expected = semantic.embed_fields.clone();
 

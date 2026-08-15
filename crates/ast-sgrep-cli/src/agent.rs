@@ -77,6 +77,12 @@ pub(crate) fn capabilities_json(_cli: &Cli) -> anyhow::Result<Value> {
             "mcp": {"binary": "asgrep-mcp", "transport": "stdio"},
             "lsp": {"binary": "asgrep-lsp", "transport": "stdio"}
         },
+        "indexed_source": {
+            "policy": "Do not spawn rg on indexed source.",
+            "exact_text": "Use literal:<term> for exact substring presence in indexed languages.",
+            "freshness": "CLI: run asgrep watch <ROOT>; Pi and Code Mode refresh before search with a 30-second default correctness lease; LSP applies document open/change/save/close before the next request.",
+            "outside_contract": "Use ripgrep only for logs and unindexed or unsupported files."
+        },
         "aliases": ["ast-sgrep"],
         "query_prefixes": ["callers:", "defs:", "imports:", "pattern:", "literal:", "regex:", "word:"],
         "output_limits": {
@@ -104,7 +110,7 @@ pub(crate) fn capabilities_json(_cli: &Cli) -> anyhow::Result<Value> {
         "notes": {
             "default_search": "Bare QUERY without a subcommand runs hybrid search; the word 'search' is not a required verb — use the `search`/`find`/`query` subcommand only when you want an explicit search command.",
             "format_implies_json": true,
-            "safe_mutating": "index refreshes incrementally with transactional writes. reindex forces a full transactional rewrite -- prefer `asgrep reindex --dry-run <ROOT> --json` before a full reindex."
+            "safe_mutating": "index refreshes incrementally with transactional writes. reindex forces a full transactional rewrite -- prefer `asgrep reindex --dry-run <ROOT> --json` before a full reindex. codemod dry-run always emits a JSON edit plan; apply commits one source transaction before a separate incremental index transaction. A source-apply failure rolls back source files; an index-refresh failure leaves the source edits applied and reports `asgrep index` as recovery."
         }
     }))
 }
@@ -283,8 +289,13 @@ pub(crate) fn robot_guide_markdown() -> &'static str {
 ## Quick start
 1. `asgrep index . --json` — build or refresh the index (required once per checkout).
 2. `asgrep --json --format compact "natural language intent" .` — ranked hits with bounded snippets.
+## Indexed source / freshness
+- Do not spawn `rg` on indexed source. Use `literal:<term>` for exact substring presence and unprefixed search for ranked code navigation.
+- For a long-running CLI session, run `asgrep watch <root>`. A pending batch starts after the debounce quiet period or after at most three debounce windows under continuous events; indexing time still depends on the project.
+- Pi and Code Mode refresh before search, with a configurable 30-second correctness lease by default. LSP applies document open/change/save/close notifications before processing the next request.
+- Ripgrep remains the tool for logs and unindexed or unsupported files. ast-sgrep never spawns it as a compatibility layer.
 ## Subcommands
-See `capabilities --json` → `commands` (complete clap catalog). Notable: `search`/`find`/`query`, `keyword`, `semantic`, `chain`, `index`/`reindex` (`--dry-run`), `status`, `bench`, `watch`, `eval`, `doctor`, `version`.
+See `capabilities --json` → `commands` (complete clap catalog). Notable: `search`/`find`/`query`, `keyword`, `semantic`, `chain`, `call-path`, `index`/`reindex` (`--dry-run`), `codemod`, `status`, `bench`, `watch`, `eval`, `doctor`, `version`.
 ## Integrations / sibling binaries
 - `asgrep-mcp` — MCP stdio server (`ASGREP_ROOT`, tools: keyword/ast/semantic search, index_repo, code_read)
 - `asgrep-lsp` — Language Server Protocol server
@@ -297,6 +308,7 @@ See `capabilities --json` → `commands` (complete clap catalog). Notable: `sear
 - Machine mode emits one JSON value on stdout and no duplicate stderr diagnostics.
 ## Index cancel / dry-run
 - `asgrep index --dry-run` / `asgrep reindex --dry-run` report planned work without mutating the index.
+- `asgrep codemod --pattern 'legacy($ARG)' --rewrite 'modern($ARG)' --dry-run .` emits a JSON edit plan without writing; omit `--dry-run` to apply all planned source files transactionally, followed by a separate transactional index refresh. If refresh fails, source edits remain applied and the command reports `asgrep index` as recovery.
 - Index writes are transactional; an interrupted uncommitted write is rolled back when SQLite recovers.
 ## Exit codes
 - 0 success · 1 usage · 2 index/search failure
@@ -371,6 +383,7 @@ pub(crate) fn query_looks_like_subcommand_typo(query: &str) -> Option<&'static s
         "keyword",
         "semantic",
         "chain",
+        "call-path",
         "bench",
         "watch",
         "capabilities",
@@ -442,6 +455,7 @@ pub(crate) fn augment_clap_usage_message(msg: &str, command: &str) -> String {
             "semantic" => r#"Example: asgrep semantic --json "where is auth refreshed" ."#,
             "search" => r#"Example: asgrep search --json --format compact "auth refresh" ."#,
             "chain" => r#"Example: asgrep chain "callers:process_request" ."#,
+            "call-path" => r#"Example: asgrep call-path main validate_input ."#,
             _ => r#"Example: asgrep --json --format compact "auth refresh" ."#,
         };
         msg.push('\n');

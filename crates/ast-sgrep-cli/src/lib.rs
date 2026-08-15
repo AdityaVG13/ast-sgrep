@@ -3,6 +3,7 @@
 mod agent;
 mod bench;
 mod cli_args;
+mod codemod_cmd;
 mod eval;
 mod index_cmd;
 mod keep_gate;
@@ -157,6 +158,7 @@ fn run_command(cli: &Cli, command: &Commands) -> anyhow::Result<()> {
             }
             run_full_index("reindex", &c.root.root, cli, true, c.scip.as_deref())
         }
+        Commands::Codemod(c) => codemod_cmd::run_codemod(cli, c),
         Commands::Search(q) => search_cmd::run_search(&q.query.root, cli, &q.query.query, false),
         Commands::Bench {
             root,
@@ -181,6 +183,7 @@ fn run_command(cli: &Cli, command: &Commands) -> anyhow::Result<()> {
         Commands::Keyword(q) => search_cmd::run_keyword_search(&q.query.root, cli, &q.query.query),
         Commands::Semantic(q) => search_cmd::run_search(&q.query.root, cli, &q.query.query, true),
         Commands::Chain(q) => search_cmd::run_chain(&q.root, cli, &q.query),
+        Commands::CallPath(args) => search_cmd::run_call_path(args, cli),
         Commands::Capabilities(args) => agent::run_capabilities(cli, args),
         Commands::Version(args) => run_version(cli, args),
         Commands::RobotDocs(args) => agent::run_robot_docs(cli, args),

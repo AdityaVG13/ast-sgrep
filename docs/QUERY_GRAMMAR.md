@@ -95,15 +95,17 @@ runs (`crates/ast-sgrep-core/src/search/conjunction.rs`):
 - Exactly two channels. More `AND`s, unprefixed sides, or parenthesized
   forms fall through to ordinary search, so plain English "AND" keeps its
   meaning (QG-023 / QG-024 still hold at the parser).
-- The left channel is the result identity. `AND` keeps left hits whose file
-  also matched the right channel; `AND NOT` keeps left hits whose file did
-  not. Right evidence overlapping a kept hit's span merges into its
-  contributor set. The join is file-level in this version.
+- The left channel is the result identity. Pattern/caller pairs join by span:
+  `pattern:... AND callers:x` returns only pattern spans containing a call to
+  `x`, and the reversed order returns only caller hits inside a matching
+  pattern span. Other pairs join by file. `AND NOT` subtracts at the same
+  scope. Overlapping right evidence merges into the kept hit's contributors.
 - Empty channels stay honest: empty left is empty; empty right makes `AND`
   empty and `AND NOT` a no-op.
 
 ```text
 callers:process_request AND pattern:fn $NAME($$$)
+pattern:fn $NAME($$$) AND callers:process_request
 imports: rusqlite AND semantic:"parameterized query"
 defs:handle AND NOT callers:test_
 ```

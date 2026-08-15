@@ -24,14 +24,24 @@ thread_local! {
 }
 // 6 = symbols_name_lower. 7 = semantic-layout-v2 wipe. 8 = unstemmed code FTS.
 // 9 = repository lexicon. 10 = per-field semantic vectors (name/docs/body/graph).
-// 11 = scip_facts overlay (kgvi.2). Never reuse a SCHEMA_VERSION for two migrations.
-const SCHEMA_VERSION: i64 = 11;
+// 11 = scip_facts overlay (kgvi.2). 12 = tests/examples semantic vector.
+// Never reuse a SCHEMA_VERSION for two migrations.
+const SCHEMA_VERSION: i64 = 12;
 const IMPORT_SELECT: &str =
     "SELECT f.path, f.language, i.module_path, i.line_no FROM imports i JOIN files f ON f.id = i.file_id";
 const SYM_LOC: &str = "SELECT f.path, s.name, f.language, s.line_start, s.line_end FROM symbols s JOIN files f ON f.id = s.file_id";
 pub type IndexedLineRow = (Arc<str>, u32, String, Option<Arc<str>>);
 pub type ImportQueryRow = (String, Option<String>, String, u32);
 pub type CallRow = (String, u32, String, String);
+
+#[derive(Debug, Clone)]
+pub(crate) struct CallEvidenceRow {
+    pub(crate) file: String,
+    pub(crate) line: u32,
+    pub(crate) caller: String,
+    pub(crate) callee: String,
+    pub(crate) scip_exact: bool,
+}
 
 /// INTEGER byte offsets must fit `i64` on write (pb2w). Wrapping `as i64`
 /// would store a negative and later wrap to `usize::MAX` on a 64-bit host.
@@ -55,7 +65,13 @@ fn ensure_semantic_field_vector_columns(conn: &Connection) -> Result<()> {
     let existing = stmt
         .query_map([], |row| row.get::<_, String>(1))?
         .collect::<std::result::Result<Vec<_>, _>>()?;
-    for column in ["vector_name", "vector_docs", "vector_body", "vector_graph"] {
+    for column in [
+        "vector_name",
+        "vector_docs",
+        "vector_body",
+        "vector_graph",
+        "vector_tests_examples",
+    ] {
         if !existing.iter().any(|name| name == column) {
             conn.execute(
                 &format!("ALTER TABLE semantic_chunks ADD COLUMN {column} BLOB"),
@@ -230,13 +246,13 @@ impl IndexStore {
         // A legacy semantic sidecar is only a derived acceleration structure.
         // Remove it before migration; if the DB transaction then rolls back,
         // searches safely fall back rather than observing stale ANN contents.
-        if version < 10 {
+        if version < 12 {
             crate::semantic_ivf::invalidate_semantic_ivf(&self.db_path)?;
         }
         self.conn.execute_batch("BEGIN IMMEDIATE")?;
         let migration = (|| -> Result<()> {
             self.conn.execute_batch(SCHEMA_DDL)?;
-            if version < 10 {
+            if version < 12 {
                 ensure_semantic_field_vector_columns(&self.conn)?;
             }
             if version < 11 {
