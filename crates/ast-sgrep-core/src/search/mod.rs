@@ -35,6 +35,8 @@ const CASCADE_PREFILTER_FILE_LIMIT: usize = 100;
 /// Cap on reported query expansions (ufk7).
 const MAX_QUERY_EXPANSIONS: usize = 5;
 const MAX_HITS_PER_FILE: usize = 3;
+const NL_FANOUT_SYMBOL_LIMIT: usize = 4;
+const NL_FANOUT_HITS_PER_CHANNEL: usize = 16;
 
 /// On mutex poison, clear cached state before continuing so a panicked
 /// computation cannot leave a half-written entry visible (sxjc).
@@ -593,16 +595,93 @@ impl Searcher {
         let mut hits = lexical;
         hits.extend(structural);
         if self.options.use_embed {
-            hits.extend(embed_pass_for_files(
-                &self.store,
-                &self.options,
-                parsed,
-                &working_files,
-            )?);
+            let semantic =
+                embed_pass_for_files(&self.store, &self.options, parsed, &working_files)?;
+            if crate::intent::classify(parsed) == crate::intent::QueryIntent::Conceptual {
+                hits.extend(conceptual_fanout_pass(
+                    &self.store,
+                    &self.options,
+                    &semantic,
+                )?);
+            }
+            hits.extend(semantic);
         }
         Ok(hits)
     }
 }
+
+fn conceptual_fanout_pass(
+    store: &IndexStore,
+    options: &SearchOptions,
+    semantic: &[SearchHit],
+) -> Result<Vec<SearchHit>> {
+    let mut seen_symbols = HashSet::new();
+    let symbols = semantic
+        .iter()
+        .filter_map(|hit| hit.symbol.as_deref())
+        .filter(|symbol| !symbol.is_empty())
+        .filter(|symbol| seen_symbols.insert(symbol.to_lowercase()))
+        .take(NL_FANOUT_SYMBOL_LIMIT);
+    let mut hits = Vec::new();
+    let mut fanout_options = options.clone();
+    fanout_options.limit = NL_FANOUT_HITS_PER_CHANNEL;
+    for symbol in symbols {
+        let caller_query = ParsedQuery::parse(&format!("callers:{symbol}"));
+        let mut caller_count = 0;
+        let mut graph_count = 0;
+        for hit in search_callers(store, &fanout_options, &caller_query)? {
+            let count = match hit.kind {
+                HitKind::Caller => &mut caller_count,
+                HitKind::Graph => &mut graph_count,
+                _ => continue,
+            };
+            if *count < NL_FANOUT_HITS_PER_CHANNEL {
+                hits.push(hit);
+                *count += 1;
+            }
+        }
+        hits.extend(structural_symbol_hits(
+            store,
+            options.lang_filter.as_deref(),
+            symbol,
+        )?);
+    }
+    Ok(hits)
+}
+
+fn structural_symbol_hits(
+    store: &IndexStore,
+    lang: Option<&str>,
+    symbol: &str,
+) -> Result<Vec<SearchHit>> {
+    use crate::rank::SCORE_PATTERN;
+
+    let mut hits = Vec::new();
+    let mut seen = HashSet::new();
+    for signature in &ast_sgrep_lang::structural_term_signatures(symbol) {
+        let remaining = NL_FANOUT_HITS_PER_CHANNEL.saturating_sub(hits.len());
+        if remaining == 0 {
+            break;
+        }
+        for row in store.pattern_nodes_matching_limited(signature, lang, remaining)? {
+            if !seen.insert((row.path.clone(), row.line_start, row.line_end)) {
+                continue;
+            }
+            hits.push(SearchHit::span(SpanHitInput {
+                kind: HitKind::Pattern,
+                file: row.path,
+                line_start: row.line_start,
+                line_end: row.line_end,
+                score: SCORE_PATTERN * 0.85,
+                excerpt: row.excerpt,
+                symbol: Some(symbol.to_owned()),
+                language: row.language,
+            }));
+        }
+    }
+    Ok(hits)
+}
+
 fn literal_prefilter_pass(
     store: &IndexStore,
     options: &SearchOptions,

@@ -1,5 +1,7 @@
 use ast_sgrep_testkit::CliSession;
+use std::fs;
 use std::path::PathBuf;
+use tempfile::TempDir;
 fn asgrep_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_asgrep"))
 }
@@ -108,4 +110,56 @@ fn call_path_runs_against_the_real_indexed_fixture() {
     assert_eq!(response["depth"], 2);
     assert_eq!(response["path"][0]["caller"], "main");
     assert_eq!(response["path"][1]["callee"], "validate_input");
+}
+
+#[test]
+fn conceptual_query_fans_out_through_the_real_cli() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path().join("fixture");
+    fs::create_dir(&root).unwrap();
+    fs::write(
+        root.join("cookie.rs"),
+        "/// Write the session cookie after authentication succeeds.\n\
+         pub fn commit_auth_state() {\n\
+             let _cookie = \"session cookie\";\n\
+         }\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("login.rs"),
+        "pub fn complete_login() {\n\
+             commit_auth_state();\n\
+         }\n",
+    )
+    .unwrap();
+    let session = CliSession {
+        index_path: temp.path().join("index.db"),
+        bin: asgrep_bin(),
+        root,
+        _temp: temp,
+    };
+    session.run_success(&[
+        "--index-path",
+        session.index_path.to_str().unwrap(),
+        "index",
+        session.root.to_str().unwrap(),
+    ]);
+
+    let response = session.search_json(
+        "all functions that write the session cookie",
+        &["--limit", "32"],
+    );
+    let path = response["hits"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|hit| hit["file"] == "login.rs" && hit["callee"] == "commit_auth_state")
+        .expect("real CLI search must return the indexed caller path");
+    let contributors = path["contributors"].as_array().unwrap();
+    for channel in ["caller", "graph", "pattern"] {
+        assert!(
+            contributors.iter().any(|kind| kind == channel),
+            "missing {channel} evidence in {path}"
+        );
+    }
 }

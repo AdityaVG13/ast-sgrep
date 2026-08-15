@@ -1915,6 +1915,22 @@ impl IndexStore {
         signature: &str,
         lang: Option<&str>,
     ) -> Result<Vec<PatternNodeRow>> {
+        self.pattern_nodes_matching_inner(signature, lang, None)
+    }
+    pub(crate) fn pattern_nodes_matching_limited(
+        &self,
+        signature: &str,
+        lang: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<PatternNodeRow>> {
+        self.pattern_nodes_matching_inner(signature, lang, Some(limit))
+    }
+    fn pattern_nodes_matching_inner(
+        &self,
+        signature: &str,
+        lang: Option<&str>,
+        limit: Option<usize>,
+    ) -> Result<Vec<PatternNodeRow>> {
         let mut sql = String::from(
             "SELECT f.path, f.language, n.line_start, n.line_end, n.excerpt FROM pattern_nodes n JOIN files f ON f.id=n.file_id WHERE n.signature=?1",
         );
@@ -1922,6 +1938,9 @@ impl IndexStore {
             sql.push_str(" AND f.language=?2");
         }
         sql.push_str(" ORDER BY f.path, n.line_start");
+        if let Some(limit) = limit {
+            sql.push_str(&format!(" LIMIT {limit}"));
+        }
         let map = |r: &rusqlite::Row<'_>| {
             Ok(PatternNodeRow {
                 path: r.get(0)?,
