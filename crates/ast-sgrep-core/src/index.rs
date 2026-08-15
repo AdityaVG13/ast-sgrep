@@ -358,7 +358,9 @@ impl Indexer {
             && prepared.iter().all(|outcome| {
                 matches!(
                     outcome,
-                    PrepareOutcome::Ready(_) | PrepareOutcome::Unchanged
+                    PrepareOutcome::Ready(_)
+                        | PrepareOutcome::Unchanged
+                        | PrepareOutcome::SkippedBinary
                 )
             });
         let mut semantic_ivf_dirty = false;
@@ -422,6 +424,12 @@ impl Indexer {
                     // --lang must not destructively wipe other languages (y1oy.8):
                     // filtered paths are skipped here; prune_missing_files also
                     // respects lang_filter when removing absent files.
+                }
+                PrepareOutcome::SkippedBinary => {
+                    // Binary assets with text-like extensions are expected walk
+                    // noise, not index failures. Leave them unseen so a stale
+                    // row from an earlier text version is pruned below.
+                    stats.files_skipped += 1;
                 }
                 PrepareOutcome::Failed(msg) => {
                     eprintln!("[asgrep] failed to index {rel_str}: {msg}");
@@ -839,9 +847,26 @@ impl Indexer {
     }
     fn index_file_outcome(&mut self, abs_path: &Path, rel_path: &str) -> Result<IndexFileOutcome> {
         let rel_path = indexed_rel_path(Path::new(rel_path))?;
-        let source = self
+        let source = match self
             .root_dir
-            .read_text_capped(Path::new(&rel_path), crate::io_bounds::MAX_INDEX_FILE_BYTES)?;
+            .read_text_capped(Path::new(&rel_path), crate::io_bounds::MAX_INDEX_FILE_BYTES)
+        {
+            Ok(source) => source,
+            Err(error) if error.is_binary_file() && detect_language(abs_path, None).is_none() => {
+                let removed = self.store.file_hash(&rel_path)?.is_some();
+                if removed {
+                    self.store.remove_file(&rel_path)?;
+                }
+                return Ok(IndexFileOutcome {
+                    stats: FileIndexStats {
+                        skipped: !removed,
+                        ..Default::default()
+                    },
+                    removed,
+                });
+            }
+            Err(error) => return Err(error),
+        };
         let mtime = source.metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH);
         let (mtime_secs, mtime_nanos) = system_time_to_parts(mtime);
         self.index_content_at(&rel_path, &source.text, abs_path, mtime_secs, mtime_nanos)

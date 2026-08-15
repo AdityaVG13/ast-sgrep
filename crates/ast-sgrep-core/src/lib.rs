@@ -96,6 +96,10 @@ impl StoreError {
                 )
         )
     }
+
+    pub(crate) fn is_binary_file(&self) -> bool {
+        matches!(self, Self::Other(message) if message.starts_with("binary file: "))
+    }
 }
 impl From<String> for StoreError {
     fn from(s: String) -> Self {

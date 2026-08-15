@@ -509,6 +509,35 @@ fn index_all_preserves_semantic_ivf_on_noop_and_file_failure() {
 }
 
 #[test]
+fn binary_assets_with_text_extensions_are_skipped_and_stale_rows_removed() {
+    let corpus = tempfile::tempdir().unwrap();
+    let index_dir = tempfile::tempdir().unwrap();
+    let source = corpus.path().join("records.json");
+    fs::write(&source, "{\"name\":\"searchable_record\"}\n").unwrap();
+
+    let mut indexer = Indexer::new(IndexOptions {
+        root: corpus.path().to_path_buf(),
+        index_path: Some(index_dir.path().join("index.db")),
+        embed_semantic: false,
+        ..IndexOptions::default()
+    })
+    .unwrap();
+    assert_eq!(indexer.index_all().unwrap().files_indexed, 1);
+
+    // Zstandard frame magic followed by non-UTF-8 payload, matching generated
+    // artifacts that retain a `.json` suffix.
+    fs::write(&source, [0x28, 0xb5, 0x2f, 0xfd, 0xff]).unwrap();
+    let updated = indexer.update_paths(std::slice::from_ref(&source)).unwrap();
+    assert_eq!(updated.files_failed, 0);
+    assert_eq!(updated.files_removed, 1);
+    assert_eq!(indexer.store().status().unwrap().file_count, 0);
+
+    let scanned = indexer.index_all().unwrap();
+    assert_eq!(scanned.files_failed, 0);
+    assert_eq!(scanned.files_skipped, 1);
+}
+
+#[test]
 fn failed_file_preparation_preserves_prior_rows_and_aborts_strict_reindex() {
     let corpus = tempfile::tempdir().unwrap();
     let index_dir = tempfile::tempdir().unwrap();

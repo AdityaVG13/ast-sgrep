@@ -71,11 +71,21 @@ fn update_paths_handles_exact_targets_and_prunes_removals() {
         .file_hash("beta.rs")
         .expect("hash lookup")
         .is_none());
+    fs::write(
+        root.join("target").join("gen.rs"),
+        "pub fn generated_updated() {}\n",
+    )
+    .unwrap();
     let stats = indexer
         .update_paths(&[root.join("target").join("gen.rs")])
-        .expect("skip update");
-    assert_eq!(stats.files_indexed, 0);
-    assert_eq!(stats.files_skipped, 1);
+        .expect("user-controlled directory update");
+    assert_eq!(stats.files_indexed, 1);
+    assert_eq!(stats.files_skipped, 0);
+    assert!(!indexer
+        .store()
+        .symbols_in_file("target/gen.rs")
+        .expect("generated symbols")
+        .is_empty());
 }
 
 #[test]
@@ -313,7 +323,7 @@ fn update_paths_refuses_symlink_escape_into_index() {
     );
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 #[test]
 fn update_paths_advertises_after_partial_batch_error() {
     use std::ffi::OsString;

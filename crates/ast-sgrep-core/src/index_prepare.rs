@@ -36,6 +36,7 @@ pub(crate) struct PreparedFile {
 pub(crate) enum PrepareOutcome {
     Unchanged,
     Filtered,
+    SkippedBinary,
     Failed(String),
     Ready(PreparedFile),
 }
@@ -149,6 +150,9 @@ pub(crate) fn prepare_file(
     let source =
         match root_dir.read_text_capped(Path::new(rel), crate::io_bounds::MAX_INDEX_FILE_BYTES) {
             Ok(source) => source,
+            Err(error) if error.is_binary_file() && detect_language(abs, None).is_none() => {
+                return PrepareOutcome::SkippedBinary
+            }
             Err(error) => return PrepareOutcome::Failed(error.to_string()),
         };
     let mtime = source.metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH);

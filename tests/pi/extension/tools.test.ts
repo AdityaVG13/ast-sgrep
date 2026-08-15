@@ -84,6 +84,7 @@ test("asgrep runs JS against the connector and returns a shaped result", async (
   });
   assert.equal(result.details.ok, true);
   assert.deepEqual(result.details.result, { symbol: "auth_refresh", n: 1 });
+  assert.match(result.content[0]!.text, /auth_refresh/);
   assert.ok(f.calls.some((call) => call.args.includes("agent-capsule")));
   assert.ok(result.details.stats);
   assert.ok(typeof result.details.wallMs === "number");
