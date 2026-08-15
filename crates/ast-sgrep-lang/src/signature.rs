@@ -20,6 +20,13 @@ pub fn cached_pattern_signatures(pattern: &str) -> Option<Vec<String>> {
     if !pattern.contains('$') {
         return Some(vec![pattern.to_string()]);
     }
+    // Nested body templates (`fn $N($$$) { $STMT }`, `if $COND { $BODY }`)
+    // are not indexable: `pattern_nodes` signatures cannot express statement
+    // counts, so serving them from the index would over-match. The native
+    // tree-sitter scan is the sole source for these shapes.
+    if pattern.contains('{') {
+        return None;
+    }
     for (prefix, kinds) in CACHED_DECL_KIND_TABLE {
         if let Some(rest) = pattern.strip_prefix(prefix) {
             let name = rest
@@ -64,6 +71,11 @@ pub fn required_pattern_literal(pattern: &str) -> Option<String> {
     }
     if !pattern.contains('$') {
         return Some(pattern.to_string());
+    }
+    // If templates: every indexed language spells the keyword `if`, so any
+    // file that can hold an if-node must contain those bytes.
+    if pattern.starts_with("if ") || pattern.starts_with("if(") {
+        return Some("if".to_string());
     }
     for (prefix, _) in DECL_PATTERN_PREFIXES {
         if let Some(rest) = pattern.strip_prefix(prefix) {

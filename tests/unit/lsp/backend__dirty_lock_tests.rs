@@ -85,11 +85,7 @@ fn absolute_index_path_outside_workspace_requires_opt_in() {
     );
 
     let allowed = resolve_lsp_index_path(&root, escaped.to_str().unwrap(), true).unwrap();
-    let expected = outside
-        .path()
-        .canonicalize()
-        .unwrap()
-        .join("index.db");
+    let expected = outside.path().canonicalize().unwrap().join("index.db");
     assert_eq!(allowed, expected);
 }
 

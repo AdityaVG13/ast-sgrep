@@ -6,6 +6,8 @@ fn test_server(root: PathBuf) -> McpServer {
         index_path: None,
         limit: 10,
         use_embed: false,
+        use_neural_embed: false,
+        use_semantic_only: false,
         searcher_cache: Mutex::new(SearcherCache::default()),
         index_lock: Mutex::new(()),
         path_registry: Mutex::new(HashMap::new()),
@@ -42,8 +44,7 @@ fn index_repo_invalidates_searcher_after_disk_mutation() {
         assert_eq!(cache.generation, generation);
     }
     // Seed session maps that must not survive reindex.
-    McpServer::lock_or_recover(&server.path_registry, |_| {})
-        .insert("p0".into(), "lib.rs".into());
+    McpServer::lock_or_recover(&server.path_registry, |_| {}).insert("p0".into(), "lib.rs".into());
     McpServer::lock_or_recover(&server.emitted_snippets, |_| {}).insert("p0:1-1".into(), 42);
 
     let args = server
@@ -86,14 +87,13 @@ fn index_repo_invalidates_searcher_on_index_err() {
     let server = test_server(root.clone());
     let (searcher, generation) = server.searcher_for(root.clone(), 10).unwrap();
     server.restore_searcher(root.clone(), 10, generation, searcher);
-    McpServer::lock_or_recover(&server.path_registry, |_| {})
-        .insert("p0".into(), "lib.rs".into());
+    McpServer::lock_or_recover(&server.path_registry, |_| {}).insert("p0".into(), "lib.rs".into());
     McpServer::lock_or_recover(&server.emitted_snippets, |_| {}).insert("p0:1-1".into(), 42);
 
     let args = server
         .parse_index_repo(&json!({}))
         .expect("empty index_repo args should parse");
-    let _fail = force_sidecar_rebuild_err();
+    let _fail = ast_sgrep_core::force_sidecar_rebuild_err();
     let err = server
         .tool_index_repo(args)
         .expect_err("forced sidecar rebuild must surface as index_repo Err");
@@ -136,8 +136,7 @@ fn external_writer_generation_invalidates_warm_searcher() {
         let cache = McpServer::lock_or_recover(&server.searcher_cache, |_| {});
         assert!(cache.entry.is_some(), "precondition: warm Searcher");
     }
-    McpServer::lock_or_recover(&server.path_registry, |_| {})
-        .insert("p0".into(), "lib.rs".into());
+    McpServer::lock_or_recover(&server.path_registry, |_| {}).insert("p0".into(), "lib.rs".into());
 
     // Simulate watch / CLI index in another process: bump stamp only.
     let bumped = ast_sgrep_core::bump_writer_generation(&root, None).unwrap();

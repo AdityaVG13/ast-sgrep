@@ -14,14 +14,35 @@ const FIXTURE: &str = include_str!("../fixtures/pattern_diff/lib.rs");
 
 const SUPPORTED: &[&str] = &[
     "process_request",
-    "fn $NAME($$$)",
     "process_request($$$)",
     "$OBJ.$METHOD($$$)",
+    // Nested statement template (ast-sgrep-yira): exact Rust token form, and
+    // ast-grep agrees on the one-statement semantics for the fixture ifs.
+    "if $COND { $BODY }",
+];
+
+/// Native-only normalized forms: these must hit natively but stay OUT of the
+/// ast-grep equality list because ast-grep parses patterns token-exactly:
+/// - `if ($COND) { $BODY }` / `if $COND: $BODY`: paren/colon forms only match
+///   that literal syntax in ast-grep; the native engine normalizes them so one
+///   template works across all indexed languages.
+/// - `fn $NAME($$$)`: ast-grep parses the bodyless form as a trait
+///   `function_signature_item`, so it matches no `fn` declarations at all.
+/// - `fn $N($$$) { $STMT }`: ast-grep is visibility-exact (`pub fn` does not
+///   match a pattern without `pub`); the native engine matches any function.
+/// - `struct AppContext`: the bodyless struct pattern does not match
+///   `struct AppContext {}` in ast-grep; the native engine matches the decl.
+const SUPPORTED_NATIVE_NORMALIZED: &[&str] = &[
+    "if ($COND) { $BODY }",
+    "if $COND: $BODY",
+    "fn $NAME($$$)",
+    "fn $N($$$) { $STMT }",
     "struct AppContext",
 ];
 
 const UNSUPPORTED: &[&str] = &[
-    "if ($COND) { $BODY }",
+    "if ($COND) { $A; $B }",
+    "if (x > 0) { $BODY }",
     "foo($X + 1)",
     "rule:\n  pattern: fn $A\n  fix: fn $B\n",
     "$A == $B",
@@ -37,7 +58,10 @@ fn indexed_fixture() -> IsolatedIndexSession {
     session
 }
 
-fn search_pattern(session: &IsolatedIndexSession, pattern: &str) -> Result<Vec<(String, u32)>, String> {
+fn search_pattern(
+    session: &IsolatedIndexSession,
+    pattern: &str,
+) -> Result<Vec<(String, u32)>, String> {
     let searcher = session.searcher(SearchOptions {
         use_embed: false,
         limit: 32,
@@ -69,19 +93,14 @@ fn competitor_bin() -> Option<PathBuf> {
 /// ast-grep `run --json` rows: 0-based `range.start.line` in current CLI JSON.
 fn ast_grep_match_set(bin: &Path, root: &Path, pattern: &str) -> BTreeSet<(String, u32)> {
     let output = Command::new(bin)
-        .args([
-            "run",
-            "--pattern",
-            pattern,
-            "--lang",
-            "rust",
-            "--json",
-        ])
+        .args(["run", "--pattern", pattern, "--lang", "rust", "--json"])
         .arg(root)
         .output()
         .unwrap_or_else(|e| panic!("spawn ast-grep: {e}"));
+    // grep convention: exit 0 = matches, exit 1 = valid run with no matches.
+    let no_matches = output.status.code() == Some(1);
     assert!(
-        output.status.success(),
+        output.status.success() || no_matches,
         "ast-grep failed: {}\n{}",
         String::from_utf8_lossy(&output.stderr),
         String::from_utf8_lossy(&output.stdout)
@@ -113,7 +132,7 @@ fn ast_grep_match_set(bin: &Path, root: &Path, pattern: &str) -> BTreeSet<(Strin
 #[test]
 fn supported_native_patterns_hit_fixture() {
     let session = indexed_fixture();
-    for pattern in SUPPORTED {
+    for pattern in SUPPORTED.iter().chain(SUPPORTED_NATIVE_NORMALIZED) {
         let hits = search_pattern(&session, pattern).unwrap_or_else(|e| {
             panic!("supported {pattern} must not fail-closed: {e}");
         });
@@ -122,6 +141,32 @@ fn supported_native_patterns_hit_fixture() {
             "supported native pattern {pattern} must hit tests/fixtures/pattern_diff/lib.rs"
         );
     }
+}
+
+/// Nested templates enforce statement counts (ast-sgrep-yira): `{ $STMT }` /
+/// `{ $BODY }` is exactly one statement, `{ $$$ }` is any body, `{}` is empty.
+#[test]
+fn nested_templates_enforce_statement_counts() {
+    let session = indexed_fixture();
+    let lines = |pattern: &str| -> BTreeSet<u32> {
+        search_pattern(&session, pattern)
+            .unwrap_or_else(|e| panic!("{pattern}: {e}"))
+            .into_iter()
+            .map(|(_, line)| line)
+            .collect()
+    };
+    // guard's first if has one statement; its second has two.
+    assert_eq!(lines("if $COND { $BODY }"), BTreeSet::from([24]));
+    // Paren and colon forms normalize to the same template.
+    assert_eq!(lines("if ($COND) { $BODY }"), BTreeSet::from([24]));
+    assert_eq!(lines("if $COND: $BODY"), BTreeSet::from([24]));
+    // Any-body matches both ifs.
+    assert_eq!(lines("if ($COND) { $$$ }"), BTreeSet::from([24, 25]));
+    // Single-statement functions: other (3), tick (12), demo (19).
+    // guard has three body statements; process_request/helper are empty.
+    assert_eq!(lines("fn $N($$$) { $STMT }"), BTreeSet::from([3, 12, 19]));
+    // Empty-body functions: process_request (1), helper (16).
+    assert_eq!(lines("fn $N($$$) {}"), BTreeSet::from([1, 16]));
 }
 
 #[test]
@@ -166,7 +211,11 @@ fn supported_match_sets_equal_ast_grep_when_env_set() {
             "ignored test executed without ASGREP_DIFF_AST_GREP; not claiming equality (DISC-pattern-native-subset)"
         );
     };
-    assert!(bin.is_file(), "ASGREP_DIFF_AST_GREP must be a file: {}", bin.display());
+    assert!(
+        bin.is_file(),
+        "ASGREP_DIFF_AST_GREP must be a file: {}",
+        bin.display()
+    );
     let session = indexed_fixture();
     for pattern in SUPPORTED {
         let dut: BTreeSet<_> = search_pattern(&session, pattern)

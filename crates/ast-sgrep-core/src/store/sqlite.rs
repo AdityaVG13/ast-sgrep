@@ -371,7 +371,9 @@ impl IndexStore {
         let mut files = HashMap::new();
         {
             let mut stmt = self.conn.prepare("SELECT id, path FROM files")?;
-            let rows = stmt.query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)))?;
+            let rows = stmt.query_map([], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+            })?;
             for row in rows {
                 let (id, path) = row?;
                 files.insert(crate::scip::normalize_scip_path(&path), id);

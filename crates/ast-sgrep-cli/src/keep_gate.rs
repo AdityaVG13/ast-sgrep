@@ -46,14 +46,18 @@ pub struct KeepPrior {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum KeepVerdict {
-    Keep { regression_pct: f64 },
+    Keep {
+        regression_pct: f64,
+    },
     EstablishBaseline,
     RejectRegression {
         regression_pct: f64,
         threshold: f64,
         kind: &'static str,
     },
-    QuarantineCv { cv_pct: f64 },
+    QuarantineCv {
+        cv_pct: f64,
+    },
 }
 
 impl KeepVerdict {
@@ -84,9 +88,7 @@ pub fn evaluate_keep(
             cv_pct: sample.cv_pct,
         };
     }
-    let prior_avg = prior
-        .avg_ms
-        .filter(|ms| ms.is_finite() && *ms > 0.0);
+    let prior_avg = prior.avg_ms.filter(|ms| ms.is_finite() && *ms > 0.0);
     if prior.placeholder || prior_avg.is_none() {
         return KeepVerdict::EstablishBaseline;
     }
@@ -122,8 +124,7 @@ pub fn prior_from_json(v: &Value) -> KeepPrior {
     KeepPrior {
         avg_ms: v["avg_search_ms"].as_f64(),
         geomean_ms: v["geomean_search_ms"].as_f64(),
-        placeholder: v["placeholder"].as_bool().unwrap_or(false)
-            || v["keep_eligible"] == false,
+        placeholder: v["placeholder"].as_bool().unwrap_or(false) || v["keep_eligible"] == false,
     }
 }
 
@@ -218,10 +219,10 @@ fn git_head() -> Option<String> {
 }
 
 pub fn bench_ratchet_enabled() -> bool {
-    match std::env::var("ASGREP_BENCH_RATCHET") {
-        Ok(v) if v == "0" || v.eq_ignore_ascii_case("false") => false,
-        _ => true,
-    }
+    !matches!(
+        std::env::var("ASGREP_BENCH_RATCHET"),
+        Ok(v) if v == "0" || v.eq_ignore_ascii_case("false")
+    )
 }
 
 pub fn history_commit_enabled() -> bool {
@@ -262,7 +263,12 @@ mod tests {
             },
             t(),
         );
-        assert_eq!(v, KeepVerdict::Keep { regression_pct: 3.0 });
+        assert_eq!(
+            v,
+            KeepVerdict::Keep {
+                regression_pct: 3.0
+            }
+        );
     }
 
     #[test]
@@ -282,9 +288,7 @@ mod tests {
         );
         match v {
             KeepVerdict::RejectRegression {
-                kind,
-                threshold,
-                ..
+                kind, threshold, ..
             } => {
                 assert_eq!(kind, "primary");
                 assert_eq!(threshold, 3.0);
@@ -354,6 +358,9 @@ mod tests {
 
     #[test]
     fn sanitize_suite_label() {
-        assert_eq!(sanitize_label("suite:sample:default"), "suite-sample-default");
+        assert_eq!(
+            sanitize_label("suite:sample:default"),
+            "suite-sample-default"
+        );
     }
 }

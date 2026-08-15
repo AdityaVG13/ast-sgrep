@@ -15,6 +15,9 @@ use crate::extract::{
 };
 use crate::pattern_queries::{class_queries_for, queries_for, FUNCTION_QUERY_TABLE};
 use crate::{Language, PatternNode};
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::sync::{Arc, OnceLock, RwLock};
 use tree_sitter::{Node, Parser, Query, QueryCursor, StreamingIterator};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -117,11 +120,28 @@ pub fn match_literal_pattern(
     Ok(matches)
 }
 
+/// Statement-count template inside a nested `{ ... }` (or `:` suite) section.
+///
+/// ast-grep semantics: a single metavariable statement (`{ $STMT }`) matches a
+/// body with **exactly one** statement; `$$$` matches any body; `{}` matches an
+/// empty body. Comments are not counted as statements.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BodyTemplate {
+    /// `{ $$$ }` / `{ $$$BODY }` — any statements, but a body must exist.
+    Any,
+    /// `{}` → 0 statements, `{ $STMT }` → exactly 1 statement.
+    Exactly(usize),
+}
+
 /// Native structural pattern shapes handled in-process.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NativeKind {
     /// Function-like declaration; `name == None` means any name (`$NAME`).
-    Function { name: Option<String> },
+    /// `body` constrains the statement count of the body (`fn $N($$$) { $STMT }`).
+    Function {
+        name: Option<String>,
+        body: Option<BodyTemplate>,
+    },
     /// Class/struct/type declaration. `keyword` is the pattern prefix
     /// (`class`, `struct`, `interface`, or `type`) so queries stay kind-specific.
     Class {
@@ -133,11 +153,20 @@ pub enum NativeKind {
         /// Exact path like `foo.bar` or single name; segments that were `$X` are None.
         path: Vec<Option<String>>,
     },
+    /// `if` statement/expression template: `if ($COND) { $BODY }`,
+    /// `if $COND { $BODY }`, or `if $COND: $BODY`. The condition must be a
+    /// metavariable; paren, brace, and colon forms are normalized so one
+    /// pattern matches if-nodes across all indexed languages.
+    If { body: Option<BodyTemplate> },
 }
 
 /// Classify a metavariable / structural pattern into the native subset.
 pub fn classify_native(pattern: &str) -> Option<NativeKind> {
     let p = pattern.trim();
+    // `if` templates first: `if ($COND)` must never classify as a call to `if`.
+    if is_if_prefixed(p) {
+        return classify_if_template(p);
+    }
     for &(prefix, is_class) in DECL_PATTERN_PREFIXES {
         if let Some(rest) = p.strip_prefix(prefix) {
             let head = rest
@@ -155,13 +184,25 @@ pub fn classify_native(pattern: &str) -> Option<NativeKind> {
             } else {
                 return None;
             };
+            // Nested body template (`fn $N($$$) { $STMT }`): everything from the
+            // first `{` is the body section. Unsupported inner shapes fail
+            // closed (classify None → needs_ast_grep_fallback).
+            let body = match rest.find('{') {
+                Some(brace) => parse_body_template(&rest[brace..])?,
+                None => None,
+            };
             return Some(if is_class {
+                // Statement-count templates on type bodies are language-specific
+                // (fields vs methods); only `{ $$$ }` / no body are supported.
+                if matches!(body, Some(BodyTemplate::Exactly(_))) {
+                    return None;
+                }
                 NativeKind::Class {
                     keyword: prefix.trim(),
                     name,
                 }
             } else {
-                NativeKind::Function { name }
+                NativeKind::Function { name, body }
             });
         }
     }
@@ -187,6 +228,73 @@ pub fn classify_native(pattern: &str) -> Option<NativeKind> {
     }
     let path = parse_call_path(callee)?;
     Some(NativeKind::Call { path })
+}
+
+/// True when the pattern starts an `if` template (`if `, `if(`).
+/// Identifiers like `iffy(...)` are not if-prefixed.
+fn is_if_prefixed(p: &str) -> bool {
+    p.strip_prefix("if")
+        .is_some_and(|rest| rest.starts_with([' ', '(']))
+}
+
+/// Parse `if ($COND) { $BODY }` / `if $COND { $BODY }` / `if $COND: $BODY`.
+///
+/// The condition must be a single metavariable (`$COND`); concrete condition
+/// expressions are out of the native subset and fail closed. `None` here means
+/// unsupported — never fall through to call classification.
+fn classify_if_template(p: &str) -> Option<NativeKind> {
+    let rest = p.strip_prefix("if")?.trim_start();
+    let (condition, after) = if let Some(inner) = rest.strip_prefix('(') {
+        let close = inner.find(')')?;
+        (inner[..close].trim(), inner[close + 1..].trim_start())
+    } else {
+        let end = rest
+            .find(|c: char| c.is_whitespace() || c == '{' || c == ':')
+            .unwrap_or(rest.len());
+        (rest[..end].trim(), rest[end..].trim_start())
+    };
+    if !is_single_metavariable(condition) {
+        return None;
+    }
+    let body = parse_body_template(after)?;
+    Some(NativeKind::If { body })
+}
+
+/// Parse the nested body section of a template.
+///
+/// `after` is either empty (no body constraint), a `{ ... }` section, or a
+/// `: ...` suite (Python form). Outer `None` = unsupported inner shape.
+fn parse_body_template(after: &str) -> Option<Option<BodyTemplate>> {
+    let after = after.trim();
+    if after.is_empty() {
+        return Some(None);
+    }
+    let (inner, braced) = if let Some(rest) = after.strip_prefix('{') {
+        (rest.strip_suffix('}')?, true)
+    } else {
+        (after.strip_prefix(':')?, false)
+    };
+    let inner = inner.trim();
+    if inner.is_empty() {
+        // `{}` matches an empty body; a bare `:` adds no constraint.
+        return Some(braced.then_some(BodyTemplate::Exactly(0)));
+    }
+    if inner
+        .strip_prefix("$$$")
+        .is_some_and(|rest| rest.is_empty() || is_pattern_ident(rest))
+    {
+        return Some(Some(BodyTemplate::Any));
+    }
+    if is_single_metavariable(inner) {
+        return Some(Some(BodyTemplate::Exactly(1)));
+    }
+    None
+}
+
+/// `$NAME` — exactly one metavariable, not `$$$`.
+fn is_single_metavariable(s: &str) -> bool {
+    s.strip_prefix('$')
+        .is_some_and(|rest| !rest.starts_with('$') && is_pattern_ident(rest))
 }
 
 /// Identifier token check shared with index signature builders.
@@ -228,14 +336,52 @@ fn parse_call_path(callee: &str) -> Option<Vec<Option<String>>> {
     (!segments.is_empty()).then_some(segments)
 }
 
+thread_local! {
+    /// Per-thread reusable parsers (Amdahl: `Parser::new` + `set_language` were
+    /// paid once per file in the rayon span; now once per thread per language).
+    static PARSERS: RefCell<HashMap<Language, Parser>> = RefCell::new(HashMap::new());
+}
+
 fn parse_source(lang: Language, source: &str) -> anyhow::Result<tree_sitter::Tree> {
-    let mut parser = Parser::new();
-    parser
-        .set_language(&tree_sitter_language(lang))
-        .map_err(|e| anyhow::anyhow!("failed to set language: {e}"))?;
-    parser
-        .parse(source, None)
-        .ok_or_else(|| anyhow::anyhow!("failed to parse source"))
+    PARSERS.with(|cell| {
+        let mut parsers = cell.borrow_mut();
+        let parser = match parsers.entry(lang) {
+            std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                let mut parser = Parser::new();
+                parser
+                    .set_language(&tree_sitter_language(lang))
+                    .map_err(|e| anyhow::anyhow!("failed to set language: {e}"))?;
+                entry.insert(parser)
+            }
+        };
+        parser
+            .parse(source, None)
+            .ok_or_else(|| anyhow::anyhow!("failed to parse source"))
+    })
+}
+
+/// Process-wide compiled query cache (Amdahl: `Query::new` compiled every table
+/// query per file in the rayon span; queries are `'static` table entries, so
+/// key by pointer and compile once per process).
+type QueryCache = RwLock<HashMap<(Language, usize), Option<Arc<Query>>>>;
+
+fn compiled_query(
+    language: &tree_sitter::Language,
+    lang: Language,
+    source: &'static str,
+) -> Option<Arc<Query>> {
+    static CACHE: OnceLock<QueryCache> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| RwLock::new(HashMap::new()));
+    let key = (lang, source.as_ptr() as usize);
+    if let Some(cached) = cache.read().ok()?.get(&key) {
+        return cached.clone();
+    }
+    let compiled = Query::new(language, source).ok().map(Arc::new);
+    if let Ok(mut writer) = cache.write() {
+        writer.insert(key, compiled.clone());
+    }
+    compiled
 }
 
 fn match_structural(
@@ -247,46 +393,56 @@ fn match_structural(
     let tree = parse_source(lang, source)?;
     let mut out = Vec::new();
     match kind {
-        NativeKind::Function { name } => {
+        NativeKind::Function { name, body } => {
             run_queries(
                 &language,
+                lang,
                 tree.root_node(),
                 source,
                 queries_for(FUNCTION_QUERY_TABLE, lang),
                 name.as_deref(),
                 None,
+                body.as_ref(),
                 &mut out,
             )?;
         }
         NativeKind::Class { keyword, name } => {
             run_queries(
                 &language,
+                lang,
                 tree.root_node(),
                 source,
                 class_queries_for(lang, keyword),
                 name.as_deref(),
                 Some((lang, *keyword)),
+                None,
                 &mut out,
             )?;
         }
         NativeKind::Call { path } => {
             walk_calls(tree.root_node(), source, path, &mut out);
         }
+        NativeKind::If { body } => {
+            walk_ifs(tree.root_node(), source, body.as_ref(), &mut out);
+        }
     }
     Ok(out)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_queries(
     language: &tree_sitter::Language,
+    lang: Language,
     root: Node,
     source: &str,
-    queries: &[&str],
+    queries: &'static [&'static str],
     name_filter: Option<&str>,
     class_filter: Option<(Language, &str)>,
+    body_filter: Option<&BodyTemplate>,
     out: &mut Vec<PatternMatch>,
 ) -> anyhow::Result<()> {
     for qsrc in queries {
-        let Ok(query) = Query::new(language, qsrc) else {
+        let Some(query) = compiled_query(language, lang, qsrc) else {
             continue;
         };
         let mut cursor = QueryCursor::new();
@@ -318,6 +474,11 @@ fn run_queries(
             }
             if let Some(want) = name_filter {
                 if name_text != Some(want) {
+                    continue;
+                }
+            }
+            if let Some(template) = body_filter {
+                if !function_body_matches(&node, template) {
                     continue;
                 }
             }
@@ -369,6 +530,128 @@ fn walk_calls(node: Node, source: &str, path: &[Option<String>], out: &mut Vec<P
     }
 }
 
+/// If-node kinds matched by `NativeKind::If` across the 13 indexed languages.
+/// Modifier (`x if y` in Ruby) and ternary forms are deliberately excluded.
+const IF_KINDS: &[&str] = &["if_statement", "if_expression", "if"];
+
+/// Body/consequence container kinds across grammars.
+const BLOCK_KINDS: &[&str] = &[
+    "block",
+    "statement_block",
+    "compound_statement",
+    "function_body",
+    "body_statement",
+    "statements",
+    "then",
+];
+
+/// Wrapper kinds that never hold statements directly; descend into their
+/// single block-like child before counting (Swift `function_body { statements }`).
+const STMT_WRAPPER_KINDS: &[&str] = &["function_body", "then", "statements"];
+
+fn is_trivia_kind(kind: &str) -> bool {
+    kind.contains("comment")
+}
+
+fn walk_ifs(node: Node, source: &str, body: Option<&BodyTemplate>, out: &mut Vec<PatternMatch>) {
+    if IF_KINDS.contains(&node.kind())
+        && !is_in_comment_or_string(&node)
+        && if_body_matches(&node, body)
+    {
+        push_match(&node, source, "if", out);
+    }
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        walk_ifs(child, source, body, out);
+    }
+}
+
+fn if_body_matches(node: &Node, template: Option<&BodyTemplate>) -> bool {
+    let Some(template) = template else {
+        return true;
+    };
+    let Some(consequence) = if_consequence(node) else {
+        return false;
+    };
+    match template {
+        BodyTemplate::Any => true,
+        BodyTemplate::Exactly(want) => {
+            if BLOCK_KINDS.contains(&consequence.kind()) {
+                count_statements(consequence) == *want
+            } else {
+                // Braceless consequence (`if (x) foo();`) is one statement.
+                *want == 1
+            }
+        }
+    }
+}
+
+/// The then-branch of an if node: `consequence`/`body` field, else the first
+/// block-like named child (first, not last, so an else block is never picked).
+fn if_consequence<'a>(node: &Node<'a>) -> Option<Node<'a>> {
+    node.child_by_field_name("consequence")
+        .or_else(|| node.child_by_field_name("body"))
+        .or_else(|| {
+            let mut cursor = node.walk();
+            let found = node
+                .named_children(&mut cursor)
+                .find(|child| BLOCK_KINDS.contains(&child.kind()));
+            found
+        })
+}
+
+fn function_body_matches(node: &Node, template: &BodyTemplate) -> bool {
+    let Some(body) = function_body_node(node) else {
+        return false;
+    };
+    match template {
+        BodyTemplate::Any => true,
+        BodyTemplate::Exactly(want) => count_statements(body) == *want,
+    }
+}
+
+/// The body block of a function-like match node. Falls back to scanning named
+/// children (and their `body` fields, for `const f = () => {...}` declarators)
+/// when the grammar has no `body` field.
+fn function_body_node<'a>(node: &Node<'a>) -> Option<Node<'a>> {
+    if let Some(body) = node.child_by_field_name("body") {
+        return Some(body);
+    }
+    let mut cursor = node.walk();
+    let children: Vec<Node<'a>> = node.named_children(&mut cursor).collect();
+    children
+        .iter()
+        .find(|child| BLOCK_KINDS.contains(&child.kind()))
+        .copied()
+        .or_else(|| {
+            children
+                .iter()
+                .find_map(|child| child.child_by_field_name("body"))
+        })
+}
+
+/// Count named non-comment statements in a body, descending through
+/// statement-free wrapper nodes (`function_body` → `statements` → …).
+fn count_statements(body: Node) -> usize {
+    let mut container = body;
+    while STMT_WRAPPER_KINDS.contains(&container.kind()) {
+        let mut cursor = container.walk();
+        let named: Vec<Node> = container
+            .named_children(&mut cursor)
+            .filter(|child| !is_trivia_kind(child.kind()))
+            .collect();
+        match named.as_slice() {
+            [only] if BLOCK_KINDS.contains(&only.kind()) => container = *only,
+            _ => break,
+        }
+    }
+    let mut cursor = container.walk();
+    container
+        .named_children(&mut cursor)
+        .filter(|child| !is_trivia_kind(child.kind()))
+        .count()
+}
+
 /// When `node` is a call outside trivia that matches `path`, return its callee segments.
 fn call_match_path(node: &Node, source: &str, path: &[Option<String>]) -> Option<Vec<String>> {
     if is_in_comment_or_string(node) || !is_call_kind(node.kind()) {
@@ -396,8 +679,16 @@ fn call_target_path(node: &Node, source: &str) -> Option<Vec<String>> {
     path_from_node(&call_field_node(node)?, source)
 }
 
+/// Keyword receivers that count as a path segment in `$OBJ.$METHOD($$$)`:
+/// `self.helper()` / `this.render()` must match a two-segment wildcard path
+/// exactly like `app.tick()` does (ast-grep agrees). Rust/Ruby use `self`,
+/// JS/TS/Java/C++ use `this`, Swift `self_expression`, Kotlin/C#
+/// `this_expression`. Not added to `IDENT_KINDS`: that table also drives
+/// index extraction, where keyword receivers must stay non-identifiers.
+const KEYWORD_RECEIVER_KINDS: &[&str] = &["self", "this", "self_expression", "this_expression"];
+
 fn path_from_node(node: &Node, source: &str) -> Option<Vec<String>> {
-    if is_ident_kind(node.kind()) {
+    if is_ident_kind(node.kind()) || KEYWORD_RECEIVER_KINDS.contains(&node.kind()) {
         return node_text(node, source).map(|t| vec![t.to_string()]);
     }
     if !is_member_expr_kind(node.kind()) {

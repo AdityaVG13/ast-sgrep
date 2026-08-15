@@ -162,8 +162,10 @@ fn embed_backend_roundtrips_through_use_star_flags() {
 
 #[test]
 fn embed_backend_from_flags_prefers_neural_over_semantic() {
-    let mut options = SearchOptions::default();
-    options.use_neural_embed = true;
-    options.use_semantic_only = true;
+    let options = SearchOptions {
+        use_neural_embed: true,
+        use_semantic_only: true,
+        ..SearchOptions::default()
+    };
     assert_eq!(options.embed_backend(), crate::EmbedBackend::Neural);
 }

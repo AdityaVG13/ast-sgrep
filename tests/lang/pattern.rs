@@ -33,7 +33,8 @@ fn common_metavariable_patterns_are_native() {
     assert!(!needs_ast_grep_fallback("def $NAME"));
     assert!(!needs_ast_grep_fallback("$OBJ.$METHOD($$$)"));
     assert!(!needs_ast_grep_fallback("process_request"));
-    assert!(needs_ast_grep_fallback("if ($COND) { $BODY }"));
+    assert!(!needs_ast_grep_fallback("if ($COND) { $BODY }"));
+    assert!(needs_ast_grep_fallback("if ($COND) { $A; $B }"));
 }
 
 #[test]

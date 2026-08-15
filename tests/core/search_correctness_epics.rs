@@ -288,7 +288,9 @@ fn iva9_7_exotic_pattern_fail_closed_without_ast_grep() {
     let store = IndexStore::open(temp.path(), None).unwrap();
     let old = std::env::var_os("ASGREP_DISABLE_AST_GREP");
     std::env::set_var("ASGREP_DISABLE_AST_GREP", "1");
-    let result = search_pattern("if ($COND) { $BODY }", &store, temp.path(), None);
+    // Multi-statement template: single-statement `{ $BODY }` is native since
+    // ast-sgrep-yira, so it no longer exercises the fail-closed path.
+    let result = search_pattern("if ($COND) { $A; $B }", &store, temp.path(), None);
     match old {
         Some(v) => std::env::set_var("ASGREP_DISABLE_AST_GREP", v),
         None => std::env::remove_var("ASGREP_DISABLE_AST_GREP"),

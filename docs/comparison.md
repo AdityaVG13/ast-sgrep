@@ -107,10 +107,11 @@ ast-grep matches **structure**, not **meaning**. ripgrep matches **text**, not *
 
 ### Structural patterns
 
-ast-grep is the specialist for nested templates, YAML rules, and rewrites. ast-sgrep ships a native subset for indexed signatures and simple declaration/call shapes:
+ast-grep is the specialist for YAML rules, rewrites, and deeply nested templates. ast-sgrep ships a native subset for indexed signatures, declaration/call shapes, and single-statement nested templates (`fn $N($$$) { $STMT }`, `if ($COND) { $BODY }`):
 
 ```bash
 asgrep "pattern:fn $NAME($$$)"
+asgrep 'pattern:if ($COND) { $BODY }'
 ```
 
 This does **not** require the ast-grep CLI. Unsupported shapes return no hits rather than spawning a subprocess. Results appear as `PATTERN` hits. See `docs/structural-patterns.md`.
