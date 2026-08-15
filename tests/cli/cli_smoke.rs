@@ -88,3 +88,24 @@ fn cli_failure_oracle_preserves_diagnostics() {
         .stderr
         .is_empty());
 }
+
+#[test]
+fn call_path_runs_against_the_real_indexed_fixture() {
+    let session = CliSession::sample(asgrep_bin());
+    let output = session.run_success(&[
+        "--index-path",
+        session.index_path.to_str().unwrap(),
+        "--json",
+        "call-path",
+        "main",
+        "validate_input",
+        session.root.to_str().unwrap(),
+    ]);
+    let response: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(response["command"], "call-path");
+    assert_eq!(response["found"], true);
+    assert_eq!(response["semantics"], "call_graph_only");
+    assert_eq!(response["depth"], 2);
+    assert_eq!(response["path"][0]["caller"], "main");
+    assert_eq!(response["path"][1]["callee"], "validate_input");
+}

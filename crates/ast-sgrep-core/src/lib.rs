@@ -3,11 +3,12 @@
 //! L1 search kernel. L2/L3 consumers should prefer crate-root reexports
 //! (`HitKind`, `SearchHit`, `Durability`, `SymbolRow`, `hit_why`, and the
 //! other `pub use` items below). Intentional module paths remain: `search`,
-//! `store`, `query`, `intent`, `chain`, `env_flag`, `semantic_ann`, `pattern`.
+//! `store`, `query`, `intent`, `chain`, `call_path`, `env_flag`, `semantic_ann`, `pattern`.
 //! Do not split this crate to lower fan_in.
 
 use thiserror::Error;
 pub mod bench_suite;
+pub mod call_path;
 pub mod chain;
 pub mod env_flag;
 pub mod fusion;

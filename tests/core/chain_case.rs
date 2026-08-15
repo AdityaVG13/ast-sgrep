@@ -1,4 +1,7 @@
+use ast_sgrep_core::call_path::{find_call_path, CallPathConfig};
 use ast_sgrep_core::chain::{expand_chain, ChainConfig, EdgeLabel};
+use ast_sgrep_core::resolution::Resolution;
+use ast_sgrep_core::scip::{ScipDocument, ScipIndex, ScipOccurrence};
 use ast_sgrep_core::store::{CallerRow, SymbolRow, UpsertFileInput};
 use ast_sgrep_core::IndexStore;
 use tempfile::TempDir;
@@ -172,4 +175,126 @@ fn case_mismatched_callee_expands_to_definition_node() {
             && edge.from_symbol.as_deref() == Some("FooBar")
             && edge.to_symbol.as_deref() == Some("baz")
     }));
+}
+
+#[test]
+fn bounded_call_path_reports_scip_evidence_without_claiming_value_flow() {
+    let temp = TempDir::new().unwrap();
+    let store = IndexStore::open(temp.path(), None).unwrap();
+    let symbols = [
+        SymbolRow {
+            name: "source".into(),
+            kind: "function".into(),
+            line_start: 1,
+            line_end: 1,
+            byte_start: 0,
+            byte_end: 23,
+        },
+        SymbolRow {
+            name: "middle".into(),
+            kind: "function".into(),
+            line_start: 2,
+            line_end: 2,
+            byte_start: 24,
+            byte_end: 45,
+        },
+        SymbolRow {
+            name: "sink".into(),
+            kind: "function".into(),
+            line_start: 3,
+            line_end: 3,
+            byte_start: 46,
+            byte_end: 58,
+        },
+    ];
+    let callers = [
+        CallerRow {
+            caller: "source".into(),
+            callee: "middle".into(),
+            line_no: 1,
+            byte_start: 14,
+            byte_end: 20,
+        },
+        CallerRow {
+            caller: "middle".into(),
+            callee: "sink".into(),
+            line_no: 2,
+            byte_start: 38,
+            byte_end: 42,
+        },
+        CallerRow {
+            caller: "sink".into(),
+            callee: "source".into(),
+            line_no: 3,
+            byte_start: 0,
+            byte_end: 0,
+        },
+    ];
+    let lines = [
+        (1, "fn source() { middle(); }".into()),
+        (2, "fn middle() { sink(); }".into()),
+        (3, "fn sink() {}".into()),
+    ];
+    store
+        .upsert_file(base("graph.rs", &lines, "graph-hash", &symbols, &callers))
+        .unwrap();
+    let applied = store
+        .apply_scip(&ScipIndex {
+            documents: vec![ScipDocument {
+                relative_path: "graph.rs".into(),
+                occurrences: vec![ScipOccurrence {
+                    symbol: "rust+fixture+middle().".into(),
+                    symbol_roles: 0,
+                    range: vec![0, 14, 0, 20],
+                }],
+            }],
+        })
+        .unwrap();
+    assert_eq!(applied.refs_upgraded, 1);
+
+    let too_shallow = find_call_path(
+        &store,
+        "source",
+        "sink",
+        &CallPathConfig {
+            max_depth: 1,
+            max_nodes: 10,
+            max_edges: 10,
+        },
+    )
+    .unwrap();
+    assert!(!too_shallow.found);
+    assert!(!too_shallow.truncated);
+
+    let response = find_call_path(
+        &store,
+        "SOURCE",
+        "sink",
+        &CallPathConfig {
+            max_depth: 2,
+            max_nodes: 10,
+            max_edges: 10,
+        },
+    )
+    .unwrap();
+    assert!(response.found);
+    assert_eq!(response.semantics, "call_graph_only");
+    assert_eq!(response.depth, Some(2));
+    assert_eq!(response.path.len(), 2);
+    assert_eq!(response.path[0].resolution, Resolution::ScipExact);
+    assert!(response.path.iter().all(|hop| hop.precise));
+
+    let node_capped = find_call_path(
+        &store,
+        "source",
+        "sink",
+        &CallPathConfig {
+            max_depth: 2,
+            max_nodes: 2,
+            max_edges: 10,
+        },
+    )
+    .unwrap();
+    assert!(!node_capped.found);
+    assert!(node_capped.truncated);
 }

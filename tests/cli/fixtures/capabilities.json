@@ -42,6 +42,16 @@
       "usage": "asgrep bench"
     },
     {
+      "about": "Find a bounded call path (call graph only, not value flow)",
+      "flags": [
+        "--max-depth",
+        "--max-edges",
+        "--max-nodes"
+      ],
+      "name": "call-path",
+      "usage": "asgrep call-path"
+    },
+    {
       "about": "Print the machine-readable CLI contract (JSON)",
       "flags": [
         "--json"

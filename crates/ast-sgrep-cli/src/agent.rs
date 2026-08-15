@@ -295,7 +295,7 @@ pub(crate) fn robot_guide_markdown() -> &'static str {
 - Pi and Code Mode refresh before search, with a configurable 30-second correctness lease by default. LSP applies document open/change/save/close notifications before processing the next request.
 - Ripgrep remains the tool for logs and unindexed or unsupported files. ast-sgrep never spawns it as a compatibility layer.
 ## Subcommands
-See `capabilities --json` → `commands` (complete clap catalog). Notable: `search`/`find`/`query`, `keyword`, `semantic`, `chain`, `index`/`reindex` (`--dry-run`), `status`, `bench`, `watch`, `eval`, `doctor`, `version`.
+See `capabilities --json` → `commands` (complete clap catalog). Notable: `search`/`find`/`query`, `keyword`, `semantic`, `chain`, `call-path`, `index`/`reindex` (`--dry-run`), `status`, `bench`, `watch`, `eval`, `doctor`, `version`.
 ## Integrations / sibling binaries
 - `asgrep-mcp` — MCP stdio server (`ASGREP_ROOT`, tools: keyword/ast/semantic search, index_repo, code_read)
 - `asgrep-lsp` — Language Server Protocol server
@@ -382,6 +382,7 @@ pub(crate) fn query_looks_like_subcommand_typo(query: &str) -> Option<&'static s
         "keyword",
         "semantic",
         "chain",
+        "call-path",
         "bench",
         "watch",
         "capabilities",
@@ -453,6 +454,7 @@ pub(crate) fn augment_clap_usage_message(msg: &str, command: &str) -> String {
             "semantic" => r#"Example: asgrep semantic --json "where is auth refreshed" ."#,
             "search" => r#"Example: asgrep search --json --format compact "auth refresh" ."#,
             "chain" => r#"Example: asgrep chain "callers:process_request" ."#,
+            "call-path" => r#"Example: asgrep call-path main validate_input ."#,
             _ => r#"Example: asgrep --json --format compact "auth refresh" ."#,
         };
         msg.push('\n');

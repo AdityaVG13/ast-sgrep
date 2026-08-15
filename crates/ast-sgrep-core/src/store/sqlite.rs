@@ -43,6 +43,15 @@ pub type IndexedLineRow = (Arc<str>, u32, String, Option<Arc<str>>);
 pub type ImportQueryRow = (String, Option<String>, String, u32);
 pub type CallRow = (String, u32, String, String);
 
+#[derive(Debug, Clone)]
+pub(crate) struct CallEvidenceRow {
+    pub(crate) file: String,
+    pub(crate) line: u32,
+    pub(crate) caller: String,
+    pub(crate) callee: String,
+    pub(crate) scip_exact: bool,
+}
+
 /// INTEGER byte offsets must fit `i64` on write (pb2w). Wrapping `as i64`
 /// would store a negative and later wrap to `usize::MAX` on a 64-bit host.
 fn sql_i64_from_byte_offset(value: usize) -> rusqlite::Result<i64> {
@@ -1811,6 +1820,33 @@ impl IndexStore {
     }
     pub fn outgoing_calls(&self, caller: &str) -> Result<Vec<CallRow>> {
         calls_matching(&self.conn, "caller", caller)
+    }
+    pub(crate) fn outgoing_calls_with_scip(
+        &self,
+        caller: &str,
+        limit: usize,
+    ) -> Result<Vec<CallEvidenceRow>> {
+        let limit = i64::try_from(limit).unwrap_or(i64::MAX);
+        query_cached_map(
+            &self.conn,
+            "SELECT f.path, c.line_no, c.caller, c.callee,
+                    EXISTS(SELECT 1 FROM scip_facts sf
+                           WHERE sf.file_id=c.file_id AND sf.line_no=c.line_no
+                             AND sf.name=c.callee AND sf.is_def=0) AS scip_exact
+             FROM callers c JOIN files f ON f.id=c.file_id
+             WHERE lower(c.caller)=lower(?1)
+             ORDER BY scip_exact DESC, f.path, c.line_no, c.callee LIMIT ?2",
+            params![caller, limit],
+            |row| {
+                Ok(CallEvidenceRow {
+                    file: row.get(0)?,
+                    line: row.get(1)?,
+                    caller: row.get(2)?,
+                    callee: row.get(3)?,
+                    scip_exact: row.get(4)?,
+                })
+            },
+        )
     }
     pub fn symbol_at_line(&self, path: &str, line: u32) -> Result<Option<SymbolLocationRow>> {
         optional_row(

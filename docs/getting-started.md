@@ -31,7 +31,7 @@ cargo build --release -p ast-sgrep-cli
 
 ## Standalone quickstart
 
-From a source checkout, build once and exercise the six core workflows:
+From a source checkout, build once and exercise the seven core workflows:
 
 ```bash
 cargo build --release -j1
@@ -39,6 +39,7 @@ cargo build --release -j1
 ./target/release/asgrep 'defs:auth_refresh' . --limit 3
 ./target/release/asgrep semantic 'credential renewal' . --limit 3
 ./target/release/asgrep chain 'auth_refresh' . --limit 3  # graph node cap; chain seeds use top_n=1
+./target/release/asgrep call-path main validate_input .    # directed calls only; not value flow
 ./target/release/asgrep bench . --query auth_refresh --iterations 1
 ```
 
@@ -141,6 +142,7 @@ Machine-oriented catalog: `asgrep capabilities --json` (clap-derived; preferred 
 | `asgrep status [ROOT]` | Index statistics |
 | `asgrep semantic "QUERY" [ROOT]` | Semantic-only search |
 | `asgrep chain "QUERY" [ROOT]` | Relationship / neighborhood expansion |
+| `asgrep call-path SOURCE SINK [ROOT]` | Bounded directed call path with resolution evidence; not value flow |
 | `asgrep bench [ROOT]` | Search latency benchmark (`--query`, `--iterations`, `--suite`, `--fixture`, `--queries-file`, `--skip-index`) |
 | `asgrep watch [ROOT]` | Incremental reindex on save (`--debounce-ms`) |
 | `asgrep eval` | Gold / A/B evaluation harness |

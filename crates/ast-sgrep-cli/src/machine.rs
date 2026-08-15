@@ -131,6 +131,7 @@ pub(crate) fn raw_command_name(args: &[std::ffi::OsString]) -> &'static str {
         "keyword",
         "semantic",
         "chain",
+        "call-path",
         "capabilities",
         "version",
         "robot-docs",

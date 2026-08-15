@@ -7,6 +7,7 @@ pub use sql::integrity_check;
 pub use sql::{
     assert_sql_ident, CALLER_COLUMN_ALLOWLIST, COUNT_TABLE_ALLOWLIST, FILE_CHILD_TABLE_ALLOWLIST,
 };
+pub(crate) use sqlite::CallEvidenceRow;
 pub use sqlite::{
     CallerRow, ImportRow, IndexStore, IndexedLineRow, RefreshLinesInput, SymbolLocationRow,
     SymbolRow, UpsertFileInput,
