@@ -2,6 +2,10 @@
 
 MEASURE only. `DEFAULT_ANN_THRESHOLD` remains **2000**. No product default change.
 
+**Status: historical / `UNREPRODUCIBLE`.** The raw hyperfine JSON and frozen
+corpus artifacts are not retained in this tree. The recorded values below are
+noncanonical evidence and must not be quoted as reproducible benchmarks.
+
 ## Provenance
 
 | Field | Value |
@@ -12,7 +16,7 @@ MEASURE only. `DEFAULT_ANN_THRESHOLD` remains **2000**. No product default chang
 | Host | Darwin arm64, macOS 26.5 |
 | n | **5** cold-index runs, hyperfine `--warmup 0`, nearest-rank p95 `idx = floor((n-1)*95/100)` |
 | Gate | `chunk_count >= 2000` (`should_use_ann` / `ASGREP_ANN_THRESHOLD`) |
-| Raw | `tests/artifacts/perf/20260814T014600Z/ann_{below,above,above_flat}.json` (gitignored) |
+| Raw | not retained; the original files were gitignored |
 
 Pre-T1 SC3 +1–3 s is **stale (C11)**. Do not quote it as post-T1-R magnitude.
 

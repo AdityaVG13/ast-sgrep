@@ -2,6 +2,10 @@
 
 MEASURE only. No product source change. Do not paste pre-T1 Amdahl S into this row.
 
+**Status: historical / `UNREPRODUCIBLE`.** The raw samply profile and exact
+corpus snapshot are not retained in this tree. The recorded values below are
+noncanonical evidence and must not be quoted as reproducible benchmarks.
+
 ## Provenance
 
 | Field | Value |
@@ -12,13 +16,13 @@ MEASURE only. No product source change. Do not paste pre-T1 Amdahl S into this r
 | Profile | `release-perf` + `RUSTFLAGS=-C force-frame-pointers=yes` |
 | Host | Darwin arm64, macOS 26.5 (`samply` meta.oscpu) |
 | Isolation | local Darwin (samply cannot attach to the Linux RCH artifact) |
-| Corpus root | `/Users/aditya/AI/ast-sgrep-wt-nz7i` |
+| Corpus | local development worktree; exact snapshot not retained |
 | Files indexed | **403** (55 skipped) |
 | Semantic chunks | **5564** |
 | ANN / IVF | **on** (`semantic_ivf_present: true`, threshold 2000) |
 | Wall | **4.22 s** real / 4.98 s user (`/usr/bin/time -l`) |
 | RSS peak | 216 MiB |
-| Raw profile | `tests/artifacts/perf/20260813T212430Z/samply.json` + `samply.syms.json` (gitignored) |
+| Raw profile | not retained; the original files were gitignored |
 
 This is **not** the historical C4 residual mean 1.934 s (different SHA, file count, and host run). Do not overwrite C4.
 
@@ -59,7 +63,7 @@ Checksum 100.00% (method error band ±5% on classification of `other` / unresolv
 T1-R sidecar bytes are **not** bit-identical to pre-T1 cosine-path dumps
 ([t1r-sidecar-bit-identity.md](t1r-sidecar-bit-identity.md), C9).
 
-## Reproduce
+## Method replay (not exact reproduction)
 
 ```bash
 export RUSTFLAGS="-C force-frame-pointers=yes"
