@@ -37,7 +37,10 @@ fn indexed_fixture() -> IsolatedIndexSession {
     session
 }
 
-fn search_pattern(session: &IsolatedIndexSession, pattern: &str) -> Result<Vec<(String, u32)>, String> {
+fn search_pattern(
+    session: &IsolatedIndexSession,
+    pattern: &str,
+) -> Result<Vec<(String, u32)>, String> {
     let searcher = session.searcher(SearchOptions {
         use_embed: false,
         limit: 32,
@@ -69,14 +72,7 @@ fn competitor_bin() -> Option<PathBuf> {
 /// ast-grep `run --json` rows: 0-based `range.start.line` in current CLI JSON.
 fn ast_grep_match_set(bin: &Path, root: &Path, pattern: &str) -> BTreeSet<(String, u32)> {
     let output = Command::new(bin)
-        .args([
-            "run",
-            "--pattern",
-            pattern,
-            "--lang",
-            "rust",
-            "--json",
-        ])
+        .args(["run", "--pattern", pattern, "--lang", "rust", "--json"])
         .arg(root)
         .output()
         .unwrap_or_else(|e| panic!("spawn ast-grep: {e}"));
@@ -166,7 +162,11 @@ fn supported_match_sets_equal_ast_grep_when_env_set() {
             "ignored test executed without ASGREP_DIFF_AST_GREP; not claiming equality (DISC-pattern-native-subset)"
         );
     };
-    assert!(bin.is_file(), "ASGREP_DIFF_AST_GREP must be a file: {}", bin.display());
+    assert!(
+        bin.is_file(),
+        "ASGREP_DIFF_AST_GREP must be a file: {}",
+        bin.display()
+    );
     let session = indexed_fixture();
     for pattern in SUPPORTED {
         let dut: BTreeSet<_> = search_pattern(&session, pattern)

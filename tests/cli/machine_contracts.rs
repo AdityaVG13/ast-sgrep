@@ -1391,7 +1391,7 @@ fn eval_reports_real_graph_precision_by_resolution_tier() {
     assert_eq!(graph["scip_requested"], true);
     assert_eq!(graph["scip_loaded"], true);
     for tier in [
-        "scip_exact",
+        "scip_occurrence",
         "file_local_unique",
         "repository_unique",
         "name_only",

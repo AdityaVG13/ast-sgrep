@@ -284,9 +284,21 @@ impl IndexStore {
                  DELETE FROM embeddings;
                  DELETE FROM embed_cache;
                  DELETE FROM meta WHERE key LIKE 'body:%' OR key LIKE 'struct:%'
-                   OR key IN ('embed_backend', 'embed_model', 'embed_dim');
-                 UPDATE files SET content_hash = 'semantic-layout-v2:' || content_hash
-                   WHERE content_hash NOT LIKE 'semantic-layout-v2:%';",
+                   OR key IN ('embed_backend', 'embed_model', 'embed_dim');",
+                )?;
+            }
+            // Schema 10 changed chunk rendering and added per-field vectors.
+            // All semantic state is derived, so rebuild it rather than mixing
+            // legacy primary vectors or cache metadata with the new layout.
+            if version < 10 {
+                self.conn.execute_batch(
+                    "DELETE FROM semantic_chunks;
+                     DELETE FROM embeddings;
+                     DELETE FROM embed_cache;
+                     DELETE FROM meta WHERE key LIKE 'body:%' OR key LIKE 'struct:%'
+                       OR key IN ('embed_backend', 'embed_model', 'embed_dim');
+                     UPDATE files SET content_hash = 'semantic-layout-v3:' || content_hash
+                       WHERE content_hash NOT LIKE 'semantic-layout-v3:%';",
                 )?;
             }
             self.conn
@@ -371,7 +383,9 @@ impl IndexStore {
         let mut files = HashMap::new();
         {
             let mut stmt = self.conn.prepare("SELECT id, path FROM files")?;
-            let rows = stmt.query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)))?;
+            let rows = stmt.query_map([], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+            })?;
             for row in rows {
                 let (id, path) = row?;
                 files.insert(crate::scip::normalize_scip_path(&path), id);
@@ -429,20 +443,23 @@ impl IndexStore {
                     stats.skipped += 1;
                     continue;
                 };
-                let matched = if occ.is_definition() {
-                    symbols.iter().any(|(fid, start, end, n)| {
-                        *fid == file_id && n == &name && line >= *start && line <= *end
+                let fact_line = if occ.is_definition() {
+                    symbols.iter().find_map(|(fid, start, end, n)| {
+                        (*fid == file_id && n == &name && line >= *start && line <= *end)
+                            .then_some(*start)
                     })
                 } else {
-                    callers.contains(&(file_id, line, name.clone()))
+                    callers
+                        .contains(&(file_id, line, name.clone()))
+                        .then_some(line)
                 };
-                if !matched {
+                let Some(fact_line) = fact_line else {
                     stats.skipped += 1;
                     continue;
-                }
+                };
                 insert.execute(params![
                     file_id,
-                    i64::from(line),
+                    i64::from(fact_line),
                     name,
                     i64::from(u8::from(occ.is_definition()))
                 ])?;

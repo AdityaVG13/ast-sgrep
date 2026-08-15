@@ -76,9 +76,15 @@ pub fn assert_golden_json_at(path: &Path, actual: &Value) {
 /// Node key: `file`, `symbol`, `line_start`, `depth`.
 /// Edge key: `from_file`, `from_symbol`, `to_file`, `to_symbol`, `label`, `depth`.
 pub fn canonicalize_chain_response(mut response: ChainResponse) -> ChainResponse {
-    response.seeds.sort_by(|a, b| node_sort_key(a).cmp(&node_sort_key(b)));
-    response.nodes.sort_by(|a, b| node_sort_key(a).cmp(&node_sort_key(b)));
-    response.edges.sort_by(|a, b| edge_sort_key(a).cmp(&edge_sort_key(b)));
+    response
+        .seeds
+        .sort_by(|a, b| node_sort_key(a).cmp(&node_sort_key(b)));
+    response
+        .nodes
+        .sort_by(|a, b| node_sort_key(a).cmp(&node_sort_key(b)));
+    response
+        .edges
+        .sort_by(|a, b| edge_sort_key(a).cmp(&edge_sort_key(b)));
     response
 }
 
@@ -94,11 +100,9 @@ pub fn canonicalize_extraction(mut result: ExtractionResult) -> ExtractionResult
             b.byte_start,
         ))
     });
-    result.imports.sort_by(|a, b| {
-        a.module_path
-            .cmp(&b.module_path)
-            .then(a.line.cmp(&b.line))
-    });
+    result
+        .imports
+        .sort_by(|a, b| a.module_path.cmp(&b.module_path).then(a.line.cmp(&b.line)));
     result.calls.sort_by(|a, b| {
         (a.caller.as_str(), a.callee.as_str(), a.line, a.byte_start).cmp(&(
             b.caller.as_str(),
@@ -153,10 +157,7 @@ fn default_golden_path(name: &str) -> PathBuf {
     if let Ok(root) = std::env::var("ASGREP_GOLDEN_DIR") {
         return PathBuf::from(root).join(name);
     }
-    workspace_root()
-        .join("tests")
-        .join("golden")
-        .join(name)
+    workspace_root().join("tests").join("golden").join(name)
 }
 
 fn workspace_root() -> PathBuf {
@@ -195,8 +196,7 @@ fn compare_or_update(path: &Path, actual: &str, json: bool) {
     });
 
     let matched = if json {
-        let expected_val: Value =
-            serde_json::from_str(&expected_raw).expect("golden JSON parses");
+        let expected_val: Value = serde_json::from_str(&expected_raw).expect("golden JSON parses");
         let actual_val: Value = serde_json::from_str(actual).expect("actual JSON parses");
         expected_val == actual_val
     } else {
@@ -212,7 +212,10 @@ fn compare_or_update(path: &Path, actual: &str, json: bool) {
         panic!("failed to write {}: {err}", actual_path.display());
     });
     let expected_display = if json {
-        format!("{}\n", pretty_json(&serde_json::from_str(&expected_raw).unwrap()))
+        format!(
+            "{}\n",
+            pretty_json(&serde_json::from_str(&expected_raw).unwrap())
+        )
     } else {
         canonicalize_text(&expected_raw)
     };
@@ -403,10 +406,7 @@ mod tests {
 
     #[test]
     fn canonicalize_text_crlf_and_trailing_ws() {
-        assert_eq!(
-            canonicalize_text("a  \r\nb\t\r\n\r\n"),
-            "a\nb\n"
-        );
+        assert_eq!(canonicalize_text("a  \r\nb\t\r\n\r\n"), "a\nb\n");
     }
 
     #[test]

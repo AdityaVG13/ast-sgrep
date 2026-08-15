@@ -147,7 +147,8 @@ mod tests {
     #[test]
     fn standard_is_idempotent() {
         let s = Scrubber::standard();
-        let input = "/Users/ada/x 0xdeadbeef 550e8400-e29b-41d4-a716-446655440000 2026-08-13T20:00:00Z";
+        let input =
+            "/Users/ada/x 0xdeadbeef 550e8400-e29b-41d4-a716-446655440000 2026-08-13T20:00:00Z";
         let once = s.apply(input);
         let twice = s.apply(&once);
         assert_eq!(once, twice);
@@ -170,7 +171,13 @@ mod tests {
     #[test]
     fn doctor_and_status_match_standard() {
         let raw = "/tmp/x 0xabcdef";
-        assert_eq!(Scrubber::doctor().apply(raw), Scrubber::standard().apply(raw));
-        assert_eq!(Scrubber::status().apply(raw), Scrubber::standard().apply(raw));
+        assert_eq!(
+            Scrubber::doctor().apply(raw),
+            Scrubber::standard().apply(raw)
+        );
+        assert_eq!(
+            Scrubber::status().apply(raw),
+            Scrubber::standard().apply(raw)
+        );
     }
 }

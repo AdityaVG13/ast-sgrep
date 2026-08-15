@@ -4,7 +4,7 @@ This fixed, intentionally non-compiling Rust corpus exercises call-edge
 resolution without external services. `local_target` is file-local unique,
 `other_target` is repository unique, `shared_target` is name-only because two
 definitions exist, and the checked-in SCIP projection upgrades `remote_target`
-to `scip_exact`.
+to `scip_occurrence`.
 
 Every extracted call is listed in `benchmarks/gold/graph_precision.json`, so
 unlisted predictions are genuine false positives rather than unlabeled data.

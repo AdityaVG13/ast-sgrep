@@ -189,7 +189,7 @@ fn attach_caller_resolutions(
             crate::resolution::Resolution::from_candidates(same_file, *repo, std::iter::empty());
         hit.resolution = Some(
             if scip_refs.contains(&(hit.file.clone(), hit.line_start, callee.to_string())) {
-                counted.upgrade(crate::resolution::Resolution::ScipExact)
+                counted.upgrade(crate::resolution::Resolution::ScipOccurrence)
             } else {
                 counted
             },
@@ -270,7 +270,7 @@ fn attach_scip_def_resolutions(store: &IndexStore, hits: &mut [SearchHit]) -> Re
                 .resolution
                 .clone()
                 .unwrap_or(crate::resolution::Resolution::NameOnly);
-            hit.resolution = Some(current.upgrade(crate::resolution::Resolution::ScipExact));
+            hit.resolution = Some(current.upgrade(crate::resolution::Resolution::ScipOccurrence));
         }
     }
     Ok(())

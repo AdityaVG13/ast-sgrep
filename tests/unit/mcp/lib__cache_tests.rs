@@ -42,8 +42,7 @@ fn index_repo_invalidates_searcher_after_disk_mutation() {
         assert_eq!(cache.generation, generation);
     }
     // Seed session maps that must not survive reindex.
-    McpServer::lock_or_recover(&server.path_registry, |_| {})
-        .insert("p0".into(), "lib.rs".into());
+    McpServer::lock_or_recover(&server.path_registry, |_| {}).insert("p0".into(), "lib.rs".into());
     McpServer::lock_or_recover(&server.emitted_snippets, |_| {}).insert("p0:1-1".into(), 42);
 
     let args = server
@@ -86,8 +85,7 @@ fn index_repo_invalidates_searcher_on_index_err() {
     let server = test_server(root.clone());
     let (searcher, generation) = server.searcher_for(root.clone(), 10).unwrap();
     server.restore_searcher(root.clone(), 10, generation, searcher);
-    McpServer::lock_or_recover(&server.path_registry, |_| {})
-        .insert("p0".into(), "lib.rs".into());
+    McpServer::lock_or_recover(&server.path_registry, |_| {}).insert("p0".into(), "lib.rs".into());
     McpServer::lock_or_recover(&server.emitted_snippets, |_| {}).insert("p0:1-1".into(), 42);
 
     let args = server
@@ -136,8 +134,7 @@ fn external_writer_generation_invalidates_warm_searcher() {
         let cache = McpServer::lock_or_recover(&server.searcher_cache, |_| {});
         assert!(cache.entry.is_some(), "precondition: warm Searcher");
     }
-    McpServer::lock_or_recover(&server.path_registry, |_| {})
-        .insert("p0".into(), "lib.rs".into());
+    McpServer::lock_or_recover(&server.path_registry, |_| {}).insert("p0".into(), "lib.rs".into());
 
     // Simulate watch / CLI index in another process: bump stamp only.
     let bumped = ast_sgrep_core::bump_writer_generation(&root, None).unwrap();

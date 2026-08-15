@@ -404,7 +404,8 @@ fn committed_v2_frame_opens_and_reject_samples_fail_closed() {
         let mut flipped = bytes.clone();
         flipped[0] ^= 0xff;
         std::fs::write(&bad_magic, flipped).expect("write bad_magic");
-        std::fs::write(&truncated, &bytes[..bytes.len().saturating_sub(4)]).expect("write truncated");
+        std::fs::write(&truncated, &bytes[..bytes.len().saturating_sub(4)])
+            .expect("write truncated");
         return;
     }
     let loaded = load_semantic_ivf(&good, fingerprint)

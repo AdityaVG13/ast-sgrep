@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 const RECALL_CUTOFFS: [usize; 3] = [1, 5, 20];
 const RESOLUTION_TIERS: [&str; 8] = [
     "compiler_exact",
-    "scip_exact",
+    "scip_occurrence",
     "import_resolved",
     "file_local_unique",
     "repository_unique",
