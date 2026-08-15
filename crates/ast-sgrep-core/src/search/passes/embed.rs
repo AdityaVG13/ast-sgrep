@@ -171,11 +171,17 @@ pub fn embed_pass_lazy_ivf(
         chunks.push(row);
     }
     let ranked = ast_sgrep_embed::rank_chunk_indices_by_vector(&query_vec, &chunks, chunks.len());
-    let field_map = store.semantic_field_vectors_by_ids(&candidate_ids)?;
-    let fields: Vec<SemanticFieldVectors> = candidate_ids
-        .iter()
-        .map(|id| field_map.get(id).cloned().unwrap_or_default())
-        .collect();
+    // 7d5x.4 concat arm: skip the per-field fetch entirely so hits keep the
+    // concatenated-chunk similarity.
+    let fields: Vec<SemanticFieldVectors> = if options.use_field_rescoring {
+        let field_map = store.semantic_field_vectors_by_ids(&candidate_ids)?;
+        candidate_ids
+            .iter()
+            .map(|id| field_map.get(id).cloned().unwrap_or_default())
+            .collect()
+    } else {
+        Vec::new()
+    };
     Ok(Some(embed_hits_rescored(
         &chunks,
         ranked,
@@ -257,11 +263,16 @@ pub fn embed_pass_with_context(
     };
     let indices =
         rank_chunk_indices_flat(store, &query_vec, chunks, flat, chunks.len(), ann_threshold)?;
-    let field_rows = store.semantic_field_vectors_filtered(options.lang_filter.as_deref())?;
     // Same JOIN + ORDER BY sc.id as all_semantic_chunks. Length mismatch
     // means skip rescoring rather than pairing the wrong field vectors.
-    let fields: Vec<SemanticFieldVectors> = if field_rows.len() == chunks.len() {
-        field_rows.into_iter().map(|(_, f)| f).collect()
+    // 7d5x.4 concat arm: `use_field_rescoring = false` skips the fetch.
+    let fields: Vec<SemanticFieldVectors> = if options.use_field_rescoring {
+        let field_rows = store.semantic_field_vectors_filtered(options.lang_filter.as_deref())?;
+        if field_rows.len() == chunks.len() {
+            field_rows.into_iter().map(|(_, f)| f).collect()
+        } else {
+            Vec::new()
+        }
     } else {
         Vec::new()
     };

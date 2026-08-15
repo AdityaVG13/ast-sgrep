@@ -69,6 +69,9 @@ path = "../../tests/core/chain_case.rs"
 name = "code_prose_fields"
 path = "../../tests/core/code_prose_fields.rs"
 [[test]]
+name = "concat_embed_ab"
+path = "../../tests/core/concat_embed_ab.rs"
+[[test]]
 name = "conjunction_queries"
 path = "../../tests/core/conjunction_queries.rs"
 [[test]]
