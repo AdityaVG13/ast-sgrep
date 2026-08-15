@@ -71,7 +71,7 @@ fn surface_equivalence_multi_mode_hit_keys() {
 /// - full sorted key sets also agree (hybrid fusion identity)
 #[test]
 fn surface_equivalence_embed_on_hit_keys() {
-    const LIMIT: usize = 16;
+    const LIMIT: usize = 32;
     let session = CliSession::sample(asgrep_bin());
 
     // NL / semantic-leaning queries that exercise hashed embed on the sample
@@ -84,7 +84,7 @@ fn surface_equivalence_embed_on_hit_keys() {
 
     for &query in cases {
         // CLI: production default is embed-on (do NOT pass --no-embed).
-        let cli_json = session.search_json(query, &["--limit", "16"]);
+        let cli_json = session.search_json(query, &["--limit", "32"]);
         let cli = sorted_keys(json_hit_keys(&cli_json));
         let core = sorted_keys(core_search_hit_keys(
             &session.root,

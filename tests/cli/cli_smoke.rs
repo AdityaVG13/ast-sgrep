@@ -93,7 +93,29 @@ fn cli_failure_oracle_preserves_diagnostics() {
 
 #[test]
 fn call_path_runs_against_the_real_indexed_fixture() {
-    let session = CliSession::sample(asgrep_bin());
+    let temp = TempDir::new().unwrap();
+    let root = temp.path().join("fixture");
+    fs::create_dir(&root).unwrap();
+    fs::write(
+        root.join("main.rs"),
+        "fn main() { process_request(); }\n\
+         fn process_request() { validate_input(); }\n\
+         fn validate_input() {}\n",
+    )
+    .unwrap();
+    let session = CliSession {
+        index_path: temp.path().join("index.db"),
+        bin: asgrep_bin(),
+        root,
+        _temp: temp,
+    };
+    session.run_success(&[
+        "--index-path",
+        session.index_path.to_str().unwrap(),
+        "index",
+        "--no-embed",
+        session.root.to_str().unwrap(),
+    ]);
     let output = session.run_success(&[
         "--index-path",
         session.index_path.to_str().unwrap(),

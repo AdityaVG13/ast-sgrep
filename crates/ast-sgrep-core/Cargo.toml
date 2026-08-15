@@ -22,9 +22,9 @@ neural-embed = ["ast-sgrep-embed/neural-embed"]
 rerank = ["ast-sgrep-embed/rerank"]
 
 [dependencies]
-ast-sgrep-embed = { path = "../ast-sgrep-embed", version = "1.4.0" }
+ast-sgrep-embed = { path = "../ast-sgrep-embed", version = "2.0.0" }
 anyhow.workspace = true
-ast-sgrep-lang = { path = "../ast-sgrep-lang", version = "1.4.0" }
+ast-sgrep-lang = { path = "../ast-sgrep-lang", version = "2.0.0" }
 blake3.workspace = true
 rusqlite.workspace = true
 serde.workspace = true
@@ -34,7 +34,7 @@ walkdir.workspace = true
 rayon.workspace = true
 regex.workspace = true
 memchr.workspace = true
-ast-sgrep-mmap = { path = "../ast-sgrep-mmap", version = "1.4.0" }
+ast-sgrep-mmap = { path = "../ast-sgrep-mmap", version = "2.0.0" }
 bytemuck.workspace = true
 cap-std.workspace = true
 

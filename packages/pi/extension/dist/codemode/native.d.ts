@@ -9,7 +9,7 @@
  * 2. `@ast-sgrep/<platform>/ast-sgrep-codemode.node` via launcher (release install)
  * 3. Local `extension/native/` / cargo `target/release` (dev builds)
  */
-export declare const CODEMODE_BINDING_VERSION = "1.4.0";
+export declare const CODEMODE_BINDING_VERSION = "2.0.0";
 export type NativeSessionConfig = {
     root?: string;
     indexPath?: string;

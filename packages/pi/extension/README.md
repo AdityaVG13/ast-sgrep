@@ -177,7 +177,7 @@ The agent chooses the retrieval granularity; these methods never auto-fuse chann
 
 The default semantic backend works offline. It needs no credential, sends no telemetry, and downloads no model on first use. Search data stays under the project's `.asgrep/` directory.
 
-External in-process neural embeddings are optional (`--features neural-embed`). They never send source text to a remote embedding API. Hashed local search remains the default.
+In-process neural embeddings are optional (`--features neural-embed`). They never send source text to a remote embedding API. Hashed local search remains the default.
 
 Pi packages are trusted code. Installation grants this JavaScript extension and its native code the permissions of the OS user running Pi. Project-root confinement is a package policy, not an operating-system security boundary.
 

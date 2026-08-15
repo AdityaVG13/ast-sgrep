@@ -1,6 +1,6 @@
 {
   "name": "pi-ast-sgrep",
-  "version": "1.4.0",
+  "version": "2.0.0",
   "description": "Native Code Mode, structural, graph, and semantic code search for Pi",
   "type": "module",
   "license": "MIT",
@@ -62,7 +62,7 @@
     "node": ">=22.19.0"
   },
   "dependencies": {
-    "ast-sgrep": "1.4.0",
+    "ast-sgrep": "2.0.0",
     "typebox": "^1.0.0"
   },
   "peerDependencies": {

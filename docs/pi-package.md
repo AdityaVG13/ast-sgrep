@@ -6,7 +6,7 @@
 pi install npm:pi-ast-sgrep
 ```
 
-This is the canonical package-user guide for the `1.4.0` contract. npm availability is established only by an authorized release, not by this repository documentation. For a project-local Pi installation, add `-l` to Pi package-management commands.
+This is the canonical package-user guide for the `2.0.0` contract. npm availability is established only by an authorized release, not by this repository documentation. For a project-local Pi installation, add `-l` to Pi package-management commands.
 
 
 ## Pi packages.md compliance
@@ -26,7 +26,7 @@ This package follows [Pi packages](https://github.com/earendil-works/pi/blob/mai
 
 Alpine/musl Linux, Windows arm64, and other hosts are unsupported. On an unsupported host, or when npm omitted the matching optional native package, `/asgrep-doctor` reports a binary-resolution error; the package does not compile Rust, search `PATH`, contact MCP, or download a fallback executable. Install on a supported host rather than bypassing this check.
 
-The npm layers are exact-version matched: the `pi-ast-sgrep` extension depends on `ast-sgrep`, which selects one of five host-constrained native packages. Extension, launcher, and native package manifests must all be `1.4.0`. The embedded executable reports native CLI version `1.4.0`; the runtime verifies that identity separately from the npm package version.
+The npm layers are exact-version matched: the `pi-ast-sgrep` extension depends on `ast-sgrep`, which selects one of five host-constrained native packages. Extension, launcher, and native package manifests must all be `2.0.0`. The embedded executable reports native CLI version `2.0.0`; the runtime verifies that identity separately from the npm package version.
 
 ## What is available immediately
 
@@ -70,6 +70,8 @@ The first index or search that needs an index creates `<project-root>/.asgrep/`.
 ```gitignore
 .asgrep/
 ```
+
+Only `.git` and `.asgrep` are always skipped. Other dotfiles and directories are indexed unless excluded by the repository's ignore rules, so project-specific generated directories belong in the project's own ignore configuration rather than a public hardcoded list.
 
 After a successful Pi `write` or `edit` tool call, the extension records the affected path and incrementally updates only those known created, changed, or deleted paths before the next search. A recursive project watcher does the same for unambiguous external file changes. Renames, directory events, ignore-file edits, watcher errors, and ambiguous events require a full incremental reconciliation; `.asgrep` self-writes are ignored. If recursive watching is unavailable, the extension performs one immediate correctness scan and relies on periodic scans. The configured interval (30 seconds by default) always forces a full incremental scan so dropped filesystem events cannot leave the index stale indefinitely. Missing indexes are built and incompatible indexes use the controlled rebuild path. Concurrent searches for the same root share one in-flight refresh and wait for it rather than starting duplicate index work.
 
@@ -122,6 +124,8 @@ Common actionable failures:
 
 ## Update, recovery, and rollback
 
+Version 2.0 removes the cloud and Ollama embedding backends, including their CLI flags, environment variables, configuration variants, and public Rust APIs. This is the breaking change behind the major version bump. The default local hashed backend and optional in-process ONNX neural backend remain available.
+
 Update this package alone with:
 
 ```bash
@@ -163,7 +167,7 @@ Deleting `.asgrep` is irreversible but does not delete source files; a later sea
 
 ## Release cadence and provenance
 
-Pi release validation does not run automatically on pull requests, pushes to `main`, or tag pushes. Both Pi workflows are manual `workflow_dispatch` actions. Manually dispatch **Pi native artifacts** (`.github/workflows/pi-native-artifacts.yml`) for a safe dry-run that packs and tests without publishing. An official Pi/npm release is one human-approved `v1.4.0` tag and commit for the five native npm packages, launcher, and extension. Its contract separately pins the embedded native CLI at `1.4.0`. The `Pi npm official release` workflow must be dispatched against that exact tag with `publish=true`.
+Pi release validation does not run automatically on pull requests, pushes to `main`, or tag pushes. Both Pi workflows are manual `workflow_dispatch` actions. Manually dispatch **Pi native artifacts** (`.github/workflows/pi-native-artifacts.yml`) for a safe dry-run that packs and tests without publishing. An official Pi/npm release is one human-approved `v2.0.0` tag and commit for the five native npm packages, launcher, and extension. Its contract separately pins the embedded native CLI at `2.0.0`. The `Pi npm official release` workflow must be dispatched against that exact tag with `publish=true`.
 
 Before the first external publication, a human must verify package-name ownership and approve the protected publishing environment. A partial npm publication is recovered by releasing a new immutable version, never by overwriting a published version.
 

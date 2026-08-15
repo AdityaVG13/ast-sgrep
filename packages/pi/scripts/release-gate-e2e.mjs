@@ -8,7 +8,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
-const version = '1.4.0';
+const version = '2.0.0';
 const machineSchema = '1.0.0';
 const piVersion = '0.80.6';
 const maxCapturedBytes = 4 * 1024 * 1024;

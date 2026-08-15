@@ -4,13 +4,13 @@ This repository publishes npm packages and public crates from one source commit 
 
 ## Pi npm package family
 
-The npm release is one atomic versioned family at `1.4.0`, published only from the human-approved official `v1.4.0` tag and commit:
+The npm release is one atomic versioned family at `2.0.0`, published only from the human-approved official `v2.0.0` tag and commit:
 
 1. the five host-constrained native packages: `@ast-sgrep/darwin-arm64`, `@ast-sgrep/darwin-x64`, `@ast-sgrep/linux-arm64-gnu`, `@ast-sgrep/linux-x64-gnu`, and `@ast-sgrep/win32-x64-msvc`;
 2. the `ast-sgrep` launcher, whose optional native dependencies use that exact version;
 3. the `pi-ast-sgrep` extension, whose launcher dependency uses that exact version.
 
-The extension, launcher, and five native npm packages share npm version `1.4.0`. The packaged executable is built from this release commit and reports native CLI version `1.4.0`; that expected CLI identity is recorded separately in [the release contract](../packages/pi/release-contract.json). All artifacts share one source commit and recorded checksums. Pi validation does not run automatically on pull requests, pushes to `main`, or tag pushes; both Pi workflows are manual `workflow_dispatch` actions. npm and crates.io are independently approved registry operations over the same source release; neither waits for or proves completion of the other.
+The extension, launcher, and five native npm packages share npm version `2.0.0`. The packaged executable is built from this release commit and reports native CLI version `2.0.0`; that expected CLI identity is recorded separately in [the release contract](../packages/pi/release-contract.json). All artifacts share one source commit and recorded checksums. Pi validation does not run automatically on pull requests, pushes to `main`, or tag pushes; both Pi workflows are manual `workflow_dispatch` actions. npm and crates.io are independently approved registry operations over the same source release; neither waits for or proves completion of the other.
 
 Local preparation is side-effect free:
 
@@ -51,13 +51,20 @@ If publication stops after a package becomes visible, retry the same preserved f
    ```sh
    CARGO_BUILD_JOBS=1 cargo package --locked -p ast-sgrep-lang
    CARGO_BUILD_JOBS=1 cargo package --locked -p ast-sgrep-embed
+   CARGO_BUILD_JOBS=1 cargo package --locked -p ast-sgrep-mmap
    CARGO_BUILD_JOBS=1 cargo package --locked -p ast-sgrep-core \
      --config 'patch.crates-io.ast-sgrep-lang.path="crates/ast-sgrep-lang"' \
-     --config 'patch.crates-io.ast-sgrep-embed.path="crates/ast-sgrep-embed"'
+     --config 'patch.crates-io.ast-sgrep-embed.path="crates/ast-sgrep-embed"' \
+     --config 'patch.crates-io.ast-sgrep-mmap.path="crates/ast-sgrep-mmap"'
    CARGO_BUILD_JOBS=1 cargo package --locked -p ast-sgrep-plugins \
      --config 'patch.crates-io.ast-sgrep-lang.path="crates/ast-sgrep-lang"' \
      --config 'patch.crates-io.ast-sgrep-embed.path="crates/ast-sgrep-embed"' \
      --config 'patch.crates-io.ast-sgrep-core.path="crates/ast-sgrep-core"'
+   CARGO_BUILD_JOBS=1 cargo package --locked -p ast-sgrep-codemode \
+     --config 'patch.crates-io.ast-sgrep-lang.path="crates/ast-sgrep-lang"' \
+     --config 'patch.crates-io.ast-sgrep-embed.path="crates/ast-sgrep-embed"' \
+     --config 'patch.crates-io.ast-sgrep-core.path="crates/ast-sgrep-core"' \
+     --config 'patch.crates-io.ast-sgrep-plugins.path="crates/ast-sgrep-plugins"'
    CARGO_BUILD_JOBS=1 cargo package --locked -p ast-sgrep-lsp \
      --config 'patch.crates-io.ast-sgrep-lang.path="crates/ast-sgrep-lang"' \
      --config 'patch.crates-io.ast-sgrep-embed.path="crates/ast-sgrep-embed"' \
@@ -66,7 +73,8 @@ If publication stops after a package becomes visible, retry the same preserved f
      --config 'patch.crates-io.ast-sgrep-lang.path="crates/ast-sgrep-lang"' \
      --config 'patch.crates-io.ast-sgrep-embed.path="crates/ast-sgrep-embed"' \
      --config 'patch.crates-io.ast-sgrep-core.path="crates/ast-sgrep-core"' \
-     --config 'patch.crates-io.ast-sgrep-plugins.path="crates/ast-sgrep-plugins"'
+     --config 'patch.crates-io.ast-sgrep-plugins.path="crates/ast-sgrep-plugins"' \
+     --config 'patch.crates-io.ast-sgrep-codemode.path="crates/ast-sgrep-codemode"'
    CARGO_BUILD_JOBS=1 cargo package --locked -p ast-sgrep-mcp \
      --config 'patch.crates-io.ast-sgrep-lang.path="crates/ast-sgrep-lang"' \
      --config 'patch.crates-io.ast-sgrep-embed.path="crates/ast-sgrep-embed"' \
@@ -80,16 +88,18 @@ If publication stops after a package becomes visible, retry the same preserved f
 
 ## Publish after explicit approval
 
-Only a human release operator may run this block. It is noninteractive and publishes the seven public crates in the only valid leaf order. It waits until each immutable version is resolvable from the crates.io index before publishing a dependent crate.
+Only a human release operator may run this block. It is noninteractive and publishes the nine public crates in the only valid leaf order. It waits until each immutable version is resolvable from the crates.io index before publishing a dependent crate.
 
 ```bash
 set -euo pipefail
-release_version='1.4.0'
+release_version='2.0.0'
 release_crates=(
   ast-sgrep-lang
   ast-sgrep-embed
+  ast-sgrep-mmap
   ast-sgrep-core
   ast-sgrep-plugins
+  ast-sgrep-codemode
   ast-sgrep-lsp
   ast-sgrep-cli
   ast-sgrep-mcp
@@ -121,12 +131,12 @@ Do not publish `ast-sgrep-testkit`. A transient failure before a crate is accept
 
 ## Post-publish verification
 
-1. Verify the exact immutable version exists for all seven crates and that docs.rs has completed each build:
+1. Verify the exact immutable version exists for all nine crates and that docs.rs has completed each build:
 
    ```bash
    set -euo pipefail
-   release_version='1.4.0'
-   release_crates=(ast-sgrep-lang ast-sgrep-embed ast-sgrep-core ast-sgrep-plugins ast-sgrep-lsp ast-sgrep-cli ast-sgrep-mcp)
+   release_version='2.0.0'
+   release_crates=(ast-sgrep-lang ast-sgrep-embed ast-sgrep-mmap ast-sgrep-core ast-sgrep-plugins ast-sgrep-codemode ast-sgrep-lsp ast-sgrep-cli ast-sgrep-mcp)
    for crate in "${release_crates[@]}"; do
      cargo info --registry crates-io "${crate}@${release_version}" >/dev/null
      curl --fail --location --silent --show-error --output /dev/null \
@@ -138,7 +148,7 @@ Do not publish `ast-sgrep-testkit`. A transient failure before a crate is accept
 
    ```bash
    set -euo pipefail
-   release_version='1.4.0'
+   release_version='2.0.0'
    install_root="$(mktemp -d)"
    cargo install ast-sgrep-cli --version "=${release_version}" --locked --root "$install_root"
    asgrep_version="$("$install_root/bin/asgrep" --version)"
@@ -148,14 +158,14 @@ Do not publish `ast-sgrep-testkit`. A transient failure before a crate is accept
    [[ "$ast_sgrep_version" == *" ${release_version}" ]]
    ```
 
-3. Run the GitHub Actions `Post-publish install and docs smoke` workflow manually with `version` set to `1.4.0`. It installs the exact crates.io CLI version into an empty temporary root on Linux and macOS, checks both binaries, and verifies the exact-version docs.rs page for every published crate. Save the successful workflow URL with the release record. This workflow is post-publish evidence only; do not run it before the release is visible on crates.io.
+3. Run the GitHub Actions `Post-publish install and docs smoke` workflow manually with `version` set to `2.0.0`. It installs the exact crates.io CLI version into an empty temporary root on Linux and macOS, checks both binaries, and verifies the exact-version docs.rs page for every published crate. Save the successful workflow URL with the release record. This workflow is post-publish evidence only; do not run it before the release is visible on crates.io.
 
 ## Homebrew formula
 
 The standalone source formula lives at `packaging/homebrew/ast-sgrep.rb`. It remains pinned to the latest verified archive until the new GitHub tag is published and its digest is known. After publishing the tag, calculate the archive digest and update both the formula URL/version and checksum:
 
 ```sh
-version="1.4.0"
+version="2.0.0"
 url="https://github.com/AdityaVG13/ast-sgrep/archive/refs/tags/v${version}.tar.gz"
 curl --fail --location --silent --show-error "$url" --output "ast-sgrep-v${version}.tar.gz"
 shasum -a 256 "ast-sgrep-v${version}.tar.gz"

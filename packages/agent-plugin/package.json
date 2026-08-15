@@ -1,6 +1,6 @@
 {
   "name": "@ast-sgrep/agent-plugin",
-  "version": "1.4.0",
+  "version": "2.0.0",
   "private": true,
   "description": "Agent Plugins 1.0 package (skills + MCP) for asgrep",
   "license": "MIT",

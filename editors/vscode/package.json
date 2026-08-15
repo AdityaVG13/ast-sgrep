@@ -2,7 +2,7 @@
   "name": "ast-sgrep",
   "displayName": "ast-sgrep",
   "description": "Structural code search and navigation powered by ast-sgrep",
-  "version": "1.4.0",
+  "version": "2.0.0",
   "publisher": "ast-sgrep",
   "license": "MIT",
   "repository": {

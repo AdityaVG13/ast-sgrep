@@ -42,7 +42,7 @@ test("NAPI addon loads and reports version", (t) => {
     return;
   }
   assert.equal(binding.isNative(), true);
-  assert.equal(binding.bindingVersion(), "1.4.0");
+  assert.equal(binding.bindingVersion(), "2.0.0");
   assert.equal(binding.asyncApiVersion(), 1);
 });
 

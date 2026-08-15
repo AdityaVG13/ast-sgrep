@@ -4,24 +4,41 @@ All notable changes to **ast-sgrep** — hybrid code search that understands int
 
 This changelog follows [Keep a Changelog](https://keepachangelog.com/) conventions. Version numbering follows the project release policy in [`docs/RELEASING.md`](docs/RELEASING.md): additive, backward-compatible functionality increments the minor version after 1.0.
 
-**Scope window:** v1.0.0-alpha (2026-07-11) → unreleased (HTTP embed removal on PR #30). The v1.4.0 section covers seven earlier PRs plus direct-to-main commits since v1.3.2; research evidence is logged in [`CHANGELOG_RESEARCH.md`](CHANGELOG_RESEARCH.md).
+**Scope window:** v1.0.0-alpha (2026-07-11) → v2.0.0 (2026-08-15). The v1.4.0 section covers seven earlier PRs plus direct-to-main commits since v1.3.2; research evidence is logged in [`CHANGELOG_RESEARCH.md`](CHANGELOG_RESEARCH.md).
 
 ## Unreleased
-
-### Breaking: HTTP embed backends removed
-
-Cloud (`--cloud-embed`, `ASGREP_EMBED_API_KEY`, OpenAI-compatible HTTP) and Ollama (`--ollama-embed`, `ASGREP_OLLAMA_URL`) embedding clients are gone. Embeddings are in-process only: hashed semantic (default) and optional ONNX neural (`--features neural-embed`). Indexes that still store `embed_backend=cloud|ollama` fail closed until `asgrep reindex`. The Cloudflare Code Mode adapter is unrelated and stays.
 
 ## Version Timeline
 
 | Version | Date | Summary |
 |---------|------|---------|
+| [v2.0.0](#v200-2026-08-15) | 2026-08-15 | Local-first major release: remote embedding APIs removed, Pi results fixed, indexing and retrieval hardened |
 | [v1.4.0](#v140-2026-08-06) | 2026-08-06 | 7-PR release: Code Mode (PTC), 13-language pattern surface, search/ranking correctness, LSP symbol fixes, watch freshness, durability hardening, quality gates + anti-bloat |
 | [v1.3.2](https://github.com/AdityaVG13/ast-sgrep/releases/tag/v1.3.2) | 2026-07-23 | **The Pi Package Update** — "Out of the Alpha and into the Light" |
 | [v1.2.0-alpha](#v120-alpha-draft-superseded) | 2026-07-21 | *The Fast Update* — draft release, superseded by 1.3.2 |
 | [v1.1.0-alpha.1](https://github.com/AdityaVG13/ast-sgrep/tree/v1.1.0-alpha.1) | 2026-07-17 | Pi npm bootstrap, SSH-signed tag verification |
 | [v1.1.0-alpha](https://github.com/AdityaVG13/ast-sgrep/releases/tag/v1.1.0-alpha) | 2026-07-12 | FTS per-file delete hardening |
 | [v1.0.0-alpha](https://github.com/AdityaVG13/ast-sgrep/releases/tag/v1.0.0-alpha) | 2026-07-11 | First alpha |
+
+---
+
+## v2.0.0 (2026-08-15)
+
+2.0 is a direct, stable major release. It makes ast-sgrep local-first, fixes the Pi result path, and incorporates the indexing, storage, graph, ranking, and Code Mode work from PRs [#29](https://github.com/AdityaVG13/ast-sgrep/pull/29), [#30](https://github.com/AdityaVG13/ast-sgrep/pull/30), [#31](https://github.com/AdityaVG13/ast-sgrep/pull/31), and [#32](https://github.com/AdityaVG13/ast-sgrep/pull/32).
+
+### Breaking changes
+
+Cloud (`--cloud-embed`, `ASGREP_EMBED_API_KEY`, OpenAI-compatible HTTP) and Ollama (`--ollama-embed`, `ASGREP_OLLAMA_URL`) embedding clients are gone. Embeddings are in-process only: hashed semantic (default) and optional ONNX neural (`--features neural-embed`). Indexes that still store `embed_backend=cloud|ollama` fail closed until `asgrep reindex`. The Cloudflare Code Mode adapter is unrelated and stays.
+
+The associated CLI flags, environment settings, configuration variants, and public Rust APIs were removed. Pi users can update the package normally, but this API removal and the index-format update make 2.0 a breaking semver release.
+
+### Fixed and improved
+
+- **Pi results reach the model:** one-shot tools now serialize bounded hits into `content`, and Code Mode places its rendered final result in `content` instead of leaving useful output only in display-only `details`.
+- **Clean, user-controlled indexing:** `.git` and `.asgrep` are the only unconditional directory skips. Repository ignore rules remain authoritative; dotfiles and user-specific directories are not silently hardcoded. Binary source-looking files are skipped without noisy failures, and stale rows are removed.
+- **Index compatibility:** Pi and the native engine now agree on index schema 12, with controlled rebuilds for older formats.
+- **Retrieval and graph quality:** semantic field vectors, SCIP facts, critic/planner routing, graph joins, keep-gates, span handling, and blank-line excerpt safety are integrated.
+- **Storage maintainability:** the SQLite store is split into focused modules without changing its public ownership boundary.
 
 ---
 

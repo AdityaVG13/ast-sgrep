@@ -53,8 +53,10 @@ jobs:
         crate:
           - ast-sgrep-lang
           - ast-sgrep-embed
+          - ast-sgrep-mmap
           - ast-sgrep-core
           - ast-sgrep-plugins
+          - ast-sgrep-codemode
           - ast-sgrep-lsp
           - ast-sgrep-cli
           - ast-sgrep-mcp

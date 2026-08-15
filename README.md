@@ -6,7 +6,7 @@
 
 **Hybrid code search that understands intent** -- not only text or syntax.
 
-**v1.4.0** · 13 languages · lexical + AST graph + **semantic symbol search** + **Code Mode** (on by default, no API key)
+**v2.0.0** · 13 languages · lexical + AST graph + **semantic symbol search** + **Code Mode** (on by default, no API key)
 
 > **ast-grep finds shapes. ripgrep finds strings. ast-sgrep finds intent.**
 
@@ -22,7 +22,15 @@ pi install npm:pi-ast-sgrep
 
 It immediately adds **`asgrep`** (Code Mode), `asgrep_search`, `asgrep_index`, `asgrep_status`, four `/asgrep-*` commands, and the `ast-sgrep` skill. The first search lazily creates `.asgrep/`; no Rust toolchain, PATH setup, MCP adapter, credential, or runtime download is required. See the [complete Pi package guide](docs/pi-package.md) and [Code Mode](docs/codemode.md).
 
-The standalone CLI is not yet published to crates.io; the Pi package is the packaged install path. To build from source:
+**Upgrading to 2.0:** this is a breaking semver release because the cloud/Ollama embedding backends and their CLI, configuration, and Rust API surfaces were removed. Pi users can update normally; local hashed semantic search remains the default, optional neural embeddings remain in-process, and older indexes are rebuilt through the normal compatibility path.
+
+The standalone CLI is also available from crates.io:
+
+```bash
+cargo install ast-sgrep-cli --version 2.0.0 --locked
+```
+
+To build from source instead:
 
 ```bash
 git clone https://github.com/AdityaVG13/ast-sgrep
@@ -198,7 +206,7 @@ Canonical table: [head-to-head.md](benchmarks/results/head-to-head.md). Index: [
 
 ## Project status and verification
 
-**v1.4.0.** Code Mode (in-process tool-calling), 13 languages (5 new: C#, Swift, Kotlin, PHP, JS), fusion-normalized ranking, SIMD/mmap performance, LSP symbol correctness, and the semantic layer are in place.
+**v2.0.0.** Code Mode (in-process tool-calling), 13 languages (5 new: C#, Swift, Kotlin, PHP, JS), fusion-normalized ranking, SIMD/mmap performance, LSP symbol correctness, and the local-first semantic layer are in place.
 
 GitHub Actions workflows are **manual-only** (`workflow_dispatch`) to control Actions minutes. Local quality bar for contributors:
 

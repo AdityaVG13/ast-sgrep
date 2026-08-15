@@ -3,7 +3,7 @@ import { accessSync, constants, existsSync, readFileSync, statSync } from "node:
 import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
 
-const VERSION = "1.4.0";
+const VERSION = "2.0.0";
 const NAPI_ADDON = "ast-sgrep-codemode.node";
 const HOSTS = new Map([
   ["darwin:arm64:", ["@ast-sgrep/darwin-arm64", "asgrep", "darwin", "arm64", null]],

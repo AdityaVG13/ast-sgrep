@@ -278,6 +278,11 @@ pub fn apply_weighted_rrf(hits: &mut Vec<SearchHit>, weights: &ChannelWeights) {
                 result.symbol = Some(sym.to_string());
             }
         }
+        if result.embed_fields.is_none() {
+            result.embed_fields = members
+                .iter()
+                .find_map(|index| hits[*index].embed_fields.clone());
+        }
         result.contributors = contributors;
         result.score = weighted_rrf_score(&ranks_by_result[&key], weights);
         fused.push(result);

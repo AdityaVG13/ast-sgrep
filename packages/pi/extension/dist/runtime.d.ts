@@ -1,9 +1,9 @@
 import { type FSWatcher } from "node:fs";
 import { resolveBinary } from "ast-sgrep";
-export declare const RUNTIME_VERSION = "1.4.0";
+export declare const RUNTIME_VERSION = "2.0.0";
 export declare const MACHINE_SCHEMA_VERSION = "1.0.0";
 export declare const CONFIG_SCHEMA_VERSION: 1;
-export declare const INDEX_FORMAT_VERSION: 9;
+export declare const INDEX_FORMAT_VERSION: 12;
 export declare const DEFAULT_TIMEOUT_MS = 30000;
 export declare const DEFAULT_MAX_OUTPUT_BYTES: number;
 export declare const DEFAULT_REFRESH_INTERVAL_MS = 30000;

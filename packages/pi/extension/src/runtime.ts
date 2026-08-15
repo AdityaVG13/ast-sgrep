@@ -4,10 +4,10 @@ import { DatabaseSync } from "node:sqlite";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
 import { resolveBinary } from "ast-sgrep";
 
-export const RUNTIME_VERSION = "1.4.0";
+export const RUNTIME_VERSION = "2.0.0";
 export const MACHINE_SCHEMA_VERSION = "1.0.0";
 export const CONFIG_SCHEMA_VERSION = 1 as const;
-export const INDEX_FORMAT_VERSION = 9 as const;
+export const INDEX_FORMAT_VERSION = 12 as const;
 export const DEFAULT_TIMEOUT_MS = 30_000;
 export const DEFAULT_MAX_OUTPUT_BYTES = 4 * 1024 * 1024;
 export const DEFAULT_REFRESH_INTERVAL_MS = 30_000;

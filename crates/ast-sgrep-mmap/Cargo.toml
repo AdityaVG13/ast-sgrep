@@ -6,7 +6,11 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true
-publish = false
+readme = "../../README.md"
+keywords = ["mmap", "code-search", "readonly"]
+categories = ["filesystem"]
+documentation = "https://docs.rs/ast-sgrep-mmap"
+publish = true
 
 # Intentionally does NOT inherit workspace.lints.unsafe_code = forbid.
 # This crate is the documented sealed boundary that wraps memmap2::map.

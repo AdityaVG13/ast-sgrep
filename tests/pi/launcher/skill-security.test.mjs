@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 
 const extensionDir = resolve(dirname(fileURLToPath(import.meta.url)), "../../../packages/pi/extension");
 
-test("published extension README discloses access, data lifecycle, external embeddings, and privacy", () => {
+test("published extension README discloses access, data lifecycle, and local-only embeddings", () => {
   const readme = readFileSync(join(extensionDir, "README.md"), "utf8");
   for (const disclosure of [
     /full OS-user access|permissions of the OS user/iu,
@@ -14,7 +14,7 @@ test("published extension README discloses access, data lifecycle, external embe
     /\.asgrep\//iu,
     /Removal preserves|preserves each project's/iu,
     /no telemetry/iu,
-    /External cloud, Ollama, and neural embedding providers|external embeddings/iu,
+    /never send source text to a remote embedding API/iu,
   ]) assert.match(readme, disclosure);
 });
 

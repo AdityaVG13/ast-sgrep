@@ -5,6 +5,17 @@ fn t() -> KeepThresholds {
 }
 
 #[test]
+fn packaged_thresholds_match_repository_policy() {
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(THRESHOLDS_JSON).unwrap(),
+        serde_json::from_str::<serde_json::Value>(include_str!(
+            "../../../.bench-history/thresholds.json"
+        ))
+        .unwrap()
+    );
+}
+
+#[test]
 fn thresholds_are_oom_tighter_than_fifty() {
     let th = t();
     assert!(th.primary_regression_pct <= 3.0);

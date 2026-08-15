@@ -24,7 +24,7 @@ function fixture(target = targets[0], changes = {}) {
   mkdirSync(packageDir);
   const manifest = {
     name: target.name,
-    version: changes.version ?? "1.4.0",
+    version: changes.version ?? "2.0.0",
     os: [target.platform],
     cpu: [target.arch],
     ...(target.libc ? { libc: [target.libc] } : {})

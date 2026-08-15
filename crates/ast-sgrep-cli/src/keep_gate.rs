@@ -1,12 +1,13 @@
 //! Keep-gate that refuses to lie: committed history priors, −3%/−5% class
 //! thresholds, cv quarantine, and host/SHA/profile attribution.
 //!
-//! Thresholds are loaded from `.bench-history/thresholds.json` (SSoT).
+//! Thresholds are embedded from a packaged mirror of the repository's
+//! `.bench-history/thresholds.json` policy.
 
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
-pub const THRESHOLDS_JSON: &str = include_str!("../../../.bench-history/thresholds.json");
+pub const THRESHOLDS_JSON: &str = include_str!("../keep-thresholds.json");
 
 #[derive(Debug, Clone, Copy)]
 pub struct KeepThresholds {

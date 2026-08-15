@@ -332,6 +332,12 @@
     "--robot-help",
     "--root"
   ],
+  "indexed_source": {
+    "exact_text": "Use literal:<term> for exact substring presence in indexed languages.",
+    "freshness": "CLI: run asgrep watch <ROOT>; Pi and Code Mode refresh before search with a 30-second default correctness lease; LSP applies document open/change/save/close before the next request.",
+    "outside_contract": "Use ripgrep only for logs and unindexed or unsupported files.",
+    "policy": "Do not spawn rg on indexed source."
+  },
   "integrations": {
     "lsp": {
       "binary": "asgrep-lsp",
@@ -342,12 +348,6 @@
       "transport": "stdio"
     }
   },
-  "indexed_source": {
-    "exact_text": "Use literal:<term> for exact substring presence in indexed languages.",
-    "freshness": "CLI: run asgrep watch <ROOT>; Pi and Code Mode refresh before search with a 30-second default correctness lease; LSP applies document open/change/save/close before the next request.",
-    "outside_contract": "Use ripgrep only for logs and unindexed or unsupported files.",
-    "policy": "Do not spawn rg on indexed source."
-  },
   "machine_schema": {
     "exit_code_field": "integer",
     "notes": "ok:true only on successful operations; doctor uses ok:false when healthy:false; operational faults use exit_code 2",
@@ -355,7 +355,7 @@
     "schema_version": "1.0.0"
   },
   "notes": {
-    "default_search": "Bare QUERY without a subcommand runs hybrid search; the word 'search' is not a required verb \u2014 use the `search`/`find`/`query` subcommand only when you want an explicit search command.",
+    "default_search": "Bare QUERY without a subcommand runs hybrid search; the word 'search' is not a required verb — use the `search`/`find`/`query` subcommand only when you want an explicit search command.",
     "format_implies_json": true,
     "safe_mutating": "index refreshes incrementally with transactional writes. reindex forces a full transactional rewrite -- prefer `asgrep reindex --dry-run <ROOT> --json` before a full reindex. codemod dry-run always emits a JSON edit plan; apply commits one source transaction before a separate incremental index transaction. A source-apply failure rolls back source files; an index-refresh failure leaves the source edits applied and reports `asgrep index` as recovery."
   },

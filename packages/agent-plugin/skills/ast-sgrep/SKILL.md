@@ -44,7 +44,7 @@ The MCP server runs as a local stdio process. Search stays under `ASGREP_ROOT`; 
 
 ## Security and data
 
-Treat this plugin and `asgrep-mcp` as trusted code with the installing OS user's full system access — not an OS jail. Local indexing writes `.asgrep` data inside the project, uses no telemetry or credentials, and package removal preserves that project data for explicit user cleanup. Local search stays on the machine; configuring an external embeddings provider may send source text and queries to that provider, so obtain authorization before enabling it.
+Treat this plugin and `asgrep-mcp` as trusted code with the installing OS user's full system access -- not an OS jail. Local indexing writes `.asgrep` data inside the project, uses no telemetry or credentials, and package removal preserves that project data for explicit user cleanup. Search and optional neural embeddings run in-process and never send source text or queries to a remote embedding API.
 
 Code Mode and MCP are separate products — **use one, not both**. This Agent Plugins package is MCP only; it does not expose Pi tools or Code Mode.
 

@@ -1,17 +1,17 @@
 {
   "schemaVersion": 2,
   "canonicalVersion": {
-    "version": "1.4.0",
+    "version": "2.0.0",
     "source": "package.json#version",
     "npmWorkspaceSource": "package.json#version",
-    "tag": "v1.4.0",
+    "tag": "v2.0.0",
     "coupledComponents": [
       "pi-extension",
       "npm-launcher",
       "native-platform-packages"
     ],
     "driftPolicy": "All Pi/npm packages and release metadata MUST equal the canonical npm version; the embedded native CLI MUST equal nativeCliVersion. Mixed package versions or unexpected CLI versions are rejected.",
-    "nativeCliVersion": "1.4.0",
+    "nativeCliVersion": "2.0.0",
     "nativeCliSource": "Cargo.toml#workspace.package.version"
   },
   "packages": {
@@ -41,7 +41,7 @@
         ],
         "libc": [],
         "executable": "asgrep",
-        "optionalDependencyVersion": "1.4.0"
+        "optionalDependencyVersion": "2.0.0"
       },
       {
         "name": "@ast-sgrep/darwin-x64",
@@ -55,7 +55,7 @@
         ],
         "libc": [],
         "executable": "asgrep",
-        "optionalDependencyVersion": "1.4.0"
+        "optionalDependencyVersion": "2.0.0"
       },
       {
         "name": "@ast-sgrep/linux-arm64-gnu",
@@ -71,7 +71,7 @@
           "glibc"
         ],
         "executable": "asgrep",
-        "optionalDependencyVersion": "1.4.0"
+        "optionalDependencyVersion": "2.0.0"
       },
       {
         "name": "@ast-sgrep/linux-x64-gnu",
@@ -87,7 +87,7 @@
           "glibc"
         ],
         "executable": "asgrep",
-        "optionalDependencyVersion": "1.4.0"
+        "optionalDependencyVersion": "2.0.0"
       },
       {
         "name": "@ast-sgrep/win32-x64-msvc",
@@ -101,7 +101,7 @@
         ],
         "libc": [],
         "executable": "asgrep.exe",
-        "optionalDependencyVersion": "1.4.0"
+        "optionalDependencyVersion": "2.0.0"
       }
     ],
     "unsupportedTargets": [
@@ -125,15 +125,15 @@
     },
     "layers": {
       "extension": {
-        "version": "1.4.0",
+        "version": "2.0.0",
         "compatibility": "exact"
       },
       "launcher": {
-        "version": "1.4.0",
+        "version": "2.0.0",
         "compatibility": "exact"
       },
       "binary": {
-        "version": "1.4.0",
+        "version": "2.0.0",
         "compatibility": "exact-native-cli"
       },
       "machineSchema": {
@@ -155,9 +155,9 @@
         "policy": "Migrate schema 0 copies without mutating their rollback source; reject ambiguous or newer schemas."
       },
       "indexFormat": {
-        "current": 9,
+        "current": 12,
         "reusable": [
-          9
+          12
         ],
         "rebuild": [
           0,
@@ -168,7 +168,10 @@
           5,
           6,
           7,
-          8
+          8,
+          9,
+          10,
+          11
         ],
         "newer": "reject-and-preserve",
         "policy": "Reuse only an exact compatible format. Migrate and strictly rebuild older formats transactionally in place after quiescing warm sessions; preparation failures abort before file rewrites, failed write transactions roll back, and newer formats are rejected without modification."
@@ -254,7 +257,7 @@
     "npm": {
       "requiresCratesIoPublication": false,
       "availabilityObserved": {
-        "date": "2026-07-16",
+        "date": "2026-08-15",
         "registryResult": "404/not-found",
         "names": [
           "pi-ast-sgrep",
@@ -267,7 +270,7 @@
         ],
         "reservationGuaranteed": false,
         "policy": "Availability is an observation only; re-verify every name and publisher ownership immediately before first publication.",
-        "version": "1.4.0"
+        "version": "2.0.0"
       },
       "policy": "npm publication is independently gated and does not wait for crates.io availability or ordering."
     },
