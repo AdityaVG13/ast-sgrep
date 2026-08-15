@@ -138,7 +138,6 @@ fn ast_grep_comparison(
 }
 
 const BENCH_HISTORY_PATH: &str = ".bench-history.json";
-const BENCH_RATCHET_PCT: f64 = 50.0;
 
 fn bench_history_enabled() -> bool {
     std::env::var("ASGREP_BENCH_HISTORY")
@@ -147,18 +146,24 @@ fn bench_history_enabled() -> bool {
         .unwrap_or(true)
 }
 
-fn bench_ratchet_enabled() -> bool {
-    std::env::var("ASGREP_BENCH_RATCHET").ok().as_deref() == Some("1")
-}
-
 fn update_bench_history(
     label: &str,
     avg_ms: f64,
     cv: f64,
+    geomean_ms: Option<f64>,
 ) -> anyhow::Result<Option<serde_json::Value>> {
     if !bench_history_enabled() {
         return Ok(None);
     }
+    let thresholds = crate::keep_gate::KeepThresholds::from_repo();
+    let prior = crate::keep_gate::load_committed_prior(label);
+    let sample = crate::keep_gate::KeepSample {
+        avg_ms,
+        cv_pct: cv,
+        geomean_ms,
+    };
+    let verdict = crate::keep_gate::evaluate_keep(sample, prior, thresholds);
+    let (host, git_sha, profile) = crate::keep_gate::attribution();
     let path = std::env::var_os("ASGREP_BENCH_HISTORY_PATH")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(BENCH_HISTORY_PATH));
@@ -168,12 +173,14 @@ fn update_bench_history(
     } else {
         serde_json::json!({"schema_version": "1", "entries": {}})
     };
-    let prior_avg = root
-        .pointer(&format!("/entries/{label}/avg_search_ms"))
-        .and_then(|v| v.as_f64());
     let entry = serde_json::json!({
         "avg_search_ms": avg_ms,
+        "geomean_search_ms": geomean_ms,
         "cv_pct": cv,
+        "host": host,
+        "git_sha": git_sha,
+        "profile": profile,
+        "verdict": verdict.as_str(),
         "updated_unix_ms": std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_millis() as u64)
@@ -192,24 +199,74 @@ fn update_bench_history(
         }
     }
     std::fs::write(&path, serde_json::to_string_pretty(&root)?)?;
+
+    let run_path = crate::keep_gate::run_snapshot_path(label);
+    if let Some(parent) = run_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let mut run_doc = entry.clone();
+    run_doc["schema_version"] = serde_json::json!("1");
+    run_doc["label"] = serde_json::json!(label);
+    run_doc["placeholder"] = serde_json::json!(false);
+    run_doc["keep_eligible"] = serde_json::json!(matches!(
+        verdict,
+        crate::keep_gate::KeepVerdict::Keep { .. }
+    ));
+    std::fs::write(&run_path, serde_json::to_string_pretty(&run_doc)?)?;
+
+    if crate::keep_gate::history_commit_enabled()
+        && matches!(
+            verdict,
+            crate::keep_gate::KeepVerdict::Keep { .. }
+                | crate::keep_gate::KeepVerdict::EstablishBaseline
+        )
+        && cv <= thresholds.cv_ineligible_pct
+    {
+        let latest = crate::keep_gate::committed_latest_path(label);
+        let mut committed = run_doc.clone();
+        committed["placeholder"] = serde_json::json!(false);
+        std::fs::write(&latest, serde_json::to_string_pretty(&committed)?)?;
+    }
+
     let mut meta = serde_json::json!({
         "path": path.display().to_string(),
+        "committed_prior": crate::keep_gate::committed_latest_path(label).display().to_string(),
+        "run_path": run_path.display().to_string(),
         "label": label,
         "avg_search_ms": avg_ms,
+        "geomean_search_ms": geomean_ms,
         "cv_pct": cv,
-        "prior_avg_search_ms": prior_avg,
-        "ratchet_pct": BENCH_RATCHET_PCT,
+        "host": host,
+        "git_sha": git_sha,
+        "profile": profile,
+        "primary_regression_pct": thresholds.primary_regression_pct,
+        "geomean_regression_pct": thresholds.geomean_regression_pct,
+        "cv_ineligible_pct": thresholds.cv_ineligible_pct,
+        "verdict": verdict.as_str(),
+        "hotpath_required_for_win_keep": true,
+        "competitor_latency_is_not_keep": true,
+        "ratchet_ok": !verdict.is_hard_fail(),
     });
-    if let Some(prior) = prior_avg {
-        let regression_pct = if prior > 0.0 {
-            ((avg_ms - prior) / prior) * 100.0
-        } else {
-            0.0
-        };
-        meta["regression_pct"] = serde_json::json!(regression_pct);
-        meta["ratchet_ok"] = serde_json::json!(regression_pct <= BENCH_RATCHET_PCT);
-    } else {
-        meta["ratchet_ok"] = serde_json::json!(true);
+    match &verdict {
+        crate::keep_gate::KeepVerdict::Keep { regression_pct } => {
+            meta["regression_pct"] = serde_json::json!(regression_pct);
+        }
+        crate::keep_gate::KeepVerdict::EstablishBaseline => {
+            meta["keep_win"] = serde_json::json!(false);
+        }
+        crate::keep_gate::KeepVerdict::RejectRegression {
+            regression_pct,
+            threshold,
+            kind,
+        } => {
+            meta["regression_pct"] = serde_json::json!(regression_pct);
+            meta["threshold"] = serde_json::json!(threshold);
+            meta["kind"] = serde_json::json!(kind);
+        }
+        crate::keep_gate::KeepVerdict::QuarantineCv { cv_pct } => {
+            meta["cv_pct"] = serde_json::json!(cv_pct);
+            meta["quarantine"] = serde_json::json!("cv_pct");
+        }
     }
     Ok(Some(meta))
 }
@@ -233,16 +290,20 @@ fn print_index_skipped(stats: Option<&IndexStats>, index_ms: Option<f64>) {
     }
 }
 
-/// Shared collapse: suite + single-query both enforce the same ratchet gate.
+/// Shared collapse: suite, single-query, and batch enforce the same keep gate.
 fn enforce_bench_ratchet(history: &Option<serde_json::Value>, subject: &str) -> anyhow::Result<()> {
     let Some(h) = history.as_ref() else {
         return Ok(());
     };
-    if bench_ratchet_enabled() && h["ratchet_ok"] == false {
+    if crate::keep_gate::bench_ratchet_enabled() && h["ratchet_ok"] == false {
         anyhow::bail!(
-            "bench ratchet failed for {subject}: regression_pct={:?} exceeds {}%",
+            "keep-gate failed for {subject}: verdict={} regression_pct={:?} cv_pct={:?} (host={:?} sha={:?} profile={:?})",
+            h["verdict"],
             h.get("regression_pct"),
-            BENCH_RATCHET_PCT
+            h.get("cv_pct"),
+            h.get("host"),
+            h.get("git_sha"),
+            h.get("profile"),
         );
     }
     Ok(())
@@ -316,7 +377,7 @@ fn run_bench_suite(
             ast_sgrep_core::bench_suite::benchmark_expectation(case).ok_or_else(|| {
                 anyhow::anyhow!("benchmark case '{}' has no identity contract", case.name)
             })?;
-        let semantic_only = expected.kind == Some(ast_sgrep_core::search::HitKind::Embed);
+        let semantic_only = expected.kind == Some(ast_sgrep_core::HitKind::Embed);
         let (times, last) = timed_searches(&searcher, case.query, semantic_only, iterations)?;
         let hits = last.as_ref().map_or(0, |r| r.hits.len());
         let identity_ok = last.as_ref().is_some_and(|response| {
@@ -344,22 +405,23 @@ fn run_bench_suite(
         }));
     }
     let suite_ok = results.iter().all(|r| r["ok"] == true);
-    let suite_avg = mean_ms(
-        &results
-            .iter()
-            .filter_map(|r| r["avg_search_ms"].as_f64())
-            .collect::<Vec<_>>(),
-    );
+    let case_avgs: Vec<f64> = results
+        .iter()
+        .filter_map(|r| r["avg_search_ms"].as_f64())
+        .collect();
+    let suite_avg = mean_ms(&case_avgs);
     let suite_cv = mean_ms(
         &results
             .iter()
             .filter_map(|r| r["cv_pct"].as_f64())
             .collect::<Vec<_>>(),
     );
+    let suite_geomean = crate::keep_gate::geomean_ms(&case_avgs);
     let history = update_bench_history(
         &format!("suite:{fixture_name}:{selected}"),
         suite_avg,
         suite_cv,
+        suite_geomean,
     )?;
     enforce_bench_ratchet(&history, &format!("suite {selected}"))?;
     if cli.json {
@@ -370,6 +432,7 @@ fn run_bench_suite(
             "cases": results,
             "suite_ok": suite_ok,
             "avg_search_ms": suite_avg,
+            "geomean_search_ms": suite_geomean,
             "cv_pct": suite_cv,
             "bench_history": history,
         });
@@ -434,7 +497,7 @@ fn run_bench(
     };
     let ag_iters = iterations.min(3);
     let comparison = ast_grep_comparison(query, root, ag_iters, avg);
-    let history = update_bench_history(&format!("query:{query}"), avg, cv)?;
+    let history = update_bench_history(&format!("query:{query}"), avg, cv, None)?;
     enforce_bench_ratchet(&history, &format!("query {query:?}"))?;
     if cli.json {
         let mut obj = serde_json::json!({
@@ -495,8 +558,9 @@ fn run_bench_batch(
             cli.active_tuning().semantic_only,
             iterations,
         )?;
+        let cv = cv_pct(&samples);
         samples.sort_by(f64::total_cmp);
-        let avg = samples.iter().sum::<f64>() / f64::from(iterations.max(1));
+        let avg = mean_ms(&samples);
         let p50 = if samples.is_empty() {
             0.0
         } else {
@@ -523,10 +587,45 @@ fn run_bench_batch(
             }
             None => (0, vec![]),
         };
-        results.push(serde_json::json!({"query": query, "avg_search_ms": avg, "p50_search_ms": p50, "hits": hits, "top_10": top_10}));
+        results.push(serde_json::json!({
+            "query": query,
+            "avg_search_ms": avg,
+            "p50_search_ms": p50,
+            "cv_pct": cv,
+            "hits": hits,
+            "top_10": top_10
+        }));
     }
+    let batch_avgs: Vec<f64> = results
+        .iter()
+        .filter_map(|r| r["avg_search_ms"].as_f64())
+        .collect();
+    let batch_avg = mean_ms(&batch_avgs);
+    let batch_cv = mean_ms(
+        &results
+            .iter()
+            .filter_map(|r| r["cv_pct"].as_f64())
+            .collect::<Vec<_>>(),
+    );
+    let batch_geomean = crate::keep_gate::geomean_ms(&batch_avgs);
+    let batch_label = format!(
+        "batch:{}",
+        queries_path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("queries")
+    );
+    let history = update_bench_history(&batch_label, batch_avg, batch_cv, batch_geomean)?;
+    enforce_bench_ratchet(&history, &format!("batch {}", queries_path.display()))?;
     if cli.json {
-        let mut obj = serde_json::json!({"iterations": iterations, "queries": results});
+        let mut obj = serde_json::json!({
+            "iterations": iterations,
+            "queries": results,
+            "avg_search_ms": batch_avg,
+            "geomean_search_ms": batch_geomean,
+            "cv_pct": batch_cv,
+            "bench_history": history,
+        });
         add_index_json(&mut obj, stats_opt.as_ref(), index_ms);
         print_machine_json("bench", &obj)?;
     } else {
@@ -538,10 +637,11 @@ fn run_bench_batch(
         print_index_skipped(stats_opt.as_ref(), Some(index_ms));
         for r in &results {
             println!(
-                "  {}: avg={:.2}ms p50={:.2}ms hits={}",
+                "  {}: avg={:.2}ms p50={:.2}ms cv={:.1}% hits={}",
                 r["query"].as_str().unwrap_or("?"),
                 r["avg_search_ms"].as_f64().unwrap_or(0.0),
                 r["p50_search_ms"].as_f64().unwrap_or(0.0),
+                r["cv_pct"].as_f64().unwrap_or(0.0),
                 r["hits"].as_u64().unwrap_or(0)
             );
         }

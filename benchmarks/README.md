@@ -1,11 +1,23 @@
 # Benchmarks
 
-Published result documents remain historical, but release-time gates now run
-the in-tree CLI benchmark suites against the checked-in sample fixture and the
-repository itself. The [Speed benchmark workflow](https://github.com/AdityaVG13/ast-sgrep/actions/workflows/speed.yml)
-and bake-off workflow upload their JSON measurements and fail when result
-identity, minimum-hit, or latency thresholds regress. Large external corpora
-are still not vendored.
+Published quality fingerprints in `results/` are a **mixed ledger**. Read the
+**status tag on each section**, not a single file-level banner.
+
+| Tag | Meaning |
+|-----|---------|
+| `canonical` | Fingerprint others must cite. Regeneration may still be `UNREPRODUCIBLE`. |
+| `historical` | Published record. Not a live SLA. |
+| `UNREPRODUCIBLE` | This tree cannot regenerate the row (missing harness, gold, corpus, or artifact). |
+| `reproducible-in-tree` | Exact command + pins exist here (`scripts/run-benchmarks.sh`, `asgrep bench` + `.bench-history`). |
+
+A file-level UNREPRODUCIBLE banner does **not** apply to `reproducible-in-tree`
+sections. A reproducible latency section does **not** make historical MRR rows
+live. Do not invent replacement MRR/latency wins.
+
+Release-time gates run the in-tree CLI suites against the sample fixture and
+the repository itself. The [Speed benchmark workflow](https://github.com/AdityaVG13/ast-sgrep/actions/workflows/speed.yml)
+uploads JSON and fails on identity / hit / keep-gate regression. Large external
+corpora are still not vendored.
 
 ```text
 benchmarks/
@@ -16,6 +28,8 @@ benchmarks/
     bakeoff.md
     losses.md
     baselines.md
+    FLOOR_PROMOTION_PROTOCOL.md
+    fusion-scorecard.md
   studies/                  ← focused analyses
     intent-confusion.md
     prevented-read.md
@@ -30,6 +44,8 @@ benchmarks/
 | [results/bakeoff.md](results/bakeoff.md) | Offline bake-off narrative and scores |
 | [results/losses.md](results/losses.md) | Where we lose (published deliberately) |
 | [results/baselines.md](results/baselines.md) | Pinned floors and provenance |
+| [results/FLOOR_PROMOTION_PROTOCOL.md](results/FLOOR_PROMOTION_PROTOCOL.md) | S2 MEASURED FLOOR MATCH axes (C1 4.304 s stays until checklist + human ACK) |
+| [results/fusion-scorecard.md](results/fusion-scorecard.md) | Sub-1ms in-process parts vs multi-ms CLI competitor rows (e2hc.31) |
 
 ## Studies
 
@@ -49,31 +65,42 @@ cargo run --locked --release -p ast-sgrep-cli --bin asgrep -- \
   --json --index-path /tmp/asgrep-speed.db \
   bench tests/fixtures/sample --suite default --fixture sample --iterations 10 \
   > speed-results.json
-python3 scripts/check-bench-output.py speed-results.json --max-average-ms 15
+python3 scripts/check-bench-output.py speed-results.json --history-dir .bench-history --label suite:sample:default --smoke-max-average-ms 15
 
 cargo run --locked --release -p ast-sgrep-cli --bin asgrep -- \
   --json --index-path /tmp/asgrep-bakeoff.db \
   bench . --suite self --fixture self --iterations 5 \
   > bakeoff-results.json
-python3 scripts/check-bench-output.py bakeoff-results.json --max-average-ms 100
+python3 scripts/check-bench-output.py bakeoff-results.json --history-dir .bench-history --label suite:self:self --smoke-max-average-ms 100
 ```
 
-Both suites fail inside the CLI when hit counts or expected result identities
-miss. The checker adds a finite measured-latency threshold.
+Both suites fail inside the CLI when hit counts, expected result identities, or
+the keep-gate miss. The checker also applies committed `.bench-history` keep
+rules; `--smoke-max-average-ms` is a host-labeled secondary ceiling, not the
+keep oracle. Competitor latency is not keep.
 
 ## Latency error budgets
 
 Published latency budgets are hard sample thresholds, separate from the measured
-tables in `results/`. The cold self-index budget is **285 ms p95**: the prior
-258.4 ms p95 plus a 10% same-host variance allowance, rounded up. A baseline
-above its threshold must not be published as a passing budget.
+tables in `results/`. A baseline above its threshold must not be published as a
+passing budget.
 
-| Surface | Hard p95 threshold | SLO |
-|---------|--------------------|-----|
-| cold self-index CLI | 285 ms | 95% |
-| literal CLI fixture | 15 ms | 95% |
-| semantic CLI fixture | 15 ms | 95% |
-| natural-language CLI fixture | 15 ms | 95% |
+| Surface | Status | Corpus file-count | git SHA | Hard p95 | SLO |
+|---------|--------|------------------:|---------|----------|-----|
+| cold self-index CLI (archived 110-file) | `historical` | 110 | unrecorded in-tree | 285 ms | 95% |
+| cold self-index CLI (current self) | `historical` (breached) | 1,107 | `cea904a` | 285 ms **must not be quoted as passing** | 95% |
+| literal CLI fixture | `reproducible-in-tree` (policy + keep-gate) | sample fixture | see `.bench-history` | 15 ms | 95% |
+| semantic CLI fixture | `reproducible-in-tree` (policy + keep-gate) | sample fixture | see `.bench-history` | 15 ms | 95% |
+| natural-language CLI fixture | `reproducible-in-tree` (policy + keep-gate) | sample fixture | see `.bench-history` | 15 ms | 95% |
+
+### Archived: 110-file cold-index budget
+
+The 285 ms p95 (prior 258.4 ms + 10% same-host variance, rounded up) was set
+against a **110-file** self corpus. SHA for that 110-file tree was **not
+recorded**. On 2026-08-05 the self corpus was **1,107 tracked files** at
+`cea904a`; measured cold index 906–992 ms p95 **breaches** 285 ms. Do not
+delete this miss. Do not invent a new passing cold-index number here
+(re-baseline is a later measurement, not this honesty pass).
 
 The historical 10 ms self-repo Searcher-query target does not apply to CLI
 startup fixtures. Each CLI surface is gated independently; handoff JSON must

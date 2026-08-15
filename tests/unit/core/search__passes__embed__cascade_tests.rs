@@ -34,7 +34,7 @@ fn child_scores_use_parent_max_and_return_one_parent_hit() {
             vec![0.0],
         ),
     ];
-    let hits = embed_similarity_hits(&chunks, vec![(0, 0.2), (2, 0.8), (1, 0.9)]);
+    let hits = embed_similarity_hits(&chunks, vec![(0, 0.2), (2, 0.8), (1, 0.9)], &[]);
     assert_eq!(hits.len(), 2);
     assert_eq!(hits[0].file, "parent.rs");
     assert_eq!((hits[0].line_start, hits[0].line_end), (10, 20));

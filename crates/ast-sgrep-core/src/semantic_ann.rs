@@ -287,6 +287,8 @@ pub fn flatten_vectors_for_search(chunks: &[SemanticChunkRow], dim: usize) -> Re
 fn write_u32<W: Write>(w: &mut W, v: u32) -> std::io::Result<()> {
     w.write_all(&v.to_le_bytes())
 }
+/// IVF on-disk fields are little-endian u32. Fail closed instead of truncating
+/// (pb2w). Format itself is unchanged.
 fn write_usize_u32<W: Write>(w: &mut W, value: usize) -> std::io::Result<()> {
     let value = u32::try_from(value).map_err(|_| {
         std::io::Error::new(

@@ -130,8 +130,6 @@ pub fn split_content_lines(content: &str) -> SplitLines {
 pub enum EmbedBackend {
     #[default]
     Auto,
-    Cloud,
-    Ollama,
     Neural,
     Semantic,
 }
@@ -139,8 +137,6 @@ impl EmbedBackend {
     pub fn to_preference(self) -> ast_sgrep_embed::EmbedPreference {
         match self {
             Self::Auto => ast_sgrep_embed::EmbedPreference::Auto,
-            Self::Cloud => ast_sgrep_embed::EmbedPreference::Cloud,
-            Self::Ollama => ast_sgrep_embed::EmbedPreference::Ollama,
             Self::Neural => ast_sgrep_embed::EmbedPreference::Neural,
             Self::Semantic => ast_sgrep_embed::EmbedPreference::Semantic,
         }
@@ -148,8 +144,6 @@ impl EmbedBackend {
     pub fn to_preference_str(self) -> &'static str {
         match self {
             Self::Auto => "auto",
-            Self::Cloud => "cloud",
-            Self::Ollama => "ollama",
             Self::Neural => "neural",
             // "semantic" is the legacy v1 marker (needs_semantic_v1_rewrite);
             // the versioned v2 identity is what gets stored and compared.
@@ -158,24 +152,28 @@ impl EmbedBackend {
     }
     pub fn parse(s: &str) -> Self {
         match s.to_lowercase().as_str() {
-            "cloud" => Self::Cloud,
-            "ollama" => Self::Ollama,
             "neural" | "fastembed" => Self::Neural,
             "semantic" | "semantic-v2" | "local" => Self::Semantic,
             _ => Self::Auto,
         }
     }
-    pub fn from_flags(cloud: bool, ollama: bool, neural: bool, semantic_only: bool) -> Self {
-        if cloud {
-            Self::Cloud
-        } else if ollama {
-            Self::Ollama
-        } else if neural {
+    pub fn from_flags(neural: bool, semantic_only: bool) -> Self {
+        if neural {
             Self::Neural
         } else if semantic_only {
             Self::Semantic
         } else {
             Self::Auto
+        }
+    }
+
+    /// Adapter flags for SearchOptions `use_*` fields. Exclusive:
+    /// Neural wins over Semantic over Auto.
+    pub fn to_flags(self) -> (bool, bool) {
+        match self {
+            Self::Neural => (true, false),
+            Self::Semantic => (false, true),
+            Self::Auto => (false, false),
         }
     }
 }

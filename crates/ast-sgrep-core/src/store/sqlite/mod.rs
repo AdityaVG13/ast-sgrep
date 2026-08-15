@@ -7,7 +7,7 @@ use ast_sgrep_lang::PatternNode;
 use rusqlite::{params, Connection};
 #[cfg(test)]
 use std::cell::Cell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::Arc;
 #[cfg(test)]
@@ -22,13 +22,60 @@ thread_local! {
     /// partially admitted FastUnsafe batch can be asserted deterministically.
     static FORCE_BEGIN_FAILURE: Cell<bool> = const { Cell::new(false) };
 }
-const SCHEMA_VERSION: i64 = 9;
+// 6 = symbols_name_lower. 7 = semantic-layout-v2 wipe. 8 = unstemmed code FTS.
+// 9 = repository lexicon. 10 = per-field semantic vectors (name/docs/body/graph).
+// 11 = scip_facts overlay (kgvi.2). Never reuse a SCHEMA_VERSION for two migrations.
+const SCHEMA_VERSION: i64 = 11;
 const IMPORT_SELECT: &str =
     "SELECT f.path, f.language, i.module_path, i.line_no FROM imports i JOIN files f ON f.id = i.file_id";
 const SYM_LOC: &str = "SELECT f.path, s.name, f.language, s.line_start, s.line_end FROM symbols s JOIN files f ON f.id = s.file_id";
 pub type IndexedLineRow = (Arc<str>, u32, String, Option<Arc<str>>);
 pub type ImportQueryRow = (String, Option<String>, String, u32);
 pub type CallRow = (String, u32, String, String);
+
+/// INTEGER byte offsets must fit `i64` on write (pb2w). Wrapping `as i64`
+/// would store a negative and later wrap to `usize::MAX` on a 64-bit host.
+fn sql_i64_from_byte_offset(value: usize) -> rusqlite::Result<i64> {
+    i64::try_from(value).map_err(|_| {
+        rusqlite::Error::ToSqlConversionFailure(Box::new(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("byte offset {value} exceeds SQLite INTEGER storage"),
+        )))
+    })
+}
+
+/// Reject negative / out-of-range INTEGER byte offsets on read (pb2w).
+fn sql_usize_from_byte_offset(row: &rusqlite::Row<'_>, idx: usize) -> rusqlite::Result<usize> {
+    let raw: i64 = row.get(idx)?;
+    usize::try_from(raw).map_err(|_| rusqlite::Error::IntegralValueOutOfRange(idx, raw))
+}
+
+fn ensure_semantic_field_vector_columns(conn: &Connection) -> Result<()> {
+    let mut stmt = conn.prepare("PRAGMA table_info(semantic_chunks)")?;
+    let existing = stmt
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    for column in ["vector_name", "vector_docs", "vector_body", "vector_graph"] {
+        if !existing.iter().any(|name| name == column) {
+            conn.execute(
+                &format!("ALTER TABLE semantic_chunks ADD COLUMN {column} BLOB"),
+                [],
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn ensure_scip_facts_table(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS scip_facts (
+            file_id INTEGER NOT NULL, line_no INTEGER NOT NULL, name TEXT NOT NULL,
+            is_def INTEGER NOT NULL, PRIMARY KEY (file_id, line_no, name, is_def),
+            FOREIGN KEY (file_id) REFERENCES files(id) ON DELETE CASCADE);
+         CREATE INDEX IF NOT EXISTS idx_scip_facts_file_id ON scip_facts(file_id);",
+    )?;
+    Ok(())
+}
 pub struct PatternNodeRow {
     pub path: String,
     pub language: Option<String>,
@@ -183,12 +230,18 @@ impl IndexStore {
         // A legacy semantic sidecar is only a derived acceleration structure.
         // Remove it before migration; if the DB transaction then rolls back,
         // searches safely fall back rather than observing stale ANN contents.
-        if version < 7 {
+        if version < 10 {
             crate::semantic_ivf::invalidate_semantic_ivf(&self.db_path)?;
         }
         self.conn.execute_batch("BEGIN IMMEDIATE")?;
         let migration = (|| -> Result<()> {
             self.conn.execute_batch(SCHEMA_DDL)?;
+            if version < 10 {
+                ensure_semantic_field_vector_columns(&self.conn)?;
+            }
+            if version < 11 {
+                ensure_scip_facts_table(&self.conn)?;
+            }
             if version < 3 {
                 self.conn.execute_batch(
                     "INSERT INTO lines_trigram(rowid, content) SELECT rowid, content FROM lines;",
@@ -210,9 +263,21 @@ impl IndexStore {
                  DELETE FROM embeddings;
                  DELETE FROM embed_cache;
                  DELETE FROM meta WHERE key LIKE 'body:%' OR key LIKE 'struct:%'
-                   OR key IN ('embed_backend', 'embed_model', 'embed_dim');
-                 UPDATE files SET content_hash = 'semantic-layout-v2:' || content_hash
-                   WHERE content_hash NOT LIKE 'semantic-layout-v2:%';",
+                   OR key IN ('embed_backend', 'embed_model', 'embed_dim');",
+                )?;
+            }
+            // Schema 10 changed chunk rendering and added per-field vectors.
+            // All semantic state is derived, so rebuild it rather than mixing
+            // legacy primary vectors or cache metadata with the new layout.
+            if version < 10 {
+                self.conn.execute_batch(
+                    "DELETE FROM semantic_chunks;
+                     DELETE FROM embeddings;
+                     DELETE FROM embed_cache;
+                     DELETE FROM meta WHERE key LIKE 'body:%' OR key LIKE 'struct:%'
+                       OR key IN ('embed_backend', 'embed_model', 'embed_dim');
+                     UPDATE files SET content_hash = 'semantic-layout-v3:' || content_hash
+                       WHERE content_hash NOT LIKE 'semantic-layout-v3:%';",
                 )?;
             }
             self.conn
@@ -278,6 +343,124 @@ impl IndexStore {
     /// Schema version this database was built with (d3l5).
     pub fn schema_version(&self) -> i64 {
         SCHEMA_VERSION
+    }
+
+    /// Persist SCIP defs/refs that match existing symbols/callers (kgvi.2).
+    /// Unmatched occurrences are skipped; no new graph edges are invented.
+    pub fn apply_scip(
+        &self,
+        index: &crate::scip::ScipIndex,
+    ) -> Result<crate::scip::ScipApplyStats> {
+        self.with_file_tx(|| self.apply_scip_inner(index))
+    }
+
+    fn apply_scip_inner(
+        &self,
+        index: &crate::scip::ScipIndex,
+    ) -> Result<crate::scip::ScipApplyStats> {
+        self.conn.execute("DELETE FROM scip_facts", [])?;
+        let mut files = HashMap::new();
+        {
+            let mut stmt = self.conn.prepare("SELECT id, path FROM files")?;
+            let rows = stmt.query_map([], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+            })?;
+            for row in rows {
+                let (id, path) = row?;
+                files.insert(crate::scip::normalize_scip_path(&path), id);
+            }
+        }
+        let mut symbols = Vec::new();
+        {
+            let mut stmt = self
+                .conn
+                .prepare("SELECT file_id, line_start, line_end, name FROM symbols")?;
+            let rows = stmt.query_map([], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, u32>(1)?,
+                    row.get::<_, u32>(2)?,
+                    row.get::<_, String>(3)?,
+                ))
+            })?;
+            for row in rows {
+                symbols.push(row?);
+            }
+        }
+        let mut callers = HashSet::new();
+        {
+            let mut stmt = self
+                .conn
+                .prepare("SELECT file_id, line_no, callee FROM callers")?;
+            let rows = stmt.query_map([], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, u32>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })?;
+            for row in rows {
+                callers.insert(row?);
+            }
+        }
+        let mut stats = crate::scip::ScipApplyStats::default();
+        let mut insert = self.conn.prepare(
+            "INSERT OR IGNORE INTO scip_facts(file_id, line_no, name, is_def) VALUES(?1, ?2, ?3, ?4)",
+        )?;
+        for doc in &index.documents {
+            let Some(&file_id) = files.get(&crate::scip::normalize_scip_path(&doc.relative_path))
+            else {
+                stats.skipped += doc.occurrences.len();
+                continue;
+            };
+            for occ in &doc.occurrences {
+                let Some(name) = crate::scip::scip_symbol_ident(&occ.symbol) else {
+                    stats.skipped += 1;
+                    continue;
+                };
+                let Some(line) = occ.start_line_1based() else {
+                    stats.skipped += 1;
+                    continue;
+                };
+                let fact_line = if occ.is_definition() {
+                    symbols.iter().find_map(|(fid, start, end, n)| {
+                        (*fid == file_id && n == &name && line >= *start && line <= *end)
+                            .then_some(*start)
+                    })
+                } else {
+                    callers
+                        .contains(&(file_id, line, name.clone()))
+                        .then_some(line)
+                };
+                let Some(fact_line) = fact_line else {
+                    stats.skipped += 1;
+                    continue;
+                };
+                insert.execute(params![
+                    file_id,
+                    i64::from(fact_line),
+                    name,
+                    i64::from(u8::from(occ.is_definition()))
+                ])?;
+                if occ.is_definition() {
+                    stats.defs_upgraded += 1;
+                } else {
+                    stats.refs_upgraded += 1;
+                }
+            }
+        }
+        Ok(stats)
+    }
+
+    pub fn scip_fact_set(&self, is_def: bool) -> Result<HashSet<(String, u32, String)>> {
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT f.path, s.line_no, s.name FROM scip_facts s JOIN files f ON f.id = s.file_id WHERE s.is_def = ?1",
+        )?;
+        let rows = stmt.query_map(params![i64::from(u8::from(is_def))], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+        })?;
+        rows.collect::<std::result::Result<HashSet<_>, _>>()
+            .map_err(Into::into)
     }
 
     /// Highest indexed file mtime, as a worktree revision proxy (d3l5).

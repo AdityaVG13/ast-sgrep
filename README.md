@@ -67,7 +67,7 @@ Most code search is either **fast text** (ripgrep) or **pattern matching** (ast-
 
 **ast-sgrep** builds a **persistent index**: symbols, caller/callee edges, imports, lexical FTS, and **symbol-level semantic vectors** enriched with call-graph context. Query in natural language or with graph prefixes; get ranked hits with excerpts for humans or agents.
 
-**No API key required.** Offline semantic search works out of the box. Cloud, Ollama, and optional neural embeddings are upgrades.
+**No API key required.** Offline hashed semantic search works out of the box. Optional in-process neural embeddings (ONNX / MiniLM) are a local upgrade, never a network call.
 
 | You need... | ast-sgrep gives you... |
 |-------------|------------------------|
@@ -122,7 +122,7 @@ Query: "credential renewal"
   → semantic pass ranks auth_refresh (zero token overlap)
 ```
 
-Provider chain: **Cloud** (if key) → **Ollama** (if configured) → **neural** (optional feature) → **local semantic** (always available). Large repos may use a persisted IVF-ANN sidecar (`.asgrep/semantic.ivf`).
+Provider chain: **neural** (optional `--features neural-embed` + `ASGREP_NEURAL_EMBED`) → **local hashed semantic** (always available). Large repos may use a persisted IVF-ANN sidecar (`.asgrep/semantic.ivf`). There is no cloud or Ollama embed client.
 
 [Semantic layer →](docs/semantic-search.md)
 
@@ -130,22 +130,21 @@ Provider chain: **Cloud** (if key) → **Ollama** (if configured) → **neural**
 
 ## Benchmarks (honest summary)
 
-These are **checked-in run summaries**, not portable guarantees. Hardware, corpus, cache state, and flags all matter.
+These are **checked-in run summaries**, not portable guarantees. Hardware, corpus, cache state, and flags all matter. Status vocabulary: [benchmarks/README.md](benchmarks/README.md).
 
-| Recorded comparison | Published result | Evidence |
-|---------------------|------------------|----------|
-| Warm lexical suite vs ripgrep | Strong on recorded cases | [speed.md](benchmarks/results/speed.md) |
-| Structural workloads vs ast-grep | Large speedups in recorded cases | [speed.md](benchmarks/results/speed.md) |
-| Cross-tool bake-off | Mixed; inspect every row | [bakeoff.md](benchmarks/results/bakeoff.md) |
-| Known regressions | Published without suppression | [losses.md](benchmarks/results/losses.md) |
-| 2026-08-05 release run (self corpus) | Structural pattern 31× faster on the quality path; literal ≈ ripgrep; cold index 906 ms p95 | [speed.md](benchmarks/results/speed.md) |
+| Recorded comparison | Status | Published result | Evidence |
+|---------------------|--------|------------------|----------|
+| Warm lexical suite vs ripgrep | `historical` / mixed | Strong on recorded cases | [speed.md](benchmarks/results/speed.md) |
+| Structural workloads vs ast-grep | `historical` (latency-only, not match-set) | Large speedups in recorded cases | [speed.md](benchmarks/results/speed.md) |
+| Cross-tool bake-off | `UNREPRODUCIBLE` | Mixed; inspect every row | [bakeoff.md](benchmarks/results/bakeoff.md) |
+| Known regressions | `UNREPRODUCIBLE` | Published without suppression | [losses.md](benchmarks/results/losses.md) |
+| 2026-08-05 release run (self corpus) | `reproducible-in-tree` | Structural pattern 31× faster on the quality path; literal ≈ ripgrep; cold index 906 ms p95 | [speed.md](benchmarks/results/speed.md) |
 
-Measured 2026-08-05 on the self corpus (1,107 tracked files; `scripts/run-benchmarks.sh`) on the **integrated release/1.4.0 tree** (all 7 PRs merged + gated, 66/66 workspace suites green): cold index **2.3 s p95** with semantic embedding (budget breach on the grown corpus — the 285 ms budget was set for 110 files; the original 88.5 s pr21 build was fixed by capping child chunks, `0ba34da`), warm literal **19.5 ms** (≈ ripgrep 15.7 ms), structural pattern **33.1 ms** with the quality batch vs **987 ms** without (ast-grep: 24.2 ms), semantic NL **19.6 ms**. Full provenance in [speed.md](benchmarks/results/speed.md).
+Measured 2026-08-05 on the self corpus (1,107 tracked files; `scripts/run-benchmarks.sh`) on the **integrated release/1.4.0 tree**: cold index **2.3 s p95** with semantic embedding (budget breach on the grown corpus -- the 285 ms budget was set for 110 files; SHA unrecorded; the original 88.5 s pr21 build was fixed by capping child chunks, `0ba34da`), warm literal **19.5 ms** (≈ ripgrep 15.7 ms), structural pattern **33.1 ms** with the quality batch vs **987 ms** without (ast-grep: 24.2 ms), semantic NL **19.6 ms**. Full provenance in [speed.md](benchmarks/results/speed.md).
 
 Canonical table: [head-to-head.md](benchmarks/results/head-to-head.md). Index: [benchmarks/README.md](benchmarks/README.md). Methodology: [docs/benchmarks.md](docs/benchmarks.md).
 
-**Quality snapshot (self corpus, 18 labeled gold queries):** hybrid MRR **0.712**, Recall@k **0.889**, nDCG@k **0.751**. The canonical row and its reproduction status are in [baselines.md](benchmarks/results/baselines.md#retrieval-quality--self-corpus-18-gold-queries). On some foreign corpora the offline embedder currently adds little over lexical + AST; a stronger local model is on the roadmap.
-**Historical quality snapshot (self corpus, labeled gold):** hybrid MRR ≈ 0.75, Recall@k ≈ 0.94 (see docs/benchmarks for commands). These are point estimates from an historical evaluation whose sample size and confidence intervals were not recorded; they are not product guarantees and must not be used to claim statistically significant improvements. On some foreign corpora the offline embedder currently adds little over lexical + AST; a stronger local model is on the roadmap.
+**Quality snapshot (UNREPRODUCIBLE):** cite only fingerprint `self-hybrid-d3eab74` in [baselines.md](benchmarks/results/baselines.md#retrieval-quality--self-corpus-18-gold-queries) -- hybrid MRR **0.712**, Recall@k **0.889**, nDCG@k **0.751**. The gold harness is absent. Do not quote the superseded ≈0.75 / 0.94 row (`self-hist-pre-29129bd`) as current. On some foreign corpora the offline embedder currently adds little over lexical + AST.
 
 ---
 

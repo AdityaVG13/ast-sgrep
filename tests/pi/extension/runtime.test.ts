@@ -886,6 +886,40 @@ describe("per-root index freshness", () => {
     await subject.ensureFresh(runtime, { cwd: project });
     assert.deepEqual(calls.at(-1), { tool: "index_repo", args: { paths: [link] } });
   });
+  it("refuses a symlink-out-of-root edit instead of indexing the target", async () => {
+    const { project, outside } = await fixture();
+    const root = await realpath(project);
+    await symlink(outside, join(root, "escape"), "dir");
+    await writeFile(join(outside, "secret.ts"), "secret");
+    await writeFile(join(root, "ok.ts"), "ok");
+    const calls: Array<{ tool: string; args: Record<string, unknown> }> = [];
+    const runtime = {
+      async resolveRoot() { return root; },
+      async run(): Promise<MachineEnvelope> { assert.fail("native path must not spawn the CLI"); },
+      async nativeCall(tool: string, args: Record<string, unknown>): Promise<MachineEnvelope> {
+        calls.push({ tool, args });
+        return machine({ index: { exists: true, compatible: true, status: "ready" }, stats: { files_failed: 0 } });
+      },
+    };
+    const subject = new FreshnessCoordinator({ refreshIntervalMs: 1_000, now: () => 0 });
+    await subject.ensureFresh(runtime, { cwd: root });
+    const afterInit = calls.length;
+    subject.markAffectedPath(join(root, "escape", "secret.ts"), root);
+    subject.markAffectedPath(join("escape", "secret.ts"), root);
+    await subject.ensureFresh(runtime, { cwd: root });
+    assert.equal(calls.length, afterInit, "escaped edit must not trigger a targeted index");
+    subject.markAffectedPath(join(root, "ok.ts"), root);
+    await subject.ensureFresh(runtime, { cwd: root });
+    assert.deepEqual(calls.at(-1), { tool: "index_repo", args: { paths: [join(root, "ok.ts")] } });
+    for (const call of calls) {
+      const paths = call.args.paths;
+      if (!Array.isArray(paths)) continue;
+      for (const path of paths) {
+        assert.equal(String(path).includes("secret"), false, `escaped path leaked to index: ${path}`);
+        assert.equal(String(path).includes("outside"), false, `outside target leaked to index: ${path}`);
+      }
+    }
+  });
   it("refuses to silently query when status cannot prove index health", async () => {
     const runtime = new FakeFreshnessRuntime();
     runtime.handler = async (command) => machine({ command });

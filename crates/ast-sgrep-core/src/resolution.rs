@@ -59,8 +59,8 @@ impl SymbolId {
 pub enum Resolution {
     /// A compiler or type checker resolved this.
     CompilerExact,
-    /// An SCIP index resolved this.
-    ScipExact,
+    /// A matching SCIP occurrence was observed at this indexed location.
+    ScipOccurrence,
     /// Resolved through an explicit import.
     ImportResolved,
     /// Exactly one candidate with this name in the same file.
@@ -78,7 +78,7 @@ impl Resolution {
     pub fn is_precise(&self) -> bool {
         matches!(
             self,
-            Self::CompilerExact | Self::ScipExact | Self::ImportResolved | Self::FileLocalUnique
+            Self::CompilerExact | Self::ImportResolved | Self::FileLocalUnique
         )
     }
 
@@ -86,7 +86,7 @@ impl Resolution {
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::CompilerExact => "compiler_exact",
-            Self::ScipExact => "scip_exact",
+            Self::ScipOccurrence => "scip_occurrence",
             Self::ImportResolved => "import_resolved",
             Self::FileLocalUnique => "file_local_unique",
             Self::RepositoryUnique => "repository_unique",
@@ -95,13 +95,22 @@ impl Resolution {
         }
     }
 
+    /// Keep the stronger of two tiers. Occurrence evidence may only upgrade, never downgrade.
+    pub fn upgrade(self, other: Self) -> Self {
+        if other.rank() < self.rank() {
+            other
+        } else {
+            self
+        }
+    }
+
     /// Strength ordering, strongest first (0 is strongest).
     pub fn rank(&self) -> u8 {
         match self {
             Self::CompilerExact => 0,
-            Self::ScipExact => 1,
-            Self::ImportResolved => 2,
-            Self::FileLocalUnique => 3,
+            Self::ImportResolved => 1,
+            Self::FileLocalUnique => 2,
+            Self::ScipOccurrence => 3,
             Self::RepositoryUnique => 4,
             Self::NameOnly => 5,
             Self::Ambiguous { .. } => 6,

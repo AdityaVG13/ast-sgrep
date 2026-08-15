@@ -15,8 +15,7 @@ documentation = "https://docs.rs/ast-sgrep-core"
 workspace = true
 
 [features]
-default = ["cloud-embed"]
-cloud-embed = ["ast-sgrep-embed/cloud"]
+default = []
 # Real neural embeddings (fastembed/ONNX). Heavy dependency, opt-in: off by
 # default in the workspace, enabled with --features neural-embed.
 neural-embed = ["ast-sgrep-embed/neural-embed"]
@@ -49,6 +48,7 @@ cap-fs-ext.workspace = true
 ast-sgrep-testkit = { path = "../ast-sgrep-testkit" }
 criterion = "=0.5.1"
 proptest = "1.6"
+serde_json.workspace = true
 tempfile.workspace = true
 
 [[bench]]
@@ -65,9 +65,6 @@ path = "../../tests/core/cascade_planner.rs"
 [[test]]
 name = "chain_case"
 path = "../../tests/core/chain_case.rs"
-[[test]]
-name = "cloud_feature_gate"
-path = "../../tests/core/cloud_feature_gate.rs"
 [[test]]
 name = "code_prose_fields"
 path = "../../tests/core/code_prose_fields.rs"
@@ -116,6 +113,12 @@ path = "../../tests/core/pattern_prefilter.rs"
 [[test]]
 name = "pattern_routing"
 path = "../../tests/core/pattern_routing.rs"
+[[test]]
+name = "pattern_diff"
+path = "../../tests/core/pattern_diff.rs"
+[[test]]
+name = "external_ast_grep_e2e"
+path = "../../tests/core/external_ast_grep_e2e.rs"
 [[test]]
 name = "properties"
 path = "../../tests/core/properties.rs"

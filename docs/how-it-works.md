@@ -51,7 +51,7 @@ ast-sgrep/
 ├── crates/ast-sgrep-core/    # Index + hybrid search engine
 ├── crates/ast-sgrep-cli/     # asgrep / ast-sgrep binaries
 ├── crates/ast-sgrep-lang/    # tree-sitter parsers (13 languages)
-├── crates/ast-sgrep-embed/   # Semantic local + Ollama + cloud
+├── crates/ast-sgrep-embed/   # Hashed semantic + optional in-process neural
 ├── crates/ast-sgrep-plugins/ # GitHub / GitLab / agent JSON
 ├── crates/ast-sgrep-lsp/     # asgrep-lsp
 └── tests/fixtures/           # Polyglot sample + regression fixtures
@@ -74,7 +74,7 @@ flowchart LR
     P -->|callers:| C["Caller graph SQL"]
     P -->|defs:| D["Symbol lookup SQL"]
     P -->|imports:| I["Import lookup SQL"]
-    P -->|pattern:| AG["ast-grep delegate"]
+    P -->|pattern:| AG["native pattern subset"]
     P -->|hybrid| H["Multi-pass fusion"]
     H --> L["Lexical FTS5"]
     H --> S["Symbol match"]
@@ -94,9 +94,9 @@ flowchart LR
 
 ### Query routing
 
-1. **Prefixed queries** bypass hybrid fusion and hit dedicated SQL or external tools:
+1. **Prefixed queries** bypass hybrid fusion and hit dedicated SQL or the native pattern matcher:
    - `callers:`, `defs:`, `imports:` → graph/symbol tables
-   - `pattern:` → ast-grep subprocess (when installed)
+   - `pattern:` → indexed signatures + tree-sitter reparse (native subset, not ast-grep CLI)
 
 2. **Hybrid queries** (no prefix) run multiple passes in parallel conceptually, then fuse:
    - **Lexical**, FTS5 BM25 on `lines_fts` (and optional Tantivy sidecar at scale)
@@ -173,8 +173,7 @@ let searcher = Searcher::new(SearchOptions {
     lang_filter: None,
     use_embed: true,
     use_tantivy: false,
-    use_cloud_embed: false,
-    use_ollama_embed: false,
+    use_neural_embed: false,
     use_semantic_only: false,
     ann_threshold: None,
 })?;

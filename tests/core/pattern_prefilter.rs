@@ -1,5 +1,7 @@
 use ast_sgrep_core::pattern::profile_pattern_search;
+use ast_sgrep_core::MAX_INDEX_FILE_BYTES;
 use std::fs;
+use std::fs::File;
 
 #[test]
 fn literal_prefilter_skips_noncandidate_files() {
@@ -55,4 +57,24 @@ fn declaration_keyword_is_not_a_cross_language_required_literal() {
     assert_eq!(profile.files_prefiltered, 0);
     assert_eq!(profile.files_parsed, 1);
     assert_eq!(profile.hits, 1);
+}
+
+#[test]
+fn oversize_files_are_skipped_without_parsing() {
+    let corpus = tempfile::tempdir().unwrap();
+    fs::write(
+        corpus.path().join("needle.rs"),
+        "fn Needle(value: usize) -> usize { value }\nfn caller() { let _ = Needle(1); }\n",
+    )
+    .unwrap();
+    File::create(corpus.path().join("huge.rs"))
+        .unwrap()
+        .set_len(MAX_INDEX_FILE_BYTES + 1)
+        .unwrap();
+
+    let profile = profile_pattern_search("Needle($$$ARGS)", corpus.path(), Some("rust")).unwrap();
+    assert_eq!(profile.files_considered, 2);
+    assert_eq!(profile.files_parsed, 1);
+    assert_eq!(profile.hits, 1);
+    assert!(profile.bytes_scanned < MAX_INDEX_FILE_BYTES);
 }

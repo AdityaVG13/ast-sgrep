@@ -170,6 +170,8 @@ struct SearcherKey {
     index_path: Option<PathBuf>,
     limit: usize,
     use_embed: bool,
+    use_neural_embed: bool,
+    use_semantic_only: bool,
 }
 
 #[derive(Default)]
@@ -186,6 +188,8 @@ pub struct McpServer {
     index_path: Option<PathBuf>,
     limit: usize,
     use_embed: bool,
+    use_neural_embed: bool,
+    use_semantic_only: bool,
     /// Reused across search-channel calls; cleared after index mutations.
     searcher_cache: Mutex<SearcherCache>,
     /// Single-flight lock for index_repo (es7u).
@@ -218,6 +222,8 @@ impl McpServer {
                     ast_sgrep_core::clamp_agent_limit(None, SearchOptions::default_limit())
                 }),
             use_embed: !ast_sgrep_core::env_flag::env_flag("ASGREP_NO_EMBED"),
+            use_neural_embed: ast_sgrep_core::env_flag::env_flag("ASGREP_NEURAL_EMBED"),
+            use_semantic_only: ast_sgrep_core::env_flag::env_flag("ASGREP_SEMANTIC_ONLY"),
             searcher_cache: Mutex::new(SearcherCache::default()),
             index_lock: Mutex::new(()),
             path_registry: Mutex::new(HashMap::new()),
@@ -614,6 +620,20 @@ impl McpServer {
             index_path: self.index_path.clone(),
             limit,
             use_embed: self.use_embed,
+            use_neural_embed: self.use_neural_embed,
+            use_semantic_only: self.use_semantic_only,
+        }
+    }
+
+    fn search_options(&self, root: PathBuf, limit: usize) -> SearchOptions {
+        SearchOptions {
+            root,
+            index_path: self.index_path.clone(),
+            limit,
+            use_embed: self.use_embed,
+            use_neural_embed: self.use_neural_embed,
+            use_semantic_only: self.use_semantic_only,
+            ..SearchOptions::default()
         }
     }
 
@@ -685,13 +705,7 @@ impl McpServer {
             Some((cached_key, _)) => cached_key != &key,
         };
         if need_new {
-            let searcher = Searcher::new(SearchOptions {
-                root: root.clone(),
-                index_path: self.index_path.clone(),
-                limit,
-                use_embed: self.use_embed,
-                ..SearchOptions::default()
-            })?;
+            let searcher = Searcher::new(self.search_options(root.clone(), limit))?;
             guard.writer_generation =
                 ast_sgrep_core::read_writer_generation(&root, self.index_path.as_deref());
             guard.entry = Some((key, searcher));
@@ -729,6 +743,15 @@ impl McpServer {
             budget_tokens,
         } = args;
         let (searcher, generation) = self.searcher_for(root.clone(), limit)?;
+        if matches!(mode, AgentSearchMode::Semantic) {
+            if let Some(msg) = self
+                .search_options(root.clone(), limit)
+                .unavailable_non_hashed_embed()
+            {
+                self.restore_searcher(root, limit, generation, searcher);
+                anyhow::bail!(msg);
+            }
+        }
         let response = match mode {
             AgentSearchMode::Keyword => searcher.search_lexical(&query),
             AgentSearchMode::Ast => searcher.search(&format!("pattern: {query}")),
@@ -928,7 +951,7 @@ impl McpServer {
         let mut indexer = Indexer::new(IndexOptions {
             embed_semantic: self.use_embed,
             embed_backend: if self.use_embed {
-                EmbedBackend::Auto
+                EmbedBackend::from_flags(self.use_neural_embed, self.use_semantic_only)
             } else {
                 EmbedBackend::Semantic
             },

@@ -12,6 +12,10 @@ pub(super) struct EmbeddedChunk {
     pub vector_bytes: Vec<u8>,
     pub dim: usize,
     pub backend: ast_sgrep_embed::EmbedBackendKind,
+    pub name: Option<Vec<u8>>,
+    pub docs: Option<Vec<u8>>,
+    pub body: Option<Vec<u8>>,
+    pub graph: Option<Vec<u8>>,
 }
 #[derive(Clone)]
 struct CacheRow {
@@ -72,12 +76,8 @@ fn cache_model_id_for_pref(p: ast_sgrep_embed::EmbedPreference) -> Option<String
     match p {
         Semantic => Some(semantic_mid()),
         Neural => Some(neural_mid()),
-        Cloud | Ollama => None,
         Auto => {
-            let skip = std::env::var_os("ASGREP_EMBED_API_KEY").is_some()
-                || std::env::var_os("ASGREP_OLLAMA_EMBED").is_some()
-                || std::env::var_os("ASGREP_OLLAMA_URL").is_some()
-                || crate::env_flag::env_flag("ASGREP_NEURAL_EMBED");
+            let skip = crate::env_flag::env_flag("ASGREP_NEURAL_EMBED");
             (!skip).then(semantic_mid)
         }
     }
@@ -86,22 +86,12 @@ fn cache_model_id_for_backend(backend: ast_sgrep_embed::EmbedBackendKind) -> Opt
     ast_sgrep_embed::configured_backend_model_id(backend, ast_sgrep_embed::default_semantic_dim())
 }
 pub(super) fn requested_model_identity(preference: ast_sgrep_embed::EmbedPreference) -> String {
-    use ast_sgrep_embed::{EmbedBackendKind, EmbedPreference};
-    let configured = |kind| {
-        ast_sgrep_embed::configured_backend_model_id(kind, ast_sgrep_embed::default_semantic_dim())
-    };
+    use ast_sgrep_embed::EmbedPreference;
     match preference {
-        EmbedPreference::Cloud => {
-            configured(EmbedBackendKind::Cloud).unwrap_or_else(|| "cloud:unconfigured".into())
-        }
-        EmbedPreference::Ollama => {
-            configured(EmbedBackendKind::Ollama).unwrap_or_else(|| "ollama:unconfigured".into())
-        }
         EmbedPreference::Neural => neural_mid(),
         EmbedPreference::Semantic => semantic_mid(),
-        EmbedPreference::Auto => configured(EmbedBackendKind::Cloud)
-            .or_else(|| configured(EmbedBackendKind::Ollama))
-            .or_else(|| crate::env_flag::env_flag("ASGREP_NEURAL_EMBED").then(neural_mid))
+        EmbedPreference::Auto => crate::env_flag::env_flag("ASGREP_NEURAL_EMBED")
+            .then(neural_mid)
             .unwrap_or_else(semantic_mid),
     }
 }
@@ -232,87 +222,127 @@ pub(super) fn embed_chunks(
         cache_hits,
     })
 }
+#[derive(Clone, Copy)]
+enum EmbedSlot {
+    Primary,
+    Name,
+    Docs,
+    Body,
+    Graph,
+}
+
 fn embed_parallel(
     conn: &Connection,
     chunks: &[crate::semantic_chunk::SemanticChunkInput],
     backend: ast_sgrep_embed::EmbedPreference,
     expected_mid: &Option<String>,
 ) -> Result<(Vec<EmbeddedChunk>, Vec<CacheEntry>, Vec<CacheHit>)> {
-    let texts: Vec<String> = chunks
-        .iter()
-        .map(crate::semantic_chunk::render_chunk_text)
-        .collect();
-    let mut cached: Vec<Option<CacheRow>> = vec![None; texts.len()];
-    let mut hits = Vec::new();
-    for (i, t) in texts.iter().enumerate() {
-        let h = hash_text(t);
-        if let Some(mid) = expected_mid {
-            if let Some(row) = lookup_embed_cache(conn, &h, mid)? {
-                cached[i] = Some(row);
-                hits.push(CacheHit {
-                    chunk_hash: h,
-                    model_id: mid.clone(),
-                });
+    let mut jobs: Vec<(usize, EmbedSlot, String)> = Vec::new();
+    for (i, chunk) in chunks.iter().enumerate() {
+        jobs.push((
+            i,
+            EmbedSlot::Primary,
+            crate::semantic_chunk::render_chunk_text(chunk),
+        ));
+        let fields = crate::semantic_chunk::chunk_field_texts(chunk);
+        for (slot, text) in [
+            (EmbedSlot::Name, fields.name),
+            (EmbedSlot::Docs, fields.docs),
+            (EmbedSlot::Body, fields.body),
+            (EmbedSlot::Graph, fields.graph),
+        ] {
+            if !text.is_empty() {
+                jobs.push((i, slot, text));
             }
         }
     }
-    if hits.len() == texts.len() {
-        let out = texts
-            .into_iter()
-            .zip(cached)
-            .map(|(_, row)| {
-                let row = row.expect("hit");
-                EmbeddedChunk {
-                    vector_bytes: row.vector,
-                    dim: row.dim,
-                    backend: row.backend,
+    let mut cached: Vec<Option<CacheRow>> = vec![None; jobs.len()];
+    let mut primary_hits = Vec::new();
+    for (i, (_, slot, text)) in jobs.iter().enumerate() {
+        let h = hash_text(text);
+        if let Some(mid) = expected_mid {
+            if let Some(row) = lookup_embed_cache(conn, &h, mid)? {
+                cached[i] = Some(row);
+                if matches!(slot, EmbedSlot::Primary) {
+                    primary_hits.push(CacheHit {
+                        chunk_hash: h,
+                        model_id: mid.clone(),
+                    });
                 }
-            })
-            .collect();
-        return Ok((out, Vec::new(), hits));
+            }
+        }
     }
-    let miss_idx: Vec<usize> = (0..texts.len()).filter(|&i| cached[i].is_none()).collect();
-    // One chain attempt for the whole miss batch (avoids per-chunk backend probing).
-    let miss_refs: Vec<&str> = miss_idx.iter().map(|&i| texts[i].as_str()).collect();
-    let miss_res = ast_sgrep_embed::embed_batch_with_chain(&miss_refs, backend);
-    if miss_res.len() != miss_idx.len() {
+    let miss_idx: Vec<usize> = (0..jobs.len()).filter(|&i| cached[i].is_none()).collect();
+    let mut entries = Vec::new();
+    if !miss_idx.is_empty() {
+        let miss_refs: Vec<&str> = miss_idx.iter().map(|&i| jobs[i].2.as_str()).collect();
+        let miss_res = ast_sgrep_embed::embed_batch_with_chain(&miss_refs, backend);
+        if miss_res.len() != miss_idx.len() {
+            return Err(crate::StoreError::Other(
+                "embedding result length mismatch".into(),
+            ));
+        }
+        for (job_i, r) in miss_idx.into_iter().zip(miss_res) {
+            let vb = ast_sgrep_embed::embed_to_bytes(&r.vector);
+            let dim = r.vector.len();
+            if let Some(mid) = cache_model_id_for_backend(r.backend) {
+                entries.push(CacheEntry {
+                    chunk_hash: hash_text(&jobs[job_i].2),
+                    model_id: mid,
+                    backend: r.backend,
+                    dim,
+                    vector: vb.clone(),
+                });
+            }
+            cached[job_i] = Some(CacheRow {
+                vector: vb,
+                backend: r.backend,
+                dim,
+            });
+        }
+    }
+    let mut out: Vec<EmbeddedChunk> = (0..chunks.len())
+        .map(|_| EmbeddedChunk {
+            vector_bytes: Vec::new(),
+            dim: 0,
+            backend: ast_sgrep_embed::EmbedBackendKind::Semantic,
+            name: None,
+            docs: None,
+            body: None,
+            graph: None,
+        })
+        .collect();
+    let mut filled_primary = vec![false; chunks.len()];
+    for (i, (chunk_idx, slot, _)) in jobs.iter().enumerate() {
+        let row = cached[i]
+            .take()
+            .ok_or_else(|| crate::StoreError::Other("embedding result length mismatch".into()))?;
+        let dest = &mut out[*chunk_idx];
+        if dest.dim == 0 {
+            dest.dim = row.dim;
+            dest.backend = row.backend;
+        } else if dest.backend != row.backend || dest.dim != row.dim {
+            return Err(crate::StoreError::Other(
+                "embedding provider returned mixed backend or dimension identities".into(),
+            ));
+        }
+        match slot {
+            EmbedSlot::Primary => {
+                dest.vector_bytes = row.vector;
+                filled_primary[*chunk_idx] = true;
+            }
+            EmbedSlot::Name => dest.name = Some(row.vector),
+            EmbedSlot::Docs => dest.docs = Some(row.vector),
+            EmbedSlot::Body => dest.body = Some(row.vector),
+            EmbedSlot::Graph => dest.graph = Some(row.vector),
+        }
+    }
+    if filled_primary.iter().any(|ok| !ok) {
         return Err(crate::StoreError::Other(
             "embedding result length mismatch".into(),
         ));
     }
-    let mut out = Vec::with_capacity(texts.len());
-    let mut entries = Vec::with_capacity(miss_res.len());
-    let mut miss_it = miss_res.into_iter();
-    for (i, text) in texts.into_iter().enumerate() {
-        if let Some(row) = cached[i].take() {
-            out.push(EmbeddedChunk {
-                vector_bytes: row.vector,
-                dim: row.dim,
-                backend: row.backend,
-            });
-            continue;
-        }
-        let r = miss_it
-            .next()
-            .ok_or_else(|| crate::StoreError::Other("embedding result length mismatch".into()))?;
-        let vb = ast_sgrep_embed::embed_to_bytes(&r.vector);
-        let dim = r.vector.len();
-        if let Some(mid) = cache_model_id_for_backend(r.backend) {
-            entries.push(CacheEntry {
-                chunk_hash: hash_text(&text),
-                model_id: mid,
-                backend: r.backend,
-                dim,
-                vector: vb.clone(),
-            });
-        }
-        out.push(EmbeddedChunk {
-            vector_bytes: vb,
-            dim,
-            backend: r.backend,
-        });
-    }
-    Ok((out, entries, hits))
+    Ok((out, entries, primary_hits))
 }
 pub(super) fn read_sym_loc(r: &rusqlite::Row<'_>) -> rusqlite::Result<SymbolLocationRow> {
     Ok(SymbolLocationRow {
@@ -389,6 +419,8 @@ pub(super) fn structure_fingerprint(
         h.update(b"\0");
     }
     h.update(b"|s|");
+    h.update(b"|fields|");
+    h.update(&crate::semantic_ivf::SEMANTIC_IVF_FIELD_LAYOUT.to_le_bytes());
     for chunk in semantic_chunks {
         // Hash raw chunk fields (not expand_concepts) — same equality for structure-stable edits.
         h.update(chunk.symbol_name.as_bytes());

@@ -83,6 +83,17 @@ fn symbols_in_file_rejects_negative_byte_offsets() {
     ));
 }
 
+#[cfg(target_pointer_width = "64")]
+#[test]
+fn sql_i64_from_byte_offset_rejects_values_above_i64_max() {
+    let error = super::sql_i64_from_byte_offset(usize::MAX)
+        .expect_err("usize::MAX must not wrap to a negative INTEGER");
+    assert!(
+        error.to_string().contains("exceeds SQLite INTEGER storage"),
+        "unexpected: {error}"
+    );
+}
+
 /// pass3: with_file_tx must not Ok after nested poison+rollback.
 #[test]
 fn with_file_tx_poisoned_ok_closure_returns_err() {

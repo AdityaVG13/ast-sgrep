@@ -1,0 +1,42 @@
+{
+  "schema_version": "1",
+  "subject_class": "greenfield-hybrid-search",
+  "generated": "2026-08-14T01:56:48Z",
+  "certified": false,
+  "band": "red",
+  "release_certificate": "refused",
+  "lower_bound": 0.0,
+  "optimistic_present_ratio": 0.533,
+  "interval": [
+    0.0,
+    0.533
+  ],
+  "point_estimate_is_certified": false,
+  "truncate_policy": {
+    "partial_is_not_present": true,
+    "excluded_is_not_missing": true,
+    "not_run_is_not_pass": true,
+    "unreproducible_mrr_is_not_cert": true,
+    "latency_only_never_correctness": true,
+    "present_count_is_not_green": true
+  },
+  "forbidden_victory": true,
+  "inputs": {
+    "wp1": "keep-gate / .bench-history",
+    "wp2": "benchmarks/results/baselines.md",
+    "wp4": "docs/validation/oracle-dispatch.md",
+    "wp5": "docs/contracts/supported_surface_matrix.toml",
+    "ghiw.5": "scripts/generate-compliance-report.py",
+    "nz7i": "docs/validation/golden-files.md",
+    "b8q3": "bounded-fuzz workflow_dispatch",
+    "weights": "docs/contracts/parity_score_contract.toml"
+  },
+  "deviations": [
+    "H8 lower_bound is 0: no evidence window mapped executed correctness Pass onto features.",
+    "H9 multi-ref bundle 0/8 green.",
+    "H12 live-embed P1s not run.",
+    "H14 release_certificate.json not emitted.",
+    "Canonical MRR rows remain UNREPRODUCIBLE."
+  ],
+  "checklist": "docs/validation/multi-ref-checklist.md"
+}

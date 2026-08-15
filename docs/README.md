@@ -31,6 +31,13 @@ Canonical entry points for humans and agents. Prefer this list over scavenging t
 | [PERF_INVENTORY.md](PERF_INVENTORY.md) | Hot-path cost notes + measurement caveats |
 | [RELEASING.md](RELEASING.md) | Release checklist |
 | [../CONTRIBUTING.md](../CONTRIBUTING.md) | Local verification bar and PR hygiene |
+| [validation/DISCREPANCIES.md](validation/DISCREPANCIES.md) | Registered intentional divergences (XFAIL ids) |
+| [validation/COVERAGE.md](validation/COVERAGE.md) | Conformance surface skeleton |
+| [validation/conformance-verdicts.md](validation/conformance-verdicts.md) | Fail / Ignore / XFAIL / Not-run |
+| [validation/proof-pack.md](validation/proof-pack.md) | Minimal reproducible ranking/honesty gates |
+| [validation/oracle-dispatch.md](validation/oracle-dispatch.md) | Channel × scenario → authoritative oracle |
+| [progress/README.md](progress/README.md) | Campaign negative ledgers (perf / conformance / surface) |
+| [contracts/README.md](contracts/README.md) | Surface matrix + oracle dispatch + score weights |
 | [../benchmarks/README.md](../benchmarks/README.md) | Benchmark folder index and error budgets |
 
 Published result tables (`head-to-head`, `speed`, `bakeoff`, `losses`, `baselines`)

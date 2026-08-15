@@ -89,6 +89,9 @@ pub struct SearchHit {
     /// How a graph edge was resolved, when this hit came from one (dvc4).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resolution: Option<crate::resolution::Resolution>,
+    /// Per-field embed similarities when multi-field vectors were used (7d5x.3).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub embed_fields: Option<super::field_weight::EmbedFieldScores>,
     #[serde(serialize_with = "serialize_excerpt")]
     pub excerpt: String,
 }
@@ -147,6 +150,7 @@ impl<'de> serde::Deserialize<'de> for SearchHit {
             },
             // dvc4: resolution is engine-derived, never trusted from the wire.
             resolution: None,
+            embed_fields: None,
             excerpt: bound_excerpt(wire.excerpt),
         })
     }
@@ -186,6 +190,7 @@ impl SearchHit {
             margin: 0.0,
             confidence: 0.0,
             resolution: None,
+            embed_fields: None,
             excerpt: bound_excerpt(excerpt),
         }
     }
@@ -308,8 +313,8 @@ pub struct SearchOptions {
     pub lang_filter: Option<String>,
     pub use_embed: bool,
     pub use_tantivy: bool,
-    pub use_cloud_embed: bool,
-    pub use_ollama_embed: bool,
+    /// Adapter flags for `embed_backend()`. Concurrent trues collapse
+    /// Neural > Semantic > Auto.
     pub use_neural_embed: bool,
     pub use_semantic_only: bool,
     pub ann_threshold: Option<usize>,
@@ -333,8 +338,6 @@ impl Default for SearchOptions {
             lang_filter: None,
             use_embed: !env_flag("ASGREP_NO_EMBED"),
             use_tantivy: env_flag("ASGREP_TANTIVY"),
-            use_cloud_embed: env_flag("ASGREP_CLOUD_EMBED"),
-            use_ollama_embed: env_flag("ASGREP_OLLAMA_EMBED"),
             use_neural_embed: env_flag("ASGREP_NEURAL_EMBED"),
             use_semantic_only: env_flag("ASGREP_SEMANTIC_ONLY"),
             ann_threshold: std::env::var("ASGREP_ANN_THRESHOLD")
@@ -366,26 +369,61 @@ impl SearchOptions {
         )
     }
     pub fn embed_preference(&self) -> ast_sgrep_embed::EmbedPreference {
-        EmbedBackend::from_flags(
-            self.use_cloud_embed,
-            self.use_ollama_embed,
-            self.use_neural_embed,
-            self.use_semantic_only,
-        )
-        .to_preference()
+        self.embed_backend().to_preference()
+    }
+
+    /// Canonical embed backend for these options. `use_*` flags remain
+    /// public adapters (Neural > Semantic > Auto).
+    pub fn embed_backend(&self) -> EmbedBackend {
+        EmbedBackend::from_flags(self.use_neural_embed, self.use_semantic_only)
+    }
+
+    /// Set the backend and sync the `use_*` adapter flags.
+    pub fn set_embed_backend(&mut self, backend: EmbedBackend) {
+        let (neural, semantic_only) = backend.to_flags();
+        self.use_neural_embed = neural;
+        self.use_semantic_only = semantic_only;
+    }
+
+    /// Hard-error text when a non-hashed backend is requested but cannot run.
+    ///
+    /// Hashed (`Semantic`) and `Auto` stay available. Neural must not silently
+    /// swap to hashed hits unless `ASGREP_NEURAL_FALLBACK=1`.
+    pub fn unavailable_non_hashed_embed(&self) -> Option<String> {
+        match self.embed_preference() {
+            ast_sgrep_embed::EmbedPreference::Neural => {
+                #[cfg(not(feature = "neural-embed"))]
+                {
+                    Some(
+                        "semantic_search requested neural embed but this build has no neural-embed feature; refusing hashed fallback"
+                            .into(),
+                    )
+                }
+                #[cfg(feature = "neural-embed")]
+                {
+                    if ast_sgrep_embed::NeuralEmbeddingConfig::from_env().is_none() {
+                        Some(
+                            "semantic_search requested neural embed but it is not configured; refusing hashed fallback"
+                                .into(),
+                        )
+                    } else {
+                        None
+                    }
+                }
+            }
+            _ => None,
+        }
     }
     /// Stable fingerprint of options that affect search results (nyui).
     pub fn cache_identity(&self) -> String {
         format!(
-            "root={}\0idx={:?}\0lim={}\0lang={:?}\0embed={}\0tantivy={}\0cloud={}\0ollama={}\0neural={}\0sem={}\0ann_t={:?}\0ann_p={:?}\0rerank={}\0rk={}\0ci={}\0cb={}\0ca={}\0co={}\0ff={:?}",
+            "root={}\0idx={:?}\0lim={}\0lang={:?}\0embed={}\0tantivy={}\0neural={}\0sem={}\0ann_t={:?}\0ann_p={:?}\0rerank={}\0rk={}\0ci={}\0cb={}\0ca={}\0co={}\0ff={:?}",
             self.root.display(),
             self.index_path,
             self.limit,
             self.lang_filter,
             self.use_embed,
             self.use_tantivy,
-            self.use_cloud_embed,
-            self.use_ollama_embed,
             self.use_neural_embed,
             self.use_semantic_only,
             self.ann_threshold,
@@ -563,35 +601,8 @@ pub fn assign_hit_confidence(hits: &mut [SearchHit]) {
     }
 }
 
-pub fn dedup_hits(hits: Vec<SearchHit>) -> Vec<SearchHit> {
-    let mut best: Vec<SearchHit> = Vec::with_capacity(hits.len());
-    let mut positions: std::collections::HashMap<_, usize> = std::collections::HashMap::new();
-    for hit in hits {
-        // vh65: identity is the LOCATION. Channel kind is evidence about a
-        // location, not part of what a location is -- keying on it let one
-        // physical span survive three times as three near-identical rows with
-        // three opaque scores.
-        let key = (
-            hit.file.clone(),
-            hit.line_start,
-            hit.line_end,
-            hit.symbol.clone(),
-            hit.caller.clone(),
-            hit.callee.clone(),
-        );
-        if let Some(&index) = positions.get(&key) {
-            merge_channel_evidence(&mut best[index], hit);
-        } else {
-            positions.insert(key, best.len());
-            best.push(hit);
-        }
-    }
-    assign_hit_confidence(&mut best);
-    best
-}
-
 /// Fold a duplicate observation of the same location into the kept hit (vh65).
-fn merge_channel_evidence(kept: &mut SearchHit, other: SearchHit) {
+pub(super) fn merge_channel_evidence(kept: &mut SearchHit, other: SearchHit) {
     for contributor in other
         .contributors
         .iter()
@@ -660,6 +671,9 @@ pub fn hit_why(hit: &SearchHit) -> Vec<String> {
             HitKind::Pattern => "structural_pattern".to_owned(),
             HitKind::Embed => "semantic_similarity".to_owned(),
         });
+    }
+    if let Some(fields) = &hit.embed_fields {
+        why.extend(fields.why_terms());
     }
     why.dedup();
     why

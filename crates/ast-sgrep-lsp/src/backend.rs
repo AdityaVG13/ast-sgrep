@@ -12,7 +12,7 @@ use crate::types::{
 use ast_sgrep_core::{IndexOptions, Indexer, SearchOptions, Searcher};
 use serde_json::{json, Value};
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -33,21 +33,104 @@ fn first_cmd_arg(p: &ExecuteCommandParams) -> &str {
     p.arguments.first().and_then(|v| v.as_str()).unwrap_or("")
 }
 
+fn lexical_normalize(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => match out.components().next_back() {
+                Some(Component::Normal(_)) => {
+                    out.pop();
+                }
+                Some(Component::ParentDir) | None => out.push(component),
+                Some(Component::RootDir | Component::Prefix(_)) => {}
+                Some(Component::CurDir) => unreachable!("CurDir is never pushed"),
+            },
+            other => out.push(other),
+        }
+    }
+    out
+}
+
+fn canonicalize_existing_prefix(path: PathBuf) -> PathBuf {
+    if let Ok(canonical) = path.canonicalize() {
+        return canonical;
+    }
+    let mut existing = path.as_path();
+    let mut suffix = Vec::new();
+    while let Some(name) = existing.file_name() {
+        suffix.push(name.to_os_string());
+        let Some(parent) = existing.parent() else {
+            break;
+        };
+        existing = parent;
+        if let Ok(mut canonical) = existing.canonicalize() {
+            for component in suffix.iter().rev() {
+                canonical.push(component);
+            }
+            return canonical;
+        }
+    }
+    path
+}
+
+fn path_is_within(path: &Path, root: &Path) -> bool {
+    let path = lexical_normalize(path);
+    let root = lexical_normalize(root);
+    path.starts_with(&root)
+}
+
+fn asgrep_cache_home() -> Option<PathBuf> {
+    std::env::var("XDG_CACHE_HOME")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var("HOME")
+                .or_else(|_| std::env::var("USERPROFILE"))
+                .ok()
+                .filter(|s| !s.trim().is_empty())
+                .map(|home| PathBuf::from(home).join(".cache"))
+        })
+        .map(|base| base.join("asgrep"))
+}
+
 fn resolve_lsp_index_path(
     root: &Path,
     configured: &str,
     allow_external: bool,
 ) -> anyhow::Result<PathBuf> {
-    anyhow::ensure!(
-        allow_external,
-        "custom LSP indexPath is disabled by default; indexes use the private user cache. Set ASGREP_ALLOW_EXTERNAL_INDEX=1 only for a trusted operator-supplied path"
-    );
+    resolve_lsp_index_path_with_cache(root, configured, allow_external, asgrep_cache_home())
+}
+
+fn resolve_lsp_index_path_with_cache(
+    root: &Path,
+    configured: &str,
+    allow_external: bool,
+    cache_home: Option<PathBuf>,
+) -> anyhow::Result<PathBuf> {
     let requested = Path::new(configured);
-    Ok(if requested.is_absolute() {
+    let joined = if requested.is_absolute() {
         requested.to_path_buf()
     } else {
         root.join(requested)
-    })
+    };
+    let resolved = canonicalize_existing_prefix(lexical_normalize(&joined));
+    if path_is_within(&resolved, root) {
+        return Ok(resolved);
+    }
+    if let Some(cache) = cache_home {
+        let cache = canonicalize_existing_prefix(lexical_normalize(&cache));
+        if path_is_within(&resolved, &cache) {
+            return Ok(resolved);
+        }
+    }
+    anyhow::ensure!(
+        allow_external,
+        "LSP indexPath {} is outside the workspace and asgrep cache; set ASGREP_ALLOW_EXTERNAL_INDEX=1 only for a trusted operator-supplied path",
+        resolved.display()
+    );
+    Ok(resolved)
 }
 
 impl LspBackend {

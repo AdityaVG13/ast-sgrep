@@ -1,9 +1,12 @@
+pub(crate) mod field_weight;
 mod finish;
+mod fusion;
 pub mod passes;
 mod types;
 use crate::query::{ParsedQuery, QueryMode};
 use crate::store::IndexStore;
 use crate::Result;
+pub use field_weight::EmbedFieldScores;
 #[cfg(test)]
 use finish::apply_rerank_order;
 pub use finish::finish_response;
@@ -12,6 +15,7 @@ pub(crate) use finish::finish_response_checked;
 use finish::{
     definition_query_affinity, enforce_result_gates, excerpt_term_coverage, rerank_candidate_limit,
 };
+pub use fusion::dedup_hits;
 use passes::embed::{embed_pass_for_files, run_embed_pass, SemanticCache};
 use passes::lexical::lexical_pass;
 use passes::literal::literal_pass;
@@ -27,8 +31,8 @@ use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{SystemTime, UNIX_EPOCH};
 pub use types::{
-    dedup_hits, format_hit_line, hit_why, DegradedChannel, HitKind, HitSignal, QueryExpansion,
-    SearchHit, SearchOptions, SearchResponse, SnapshotStamp, SpanHitInput,
+    format_hit_line, hit_why, DegradedChannel, HitKind, HitSignal, QueryExpansion, SearchHit,
+    SearchOptions, SearchResponse, SnapshotStamp, SpanHitInput,
 };
 const CASCADE_PREFILTER_FILE_LIMIT: usize = 100;
 /// Cap on reported query expansions (ufk7).
@@ -86,7 +90,7 @@ pub struct Searcher {
 }
 /// Fail closed when callers request optional neural/rerank paths that were
 pub fn validate_search_feature_flags(options: &SearchOptions) -> Result<()> {
-    if options.use_neural_embed {
+    if options.use_embed && options.use_neural_embed {
         #[cfg(not(feature = "neural-embed"))]
         {
             return Err(crate::StoreError::Other(

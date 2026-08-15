@@ -8,6 +8,7 @@ use tempfile::TempDir;
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(24))]
 
+    /// QG-010: `ParsedQuery::parse` never panics (`docs/QUERY_GRAMMAR.md`).
     #[test]
     fn parse_never_panics(s in ".*") {
         let _ = ParsedQuery::parse(&s);

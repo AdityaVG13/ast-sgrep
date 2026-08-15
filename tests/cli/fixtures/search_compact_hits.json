@@ -1,0 +1,36 @@
+{
+  "command": "search",
+  "exit_code": 0,
+  "h": [
+    [
+      "2zw1piqow89fh:8-11",
+      "d",
+      "t",
+      "process_request",
+      "def process_request(input)\n  validate_input(input)\n  \"processed: #{input}\"\nend"
+    ],
+    [
+      "3efr5s0prx7r0:8-10",
+      "d",
+      "t",
+      "process_request",
+      "def process_request(input: str) -> str:\n    validate_input(input)\n    return f\"processed: {input"
+    ]
+  ],
+  "ok": true,
+  "p": {
+    "2zw1piqow89fh": "src/app.rb",
+    "3efr5s0prx7r0": "src/main.py"
+  },
+  "q": "process_request",
+  "schema_version": "1.0.0",
+  "tool": "asgrep",
+  "v": 1,
+  "zb": [
+    96,
+    768,
+    174
+  ],
+  "zn": 2,
+  "zt": 1
+}

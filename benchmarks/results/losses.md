@@ -1,13 +1,8 @@
 # Known losses
 
-> **Reproducibility status:** Every numeric row in this report is a historical
-> published value and is **unreproducible from this source tree**: the generating
-> harnesses, raw corpora, and raw result artifacts are absent. The external
-> artifact location is the [Speed benchmark workflow](https://github.com/AdityaVG13/ast-sgrep/actions/workflows/speed.yml).
-> No retained artifact is identified there for these historical runs, so this
-> link is a storage location, not evidence that a row can currently be regenerated.
-
-> **Published record** of measured results. No runnable harnesses ship in this tree.
+> **Status: `historical` + `UNREPRODUCIBLE`.** Cite fingerprints in
+> [`baselines.md`](baselines.md). The incomplete `--bin` reproduce fragment
+> was removed (`eval-bakeoff.py` / writer is not in this tree).
 
 Measured 2026-07-10 on Apple M5 Max, 48 GiB RAM. The corpus is ripgrep 14.1.1 at `4649aa9700619f94cf9c66876e9549d83420e16c`; the 14-query gold fixture is unchanged. Full machine, corpus, and tool provenance is in [`BASELINES.md`](baselines.md). Machine-readable aggregate and per-query results are under `bakeoff.corpora.ripgrep` in *(historical dump; not in-tree)*.
 
@@ -22,18 +17,15 @@ natural-language query directly.
 
 ## Reproduce
 
-```bash
-cargo build --profile release-perf -p ast-sgrep-cli \
-  --features neural-embed,rerank
-# ASGREP_RERANK_WEIGHT does not exist; use ASGREP_RERANK_TOP_K.
-ASGREP_NEURAL_EMBED=1 ASGREP_RERANK=1 \
-ASGREP_RERANK_TOP_K=20 ASGREP_RERANK_BATCH_SIZE=1 \
-RAYON_NUM_THREADS=1 ASGREP_NEURAL_INTRA_THREADS=1 \
-ASGREP_RERANK_INTRA_THREADS=1 \
-    --bin target/release-perf/asgrep
-```
+**Status: `UNREPRODUCIBLE`.** Neural+rerank env flags below are historical
+provenance, not a complete harness. `eval-bakeoff.py` is not in this tree.
 
-The harness processes one query/tool subprocess at a time and writes every query result to `benchmarks/results.json`.
+```text
+ASGREP_NEURAL_EMBED=1 ASGREP_RERANK=1
+ASGREP_RERANK_TOP_K=20 ASGREP_RERANK_BATCH_SIZE=1
+RAYON_NUM_THREADS=1 ASGREP_NEURAL_INTRA_THREADS=1
+ASGREP_RERANK_INTRA_THREADS=1
+```
 
 ## All 14 ripgrep queries
 

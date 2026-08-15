@@ -5,13 +5,27 @@ use super::super::sql::{
     where_clause,
 };
 use super::{
-    CallRow, ImportQueryRow, ImportRow, IndexStore, IndexedLineRow, PatternNodeRow,
-    SemanticChunkStats, SymbolLocationRow, SymbolRow, IMPORT_SELECT, SYM_LOC,
+    sql_usize_from_byte_offset, CallRow, ImportQueryRow, ImportRow, IndexStore, IndexedLineRow,
+    PatternNodeRow, SemanticChunkStats, SymbolLocationRow, SymbolRow, IMPORT_SELECT, SYM_LOC,
 };
 use crate::{IndexStatus, Result};
 use rusqlite::types::{Type, ValueRef};
 use rusqlite::{params, ToSql};
 use std::sync::Arc;
+
+fn read_field_vector_row(
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<(i64, crate::semantic_chunk::SemanticFieldVectors)> {
+    Ok((
+        row.get(0)?,
+        crate::semantic_chunk::SemanticFieldVectors {
+            name: row.get(1)?,
+            docs: row.get(2)?,
+            body: row.get(3)?,
+            graph: row.get(4)?,
+        },
+    ))
+}
 
 impl IndexStore {
     pub fn file_hash(&self, rel_path: &str) -> Result<Option<String>> {
@@ -251,6 +265,52 @@ impl IndexStore {
         );
         query_map_rows(&self.conn, &sql, lang, read_sem_row)
     }
+
+    /// Per-field embedding blobs for 7d5x.2.2 persist / 7d5x.3 weighting.
+    pub fn semantic_chunk_field_vectors(
+        &self,
+    ) -> Result<Vec<(i64, crate::semantic_chunk::SemanticFieldVectors)>> {
+        self.semantic_field_vectors_filtered(None)
+    }
+
+    pub fn semantic_field_vectors_filtered(
+        &self,
+        lang: Option<&str>,
+    ) -> Result<Vec<(i64, crate::semantic_chunk::SemanticFieldVectors)>> {
+        let sql = format!(
+            "SELECT sc.id, sc.vector_name, sc.vector_docs, sc.vector_body, sc.vector_graph \
+             FROM semantic_chunks sc JOIN files f ON f.id=sc.file_id WHERE 1=1{} ORDER BY sc.id",
+            lang_and_clause(lang)
+        );
+        query_map_rows(&self.conn, &sql, lang, read_field_vector_row)
+    }
+
+    pub fn semantic_field_vectors_by_ids(
+        &self,
+        ids: &[i64],
+    ) -> Result<std::collections::HashMap<i64, crate::semantic_chunk::SemanticFieldVectors>> {
+        let mut out = std::collections::HashMap::with_capacity(ids.len());
+        for batch in ids.chunks(500) {
+            let placeholders = std::iter::repeat_n("?", batch.len())
+                .collect::<Vec<_>>()
+                .join(",");
+            let sql = format!(
+                "SELECT id, vector_name, vector_docs, vector_body, vector_graph \
+                 FROM semantic_chunks WHERE id IN ({placeholders})"
+            );
+            let mut stmt = self.conn.prepare(&sql)?;
+            let rows = stmt.query_map(
+                rusqlite::params_from_iter(batch.iter()),
+                read_field_vector_row,
+            )?;
+            for row in rows {
+                let (id, fields) = row?;
+                out.insert(id, fields);
+            }
+        }
+        Ok(out)
+    }
+
     /// Walk sorted file paths and extend with per-path query results (stable path order).
     fn map_sorted_files<T>(
         files: &std::collections::HashSet<String>,
@@ -328,8 +388,8 @@ impl IndexStore {
                     kind: r.get(1)?,
                     line_start: r.get(2)?,
                     line_end: r.get(3)?,
-                    byte_start: r.get(4)?,
-                    byte_end: r.get(5)?,
+                    byte_start: sql_usize_from_byte_offset(r, 4)?,
+                    byte_end: sql_usize_from_byte_offset(r, 5)?,
                 })
             },
         )

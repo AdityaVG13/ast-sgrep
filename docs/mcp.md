@@ -96,7 +96,7 @@ Build or incrementally update the index. Pass `force: true` for full reindex.
 2. Choose one of `keyword_search`, `ast_search`, or `semantic_search` with a bounded limit.
 3. Inspect abbreviated previews and retain only relevant node IDs.
 4. Call `code_read` for selected IDs, adding adjacent context only when needed.
-5. Use the one-shot CLI when automatic fusion is explicitly desired. Structural rewrites remain delegated to ast-grep.
+5. Use the one-shot CLI when automatic fusion is explicitly desired. Structural rewrites and nested templates are out of contract; use standalone ast-grep, they are not silently delegated (`DISC-pattern-native-subset`).
 
 ## LSP vs MCP
 

@@ -1,4 +1,21 @@
-use ast_sgrep_testkit::CliSession;
+//! Machine envelope contracts. Clause map (ghiw.2): `docs/validation/machine-json-schema.md`.
+//!
+//! MJ-001/002/003/004 — `assert_success` / `assert_doctor_unhealthy`
+//! MJ-005 — `operational_failures_are_json_and_exit_two`
+//! MJ-006 — `bounded_arguments_are_json_usage_errors` (+ typo cases)
+//! MJ-007 — `capabilities_and_version_match_goldens`
+//! MJ-008 — `index_reindex_status_and_doctor_have_stable_shapes`
+//! MJ-009 — `format_aliases_typos_and_root_failures_are_unambiguous`
+//! MJ-010 — doctor unhealthy / `missing_root`
+//! MJ-013 — `format_alone_implies_json_machine_output`
+//! MJ-011 — `search_hit_dumps_match_goldens_for_agent_capsule_and_compact` (nz7i.2)
+//! MJ-012 disc — MCP non-envelope (`DISC-mcp-not-full-suite`)
+//! NL-008 — `compact_omits_native_hit_array_and_excerpt_blobs`
+use ast_sgrep_core::chain::ChainResponse;
+use ast_sgrep_testkit::{
+    assert_golden_at, assert_golden_json_at, canonicalize_chain_response, canonicalize_text,
+    CliSession, Scrubber,
+};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -88,12 +105,51 @@ fn assert_shape(value: &Value, shape: &Value) {
         .collect();
     assert_eq!(actual, expected);
 }
+
+fn cli_fixture(name: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/cli/fixtures")
+        .join(name)
+}
+
+/// `search_dump(root)` then `machine_contract` (package version only; scores stay).
+fn scrub_search_dump(root: &Path, value: &Value) -> Value {
+    let raw = serde_json::to_string(value).expect("serialize search dump");
+    let scrubbed = Scrubber::machine_contract().apply(&Scrubber::search_dump(root).apply(&raw));
+    serde_json::from_str(&scrubbed).expect("scrubbed search dump parses")
+}
+
+fn search_format(session: &CliSession, format: &str) -> Value {
+    let index = session.index_path.to_str().expect("index utf8");
+    let root = session.root.to_str().expect("root utf8");
+    assert_success(
+        &run(
+            &session.bin,
+            &[
+                "--json",
+                "--no-embed",
+                "--index-path",
+                index,
+                "--limit",
+                "2",
+                "--format",
+                format,
+                "process_request",
+                root,
+            ],
+        ),
+        "search",
+    )
+}
+
 #[test]
 fn capabilities_and_version_match_goldens() {
     let bin = asgrep_bin();
     let mut capabilities = assert_success(&run(&bin, &["capabilities", "--json"]), "capabilities");
     capabilities["version"] = "<version>".into();
-    assert_eq!(capabilities, fixture("capabilities"));
+    let capabilities_golden =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/cli/fixtures/capabilities.json");
+    assert_golden_json_at(&capabilities_golden, &capabilities);
     let mut version = assert_success(&run(&bin, &["version", "--json"]), "version");
     version["version"] = "<version>".into();
     assert_eq!(version, fixture("envelopes")["version"]);
@@ -145,6 +201,75 @@ fn index_reindex_status_and_doctor_have_stable_shapes() {
     assert_eq!(doctor["healthy"], false);
     assert_eq!(doctor["status"], Value::Null);
     assert!(!doctor["issues"].as_array().expect("issues").is_empty());
+}
+
+#[test]
+fn index_scip_missing_or_malformed_degrades_without_failing() {
+    let session = CliSession::sample(asgrep_bin());
+    let index = session.index_path.to_str().expect("index utf8");
+    let root = session.root.to_str().expect("root utf8");
+    let missing = assert_success(
+        &run(
+            &session.bin,
+            &[
+                "--json",
+                "--no-embed",
+                "--index-path",
+                index,
+                "index",
+                root,
+                "--scip",
+                "/tmp/asgrep-kgvi3-missing.scip.json",
+            ],
+        ),
+        "index",
+    );
+    let missing_channels = missing["degraded_channels"]
+        .as_array()
+        .expect("degraded_channels");
+    assert_eq!(missing_channels.len(), 1);
+    assert_eq!(missing_channels[0]["channel"], "scip");
+    assert!(
+        missing_channels[0]["reason"]
+            .as_str()
+            .unwrap_or("")
+            .contains("not found"),
+        "missing SCIP reason: {}",
+        missing_channels[0]["reason"]
+    );
+
+    let bad_dir = TempDir::new().expect("tempdir");
+    let bad = bad_dir.path().join("bad.json");
+    std::fs::write(&bad, "{").expect("malformed scip");
+    let malformed = assert_success(
+        &run(
+            &session.bin,
+            &[
+                "--json",
+                "--no-embed",
+                "--index-path",
+                index,
+                "index",
+                root,
+                "--scip",
+                bad.to_str().expect("utf8"),
+            ],
+        ),
+        "index",
+    );
+    let malformed_channels = malformed["degraded_channels"]
+        .as_array()
+        .expect("degraded_channels");
+    assert_eq!(malformed_channels.len(), 1);
+    assert_eq!(malformed_channels[0]["channel"], "scip");
+    assert!(
+        malformed_channels[0]["reason"]
+            .as_str()
+            .unwrap_or("")
+            .contains("malformed"),
+        "malformed SCIP reason: {}",
+        malformed_channels[0]["reason"]
+    );
 }
 
 #[test]
@@ -540,8 +665,6 @@ fn agent_discovery_defaults_and_boolish_envs_are_round_trip_free() {
         let output = Command::new(&bin)
             .arg("capabilities")
             .env("ASGREP_NO_EMBED", value)
-            .env("ASGREP_CLOUD_EMBED", value)
-            .env("ASGREP_OLLAMA_EMBED", value)
             .env("ASGREP_NEURAL_EMBED", value)
             .env("ASGREP_SEMANTIC_ONLY", value)
             .env("ASGREP_TANTIVY", value)
@@ -708,6 +831,65 @@ fn doctor_suggested_commands_echo_effective_root() {
             .is_some_and(|s| s.contains(root_s) && s.contains("index"))),
         "suggested_commands must echo effective root, got {suggested:?}"
     );
+}
+
+/// NL-008 / `DISC-compact-drops-provenance`: compact is not a native hit dump.
+#[test]
+fn compact_omits_native_hit_array_and_excerpt_blobs() {
+    let session = CliSession::sample(asgrep_bin());
+    let index = session.index_path.to_str().expect("index utf8");
+    let root = session.root.to_str().expect("root utf8");
+    let output = run(
+        &session.bin,
+        &[
+            "--no-embed",
+            "--index-path",
+            index,
+            "--format",
+            "compact",
+            "search",
+            "process_request",
+            root,
+        ],
+    );
+    let value = assert_success(&output, "search");
+    assert_eq!(value["v"], 1);
+    assert!(
+        value.get("hits").is_none(),
+        "compact must not emit native hits array"
+    );
+    assert!(
+        value.get("excerpt").is_none() && value.get("excerpts").is_none(),
+        "compact must not emit native excerpt provenance blobs"
+    );
+    assert!(value.get("h").is_some(), "compact hit rows live in h");
+    assert!(
+        value.get("p").is_some(),
+        "compact path dictionary lives in p"
+    );
+}
+
+/// Public embed flags stay independently settable. Exclusive collapse
+/// is SearchOptions-side (`from_flags` / `set_embed_backend`), not a clap conflict.
+#[test]
+fn concurrent_neural_and_semantic_embed_flags_are_not_usage_errors() {
+    let session = CliSession::sample(asgrep_bin());
+    let index = session.index_path.to_str().expect("index utf8");
+    let root = session.root.to_str().expect("root utf8");
+    let output = run(
+        &session.bin,
+        &[
+            "--json",
+            "--no-embed",
+            "--neural-embed",
+            "--index-path",
+            index,
+            "search",
+            "process_request",
+            root,
+        ],
+    );
+    assert_success(&output, "search");
 }
 
 #[test]
@@ -1072,4 +1254,154 @@ fn codemode_batch_missing_file_machine_envelope_without_json_flag() {
     assert_eq!(value["ok"], false);
     assert_eq!(value["command"], "codemode-batch");
     assert_eq!(value["error"]["kind"], "operational");
+}
+
+/// MJ-011 / nz7i.2: freeze ranked hit payloads, not just top-level key sets.
+#[test]
+fn search_hit_dumps_match_goldens_for_agent_capsule_and_compact() {
+    let session = CliSession::sample(asgrep_bin());
+    for (format, file) in [
+        ("agent", "search_agent_hits.json"),
+        ("agent-capsule", "search_agent_capsule_hits.json"),
+        ("compact", "search_compact_hits.json"),
+    ] {
+        let dump = scrub_search_dump(&session.root, &search_format(&session, format));
+        assert_golden_json_at(&cli_fixture(file), &dump);
+    }
+}
+
+/// nz7i.2 F2: native / github / gitlab were listed in capabilities but unshaped.
+#[test]
+fn native_github_gitlab_search_shapes_are_stable() {
+    let session = CliSession::sample(asgrep_bin());
+    let shapes = fixture("shapes");
+    for format in ["native", "github", "gitlab"] {
+        assert_shape(&search_format(&session, format), &shapes[format]);
+    }
+}
+
+/// nz7i.2 F4: path-free usage teaching is frozen in full, not blanked to `<message>`.
+#[test]
+fn path_free_usage_teaching_messages_match_goldens() {
+    let bin = asgrep_bin();
+    let typo = parse_stdout(&run(&bin, &["--json", "indxx"]));
+    assert_eq!(typo["ok"], false);
+    assert_eq!(typo["error"]["kind"], "usage");
+    let typo_msg = typo["error"]["message"].as_str().expect("typo message");
+    assert!(
+        typo_msg.contains("did you mean") && typo_msg.contains("index"),
+        "expected index teaching, got {typo_msg}"
+    );
+    assert_golden_json_at(&cli_fixture("teaching_indxx.json"), &typo);
+
+    let format = parse_stdout(&run(&bin, &["--json", "--format", "agnt", "query", "."]));
+    assert_eq!(format["ok"], false);
+    assert_eq!(format["error"]["kind"], "usage");
+    let format_msg = format["error"]["message"].as_str().expect("format message");
+    assert!(
+        format_msg.contains("did you mean") && format_msg.contains("agent"),
+        "expected agent teaching, got {format_msg}"
+    );
+    assert_golden_json_at(&cli_fixture("teaching_format_agnt.json"), &format);
+}
+
+/// nz7i.4: freeze `chain process_request` nodes/edges (sorted; scores kept).
+#[test]
+fn chain_expand_sample_dump_matches_golden() {
+    let session = CliSession::sample(asgrep_bin());
+    let index = session.index_path.to_str().expect("index utf8");
+    let root = session.root.to_str().expect("root utf8");
+    let envelope = assert_success(
+        &run(
+            &session.bin,
+            &[
+                "--json",
+                "--no-embed",
+                "--index-path",
+                index,
+                "chain",
+                "process_request",
+                root,
+            ],
+        ),
+        "chain",
+    );
+    let chain: ChainResponse =
+        serde_json::from_value(envelope.clone()).expect("chain envelope deserializes");
+    let mut dump = serde_json::to_value(canonicalize_chain_response(chain))
+        .expect("canonical chain serializes");
+    if let Some(object) = dump.as_object_mut() {
+        for key in ["schema_version", "tool", "command", "ok", "exit_code"] {
+            object.insert(key.to_string(), envelope[key].clone());
+        }
+    }
+    assert_golden_json_at(
+        &cli_fixture("chain_expand_process_request.json"),
+        &scrub_search_dump(&session.root, &dump),
+    );
+}
+
+/// nz7i.3: freeze the agent handbook body (exact; canonicalize_text only).
+#[test]
+fn robot_docs_guide_body_matches_golden() {
+    let bin = asgrep_bin();
+    let markdown = String::from_utf8(run(&bin, &["robot-docs"]).stdout).expect("handbook utf8");
+    assert_golden_at(&cli_fixture("robot_guide.md"), &markdown);
+    let envelope = parse_stdout(&run(&bin, &["robot-docs", "--json"]));
+    assert_eq!(envelope["command"], "robot-docs");
+    assert_eq!(envelope["topic"], "guide");
+    assert_eq!(envelope["format"], "markdown");
+    assert_eq!(
+        canonicalize_text(envelope["body"].as_str().expect("body")),
+        canonicalize_text(&markdown)
+    );
+}
+
+#[test]
+fn eval_reports_real_graph_precision_by_resolution_tier() {
+    let bin = asgrep_bin();
+    let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let root = repo.join("benchmarks/fixtures/graph_precision");
+    let gold = repo.join("benchmarks/gold/graph_precision.json");
+    let scip = root.join("index.scip.json");
+    let temp = TempDir::new().expect("tempdir");
+    let index = temp.path().join("index.db");
+    let report = assert_success(
+        &run(
+            &bin,
+            &[
+                "--json",
+                "--no-embed",
+                "--index-path",
+                index.to_str().expect("index path utf8"),
+                "eval",
+                "--gold",
+                gold.to_str().expect("gold path utf8"),
+                "--scip",
+                scip.to_str().expect("scip path utf8"),
+                root.to_str().expect("root path utf8"),
+            ],
+        ),
+        "eval",
+    );
+
+    let graph = &report["graph_edge_precision"];
+    assert_eq!(graph["labeled_queries"], 4);
+    assert_eq!(graph["gold_edges"], 4);
+    assert_eq!(graph["scip_requested"], true);
+    assert_eq!(graph["scip_loaded"], true);
+    for tier in [
+        "scip_occurrence",
+        "file_local_unique",
+        "repository_unique",
+        "name_only",
+    ] {
+        assert_eq!(graph["by_resolution"][tier]["predicted"], 1, "{tier}");
+        assert_eq!(graph["by_resolution"][tier]["correct"], 1, "{tier}");
+        assert_eq!(graph["by_resolution"][tier]["precision"], 1.0, "{tier}");
+    }
+    assert_eq!(
+        graph["by_resolution"]["compiler_exact"]["precision"],
+        Value::Null
+    );
 }

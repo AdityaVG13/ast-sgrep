@@ -7,7 +7,7 @@
 | `tool` | Always `asgrep` on machine envelopes |
 | `schema_version` | Machine JSON protocol (`1.0.0`) |
 | `version` | `CARGO_PKG_VERSION` / Pi `RUNTIME_VERSION` (must match) |
-| `embed_backend` | Stored meta: `semantic` / `neural` / `cloud` / `ollama` |
+| `embed_backend` | Stored meta: `semantic` / `neural` (legacy `cloud` / `ollama` refuse search until reindex) |
 | `index_format` | SQLite user_version / Pi `INDEX_FORMAT_VERSION` |
 
 ## FailureBundle

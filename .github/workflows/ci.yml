@@ -40,7 +40,28 @@ jobs:
             exit 1
           fi
       - name: test workspace
+        env:
+          # Compare-only. Never set ASGREP_UPDATE_GOLDENS=1 under .github/.
+          # SOP: docs/validation/golden-files.md
+          ASGREP_UPDATE_GOLDENS: "0"
         run: cargo test --workspace -j1
+      - name: upload golden mismatch dumps
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: golden-actuals-test
+          path: "**/*.actual"
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: no leftover golden actuals
+        if: success()
+        run: |
+          leftovers=$(find . -name '*.actual' ! -path './target/*' ! -path './.git/*' || true)
+          if [ -n "$leftovers" ]; then
+            echo "unexpected *.actual files (CI is compare-only):" >&2
+            echo "$leftovers" >&2
+            exit 1
+          fi
 
   pi:
     runs-on: ubuntu-latest
@@ -74,7 +95,28 @@ jobs:
         run: cargo build --workspace --release
 
       - name: Test (release)
+        env:
+          # Compare-only. Never set ASGREP_UPDATE_GOLDENS=1 under .github/.
+          # SOP: docs/validation/golden-files.md
+          ASGREP_UPDATE_GOLDENS: "0"
         run: cargo test --workspace --release
+      - name: upload golden mismatch dumps
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: golden-actuals-build-and-test-${{ matrix.os }}
+          path: "**/*.actual"
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: no leftover golden actuals
+        if: success()
+        run: |
+          leftovers=$(find . -name '*.actual' ! -path './target/*' ! -path './.git/*' || true)
+          if [ -n "$leftovers" ]; then
+            echo "unexpected *.actual files (CI is compare-only):" >&2
+            echo "$leftovers" >&2
+            exit 1
+          fi
 
   windows-smoke:
     if: github.event_name == 'workflow_dispatch'
@@ -202,3 +244,18 @@ jobs:
       - name: Fuzz ranking invariants
         working-directory: fuzz
         run: cargo +nightly fuzz run rank -- -max_total_time=30 -timeout=5
+
+  ann-ivf-scale:
+    if: github.event_name == 'workflow_dispatch'
+    name: ANN IVF scale quality (release, ignored)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: adaptive IVF tradeoff at 2048 and 10000
+        run: |
+          cargo test -p ast-sgrep-core --release --test semantic_ivf_roundtrip \
+            adaptive_ivf_tradeoff_at_2048_and_10000_vectors -- --ignored --nocapture
+        # Fail hard. Do not --skip. Do not treat timeout as pass.

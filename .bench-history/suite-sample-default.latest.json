@@ -1,0 +1,13 @@
+{
+  "schema_version": "1",
+  "label": "suite:sample:default",
+  "placeholder": true,
+  "keep_eligible": false,
+  "avg_search_ms": null,
+  "geomean_search_ms": null,
+  "cv_pct": null,
+  "git_sha": null,
+  "host": null,
+  "profile": null,
+  "note": "Greenfield SSoT row. First honest labeled-host run may replace this after a keep. Do not treat competitor latency or UNREPRODUCIBLE ledger ms as this baseline."
+}

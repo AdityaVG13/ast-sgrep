@@ -15,6 +15,7 @@ fn hit(file: &str, line: u32, score: f64) -> SearchHit {
         margin: 0.0,
         confidence: 0.0,
         resolution: None,
+        embed_fields: None,
         excerpt: String::new(),
     }
 }

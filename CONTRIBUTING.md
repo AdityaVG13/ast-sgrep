@@ -43,18 +43,34 @@ Rust, and `cargo-fuzz`. It is **not** invoked by Pi `release-acceptance` (npm
 pack/verify/gate/publish). Ordinary changes should keep using the cheaper,
 targeted default bar above.
 
+Merge honesty (optional, does not replace T0): `bash scripts/run-proof-pack.sh`
+writes `tests/artifacts/compliance/COMPLIANCE_REPORT.md`. See
+[docs/validation/proof-pack.md](docs/validation/proof-pack.md).
+
 GitHub Actions on every `pull_request` runs `forbid-soundness`, `cargo-check`,
-`test`, `pi`, `clippy`, `fmt`, and `audit`. `build-and-test`, `windows-smoke`,
-and `bounded-fuzz` remain `workflow_dispatch` (Actions tab). The speed and
-bake-off workflows execute real harnesses and fail on correctness, identity, or
-latency threshold breaches.
+ubuntu `test` (`cargo test --workspace`, compare-only goldens), `pi`, `clippy`,
+`fmt`, and `audit`. The ubuntu+macos **release** matrix (`build-and-test`),
+Windows smoke, bounded fuzz, and **ANN IVF scale** (`ann-ivf-scale`, ignored
+release test at 2048+10000 vectors) stay `workflow_dispatch` (Actions tab). Speed
+and bake-off workflows execute real harnesses and fail on correctness, identity,
+or latency threshold breaches.
+
+## Golden files
+
+CI compares frozen dumps; it never rewrites them (`ASGREP_UPDATE_GOLDENS=0`).
+To refresh a freeze locally, set `ASGREP_UPDATE_GOLDENS=1`, run the targeted
+test, review `git diff` file-by-file, and commit. Never commit `*.actual`.
+Full SOP: [docs/validation/golden-files.md](docs/validation/golden-files.md).
+Do not treat `benchmarks/results/baselines.md` as a golden.
 
 ## Pull requests
 
 - Keep changes focused; extend `tests/core/parity.rs` (or a targeted unit test) when behavior changes.
+- Review golden/fixture diffs file-by-file; do not commit `*.actual`.
 - Do not commit local agent/tool caches or skill-run trees -- they are gitignored.
 - Do not commit secrets, `.env`, local caches, or `fuzz/target/`.
 - Prefer conventional commits: `feat:`, `fix:`, `refactor:`, `docs:`, `test:`, `ci:`, `chore:`.
+- Metric claims must cite `benchmarks/results/baselines.md` or be tagged `UNREPRODUCIBLE`.
 
 ## Crate layout
 
@@ -73,3 +89,8 @@ latency threshold breaches.
 | `ast-sgrep-testkit` | Shared fixtures for integration tests |
 
 See [README.md](README.md) and [docs/README.md](docs/README.md) for user-facing docs.
+
+Conformance honesty: [docs/validation/DISCREPANCIES.md](docs/validation/DISCREPANCIES.md),
+[docs/validation/COVERAGE.md](docs/validation/COVERAGE.md), and
+[docs/validation/conformance-verdicts.md](docs/validation/conformance-verdicts.md).
+XFAIL/`#[ignore]` only with a registered DISC id. Not-run is not Pass.

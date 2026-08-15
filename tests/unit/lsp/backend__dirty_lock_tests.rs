@@ -1,4 +1,5 @@
-use super::{resolve_lsp_index_path, LspBackend};
+use super::{resolve_lsp_index_path, resolve_lsp_index_path_with_cache, LspBackend};
+use crate::support::AsgrepSettings;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::Arc;
 
@@ -29,22 +30,116 @@ fn dirty_buffers_poison_recovers_fail_closed() {
 }
 
 #[test]
-fn custom_index_path_requires_explicit_trusted_operator_opt_in() {
+fn relative_index_path_is_allowed_under_workspace_without_opt_in() {
+    let workspace = tempfile::tempdir().unwrap();
+    let root = workspace.path().canonicalize().unwrap();
+    let path = resolve_lsp_index_path(&root, "state/index.db", false).unwrap();
+    assert_eq!(path, root.join("state/index.db"));
+
+    let mut backend = LspBackend::new(root.clone());
+    backend
+        .apply_settings(AsgrepSettings {
+            index_path: Some("state/index.db".into()),
+            ..AsgrepSettings::default()
+        })
+        .expect("relative indexPath under workspace");
+    assert_eq!(
+        backend.index_path.as_ref(),
+        Some(&root.join("state/index.db"))
+    );
+}
+
+#[test]
+fn relative_index_path_escape_is_rejected_without_opt_in() {
+    let workspace = tempfile::tempdir().unwrap();
+    let root = workspace.path().canonicalize().unwrap();
+    let error = resolve_lsp_index_path(&root, "../escape.db", false)
+        .expect_err("parent-dir escape must not write outside the workspace");
+    assert!(
+        error.to_string().contains("outside the workspace"),
+        "{error}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn relative_index_path_through_symlink_with_missing_suffix_is_rejected() {
+    use std::os::unix::fs::symlink;
+
     let workspace = tempfile::tempdir().unwrap();
     let outside = tempfile::tempdir().unwrap();
     let root = workspace.path().canonicalize().unwrap();
+    symlink(outside.path(), root.join("link")).unwrap();
 
-    let error = resolve_lsp_index_path(&root, "state/index.db", false)
-        .expect_err("all custom paths must require explicit opt-in");
-    assert!(error.to_string().contains("disabled by default"));
+    let configured = "link/nonexistent/deep/index.db";
+    let error = resolve_lsp_index_path(&root, configured, false)
+        .expect_err("nearest existing symlink ancestor must reveal the external path");
+    assert!(
+        error.to_string().contains("outside the workspace"),
+        "{error}"
+    );
 
-    let allowed = resolve_lsp_index_path(
+    let allowed = resolve_lsp_index_path(&root, configured, true).unwrap();
+    assert_eq!(
+        allowed,
+        outside
+            .path()
+            .canonicalize()
+            .unwrap()
+            .join("nonexistent/deep/index.db")
+    );
+}
+
+#[test]
+fn absolute_index_path_inside_workspace_is_allowed_without_opt_in() {
+    let workspace = tempfile::tempdir().unwrap();
+    let root = workspace.path().canonicalize().unwrap();
+    let inside = root.join("index.db");
+    let path = resolve_lsp_index_path(&root, inside.to_str().unwrap(), false).unwrap();
+    assert_eq!(path, inside);
+}
+
+#[test]
+fn absolute_index_path_outside_workspace_requires_opt_in() {
+    let workspace = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    let root = workspace.path().canonicalize().unwrap();
+    let escaped = outside.path().join("index.db");
+
+    let error = resolve_lsp_index_path(&root, escaped.to_str().unwrap(), false)
+        .expect_err("untrusted absolute path must not plant a DB outside the folder");
+    assert!(
+        error.to_string().contains("ASGREP_ALLOW_EXTERNAL_INDEX=1"),
+        "{error}"
+    );
+
+    let allowed = resolve_lsp_index_path(&root, escaped.to_str().unwrap(), true).unwrap();
+    let expected = outside.path().canonicalize().unwrap().join("index.db");
+    assert_eq!(allowed, expected);
+}
+
+#[test]
+fn absolute_index_path_under_asgrep_cache_is_allowed_without_opt_in() {
+    let workspace = tempfile::tempdir().unwrap();
+    let cache = tempfile::tempdir().unwrap();
+    let root = workspace.path().canonicalize().unwrap();
+    let cache_home = cache.path().join("asgrep");
+    let cached = cache_home.join("abc").join("index.db");
+    let path = resolve_lsp_index_path_with_cache(
         &root,
-        outside.path().join("index.db").to_str().unwrap(),
-        true,
+        cached.to_str().unwrap(),
+        false,
+        Some(cache_home.clone()),
     )
     .unwrap();
-    assert_eq!(allowed, outside.path().join("index.db"));
+    assert_eq!(
+        path,
+        cache
+            .path()
+            .canonicalize()
+            .unwrap()
+            .join("asgrep/abc/index.db")
+    );
 }
 
 #[test]

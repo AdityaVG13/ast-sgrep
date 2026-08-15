@@ -1,0 +1,79 @@
+{
+  "command": "search",
+  "exit_code": 0,
+  "has_semantic_hits": false,
+  "hit_count": 2,
+  "hits": [
+    {
+      "callee": null,
+      "caller": null,
+      "contributors": [
+        "asgrep",
+        "def",
+        "anchor",
+        "pattern"
+      ],
+      "excerpt": "def process_request(input)\n  validate_input(input)\n  \"processed: #{input}\"\nend",
+      "file": "src/app.rb",
+      "follow_up_queries": [
+        "defs:process_request",
+        "callers:process_request"
+      ],
+      "kind": "def",
+      "language": "ruby",
+      "lines": {
+        "end": 11,
+        "start": 8
+      },
+      "margin": 0.0014232714172395522,
+      "score": 0.0693416181914331,
+      "semantic": false,
+      "signal": "structural",
+      "symbol": "process_request"
+    },
+    {
+      "callee": null,
+      "caller": null,
+      "contributors": [
+        "asgrep",
+        "def",
+        "anchor",
+        "pattern"
+      ],
+      "excerpt": "def process_request(input: str) -> str:\n    validate_input(input)\n    return f\"processed: {input}\"",
+      "file": "src/main.py",
+      "follow_up_queries": [
+        "defs:process_request",
+        "callers:process_request"
+      ],
+      "kind": "def",
+      "language": "python",
+      "lines": {
+        "end": 10,
+        "start": 8
+      },
+      "margin": 0.013819986118455842,
+      "score": 0.06791834677419355,
+      "semantic": false,
+      "signal": "structural",
+      "symbol": "process_request"
+    }
+  ],
+  "limit": 2,
+  "ok": true,
+  "prevented_read_bytes": 605,
+  "provider": "ast-sgrep",
+  "query": "process_request",
+  "read_bytes_estimate": 781,
+  "returned_excerpt_bytes": 176,
+  "schema_version": "1.0.0",
+  "stack_hint": "Use asgrep for hybrid search; defs:/callers:/literal: prefixes for graph and exact text; asgrep semantic for embedding-only.",
+  "suggested_next": [
+    "asgrep \"defs:process_request\"",
+    "asgrep \"callers:process_request\"",
+    "asgrep --json --format agent \"process_request\"",
+    "asgrep \"literal:process_request\""
+  ],
+  "tool": "asgrep",
+  "version": "<version>"
+}

@@ -43,22 +43,6 @@ pub(crate) struct SearchTuning {
     pub(crate) no_embed: bool,
     #[arg(
         long,
-        env = "ASGREP_CLOUD_EMBED",
-        action = clap::ArgAction::SetTrue,
-        value_parser = clap::builder::BoolishValueParser::new(),
-        help = "Prefer cloud embeddings"
-    )]
-    pub(crate) cloud_embed: bool,
-    #[arg(
-        long,
-        env = "ASGREP_OLLAMA_EMBED",
-        action = clap::ArgAction::SetTrue,
-        value_parser = clap::builder::BoolishValueParser::new(),
-        help = "Prefer Ollama embeddings"
-    )]
-    pub(crate) ollama_embed: bool,
-    #[arg(
-        long,
         env = "ASGREP_NEURAL_EMBED",
         action = clap::ArgAction::SetTrue,
         value_parser = clap::builder::BoolishValueParser::new(),
@@ -162,6 +146,12 @@ pub(crate) struct IndexCmd {
         help = "Update one changed file path (repeatable; index only, max 1024)"
     )]
     pub(crate) paths: Vec<PathBuf>,
+    #[arg(
+        long,
+        value_name = "PATH",
+        help = "Optional SCIP JSON overlay; missing or malformed degrades, never fails the index"
+    )]
+    pub(crate) scip: Option<PathBuf>,
 }
 
 #[derive(Args, Clone, Debug)]
@@ -172,6 +162,12 @@ pub(crate) struct ReindexCmd {
     pub(crate) tuning: SearchTuning,
     #[arg(long, help = "Report planned index work without writing")]
     pub(crate) dry_run: bool,
+    #[arg(
+        long,
+        value_name = "PATH",
+        help = "Optional SCIP JSON overlay; missing or malformed degrades, never fails the index"
+    )]
+    pub(crate) scip: Option<PathBuf>,
 }
 
 #[derive(Args, Clone, Debug)]
@@ -235,7 +231,7 @@ pub(crate) struct Cli {
         value_parser = parse_durability,
         help = "Index write durability: strict|balanced|fast-unsafe (default balanced)"
     )]
-    pub(crate) durability: Option<ast_sgrep_core::store::Durability>,
+    pub(crate) durability: Option<ast_sgrep_core::Durability>,
     /// Search-tuning for bare (no-subcommand) search only — not inherited by capabilities/doctor (vdqo).
     #[command(flatten)]
     pub(crate) tuning: SearchTuning,
@@ -367,8 +363,8 @@ fn parse_bounded_usize(raw: &str, maximum: usize, name: &str) -> Result<usize, S
 
 /// 0obi: an unrecognized durability value is a hard error, never a silent
 /// downgrade to a weaker profile.
-fn parse_durability(raw: &str) -> Result<ast_sgrep_core::store::Durability, String> {
-    ast_sgrep_core::store::Durability::parse(raw).ok_or_else(|| {
+fn parse_durability(raw: &str) -> Result<ast_sgrep_core::Durability, String> {
+    ast_sgrep_core::Durability::parse(raw).ok_or_else(|| {
         format!("unknown durability '{raw}' (expected strict, balanced, or fast-unsafe)")
     })
 }
@@ -470,8 +466,6 @@ impl Cli {
         };
         if let Some(o) = overlay {
             t.no_embed |= o.no_embed;
-            t.cloud_embed |= o.cloud_embed;
-            t.ollama_embed |= o.ollama_embed;
             t.neural_embed |= o.neural_embed;
             t.semantic_only |= o.semantic_only;
             t.tantivy |= o.tantivy;

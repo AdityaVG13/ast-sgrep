@@ -11,4 +11,7 @@ What is intentionally **not** claimed: bit-identical result sets versus
 external tools. Structural patterns are a native subset (see
 `docs/structural-patterns.md`); lexical modes are FTS-backed, not rg-compatible.
 
-Proof pack entry: `docs/validation/proof-pack.md`.
+Proof pack entry: `docs/validation/proof-pack.md`. Registered ids:
+`DISC-no-jell-harness`, `DISC-lexical-not-rg`, `DISC-pattern-native-subset`
+in `docs/validation/DISCREPANCIES.md`. Oracle router:
+`docs/validation/oracle-dispatch.md` (jell row is `deferred_excluded`).

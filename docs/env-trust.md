@@ -9,19 +9,16 @@ must not become silent privilege or SSRF primitives.
 Other spellings are false. CLI clap flags use `BoolishValueParser`; library
 defaults use `env_flag` / the same spelling set.
 
-## Embed HTTP URLs (`ASGREP_EMBED_API_URL`, `ASGREP_OLLAMA_URL`)
+## Embeddings (in-process only)
 
-Requests are allowlisted before any HTTP client call (`embed_url_is_allowed`):
+Embeddings never leave the process. There is no `ASGREP_EMBED_API_URL`, no
+Ollama URL, no API key, and no SSRF allowlist. Stored indexes that still
+record `cloud` or `ollama` fail closed at query time until `asgrep reindex`.
 
-| Host | Notes |
-|------|-------|
-| `api.openai.com`, `api.azure.com` | Default cloud hosts |
-| `127.0.0.1`, `localhost`, `::1` | Default Ollama loopback |
-| `ASGREP_EMBED_URL_ALLOWLIST` | Extra comma-separated hosts |
-
-`http://` is limited to loopback unless `ASGREP_EMBED_ALLOW_INSECURE_HTTP=1`.
-Non-allowlisted hosts fail closed (config ignored / request error) — never silent
-fallback to a private metadata endpoint.
+Neural (ONNX) is opt-in via `--features neural-embed` and `ASGREP_NEURAL_EMBED`.
+Explicit Neural does not silently swap to hashed hits unless
+`ASGREP_NEURAL_FALLBACK=1`. CoreML EP is opt-in via `ASGREP_NEURAL_COREML`.
+See `docs/validation/neural-trust.md`.
 
 ## External `ast-grep` (`ASGREP_AST_GREP`)
 

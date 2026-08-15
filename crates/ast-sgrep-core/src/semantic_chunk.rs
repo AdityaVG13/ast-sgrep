@@ -183,8 +183,76 @@ fn child_priority(signature: &str) -> u8 {
     }
 }
 
+/// Per-field embed texts stored beside the concatenated chunk vector (7d5x.2.2).
+/// Empty strings are not embedded (NULL in SQLite). Query weighting is 7d5x.3.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ChunkFieldTexts {
+    pub name: String,
+    pub docs: String,
+    pub body: String,
+    pub graph: String,
+}
+
+pub fn chunk_field_texts(chunk: &SemanticChunkInput) -> ChunkFieldTexts {
+    let name = if chunk.symbol_name.is_empty() && chunk.kind.is_empty() && chunk.scope.is_empty() {
+        String::new()
+    } else {
+        let mut raw = format!("symbol: {} kind: {}", chunk.symbol_name, chunk.kind);
+        if !chunk.scope.is_empty() {
+            raw.push_str(&format!(" scope: {}", chunk.scope));
+        }
+        expand_concepts(&raw)
+    };
+    let docs = if chunk.doc.is_empty() {
+        String::new()
+    } else {
+        expand_concepts(&format!("doc: {}", chunk.doc))
+    };
+    let body = if chunk.excerpt.trim().is_empty() {
+        String::new()
+    } else {
+        expand_concepts(&format!("excerpt: {}", chunk.excerpt))
+    };
+    let mut graph = String::new();
+    if !chunk.callers.is_empty() {
+        graph.push_str(&format!("called_by: {}", chunk.callers.join(" ")));
+    }
+    if !chunk.callees.is_empty() {
+        if !graph.is_empty() {
+            graph.push(' ');
+        }
+        graph.push_str(&format!("calls: {}", chunk.callees.join(" ")));
+    }
+    let graph = if graph.is_empty() {
+        String::new()
+    } else {
+        expand_concepts(&graph)
+    };
+    ChunkFieldTexts {
+        name,
+        docs,
+        body,
+        graph,
+    }
+}
+
+/// Persisted per-field embedding blobs (NULL when the field text was empty).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SemanticFieldVectors {
+    pub name: Option<Vec<u8>>,
+    pub docs: Option<Vec<u8>>,
+    pub body: Option<Vec<u8>>,
+    pub graph: Option<Vec<u8>>,
+}
+
 pub fn render_chunk_text(chunk: &SemanticChunkInput) -> String {
-    let mut raw = format!("symbol: {} kind: {}", chunk.symbol_name, chunk.kind);
+    // Body first (7d5x.1): metadata used to precede the excerpt, so a long
+    // graph/doc prefix was what survived when embedders truncated.
+    let mut raw = format!("excerpt: {}", chunk.excerpt);
+    raw.push_str(&format!(
+        " symbol: {} kind: {}",
+        chunk.symbol_name, chunk.kind
+    ));
     if !chunk.scope.is_empty() {
         raw.push_str(&format!(" scope: {}", chunk.scope));
     }
@@ -197,7 +265,6 @@ pub fn render_chunk_text(chunk: &SemanticChunkInput) -> String {
     if !chunk.callees.is_empty() {
         raw.push_str(&format!(" calls: {}", chunk.callees.join(" ")));
     }
-    raw.push_str(&format!(" excerpt: {}", chunk.excerpt));
     expand_concepts(&raw)
 }
 fn enclosing_scope(symbols: &[SymbolRow], sym: &SymbolRow) -> String {

@@ -3,9 +3,7 @@ use crate::types::{
     SYMBOL_KIND_FUNCTION, SYMBOL_KIND_INTERFACE, SYMBOL_KIND_METHOD, SYMBOL_KIND_STRING,
     SYMBOL_KIND_STRUCT,
 };
-use ast_sgrep_core::search::HitKind;
-use ast_sgrep_core::store::SymbolRow;
-use ast_sgrep_core::{EmbedBackend, IndexOptions, SearchHit, SearchOptions};
+use ast_sgrep_core::{EmbedBackend, HitKind, IndexOptions, SearchHit, SearchOptions, SymbolRow};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::io::{self, BufRead, Write};
@@ -122,8 +120,7 @@ pub fn send_error(writer: &mut impl Write, id: &Value, code: i64, message: &str)
 #[serde(rename_all = "camelCase")]
 pub struct AsgrepSettings {
     pub no_embed: Option<bool>,
-    pub cloud_embed: Option<bool>,
-    pub ollama_embed: Option<bool>,
+    pub neural_embed: Option<bool>,
     pub semantic_only: Option<bool>,
     pub ann_threshold: Option<usize>,
     pub embed_backend: Option<String>,
@@ -146,23 +143,29 @@ impl AsgrepSettings {
         }
     }
 
+    /// Neural > Semantic > Auto, matching CLI `from_flags`.
+    /// String `embedBackend` applies first; bool keys overlay when `Some`.
+    fn resolved_embed_backend(&self, current: EmbedBackend) -> EmbedBackend {
+        let backend = self
+            .embed_backend
+            .as_deref()
+            .map(EmbedBackend::parse)
+            .unwrap_or(current);
+        let (mut neural, mut semantic) = backend.to_flags();
+        if let Some(v) = self.neural_embed {
+            neural = v;
+        }
+        if let Some(v) = self.semantic_only {
+            semantic = v;
+        }
+        EmbedBackend::from_flags(neural, semantic)
+    }
+
     pub fn apply_to_index_options(&self, opts: &mut IndexOptions) {
         if let Some(no) = self.no_embed {
             opts.embed_semantic = !no;
         }
-        if let Some(ref backend) = self.embed_backend {
-            opts.embed_backend = EmbedBackend::parse(backend);
-        }
-        // Boolean flags override string backend when set (product priority).
-        if self.cloud_embed == Some(true) {
-            opts.embed_backend = EmbedBackend::Cloud;
-        }
-        if self.ollama_embed == Some(true) {
-            opts.embed_backend = EmbedBackend::Ollama;
-        }
-        if self.semantic_only == Some(true) {
-            opts.embed_backend = EmbedBackend::Semantic;
-        }
+        opts.embed_backend = self.resolved_embed_backend(opts.embed_backend);
         self.apply_ann(&mut opts.ann_threshold);
     }
 
@@ -170,15 +173,7 @@ impl AsgrepSettings {
         if let Some(no) = self.no_embed {
             opts.use_embed = !no;
         }
-        if let Some(c) = self.cloud_embed {
-            opts.use_cloud_embed = c;
-        }
-        if let Some(o) = self.ollama_embed {
-            opts.use_ollama_embed = o;
-        }
-        if let Some(s) = self.semantic_only {
-            opts.use_semantic_only = s;
-        }
+        opts.set_embed_backend(self.resolved_embed_backend(opts.embed_backend()));
         self.apply_ann(&mut opts.ann_threshold);
     }
 }
@@ -520,3 +515,7 @@ pub fn call_hierarchy_endpoint(root: &Path, file: &str, line: u32, name: &str) -
 fn line_utf16_len(line: &str) -> u32 {
     line.chars().map(|c| c.len_utf16() as u32).sum()
 }
+
+#[cfg(test)]
+#[path = "../../../tests/unit/lsp/support__embed_cascade.rs"]
+mod embed_cascade_tests;

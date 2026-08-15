@@ -1,5 +1,6 @@
+use super::fusion::dedup_hits;
 use super::types::{
-    assign_hit_confidence, assign_signal_margins, dedup_hits, HitKind, SearchHit, SearchOptions,
+    assign_hit_confidence, assign_signal_margins, HitKind, SearchHit, SearchOptions,
     SearchResponse, SnapshotStamp,
 };
 use crate::query::{ParsedQuery, QueryMode};

@@ -1,6 +1,12 @@
 # Feature universe (`f8qy.3`)
 
-Canonical product features covered by ranking/oracle and agent surfaces.
+Canonical IDs live in the machine matrix
+[`docs/contracts/supported_surface_matrix.toml`](../contracts/supported_surface_matrix.toml)
+(`present|partial|missing|excluded|n/a` per host). This table is the short human index.
+
+Weights (not certified scores): [`docs/contracts/parity_score_contract.toml`](../contracts/parity_score_contract.toml).
+Conformal seed: [`tests/conformance/parity_score.json`](../../tests/conformance/parity_score.json) (`certified=false`).
+Intentional deltas: [`docs/progress/surface-deferrals.md`](../progress/surface-deferrals.md).
 
 | Feature ID | Surface | Notes |
 |------------|---------|-------|
@@ -15,5 +21,6 @@ Canonical product features covered by ranking/oracle and agent surfaces.
 | `mcp_index_repo` | MCP | Single-flight + deadline |
 | `forbid_soundness` | CI | First-party unsafe ban |
 
-Negative ledgers: `docs/validation/negative-ledgers.md`.
+Negative ledgers (fail-closed product cases): `docs/validation/negative-ledgers.md`.
+Campaign deferrals: `docs/progress/surface-deferrals.md`.
 Engine identity: `docs/validation/engine-identity.md`.

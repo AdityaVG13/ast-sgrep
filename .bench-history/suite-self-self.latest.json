@@ -1,0 +1,13 @@
+{
+  "schema_version": "1",
+  "label": "suite:self:self",
+  "placeholder": true,
+  "keep_eligible": false,
+  "avg_search_ms": null,
+  "geomean_search_ms": null,
+  "cv_pct": null,
+  "git_sha": null,
+  "host": null,
+  "profile": null,
+  "note": "Greenfield SSoT row for the self-repo suite. Not a keep. Competitor bake-off numbers are not this baseline."
+}

@@ -5,8 +5,9 @@
 //! - External `ast-grep` is excellent for full metavariable rules, but process
 //!   spawn + JSON parse is too heavy for tight loops and offline agents.
 //! - We implement the common ~80% of patterns natively (function/method/class
-//!   decls and calls with `$NAME` / `$$$` holes). Complex rules still fall
-//!   through to external ast-grep when installed.
+//!   decls and calls with `$NAME` / `$$$` holes). Exotic shapes are match-none
+//!   or fail-closed in search; they are **not** silently shelled out to
+//!   ast-grep (`DISC-pattern-native-subset`). Bench spawn is opt-in only.
 
 use crate::extract::{
     byte_to_line, is_ident_kind, is_in_comment_or_string, is_member_expr_kind,

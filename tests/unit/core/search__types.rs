@@ -1,4 +1,5 @@
 use super::*;
+use crate::search::dedup_hits;
 
 fn hit(kind: HitKind, file: &str, line: u32, score: f64) -> SearchHit {
     SearchHit {
@@ -16,6 +17,7 @@ fn hit(kind: HitKind, file: &str, line: u32, score: f64) -> SearchHit {
         margin: 0.0,
         confidence: 0.0,
         resolution: None,
+        embed_fields: None,
         excerpt: String::new(),
     }
 }
@@ -137,4 +139,30 @@ fn constructed_and_deserialized_excerpts_are_utf8_safely_bounded() {
     let excerpt = encoded["excerpt"].as_str().expect("serialized excerpt");
     assert!(excerpt.len() <= crate::limits::MAX_SEARCH_HIT_EXCERPT_BYTES);
     assert!(excerpt.ends_with("\n…"));
+}
+
+#[test]
+fn embed_backend_roundtrips_through_use_star_flags() {
+    use crate::EmbedBackend;
+    let mut options = SearchOptions::default();
+    for backend in [
+        EmbedBackend::Auto,
+        EmbedBackend::Neural,
+        EmbedBackend::Semantic,
+    ] {
+        options.set_embed_backend(backend);
+        assert_eq!(options.embed_backend(), backend);
+        assert_eq!(options.embed_preference(), backend.to_preference());
+        let (neural, semantic) = backend.to_flags();
+        assert_eq!(options.use_neural_embed, neural);
+        assert_eq!(options.use_semantic_only, semantic);
+    }
+}
+
+#[test]
+fn embed_backend_from_flags_prefers_neural_over_semantic() {
+    let mut options = SearchOptions::default();
+    options.use_neural_embed = true;
+    options.use_semantic_only = true;
+    assert_eq!(options.embed_backend(), crate::EmbedBackend::Neural);
 }

@@ -1,0 +1,76 @@
+{
+  "command": "search",
+  "exit_code": 0,
+  "expand_hint": "re-run with --excerpt-lines N for bodies, or read each ref span with your file reader (path + line window)",
+  "hit_count": 2,
+  "hits": [
+    {
+      "callee": null,
+      "caller": null,
+      "confidence": 0.99,
+      "contributors": [
+        "asgrep",
+        "def",
+        "anchor",
+        "pattern"
+      ],
+      "file": "src/app.rb",
+      "kind": "def",
+      "lines": {
+        "end": 11,
+        "start": 8
+      },
+      "margin": 0.0014232714172395522,
+      "preview": "def process_request(input)",
+      "ref": "src/app.rb#L8-L11",
+      "score": 0.0693416181914331,
+      "signal": "structural",
+      "symbol": "process_request",
+      "why": [
+        "exact_text",
+        "exact_symbol",
+        "anchor",
+        "structural_pattern"
+      ]
+    },
+    {
+      "callee": null,
+      "caller": null,
+      "confidence": 0.99,
+      "contributors": [
+        "asgrep",
+        "def",
+        "anchor",
+        "pattern"
+      ],
+      "file": "src/main.py",
+      "kind": "def",
+      "lines": {
+        "end": 10,
+        "start": 8
+      },
+      "margin": 0.013819986118455842,
+      "preview": "def process_request(input: str) -> str:",
+      "ref": "src/main.py#L8-L10",
+      "score": 0.06791834677419355,
+      "signal": "structural",
+      "symbol": "process_request",
+      "why": [
+        "exact_text",
+        "exact_symbol",
+        "anchor",
+        "structural_pattern"
+      ]
+    }
+  ],
+  "limit": 2,
+  "mode": "capsule",
+  "ok": true,
+  "prevented_read_bytes": 605,
+  "provider": "ast-sgrep",
+  "query": "process_request",
+  "read_bytes_estimate": 781,
+  "returned_excerpt_bytes": 65,
+  "schema_version": "1.0.0",
+  "tool": "asgrep"
+}

@@ -93,6 +93,47 @@ test("native indexing returns a Promise and does not block the event loop", asyn
   }
 });
 
+test("aborting an in-flight native call does not leave the session busy", async (t) => {
+  const binding = requireNative();
+  if (!binding) {
+    t.skip("native addon not built");
+    return;
+  }
+  const root = await mkdtemp(join(tmpdir(), "asgrep-napi-abort-busy-"));
+  const source = join(root, "src");
+  await mkdir(source);
+  try {
+    await Promise.all(Array.from({ length: 200 }, (_, index) =>
+      writeFile(join(source, `file-${index}.ts`), `export function value${index}() { return ${index}; }\n`, "utf8")));
+    const session = new binding.Session({
+      root,
+      indexPath: join(root, "index.db"),
+      useEmbed: false,
+      limit: 8,
+    });
+    const controller = new AbortController();
+    const active = session.call("index_repo", { force: false }, controller.signal);
+    controller.abort();
+    await assert.rejects(active, (err: unknown) => {
+      const message = err instanceof Error ? err.message : String(err);
+      return /cancel|abort/iu.test(message);
+    });
+    try {
+      await session.call("index_status", {});
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      assert.doesNotMatch(
+        message,
+        /session is busy/iu,
+        "aborted work must not fail-closed the pooled session with session is busy",
+      );
+      throw err;
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("native relative index paths resolve against the session root", async (t) => {
   const binding = requireNative();
   if (!binding) {

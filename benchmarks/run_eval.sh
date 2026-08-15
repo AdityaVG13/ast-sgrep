@@ -20,6 +20,9 @@ if [[ -n "$(git status --porcelain --untracked-files=normal)" ]]; then
 fi
 
 gold="benchmarks/gold/self.json"
+graph_gold="benchmarks/gold/graph_precision.json"
+graph_root="benchmarks/fixtures/graph_precision"
+graph_scip="$graph_root/index.scip.json"
 out="benchmarks/results/raw"
 mkdir -p "$out"
 
@@ -42,7 +45,13 @@ echo "== retrieval quality (self corpus) =="
 "$bin" eval --gold "$gold" . --json > "$out/self-quality.json"
 "$bin" eval --gold "$gold" . --json --ab no-embed > "$out/self-ab-no-embed.json"
 
-# 2. Token efficiency: bytes a model would actually receive, per format,
+# 2. Graph-edge precision by resolution tier over a fixed, completely labeled
+#    corpus. Zero-sample tiers remain explicit `null`, never synthetic 0.000.
+echo "== graph-edge precision (fixed corpus + SCIP overlay) =="
+"$bin" --no-embed eval --gold "$graph_gold" --scip "$graph_scip" "$graph_root" --json \
+  > "$out/graph-resolution-precision.json"
+
+# 3. Token efficiency: bytes a model would actually receive, per format,
 #    over the same gold queries. Compact is the agent-facing envelope.
 echo "== token efficiency (self corpus) =="
 # A dedicated, freshly built index keeps the measurement deterministic: the
@@ -89,7 +98,7 @@ json.dump({"per_query": rows, "totals": totals}, open(f"{out_dir}/self-token-eff
 print(json.dumps(totals, indent=2))
 PY
 
-# 3. Reliability invariants, as executable gates rather than prose claims.
+# 4. Reliability invariants, as executable gates rather than prose claims.
 echo "== budget non-inferiority (m38g) =="
 python3 - "$bin" "$gold" "$out" "$token_index" <<'BUDGETPY'
 import json, subprocess, sys
@@ -140,6 +149,7 @@ out_dir, commit = sys.argv[1], sys.argv[2]
 quality = json.load(open(f"{out_dir}/self-quality.json"))
 ab = json.load(open(f"{out_dir}/self-ab-no-embed.json"))
 tokens = json.load(open(f"{out_dir}/self-token-efficiency.json"))
+graph = json.load(open(f"{out_dir}/graph-resolution-precision.json"))
 summary = {
     "commit": commit,
     "dirty_worktree": False,
@@ -148,6 +158,7 @@ summary = {
     "retrieval": quality["aggregate"],
     "hybrid_minus_no_embed": ab["diff"]["aggregate"],
     "token_efficiency": tokens["totals"],
+    "graph_edge_precision": graph["graph_edge_precision"],
 }
 json.dump(summary, open(f"{out_dir}/summary.json", "w"), indent=2)
 print(json.dumps(summary, indent=2))

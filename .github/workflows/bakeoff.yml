@@ -20,8 +20,16 @@ jobs:
             --json --index-path "$RUNNER_TEMP/bakeoff-index.db" \
             bench . --suite self --fixture self \
             --iterations 5 > bakeoff-results.json
-      - name: Enforce identity and latency threshold
-        run: python3 scripts/check-bench-output.py bakeoff-results.json --max-average-ms 100
+        env:
+          ASGREP_BENCH_GIT_SHA: ${{ github.sha }}
+          ASGREP_BENCH_PROFILE: release
+          ASGREP_BENCH_HOST: github-actions-ubuntu-latest
+      - name: Enforce identity + keep-gate (smoke ms is host-labeled secondary)
+        env:
+          ASGREP_BENCH_GIT_SHA: ${{ github.sha }}
+          ASGREP_BENCH_PROFILE: release
+          ASGREP_BENCH_HOST: github-actions-ubuntu-latest
+        run: python3 scripts/check-bench-output.py bakeoff-results.json --history-dir .bench-history --label suite:self:self --smoke-max-average-ms 100
       - uses: actions/upload-artifact@v4
         if: always()
         with:

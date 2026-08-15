@@ -1,0 +1,283 @@
+{
+  "calls": [
+    {
+      "byte_end": 437,
+      "byte_start": 426,
+      "callee": "trim",
+      "caller": "formatWidget",
+      "line": 17
+    },
+    {
+      "byte_end": 355,
+      "byte_start": 328,
+      "callee": "formatWidget",
+      "caller": "render",
+      "line": 13
+    },
+    {
+      "byte_end": 354,
+      "byte_start": 341,
+      "callee": "get",
+      "caller": "render",
+      "line": 13
+    }
+  ],
+  "imports": [
+    {
+      "line": 3,
+      "module_path": "java.util.List"
+    }
+  ],
+  "pattern_nodes": [
+    {
+      "excerpt": "GoldenWidget",
+      "line_end": 6,
+      "line_start": 6,
+      "signature": "GoldenWidget"
+    },
+    {
+      "excerpt": "GoldenWidget",
+      "line_end": 8,
+      "line_start": 8,
+      "signature": "GoldenWidget"
+    },
+    {
+      "excerpt": "List",
+      "line_end": 3,
+      "line_start": 3,
+      "signature": "List"
+    },
+    {
+      "excerpt": "List",
+      "line_end": 12,
+      "line_start": 12,
+      "signature": "List"
+    },
+    {
+      "excerpt": "String",
+      "line_end": 12,
+      "line_start": 12,
+      "signature": "String"
+    },
+    {
+      "excerpt": "String",
+      "line_end": 16,
+      "line_start": 16,
+      "signature": "String"
+    },
+    {
+      "excerpt": "formatWidget(labels.get(0))",
+      "line_end": 13,
+      "line_start": 13,
+      "signature": "call-name:formatWidget"
+    },
+    {
+      "excerpt": "labels.get(0)",
+      "line_end": 13,
+      "line_start": 13,
+      "signature": "call-name:get"
+    },
+    {
+      "excerpt": "name.trim()",
+      "line_end": 17,
+      "line_start": 17,
+      "signature": "call-name:trim"
+    },
+    {
+      "excerpt": "formatWidget(labels.get(0))",
+      "line_end": 13,
+      "line_start": 13,
+      "signature": "call:formatWidget"
+    },
+    {
+      "excerpt": "labels.get(0)",
+      "line_end": 13,
+      "line_start": 13,
+      "signature": "call:get"
+    },
+    {
+      "excerpt": "name.trim()",
+      "line_end": 17,
+      "line_start": 17,
+      "signature": "call:trim"
+    },
+    {
+      "excerpt": "public class GoldenWidget {",
+      "line_end": 19,
+      "line_start": 6,
+      "signature": "class GoldenWidget"
+    },
+    {
+      "excerpt": "public class GoldenWidget {",
+      "line_end": 19,
+      "line_start": 6,
+      "signature": "decl:class:GoldenWidget"
+    },
+    {
+      "excerpt": "private String formatWidget(String name) {\n        return name.trim();\n    }",
+      "line_end": 18,
+      "line_start": 16,
+      "signature": "decl:function:formatWidget"
+    },
+    {
+      "excerpt": "public String render(List<String> labels) {\n        return formatWidget(labels.get(0));\n    }",
+      "line_end": 14,
+      "line_start": 12,
+      "signature": "decl:function:render"
+    },
+    {
+      "excerpt": "fixtures",
+      "line_end": 1,
+      "line_start": 1,
+      "signature": "fixtures"
+    },
+    {
+      "excerpt": "formatWidget",
+      "line_end": 13,
+      "line_start": 13,
+      "signature": "formatWidget"
+    },
+    {
+      "excerpt": "formatWidget",
+      "line_end": 16,
+      "line_start": 16,
+      "signature": "formatWidget"
+    },
+    {
+      "excerpt": "private String formatWidget(String name) {\n        return name.trim();\n    }",
+      "line_end": 18,
+      "line_start": 16,
+      "signature": "function formatWidget"
+    },
+    {
+      "excerpt": "public String render(List<String> labels) {\n        return formatWidget(labels.get(0));\n    }",
+      "line_end": 14,
+      "line_start": 12,
+      "signature": "function render"
+    },
+    {
+      "excerpt": "get",
+      "line_end": 13,
+      "line_start": 13,
+      "signature": "get"
+    },
+    {
+      "excerpt": "java",
+      "line_end": 3,
+      "line_start": 3,
+      "signature": "java"
+    },
+    {
+      "excerpt": "class",
+      "line_end": 6,
+      "line_start": 6,
+      "signature": "kind:class"
+    },
+    {
+      "excerpt": "public class GoldenWidget {",
+      "line_end": 19,
+      "line_start": 6,
+      "signature": "kind:class_declaration"
+    },
+    {
+      "excerpt": "public String render(List<String> labels) {\n        return formatWidget(labels.get(0));\n    }",
+      "line_end": 14,
+      "line_start": 12,
+      "signature": "kind:method_declaration"
+    },
+    {
+      "excerpt": "private String formatWidget(String name) {\n        return name.trim();\n    }",
+      "line_end": 18,
+      "line_start": 16,
+      "signature": "kind:method_declaration"
+    },
+    {
+      "excerpt": "formatWidget(labels.get(0))",
+      "line_end": 13,
+      "line_start": 13,
+      "signature": "kind:method_invocation"
+    },
+    {
+      "excerpt": "name.trim()",
+      "line_end": 17,
+      "line_start": 17,
+      "signature": "kind:method_invocation"
+    },
+    {
+      "excerpt": "labels",
+      "line_end": 12,
+      "line_start": 12,
+      "signature": "labels"
+    },
+    {
+      "excerpt": "labels",
+      "line_end": 13,
+      "line_start": 13,
+      "signature": "labels"
+    },
+    {
+      "excerpt": "name",
+      "line_end": 16,
+      "line_start": 16,
+      "signature": "name"
+    },
+    {
+      "excerpt": "name",
+      "line_end": 17,
+      "line_start": 17,
+      "signature": "name"
+    },
+    {
+      "excerpt": "render",
+      "line_end": 12,
+      "line_start": 12,
+      "signature": "render"
+    },
+    {
+      "excerpt": "trim",
+      "line_end": 17,
+      "line_start": 17,
+      "signature": "trim"
+    },
+    {
+      "excerpt": "util",
+      "line_end": 3,
+      "line_start": 3,
+      "signature": "util"
+    }
+  ],
+  "symbols": [
+    {
+      "byte_end": 446,
+      "byte_start": 109,
+      "kind": "class",
+      "line_end": 19,
+      "line_start": 6,
+      "name": "GoldenWidget"
+    },
+    {
+      "byte_end": 219,
+      "byte_start": 190,
+      "kind": "method",
+      "line_end": 9,
+      "line_start": 8,
+      "name": "GoldenWidget"
+    },
+    {
+      "byte_end": 444,
+      "byte_start": 368,
+      "kind": "method",
+      "line_end": 18,
+      "line_start": 16,
+      "name": "formatWidget"
+    },
+    {
+      "byte_end": 362,
+      "byte_start": 269,
+      "kind": "method",
+      "line_end": 14,
+      "line_start": 12,
+      "name": "render"
+    }
+  ]
+}

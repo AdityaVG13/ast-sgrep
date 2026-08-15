@@ -5,6 +5,8 @@ use ast_sgrep_plugins::{
     format_response_with, format_response_with_budget, to_github_json, to_gitlab_json,
     CompactBudget, OutputFormat,
 };
+use ast_sgrep_testkit::assert_golden_json_at;
+use std::path::{Path, PathBuf};
 fn sample() -> SearchResponse {
     let long = "x".repeat(300);
     SearchResponse {
@@ -26,6 +28,7 @@ fn sample() -> SearchResponse {
                 margin: 0.0,
                 confidence: 0.0,
                 resolution: None,
+                embed_fields: None,
                 excerpt: "fn auth_refresh() {\n    renew_token();\n    log();\n}".into(),
             },
             SearchHit {
@@ -43,6 +46,7 @@ fn sample() -> SearchResponse {
                 margin: 0.0,
                 confidence: 0.0,
                 resolution: None,
+                embed_fields: None,
                 excerpt: format!("   \n{long}"),
             },
         ],
@@ -348,6 +352,7 @@ fn many_file_sample() -> SearchResponse {
             margin: 0.1,
             confidence: 0.0,
             resolution: None,
+            embed_fields: None,
             excerpt: format!("fn handler_{index}(session: &Session) -> Result<Token> {{\n    rotate(session)\n}}"),
         })
         .collect();
@@ -522,5 +527,33 @@ fn miss_envelope_is_smaller_than_the_agent_zero_hit_response() {
         "miss envelope must be far cheaper: {} vs {}",
         miss.len(),
         old.len()
+    );
+}
+
+fn plugin_fixture(name: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/plugins/fixtures")
+        .join(name)
+}
+
+/// nz7i.2 F3: full Value dumps for review; behavioral tests above stay.
+#[test]
+fn capsule_compact_github_gitlab_full_dumps_match_goldens() {
+    let response = sample();
+    assert_golden_json_at(
+        &plugin_fixture("capsule_sample.json"),
+        &format_response_with(&response, OutputFormat::AgentCapsule, 0),
+    );
+    assert_golden_json_at(
+        &plugin_fixture("compact_sample.json"),
+        &format_response_with(&response, OutputFormat::Compact, 0),
+    );
+    assert_golden_json_at(
+        &plugin_fixture("github_sample.json"),
+        &to_github_json(&response),
+    );
+    assert_golden_json_at(
+        &plugin_fixture("gitlab_sample.json"),
+        &to_gitlab_json(&response),
     );
 }

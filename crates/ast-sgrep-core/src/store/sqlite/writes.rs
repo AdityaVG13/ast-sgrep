@@ -4,7 +4,10 @@ use super::super::embed_support::{
     EmbeddedChunks,
 };
 use super::super::sql::{delete_file_children, delete_file_lines, query_cached_map};
-use super::{CallerRow, ImportRow, IndexStore, RefreshLinesInput, SymbolRow, UpsertFileInput};
+use super::{
+    sql_i64_from_byte_offset, CallerRow, ImportRow, IndexStore, RefreshLinesInput, SymbolRow,
+    UpsertFileInput,
+};
 use crate::Result;
 use ast_sgrep_lang::PatternNode;
 use rusqlite::params;
@@ -239,8 +242,8 @@ impl IndexStore {
                 s.kind,
                 s.line_start,
                 s.line_end,
-                s.byte_start as i64,
-                s.byte_end as i64
+                sql_i64_from_byte_offset(s.byte_start)?,
+                sql_i64_from_byte_offset(s.byte_end)?
             ])?;
             ids.push(self.conn.last_insert_rowid());
         }
@@ -321,7 +324,7 @@ impl IndexStore {
             .map(|(s, id)| (format!("{}:{}", s.name, s.line_start), *id))
             .collect();
         let mut st = self.conn.prepare_cached(
-            "INSERT INTO semantic_chunks(file_id, symbol_id, chunk_kind, line_start, line_end, symbol_name, text, vector) VALUES(?1,?2,?3,?4,?5,?6,?7,?8)", )?;
+            "INSERT INTO semantic_chunks(file_id, symbol_id, chunk_kind, line_start, line_end, symbol_name, text, vector, vector_name, vector_docs, vector_body, vector_graph) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)", )?;
         for (c, e) in chunks.iter().zip(emb.iter()) {
             let sid = name_to_id
                 .get(&format!("{}:{}", c.symbol_name, c.line_start))
@@ -334,7 +337,11 @@ impl IndexStore {
                 c.line_end,
                 c.symbol_name,
                 c.excerpt,
-                e.vector_bytes
+                e.vector_bytes,
+                e.name.clone(),
+                e.docs.clone(),
+                e.body.clone(),
+                e.graph.clone(),
             ])?;
         }
         self.persist_embed_metadata(Some(first.dim), Some(first.backend), preference)
@@ -386,8 +393,8 @@ impl IndexStore {
                     c.caller,
                     c.callee,
                     c.line_no,
-                    c.byte_start as i64,
-                    c.byte_end as i64
+                    sql_i64_from_byte_offset(c.byte_start)?,
+                    sql_i64_from_byte_offset(c.byte_end)?
                 ])?;
                 Ok(())
             },

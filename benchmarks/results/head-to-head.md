@@ -1,31 +1,33 @@
 # Head-to-head results
 
-> **Reproducibility status:** Every numeric row in this report is a historical
-> published value and is **unreproducible from this source tree**: the generating
-> harnesses, raw corpora, and raw result artifacts are absent. The external
-> artifact location is the [Speed benchmark workflow](https://github.com/AdityaVG13/ast-sgrep/actions/workflows/speed.yml).
-> No retained artifact is identified there for these historical runs, so this
-> link is a storage location, not evidence that a row can currently be regenerated.
-
-> **Published record** of measured results. No runnable harnesses ship in this tree.
+> **Ledger mix:** see [`benchmarks/README.md`](../README.md) status tags.
+> Historical GATE rows below are `UNREPRODUCIBLE`. The 2026-08-05 self-corpus
+> block is `reproducible-in-tree` via `scripts/run-benchmarks.sh`.
 
 This consolidated GATE table reports only measurements already recorded in repository artifacts; it does **not** combine or extrapolate runs. Lower latency is better. Times are wall-clock p50 milliseconds, rounded to two decimals from the raw values below.
 
 ## Results
 
+**Status: `historical` + `UNREPRODUCIBLE`.** Latency-only. `parity clean` in
+the source dump meant **normalized (path, line) latency comparison succeeded**,
+**not** match-set / hit-identity equality (`DISC-pattern-native-subset`,
+`DISC-no-jell-harness`).
+
 | Win class | Scale / suite | asgrep | Comparator | Result | Evidence |
 |---|---:|---:|---:|---:|---|
 | Warm lexical query | 23,000 files, 24 queries | **46.22 ms** aggregate p50 | ripgrep 253.99 ms | **24/24 wins; 5.50x faster** | *(historical machine-readable dump; not in-tree)* |
 | Warm lexical query | 100,000 files, 24 queries | **156.46 ms** aggregate p50 | ripgrep 1,317.30 ms | **24/24 wins; 8.42x faster** | *(historical machine-readable dump; not in-tree)* |
-| Structural query | 23,000 files | **18.93 ms** query-median p50 | ast-grep 188.77 ms | **9.97x faster; parity clean** | *(historical machine-readable dump; not in-tree)* |
-| Structural query | 100,000 files | **19.34 ms** query-median p50 | ast-grep 1,347.97 ms | **69.68x faster; parity clean** | *(historical machine-readable dump; not in-tree)* |
+| Structural query | 23,000 files | **18.93 ms** query-median p50 | ast-grep 188.77 ms | **9.97x faster; latency-only (not match-set)** | *(historical machine-readable dump; not in-tree)* |
+| Structural query | 100,000 files | **19.34 ms** query-median p50 | ast-grep 1,347.97 ms | **69.68x faster; latency-only (not match-set)** | *(historical machine-readable dump; not in-tree)* |
 | Structural hand-pattern suite | 29 unchanged patterns | **1,520.6 ms** sum of per-pattern p50s | Semgrep 31,875.3 ms | **20.96x faster** | *(historical machine-readable dump; not in-tree)* |
 | Retrieval quality | ripgrep, 14 gold queries | **0.605 MRR** (`rg-neural-rerank-d3eab74`; not default hybrid 0.290) | Semgrep hand-patterns 0.536 MRR | **+0.069 MRR** | [`losses.md`](losses.md) / [`baselines.md`](baselines.md) |
 
 The three speed win classes hold in the artifacts:
 
 1. **Warm lexical:** `asgrep_wins == queries == 24` at both scales, with no unexplained result diffs.
-2. **Structural:** asgrep's query-median p50 is lower and `parity_clean == true` at both scales.
+2. **Structural:** asgrep's query-median p50 is lower and `parity_clean == true`
+   at both scales. That flag is **latency-only** (normalized file+line timing
+   pairs). It is **not** a match-set correctness Pass.
 3. **Semgrep suite:** `31,875.276 / 1,520.555 = 20.96x` after published rounding.
 
 Retrieval quality is separate because it is a relevance result, not a speed result.
@@ -40,11 +42,14 @@ Retrieval quality is separate because it is a relevance result, not a speed resu
 | structural `asgrep_query_median_p50_ms` | `18.933438000000002` | `19.344875000000002` |
 | structural `ast_grep_query_median_p50_ms` | `188.7684375` | `1347.9688125` |
 | structural `ast_grep_over_asgrep` | `9.970108836018053` | `69.68092647277379` |
-| structural `parity_clean` | `true` | `true` |
+| structural `parity_clean` | `true` (latency-only; **not** hit-identity) | `true` (latency-only; **not** hit-identity) |
 
 The Semgrep artifact stores `asgrep_sum_p50_ms = 1520.555`, `semgrep_sum_p50_ms = 31875.276`, `speedup_x = 20.96`, `patterns = 29`, match totals `51 / 19`, and `semgrep_unique_locations = 0`. The neural+rerank retrieval publication records `0.605 / 0.536` in [`losses.md`](losses.md) (fingerprint `rg-neural-rerank-d3eab74`); the canonical **default hybrid** ripgrep MRR remains **0.290** in [`baselines.md`](baselines.md).
 
 ## 2026-08-05 measured (self corpus, 1,107 tracked files)
+
+**Status: `reproducible-in-tree`.** `scripts/run-benchmarks.sh`. Raw hyperfine
+JSON is run output, not a second canonical MRR fingerprint.
 
 > New rows from `scripts/run-benchmarks.sh` (reproducible from this tree; raw
 > hyperfine JSON in the run output). Same-machine rows for the 1.4.0 release
@@ -74,32 +79,18 @@ Read the query-level retrieval losses in [`losses.md`](losses.md). Three queries
 
 ## Reproduce and verify
 
-Build the measured profile, then run harnesses or inspect the recorded aggregate. Commands that write JSON overwrite the published artifact.
+**Status: mixed.** Historical GATE JSON dumps (`results-lexical-speed.json`,
+structural/semgrep writers named in older blocks) are **not** in this tree --
+those reproduce fragments were deleted rather than left dangling.
+
+For the 2026-08-05 self-corpus latency rows:
 
 ```bash
-cargo build --profile release-perf -p ast-sgrep-cli \
-  --features neural-embed,rerank
-
-# Reproduce the published lexical aggregate from recorded evidence.
-jq '.scales | with_entries(.value = .value.aggregate)' \
-  benchmarks/results-lexical-speed.json
-
-# Structural: one discarded run plus five measured runs.
-  --bin target/release-perf/asgrep \
-  --sizes 23000,100000 --runs 6 \
-  --output benchmarks/results-structural-speed.json
-
-# Fixed 29-pattern suite: one warmup plus five measured runs.
-  --bin target/release-perf/asgrep --warmups 1 --runs 5 \
-  --output benchmarks/results-semgrep-patterns.json
-
-# Retrieval bake-off: exact environment from losses.md.
-# Note: ASGREP_RERANK_WEIGHT does not exist; use ASGREP_RERANK_TOP_K.
-ASGREP_NEURAL_EMBED=1 ASGREP_RERANK=1 \
-ASGREP_RERANK_TOP_K=20 ASGREP_RERANK_BATCH_SIZE=1 \
-RAYON_NUM_THREADS=1 ASGREP_NEURAL_INTRA_THREADS=1 \
-ASGREP_RERANK_INTRA_THREADS=1 \
-    --bin target/release-perf/asgrep
+cargo build --profile release-perf -p ast-sgrep-cli
+bash scripts/run-benchmarks.sh
 ```
 
-For corpus pins, versions, host metadata, feature flags, and noise, treat [`SPEED.md`](speed.md), [`losses.md`](losses.md), and linked JSON as authoritative rather than this rounded summary.
+For corpus pins, versions, host metadata, feature flags, and noise, treat
+[`speed.md`](speed.md), [`losses.md`](losses.md), and [`baselines.md`](baselines.md)
+as authoritative rather than this rounded summary.
+

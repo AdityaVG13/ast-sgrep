@@ -1,0 +1,8 @@
+{
+  "schema_version": "1",
+  "primary_regression_pct": 3.0,
+  "geomean_regression_pct": 5.0,
+  "cv_ineligible_pct": 5.0,
+  "retired_tripwire_pct": 50.0,
+  "notes": "Pass-over-pass keep thresholds. Primary -3% class and geomean -5% class are order-of-magnitude tighter than the retired 50% optional tripwire. cv_pct > 5 is quarantine, not a silent keep. Competitor latency is never a keep oracle."
+}

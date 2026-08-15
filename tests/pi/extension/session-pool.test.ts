@@ -90,6 +90,39 @@ test("pre-aborted calls reject before starting a backend", async () => {
   assert.equal(starts, 0);
 });
 
+test("aborting an in-flight pool call unblocks the next caller", async () => {
+  const abortErr = () => Object.assign(new Error("native call aborted"), { name: "AbortError" });
+  let started = 0;
+  const pool = new NativeSessionPool(async () => ({
+    async call(_tool, _args, options) {
+      started += 1;
+      if (!options?.signal) {
+        return { tool: "asgrep", schema_version: "1.0.0", ok: true } as MachineEnvelope;
+      }
+      if (options.signal.aborted) throw abortErr();
+      await new Promise<void>((_resolve, reject) => {
+        options.signal.addEventListener("abort", () => reject(abortErr()), { once: true });
+      });
+      return { tool: "asgrep", schema_version: "1.0.0", ok: true } as MachineEnvelope;
+    },
+    async batch() {
+      return { results: [] };
+    },
+    async end() {},
+  }));
+  pool.configure({ binary: "/fake/asgrep" });
+  const controller = new AbortController();
+  const pending = pool.call("/p", "search", {}, { signal: controller.signal });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(started, 1);
+  controller.abort();
+  await assert.rejects(pending, { name: "AbortError" });
+  const startedAt = Date.now();
+  await pool.call("/p", "index_status");
+  assert.ok(Date.now() - startedAt < 500, "next caller must not wait on aborted in-flight work");
+  await pool.shutdown();
+});
+
 test("invalidate drops worker so next acquire restarts", async () => {
   const log: string[] = [];
   let starts = 0;

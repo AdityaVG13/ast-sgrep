@@ -1,0 +1,75 @@
+{
+  "incomplete_results": false,
+  "items": [
+    {
+      "language": "rust",
+      "metadata": {
+        "callee": null,
+        "caller": null,
+        "contributors": [
+          "def",
+          "embed"
+        ],
+        "kind": "def",
+        "line_end": 42,
+        "line_start": 10,
+        "margin": 0.0,
+        "score": 5.5,
+        "signal": "structural",
+        "symbol": "auth_refresh"
+      },
+      "name": "auth.rs",
+      "path": "src/auth.rs",
+      "score": 5.5,
+      "text_matches": [
+        {
+          "fragment": "fn auth_refresh() {\n    renew_token();\n    log();\n}",
+          "matches": [
+            {
+              "indices": [
+                0
+              ],
+              "text": "auth_refresh"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "language": "rust",
+      "metadata": {
+        "callee": "auth_refresh",
+        "caller": "open_session",
+        "contributors": [
+          "caller"
+        ],
+        "kind": "caller",
+        "line_end": 7,
+        "line_start": 7,
+        "margin": 0.0,
+        "score": 3.2,
+        "signal": "structural",
+        "symbol": null
+      },
+      "name": "session.rs",
+      "path": "src/session.rs",
+      "score": 3.2,
+      "text_matches": [
+        {
+          "fragment": "   \nxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "matches": [
+            {
+              "indices": [
+                0
+              ],
+              "text": "auth_refresh"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "provider": "ast-sgrep",
+  "query": "renewal flow",
+  "total_count": 2
+}

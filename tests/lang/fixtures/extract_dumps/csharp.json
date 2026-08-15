@@ -1,0 +1,605 @@
+{
+  "calls": [
+    {
+      "byte_end": 291,
+      "byte_start": 270,
+      "callee": "Helper",
+      "caller": "GoldenWidget",
+      "line": 10
+    },
+    {
+      "byte_end": 633,
+      "byte_start": 622,
+      "callee": "Trim",
+      "caller": "Helper",
+      "line": 22
+    },
+    {
+      "byte_end": 768,
+      "byte_start": 761,
+      "callee": "Touch",
+      "caller": "Local",
+      "line": 29
+    },
+    {
+      "byte_end": 732,
+      "byte_start": 725,
+      "callee": "Local",
+      "caller": "Move",
+      "line": 28
+    },
+    {
+      "byte_end": 455,
+      "byte_start": 443,
+      "callee": "Helper",
+      "caller": "Render",
+      "line": 15
+    }
+  ],
+  "imports": [
+    {
+      "line": 1,
+      "module_path": "System.Text"
+    }
+  ],
+  "pattern_nodes": [
+    {
+      "excerpt": "Echo",
+      "line_end": 19,
+      "line_start": 19,
+      "signature": "Echo"
+    },
+    {
+      "excerpt": "Fixtures",
+      "line_end": 3,
+      "line_start": 3,
+      "signature": "Fixtures"
+    },
+    {
+      "excerpt": "GoldenPoint",
+      "line_end": 26,
+      "line_start": 26,
+      "signature": "GoldenPoint"
+    },
+    {
+      "excerpt": "GoldenRecord",
+      "line_end": 35,
+      "line_start": 35,
+      "signature": "GoldenRecord"
+    },
+    {
+      "excerpt": "GoldenState",
+      "line_end": 37,
+      "line_start": 37,
+      "signature": "GoldenState"
+    },
+    {
+      "excerpt": "GoldenWidget",
+      "line_end": 6,
+      "line_start": 6,
+      "signature": "GoldenWidget"
+    },
+    {
+      "excerpt": "GoldenWidget",
+      "line_end": 9,
+      "line_start": 9,
+      "signature": "GoldenWidget"
+    },
+    {
+      "excerpt": "Helper",
+      "line_end": 10,
+      "line_start": 10,
+      "signature": "Helper"
+    },
+    {
+      "excerpt": "Helper",
+      "line_end": 15,
+      "line_start": 15,
+      "signature": "Helper"
+    },
+    {
+      "excerpt": "Helper",
+      "line_end": 21,
+      "line_start": 21,
+      "signature": "Helper"
+    },
+    {
+      "excerpt": "Local",
+      "line_end": 28,
+      "line_start": 28,
+      "signature": "Local"
+    },
+    {
+      "excerpt": "Local",
+      "line_end": 29,
+      "line_start": 29,
+      "signature": "Local"
+    },
+    {
+      "excerpt": "Move",
+      "line_end": 27,
+      "line_start": 27,
+      "signature": "Move"
+    },
+    {
+      "excerpt": "Name",
+      "line_end": 7,
+      "line_start": 7,
+      "signature": "Name"
+    },
+    {
+      "excerpt": "Name",
+      "line_end": 35,
+      "line_start": 35,
+      "signature": "Name"
+    },
+    {
+      "excerpt": "Obsolete",
+      "line_end": 5,
+      "line_start": 5,
+      "signature": "Obsolete"
+    },
+    {
+      "excerpt": "Ready",
+      "line_end": 38,
+      "line_start": 38,
+      "signature": "Ready"
+    },
+    {
+      "excerpt": "Render",
+      "line_end": 14,
+      "line_start": 14,
+      "signature": "Render"
+    },
+    {
+      "excerpt": "Spent",
+      "line_end": 39,
+      "line_start": 39,
+      "signature": "Spent"
+    },
+    {
+      "excerpt": "System",
+      "line_end": 1,
+      "line_start": 1,
+      "signature": "System"
+    },
+    {
+      "excerpt": "System",
+      "line_end": 5,
+      "line_start": 5,
+      "signature": "System"
+    },
+    {
+      "excerpt": "Text",
+      "line_end": 1,
+      "line_start": 1,
+      "signature": "Text"
+    },
+    {
+      "excerpt": "Touch",
+      "line_end": 29,
+      "line_start": 29,
+      "signature": "Touch"
+    },
+    {
+      "excerpt": "Touch",
+      "line_end": 32,
+      "line_start": 32,
+      "signature": "Touch"
+    },
+    {
+      "excerpt": "Trim",
+      "line_end": 22,
+      "line_start": 22,
+      "signature": "Trim"
+    },
+    {
+      "excerpt": "Helper(\"constructor\")",
+      "line_end": 10,
+      "line_start": 10,
+      "signature": "call-name:Helper"
+    },
+    {
+      "excerpt": "Helper(name)",
+      "line_end": 15,
+      "line_start": 15,
+      "signature": "call-name:Helper"
+    },
+    {
+      "excerpt": "Local()",
+      "line_end": 28,
+      "line_start": 28,
+      "signature": "call-name:Local"
+    },
+    {
+      "excerpt": "Touch()",
+      "line_end": 29,
+      "line_start": 29,
+      "signature": "call-name:Touch"
+    },
+    {
+      "excerpt": "name.Trim()",
+      "line_end": 22,
+      "line_start": 22,
+      "signature": "call-name:Trim"
+    },
+    {
+      "excerpt": "Helper(\"constructor\")",
+      "line_end": 10,
+      "line_start": 10,
+      "signature": "call:Helper"
+    },
+    {
+      "excerpt": "Helper(name)",
+      "line_end": 15,
+      "line_start": 15,
+      "signature": "call:Helper"
+    },
+    {
+      "excerpt": "Local()",
+      "line_end": 28,
+      "line_start": 28,
+      "signature": "call:Local"
+    },
+    {
+      "excerpt": "Touch()",
+      "line_end": 29,
+      "line_start": 29,
+      "signature": "call:Touch"
+    },
+    {
+      "excerpt": "name.Trim()",
+      "line_end": 22,
+      "line_start": 22,
+      "signature": "call:name.Trim"
+    },
+    {
+      "excerpt": "public record GoldenRecord(string Name);",
+      "line_end": 35,
+      "line_start": 35,
+      "signature": "class GoldenRecord"
+    },
+    {
+      "excerpt": "    [System.Obsolete]",
+      "line_end": 24,
+      "line_start": 5,
+      "signature": "class GoldenWidget"
+    },
+    {
+      "excerpt": "public record GoldenRecord(string Name);",
+      "line_end": 35,
+      "line_start": 35,
+      "signature": "decl:class:GoldenRecord"
+    },
+    {
+      "excerpt": "    [System.Obsolete]",
+      "line_end": 24,
+      "line_start": 5,
+      "signature": "decl:class:GoldenWidget"
+    },
+    {
+      "excerpt": "public enum GoldenState {\n        Ready,\n        Spent\n    }",
+      "line_end": 40,
+      "line_start": 37,
+      "signature": "decl:enum:GoldenState"
+    },
+    {
+      "excerpt": "public string Echo(string value) => value;",
+      "line_end": 19,
+      "line_start": 19,
+      "signature": "decl:function:Echo"
+    },
+    {
+      "excerpt": "private static string Helper(string name) {\n            return name.Trim();\n        }",
+      "line_end": 23,
+      "line_start": 21,
+      "signature": "decl:function:Helper"
+    },
+    {
+      "excerpt": "void Local() { Touch(); }",
+      "line_end": 29,
+      "line_start": 29,
+      "signature": "decl:function:Local"
+    },
+    {
+      "excerpt": "public void Move() {\n            Local();\n            void Local() { Touch(); }\n        }",
+      "line_end": 30,
+      "line_start": 27,
+      "signature": "decl:function:Move"
+    },
+    {
+      "excerpt": "public string Render(string name) {\n            var normalized = Helper(name);\n            return normalized;\n        }",
+      "line_end": 17,
+      "line_start": 14,
+      "signature": "decl:function:Render"
+    },
+    {
+      "excerpt": "private static void Touch() { }",
+      "line_end": 32,
+      "line_start": 32,
+      "signature": "decl:function:Touch"
+    },
+    {
+      "excerpt": "    public struct GoldenPoint {",
+      "line_end": 33,
+      "line_start": 26,
+      "signature": "decl:struct:GoldenPoint"
+    },
+    {
+      "excerpt": "public enum GoldenState {\n        Ready,\n        Spent\n    }",
+      "line_end": 40,
+      "line_start": 37,
+      "signature": "enum GoldenState"
+    },
+    {
+      "excerpt": "public string Echo(string value) => value;",
+      "line_end": 19,
+      "line_start": 19,
+      "signature": "function Echo"
+    },
+    {
+      "excerpt": "private static string Helper(string name) {\n            return name.Trim();\n        }",
+      "line_end": 23,
+      "line_start": 21,
+      "signature": "function Helper"
+    },
+    {
+      "excerpt": "void Local() { Touch(); }",
+      "line_end": 29,
+      "line_start": 29,
+      "signature": "function Local"
+    },
+    {
+      "excerpt": "public void Move() {\n            Local();\n            void Local() { Touch(); }\n        }",
+      "line_end": 30,
+      "line_start": 27,
+      "signature": "function Move"
+    },
+    {
+      "excerpt": "public string Render(string name) {\n            var normalized = Helper(name);\n            return normalized;\n        }",
+      "line_end": 17,
+      "line_start": 14,
+      "signature": "function Render"
+    },
+    {
+      "excerpt": "private static void Touch() { }",
+      "line_end": 32,
+      "line_start": 32,
+      "signature": "function Touch"
+    },
+    {
+      "excerpt": "class",
+      "line_end": 6,
+      "line_start": 6,
+      "signature": "kind:class"
+    },
+    {
+      "excerpt": "    [System.Obsolete]",
+      "line_end": 24,
+      "line_start": 5,
+      "signature": "kind:class_declaration"
+    },
+    {
+      "excerpt": "public enum GoldenState {\n        Ready,\n        Spent\n    }",
+      "line_end": 40,
+      "line_start": 37,
+      "signature": "kind:enum_declaration"
+    },
+    {
+      "excerpt": "Helper(\"constructor\")",
+      "line_end": 10,
+      "line_start": 10,
+      "signature": "kind:invocation_expression"
+    },
+    {
+      "excerpt": "Helper(name)",
+      "line_end": 15,
+      "line_start": 15,
+      "signature": "kind:invocation_expression"
+    },
+    {
+      "excerpt": "name.Trim()",
+      "line_end": 22,
+      "line_start": 22,
+      "signature": "kind:invocation_expression"
+    },
+    {
+      "excerpt": "Local()",
+      "line_end": 28,
+      "line_start": 28,
+      "signature": "kind:invocation_expression"
+    },
+    {
+      "excerpt": "Touch()",
+      "line_end": 29,
+      "line_start": 29,
+      "signature": "kind:invocation_expression"
+    },
+    {
+      "excerpt": "void Local() { Touch(); }",
+      "line_end": 29,
+      "line_start": 29,
+      "signature": "kind:local_function_statement"
+    },
+    {
+      "excerpt": "public string Render(string name) {\n            var normalized = Helper(name);\n            return normalized;\n        }",
+      "line_end": 17,
+      "line_start": 14,
+      "signature": "kind:method_declaration"
+    },
+    {
+      "excerpt": "public string Echo(string value) => value;",
+      "line_end": 19,
+      "line_start": 19,
+      "signature": "kind:method_declaration"
+    },
+    {
+      "excerpt": "private static string Helper(string name) {\n            return name.Trim();\n        }",
+      "line_end": 23,
+      "line_start": 21,
+      "signature": "kind:method_declaration"
+    },
+    {
+      "excerpt": "public void Move() {\n            Local();\n            void Local() { Touch(); }\n        }",
+      "line_end": 30,
+      "line_start": 27,
+      "signature": "kind:method_declaration"
+    },
+    {
+      "excerpt": "private static void Touch() { }",
+      "line_end": 32,
+      "line_start": 32,
+      "signature": "kind:method_declaration"
+    },
+    {
+      "excerpt": "public record GoldenRecord(string Name);",
+      "line_end": 35,
+      "line_start": 35,
+      "signature": "kind:record_declaration"
+    },
+    {
+      "excerpt": "    public struct GoldenPoint {",
+      "line_end": 33,
+      "line_start": 26,
+      "signature": "kind:struct_declaration"
+    },
+    {
+      "excerpt": "name",
+      "line_end": 14,
+      "line_start": 14,
+      "signature": "name"
+    },
+    {
+      "excerpt": "name",
+      "line_end": 15,
+      "line_start": 15,
+      "signature": "name"
+    },
+    {
+      "excerpt": "name",
+      "line_end": 21,
+      "line_start": 21,
+      "signature": "name"
+    },
+    {
+      "excerpt": "name",
+      "line_end": 22,
+      "line_start": 22,
+      "signature": "name"
+    },
+    {
+      "excerpt": "normalized",
+      "line_end": 15,
+      "line_start": 15,
+      "signature": "normalized"
+    },
+    {
+      "excerpt": "normalized",
+      "line_end": 16,
+      "line_start": 16,
+      "signature": "normalized"
+    },
+    {
+      "excerpt": "    public struct GoldenPoint {",
+      "line_end": 33,
+      "line_start": 26,
+      "signature": "struct GoldenPoint"
+    },
+    {
+      "excerpt": "value",
+      "line_end": 19,
+      "line_start": 19,
+      "signature": "value"
+    }
+  ],
+  "symbols": [
+    {
+      "byte_end": 549,
+      "byte_start": 507,
+      "kind": "method",
+      "line_end": 19,
+      "line_start": 19,
+      "name": "Echo"
+    },
+    {
+      "byte_end": 828,
+      "byte_start": 656,
+      "kind": "type",
+      "line_end": 33,
+      "line_start": 26,
+      "name": "GoldenPoint"
+    },
+    {
+      "byte_end": 874,
+      "byte_start": 834,
+      "kind": "class",
+      "line_end": 35,
+      "line_start": 35,
+      "name": "GoldenRecord"
+    },
+    {
+      "byte_end": 940,
+      "byte_start": 880,
+      "kind": "enum",
+      "line_end": 40,
+      "line_start": 37,
+      "name": "GoldenState"
+    },
+    {
+      "byte_end": 650,
+      "byte_start": 133,
+      "kind": "class",
+      "line_end": 24,
+      "line_start": 5,
+      "name": "GoldenWidget"
+    },
+    {
+      "byte_end": 302,
+      "byte_start": 234,
+      "kind": "method",
+      "line_end": 11,
+      "line_start": 9,
+      "name": "GoldenWidget"
+    },
+    {
+      "byte_end": 644,
+      "byte_start": 559,
+      "kind": "method",
+      "line_end": 23,
+      "line_start": 21,
+      "name": "Helper"
+    },
+    {
+      "byte_end": 771,
+      "byte_start": 746,
+      "kind": "function",
+      "line_end": 29,
+      "line_start": 29,
+      "name": "Local"
+    },
+    {
+      "byte_end": 781,
+      "byte_start": 692,
+      "kind": "method",
+      "line_end": 30,
+      "line_start": 27,
+      "name": "Move"
+    },
+    {
+      "byte_end": 497,
+      "byte_start": 378,
+      "kind": "method",
+      "line_end": 17,
+      "line_start": 14,
+      "name": "Render"
+    },
+    {
+      "byte_end": 822,
+      "byte_start": 791,
+      "kind": "method",
+      "line_end": 32,
+      "line_start": 32,
+      "name": "Touch"
+    }
+  ]
+}
