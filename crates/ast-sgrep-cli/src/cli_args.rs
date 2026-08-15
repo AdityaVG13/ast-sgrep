@@ -202,6 +202,28 @@ pub(crate) struct ReindexCmd {
 }
 
 #[derive(Args, Clone, Debug)]
+pub(crate) struct CodemodCmd {
+    #[command(flatten)]
+    pub(crate) root: RootArg,
+    #[command(flatten)]
+    pub(crate) tuning: SearchTuning,
+    #[arg(
+        long,
+        value_name = "PATTERN",
+        help = "Native structural search pattern"
+    )]
+    pub(crate) pattern: String,
+    #[arg(
+        long,
+        value_name = "TEMPLATE",
+        help = "Replacement template using matched metavariables or $MATCH"
+    )]
+    pub(crate) rewrite: String,
+    #[arg(long, help = "Emit an edit plan without writing source files")]
+    pub(crate) dry_run: bool,
+}
+
+#[derive(Args, Clone, Debug)]
 pub(crate) struct QueryCmd {
     #[command(flatten)]
     pub(crate) query: QueryRootArg,
@@ -285,6 +307,9 @@ pub(crate) enum Commands {
     /// Force a full transactional rebuild
     #[command(about = "Force a full transactional rebuild")]
     Reindex(ReindexCmd),
+    /// Plan or apply an indexed structural rewrite in process
+    #[command(about = "Plan or apply an indexed structural rewrite in process")]
+    Codemod(CodemodCmd),
     /// Search explicitly; aliases: find, query
     #[command(
         about = "Hybrid search (aliases: find, query)",
@@ -492,6 +517,7 @@ impl Cli {
         let overlay = match self.command.as_ref() {
             Some(Commands::Index(c)) => Some(&c.tuning),
             Some(Commands::Reindex(c)) => Some(&c.tuning),
+            Some(Commands::Codemod(c)) => Some(&c.tuning),
             Some(Commands::Search(c) | Commands::Keyword(c) | Commands::Semantic(c)) => {
                 Some(&c.tuning)
             }
@@ -534,6 +560,7 @@ impl Cli {
 
     pub(crate) fn machine_output_requested(&self) -> bool {
         self.search_machine_output()
+            || matches!(self.command.as_ref(), Some(Commands::Codemod(c)) if c.dry_run)
             || matches!(self.command.as_ref(), Some(Commands::Capabilities(_)))
             || matches!(self.command.as_ref(), Some(Commands::Version(a)) if a.json)
             || matches!(self.command.as_ref(), Some(Commands::Doctor { .. }))
@@ -547,6 +574,7 @@ impl Cli {
             Some(Commands::Index(_)) => "index",
             Some(Commands::Status(_)) => "status",
             Some(Commands::Reindex(_)) => "reindex",
+            Some(Commands::Codemod(_)) => "codemod",
             Some(Commands::Search(_)) => "search",
             Some(Commands::Bench { .. }) => "bench",
             Some(Commands::Watch { .. }) => "watch",

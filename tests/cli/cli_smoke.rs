@@ -163,3 +163,89 @@ fn conceptual_query_fans_out_through_the_real_cli() {
         );
     }
 }
+
+#[test]
+fn codemod_dry_run_and_apply_use_the_real_indexed_fixture() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path().join("fixture");
+    fs::create_dir(&root).unwrap();
+    let first = root.join("first.rs");
+    let second = root.join("second.rs");
+    fs::write(&first, "fn first() { legacy(alpha); }\n").unwrap();
+    fs::write(&second, "fn second() { legacy(beta); }\n").unwrap();
+    let session = CliSession {
+        index_path: temp.path().join("index.db"),
+        bin: asgrep_bin(),
+        root,
+        _temp: temp,
+    };
+    session.run_success(&[
+        "--index-path",
+        session.index_path.to_str().unwrap(),
+        "index",
+        "--no-embed",
+        session.root.to_str().unwrap(),
+    ]);
+
+    let dry_run = session.run_success(&[
+        "--index-path",
+        session.index_path.to_str().unwrap(),
+        "codemod",
+        "--no-embed",
+        "--dry-run",
+        "--pattern",
+        "legacy($ARG)",
+        "--rewrite",
+        "modern($ARG)",
+        session.root.to_str().unwrap(),
+    ]);
+    let dry_run: serde_json::Value = serde_json::from_slice(&dry_run.stdout).unwrap();
+    assert_eq!(dry_run["command"], "codemod");
+    assert_eq!(dry_run["dry_run"], true);
+    assert_eq!(dry_run["plan"]["files_changed"], 2);
+    assert_eq!(dry_run["plan"]["edit_count"], 2);
+    assert_eq!(
+        fs::read_to_string(&first).unwrap(),
+        "fn first() { legacy(alpha); }\n"
+    );
+    assert_eq!(
+        fs::read_to_string(&second).unwrap(),
+        "fn second() { legacy(beta); }\n"
+    );
+
+    let applied = session.run_success(&[
+        "--index-path",
+        session.index_path.to_str().unwrap(),
+        "--json",
+        "codemod",
+        "--no-embed",
+        "--pattern",
+        "legacy($ARG)",
+        "--rewrite",
+        "modern($ARG)",
+        session.root.to_str().unwrap(),
+    ]);
+    let applied: serde_json::Value = serde_json::from_slice(&applied.stdout).unwrap();
+    assert_eq!(applied["files_changed"], 2);
+    assert_eq!(applied["edits_applied"], 2);
+    assert_eq!(
+        fs::read_to_string(&first).unwrap(),
+        "fn first() { modern(alpha); }\n"
+    );
+    assert_eq!(
+        fs::read_to_string(&second).unwrap(),
+        "fn second() { modern(beta); }\n"
+    );
+
+    let search = session.search_json("modern", &["--no-embed", "--limit", "20"]);
+    let hit_files = search["hits"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|hit| hit["file"].as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(
+        hit_files,
+        std::collections::BTreeSet::from(["first.rs", "second.rs"])
+    );
+}

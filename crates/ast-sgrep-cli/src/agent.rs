@@ -110,7 +110,7 @@ pub(crate) fn capabilities_json(_cli: &Cli) -> anyhow::Result<Value> {
         "notes": {
             "default_search": "Bare QUERY without a subcommand runs hybrid search; the word 'search' is not a required verb — use the `search`/`find`/`query` subcommand only when you want an explicit search command.",
             "format_implies_json": true,
-            "safe_mutating": "index refreshes incrementally with transactional writes. reindex forces a full transactional rewrite -- prefer `asgrep reindex --dry-run <ROOT> --json` before a full reindex."
+            "safe_mutating": "index refreshes incrementally with transactional writes. reindex forces a full transactional rewrite -- prefer `asgrep reindex --dry-run <ROOT> --json` before a full reindex. codemod dry-run always emits a JSON edit plan; apply stages every file and rolls back source changes on failure."
         }
     }))
 }
@@ -295,7 +295,7 @@ pub(crate) fn robot_guide_markdown() -> &'static str {
 - Pi and Code Mode refresh before search, with a configurable 30-second correctness lease by default. LSP applies document open/change/save/close notifications before processing the next request.
 - Ripgrep remains the tool for logs and unindexed or unsupported files. ast-sgrep never spawns it as a compatibility layer.
 ## Subcommands
-See `capabilities --json` → `commands` (complete clap catalog). Notable: `search`/`find`/`query`, `keyword`, `semantic`, `chain`, `call-path`, `index`/`reindex` (`--dry-run`), `status`, `bench`, `watch`, `eval`, `doctor`, `version`.
+See `capabilities --json` → `commands` (complete clap catalog). Notable: `search`/`find`/`query`, `keyword`, `semantic`, `chain`, `call-path`, `index`/`reindex` (`--dry-run`), `codemod`, `status`, `bench`, `watch`, `eval`, `doctor`, `version`.
 ## Integrations / sibling binaries
 - `asgrep-mcp` — MCP stdio server (`ASGREP_ROOT`, tools: keyword/ast/semantic search, index_repo, code_read)
 - `asgrep-lsp` — Language Server Protocol server
@@ -308,6 +308,7 @@ See `capabilities --json` → `commands` (complete clap catalog). Notable: `sear
 - Machine mode emits one JSON value on stdout and no duplicate stderr diagnostics.
 ## Index cancel / dry-run
 - `asgrep index --dry-run` / `asgrep reindex --dry-run` report planned work without mutating the index.
+- `asgrep codemod --pattern 'legacy($ARG)' --rewrite 'modern($ARG)' --dry-run .` emits a JSON edit plan without writing; omit `--dry-run` to apply all planned files transactionally.
 - Index writes are transactional; an interrupted uncommitted write is rolled back when SQLite recovers.
 ## Exit codes
 - 0 success · 1 usage · 2 index/search failure
