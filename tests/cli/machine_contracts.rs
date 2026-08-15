@@ -1356,3 +1356,52 @@ fn robot_docs_guide_body_matches_golden() {
         canonicalize_text(&markdown)
     );
 }
+
+#[test]
+fn eval_reports_real_graph_precision_by_resolution_tier() {
+    let bin = asgrep_bin();
+    let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let root = repo.join("benchmarks/fixtures/graph_precision");
+    let gold = repo.join("benchmarks/gold/graph_precision.json");
+    let scip = root.join("index.scip.json");
+    let temp = TempDir::new().expect("tempdir");
+    let index = temp.path().join("index.db");
+    let report = assert_success(
+        &run(
+            &bin,
+            &[
+                "--json",
+                "--no-embed",
+                "--index-path",
+                index.to_str().expect("index path utf8"),
+                "eval",
+                "--gold",
+                gold.to_str().expect("gold path utf8"),
+                "--scip",
+                scip.to_str().expect("scip path utf8"),
+                root.to_str().expect("root path utf8"),
+            ],
+        ),
+        "eval",
+    );
+
+    let graph = &report["graph_edge_precision"];
+    assert_eq!(graph["labeled_queries"], 4);
+    assert_eq!(graph["gold_edges"], 4);
+    assert_eq!(graph["scip_requested"], true);
+    assert_eq!(graph["scip_loaded"], true);
+    for tier in [
+        "scip_exact",
+        "file_local_unique",
+        "repository_unique",
+        "name_only",
+    ] {
+        assert_eq!(graph["by_resolution"][tier]["predicted"], 1, "{tier}");
+        assert_eq!(graph["by_resolution"][tier]["correct"], 1, "{tier}");
+        assert_eq!(graph["by_resolution"][tier]["precision"], 1.0, "{tier}");
+    }
+    assert_eq!(
+        graph["by_resolution"]["compiler_exact"]["precision"],
+        Value::Null
+    );
+}

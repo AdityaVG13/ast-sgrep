@@ -118,7 +118,10 @@ struct IndexCommandResult {
     degraded_channels: Vec<DegradedChannel>,
 }
 
-fn ingest_scip(indexer: &Indexer, scip: Option<&Path>) -> anyhow::Result<Vec<DegradedChannel>> {
+pub(crate) fn ingest_scip(
+    indexer: &Indexer,
+    scip: Option<&Path>,
+) -> anyhow::Result<Vec<DegradedChannel>> {
     let Some(path) = scip else {
         return Ok(Vec::new());
     };

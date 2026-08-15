@@ -82,7 +82,8 @@
       "about": "Evaluate retrieval against a gold fixture",
       "flags": [
         "--ab",
-        "--gold"
+        "--gold",
+        "--scip"
       ],
       "name": "eval",
       "usage": "asgrep eval"

@@ -58,9 +58,12 @@ for retrieval-quality deltas. Use a frozen or foreign corpus before claiming a
 quality change. The repository PPMI lexicon is reported as explainable evidence
 but is deliberately not fed into ranking; no retrieval lift is claimed.
 
-Still unmeasured here: foreign-corpus quality and token efficiency, confidence
-calibration, graph precision by resolution tier, multi-field semantic vectors,
-and agent-in-the-loop token/tool-call outcomes.
+The candidate pack now emits graph-edge precision by resolution tier from a
+fixed, completely labeled fixture, including explicit nulls for unobserved
+tiers. No graph precision value is canonical until a reviewed clean-worktree
+run is promoted here with its commit fingerprint. Still unmeasured here:
+foreign-corpus quality and token efficiency, confidence calibration,
+multi-field semantic vectors, and agent-in-the-loop token/tool-call outcomes.
 
 ## Provenance
 
