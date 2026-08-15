@@ -49,7 +49,30 @@ Three tools, three jobs. ast-sgrep is the **navigation and intent layer** you ad
 └─────────────────────────────────────────────────────────┘
 ```
 
-**ast-sgrep complements the others.** `pattern:` is a native indexed subset (not an ast-grep subprocess) and does not compete with ripgrep on raw scan speed over arbitrary unindexed files. See `docs/structural-patterns.md` and `DISC-pattern-native-subset`.
+**ast-sgrep complements the others today.** `pattern:` is a native indexed subset (not an ast-grep subprocess) and does not compete with ripgrep on raw scan speed over arbitrary unindexed files. See `docs/structural-patterns.md` and `DISC-pattern-native-subset`.
+
+## Campaign goal (not current status)
+
+The goal is that a coding agent working in an indexed repo never needs a
+second search tool: ripgrep stays for logs and unindexed trees, and
+ast-grep / Semgrep become specialists rather than defaults. The engine is
+already moving that way without a sidecar model:
+
+- A deterministic post-fusion **critic** gates embed-only hits on
+  corroboration, boosts multi-channel agreement, and explains every hit
+  (`why` on agent JSON). See `docs/fusion-ranking.md`.
+- **Causal follow-ups**: `follow_up_queries` are derived from the actual
+  top hit (kind, symbol, margin), so the drill-down an agent would have
+  asked a second model for is already in the envelope.
+- **Two-channel conjunction**: `callers:x AND pattern:...`, `AND NOT`
+  subtraction. Graph and structure intersect inside the index. See
+  `docs/QUERY_GRAMMAR.md`.
+
+What must exist before any "replaces X" claim is made here: a green
+keep-gate against the tool being replaced (rg file-set presence for
+`literal:`, pinned ast-grep match sets for the native pattern subset).
+Until those gates exist and pass, this document describes complements,
+and the table above stays honest about the current subset.
 
 ## Feature deep dive
 
