@@ -61,3 +61,10 @@ label = "ast-sgrep-core pattern_diff"
 tier = "extended"
 required_env = ["ASGREP_DIFF_AST_GREP"]
 command = ["cargo", "test", "-p", "ast-sgrep-core", "--test", "pattern_diff", "-j1", "--", "--test-threads=1"]
+
+[[suite]]
+id = "literal_diff"
+label = "ast-sgrep-core literal_diff"
+tier = "extended"
+required_env = ["ASGREP_DIFF_RG"]
+command = ["cargo", "test", "-p", "ast-sgrep-core", "--test", "literal_diff", "-j1", "--", "--test-threads=1"]

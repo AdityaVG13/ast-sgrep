@@ -28,6 +28,7 @@ Subject is always this tree (`asgrep` / `ast-sgrep-*`). Oracle IDs name the
 | Channel | Scenario | authoritative_mode | subject_id | oracle_id | comparator | disc_ids | suite_path | gate_class |
 |---|---|---|---|---|---|---|---|---|
 | lexical | keyword / FTS hits | fixture | `asgrep` | `tests/core/parity.rs` + FTS contract | must_include / hit keys | `DISC-lexical-not-rg` | `tests/core/parity.rs` | `correctness` |
+| lexical | `literal:` indexed-language fixture | pinned local | `asgrep` | ripgrep 15.1.0 | file-set presence | `DISC-lexical-not-rg` | `tests/core/literal_diff.rs` | `local_correctness`; Not-run until `ASGREP_DIFF_RG` |
 | lexical | vs ripgrep identity | excluded | `asgrep` | `rg` | hit-ID equality | `DISC-lexical-not-rg`, `DISC-no-jell-harness` | `docs/validation/jell-deferral.md` | `deferred_excluded` |
 | graph | defs / callers / imports | fixture | `asgrep` | `tests/fixtures` graph cases | expected edges / symbols | | `tests/core/graph_oracle.rs` | `correctness` |
 | structural-native | `pattern:` indexed subset | spec+fixture | `asgrep` | `docs/structural-patterns.md` | supported shapes hit; unsupported empty | `DISC-pattern-native-subset` | `crates/ast-sgrep-lang` pattern tests | `correctness` |

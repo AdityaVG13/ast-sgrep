@@ -15,6 +15,18 @@ gate_class = "correctness"
 
 [[channel]]
 id = "lexical"
+scenario = "literal_rg_fixture"
+authoritative_mode = "local_pinned"
+subject_id = "asgrep"
+oracle_id = "ripgrep-15.1.0"
+comparator = "indexed_language_file_set_presence"
+disc_ids = ["DISC-lexical-not-rg"]
+suite_path = "tests/core/literal_diff.rs"
+gate_class = "local_correctness"
+note = "The 13-language literal file-presence gate runs when ASGREP_DIFF_RG is an absolute ripgrep 15.1.0 path. The registry records Not-run when unset."
+
+[[channel]]
+id = "lexical"
 scenario = "rg_identity"
 authoritative_mode = "excluded"
 subject_id = "asgrep"

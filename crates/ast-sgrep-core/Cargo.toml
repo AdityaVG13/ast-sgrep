@@ -105,6 +105,9 @@ path = "../../tests/core/lexicon_learning.rs"
 name = "literal_glob"
 path = "../../tests/core/literal_glob.rs"
 [[test]]
+name = "literal_diff"
+path = "../../tests/core/literal_diff.rs"
+[[test]]
 name = "metamorphic"
 path = "../../tests/core/metamorphic.rs"
 [[test]]

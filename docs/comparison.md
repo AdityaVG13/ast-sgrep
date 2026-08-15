@@ -68,11 +68,11 @@ already moving that way without a sidecar model:
   subtraction. Graph and structure intersect inside the index. See
   `docs/QUERY_GRAMMAR.md`.
 
-What must exist before any "replaces X" claim is made here: a green
-keep-gate against the tool being replaced (rg file-set presence for
-`literal:`, pinned ast-grep match sets for the native pattern subset).
-Until those gates exist and pass, this document describes complements,
-and the table above stays honest about the current subset.
+The two bounded keep-gates now exist: indexed-language fixture file presence
+for `literal:` vs pinned ripgrep, and native Pattern-1 match sets vs pinned
+ast-grep. They do not establish full tool identity, cover unindexed files, or
+justify a replacement claim. This document therefore still describes
+complements, and the table above stays honest about the current subsets.
 
 ## Feature deep dive
 
