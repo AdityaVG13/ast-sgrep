@@ -56,6 +56,10 @@ path = "../../tests/cli/cli_smoke.rs"
 name = "machine_contracts"
 path = "../../tests/cli/machine_contracts.rs"
 [[test]]
+name = "neural_embed_e2e"
+path = "../../tests/cli/neural_embed_e2e.rs"
+required-features = ["neural-embed"]
+[[test]]
 name = "no_embed_hit_key_parity"
 path = "../../tests/cli/no_embed_hit_key_parity.rs"
 [[test]]

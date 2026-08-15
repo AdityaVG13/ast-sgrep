@@ -23,6 +23,19 @@ jobs:
       - name: cargo check workspace
         run: cargo check --workspace -j1
 
+  neural-embed-e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Provision pinned neural model
+        run: bash scripts/fetch-neural-e2e-model "$RUNNER_TEMP/neural-models"
+      - name: Run real neural index and search
+        env:
+          ASGREP_NEURAL_E2E_CACHE_DIR: ${{ runner.temp }}/neural-models
+        run: cargo test -p ast-sgrep-cli --features neural-embed --test neural_embed_e2e -j1
+
   test:
     runs-on: ubuntu-latest
     steps:

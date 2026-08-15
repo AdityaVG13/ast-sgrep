@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ $# -ne 1 ]]; then
+  echo "usage: $0 CACHE_DIR" >&2
+  exit 2
+fi
+
+cache_dir=$1
+repo_id=Xenova/all-MiniLM-L6-v2
+repo_dir="$cache_dir/models--Xenova--all-MiniLM-L6-v2"
+revision=751bff37182d3f1213fa05d7196b954e230abad9
+snapshot="$repo_dir/snapshots/$revision"
+
+files=(
+  onnx/model_quantized.onnx
+  tokenizer.json
+  config.json
+  special_tokens_map.json
+  tokenizer_config.json
+)
+checksums=(
+  afdb6f1a0e45b715d0bb9b11772f032c399babd23bfc31fed1c170afc848bdb1
+  da0e79933b9ed51798a3ae27893d3c5fa4a201126cef75586296df9b4d2c62a0
+  7135149f7cffa1a573466c6e4d8423ed73b62fd2332c575bf738a0d033f70df7
+  b6d346be366a7d1d48332dbc9fdf3bf8960b5d879522b7799ddba59e76237ee3
+  9261e7d79b44c8195c1cada2b453e55b00aeb81e907a6664974b4d7776172ab3
+)
+
+mkdir -p "$snapshot/onnx" "$repo_dir/refs"
+
+for i in "${!files[@]}"; do
+  file=${files[$i]}
+  checksum=${checksums[$i]}
+  target="$snapshot/$file"
+  actual=""
+  if [[ -f "$target" ]]; then
+    actual=$(shasum -a 256 "$target" | awk '{print $1}')
+  fi
+  if [[ "$actual" != "$checksum" ]]; then
+    tmp="$target.tmp"
+    curl --fail --location --retry 3 --silent --show-error \
+      "https://huggingface.co/$repo_id/resolve/$revision/$file" \
+      --output "$tmp"
+    actual=$(shasum -a 256 "$tmp" | awk '{print $1}')
+    if [[ "$actual" != "$checksum" ]]; then
+      rm -f "$tmp"
+      echo "checksum mismatch for $file: expected $checksum, got $actual" >&2
+      exit 1
+    fi
+    mv -f "$tmp" "$target"
+  fi
+done
+
+printf '%s' "$revision" > "$repo_dir/refs/main"
+echo "$cache_dir"
