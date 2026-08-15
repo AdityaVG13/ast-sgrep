@@ -27,25 +27,27 @@ cargo build --release -p ast-sgrep-cli -j1
 ```
 
 New workspace members **must** set `[lints] workspace = true` so they inherit
-`unsafe_code = "forbid"`. The only sealed exception is `ast-sgrep-mmap`
-(see [SECURITY.md](SECURITY.md)).
+`unsafe_code = "forbid"`. Sealed exceptions are exactly two (see
+[SECURITY.md](SECURITY.md)): `ast-sgrep-mmap` (sole hand-written `unsafe`) and
+`ast-sgrep-codemode-napi` (generated Node-API FFI only).
 
-Before a release, run the same gate used by official release acceptance:
+Before a Rust release cut, run the local release gate manually:
 
 ```bash
 bash scripts/local-release-gate.sh
 ```
 
-The release gate checks formatting, workspace clippy and tests, then exercises
-ranking invariants with a bounded 30-second fuzz run. It requires stable Rust,
-nightly Rust, and `cargo-fuzz`. Ordinary changes should keep using the cheaper,
+That gate checks formatting, workspace clippy and tests, then exercises ranking
+invariants with a bounded 30-second fuzz run. It requires stable Rust, nightly
+Rust, and `cargo-fuzz`. It is **not** invoked by Pi `release-acceptance` (npm
+pack/verify/gate/publish). Ordinary changes should keep using the cheaper,
 targeted default bar above.
 
-GitHub Actions runs `forbid-soundness` and `cargo check` on every `pull_request`.
-Full build/test/clippy/audit/fuzz matrices remain `workflow_dispatch` (Actions tab).
-The speed and bake-off workflows execute real harnesses and fail on correctness,
-identity, or latency threshold breaches. The official package release invokes
-`scripts/local-release-gate.sh` through the release-acceptance command.
+GitHub Actions on every `pull_request` runs `forbid-soundness`, `cargo-check`,
+`test`, `pi`, `clippy`, `fmt`, and `audit`. `build-and-test`, `windows-smoke`,
+and `bounded-fuzz` remain `workflow_dispatch` (Actions tab). The speed and
+bake-off workflows execute real harnesses and fail on correctness, identity, or
+latency threshold breaches.
 
 ## Pull requests
 
@@ -64,6 +66,9 @@ identity, or latency threshold breaches. The official package release invokes
 | `ast-sgrep-embed` | Embeddings (+ optional neural/rerank features) |
 | `ast-sgrep-lsp` | Language server |
 | `ast-sgrep-mcp` | MCP server for agents |
+| `ast-sgrep-mmap` | Sealed read-only mmap wrapper (sole hand-written unsafe boundary) |
+| `ast-sgrep-codemode` | Code Mode / programmatic tool-calling |
+| `ast-sgrep-codemode-napi` | Node-API bindings for in-process Code Mode |
 | `ast-sgrep-plugins` | Output formats (native/github/gitlab/agent/capsule) |
 | `ast-sgrep-testkit` | Shared fixtures for integration tests |
 

@@ -20,6 +20,10 @@ use std::fs;
 use std::sync::Arc;
 use tempfile::TempDir;
 
+#[path = "metamorphic_preds.rs"]
+mod metamorphic_preds;
+use metamorphic_preds::*;
+
 /// Keep metamorphic proptest fast: small case count, no source-parallel persistence races.
 fn mr_proptest_config() -> ProptestConfig {
     ProptestConfig {
@@ -349,55 +353,8 @@ fn mr_compound_reindex_then_limit_subset() {
 // Each planted mutant class must be killed by ≥ 1 MR predicate that mirrors a
 // shipped product MR. Kill matrix and 100% suite rate live in the module docs
 // ("Validation meta") and are asserted here.
-
-type HitKey = (String, u32, u32);
-
-/// MR predicate: limit-subset -- keys(top_k) ⊆ keys(top_K) for k ≤ K.
-fn mr_pred_limit_subset(small: &BTreeSet<HitKey>, large: &BTreeSet<HitKey>) -> bool {
-    small.is_subset(large)
-}
-
-/// MR predicate: probe monotony -- cand(p) ⊆ cand(P) for 1 ≤ p ≤ P.
-fn mr_pred_probe_monotone(fewer: &BTreeSet<usize>, more: &BTreeSet<usize>) -> bool {
-    fewer.is_subset(more)
-}
-
-/// MR predicate: scale invariance -- candidate index sequence identical under α>0.
-fn mr_pred_scale_invariance(bare: &[usize], scaled: &[usize]) -> bool {
-    bare == scaled
-}
-
-/// MR predicate: lang filter subset -- filtered keys ⊆ unfiltered keys.
-fn mr_pred_lang_filter_subset(filtered: &BTreeSet<HitKey>, unfiltered: &BTreeSet<HitKey>) -> bool {
-    filtered.is_subset(unfiltered)
-}
-
-/// MR predicate: reindex idempotence -- hit keys unchanged after reindex.
-fn mr_pred_reindex_idempotent(before: &BTreeSet<HitKey>, after: &BTreeSet<HitKey>) -> bool {
-    before == after
-}
-
-/// MR predicate: search_flat prefix equality -- ordered top-k is prefix of top-K.
-fn mr_pred_search_flat_prefix(small: &[(usize, f32)], large: &[(usize, f32)]) -> bool {
-    if small.len() > large.len() {
-        return false;
-    }
-    small
-        .iter()
-        .zip(large.iter())
-        .all(|((i_s, s_s), (i_l, s_l))| i_s == i_l && (s_s - s_l).abs() <= 1e-5)
-}
-
-/// MR predicate: multi-term query token-order equivalence -- hit keys equal.
-fn mr_pred_term_order_equiv(a: &BTreeSet<HitKey>, b: &BTreeSet<HitKey>) -> bool {
-    a == b
-}
-
-/// MR predicate: orthogonal corpus add -- hit keys unchanged when added file
-/// cannot match the query.
-fn mr_pred_corpus_add_orthogonal(before: &BTreeSet<HitKey>, after: &BTreeSet<HitKey>) -> bool {
-    before == after
-}
+//
+// `HitKey` + `mr_pred_*` live in `metamorphic_preds.rs` (#[path] include).
 
 /// Mutation validation: planted pure-logic mutants are each caught by ≥ 1 MR class.
 ///

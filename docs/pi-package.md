@@ -14,7 +14,7 @@ This is the canonical package-user guide for the `1.4.0` contract. npm availabil
 This package follows [Pi packages](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/packages.md):
 
 - `keywords` includes `pi-package`
-- `pi.extensions` / `pi.skills` / `pi.image` declared in `packages/pi/extension/package.json`
+- `pi.extensions` / `pi.image` declared in `packages/pi/extension/package.json`. Tools auto-register via ExtensionAPI (`promptSnippet` + `promptGuidelines`); the package does not ship a skill.
 - Pi core (`@earendil-works/pi-coding-agent`) is an optional peer constrained to the tested `>=0.80.6 <1` range and is not duplicated at runtime
 - Runtime dependencies that are not supplied by Pi (`ast-sgrep` and `typebox`) stay in `dependencies`
 
@@ -32,9 +32,8 @@ The npm layers are exact-version matched: the `pi-ast-sgrep` extension depends o
 
 Restart Pi after installation if the current session does not reload package resources. The package contributes:
 
-- Tools: **`asgrep`** (primary — JS Code Mode on an **in-process NAPI** `CodeModeSession`), plus `asgrep_search`, `asgrep_index`, and `asgrep_status` for one-shot search/index/status. Search tools share one warm in-process Searcher per project root — no CLI spawn on the hot path (MCP-class native feel).
+- Tools: **`asgrep`** (primary — JS Code Mode on an **in-process NAPI** `CodeModeSession`), plus `asgrep_search`, `asgrep_index`, and `asgrep_status` for one-shot search/index/status. Search tools share one warm in-process Searcher per project root — no CLI spawn on the hot path (MCP-class native feel). The tools register `promptSnippet` and `promptGuidelines` so Pi calls asgrep for code lookup without a skill file.
 - Commands: `/asgrep-doctor`, `/asgrep-status`, `/asgrep-index`, and `/asgrep-reindex`. These commands accept no arguments.
-- Skill: `ast-sgrep`, which prefers Code Mode for multi-step/parallel retrieval and teaches when exact-text search is better.
 
 Start in the project you want Pi to search. A first search (Code Mode or direct) checks index health and lazily creates the index when it is missing, so an explicit setup command is optional. To build it before searching, run `/asgrep-index`.
 

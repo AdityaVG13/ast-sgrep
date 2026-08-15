@@ -1,6 +1,6 @@
 # MCP server (asgrep-mcp)
 
-`asgrep-mcp` exposes ast-sgrep hybrid code search to AI agents via the [Model Context Protocol](https://modelcontextprotocol.io/) over stdio.
+`asgrep-mcp` exposes hierarchical ast-sgrep code retrieval (separate keyword / AST / semantic channels; no auto-fusion) to AI agents via the [Model Context Protocol](https://modelcontextprotocol.io/) over stdio.
 
 
 ## Code Mode XOR MCP
@@ -212,7 +212,7 @@ asgrep --json --format agent-capsule --limit 5 "hybrid ranking fusion" .
 
 Each hit carries `file`, `symbol`, `kind`, `score`, `lines`, a `preview`
 (first non-empty line, <=120 chars), and a `ref` like
-`crates/core/src/search/mod.rs#L120-L132`. Bodies appear only on request:
+`crates/ast-sgrep-core/src/search/mod.rs#L120-L132`. Bodies appear only on request:
 
 - re-run with `--excerpt-lines N` to inline up to N lines per hit, or
 - hand the `ref` span to your own file reader.

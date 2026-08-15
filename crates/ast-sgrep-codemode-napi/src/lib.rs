@@ -31,6 +31,15 @@ fn map_err(err: impl std::fmt::Display) -> Error {
     Error::from_reason(err.to_string())
 }
 
+/// Bounded metadata and symbol lookups that may run on the JS thread. Search
+/// and other potentially expensive tools stay on libuv's worker pool.
+fn is_fast_lookup(tool: &str) -> bool {
+    matches!(
+        tool,
+        "defs" | "callers" | "imports" | "index_status" | "catalog_search" | "catalog_describe"
+    )
+}
+
 #[napi(object)]
 pub struct JsSessionConfig {
     pub root: Option<String>,
@@ -333,6 +342,34 @@ impl Session {
             },
             signal,
         ))
+    }
+
+    /// Bounded metadata or symbol lookup on the JS thread.
+    ///
+    /// Search, index, semantic, and chain stay on [`Self::call`] so they cannot
+    /// stall Node's event loop. Returns "session is busy" when a worker-pool
+    /// task already holds the session so the JS host can fall back to `call`.
+    #[napi]
+    pub fn call_now(&self, tool: String, args: Option<Value>) -> Result<Value> {
+        if !is_fast_lookup(&tool) {
+            return Err(Error::from_reason(
+                "callNow is only for bounded metadata/symbol lookups; use call() for search/index/semantic/chain",
+            ));
+        }
+        if self.busy.load(Ordering::Acquire) {
+            return Err(Error::from_reason("session is busy"));
+        }
+        let _admission = self.admit()?;
+        let mut session = self
+            .inner
+            .try_lock()
+            .map_err(|_| Error::from_reason("session is busy"))?;
+        let result = session.call(&tool, args.unwrap_or(Value::Object(Default::default())));
+        self.call_count.store(
+            session.call_count().min(u32::MAX as usize) as u32,
+            Ordering::Relaxed,
+        );
+        result.map_err(map_err)
     }
 
     /// Dispatch one serial warm batch in a single worker-pool task.

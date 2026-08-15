@@ -3,6 +3,7 @@
 use crate::cli_args::{usage_error, Cli};
 use crate::machine::print_machine_json;
 use anyhow::Context;
+use ast_sgrep_core::skip::should_skip_dir;
 use ast_sgrep_core::{
     canonicalize_affected_path, index_db_path, EmbedBackend, IndexOptions, IndexStats, Indexer,
     SearchOptions, MAX_INCREMENTAL_PATHS,
@@ -225,8 +226,7 @@ pub(crate) fn run_index_dry_run(command: &str, root: &Path, cli: &Cli) -> anyhow
                 }
             };
             if ft.is_dir() {
-                let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
-                if matches!(name, ".git" | "node_modules" | "target" | ".asgrep") {
+                if should_skip_dir(&path) {
                     continue;
                 }
                 walk(&path, files, skipped, walk_errors);

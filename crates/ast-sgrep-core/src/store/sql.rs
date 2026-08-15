@@ -176,7 +176,10 @@ fn or_like_filter(
                     .map(|c| format!("lower({c}) LIKE '%' || lower(?) || '%' ESCAPE '\\'"))
                     .collect();
                 if per_col.len() == 1 {
-                    per_col.into_iter().next().unwrap()
+                    per_col
+                        .into_iter()
+                        .next()
+                        .expect("len==1: single-column LIKE term")
                 } else {
                     format!("({})", per_col.join(" OR "))
                 }

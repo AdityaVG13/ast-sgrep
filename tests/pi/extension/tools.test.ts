@@ -6,6 +6,8 @@ import { RuntimeError, type MachineEnvelope } from "../../../packages/pi/extensi
 
 type Tool = {
   name: string;
+  promptSnippet?: string;
+  promptGuidelines?: string[];
   parameters: { properties: Record<string, Record<string, unknown>>; additionalProperties?: boolean };
   execute(id: string, params: Record<string, unknown>, signal: AbortSignal, onUpdate: (value: unknown) => void, ctx: { cwd: string }): Promise<{ content: Array<{ text: string }>; details: Record<string, unknown> }>;
 };
@@ -42,9 +44,12 @@ async function invoke(tool: Tool, params: Record<string, unknown> = {}, signal =
   return { result, updates, signal };
 }
 
-test("registers Code Mode first, then direct one-shot tools", () => {
+test("registers Code Mode first with auto-use prompt snippet", () => {
   const { tools, byName } = fixture();
   assert.deepEqual(tools.map(({ name }) => name), ["asgrep", "asgrep_search", "asgrep_index", "asgrep_status"]);
+  assert.ok(byName("asgrep").promptSnippet);
+  assert.match(byName("asgrep").promptSnippet!, /without being asked/);
+  assert.ok((byName("asgrep").promptGuidelines ?? []).length >= 2);
   const search = byName("asgrep_search").parameters;
   assert.equal(search.additionalProperties, false);
   assert.equal(search.properties.query.minLength, 1);
@@ -79,17 +84,28 @@ test("asgrep runs JS against the connector and returns a shaped result", async (
   });
   assert.equal(result.details.ok, true);
   assert.deepEqual(result.details.result, { symbol: "auth_refresh", n: 1 });
+  assert.match(result.content[0]!.text, /auth_refresh/);
   assert.ok(f.calls.some((call) => call.args.includes("agent-capsule")));
   assert.ok(result.details.stats);
   assert.ok(typeof result.details.wallMs === "number");
 });
 
-test("search defaults to a small zero-excerpt agent capsule", async () => {
-  const f = fixture({ tool: "asgrep", schema_version: "1.0.0", ok: true, hits: new Array(500).fill({ preview: "x".repeat(500) }) });
-  const { result } = await invoke(f.byName("asgrep_search"), { query: "where auth refreshes" });
-  assert.deepEqual(f.calls[0]?.args, ["--json", "--format", "agent-capsule", "--limit", "8", "--excerpt-lines", "0", "where auth refreshes", "."]);
-  assert.ok(result.content[0]!.text.length <= 1200);
-  assert.equal((result.details.response as MachineEnvelope).hits instanceof Array, true);
+test("search result content names the call and lists hits", async () => {
+  const f = fixture({
+    tool: "asgrep",
+    schema_version: "1.0.0",
+    ok: true,
+    hits: [{ file: "src/auth.rs", start_line: 42, symbol: "refresh_token", kind: "function" }],
+  });
+  const { result } = await invoke(f.byName("asgrep_search"), { query: "auth refresh", mode: "natural" });
+  assert.deepEqual(f.calls[0]?.args, ["--json", "--format", "agent-capsule", "--limit", "8", "--excerpt-lines", "0", "auth refresh", "."]);
+  const text = result.content[0]!.text;
+  assert.match(text, /asgrep/);
+  assert.match(text, /search/);
+  assert.match(text, /auth refresh/);
+  assert.match(text, /src\/auth\.rs:42/);
+  assert.match(text, /refresh_token/);
+  assert.equal(typeof result.details.activationMs, "number");
 });
 
 test("maps every query mode and bounded output option to argv arrays", async () => {

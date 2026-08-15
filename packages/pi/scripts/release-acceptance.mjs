@@ -66,7 +66,7 @@ const validateFiles = (state, artifact) => {
     ? ['LICENSE', 'checksum.sha256', nativeTarget.executable, state.matrix.napiAddon, 'package.json']
     : artifact.layer === 'launcher'
       ? ['LICENSE', 'README.md', 'bin/asgrep.js', 'package.json', 'src/index.d.ts', 'src/index.js']
-      : ['LICENSE', 'README.md', 'assets/preview.png', 'dist/codemode/index.d.ts', 'dist/codemode/index.js', 'dist/codemode/native.d.ts', 'dist/codemode/native.js', 'dist/index.d.ts', 'dist/index.js', 'dist/runtime.d.ts', 'dist/runtime.js', 'native/README.md', 'package.json', 'skills/ast-sgrep/SKILL.md', 'skills/ast-sgrep/references/query-guide.md'];
+      : ['LICENSE', 'README.md', 'assets/preview.png', 'dist/codemode/index.d.ts', 'dist/codemode/index.js', 'dist/codemode/native.d.ts', 'dist/codemode/native.js', 'dist/index.d.ts', 'dist/index.js', 'dist/present.d.ts', 'dist/present.js', 'dist/runtime.d.ts', 'dist/runtime.js', 'native/README.md', 'package.json'];
   for (const entry of required) if (!files.includes(entry)) fail('ASGREP_RELEASE_CONTENT_MISSING', `${artifact.name} is missing ${entry}`);
   for (const entry of files) if (/(^|\/)(test|node_modules)(\/|$)/u.test(entry) || /\.(rs|toml)$/u.test(entry)) fail('ASGREP_RELEASE_CONTENT_FORBIDDEN', `${artifact.name} unexpectedly contains ${entry}`);
 };

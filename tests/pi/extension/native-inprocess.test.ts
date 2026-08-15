@@ -110,7 +110,7 @@ test("native relative index paths resolve against the session root", async (t) =
     });
     await session.call("index_repo", { force: false });
     const status = await session.call("index_status", {}) as Record<string, unknown>;
-    assert.equal(status.index_path, join(root, "custom-index", "index.db"));
+    assert.equal(status.index_path, join(realpathSync(root), "custom-index", "index.db"));
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -133,6 +133,38 @@ test("session pool uses napi backend", async (t) => {
   const envelope = await worker!.call("search", { query: "token", limit: 2, format: "capsule" });
   assert.equal(envelope.tool, "asgrep");
   assert.equal(envelope.ok, true);
+  await pool.shutdown();
+});
+
+test("only bounded warm lookups use callNow and pool search stays async", async (t) => {
+  const binding = requireNative();
+  if (!binding) {
+    t.skip("native addon not built");
+    return;
+  }
+  const indexed = await indexedNative(binding);
+  t.after(() => rm(indexed.dir, { recursive: true, force: true }));
+  const session = new binding.Session({ root: sample, indexPath: indexed.indexPath, useEmbed: false, limit: 8 });
+  assert.equal(typeof session.callNow, "function", "bounded warm lookups need Session.callNow");
+  assert.throws(
+    () => session.callNow!("search", { query: "token", limit: 2, format: "capsule" }),
+    /metadata\/symbol|callNow/i,
+  );
+  const status = session.callNow!("index_status", {}) as Record<string, unknown>;
+  assert.equal(typeof status, "object");
+  const defs = session.callNow!("defs", { symbol: "auth_refresh", limit: 2 }) as Record<string, unknown>;
+  assert.ok(Array.isArray(defs.hits));
+
+  const pool = new NativeSessionPool();
+  pool.configure({ useEmbed: false, indexPath: indexed.indexPath });
+  const worker = await pool.acquire(sample);
+  assert.ok(worker);
+  let eventLoopAdvanced = false;
+  setImmediate(() => { eventLoopAdvanced = true; });
+  const search = worker!.call("search", { query: "token", limit: 2, format: "capsule" });
+  assert.equal(eventLoopAdvanced, false, "pool search must not complete synchronously");
+  await search;
+  assert.equal(eventLoopAdvanced, true, "pool search must dispatch through the async native path");
   await pool.shutdown();
 });
 

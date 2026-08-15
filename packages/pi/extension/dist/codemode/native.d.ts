@@ -36,6 +36,8 @@ export type NativeBatchResponse = {
 };
 export type NativeSession = {
     call(tool: string, args?: Record<string, unknown>, signal?: AbortSignal): Promise<unknown>;
+    /** Sync bounded metadata/symbol lookup; omitted on older addons. Throws if busy. */
+    callNow?(tool: string, args?: Record<string, unknown>): unknown;
     batch(calls: NativeBatchCall[], signal?: AbortSignal): Promise<NativeBatchResponse>;
     readonly callCount: number;
     readonly root: string;

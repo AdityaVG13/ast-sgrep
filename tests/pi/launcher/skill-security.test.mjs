@@ -6,16 +6,16 @@ import { fileURLToPath } from "node:url";
 
 const extensionDir = resolve(dirname(fileURLToPath(import.meta.url)), "../../../packages/pi/extension");
 
-test("packaged skill discloses access, data lifecycle, external embeddings, and privacy", () => {
-  const skill = readFileSync(join(extensionDir, "skills/ast-sgrep/SKILL.md"), "utf8");
+test("published extension README discloses access, data lifecycle, external embeddings, and privacy", () => {
+  const readme = readFileSync(join(extensionDir, "README.md"), "utf8");
   for (const disclosure of [
-    /full system access/iu,
-    /not a sandbox/iu,
-    /writes `\.asgrep` data inside the project/iu,
-    /package removal preserves that project data/iu,
-    /uses no telemetry or credentials/iu,
-    /external embeddings provider may send source text and queries/iu,
-  ]) assert.match(skill, disclosure);
+    /full OS-user access|permissions of the OS user/iu,
+    /not an operating-system security boundary|not a sandbox/iu,
+    /\.asgrep\//iu,
+    /Removal preserves|preserves each project's/iu,
+    /no telemetry/iu,
+    /External cloud, Ollama, and neural embedding providers|external embeddings/iu,
+  ]) assert.match(readme, disclosure);
 });
 
 test("published extension runtime has no telemetry, credential integration, or network downloader", () => {

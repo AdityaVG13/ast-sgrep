@@ -212,9 +212,7 @@ fn doctor_fast_unsafe_issue(
         .durability
         .filter(|d| *d == ast_sgrep_core::store::Durability::FastUnsafe)
         .map(|_| "fast-unsafe");
-    if from_status.or(from_cli).is_none() {
-        return None;
-    }
+    from_status.or(from_cli)?;
     Some(json!({
         "kind": "durability_fast_unsafe",
         "message": "ASGREP_DURABILITY=fast-unsafe (or --durability fast-unsafe) is active: power loss during a write batch can corrupt the index. Prefer balanced/strict outside trusted CI speed paths; MCP/Code Mode inherit this env."
