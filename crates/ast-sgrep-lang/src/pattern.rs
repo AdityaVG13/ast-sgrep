@@ -195,15 +195,11 @@ pub fn classify_native(pattern: &str) -> Option<NativeKind> {
             } else {
                 return None;
             };
-            if let Some(arguments) = pattern_argument_text(rest) {
-                validate_argument_pattern(arguments)?;
-            }
-            // Nested body template (`fn $N($$$) { $STMT }`): everything from the
-            // first `{` is the body section. Unsupported inner shapes fail
-            // closed (classify None → needs_ast_grep_fallback).
-            let body = match rest.find('{') {
-                Some(brace) => parse_body_template(&rest[brace..])?,
-                None => None,
+            let tail = rest[head.len()..].trim();
+            let body = if is_class {
+                parse_body_template(tail)?
+            } else {
+                parse_function_tail(tail)?
             };
             return Some(if is_class {
                 // Statement-count templates on type bodies are language-specific
@@ -240,6 +236,22 @@ pub fn classify_native(pattern: &str) -> Option<NativeKind> {
     }
     let path = parse_call_path(callee)?;
     Some(NativeKind::Call { path })
+}
+
+/// Parse an optional metavariable argument list followed by an optional body.
+/// Declaration heads without either are valid (`def $NAME`); every other byte
+/// must belong to one of these supported sections.
+fn parse_function_tail(tail: &str) -> Option<Option<BodyTemplate>> {
+    let mut after = tail.trim();
+    if let Some(args) = after.strip_prefix('(') {
+        let close = args.find(')')?;
+        let inner = args[..close].trim();
+        if !inner.is_empty() && inner != "$$$" && !inner.split(',').all(is_pure_metavariable) {
+            return None;
+        }
+        after = args[close + 1..].trim();
+    }
+    parse_body_template(after)
 }
 
 /// True when the pattern starts an `if` template (`if `, `if(`).

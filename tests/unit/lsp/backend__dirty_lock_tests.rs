@@ -61,6 +61,35 @@ fn relative_index_path_escape_is_rejected_without_opt_in() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn relative_index_path_through_symlink_with_missing_suffix_is_rejected() {
+    use std::os::unix::fs::symlink;
+
+    let workspace = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    let root = workspace.path().canonicalize().unwrap();
+    symlink(outside.path(), root.join("link")).unwrap();
+
+    let configured = "link/nonexistent/deep/index.db";
+    let error = resolve_lsp_index_path(&root, configured, false)
+        .expect_err("nearest existing symlink ancestor must reveal the external path");
+    assert!(
+        error.to_string().contains("outside the workspace"),
+        "{error}"
+    );
+
+    let allowed = resolve_lsp_index_path(&root, configured, true).unwrap();
+    assert_eq!(
+        allowed,
+        outside
+            .path()
+            .canonicalize()
+            .unwrap()
+            .join("nonexistent/deep/index.db")
+    );
+}
+
 #[test]
 fn absolute_index_path_inside_workspace_is_allowed_without_opt_in() {
     let workspace = tempfile::tempdir().unwrap();
@@ -103,7 +132,14 @@ fn absolute_index_path_under_asgrep_cache_is_allowed_without_opt_in() {
         Some(cache_home.clone()),
     )
     .unwrap();
-    assert_eq!(path, cached);
+    assert_eq!(
+        path,
+        cache
+            .path()
+            .canonicalize()
+            .unwrap()
+            .join("asgrep/abc/index.db")
+    );
 }
 
 #[test]

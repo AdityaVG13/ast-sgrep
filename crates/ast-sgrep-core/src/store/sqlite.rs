@@ -301,9 +301,21 @@ impl IndexStore {
                  DELETE FROM embeddings;
                  DELETE FROM embed_cache;
                  DELETE FROM meta WHERE key LIKE 'body:%' OR key LIKE 'struct:%'
-                   OR key IN ('embed_backend', 'embed_model', 'embed_dim');
-                 UPDATE files SET content_hash = 'semantic-layout-v2:' || content_hash
-                   WHERE content_hash NOT LIKE 'semantic-layout-v2:%';",
+                   OR key IN ('embed_backend', 'embed_model', 'embed_dim');",
+                )?;
+            }
+            // Schema 10 changed chunk rendering and added per-field vectors.
+            // All semantic state is derived, so rebuild it rather than mixing
+            // legacy primary vectors or cache metadata with the new layout.
+            if version < 10 {
+                self.conn.execute_batch(
+                    "DELETE FROM semantic_chunks;
+                     DELETE FROM embeddings;
+                     DELETE FROM embed_cache;
+                     DELETE FROM meta WHERE key LIKE 'body:%' OR key LIKE 'struct:%'
+                       OR key IN ('embed_backend', 'embed_model', 'embed_dim');
+                     UPDATE files SET content_hash = 'semantic-layout-v3:' || content_hash
+                       WHERE content_hash NOT LIKE 'semantic-layout-v3:%';",
                 )?;
             }
             self.conn
@@ -448,20 +460,23 @@ impl IndexStore {
                     stats.skipped += 1;
                     continue;
                 };
-                let matched = if occ.is_definition() {
-                    symbols.iter().any(|(fid, start, end, n)| {
-                        *fid == file_id && n == &name && line >= *start && line <= *end
+                let fact_line = if occ.is_definition() {
+                    symbols.iter().find_map(|(fid, start, end, n)| {
+                        (*fid == file_id && n == &name && line >= *start && line <= *end)
+                            .then_some(*start)
                     })
                 } else {
-                    callers.contains(&(file_id, line, name.clone()))
+                    callers
+                        .contains(&(file_id, line, name.clone()))
+                        .then_some(line)
                 };
-                if !matched {
+                let Some(fact_line) = fact_line else {
                     stats.skipped += 1;
                     continue;
-                }
+                };
                 insert.execute(params![
                     file_id,
-                    i64::from(line),
+                    i64::from(fact_line),
                     name,
                     i64::from(u8::from(occ.is_definition()))
                 ])?;
@@ -1765,6 +1780,34 @@ impl IndexStore {
                 params![path],
                 read_sem_row,
             ),
+        })
+    }
+
+    pub(crate) fn semantic_field_vectors_for_files(
+        &self,
+        files: &std::collections::HashSet<String>,
+        lang: Option<&str>,
+    ) -> Result<Vec<crate::semantic_chunk::SemanticFieldVectors>> {
+        Self::map_sorted_files(files, |path| {
+            let rows = match lang {
+                Some(language) => query_cached_map(
+                    &self.conn,
+                    "SELECT sc.id, sc.vector_name, sc.vector_docs, sc.vector_body, sc.vector_graph \
+                     FROM semantic_chunks sc JOIN files f ON f.id=sc.file_id \
+                     WHERE f.path=?1 AND f.language=?2 ORDER BY sc.id",
+                    params![path, language],
+                    read_field_vector_row,
+                ),
+                None => query_cached_map(
+                    &self.conn,
+                    "SELECT sc.id, sc.vector_name, sc.vector_docs, sc.vector_body, sc.vector_graph \
+                     FROM semantic_chunks sc JOIN files f ON f.id=sc.file_id \
+                     WHERE f.path=?1 ORDER BY sc.id",
+                    params![path],
+                    read_field_vector_row,
+                ),
+            }?;
+            Ok(rows.into_iter().map(|(_, fields)| fields).collect())
         })
     }
 

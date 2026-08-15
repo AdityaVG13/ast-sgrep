@@ -3,7 +3,7 @@
 //! Exact string formats here are part of the on-disk `pattern_nodes` contract —
 //! keep them byte-identical when refactoring.
 
-use crate::pattern::{is_pattern_ident, DECL_PATTERN_PREFIXES};
+use crate::pattern::{classify_native, is_pattern_ident, DECL_PATTERN_PREFIXES};
 
 /// Declaration keyword prefixes used when classifying patterns / building index keys.
 /// Shared with `classify_native` via [`DECL_PATTERN_PREFIXES`].
@@ -20,6 +20,9 @@ pub fn cached_pattern_signatures(pattern: &str) -> Option<Vec<String>> {
     if !pattern.contains('$') {
         return Some(vec![pattern.to_string()]);
     }
+    // Never let a broad cached signature bypass native validation. In
+    // particular, malformed declaration tails must remain match-none.
+    classify_native(pattern)?;
     // Nested body templates (`fn $N($$$) { $STMT }`, `if $COND { $BODY }`)
     // are not indexable: `pattern_nodes` signatures cannot express statement
     // counts, so serving them from the index would over-match. The native

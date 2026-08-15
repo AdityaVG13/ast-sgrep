@@ -1,0 +1,1 @@
+fn remote_target() {}

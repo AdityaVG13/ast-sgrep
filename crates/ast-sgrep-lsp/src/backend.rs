@@ -56,9 +56,19 @@ fn canonicalize_existing_prefix(path: PathBuf) -> PathBuf {
     if let Ok(canonical) = path.canonicalize() {
         return canonical;
     }
-    if let (Some(parent), Some(name)) = (path.parent(), path.file_name()) {
-        if let Ok(canonical_parent) = parent.canonicalize() {
-            return canonical_parent.join(name);
+    let mut existing = path.as_path();
+    let mut suffix = Vec::new();
+    while let Some(name) = existing.file_name() {
+        suffix.push(name.to_os_string());
+        let Some(parent) = existing.parent() else {
+            break;
+        };
+        existing = parent;
+        if let Ok(mut canonical) = existing.canonicalize() {
+            for component in suffix.iter().rev() {
+                canonical.push(component);
+            }
+            return canonical;
         }
     }
     path
@@ -110,6 +120,7 @@ fn resolve_lsp_index_path_with_cache(
         return Ok(resolved);
     }
     if let Some(cache) = cache_home {
+        let cache = canonicalize_existing_prefix(lexical_normalize(&cache));
         if path_is_within(&resolved, &cache) {
             return Ok(resolved);
         }

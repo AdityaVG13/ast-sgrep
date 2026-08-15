@@ -152,8 +152,8 @@ fn empty_response_suggests_semantic_then_agent_rerun() {
     assert_eq!(
         plan,
         vec![
-            "asgrep semantic \"session cookie\"",
-            "asgrep --json --format agent \"session cookie\"",
+            "asgrep semantic 'session cookie'",
+            "asgrep --json --format agent 'session cookie'",
         ]
     );
 }
@@ -165,9 +165,9 @@ fn suggested_next_follows_the_actual_top_hit() {
     assert_eq!(
         plan,
         vec![
-            "asgrep \"defs:auth_refresh\"",
-            "asgrep \"callers:auth_refresh\"",
-            "asgrep --json --format agent \"token renewal\"",
+            "asgrep 'defs:auth_refresh'",
+            "asgrep 'callers:auth_refresh'",
+            "asgrep --json --format agent 'token renewal'",
         ]
     );
 }
@@ -179,11 +179,31 @@ fn semantic_rerun_is_suggested_only_without_semantic_evidence() {
         0.5,
     );
     let plan = plan_suggested_next(&response("auth_refresh", vec![structural.clone()]));
-    assert!(plan.contains(&"asgrep semantic \"auth_refresh\"".to_string()));
+    assert!(plan.contains(&"asgrep semantic 'auth_refresh'".to_string()));
 
     let semantic = with_contributors(structural, &[HitKind::Def, HitKind::Embed]);
     let plan = plan_suggested_next(&response("auth_refresh", vec![semantic]));
     assert!(!plan.iter().any(|cmd| cmd.starts_with("asgrep semantic")));
+}
+
+#[test]
+fn hostile_query_and_follow_up_are_posix_shell_quoted() {
+    let hostile = "x'; touch /tmp/pwned; echo '$HOME $(id)";
+    let top = with_symbol(hit(HitKind::Embed, "src/auth.rs", 0.5), hostile);
+    let plan = plan_suggested_next(&response(hostile, vec![top]));
+    assert!(plan.contains(&format!(
+        "asgrep {}",
+        quote_shell_arg(&format!("defs:{hostile}"))
+    )));
+    assert!(plan.contains(&format!(
+        "asgrep {}",
+        quote_shell_arg(&format!("callers:{hostile}"))
+    )));
+    assert!(plan.contains(&format!(
+        "asgrep --json --format agent {}",
+        quote_shell_arg(hostile)
+    )));
+    assert_eq!(quote_shell_arg("a'b"), "'a'\\''b'");
 }
 
 #[test]

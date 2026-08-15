@@ -11,7 +11,7 @@ use crate::Result;
 pub use critic::CriticNote;
 pub use field_weight::EmbedFieldScores;
 pub use fusion::dedup_hits;
-use passes::embed::{embed_pass_for_files, run_embed_pass, SemanticCache};
+use passes::embed::{run_embed_pass, SemanticCache};
 use passes::lexical::lexical_pass;
 use passes::literal::literal_pass;
 use passes::regex::regex_pass;
@@ -84,6 +84,7 @@ const RESPONSE_CACHE_CAP: usize = 128;
 pub struct Searcher {
     store: IndexStore,
     options: SearchOptions,
+    use_field_rescoring: bool,
     semantic_cache: Arc<Mutex<Option<SemanticCache>>>,
     lexicon_cache: Mutex<Option<(i64, crate::lexicon::Lexicon)>>,
     response_cache: Mutex<ResponseCache>,
@@ -151,6 +152,7 @@ impl Searcher {
         Self {
             store,
             options,
+            use_field_rescoring: true,
             semantic_cache: Arc::new(Mutex::new(None)),
             lexicon_cache: Mutex::new(None),
             response_cache: Mutex::new(ResponseCache {
@@ -171,6 +173,13 @@ impl Searcher {
     pub fn options(&self) -> &SearchOptions {
         &self.options
     }
+    /// Select concatenated-vector scoring (`false`) or the default per-field
+    /// semantic rescoring (`true`). This eval-oriented setting lives on the
+    /// searcher so adding it does not break exhaustive `SearchOptions` literals.
+    pub fn with_field_rescoring(mut self, enabled: bool) -> Self {
+        self.use_field_rescoring = enabled;
+        self
+    }
     fn index_gen(&self) -> Option<IndexGeneration> {
         // PRAGMA failure disables caching rather than pinning gen=0 (hdwh).
         let external = self
@@ -187,7 +196,11 @@ impl Searcher {
     }
     fn cache_key(&self, kind: &str, query: &str) -> String {
         // Full SearchOptions identity (nyui).
-        format!("{kind}\0{query}\0{}", self.options.cache_identity())
+        format!(
+            "{kind}\0{query}\0{}\0fr={}",
+            self.options.cache_identity(),
+            self.use_field_rescoring
+        )
     }
     /// Run one multi-pass search inside a single read snapshot and stamp the
     fn fenced(&self, compute: impl FnOnce() -> Result<SearchResponse>) -> Result<SearchResponse> {
@@ -512,21 +525,32 @@ impl Searcher {
     /// Dispatches exactly like `search` does for the same prefix; the
     /// semantic channel runs the embedding-only pass.
     fn channel_hits(&self, channel: &conjunction::ChannelQuery) -> Result<Vec<SearchHit>> {
+        let status = self.store.status()?;
+        let exhaustive_limit = status
+            .line_count
+            .saturating_add(status.symbol_count)
+            .saturating_add(status.caller_count)
+            .saturating_add(status.import_count)
+            .saturating_add(status.semantic_chunk_count)
+            .max(1);
+        let mut options = self.options.clone();
+        options.limit = exhaustive_limit;
+        options.use_rerank = false;
+        options.rerank_top_k = exhaustive_limit;
+        options.ann_probes = Some(usize::MAX);
         match channel {
             conjunction::ChannelQuery::Mode(parsed) => match parsed.mode {
-                QueryMode::Callers => search_callers(&self.store, &self.options, parsed),
-                QueryMode::Defs => search_defs(&self.store, &self.options, parsed),
-                QueryMode::Imports => search_imports(&self.store, &self.options, parsed),
+                QueryMode::Callers => search_callers(&self.store, &options, parsed),
+                QueryMode::Defs => search_defs(&self.store, &options, parsed),
+                QueryMode::Imports => search_imports(&self.store, &options, parsed),
                 QueryMode::Pattern => crate::pattern::search_pattern(
                     parsed.terms.first().map(|s| s.as_str()).unwrap_or(""),
                     &self.store,
                     &self.options.root,
                     self.options.lang_filter.as_deref(),
                 ),
-                QueryMode::Literal | QueryMode::Word => {
-                    literal_pass(&self.store, &self.options, parsed)
-                }
-                QueryMode::Regex => regex_pass(&self.store, &self.options, parsed),
+                QueryMode::Literal | QueryMode::Word => literal_pass(&self.store, &options, parsed),
+                QueryMode::Regex => regex_pass(&self.store, &options, parsed),
                 // ChannelQuery::parse never yields Hybrid; stay total anyway.
                 QueryMode::Hybrid => Ok(Vec::new()),
             },
@@ -535,9 +559,10 @@ impl Searcher {
                 let expanded = self.repository_expanded_query(&parsed)?;
                 run_embed_pass(
                     &self.store,
-                    &self.options,
+                    &options,
                     expanded.as_ref().unwrap_or(&parsed),
                     &self.semantic_cache,
+                    self.use_field_rescoring,
                 )
             }
         }
@@ -555,6 +580,7 @@ impl Searcher {
                     &self.options,
                     expanded.as_ref().unwrap_or(&parsed),
                     &self.semantic_cache,
+                    self.use_field_rescoring,
                 )?,
                 false,
             )
@@ -643,8 +669,13 @@ impl Searcher {
         let mut hits = lexical;
         hits.extend(structural);
         if self.options.use_embed {
-            let semantic =
-                embed_pass_for_files(&self.store, &self.options, semantic_query, &working_files)?;
+            let semantic = passes::embed::embed_pass_for_files_with_rescoring(
+                &self.store,
+                &self.options,
+                semantic_query,
+                &working_files,
+                self.use_field_rescoring,
+            )?;
             if crate::intent::classify(parsed) == crate::intent::QueryIntent::Conceptual {
                 hits.extend(conceptual_fanout_pass(
                     &self.store,
