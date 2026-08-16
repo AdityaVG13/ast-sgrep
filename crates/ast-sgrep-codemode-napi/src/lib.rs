@@ -14,8 +14,9 @@
 //!
 //! Soft-timeout abort must not leave waiters parked on the session mutex or a
 //! fail-fast `session is busy` gate. Tasks poll `try_lock` so a cancelled
-//! waiter returns `operation cancelled` without taking the session. A call that
-//! already holds the mutex may finish its current `session.call`.
+//! waiter returns `operation cancelled` without taking the session. Read/search
+//! calls that already hold the mutex may finish. `index_repo` polls the abort
+//! flag during walk/prepare and returns `operation cancelled` without committing.
 
 #![deny(clippy::all)]
 
@@ -111,6 +112,27 @@ fn cancelled_error() -> Error {
     Error::from_reason("operation cancelled")
 }
 
+struct SessionCancelGuard<'a> {
+    session: &'a mut CodeModeSession,
+}
+
+impl<'a> SessionCancelGuard<'a> {
+    fn arm(session: &'a mut CodeModeSession, cancel: &Arc<AtomicBool>) -> Self {
+        session.set_cancel(Some(Arc::clone(cancel)));
+        Self { session }
+    }
+
+    fn session(&mut self) -> &mut CodeModeSession {
+        self.session
+    }
+}
+
+impl Drop for SessionCancelGuard<'_> {
+    fn drop(&mut self) {
+        self.session.set_cancel(None);
+    }
+}
+
 fn watch_cancel(signal: Option<&AbortSignal>, cancelled: &Arc<AtomicBool>) {
     let Some(signal) = signal else {
         return;
@@ -160,11 +182,14 @@ impl<'task> ScopedTask<'task> for SessionCallTask {
     type JsValue = Unknown<'task>;
 
     fn compute(&mut self) -> Result<Self::Output> {
-        let mut session = lock_session(&self.inner, &self.cancelled)?;
-        let result = session.call(&self.tool, std::mem::take(&mut self.args));
+        let mut locked = lock_session(&self.inner, &self.cancelled)?;
+        let mut session = SessionCancelGuard::arm(&mut locked, &self.cancelled);
+        let result = session
+            .session()
+            .call(&self.tool, std::mem::take(&mut self.args));
         // Saturate at u32::MAX; session cap 10_000 makes wrap unreachable (pb2w).
         self.call_count.store(
-            session.call_count().min(u32::MAX as usize) as u32,
+            session.session().call_count().min(u32::MAX as usize) as u32,
             Ordering::Relaxed,
         );
         result.map_err(map_err)
@@ -189,7 +214,8 @@ impl Task for SessionBatchTask {
 
     fn compute(&mut self) -> Result<Self::Output> {
         let started = Instant::now();
-        let mut session = lock_session(&self.inner, &self.cancelled)?;
+        let mut locked = lock_session(&self.inner, &self.cancelled)?;
+        let mut session = SessionCancelGuard::arm(&mut locked, &self.cancelled);
         let mut all_ok = true;
         let mut results = Vec::with_capacity(self.calls.len());
         let mut response_bytes = MAX_BATCH_RESPONSE_BYTES - MAX_BATCH_VALUE_BYTES;
@@ -197,7 +223,7 @@ impl Task for SessionBatchTask {
             if self.cancelled.load(Ordering::Acquire) {
                 return Err(cancelled_error());
             }
-            let result = match session.call(
+            let result = match session.session().call(
                 &call.tool,
                 call.args.unwrap_or(Value::Object(Default::default())),
             ) {
@@ -219,13 +245,13 @@ impl Task for SessionBatchTask {
             results.push(result);
         }
         self.call_count.store(
-            session.call_count().min(u32::MAX as usize) as u32,
+            session.session().call_count().min(u32::MAX as usize) as u32,
             Ordering::Relaxed,
         );
         Ok(JsBatchResponse {
             all_ok,
             results,
-            call_count: session.call_count().min(u32::MAX as usize) as u32,
+            call_count: session.session().call_count().min(u32::MAX as usize) as u32,
             wall_ms: started.elapsed().as_millis().min(u128::from(u32::MAX)) as u32,
             mode: "serial-napi".to_string(),
         })

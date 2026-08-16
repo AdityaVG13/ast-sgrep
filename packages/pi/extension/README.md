@@ -132,9 +132,9 @@ Code Mode and `ast-sgrep-mcp` are separate front ends over the same Rust search 
 
 Start Pi in the repository you want to search. The first search validates the index and lazily creates `<project-root>/.asgrep/` when needed. Run `/asgrep-index` if you want to build it before searching.
 
-After a successful Pi `write` or `edit`, the extension marks the affected path dirty and updates only known changed paths before the next search. It also watches the project for external filesystem changes: known file changes receive the same targeted update, while renames, directory changes, ignore-file edits, watcher errors, and ambiguous events trigger a correctness scan. `.asgrep` writes are excluded so indexing cannot dirty itself. If recursive watching is unavailable, an immediate scan plus the periodic full scan preserve correctness. Concurrent searches for the same root share one in-flight refresh.
+After a successful Pi `write` or `edit`, the extension marks the affected path dirty and updates only known changed paths before the next search. It also watches the project for external filesystem changes: known file changes receive the same targeted update, while renames, directory changes, ignore-file edits, watcher errors, and ambiguous events trigger a correctness scan. `.asgrep` writes are excluded so indexing cannot dirty itself. If recursive watching is unavailable, an immediate scan on first use preserves correctness. A ready index is not walked on first search or on the refresh interval; the interval only re-checks index health. Concurrent searches for the same root share one in-flight refresh. The last cancelled waiter aborts that shared index so Pi cannot leave workers running after a search is cancelled. In-process indexing uses the host's available parallelism by default.
 
-The periodic interval forces a full incremental reconciliation even when the watcher reports nothing, covering dropped or coalesced filesystem events. Run `/asgrep-index` when you need freshness immediately after a large external operation; use `/asgrep-reindex` only for an incompatible or corrupt index, or when you explicitly need a strict full rebuild.
+The refresh interval does not force a full tree walk. Run `/asgrep-index` when you need freshness immediately after a large external operation the watcher did not see; use `/asgrep-reindex` only for an incompatible or corrupt index, or when you explicitly need a strict full rebuild.
 
 The package never edits `.gitignore`. Add this entry yourself if index data must stay untracked:
 
@@ -209,6 +209,7 @@ Defaults are a 30-second operation timeout, 4 MiB output limit, and 30-second fr
 | `ASGREP_TIMEOUT_MS` | Set the native operation timeout. |
 | `ASGREP_MAX_OUTPUT_BYTES` | Bound native output. |
 | `ASGREP_REFRESH_INTERVAL_MS` | Set the idle freshness-check interval. |
+| `ASGREP_INDEX_THREADS` | Cap in-process Code Mode indexing threads (default: host parallelism). |
 | `ASGREP_BIN` | Override the packaged binary for development. |
 
 Explicit project configuration can opt into `allowOutsideProject`; global settings and environment variables cannot relax the default project boundary. See the [complete package guide](https://github.com/AdityaVG13/ast-sgrep/blob/main/docs/pi-package.md) for schema and precedence details.

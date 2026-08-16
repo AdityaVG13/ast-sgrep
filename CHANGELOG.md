@@ -12,6 +12,7 @@ This changelog follows [Keep a Changelog](https://keepachangelog.com/) conventio
 
 | Version | Date | Summary |
 |---------|------|---------|
+| [v2.0.2](#v202-2026-08-16) | 2026-08-16 | Pi package: first search no longer full-walks a ready index; cancel stops in-flight index |
 | [v2.0.1](#v201-2026-08-16) | 2026-08-16 | Pi package: truncate asgrep TUI chrome so long queries no longer crash Pi |
 | [v2.0.0](#v200-2026-08-15) | 2026-08-15 | Local-first major: five PRs (#27, #29–#32). Remote embed APIs removed; critic, conjunction, SCIP, Pi results |
 | [v1.4.0](#v140-2026-08-06) | 2026-08-06 | 7-PR release: Code Mode (PTC), 13-language pattern surface, search/ranking correctness, LSP symbol fixes, watch freshness, durability hardening, quality gates + anti-bloat |
@@ -22,6 +23,16 @@ This changelog follows [Keep a Changelog](https://keepachangelog.com/) conventio
 | [v1.0.0-alpha](https://github.com/AdityaVG13/ast-sgrep/releases/tag/v1.0.0-alpha) | 2026-07-11 | First alpha |
 
 ---
+
+## v2.0.2 (2026-08-16)
+
+`pi-ast-sgrep` 2.0.2. Native CLI, launcher, and platform packages stay at 2.0.0.
+
+### Fixed
+
+- Pi first search no longer walks a ready, clean index. The refresh interval re-checks status instead of hashing the tree.
+- Last cancelled search waiter aborts the shared in-flight index so workers cannot keep running after Pi moves on.
+- Incremental `index_all` skips unchanged files by stored mtime before read/hash. Code Mode indexing uses host parallelism by default (`ASGREP_INDEX_THREADS` still caps). Native mtime skip and cancel polling land in the next family rebuild; this patch ships the Pi freshness coordinator immediately.
 
 ## v2.0.1 (2026-08-16)
 

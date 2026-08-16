@@ -65,7 +65,7 @@ pub use fusion::{
 };
 pub use index::{
     canonicalize_affected_path, force_sidecar_rebuild_err, indexed_rel_path, EmbedBackend,
-    FileIndexStats, ForceSidecarRebuildErr, IndexOptions, IndexStats, Indexer,
+    FileIndexStats, ForceSidecarRebuildErr, IndexOptions, IndexStats, Indexer, INDEX_CANCELLED,
     MAX_INCREMENTAL_PATHS,
 };
 pub use io_bounds::{read_text_capped, MAX_INDEX_FILE_BYTES};

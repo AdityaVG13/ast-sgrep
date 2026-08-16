@@ -143,7 +143,7 @@ Below the ANN threshold, semantic search uses brute-force cosine over all symbol
 6. **Upsert** file row, lines, symbols, graph edges; remove stale rows for changed files
 7. **Build IVF sidecar** if symbol count exceeds threshold
 
-Incremental skip: if `content_hash` and mtime match, file is not re-parsed.
+Incremental skip: matching stored mtime skips the file without reading it. If mtime differs, content is hashed; a matching hash skips parse.
 
 ## Caller graph safety
 

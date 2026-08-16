@@ -95,6 +95,30 @@ _(no invented measurement closes)_
 - **retry_condition_predicate:** Retry only if a profiler attributes a clearly-above-noise share to IVF residual leaf work on a frozen corpus. The historical hoy3.1 values are noncanonical until rerun with retained raw evidence. Do not treat pre-T1 build_from_flat as current.
 - **bead_id:** `ast-sgrep-ho-ivf-residual-ho-20260807-hoy3.1`
 
+### `cass-unavailable-freshness-cancel-cpu-2026-08-16`
+
+- **target_workload:** Pi freshness / in-process `index_repo` cancel
+- **files_touched:** `packages/pi/extension/src/runtime.ts`, `crates/ast-sgrep-core/src/index.rs`, `crates/ast-sgrep-codemode`, `crates/ast-sgrep-codemode-napi`
+- **correctness_proof:** not-measured (cass 60-day mine blocked; this is a cancel/CPU-safety bugfix, not a keep-gate optimization)
+- **evidence_artifact_paths:** this ledger
+- **baseline_configuration:** pointer-only
+- **candidate_configuration:** pointer-only
+- **measured_result:** not claimed
+- **retry_condition_predicate:** Blocked until `cass` is on PATH; re-run the 60-day mine for `rejected|reverted|abandoned|slower|regressed|within noise|keep gate|UNREPRODUCIBLE|jell` before treating thread-cap or cancel polling as a measured perf experiment.
+- **bead_id:** `br-c0s`
+
+### `cass-unavailable-ready-index-first-search-walk-2026-08-16`
+
+- **target_workload:** Pi first `asgrep` search against an already-ready `.asgrep/index.db`
+- **files_touched:** `packages/pi/extension/src/runtime.ts`, `crates/ast-sgrep-core/src/index.rs`, `crates/ast-sgrep-core/src/index_prepare.rs`, `crates/ast-sgrep-codemode/src/session.rs`
+- **correctness_proof:** not-measured (cass 60-day mine blocked; product change is skip-walk + mtime short-circuit, not a keep-gate number)
+- **evidence_artifact_paths:** this ledger
+- **baseline_configuration:** pointer-only
+- **candidate_configuration:** pointer-only
+- **measured_result:** not claimed
+- **retry_condition_predicate:** Blocked until `cass` is on PATH; re-run the 60-day mine for `rejected|reverted|abandoned|slower|regressed|within noise|keep gate|UNREPRODUCIBLE|jell` before treating mtime skip or host-parallelism restore as a measured perf experiment. Do not quote wall-clock speedup until a fingerprint row exists.
+- **bead_id:** `br-v0e`
+
 ## Retired
 
 _(none)_

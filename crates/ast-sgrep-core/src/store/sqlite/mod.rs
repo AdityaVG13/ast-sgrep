@@ -135,6 +135,13 @@ pub struct SymbolLocationRow {
     pub line_start: u32,
     pub line_end: u32,
 }
+
+#[derive(Debug, Clone)]
+pub(crate) struct FileIdentity {
+    pub mtime_secs: i64,
+    pub mtime_nanos: u32,
+    pub content_hash: String,
+}
 pub struct UpsertFileInput<'a> {
     pub rel_path: &'a str,
     pub language: Option<&'a str>,

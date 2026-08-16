@@ -12,6 +12,7 @@ use super::{
 use crate::{IndexStatus, Result};
 use rusqlite::types::{Type, ValueRef};
 use rusqlite::{params, ToSql};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 fn read_field_vector_row(
@@ -37,6 +38,25 @@ impl IndexStore {
             &[&rel_path],
             |r| r.get(0),
         )
+    }
+
+    pub(crate) fn file_identities(&self) -> Result<HashMap<String, super::FileIdentity>> {
+        let rows = query_cached_map(
+            &self.conn,
+            "SELECT path, mtime_secs, mtime_nanos, content_hash FROM files",
+            [],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    super::FileIdentity {
+                        mtime_secs: row.get(1)?,
+                        mtime_nanos: row.get(2)?,
+                        content_hash: row.get(3)?,
+                    },
+                ))
+            },
+        )?;
+        Ok(rows.into_iter().collect())
     }
     pub fn all_file_paths(&self) -> Result<Vec<String>> {
         query_cached_map(

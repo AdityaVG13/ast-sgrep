@@ -134,6 +134,49 @@ test("aborting an in-flight native call does not leave the session busy", async 
   }
 });
 
+test("aborting index_repo after it starts stops the walk", async (t) => {
+  const binding = requireNative();
+  if (!binding) {
+    t.skip("native addon not built");
+    return;
+  }
+  const root = await mkdtemp(join(tmpdir(), "asgrep-napi-abort-walk-"));
+  const source = join(root, "src");
+  await mkdir(source);
+  try {
+    await Promise.all(Array.from({ length: 1_200 }, (_, index) =>
+      writeFile(join(source, `file-${index}.ts`), `export function value${index}() { return ${index}; }\n`, "utf8")));
+    const session = new binding.Session({
+      root,
+      indexPath: join(root, "index.db"),
+      useEmbed: false,
+      limit: 8,
+    });
+    const controller = new AbortController();
+    const started = Date.now();
+    let settled = false;
+    const active = session.call("index_repo", { force: true }, controller.signal)
+      .finally(() => { settled = true; });
+    await new Promise((resolve) => setTimeout(resolve, 15));
+    if (settled) {
+      t.skip("index finished before abort could be observed");
+      return;
+    }
+    controller.abort();
+    await assert.rejects(active, (err: unknown) => {
+      const message = err instanceof Error ? err.message : String(err);
+      return /cancel|abort/iu.test(message);
+    });
+    assert.ok(
+      Date.now() - started < 8_000,
+      "cancelled index_repo must stop instead of finishing the tree walk",
+    );
+    await session.call("index_status", {});
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("native relative index paths resolve against the session root", async (t) => {
   const binding = requireNative();
   if (!binding) {

@@ -312,6 +312,21 @@ function waitForRefresh(refresh, signal) {
         });
     });
 }
+/** Shared refresh continues while other waiters remain; the last cancel stops it. */
+function attachRefreshWaiter(state, refresh, signal) {
+    state.waiterCount += 1;
+    let cancelledByWaiter = false;
+    const wait = waitForRefresh(refresh, signal).catch((cause) => {
+        cancelledByWaiter = cause instanceof RuntimeError && cause.code === "CANCELLED" && signal?.aborted === true;
+        throw cause;
+    });
+    return wait.finally(() => {
+        state.waiterCount = Math.max(0, state.waiterCount - 1);
+        if (cancelledByWaiter && state.waiterCount === 0 && state.inFlight !== undefined) {
+            state.refreshAbort?.abort();
+        }
+    });
+}
 export class FreshnessCoordinator {
     #states = new Map();
     #pending = new Map();
@@ -373,7 +388,7 @@ export class FreshnessCoordinator {
         }
     }
     async ensureFresh(runtime, context, options = {}) {
-        const root = await runtime.resolveRoot(context);
+        const root = canonicalizeRootPath(await runtime.resolveRoot(context));
         const rootContext = { cwd: root, [RESOLVED_ROOT]: true };
         let state = this.#states.get(root);
         if (!state) {
@@ -385,6 +400,8 @@ export class FreshnessCoordinator {
                 initialized: false,
                 lastRefreshAt: 0,
                 inFlight: undefined,
+                refreshAbort: undefined,
+                waiterCount: 0,
                 watcher: undefined,
             };
             this.#states.set(root, state);
@@ -413,12 +430,16 @@ export class FreshnessCoordinator {
                 this.#pending.delete(pendingRoot);
         }
         if (state.inFlight) {
-            await waitForRefresh(state.inFlight, options.signal);
+            await attachRefreshWaiter(state, state.inFlight, options.signal);
             return this.ensureFresh(runtime, rootContext, options);
         }
+        if (options.signal?.aborted)
+            throw cancelledRefreshWait();
         const now = this.#now();
         const elapsed = now - state.lastRefreshAt;
         // Lease expiry: initialized and interval elapsed (or clock went backwards).
+        // Expiry re-probes status (missing/incompatible) but must not walk a ready
+        // index. First search of a ready, clean index is the same: status only.
         const expired = state.initialized && (elapsed < 0 || elapsed >= this.#interval);
         if (state.initialized && state.cleanGeneration === state.dirtyGeneration && !expired)
             return root;
@@ -427,8 +448,12 @@ export class FreshnessCoordinator {
         const fullScanRequired = state.fullScanRequired;
         // Correctness work belongs to the root, not to whichever request happened
         // to start it. Individual callers may stop waiting, but cannot cancel the
-        // shared refresh while other callers depend on it.
-        const sharedOptions = {};
+        // shared refresh while other callers still depend on it. The last waiter
+        // abort stops the in-flight index so Pi/tool cancel cannot leave rayon
+        // workers burning CPU.
+        const refreshAbort = new AbortController();
+        state.refreshAbort = refreshAbort;
+        const sharedOptions = { signal: refreshAbort.signal };
         if (options.timeoutMs !== undefined)
             sharedOptions.timeoutMs = options.timeoutMs;
         if (options.env !== undefined)
@@ -443,7 +468,10 @@ export class FreshnessCoordinator {
                 else
                     await runIndex(runtime, true, rootContext, sharedOptions);
             }
-            else if (health === "missing" || !state.initialized || expired || (dirty && (fullScanRequired || refreshPaths.length === 0))) {
+            else if (health === "missing") {
+                await runIndex(runtime, false, rootContext, sharedOptions);
+            }
+            else if (dirty && (fullScanRequired || refreshPaths.length === 0)) {
                 await runIndex(runtime, false, rootContext, sharedOptions);
             }
             else if (dirty) {
@@ -459,14 +487,16 @@ export class FreshnessCoordinator {
         })();
         let tracked;
         tracked = refresh.finally(() => {
-            if (state.inFlight === tracked)
+            if (state.inFlight === tracked) {
                 state.inFlight = undefined;
+                state.refreshAbort = undefined;
+            }
         });
         state.inFlight = tracked;
         // If every waiter is cancelled, the root-owned refresh still needs a
         // rejection handler while it finishes in the background.
         void tracked.catch(() => undefined);
-        await waitForRefresh(tracked, options.signal);
+        await attachRefreshWaiter(state, tracked, options.signal);
         if (state.cleanGeneration !== state.dirtyGeneration) {
             return this.ensureFresh(runtime, rootContext, options);
         }
