@@ -12,6 +12,7 @@ This changelog follows [Keep a Changelog](https://keepachangelog.com/) conventio
 
 | Version | Date | Summary |
 |---------|------|---------|
+| [v2.0.1](#v201-2026-08-16) | 2026-08-16 | Pi package: truncate asgrep TUI chrome so long queries no longer crash Pi |
 | [v2.0.0](#v200-2026-08-15) | 2026-08-15 | Local-first major: five PRs (#27, #29–#32). Remote embed APIs removed; critic, conjunction, SCIP, Pi results |
 | [v1.4.0](#v140-2026-08-06) | 2026-08-06 | 7-PR release: Code Mode (PTC), 13-language pattern surface, search/ranking correctness, LSP symbol fixes, watch freshness, durability hardening, quality gates + anti-bloat |
 | [v1.3.2](https://github.com/AdityaVG13/ast-sgrep/releases/tag/v1.3.2) | 2026-07-23 | **The Pi Package Update** — "Out of the Alpha and into the Light" |
@@ -19,6 +20,16 @@ This changelog follows [Keep a Changelog](https://keepachangelog.com/) conventio
 | [v1.1.0-alpha.1](https://github.com/AdityaVG13/ast-sgrep/tree/v1.1.0-alpha.1) | 2026-07-17 | Pi npm bootstrap, SSH-signed tag verification |
 | [v1.1.0-alpha](https://github.com/AdityaVG13/ast-sgrep/releases/tag/v1.1.0-alpha) | 2026-07-12 | FTS per-file delete hardening |
 | [v1.0.0-alpha](https://github.com/AdityaVG13/ast-sgrep/releases/tag/v1.0.0-alpha) | 2026-07-11 | First alpha |
+
+---
+
+## v2.0.1 (2026-08-16)
+
+`pi-ast-sgrep` 2.0.1. Native CLI, launcher, and platform packages stay at 2.0.0.
+
+### Fixed
+
+- Pi TUI no longer exits when asgrep renders a long search query. `AsgrepText.render()` now truncates to the terminal width.
 
 ---
 

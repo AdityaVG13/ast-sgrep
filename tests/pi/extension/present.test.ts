@@ -61,3 +61,47 @@ test("presentText reuses the last component", () => {
   assert.equal(first, second);
   assert.deepEqual(second.render(80), ["two"]);
 });
+
+function testVisibleWidth(text: string): number {
+  let width = 0;
+  for (let i = 0; i < text.length; ) {
+    if (text.charCodeAt(i) === 0x1b) {
+      const csi = text.slice(i).match(/^\x1b\[[0-9;?]*[ -/]*[@-~]/);
+      if (csi) {
+        i += csi[0].length;
+        continue;
+      }
+      const osc = text.slice(i).match(/^\x1b\].*?(?:\x07|\x1b\\)/);
+      if (osc) {
+        i += osc[0].length;
+        continue;
+      }
+      i += Math.min(2, text.length - i);
+      continue;
+    }
+    const code = text.charCodeAt(i);
+    width += code <= 0x7e ? 1 : 2;
+    i += code >= 0xd800 && code <= 0xdbff ? 2 : 1;
+  }
+  return width;
+}
+
+test("AsgrepText truncates a long search header to the terminal width", () => {
+  const query =
+    "In pi/packages/pi-zsx/index.js, find where the zero tool is registered, including its name, description, parameters, system prompt or agent policy injection, and examples. Return relevant symbols and bodies.";
+  const theme = {
+    bold: (text: string) => `\x1b[1m${text}\x1b[22m`,
+    fg: (_role: string, text: string) => `\x1b[38;2;182;183;250m${text}\x1b[39m`,
+  };
+  const component = presentText(formatSearchCall({ query, mode: "natural" }, theme), undefined);
+  const lines = component.render(91);
+  assert.equal(lines.length, 1);
+  assert.ok(testVisibleWidth(lines[0]) <= 91, `visible width ${testVisibleWidth(lines[0])} > 91`);
+  assert.match(lines[0], /asgrep/);
+  assert.match(lines[0], /\.\.\./);
+});
+
+test("AsgrepText keeps short lines unchanged", () => {
+  const component = presentText('asgrep  ·  search  ·  "auth"  ·  natural', undefined);
+  assert.deepEqual(component.render(91), ['asgrep  ·  search  ·  "auth"  ·  natural']);
+});

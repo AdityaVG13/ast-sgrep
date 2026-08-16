@@ -111,7 +111,17 @@ report(extensionManifest.dependencies?.typebox === '^1.0.0' && extensionManifest
 const layers = contract.compatibility?.layers ?? {};
 report(layers.extension?.version === version && layers.launcher?.version === version && layers.binary?.version === nativeVersion, 'npm layers or embedded native CLI drift from their canonical versions');
 report(layers.extension?.compatibility === 'exact' && layers.launcher?.compatibility === 'exact' && layers.binary?.compatibility === 'exact-native-cli', 'release layer compatibility must reject package or native CLI version skew');
-report(extensionManifest.version === version && launcherManifest.version === version && extensionManifest.dependencies?.['ast-sgrep'] === version, 'extension and launcher manifests drift from the compatibility matrix');
+const parseRelease = (value) => {
+  const match = String(value).match(/^(\d+)\.(\d+)\.(\d+)$/);
+  return match ? [Number(match[1]), Number(match[2]), Number(match[3])] : null;
+};
+const isExtensionPatchOf = (extensionVersion, canonical) => {
+  if (extensionVersion === canonical) return true;
+  const actual = parseRelease(extensionVersion);
+  const expected = parseRelease(canonical);
+  return Boolean(actual && expected && actual[0] === expected[0] && actual[1] === expected[1] && actual[2] > expected[2]);
+};
+report(isExtensionPatchOf(extensionManifest.version, version) && launcherManifest.version === version && extensionManifest.dependencies?.['ast-sgrep'] === version, 'extension and launcher manifests drift from the compatibility matrix');
 report(runtimeSource.includes(`export const RUNTIME_VERSION = "${nativeVersion}";`) && launcherSource.includes(`const VERSION = "${version}";`), 'runtime native CLI expectation or launcher package version drifts from the compatibility matrix');
 report(nativeSource.includes(`export const CODEMODE_BINDING_VERSION = "${nativeVersion}";`) && nativeDist.includes(`export const CODEMODE_BINDING_VERSION = "${nativeVersion}";`), 'Code Mode NAPI binding expectation drifts from the compatibility matrix');
 report(layers.machineSchema?.version === '1.0.0' && equal(layers.machineSchema.readable, ['1.0.0']) && runtimeSource.includes('export const MACHINE_SCHEMA_VERSION = "1.0.0";'), 'machine schema compatibility matrix is inconsistent');
