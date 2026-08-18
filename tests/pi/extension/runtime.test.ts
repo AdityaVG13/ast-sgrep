@@ -2,11 +2,11 @@ import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { statSync } from "node:fs";
 import { mkdtemp, mkdir, realpath, rename, rm, symlink, writeFile } from "node:fs/promises";
-import { DatabaseSync } from "node:sqlite";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, describe, it } from "node:test";
 import { AstSgrepRuntime, CONFIG_SCHEMA_VERSION, DEFAULT_MAX_OUTPUT_BYTES, DEFAULT_REFRESH_INTERVAL_MS, DEFAULT_TIMEOUT_MS, FreshnessCoordinator, INDEX_FORMAT_VERSION, MACHINE_SCHEMA_VERSION, RUNTIME_VERSION, RuntimeError, migrateConfig, resolveConfig, resolveRuntimeRoot, rollbackConfig, type ExecOptions, type ExecResult, type MachineEnvelope, type PiExec, type RunOptions, type RuntimeContext } from "../../../packages/pi/extension/src/runtime.js";
+import { openIndexDatabase } from "../../../packages/pi/extension/src/sqlite.js";
 
 const temporary: string[] = [];
 afterEach(async () => { await Promise.all(temporary.splice(0).map((path) => rm(path, { recursive: true, force: true }))); });
@@ -40,7 +40,7 @@ async function errorCode(action: () => Promise<unknown>, code: string): Promise<
 }
 async function createIndex(path: string, version: number, marker: string): Promise<void> {
   await mkdir(dirname(path), { recursive: true });
-  const database = new DatabaseSync(path);
+  const database = openIndexDatabase(path);
   try {
     database.exec(`PRAGMA user_version = ${version}; CREATE TABLE marker (value TEXT NOT NULL);`);
     database.prepare("INSERT INTO marker (value) VALUES (?)").run(marker);
@@ -50,7 +50,7 @@ async function createIndex(path: string, version: number, marker: string): Promi
 }
 
 function readMarker(path: string): string {
-  const database = new DatabaseSync(path, { readOnly: true });
+  const database = openIndexDatabase(path, { readOnly: true });
   try {
     const row: unknown = database.prepare("SELECT value FROM marker").get();
     if (!row || typeof row !== "object" || !("value" in row) || typeof row.value !== "string") assert.fail("marker row is invalid");
@@ -192,7 +192,7 @@ describe("index format upgrades", () => {
     const inode = statSync(indexPath).ino;
     const pi = new FakePi(async (_options, args) => {
       assert.deepEqual(args, ["reindex", ".", "--json"]);
-      const database = new DatabaseSync(indexPath);
+      const database = openIndexDatabase(indexPath);
       try {
         database.exec(`PRAGMA user_version = ${INDEX_FORMAT_VERSION}`);
         database.prepare("UPDATE marker SET value = ?").run("rebuilt");
@@ -223,7 +223,7 @@ describe("index format upgrades", () => {
     assert.equal(error.details.supported, INDEX_FORMAT_VERSION);
     assert.equal(error.details.rollbackSafe, true);
     assert.equal(readMarker(indexPath), "future");
-    const database = new DatabaseSync(indexPath, { readOnly: true });
+    const database = openIndexDatabase(indexPath, { readOnly: true });
     try {
       const row = database.prepare("PRAGMA user_version").get() as Record<string, unknown>;
       assert.equal(Number(Object.values(row)[0]), INDEX_FORMAT_VERSION + 1);
@@ -273,7 +273,7 @@ describe("index format upgrades", () => {
     const indexPath = join(project, ".asgrep", "index.db");
     await createIndex(indexPath, INDEX_FORMAT_VERSION - 1, "prior");
     const subject = runtime(new FakePi(async () => {
-      const database = new DatabaseSync(indexPath);
+      const database = openIndexDatabase(indexPath);
       try {
         database.exec(`PRAGMA user_version = ${INDEX_FORMAT_VERSION}`);
       } finally {

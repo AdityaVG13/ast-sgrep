@@ -11,7 +11,7 @@
     "asgrep capabilities --json",
     "asgrep robot-docs guide",
     "asgrep doctor --robot-triage",
-    "asgrep index . && asgrep --json --format compact \"where is auth refreshed\" ."
+    "asgrep --json --format compact \"where is auth refreshed\" ."
   ],
   "command": "capabilities",
   "commands": [
@@ -281,6 +281,7 @@
     "ASGREP_INDEX_PATH",
     "ASGREP_DURABILITY",
     "ASGREP_NO_EMBED",
+    "ASGREP_NO_AUTO_INDEX",
     "ASGREP_NEURAL_EMBED",
     "ASGREP_NEURAL_FALLBACK",
     "ASGREP_SEMANTIC_ONLY",
@@ -329,6 +330,7 @@
     "--json",
     "--lang",
     "--limit",
+    "--no-auto-index",
     "--robot-help",
     "--root"
   ],

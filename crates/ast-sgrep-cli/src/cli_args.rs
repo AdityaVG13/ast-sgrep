@@ -285,6 +285,15 @@ pub(crate) struct Cli {
         help = "Index write durability: strict|balanced|fast-unsafe (default balanced)"
     )]
     pub(crate) durability: Option<ast_sgrep_core::Durability>,
+    #[arg(
+        long = "no-auto-index",
+        global = true,
+        env = "ASGREP_NO_AUTO_INDEX",
+        action = clap::ArgAction::SetTrue,
+        value_parser = clap::builder::BoolishValueParser::new(),
+        help = "Fail if the index is empty instead of indexing automatically"
+    )]
+    pub(crate) no_auto_index: bool,
     /// Search-tuning for bare (no-subcommand) search only — not inherited by capabilities/doctor (vdqo).
     #[command(flatten)]
     pub(crate) tuning: SearchTuning,

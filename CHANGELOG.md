@@ -8,6 +8,11 @@ This changelog follows [Keep a Changelog](https://keepachangelog.com/) conventio
 
 ## Unreleased
 
+### Fixed
+
+- `pi-ast-sgrep` no longer imports `node:sqlite` at load time, so Pi/OMP/ZMP can boot under Bun via `bun:sqlite`.
+- `asgrep search` indexes an empty checkout on first use instead of exiting 2. Pass `--no-auto-index` to keep the old fail-closed error.
+
 ## Version Timeline
 
 | Version | Date | Summary |

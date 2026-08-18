@@ -64,3 +64,11 @@ fn search_options_collapses_parent_and_subcommand_flag_forms() {
     let sub = parse_search(&["search", "--neural-embed", "--semantic-only", "q", "."]);
     assert_exclusive(&search_options(Path::new("."), &sub), EmbedBackend::Neural);
 }
+
+#[test]
+fn no_auto_index_flag_parses() {
+    let default = parse_search(&["search", "q", "."]);
+    assert!(!default.no_auto_index);
+    let flagged = parse_search(&["--no-auto-index", "search", "q", "."]);
+    assert!(flagged.no_auto_index);
+}

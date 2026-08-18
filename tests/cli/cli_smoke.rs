@@ -1,6 +1,8 @@
 use ast_sgrep_testkit::CliSession;
+use serde_json::Value;
 use std::fs;
 use std::path::PathBuf;
+use std::process::Command;
 use tempfile::TempDir;
 fn asgrep_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_asgrep"))
@@ -89,6 +91,99 @@ fn cli_failure_oracle_preserves_diagnostics() {
         .run_failure(&["--definitely-invalid-option"])
         .stderr
         .is_empty());
+}
+
+fn run_json(args: &[&str]) -> (i32, Value, String, String) {
+    let output = Command::new(asgrep_bin())
+        .args(args)
+        .env("NO_COLOR", "1")
+        .output()
+        .expect("run asgrep");
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    let value = serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
+        panic!("stdout is not JSON: {error}\nstdout: {stdout}\nstderr: {stderr}")
+    });
+    (
+        output.status.code().expect("exit code"),
+        value,
+        stdout,
+        stderr,
+    )
+}
+
+#[test]
+fn search_auto_indexes_an_empty_checkout() {
+    let root = TempDir::new().expect("root");
+    fs::write(root.path().join("planted.rs"), "fn planted_symbol() {}\n").expect("source");
+    let index = root.path().join("index.db");
+    let (code, value, _stdout, stderr) = run_json(&[
+        "--json",
+        "--no-embed",
+        "--index-path",
+        index.to_str().unwrap(),
+        "search",
+        "planted_symbol",
+        root.path().to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "stderr={stderr} value={value}");
+    assert!(stderr.is_empty(), "machine mode must stay silent: {stderr}");
+    assert_eq!(value["ok"], true);
+    let hits = value["hits"].as_array().expect("hits");
+    assert!(
+        hits.iter()
+            .any(|hit| { hit["symbol"] == "planted_symbol" || hit["file"] == "planted.rs" }),
+        "expected planted_symbol hit, got {hits:?}"
+    );
+}
+
+#[test]
+fn search_no_auto_index_fails_closed_when_empty() {
+    let root = TempDir::new().expect("root");
+    fs::write(root.path().join("planted.rs"), "fn planted_symbol() {}\n").expect("source");
+    let index = root.path().join("index.db");
+    let (code, value, _stdout, stderr) = run_json(&[
+        "--no-auto-index",
+        "--json",
+        "--no-embed",
+        "--index-path",
+        index.to_str().unwrap(),
+        "search",
+        "planted_symbol",
+        root.path().to_str().unwrap(),
+    ]);
+    assert_eq!(code, 2, "stderr={stderr} value={value}");
+    assert!(stderr.is_empty(), "machine mode must stay silent: {stderr}");
+    assert_eq!(value["ok"], false);
+    let message = value["error"]["message"].as_str().unwrap_or("");
+    assert!(
+        message.contains("index is empty"),
+        "expected empty-index error, got {message}"
+    );
+}
+
+#[test]
+fn chain_auto_indexes_an_empty_checkout() {
+    let root = TempDir::new().expect("root");
+    fs::write(
+        root.path().join("planted.rs"),
+        "fn planted_caller() { planted_symbol(); }\nfn planted_symbol() {}\n",
+    )
+    .expect("source");
+    let index = root.path().join("index.db");
+    let (code, value, _stdout, stderr) = run_json(&[
+        "--json",
+        "--no-embed",
+        "--index-path",
+        index.to_str().unwrap(),
+        "chain",
+        "planted_symbol",
+        root.path().to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "stderr={stderr} value={value}");
+    assert!(stderr.is_empty(), "machine mode must stay silent: {stderr}");
+    assert_eq!(value["ok"], true);
+    assert!(value["node_count"].as_u64().unwrap_or(0) > 0, "{value}");
 }
 
 #[test]

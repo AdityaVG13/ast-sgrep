@@ -1,8 +1,8 @@
 import { realpath } from "node:fs/promises";
 import { constants, accessSync, existsSync, readdirSync, realpathSync, statSync, watch, type FSWatcher } from "node:fs";
-import { DatabaseSync } from "node:sqlite";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
 import { resolveBinary } from "ast-sgrep";
+import { openIndexDatabase, type IndexDatabase } from "./sqlite.js";
 
 export const RUNTIME_VERSION = "2.0.0";
 export const MACHINE_SCHEMA_VERSION = "1.0.0";
@@ -808,9 +808,9 @@ function throwIndexRebuildFailed(cause: unknown, indexPath: string, quarantinesB
 
 function inspectIndexFile(path: string): IndexHealth {
   if (!existsSync(path)) return "missing";
-  let database: DatabaseSync | undefined;
+  let database: IndexDatabase | undefined;
   try {
-    database = new DatabaseSync(path, { readOnly: true });
+    database = openIndexDatabase(path, { readOnly: true });
     const row = database.prepare("PRAGMA user_version").get() as Record<string, unknown> | undefined;
     const version = Number(Object.values(row ?? {})[0]);
     if (version > INDEX_FORMAT_VERSION) {

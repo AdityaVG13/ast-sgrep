@@ -67,7 +67,7 @@ pub(crate) fn capabilities_json(_cli: &Cli) -> anyhow::Result<Value> {
             "precedence": "conflicting --root and positional ROOT is a usage error; effective_root prefers --root when set",
             "bin_aliases": ["asgrep", "ast-sgrep"]
         },
-        "environment": ["ASGREP_LIMIT", "ASGREP_INDEX_PATH", "ASGREP_DURABILITY", "ASGREP_NO_EMBED", "ASGREP_NEURAL_EMBED", "ASGREP_NEURAL_FALLBACK", "ASGREP_SEMANTIC_ONLY", "ASGREP_TANTIVY", "ASGREP_ANN_THRESHOLD", "ASGREP_ANN_PROBES", "ASGREP_RERANK", "ASGREP_RERANK_TOP_K", "ASGREP_ALLOW_AST_GREP", "ASGREP_ALLOW_EXTERNAL_INDEX", "ASGREP_AST_GREP", "ASGREP_LEDGER_PATH", "ASGREP_USE_CACHE", "XDG_CACHE_HOME", "NO_COLOR", "CI"],
+        "environment": ["ASGREP_LIMIT", "ASGREP_INDEX_PATH", "ASGREP_DURABILITY", "ASGREP_NO_EMBED", "ASGREP_NO_AUTO_INDEX", "ASGREP_NEURAL_EMBED", "ASGREP_NEURAL_FALLBACK", "ASGREP_SEMANTIC_ONLY", "ASGREP_TANTIVY", "ASGREP_ANN_THRESHOLD", "ASGREP_ANN_PROBES", "ASGREP_RERANK", "ASGREP_RERANK_TOP_K", "ASGREP_ALLOW_AST_GREP", "ASGREP_ALLOW_EXTERNAL_INDEX", "ASGREP_AST_GREP", "ASGREP_LEDGER_PATH", "ASGREP_USE_CACHE", "XDG_CACHE_HOME", "NO_COLOR", "CI"],
         "environment_bool_values": ["1", "0", "true", "false", "yes", "no", "on", "off"],
         "sibling_binaries": [
             {"name":"asgrep-mcp","purpose":"MCP stdio server","launch":"asgrep-mcp (stdio JSON-RPC)"},
@@ -106,7 +106,7 @@ pub(crate) fn capabilities_json(_cli: &Cli) -> anyhow::Result<Value> {
             {"code": 1, "meaning": "usage error (missing required args, unknown flags, invalid --format, conflicting roots)"},
             {"code": 2, "meaning": "operational failure (index/search/IO) or doctor healthy:false"}
         ],
-        "canonical_tasks": ["asgrep capabilities --json", "asgrep robot-docs guide", "asgrep doctor --robot-triage", "asgrep index . && asgrep --json --format compact \"where is auth refreshed\" ."],
+        "canonical_tasks": ["asgrep capabilities --json", "asgrep robot-docs guide", "asgrep doctor --robot-triage", "asgrep --json --format compact \"where is auth refreshed\" ."],
         "notes": {
             "default_search": "Bare QUERY without a subcommand runs hybrid search; the word 'search' is not a required verb — use the `search`/`find`/`query` subcommand only when you want an explicit search command.",
             "format_implies_json": true,
@@ -287,8 +287,8 @@ pub(crate) fn robot_guide_markdown() -> &'static str {
 2. `asgrep robot-docs guide` — this handbook.
 3. `asgrep doctor --robot-triage` — health + recovery commands using the effective root.
 ## Quick start
-1. `asgrep index . --json` — build or refresh the index (required once per checkout).
-2. `asgrep --json --format compact "natural language intent" .` — ranked hits with bounded snippets.
+1. `asgrep --json --format compact "natural language intent" .` — ranked hits with bounded snippets. First search indexes an empty checkout automatically.
+2. `asgrep index . --json` — explicit refresh. Pass `--no-auto-index` on search to fail closed instead.
 ## Indexed source / freshness
 - Do not spawn `rg` on indexed source. Use `literal:<term>` for exact substring presence and unprefixed search for ranked code navigation.
 - For a long-running CLI session, run `asgrep watch <root>`. A pending batch starts after the debounce quiet period or after at most three debounce windows under continuous events; indexing time still depends on the project.
@@ -313,14 +313,14 @@ See `capabilities --json` → `commands` (complete clap catalog). Notable: `sear
 ## Exit codes
 - 0 success · 1 usage · 2 index/search failure
 ## Environment
-See `capabilities --json` → `environment`. Common: `ASGREP_INDEX_PATH`, `ASGREP_LIMIT`, `ASGREP_NO_EMBED`, `ASGREP_DURABILITY`, `NO_COLOR`, `CI`.
+See `capabilities --json` → `environment`. Common: `ASGREP_INDEX_PATH`, `ASGREP_LIMIT`, `ASGREP_NO_EMBED`, `ASGREP_NO_AUTO_INDEX`, `ASGREP_DURABILITY`, `NO_COLOR`, `CI`.
 ## Ops footguns (privileged sinks)
 - `ASGREP_INDEX_PATH` / `--index-path` is a **privileged sink**: any absolute writable path is accepted. Treat it like a database URL; do not point it at untrusted locations.
 - Index rebuilds are in-place on the default `.asgrep/` DB or a pinned `ASGREP_INDEX_PATH` (SQLite transactional rollback). There is no build-then-swap generation layout. Pinning only chooses which file; it does not change atomicity.
 - `ASGREP_DURABILITY=fast-unsafe` (or `--durability fast-unsafe`) opts into power-loss corruption risk during write batches. `asgrep doctor` / `status` surface it; MCP/Code Mode inherit the env.
 - MCP and Code Mode / NAPI jail tool `root` under the configured workspace (`escapes configured workspace`). Host duty remains: set `ASGREP_ROOT` / Session root intentionally; NAPI inherits Session (not a free root).
 ## Common mistakes
-- Missing or empty index: run `asgrep index <root> --json` before searching.
+- Empty index fail-closed: pass `--no-auto-index` (or `ASGREP_NO_AUTO_INDEX=1`) if search must not index first.
 - Missing ROOT is an operational error; it is never reported as an empty result.
 - Full rebuild: prefer `asgrep reindex --dry-run <root> --json` before `reindex`.
 - Output format is not `json`: use `--json` and optionally `--format compact` (not `--format json`).

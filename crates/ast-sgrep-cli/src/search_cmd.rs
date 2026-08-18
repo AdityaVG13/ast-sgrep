@@ -1,29 +1,18 @@
 //! Search / keyword / semantic / chain command helpers.
 
 use crate::machine::{print_machine_json, print_machine_json_with_style, write_stdout_line};
-use crate::{
-    ensure_existing_root, ensure_nonempty_index, open_searcher, resolve_root_index, usage_error,
-    Cli,
-};
+use crate::{ensure_existing_root, open_indexed_store, open_searcher, usage_error, Cli};
 use anyhow::Context;
 use ast_sgrep_core::{
     call_path::{find_call_path, CallPathConfig},
     chain::{expand_chain, ChainConfig},
-    format_hit_line, IndexStore, SearchResponse, Searcher,
+    format_hit_line, SearchResponse, Searcher,
 };
 use std::path::Path;
 
 pub(crate) fn run_chain(root: &Path, cli: &Cli, query: &str) -> anyhow::Result<()> {
     let root = ensure_existing_root(root, cli)?;
-    let (_, index_path) = resolve_root_index(cli, &root);
-    // 0obi: honor the requested durability profile on the read path too.
-    let store = IndexStore::open_with_durability(
-        &root,
-        index_path.as_deref(),
-        cli.durability.unwrap_or_default(),
-    )
-    .context("failed to open index")?;
-    ensure_nonempty_index(&root, store.status()?.file_count)?;
+    let store = open_indexed_store(&root, cli)?;
     let config = ChainConfig {
         limit: ast_sgrep_core::clamp_output_limit(cli.limit, ChainConfig::default().limit),
         top_n: 1,
@@ -60,14 +49,7 @@ pub(crate) fn run_chain(root: &Path, cli: &Cli, query: &str) -> anyhow::Result<(
 
 pub(crate) fn run_call_path(args: &crate::cli_args::CallPathArgs, cli: &Cli) -> anyhow::Result<()> {
     let root = ensure_existing_root(&args.root, cli)?;
-    let (_, index_path) = resolve_root_index(cli, &root);
-    let store = IndexStore::open_with_durability(
-        &root,
-        index_path.as_deref(),
-        cli.durability.unwrap_or_default(),
-    )
-    .context("failed to open index")?;
-    ensure_nonempty_index(&root, store.status()?.file_count)?;
+    let store = open_indexed_store(&root, cli)?;
     let response = find_call_path(
         &store,
         &args.source,

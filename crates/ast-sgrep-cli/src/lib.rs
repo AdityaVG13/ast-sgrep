@@ -24,8 +24,8 @@ use std::path::{Path, PathBuf};
 
 pub(crate) use cli_args::{usage_error, UsageError};
 pub(crate) use index_cmd::{
-    effective_root, ensure_existing_root, ensure_nonempty_index, ensure_unambiguous_root,
-    index_options, open_indexer, open_searcher, resolve_root_index, search_options,
+    effective_root, ensure_existing_root, ensure_unambiguous_root, index_options,
+    open_indexed_store, open_indexer, open_searcher, resolve_root_index, search_options,
 };
 pub(crate) use machine::print_machine_json_status;
 
