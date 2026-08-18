@@ -271,6 +271,63 @@ fn iva9_5_literal_lang_filter_not_starved_by_path_limit() {
         .all(|h| h.language.as_deref() == Some("rust")));
 }
 
+/// br-5l6 — `--lang ts` must match stored `typescript` (SQL equality used the raw alias).
+#[test]
+fn lang_alias_ts_matches_indexed_typescript() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    write_src(root, "a.py", "unique_alias_needle = 1\n");
+    write_src(root, "b.ts", "const unique_alias_needle = 1;\n");
+    let index_path = root.join("index.db");
+    let mut indexer = Indexer::new(IndexOptions {
+        root: root.to_path_buf(),
+        index_path: Some(index_path.clone()),
+        force_reindex: true,
+        embed_semantic: false,
+        ..IndexOptions::default()
+    })
+    .unwrap();
+    indexer.index_all().unwrap();
+    let searcher = Searcher::new(SearchOptions {
+        root: root.to_path_buf(),
+        index_path: Some(index_path.clone()),
+        lang_filter: Some("ts".into()),
+        limit: 16,
+        use_embed: false,
+        ..SearchOptions::default()
+    })
+    .unwrap();
+    let resp = searcher.search("word:unique_alias_needle").unwrap();
+    assert!(
+        resp.hits.iter().any(|h| h.file.contains("b.ts")),
+        "--lang ts must hit typescript; got {:#?}",
+        resp.hits
+    );
+    assert!(
+        resp.hits
+            .iter()
+            .all(|h| h.language.as_deref() == Some("typescript")),
+        "alias must canonicalize to stored id; got {:#?}",
+        resp.hits
+    );
+    let js_only = Searcher::new(SearchOptions {
+        root: root.to_path_buf(),
+        index_path: Some(index_path),
+        lang_filter: Some("js".into()),
+        limit: 16,
+        use_embed: false,
+        ..SearchOptions::default()
+    })
+    .unwrap()
+    .search("word:unique_alias_needle")
+    .unwrap();
+    assert!(
+        js_only.hits.is_empty(),
+        "--lang js must not match .ts; got {:#?}",
+        js_only.hits
+    );
+}
+
 /// iva9.6 — under-filled / empty ANN is not treated as sufficient.
 #[test]
 fn iva9_6_ann_sufficiency_contract() {

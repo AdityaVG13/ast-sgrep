@@ -75,6 +75,8 @@ pub fn search_pattern(
     // Union index signatures with native tree-sitter matches (92nj).
     // Production does not spawn external ast-grep by default; native-only is the
     // honest completeness path when the index is partial.
+    let canonical = ast_sgrep_lang::Language::canonical_filter(lang_filter);
+    let lang_filter = canonical.as_deref();
     let mut hits = Vec::new();
     let mut seen = std::collections::HashSet::new();
     if store.pattern_node_count()? > 0 {
@@ -230,6 +232,8 @@ fn search_pattern_native_profiled(
     lang_filter: Option<&str>,
     use_prefilter: bool,
 ) -> Result<NativeSearchOutput> {
+    let canonical = ast_sgrep_lang::Language::canonical_filter(lang_filter);
+    let lang_filter = canonical.as_deref();
     let total_started = Instant::now();
     let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
     let ignore = crate::gitignore::IgnoreMatcher::new(&root);

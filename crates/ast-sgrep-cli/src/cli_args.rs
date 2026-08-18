@@ -273,7 +273,11 @@ pub(crate) struct Cli {
         help = "Override index database path"
     )]
     pub(crate) index_path: Option<PathBuf>,
-    #[arg(long, global = true, help = "Language filter")]
+    #[arg(
+        long,
+        global = true,
+        help = "Language filter (typescript or ts, javascript or js, python or py, rust or rs, …)"
+    )]
     pub(crate) lang: Option<String>,
     /// 0obi: `fast-unsafe` can corrupt the index on power loss, so it must be
     /// asked for by name; it is never reached by default.

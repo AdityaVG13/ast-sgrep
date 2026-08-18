@@ -86,6 +86,18 @@ impl Language {
             .map(|lang| lang.as_str().to_string())
             .unwrap_or_else(|| raw.trim().to_ascii_lowercase())
     }
+
+    /// Canonical language id for index storage and SQL filters.
+    ///
+    /// Known aliases (`ts`, `tsx`, `js`, `py`, `rs`, …) map to [`Language::as_str`].
+    /// Blank input is no filter. Unknown labels are lowercased.
+    pub fn canonical_filter(raw: Option<&str>) -> Option<String> {
+        let trimmed = raw?.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+        Some(Self::normalize_id(trimmed))
+    }
 }
 
 impl std::fmt::Display for Language {
@@ -237,5 +249,57 @@ fn make_parser(lang: Language) -> Box<dyn LanguageParser> {
         Language::Cpp => Box::new(CppParser),
         Language::Kotlin => Box::new(KotlinParser),
         Language::Php => Box::new(PhpParser),
+    }
+}
+
+#[cfg(test)]
+mod canonical_filter_tests {
+    use super::Language;
+
+    #[test]
+    fn aliases_map_to_stored_ids() {
+        assert_eq!(
+            Language::canonical_filter(Some("ts")).as_deref(),
+            Some("typescript")
+        );
+        assert_eq!(
+            Language::canonical_filter(Some("tsx")).as_deref(),
+            Some("typescript")
+        );
+        assert_eq!(
+            Language::canonical_filter(Some("TypeScript")).as_deref(),
+            Some("typescript")
+        );
+        assert_eq!(
+            Language::canonical_filter(Some("js")).as_deref(),
+            Some("javascript")
+        );
+        assert_eq!(
+            Language::canonical_filter(Some("py")).as_deref(),
+            Some("python")
+        );
+        assert_eq!(
+            Language::canonical_filter(Some("rs")).as_deref(),
+            Some("rust")
+        );
+        assert_eq!(
+            Language::canonical_filter(Some("c#")).as_deref(),
+            Some("csharp")
+        );
+    }
+
+    #[test]
+    fn blank_is_no_filter() {
+        assert_eq!(Language::canonical_filter(None), None);
+        assert_eq!(Language::canonical_filter(Some("")), None);
+        assert_eq!(Language::canonical_filter(Some("  ")), None);
+    }
+
+    #[test]
+    fn unknown_labels_lowercase() {
+        assert_eq!(
+            Language::canonical_filter(Some("Fortran")).as_deref(),
+            Some("fortran")
+        );
     }
 }

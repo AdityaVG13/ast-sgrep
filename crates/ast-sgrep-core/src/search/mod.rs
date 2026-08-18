@@ -149,7 +149,11 @@ impl Searcher {
             options,
         ))
     }
-    pub fn with_store(store: IndexStore, options: SearchOptions) -> Self {
+    pub fn with_store(store: IndexStore, mut options: SearchOptions) -> Self {
+        // Bind SQL `f.language = ?` to Language::as_str so `--lang ts` matches
+        // stored `typescript` (br-5l6). matches_lang already aliases; SQL did not.
+        options.lang_filter =
+            ast_sgrep_lang::Language::canonical_filter(options.lang_filter.as_deref());
         Self {
             store,
             options,

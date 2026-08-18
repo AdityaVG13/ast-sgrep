@@ -182,7 +182,7 @@ Machine-oriented catalog: `asgrep capabilities --json` (clap-derived; preferred 
 | `--ann-probes` | `ASGREP_ANN_PROBES` | IVF clusters to probe |
 | `--rerank` | `ASGREP_RERANK` | Local cross-encoder rerank (feature-gated) |
 | `--rerank-top-k` | `ASGREP_RERANK_TOP_K` | Rerank candidate pool (default 20) |
-| `--lang` | | Filter: `rust`, `typescript`, `javascript`, `python`, `go`, … |
+| `--lang` | | Filter by canonical id or alias: `typescript`/`ts`/`tsx`, `javascript`/`js`, `python`/`py`, `rust`/`rs`, `go`, … |
 | `--index-path` | `ASGREP_INDEX_PATH` | Custom index DB path (**privileged sink**; pin disables gen reindex) |
 
 Store index in cache instead of repo:

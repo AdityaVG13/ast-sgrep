@@ -124,9 +124,9 @@ pub fn calls_matching(
         .map_err(Into::into)
 }
 pub fn append_lang_filter(parts: &mut Vec<String>, bind: &mut Vec<String>, lang: Option<&str>) {
-    if let Some(lang) = lang {
+    if let Some(lang) = ast_sgrep_lang::Language::canonical_filter(lang) {
         parts.push("f.language = ?".into());
-        bind.push(lang.into());
+        bind.push(lang);
     }
 }
 pub fn where_clause(parts: &[String]) -> String {

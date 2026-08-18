@@ -270,6 +270,8 @@ pub(crate) fn quick_check(store: &IndexStore) -> Result<String> {
 impl Indexer {
     pub fn new(mut options: IndexOptions) -> Result<Self> {
         options.root = options.root.canonicalize().unwrap_or(options.root.clone());
+        options.lang_filter =
+            ast_sgrep_lang::Language::canonical_filter(options.lang_filter.as_deref());
         let root_dir = crate::io_bounds::RootDir::open(&options.root)?;
         let store = match open_index_store(&options) {
             Ok(store) if options.force_reindex => match quick_check(&store) {
