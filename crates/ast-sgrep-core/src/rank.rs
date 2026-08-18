@@ -119,3 +119,6 @@ pub fn score_caller_normalized(normalized_terms: &[String], callee: &str) -> f64
     }
 }
 
+#[cfg(test)]
+#[path = "../../../tests/unit/core/rank.rs"]
+mod tests;

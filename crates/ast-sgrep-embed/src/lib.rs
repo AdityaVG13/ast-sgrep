@@ -80,3 +80,6 @@ fn l2(v: &[f32]) -> f32 {
     v.iter().map(|x| x * x).sum::<f32>().sqrt()
 }
 
+#[cfg(test)]
+#[path = "../../../tests/unit/embed/lib.rs"]
+mod tests;

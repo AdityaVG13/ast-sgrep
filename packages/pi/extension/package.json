@@ -53,6 +53,9 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "build:native": "cargo build -p ast-sgrep-codemode-napi --release && node ./scripts/copy-native.mjs",
+    "test": "ASGREP_CODEMODE_BACKEND=cli node --import tsx --test ../../../tests/pi/extension/code-mode.test.ts ../../../tests/pi/extension/codemode.test.ts ../../../tests/pi/extension/commands.test.ts ../../../tests/pi/extension/present.test.ts ../../../tests/pi/extension/runtime.test.ts ../../../tests/pi/extension/security.test.ts ../../../tests/pi/extension/session-pool.test.ts ../../../tests/pi/extension/skill-workflow.test.ts ../../../tests/pi/extension/sqlite.test.ts ../../../tests/pi/extension/tools.test.ts",
+    "test:native": "node --import tsx --test ../../../tests/pi/extension/native-inprocess.test.ts",
+    "test:all": "npm test && npm run test:native",
     "prepack": "npm run build"
   },
   "engines": {
@@ -73,6 +76,7 @@
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "^0.84.1",
     "@types/node": "^22.15.0",
+    "tsx": "^4.20.0",
     "typescript": "^5.8.0"
   }
 }

@@ -1,0 +1,325 @@
+{
+  "calls": [
+    {
+      "byte_end": 472,
+      "byte_start": 460,
+      "callee": "name",
+      "caller": "format_widget",
+      "line": 16
+    },
+    {
+      "byte_end": 303,
+      "byte_start": 271,
+      "callee": "format_widget",
+      "caller": "render",
+      "line": 9
+    },
+    {
+      "byte_end": 302,
+      "byte_start": 285,
+      "callee": "make_widget",
+      "caller": "render",
+      "line": 9
+    }
+  ],
+  "imports": [
+    {
+      "line": 2,
+      "module_path": "pathlib.Path"
+    }
+  ],
+  "pattern_nodes": [
+    {
+      "excerpt": "GoldenWidget",
+      "line_end": 4,
+      "line_start": 4,
+      "signature": "GoldenWidget"
+    },
+    {
+      "excerpt": "Path",
+      "line_end": 2,
+      "line_start": 2,
+      "signature": "Path"
+    },
+    {
+      "excerpt": "Path",
+      "line_end": 7,
+      "line_start": 7,
+      "signature": "Path"
+    },
+    {
+      "excerpt": "Path",
+      "line_end": 11,
+      "line_start": 11,
+      "signature": "Path"
+    },
+    {
+      "excerpt": "format_widget(make_widget(path))",
+      "line_end": 9,
+      "line_start": 9,
+      "signature": "call-name:format_widget"
+    },
+    {
+      "excerpt": "make_widget(path)",
+      "line_end": 9,
+      "line_start": 9,
+      "signature": "call-name:make_widget"
+    },
+    {
+      "excerpt": "name.strip()",
+      "line_end": 16,
+      "line_start": 16,
+      "signature": "call-name:strip"
+    },
+    {
+      "excerpt": "format_widget(make_widget(path))",
+      "line_end": 9,
+      "line_start": 9,
+      "signature": "call:format_widget"
+    },
+    {
+      "excerpt": "make_widget(path)",
+      "line_end": 9,
+      "line_start": 9,
+      "signature": "call:make_widget"
+    },
+    {
+      "excerpt": "name.strip()",
+      "line_end": 16,
+      "line_start": 16,
+      "signature": "call:name.strip"
+    },
+    {
+      "excerpt": "class GoldenWidget:\n    \"\"\"Class docs mention doc_only_python.\"\"\"\n\n    def render(self, path: Path) -> str:\n        \"\"\"Method docs mention doc_only_python.\"\"\"\n        return format_widget(make_widget(path))",
+      "line_end": 9,
+      "line_start": 4,
+      "signature": "class GoldenWidget"
+    },
+    {
+      "excerpt": "class GoldenWidget:\n    \"\"\"Class docs mention doc_only_python.\"\"\"\n\n    def render(self, path: Path) -> str:\n        \"\"\"Method docs mention doc_only_python.\"\"\"\n        return format_widget(make_widget(path))",
+      "line_end": 9,
+      "line_start": 4,
+      "signature": "decl:class:GoldenWidget"
+    },
+    {
+      "excerpt": "def format_widget(name: str) -> str:\n    return name.strip()",
+      "line_end": 16,
+      "line_start": 15,
+      "signature": "decl:def:format_widget"
+    },
+    {
+      "excerpt": "def make_widget(path: Path) -> str:\n    \"\"\"Function docs mention doc_only_python.\"\"\"\n    return path.name",
+      "line_end": 13,
+      "line_start": 11,
+      "signature": "decl:def:make_widget"
+    },
+    {
+      "excerpt": "def render(self, path: Path) -> str:\n        \"\"\"Method docs mention doc_only_python.\"\"\"\n        return format_widget(make_widget(path))",
+      "line_end": 9,
+      "line_start": 7,
+      "signature": "decl:def:render"
+    },
+    {
+      "excerpt": "def format_widget(name: str) -> str:\n    return name.strip()",
+      "line_end": 16,
+      "line_start": 15,
+      "signature": "def format_widget"
+    },
+    {
+      "excerpt": "def make_widget(path: Path) -> str:\n    \"\"\"Function docs mention doc_only_python.\"\"\"\n    return path.name",
+      "line_end": 13,
+      "line_start": 11,
+      "signature": "def make_widget"
+    },
+    {
+      "excerpt": "def render(self, path: Path) -> str:\n        \"\"\"Method docs mention doc_only_python.\"\"\"\n        return format_widget(make_widget(path))",
+      "line_end": 9,
+      "line_start": 7,
+      "signature": "def render"
+    },
+    {
+      "excerpt": "format_widget",
+      "line_end": 9,
+      "line_start": 9,
+      "signature": "format_widget"
+    },
+    {
+      "excerpt": "format_widget",
+      "line_end": 15,
+      "line_start": 15,
+      "signature": "format_widget"
+    },
+    {
+      "excerpt": "format_widget(make_widget(path))",
+      "line_end": 9,
+      "line_start": 9,
+      "signature": "kind:call"
+    },
+    {
+      "excerpt": "name.strip()",
+      "line_end": 16,
+      "line_start": 16,
+      "signature": "kind:call"
+    },
+    {
+      "excerpt": "class",
+      "line_end": 4,
+      "line_start": 4,
+      "signature": "kind:class"
+    },
+    {
+      "excerpt": "class GoldenWidget:\n    \"\"\"Class docs mention doc_only_python.\"\"\"\n\n    def render(self, path: Path) -> str:\n        \"\"\"Method docs mention doc_only_python.\"\"\"\n        return format_widget(make_widget(path))",
+      "line_end": 9,
+      "line_start": 4,
+      "signature": "kind:class_definition"
+    },
+    {
+      "excerpt": "def render(self, path: Path) -> str:\n        \"\"\"Method docs mention doc_only_python.\"\"\"\n        return format_widget(make_widget(path))",
+      "line_end": 9,
+      "line_start": 7,
+      "signature": "kind:function_definition"
+    },
+    {
+      "excerpt": "def make_widget(path: Path) -> str:\n    \"\"\"Function docs mention doc_only_python.\"\"\"\n    return path.name",
+      "line_end": 13,
+      "line_start": 11,
+      "signature": "kind:function_definition"
+    },
+    {
+      "excerpt": "def format_widget(name: str) -> str:\n    return name.strip()",
+      "line_end": 16,
+      "line_start": 15,
+      "signature": "kind:function_definition"
+    },
+    {
+      "excerpt": "make_widget",
+      "line_end": 9,
+      "line_start": 9,
+      "signature": "make_widget"
+    },
+    {
+      "excerpt": "make_widget",
+      "line_end": 11,
+      "line_start": 11,
+      "signature": "make_widget"
+    },
+    {
+      "excerpt": "name",
+      "line_end": 13,
+      "line_start": 13,
+      "signature": "name"
+    },
+    {
+      "excerpt": "name",
+      "line_end": 15,
+      "line_start": 15,
+      "signature": "name"
+    },
+    {
+      "excerpt": "name",
+      "line_end": 16,
+      "line_start": 16,
+      "signature": "name"
+    },
+    {
+      "excerpt": "path",
+      "line_end": 7,
+      "line_start": 7,
+      "signature": "path"
+    },
+    {
+      "excerpt": "path",
+      "line_end": 9,
+      "line_start": 9,
+      "signature": "path"
+    },
+    {
+      "excerpt": "path",
+      "line_end": 11,
+      "line_start": 11,
+      "signature": "path"
+    },
+    {
+      "excerpt": "path",
+      "line_end": 13,
+      "line_start": 13,
+      "signature": "path"
+    },
+    {
+      "excerpt": "pathlib",
+      "line_end": 2,
+      "line_start": 2,
+      "signature": "pathlib"
+    },
+    {
+      "excerpt": "render",
+      "line_end": 7,
+      "line_start": 7,
+      "signature": "render"
+    },
+    {
+      "excerpt": "self",
+      "line_end": 7,
+      "line_start": 7,
+      "signature": "self"
+    },
+    {
+      "excerpt": "str",
+      "line_end": 7,
+      "line_start": 7,
+      "signature": "str"
+    },
+    {
+      "excerpt": "str",
+      "line_end": 11,
+      "line_start": 11,
+      "signature": "str"
+    },
+    {
+      "excerpt": "str",
+      "line_end": 15,
+      "line_start": 15,
+      "signature": "str"
+    },
+    {
+      "excerpt": "strip",
+      "line_end": 16,
+      "line_start": 16,
+      "signature": "strip"
+    }
+  ],
+  "symbols": [
+    {
+      "byte_end": 303,
+      "byte_start": 97,
+      "kind": "class",
+      "line_end": 9,
+      "line_start": 4,
+      "name": "GoldenWidget"
+    },
+    {
+      "byte_end": 472,
+      "byte_start": 412,
+      "kind": "function",
+      "line_end": 16,
+      "line_start": 15,
+      "name": "format_widget"
+    },
+    {
+      "byte_end": 410,
+      "byte_start": 305,
+      "kind": "function",
+      "line_end": 13,
+      "line_start": 11,
+      "name": "make_widget"
+    },
+    {
+      "byte_end": 303,
+      "byte_start": 168,
+      "kind": "method",
+      "line_end": 9,
+      "line_start": 7,
+      "name": "render"
+    }
+  ]
+}

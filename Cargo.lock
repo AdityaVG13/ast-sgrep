@@ -119,6 +119,7 @@ dependencies = [
  "ast-sgrep-codemode",
  "ast-sgrep-core",
  "ast-sgrep-plugins",
+ "ast-sgrep-testkit",
  "clap",
  "nix",
  "notify",
@@ -135,9 +136,11 @@ dependencies = [
  "anyhow",
  "ast-sgrep-core",
  "ast-sgrep-plugins",
+ "ast-sgrep-testkit",
  "rayon",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror",
 ]
 
@@ -161,6 +164,7 @@ dependencies = [
  "ast-sgrep-embed",
  "ast-sgrep-lang",
  "ast-sgrep-mmap",
+ "ast-sgrep-testkit",
  "blake3",
  "bytemuck",
  "cap-fs-ext",
@@ -172,6 +176,7 @@ dependencies = [
  "rustix 0.38.44",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror",
  "walkdir",
 ]
@@ -195,7 +200,9 @@ name = "ast-sgrep-lang"
 version = "2.0.0"
 dependencies = [
  "anyhow",
+ "ast-sgrep-testkit",
  "serde",
+ "serde_json",
  "tree-sitter",
  "tree-sitter-c",
  "tree-sitter-c-sharp",
@@ -229,8 +236,10 @@ dependencies = [
  "anyhow",
  "ast-sgrep-core",
  "ast-sgrep-plugins",
+ "ast-sgrep-testkit",
  "serde",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]
@@ -238,6 +247,7 @@ name = "ast-sgrep-mmap"
 version = "2.0.0"
 dependencies = [
  "memmap2",
+ "tempfile",
 ]
 
 [[package]]
@@ -247,6 +257,20 @@ dependencies = [
  "ast-sgrep-core",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "ast-sgrep-testkit"
+version = "2.0.0"
+dependencies = [
+ "ast-sgrep-core",
+ "ast-sgrep-lang",
+ "ast-sgrep-lsp",
+ "regex",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tree-sitter",
 ]
 
 [[package]]

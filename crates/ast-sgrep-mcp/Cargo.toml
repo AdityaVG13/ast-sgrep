@@ -24,3 +24,12 @@ ast-sgrep-core = { path = "../ast-sgrep-core", version = "2.0.0" }
 ast-sgrep-plugins = { path = "../ast-sgrep-plugins", version = "2.0.0" }
 serde.workspace = true
 serde_json.workspace = true
+
+[dev-dependencies]
+ast-sgrep-testkit = { path = "../ast-sgrep-testkit" }
+tempfile.workspace = true
+
+# Integration tests live in the repo-root tests/ tree.
+[[test]]
+name = "protocol"
+path = "../../tests/mcp/protocol.rs"

@@ -42,6 +42,7 @@ Canonical entry points for humans and agents. Prefer this list over scavenging t
 | [validation/compact-output.md](validation/compact-output.md) | Compact CLI output |
 | [validation/neural-trust.md](validation/neural-trust.md) | Optional in-process neural embeddings |
 | [validation/semantic-ivf-mmap.md](validation/semantic-ivf-mmap.md) | IVF sidecar layout |
+| [validation/golden-files.md](validation/golden-files.md) | Compare-only goldens; how to refresh locally |
 
 Published result tables live under [`../benchmarks/results/`](../benchmarks/results/); start from [`../benchmarks/README.md`](../benchmarks/README.md).
 
@@ -57,4 +58,5 @@ ast-sgrep-lsp    → language server
 ast-sgrep-mcp    → MCP stdio server
 ast-sgrep-codemode → Code Mode / PTC tools + plan runner
 ast-sgrep-plugins→ JSON/output formats
+ast-sgrep-testkit→ shared fixtures for search/index/Pi tests
 ```

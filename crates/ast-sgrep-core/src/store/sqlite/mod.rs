@@ -5,9 +5,23 @@ use super::try_index_db_path;
 use crate::Result;
 use ast_sgrep_lang::PatternNode;
 use rusqlite::{params, Connection};
+#[cfg(test)]
+use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::Arc;
+#[cfg(test)]
+thread_local! {
+    /// Test-only inject for d2a1.2: force restore_synchronous to fail so
+    /// callers prove commit/rollback surfaces the error (no `let _ =`).
+    static FORCE_RESTORE_SYNC_FAILURE: Cell<bool> = const { Cell::new(false) };
+    /// Force COMMIT to fail before it reaches SQLite so tests can verify that
+    /// transaction cleanup does not depend on a successful commit.
+    static FORCE_COMMIT_FAILURE: Cell<bool> = const { Cell::new(false) };
+    /// Fail after write pragmas are admitted but before BEGIN so cleanup of a
+    /// partially admitted FastUnsafe batch can be asserted deterministically.
+    static FORCE_BEGIN_FAILURE: Cell<bool> = const { Cell::new(false) };
+}
 // 6 = symbols_name_lower. 7 = semantic-layout-v2 wipe. 8 = unstemmed code FTS.
 // 9 = repository lexicon. 10 = per-field semantic vectors (name/docs/body/graph).
 // 11 = scip_facts overlay (kgvi.2). 12 = tests/examples semantic vector.
@@ -755,7 +769,13 @@ impl IndexStore {
         self.end_file_tx(false)
     }
     fn restore_synchronous(&self) -> Result<()> {
-                self.conn.execute_batch(&format!(
+        #[cfg(test)]
+        if FORCE_RESTORE_SYNC_FAILURE.with(|c| c.get()) {
+            return Err(crate::StoreError::Other(
+                "restore_synchronous forced failure (test inject)".into(),
+            ));
+        }
+        self.conn.execute_batch(&format!(
             "PRAGMA synchronous = {}; PRAGMA cache_size = -16384",
             self.durability.steady_pragma()
         ))?;
@@ -767,7 +787,13 @@ impl IndexStore {
     fn begin_owned_transaction(&self, setup: &str) -> Result<()> {
         let start = (|| -> Result<()> {
             self.conn.execute_batch(setup)?;
-                        self.conn.execute_batch("BEGIN IMMEDIATE")?;
+            #[cfg(test)]
+            if FORCE_BEGIN_FAILURE.with(|c| c.get()) {
+                return Err(crate::StoreError::Other(
+                    "BEGIN forced failure (test inject)".into(),
+                ));
+            }
+            self.conn.execute_batch("BEGIN IMMEDIATE")?;
             Ok(())
         })();
         let Err(start_error) = start else {
@@ -786,7 +812,13 @@ impl IndexStore {
         Err(start_error)
     }
     fn execute_transaction_end(&self, sql: &str) -> Result<()> {
-                self.conn.execute_batch(sql)?;
+        #[cfg(test)]
+        if sql == "COMMIT" && FORCE_COMMIT_FAILURE.with(|c| c.get()) {
+            return Err(crate::StoreError::Other(
+                "COMMIT forced failure (test inject)".into(),
+            ));
+        }
+        self.conn.execute_batch(sql)?;
         Ok(())
     }
     /// End a transaction owned by this store and restore its steady-state
@@ -964,4 +996,10 @@ impl IndexStore {
     }
 }
 
+#[cfg(test)]
+#[path = "../../../../../tests/unit/core/store__sqlite__restore_synchronous_tests.rs"]
+mod restore_synchronous_tests;
 
+#[cfg(test)]
+#[path = "../../../../../tests/unit/core/store_sqlite_deep.rs"]
+mod store_sqlite_deep;

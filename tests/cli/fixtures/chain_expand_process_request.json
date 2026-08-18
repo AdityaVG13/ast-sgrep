@@ -1,0 +1,150 @@
+{
+  "command": "chain",
+  "decay_factor": 0.5,
+  "edge_count": 12,
+  "edges": [
+    {
+      "depth": 0,
+      "from_file": "src/app.rb",
+      "from_symbol": "main",
+      "label": "called_by",
+      "to_file": "src/app.rb",
+      "to_symbol": "process_request"
+    },
+    {
+      "depth": 0,
+      "from_file": "src/app.rb",
+      "from_symbol": "process_request",
+      "label": "calls",
+      "to_file": "src/app.rb",
+      "to_symbol": "validate_input"
+    },
+    {
+      "depth": 1,
+      "from_file": "src/app.rb",
+      "from_symbol": "process_request",
+      "label": "called_by",
+      "to_file": "src/main.py",
+      "to_symbol": "validate_input"
+    },
+    {
+      "depth": 0,
+      "from_file": "src/app.rb",
+      "from_symbol": "process_request",
+      "label": "calls",
+      "to_file": "src/main.py",
+      "to_symbol": "validate_input"
+    },
+    {
+      "depth": 1,
+      "from_file": "src/app.rb",
+      "from_symbol": "process_request",
+      "label": "called_by",
+      "to_file": "src/main.rs",
+      "to_symbol": "validate_input"
+    },
+    {
+      "depth": 0,
+      "from_file": "src/app.rb",
+      "from_symbol": "process_request",
+      "label": "calls",
+      "to_file": "src/main.rs",
+      "to_symbol": "validate_input"
+    },
+    {
+      "depth": 0,
+      "from_file": "src/main.py",
+      "from_symbol": "main",
+      "label": "called_by",
+      "to_file": "src/app.rb",
+      "to_symbol": "process_request"
+    },
+    {
+      "depth": 1,
+      "from_file": "src/main.py",
+      "from_symbol": "process_request",
+      "label": "called_by",
+      "to_file": "src/main.py",
+      "to_symbol": "validate_input"
+    },
+    {
+      "depth": 1,
+      "from_file": "src/main.py",
+      "from_symbol": "process_request",
+      "label": "called_by",
+      "to_file": "src/main.rs",
+      "to_symbol": "validate_input"
+    },
+    {
+      "depth": 0,
+      "from_file": "src/main.rs",
+      "from_symbol": "main",
+      "label": "called_by",
+      "to_file": "src/app.rb",
+      "to_symbol": "process_request"
+    },
+    {
+      "depth": 1,
+      "from_file": "src/main.rs",
+      "from_symbol": "process_request",
+      "label": "called_by",
+      "to_file": "src/main.py",
+      "to_symbol": "validate_input"
+    },
+    {
+      "depth": 1,
+      "from_file": "src/main.rs",
+      "from_symbol": "process_request",
+      "label": "called_by",
+      "to_file": "src/main.rs",
+      "to_symbol": "validate_input"
+    }
+  ],
+  "exit_code": 0,
+  "max_depth": 2,
+  "node_count": 3,
+  "nodes": [
+    {
+      "depth": 0,
+      "file": "src/app.rb",
+      "language": "ruby",
+      "line_end": 11,
+      "line_start": 8,
+      "score": 0.09482482813326282,
+      "symbol": "process_request"
+    },
+    {
+      "depth": 1,
+      "file": "src/main.py",
+      "language": "python",
+      "line_end": 15,
+      "line_start": 13,
+      "score": 0.04741241406663141,
+      "symbol": "validate_input"
+    },
+    {
+      "depth": 1,
+      "file": "src/main.rs",
+      "language": "rust",
+      "line_end": 17,
+      "line_start": 13,
+      "score": 0.04741241406663141,
+      "symbol": "validate_input"
+    }
+  ],
+  "ok": true,
+  "query": "process_request",
+  "schema_version": "1.0.0",
+  "seeds": [
+    {
+      "depth": 0,
+      "file": "src/app.rb",
+      "language": "ruby",
+      "line_end": 11,
+      "line_start": 8,
+      "score": 0.09482482813326282,
+      "symbol": "process_request"
+    }
+  ],
+  "tool": "asgrep"
+}

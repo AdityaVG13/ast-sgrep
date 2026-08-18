@@ -19,3 +19,6 @@ unsafe_code = "allow"
 
 [dependencies]
 memmap2.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

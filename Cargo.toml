@@ -7,6 +7,7 @@ members = [
     "crates/ast-sgrep-embed",
     "crates/ast-sgrep-lsp",
     "crates/ast-sgrep-plugins",
+    "crates/ast-sgrep-testkit",
     "crates/ast-sgrep-mcp",
     "crates/ast-sgrep-mmap",
     "crates/ast-sgrep-codemode",

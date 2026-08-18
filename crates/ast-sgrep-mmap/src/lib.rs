@@ -30,3 +30,6 @@ pub fn map_readonly(file: &File) -> io::Result<Mmap> {
 
 pub use memmap2::Mmap;
 
+#[cfg(test)]
+#[path = "../../../tests/unit/mmap/lib.rs"]
+mod tests;

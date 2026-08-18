@@ -382,7 +382,14 @@ impl CodeModeSession {
         result
     }
 
+    #[cfg(test)]
+    fn searcher_cache_occupied(&self) -> bool {
+        self.searcher_cache
+            .lock()
+            .map(|g| g.is_some())
+            .unwrap_or(false)
     }
+}
 
 #[derive(Default)]
 struct CountingWriter(usize);
@@ -509,4 +516,10 @@ fn incremental_paths(args: &Value, root: &Path) -> anyhow::Result<Option<Vec<Pat
     Ok(Some(paths))
 }
 
+#[cfg(test)]
+#[path = "../../../tests/unit/codemode/session__index_err_cache_tests.rs"]
+mod index_err_cache_tests;
 
+#[cfg(test)]
+#[path = "../../../tests/unit/codemode/session__root_sandbox_tests.rs"]
+mod root_sandbox_tests;

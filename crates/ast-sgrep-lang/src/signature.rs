@@ -165,3 +165,6 @@ fn is_pattern_path(value: &str) -> bool {
             .all(is_pattern_ident)
 }
 
+#[cfg(test)]
+#[path = "../../../tests/unit/lang/signature.rs"]
+mod tests;

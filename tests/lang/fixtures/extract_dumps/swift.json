@@ -1,0 +1,501 @@
+{
+  "calls": [
+    {
+      "byte_end": 637,
+      "byte_start": 595,
+      "callee": "trimmingCharacters",
+      "caller": "formatWidget",
+      "line": 32
+    },
+    {
+      "byte_end": 540,
+      "byte_start": 526,
+      "callee": "GoldenWidget",
+      "caller": "makeWidget",
+      "line": 28
+    },
+    {
+      "byte_end": 386,
+      "byte_start": 367,
+      "callee": "formatWidget",
+      "caller": "render",
+      "line": 16
+    }
+  ],
+  "imports": [
+    {
+      "line": 2,
+      "module_path": "Foundation"
+    }
+  ],
+  "pattern_nodes": [
+    {
+      "excerpt": "Foundation",
+      "line_end": 2,
+      "line_start": 2,
+      "signature": "Foundation"
+    },
+    {
+      "excerpt": "GoldenRenderable",
+      "line_end": 10,
+      "line_start": 10,
+      "signature": "GoldenRenderable"
+    },
+    {
+      "excerpt": "GoldenRenderable",
+      "line_end": 14,
+      "line_start": 14,
+      "signature": "GoldenRenderable"
+    },
+    {
+      "excerpt": "GoldenState",
+      "line_end": 22,
+      "line_start": 22,
+      "signature": "GoldenState"
+    },
+    {
+      "excerpt": "GoldenWidget",
+      "line_end": 14,
+      "line_start": 14,
+      "signature": "GoldenWidget"
+    },
+    {
+      "excerpt": "GoldenWidget",
+      "line_end": 27,
+      "line_start": 27,
+      "signature": "GoldenWidget"
+    },
+    {
+      "excerpt": "GoldenWidget",
+      "line_end": 28,
+      "line_start": 28,
+      "signature": "GoldenWidget"
+    },
+    {
+      "excerpt": "GoldenWorker",
+      "line_end": 20,
+      "line_start": 20,
+      "signature": "GoldenWorker"
+    },
+    {
+      "excerpt": "String",
+      "line_end": 11,
+      "line_start": 11,
+      "signature": "String"
+    },
+    {
+      "excerpt": "String",
+      "line_end": 15,
+      "line_start": 15,
+      "signature": "String"
+    },
+    {
+      "excerpt": "String",
+      "line_end": 27,
+      "line_start": 27,
+      "signature": "String"
+    },
+    {
+      "excerpt": "String",
+      "line_end": 31,
+      "line_start": 31,
+      "signature": "String"
+    },
+    {
+      "excerpt": "_",
+      "line_end": 11,
+      "line_start": 11,
+      "signature": "_"
+    },
+    {
+      "excerpt": "_",
+      "line_end": 15,
+      "line_start": 15,
+      "signature": "_"
+    },
+    {
+      "excerpt": "_",
+      "line_end": 27,
+      "line_start": 27,
+      "signature": "_"
+    },
+    {
+      "excerpt": "_",
+      "line_end": 31,
+      "line_start": 31,
+      "signature": "_"
+    },
+    {
+      "excerpt": "GoldenWidget()",
+      "line_end": 28,
+      "line_start": 28,
+      "signature": "call-name:GoldenWidget"
+    },
+    {
+      "excerpt": "formatWidget(value)",
+      "line_end": 16,
+      "line_start": 16,
+      "signature": "call-name:formatWidget"
+    },
+    {
+      "excerpt": "value.trimmingCharacters(in: .whitespaces)",
+      "line_end": 32,
+      "line_start": 32,
+      "signature": "call-name:trimmingCharacters"
+    },
+    {
+      "excerpt": "GoldenWidget()",
+      "line_end": 28,
+      "line_start": 28,
+      "signature": "call:GoldenWidget"
+    },
+    {
+      "excerpt": "formatWidget(value)",
+      "line_end": 16,
+      "line_start": 16,
+      "signature": "call:formatWidget"
+    },
+    {
+      "excerpt": "value.trimmingCharacters(in: .whitespaces)",
+      "line_end": 32,
+      "line_start": 32,
+      "signature": "call:value.trimmingCharacters"
+    },
+    {
+      "excerpt": "enum GoldenState {\n    case ready\n    case spent\n}",
+      "line_end": 25,
+      "line_start": 22,
+      "signature": "decl:enum:GoldenState"
+    },
+    {
+      "excerpt": "func formatWidget(_ value: String) -> String {\n    value.trimmingCharacters(in: .whitespaces)\n}",
+      "line_end": 33,
+      "line_start": 31,
+      "signature": "decl:function:formatWidget"
+    },
+    {
+      "excerpt": "func makeWidget(_ value: String) -> GoldenWidget {\n    GoldenWidget()\n}",
+      "line_end": 29,
+      "line_start": 27,
+      "signature": "decl:function:makeWidget"
+    },
+    {
+      "excerpt": "func render(_ value: String) -> String",
+      "line_end": 11,
+      "line_start": 11,
+      "signature": "decl:function:render"
+    },
+    {
+      "excerpt": "func render(_ value: String) -> String {\n        formatWidget(value)\n    }",
+      "line_end": 17,
+      "line_start": 15,
+      "signature": "decl:function:render"
+    },
+    {
+      "excerpt": "protocol GoldenRenderable {\n    func render(_ value: String) -> String\n}",
+      "line_end": 12,
+      "line_start": 10,
+      "signature": "decl:interface:GoldenRenderable"
+    },
+    {
+      "excerpt": "struct GoldenWidget: GoldenRenderable {\n    func render(_ value: String) -> String {\n        formatWidget(value)\n    }\n}",
+      "line_end": 18,
+      "line_start": 14,
+      "signature": "decl:struct:GoldenWidget"
+    },
+    {
+      "excerpt": "actor GoldenWorker {}",
+      "line_end": 20,
+      "line_start": 20,
+      "signature": "decl:struct:GoldenWorker"
+    },
+    {
+      "excerpt": "enum GoldenState {\n    case ready\n    case spent\n}",
+      "line_end": 25,
+      "line_start": 22,
+      "signature": "enum GoldenState"
+    },
+    {
+      "excerpt": "formatWidget",
+      "line_end": 16,
+      "line_start": 16,
+      "signature": "formatWidget"
+    },
+    {
+      "excerpt": "formatWidget",
+      "line_end": 31,
+      "line_start": 31,
+      "signature": "formatWidget"
+    },
+    {
+      "excerpt": "func formatWidget(_ value: String) -> String {\n    value.trimmingCharacters(in: .whitespaces)\n}",
+      "line_end": 33,
+      "line_start": 31,
+      "signature": "function formatWidget"
+    },
+    {
+      "excerpt": "func makeWidget(_ value: String) -> GoldenWidget {\n    GoldenWidget()\n}",
+      "line_end": 29,
+      "line_start": 27,
+      "signature": "function makeWidget"
+    },
+    {
+      "excerpt": "func render(_ value: String) -> String",
+      "line_end": 11,
+      "line_start": 11,
+      "signature": "function render"
+    },
+    {
+      "excerpt": "func render(_ value: String) -> String {\n        formatWidget(value)\n    }",
+      "line_end": 17,
+      "line_start": 15,
+      "signature": "function render"
+    },
+    {
+      "excerpt": "in",
+      "line_end": 32,
+      "line_start": 32,
+      "signature": "in"
+    },
+    {
+      "excerpt": "protocol GoldenRenderable {\n    func render(_ value: String) -> String\n}",
+      "line_end": 12,
+      "line_start": 10,
+      "signature": "interface GoldenRenderable"
+    },
+    {
+      "excerpt": "formatWidget(value)",
+      "line_end": 16,
+      "line_start": 16,
+      "signature": "kind:call_expression"
+    },
+    {
+      "excerpt": "GoldenWidget()",
+      "line_end": 28,
+      "line_start": 28,
+      "signature": "kind:call_expression"
+    },
+    {
+      "excerpt": "value.trimmingCharacters(in: .whitespaces)",
+      "line_end": 32,
+      "line_start": 32,
+      "signature": "kind:call_expression"
+    },
+    {
+      "excerpt": "struct GoldenWidget: GoldenRenderable {\n    func render(_ value: String) -> String {\n        formatWidget(value)\n    }\n}",
+      "line_end": 18,
+      "line_start": 14,
+      "signature": "kind:class_declaration"
+    },
+    {
+      "excerpt": "actor GoldenWorker {}",
+      "line_end": 20,
+      "line_start": 20,
+      "signature": "kind:class_declaration"
+    },
+    {
+      "excerpt": "enum GoldenState {\n    case ready\n    case spent\n}",
+      "line_end": 25,
+      "line_start": 22,
+      "signature": "kind:class_declaration"
+    },
+    {
+      "excerpt": "func render(_ value: String) -> String {\n        formatWidget(value)\n    }",
+      "line_end": 17,
+      "line_start": 15,
+      "signature": "kind:function_declaration"
+    },
+    {
+      "excerpt": "func makeWidget(_ value: String) -> GoldenWidget {\n    GoldenWidget()\n}",
+      "line_end": 29,
+      "line_start": 27,
+      "signature": "kind:function_declaration"
+    },
+    {
+      "excerpt": "func formatWidget(_ value: String) -> String {\n    value.trimmingCharacters(in: .whitespaces)\n}",
+      "line_end": 33,
+      "line_start": 31,
+      "signature": "kind:function_declaration"
+    },
+    {
+      "excerpt": "protocol GoldenRenderable {\n    func render(_ value: String) -> String\n}",
+      "line_end": 12,
+      "line_start": 10,
+      "signature": "kind:protocol_declaration"
+    },
+    {
+      "excerpt": "func render(_ value: String) -> String",
+      "line_end": 11,
+      "line_start": 11,
+      "signature": "kind:protocol_function_declaration"
+    },
+    {
+      "excerpt": "makeWidget",
+      "line_end": 27,
+      "line_start": 27,
+      "signature": "makeWidget"
+    },
+    {
+      "excerpt": "multilineMention",
+      "line_end": 5,
+      "line_start": 5,
+      "signature": "multilineMention"
+    },
+    {
+      "excerpt": "ready",
+      "line_end": 23,
+      "line_start": 23,
+      "signature": "ready"
+    },
+    {
+      "excerpt": "render",
+      "line_end": 11,
+      "line_start": 11,
+      "signature": "render"
+    },
+    {
+      "excerpt": "render",
+      "line_end": 15,
+      "line_start": 15,
+      "signature": "render"
+    },
+    {
+      "excerpt": "spent",
+      "line_end": 24,
+      "line_start": 24,
+      "signature": "spent"
+    },
+    {
+      "excerpt": "stringMention",
+      "line_end": 4,
+      "line_start": 4,
+      "signature": "stringMention"
+    },
+    {
+      "excerpt": "struct GoldenWidget: GoldenRenderable {\n    func render(_ value: String) -> String {\n        formatWidget(value)\n    }\n}",
+      "line_end": 18,
+      "line_start": 14,
+      "signature": "struct GoldenWidget"
+    },
+    {
+      "excerpt": "actor GoldenWorker {}",
+      "line_end": 20,
+      "line_start": 20,
+      "signature": "struct GoldenWorker"
+    },
+    {
+      "excerpt": "trimmingCharacters",
+      "line_end": 32,
+      "line_start": 32,
+      "signature": "trimmingCharacters"
+    },
+    {
+      "excerpt": "value",
+      "line_end": 11,
+      "line_start": 11,
+      "signature": "value"
+    },
+    {
+      "excerpt": "value",
+      "line_end": 15,
+      "line_start": 15,
+      "signature": "value"
+    },
+    {
+      "excerpt": "value",
+      "line_end": 16,
+      "line_start": 16,
+      "signature": "value"
+    },
+    {
+      "excerpt": "value",
+      "line_end": 27,
+      "line_start": 27,
+      "signature": "value"
+    },
+    {
+      "excerpt": "value",
+      "line_end": 31,
+      "line_start": 31,
+      "signature": "value"
+    },
+    {
+      "excerpt": "value",
+      "line_end": 32,
+      "line_start": 32,
+      "signature": "value"
+    },
+    {
+      "excerpt": "whitespaces",
+      "line_end": 32,
+      "line_start": 32,
+      "signature": "whitespaces"
+    }
+  ],
+  "symbols": [
+    {
+      "byte_end": 272,
+      "byte_start": 200,
+      "kind": "interface",
+      "line_end": 12,
+      "line_start": 10,
+      "name": "GoldenRenderable"
+    },
+    {
+      "byte_end": 469,
+      "byte_start": 419,
+      "kind": "enum",
+      "line_end": 25,
+      "line_start": 22,
+      "name": "GoldenState"
+    },
+    {
+      "byte_end": 394,
+      "byte_start": 274,
+      "kind": "type",
+      "line_end": 18,
+      "line_start": 14,
+      "name": "GoldenWidget"
+    },
+    {
+      "byte_end": 417,
+      "byte_start": 396,
+      "kind": "type",
+      "line_end": 20,
+      "line_start": 20,
+      "name": "GoldenWorker"
+    },
+    {
+      "byte_end": 639,
+      "byte_start": 544,
+      "kind": "function",
+      "line_end": 33,
+      "line_start": 31,
+      "name": "formatWidget"
+    },
+    {
+      "byte_end": 542,
+      "byte_start": 471,
+      "kind": "function",
+      "line_end": 29,
+      "line_start": 27,
+      "name": "makeWidget"
+    },
+    {
+      "byte_end": 270,
+      "byte_start": 232,
+      "kind": "method",
+      "line_end": 11,
+      "line_start": 11,
+      "name": "render"
+    },
+    {
+      "byte_end": 392,
+      "byte_start": 318,
+      "kind": "method",
+      "line_end": 17,
+      "line_start": 15,
+      "name": "render"
+    }
+  ]
+}

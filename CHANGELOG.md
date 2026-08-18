@@ -17,7 +17,7 @@
 16:### Changed
 17:
 18:- Repository hygiene: drop campaign scripts and process docs; keep only clone-required `scripts/` (`rustc-capped`, `cpu-limit-exec.py`, `verify-forbid-soundness`).
-- Drop the inherited behavioral test suite, fuzz tree, and `ast-sgrep-testkit`. Production proof is `cargo check --workspace --lib --bins`.
+- Keep search, index, and Pi behavior tests. Drop campaign fuzz, benches, keep-gates, and process suites.
 19:
 20:## Version Timeline
 21:

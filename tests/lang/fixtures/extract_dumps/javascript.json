@@ -1,0 +1,290 @@
+{
+  "calls": [
+    {
+      "byte_end": 497,
+      "byte_start": 486,
+      "callee": "trim",
+      "caller": "formatWidget",
+      "line": 17
+    },
+    {
+      "byte_end": 385,
+      "byte_start": 353,
+      "callee": "formatWidget",
+      "caller": "render",
+      "line": 12
+    },
+    {
+      "byte_end": 384,
+      "byte_start": 366,
+      "callee": "makeWidget",
+      "caller": "render",
+      "line": 12
+    },
+    {
+      "byte_end": 338,
+      "byte_start": 324,
+      "callee": "widgetSource",
+      "caller": "render",
+      "line": 11
+    }
+  ],
+  "imports": [
+    {
+      "line": 2,
+      "module_path": "./widgets.js"
+    }
+  ],
+  "pattern_nodes": [
+    {
+      "excerpt": "GoldenWidget",
+      "line_end": 9,
+      "line_start": 9,
+      "signature": "GoldenWidget"
+    },
+    {
+      "excerpt": "formatWidget(makeWidget(source))",
+      "line_end": 12,
+      "line_start": 12,
+      "signature": "call-name:formatWidget"
+    },
+    {
+      "excerpt": "makeWidget(source)",
+      "line_end": 12,
+      "line_start": 12,
+      "signature": "call-name:makeWidget"
+    },
+    {
+      "excerpt": "name.trim()",
+      "line_end": 17,
+      "line_start": 17,
+      "signature": "call-name:trim"
+    },
+    {
+      "excerpt": "widgetSource()",
+      "line_end": 11,
+      "line_start": 11,
+      "signature": "call-name:widgetSource"
+    },
+    {
+      "excerpt": "formatWidget(makeWidget(source))",
+      "line_end": 12,
+      "line_start": 12,
+      "signature": "call:formatWidget"
+    },
+    {
+      "excerpt": "makeWidget(source)",
+      "line_end": 12,
+      "line_start": 12,
+      "signature": "call:makeWidget"
+    },
+    {
+      "excerpt": "name.trim()",
+      "line_end": 17,
+      "line_start": 17,
+      "signature": "call:name.trim"
+    },
+    {
+      "excerpt": "widgetSource()",
+      "line_end": 11,
+      "line_start": 11,
+      "signature": "call:widgetSource"
+    },
+    {
+      "excerpt": "class GoldenWidget {\n  /** Method docs mention docOnlyJavaScript. */\n  render(source = widgetSource()) {\n    return formatWidget(makeWidget(source));\n  }\n}",
+      "line_end": 14,
+      "line_start": 9,
+      "signature": "class GoldenWidget"
+    },
+    {
+      "excerpt": "class GoldenWidget {\n  /** Method docs mention docOnlyJavaScript. */\n  render(source = widgetSource()) {\n    return formatWidget(makeWidget(source));\n  }\n}",
+      "line_end": 14,
+      "line_start": 9,
+      "signature": "decl:class:GoldenWidget"
+    },
+    {
+      "excerpt": "function makeWidget(source) {\n  return source.name;\n}",
+      "line_end": 7,
+      "line_start": 5,
+      "signature": "decl:function:makeWidget"
+    },
+    {
+      "excerpt": "render(source = widgetSource()) {\n    return formatWidget(makeWidget(source));\n  }",
+      "line_end": 13,
+      "line_start": 11,
+      "signature": "decl:function:render"
+    },
+    {
+      "excerpt": "formatWidget",
+      "line_end": 12,
+      "line_start": 12,
+      "signature": "formatWidget"
+    },
+    {
+      "excerpt": "formatWidget",
+      "line_end": 17,
+      "line_start": 17,
+      "signature": "formatWidget"
+    },
+    {
+      "excerpt": "function makeWidget(source) {\n  return source.name;\n}",
+      "line_end": 7,
+      "line_start": 5,
+      "signature": "function makeWidget"
+    },
+    {
+      "excerpt": "render(source = widgetSource()) {\n    return formatWidget(makeWidget(source));\n  }",
+      "line_end": 13,
+      "line_start": 11,
+      "signature": "function render"
+    },
+    {
+      "excerpt": "widgetSource()",
+      "line_end": 11,
+      "line_start": 11,
+      "signature": "kind:call_expression"
+    },
+    {
+      "excerpt": "formatWidget(makeWidget(source))",
+      "line_end": 12,
+      "line_start": 12,
+      "signature": "kind:call_expression"
+    },
+    {
+      "excerpt": "name.trim()",
+      "line_end": 17,
+      "line_start": 17,
+      "signature": "kind:call_expression"
+    },
+    {
+      "excerpt": "class",
+      "line_end": 9,
+      "line_start": 9,
+      "signature": "kind:class"
+    },
+    {
+      "excerpt": "class GoldenWidget {\n  /** Method docs mention docOnlyJavaScript. */\n  render(source = widgetSource()) {\n    return formatWidget(makeWidget(source));\n  }\n}",
+      "line_end": 14,
+      "line_start": 9,
+      "signature": "kind:class_declaration"
+    },
+    {
+      "excerpt": "function makeWidget(source) {\n  return source.name;\n}",
+      "line_end": 7,
+      "line_start": 5,
+      "signature": "kind:function_declaration"
+    },
+    {
+      "excerpt": "render(source = widgetSource()) {\n    return formatWidget(makeWidget(source));\n  }",
+      "line_end": 13,
+      "line_start": 11,
+      "signature": "kind:method_definition"
+    },
+    {
+      "excerpt": "makeWidget",
+      "line_end": 5,
+      "line_start": 5,
+      "signature": "makeWidget"
+    },
+    {
+      "excerpt": "makeWidget",
+      "line_end": 12,
+      "line_start": 12,
+      "signature": "makeWidget"
+    },
+    {
+      "excerpt": "name",
+      "line_end": 6,
+      "line_start": 6,
+      "signature": "name"
+    },
+    {
+      "excerpt": "name",
+      "line_end": 17,
+      "line_start": 17,
+      "signature": "name"
+    },
+    {
+      "excerpt": "render",
+      "line_end": 11,
+      "line_start": 11,
+      "signature": "render"
+    },
+    {
+      "excerpt": "source",
+      "line_end": 5,
+      "line_start": 5,
+      "signature": "source"
+    },
+    {
+      "excerpt": "source",
+      "line_end": 6,
+      "line_start": 6,
+      "signature": "source"
+    },
+    {
+      "excerpt": "source",
+      "line_end": 11,
+      "line_start": 11,
+      "signature": "source"
+    },
+    {
+      "excerpt": "source",
+      "line_end": 12,
+      "line_start": 12,
+      "signature": "source"
+    },
+    {
+      "excerpt": "trim",
+      "line_end": 17,
+      "line_start": 17,
+      "signature": "trim"
+    },
+    {
+      "excerpt": "widgetSource",
+      "line_end": 2,
+      "line_start": 2,
+      "signature": "widgetSource"
+    },
+    {
+      "excerpt": "widgetSource",
+      "line_end": 11,
+      "line_start": 11,
+      "signature": "widgetSource"
+    }
+  ],
+  "symbols": [
+    {
+      "byte_end": 392,
+      "byte_start": 237,
+      "kind": "class",
+      "line_end": 14,
+      "line_start": 9,
+      "name": "GoldenWidget"
+    },
+    {
+      "byte_end": 497,
+      "byte_start": 461,
+      "kind": "function",
+      "line_end": 17,
+      "line_start": 17,
+      "name": "formatWidget"
+    },
+    {
+      "byte_end": 228,
+      "byte_start": 175,
+      "kind": "function",
+      "line_end": 7,
+      "line_start": 5,
+      "name": "makeWidget"
+    },
+    {
+      "byte_end": 390,
+      "byte_start": 308,
+      "kind": "method",
+      "line_end": 13,
+      "line_start": 11,
+      "name": "render"
+    }
+  ]
+}

@@ -1,0 +1,430 @@
+{
+  "agent_contract": {
+    "deterministic": "stable JSON key ordering via serde_json; disable color with NO_COLOR=1",
+    "stderr": "empty in machine modes; human diagnostics otherwise",
+    "stdout": "one data payload in machine/default-agent modes"
+  },
+  "aliases": [
+    "ast-sgrep"
+  ],
+  "canonical_tasks": [
+    "asgrep capabilities --json",
+    "asgrep robot-docs guide",
+    "asgrep doctor --robot-triage",
+    "asgrep --json --format compact \"where is auth refreshed\" ."
+  ],
+  "command": "capabilities",
+  "commands": [
+    {
+      "about": "Run fixed performance and identity suites",
+      "flags": [
+        "--ann-probes",
+        "--ann-threshold",
+        "--budget-tokens",
+        "--excerpt-lines",
+        "--fixture",
+        "--format",
+        "--iterations",
+        "--neural-embed",
+        "--no-embed",
+        "--queries-file",
+        "--query",
+        "--rerank",
+        "--rerank-top-k",
+        "--response-snippet-tokens",
+        "--semantic-only",
+        "--skip-index",
+        "--snippet-tokens",
+        "--suite",
+        "--tantivy"
+      ],
+      "name": "bench",
+      "usage": "asgrep bench"
+    },
+    {
+      "about": "Find a bounded call path (call graph only, not value flow)",
+      "flags": [
+        "--max-depth",
+        "--max-edges",
+        "--max-nodes"
+      ],
+      "name": "call-path",
+      "usage": "asgrep call-path"
+    },
+    {
+      "about": "Print the machine-readable CLI contract (JSON)",
+      "flags": [
+        "--json"
+      ],
+      "name": "capabilities",
+      "usage": "asgrep capabilities"
+    },
+    {
+      "about": "Expand a bounded symbol/caller/import graph",
+      "flags": [],
+      "name": "chain",
+      "usage": "asgrep chain"
+    },
+    {
+      "about": "Plan or apply an indexed structural rewrite in process",
+      "flags": [
+        "--ann-probes",
+        "--ann-threshold",
+        "--budget-tokens",
+        "--dry-run",
+        "--excerpt-lines",
+        "--format",
+        "--neural-embed",
+        "--no-embed",
+        "--pattern",
+        "--rerank",
+        "--rerank-top-k",
+        "--response-snippet-tokens",
+        "--rewrite",
+        "--semantic-only",
+        "--snippet-tokens",
+        "--tantivy"
+      ],
+      "name": "codemod",
+      "usage": "asgrep codemod"
+    },
+    {
+      "about": "Run many Code Mode tool calls in one warm process",
+      "flags": [
+        "--requests"
+      ],
+      "name": "codemode-batch",
+      "usage": "asgrep codemode-batch"
+    },
+    {
+      "about": "Sticky NDJSON Code Mode worker",
+      "flags": [],
+      "name": "codemode-serve",
+      "usage": "asgrep codemode-serve"
+    },
+    {
+      "about": "Diagnose index health and return recovery commands",
+      "flags": [
+        "--json",
+        "--robot-triage"
+      ],
+      "name": "doctor",
+      "usage": "asgrep doctor"
+    },
+    {
+      "about": "Evaluate retrieval against a gold fixture",
+      "flags": [
+        "--ab",
+        "--gold",
+        "--scip"
+      ],
+      "name": "eval",
+      "usage": "asgrep eval"
+    },
+    {
+      "about": "Build or incrementally refresh an index",
+      "flags": [
+        "--ann-probes",
+        "--ann-threshold",
+        "--budget-tokens",
+        "--dry-run",
+        "--excerpt-lines",
+        "--format",
+        "--neural-embed",
+        "--no-embed",
+        "--path",
+        "--rerank",
+        "--rerank-top-k",
+        "--response-snippet-tokens",
+        "--scip",
+        "--semantic-only",
+        "--snippet-tokens",
+        "--tantivy"
+      ],
+      "name": "index",
+      "safe_mutating": {
+        "kind": "incremental",
+        "note": "incremental refresh with transactional index writes",
+        "prefer_first": "asgrep index <ROOT> --json"
+      },
+      "usage": "asgrep index"
+    },
+    {
+      "about": "Lexical-only (FTS/trigram) search",
+      "example": "asgrep keyword --json \"auth refresh\" .",
+      "flags": [
+        "--ann-probes",
+        "--ann-threshold",
+        "--budget-tokens",
+        "--excerpt-lines",
+        "--format",
+        "--neural-embed",
+        "--no-embed",
+        "--rerank",
+        "--rerank-top-k",
+        "--response-snippet-tokens",
+        "--semantic-only",
+        "--snippet-tokens",
+        "--tantivy"
+      ],
+      "name": "keyword",
+      "robot_output": "--format implies --json; formats: native|agent|agent-capsule|compact|github|gitlab",
+      "usage": "asgrep keyword"
+    },
+    {
+      "about": "Force a full transactional rebuild",
+      "flags": [
+        "--ann-probes",
+        "--ann-threshold",
+        "--budget-tokens",
+        "--dry-run",
+        "--excerpt-lines",
+        "--format",
+        "--neural-embed",
+        "--no-embed",
+        "--rerank",
+        "--rerank-top-k",
+        "--response-snippet-tokens",
+        "--scip",
+        "--semantic-only",
+        "--snippet-tokens",
+        "--tantivy"
+      ],
+      "name": "reindex",
+      "safe_mutating": {
+        "kind": "full_rebuild",
+        "note": "forces a full in-place transactional rewrite; dry-run reports plan without writing",
+        "prefer_first": "asgrep reindex --dry-run <ROOT> --json"
+      },
+      "usage": "asgrep reindex"
+    },
+    {
+      "about": "Print the agent handbook (robot-docs guide)",
+      "flags": [],
+      "name": "robot-docs",
+      "usage": "asgrep robot-docs"
+    },
+    {
+      "about": "Hybrid search (aliases: find, query)",
+      "aliases": [
+        "find",
+        "query"
+      ],
+      "example": "asgrep search --json --format compact \"auth refresh\" .",
+      "flags": [
+        "--ann-probes",
+        "--ann-threshold",
+        "--budget-tokens",
+        "--excerpt-lines",
+        "--format",
+        "--neural-embed",
+        "--no-embed",
+        "--rerank",
+        "--rerank-top-k",
+        "--response-snippet-tokens",
+        "--semantic-only",
+        "--snippet-tokens",
+        "--tantivy"
+      ],
+      "name": "search",
+      "robot_output": "--format implies --json; formats: native|agent|agent-capsule|compact|github|gitlab",
+      "usage": "asgrep search"
+    },
+    {
+      "about": "Embedding-only semantic search",
+      "example": "asgrep semantic --json \"where is auth refreshed\" .",
+      "flags": [
+        "--ann-probes",
+        "--ann-threshold",
+        "--budget-tokens",
+        "--excerpt-lines",
+        "--format",
+        "--neural-embed",
+        "--no-embed",
+        "--rerank",
+        "--rerank-top-k",
+        "--response-snippet-tokens",
+        "--semantic-only",
+        "--snippet-tokens",
+        "--tantivy"
+      ],
+      "name": "semantic",
+      "robot_output": "--format implies --json; formats: native|agent|agent-capsule|compact|github|gitlab",
+      "usage": "asgrep semantic"
+    },
+    {
+      "about": "Show index and embedding status",
+      "flags": [],
+      "name": "status",
+      "usage": "asgrep status"
+    },
+    {
+      "about": "Print package and machine schema versions",
+      "flags": [
+        "--json"
+      ],
+      "name": "version",
+      "usage": "asgrep version"
+    },
+    {
+      "about": "Watch files and update the index incrementally",
+      "flags": [
+        "--debounce-ms"
+      ],
+      "name": "watch",
+      "usage": "asgrep watch"
+    }
+  ],
+  "description": "Polyglot hybrid code search",
+  "environment": [
+    "ASGREP_LIMIT",
+    "ASGREP_INDEX_PATH",
+    "ASGREP_DURABILITY",
+    "ASGREP_NO_EMBED",
+    "ASGREP_NO_AUTO_INDEX",
+    "ASGREP_NEURAL_EMBED",
+    "ASGREP_NEURAL_FALLBACK",
+    "ASGREP_SEMANTIC_ONLY",
+    "ASGREP_TANTIVY",
+    "ASGREP_ANN_THRESHOLD",
+    "ASGREP_ANN_PROBES",
+    "ASGREP_RERANK",
+    "ASGREP_RERANK_TOP_K",
+    "ASGREP_ALLOW_AST_GREP",
+    "ASGREP_ALLOW_EXTERNAL_INDEX",
+    "ASGREP_AST_GREP",
+    "ASGREP_LEDGER_PATH",
+    "ASGREP_USE_CACHE",
+    "XDG_CACHE_HOME",
+    "NO_COLOR",
+    "CI"
+  ],
+  "environment_bool_values": [
+    "1",
+    "0",
+    "true",
+    "false",
+    "yes",
+    "no",
+    "on",
+    "off"
+  ],
+  "exit_code": 0,
+  "exit_codes": [
+    {
+      "code": 0,
+      "meaning": "success"
+    },
+    {
+      "code": 1,
+      "meaning": "usage error (missing required args, unknown flags, invalid --format, conflicting roots)"
+    },
+    {
+      "code": 2,
+      "meaning": "operational failure (index/search/IO) or doctor healthy:false"
+    }
+  ],
+  "global_flags": [
+    "--durability",
+    "--index-path",
+    "--json",
+    "--lang",
+    "--limit",
+    "--no-auto-index",
+    "--robot-help",
+    "--root"
+  ],
+  "indexed_source": {
+    "exact_text": "Use literal:<term> for exact substring presence in indexed languages.",
+    "freshness": "CLI: run asgrep watch <ROOT>; Pi and Code Mode refresh before search with a 30-second default correctness lease; LSP applies document open/change/save/close before the next request.",
+    "outside_contract": "Use ripgrep only for logs and unindexed or unsupported files.",
+    "policy": "Do not spawn rg on indexed source."
+  },
+  "integrations": {
+    "lsp": {
+      "binary": "asgrep-lsp",
+      "transport": "stdio"
+    },
+    "mcp": {
+      "binary": "asgrep-mcp",
+      "transport": "stdio"
+    }
+  },
+  "machine_schema": {
+    "exit_code_field": "integer",
+    "notes": "ok:true only on successful operations; doctor uses ok:false when healthy:false; operational faults use exit_code 2",
+    "ok_field": "boolean",
+    "schema_version": "1.0.0"
+  },
+  "notes": {
+    "default_search": "Bare QUERY without a subcommand runs hybrid search; the word 'search' is not a required verb — use the `search`/`find`/`query` subcommand only when you want an explicit search command.",
+    "format_implies_json": true,
+    "safe_mutating": "index refreshes incrementally with transactional writes. reindex forces a full transactional rewrite -- prefer `asgrep reindex --dry-run <ROOT> --json` before a full reindex. codemod dry-run always emits a JSON edit plan; apply commits one source transaction before a separate incremental index transaction. A source-apply failure rolls back source files; an index-refresh failure leaves the source edits applied and reports `asgrep index` as recovery."
+  },
+  "ok": true,
+  "output_limits": {
+    "default_response_snippet_tokens": 768,
+    "default_snippet_tokens": 96,
+    "max_error_message_chars": 4096,
+    "max_excerpt_lines": 100,
+    "max_response_snippet_tokens": 65536,
+    "max_results": 1000,
+    "max_snippet_tokens": 4096
+  },
+  "query_prefixes": [
+    "callers:",
+    "defs:",
+    "imports:",
+    "pattern:",
+    "literal:",
+    "regex:",
+    "word:"
+  ],
+  "root_specification": {
+    "alias": "--root ROOT",
+    "bin_aliases": [
+      "asgrep",
+      "ast-sgrep"
+    ],
+    "canonical": "positional ROOT on the subcommand (or bare-search ROOT)",
+    "precedence": "conflicting --root and positional ROOT is a usage error; effective_root prefers --root when set"
+  },
+  "schema_version": "1.0.0",
+  "search_formats": [
+    "native",
+    "agent",
+    "agent-capsule",
+    "compact",
+    "github",
+    "gitlab"
+  ],
+  "search_tuning_flags": [
+    "--ann-probes",
+    "--ann-threshold",
+    "--budget-tokens",
+    "--excerpt-lines",
+    "--format",
+    "--neural-embed",
+    "--no-embed",
+    "--rerank",
+    "--rerank-top-k",
+    "--response-snippet-tokens",
+    "--semantic-only",
+    "--snippet-tokens",
+    "--tantivy"
+  ],
+  "sibling_binaries": [
+    {
+      "launch": "asgrep-mcp (stdio JSON-RPC)",
+      "name": "asgrep-mcp",
+      "purpose": "MCP stdio server"
+    },
+    {
+      "launch": "asgrep-lsp",
+      "name": "asgrep-lsp",
+      "purpose": "Language Server Protocol server"
+    }
+  ],
+  "tool": "asgrep",
+  "version": "<version>"
+}

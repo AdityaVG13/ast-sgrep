@@ -195,3 +195,6 @@ fn scan_regex_rows(
     Ok(preferred)
 }
 
+#[cfg(test)]
+#[path = "../../../../../tests/unit/core/search__passes__regex.rs"]
+mod tests;

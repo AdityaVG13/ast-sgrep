@@ -31,3 +31,15 @@ tree-sitter-c-sharp = "0.23"
 tree-sitter-swift = "0.7"
 tree-sitter-kotlin-ng = "1.1"
 tree-sitter-php = "0.24"
+
+[dev-dependencies]
+ast-sgrep-testkit = { path = "../ast-sgrep-testkit" }
+serde_json.workspace = true
+
+# Integration tests live in the repo-root tests/ tree.
+[[test]]
+name = "extraction_goldens"
+path = "../../tests/lang/extraction_goldens.rs"
+[[test]]
+name = "pattern"
+path = "../../tests/lang/pattern.rs"

@@ -1,0 +1,284 @@
+{
+  "calls": [
+    {
+      "byte_end": 408,
+      "byte_start": 396,
+      "callee": "render",
+      "caller": "format_widget",
+      "line": 24
+    },
+    {
+      "byte_end": 348,
+      "byte_start": 336,
+      "callee": "helper",
+      "caller": "render",
+      "line": 20
+    }
+  ],
+  "imports": [
+    {
+      "line": 2,
+      "module_path": "<stdio.h>"
+    },
+    {
+      "line": 3,
+      "module_path": "local.h"
+    }
+  ],
+  "pattern_nodes": [
+    {
+      "excerpt": "GoldenAlias",
+      "line_end": 14,
+      "line_start": 14,
+      "signature": "GoldenAlias"
+    },
+    {
+      "excerpt": "GoldenState",
+      "line_end": 9,
+      "line_start": 9,
+      "signature": "GoldenState"
+    },
+    {
+      "excerpt": "GoldenWidget",
+      "line_end": 5,
+      "line_start": 5,
+      "signature": "GoldenWidget"
+    },
+    {
+      "excerpt": "GoldenWidget",
+      "line_end": 14,
+      "line_start": 14,
+      "signature": "GoldenWidget"
+    },
+    {
+      "excerpt": "Ready",
+      "line_end": 10,
+      "line_start": 10,
+      "signature": "Ready"
+    },
+    {
+      "excerpt": "Spent",
+      "line_end": 11,
+      "line_start": 11,
+      "signature": "Spent"
+    },
+    {
+      "excerpt": "helper(name)",
+      "line_end": 20,
+      "line_start": 20,
+      "signature": "call-name:helper"
+    },
+    {
+      "excerpt": "render(name)",
+      "line_end": 24,
+      "line_start": 24,
+      "signature": "call-name:render"
+    },
+    {
+      "excerpt": "helper(name)",
+      "line_end": 20,
+      "line_start": 20,
+      "signature": "call:helper"
+    },
+    {
+      "excerpt": "render(name)",
+      "line_end": 24,
+      "line_start": 24,
+      "signature": "call:render"
+    },
+    {
+      "excerpt": "enum GoldenState {\n    Ready,\n    Spent\n}",
+      "line_end": 12,
+      "line_start": 9,
+      "signature": "decl:enum:GoldenState"
+    },
+    {
+      "excerpt": "struct GoldenWidget {\n    int x;\n}",
+      "line_end": 7,
+      "line_start": 5,
+      "signature": "decl:struct:GoldenWidget"
+    },
+    {
+      "excerpt": "struct GoldenWidget",
+      "line_end": 14,
+      "line_start": 14,
+      "signature": "decl:struct:GoldenWidget"
+    },
+    {
+      "excerpt": "enum GoldenState {\n    Ready,\n    Spent\n}",
+      "line_end": 12,
+      "line_start": 9,
+      "signature": "enum GoldenState"
+    },
+    {
+      "excerpt": "format_widget",
+      "line_end": 23,
+      "line_start": 23,
+      "signature": "format_widget"
+    },
+    {
+      "excerpt": "helper",
+      "line_end": 17,
+      "line_start": 17,
+      "signature": "helper"
+    },
+    {
+      "excerpt": "helper",
+      "line_end": 20,
+      "line_start": 20,
+      "signature": "helper"
+    },
+    {
+      "excerpt": "helper(name)",
+      "line_end": 20,
+      "line_start": 20,
+      "signature": "kind:call_expression"
+    },
+    {
+      "excerpt": "render(name)",
+      "line_end": 24,
+      "line_start": 24,
+      "signature": "kind:call_expression"
+    },
+    {
+      "excerpt": "enum GoldenState {\n    Ready,\n    Spent\n}",
+      "line_end": 12,
+      "line_start": 9,
+      "signature": "kind:enum_specifier"
+    },
+    {
+      "excerpt": "void render(const char *name) {\n    helper(name);\n}",
+      "line_end": 21,
+      "line_start": 19,
+      "signature": "kind:function_definition"
+    },
+    {
+      "excerpt": "void format_widget(const char *name) {\n    render(name);\n}",
+      "line_end": 25,
+      "line_start": 23,
+      "signature": "kind:function_definition"
+    },
+    {
+      "excerpt": "struct GoldenWidget {\n    int x;\n}",
+      "line_end": 7,
+      "line_start": 5,
+      "signature": "kind:struct_specifier"
+    },
+    {
+      "excerpt": "struct GoldenWidget",
+      "line_end": 14,
+      "line_start": 14,
+      "signature": "kind:struct_specifier"
+    },
+    {
+      "excerpt": "name",
+      "line_end": 17,
+      "line_start": 17,
+      "signature": "name"
+    },
+    {
+      "excerpt": "name",
+      "line_end": 19,
+      "line_start": 19,
+      "signature": "name"
+    },
+    {
+      "excerpt": "name",
+      "line_end": 20,
+      "line_start": 20,
+      "signature": "name"
+    },
+    {
+      "excerpt": "name",
+      "line_end": 23,
+      "line_start": 23,
+      "signature": "name"
+    },
+    {
+      "excerpt": "name",
+      "line_end": 24,
+      "line_start": 24,
+      "signature": "name"
+    },
+    {
+      "excerpt": "render",
+      "line_end": 19,
+      "line_start": 19,
+      "signature": "render"
+    },
+    {
+      "excerpt": "render",
+      "line_end": 24,
+      "line_start": 24,
+      "signature": "render"
+    },
+    {
+      "excerpt": "struct GoldenWidget {\n    int x;\n}",
+      "line_end": 7,
+      "line_start": 5,
+      "signature": "struct GoldenWidget"
+    },
+    {
+      "excerpt": "struct GoldenWidget",
+      "line_end": 14,
+      "line_start": 14,
+      "signature": "struct GoldenWidget"
+    },
+    {
+      "excerpt": "x",
+      "line_end": 6,
+      "line_start": 6,
+      "signature": "x"
+    }
+  ],
+  "symbols": [
+    {
+      "byte_end": 226,
+      "byte_start": 186,
+      "kind": "type",
+      "line_end": 14,
+      "line_start": 14,
+      "name": "GoldenAlias"
+    },
+    {
+      "byte_end": 183,
+      "byte_start": 142,
+      "kind": "enum",
+      "line_end": 12,
+      "line_start": 9,
+      "name": "GoldenState"
+    },
+    {
+      "byte_end": 139,
+      "byte_start": 105,
+      "kind": "type",
+      "line_end": 7,
+      "line_start": 5,
+      "name": "GoldenWidget"
+    },
+    {
+      "byte_end": 213,
+      "byte_start": 194,
+      "kind": "type",
+      "line_end": 14,
+      "line_start": 14,
+      "name": "GoldenWidget"
+    },
+    {
+      "byte_end": 411,
+      "byte_start": 353,
+      "kind": "function",
+      "line_end": 25,
+      "line_start": 23,
+      "name": "format_widget"
+    },
+    {
+      "byte_end": 351,
+      "byte_start": 300,
+      "kind": "function",
+      "line_end": 21,
+      "line_start": 19,
+      "name": "render"
+    }
+  ]
+}
