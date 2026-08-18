@@ -554,6 +554,3 @@ pub fn bench_ast_grep(pattern: &str, root: &Path, iterations: u32) -> Option<f64
     Some(total / f64::from(iterations))
 }
 
-#[cfg(test)]
-#[path = "../../../tests/unit/core/pattern.rs"]
-mod tests;

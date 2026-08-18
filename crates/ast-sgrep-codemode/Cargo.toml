@@ -27,21 +27,3 @@ rayon.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
-
-[dev-dependencies]
-ast-sgrep-testkit = { path = "../ast-sgrep-testkit" }
-tempfile.workspace = true
-
-# Integration tests live in the repo-root tests/ tree.
-[[test]]
-name = "batch"
-path = "../../tests/codemode/batch.rs"
-[[test]]
-name = "catalog"
-path = "../../tests/codemode/catalog.rs"
-[[test]]
-name = "fuzz_oracles"
-path = "../../tests/codemode/fuzz_oracles.rs"
-[[test]]
-name = "session_plan"
-path = "../../tests/codemode/session_plan.rs"

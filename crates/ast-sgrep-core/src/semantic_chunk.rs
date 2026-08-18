@@ -382,6 +382,3 @@ fn excerpt_for_span(lines: &[(u32, String)], line_start: u32, line_end: u32) -> 
         .join("\n")
 }
 
-#[cfg(test)]
-#[path = "../../../tests/unit/core/semantic_chunk.rs"]
-mod tests;

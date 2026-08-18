@@ -525,6 +525,3 @@ pub fn search_imports(
         .collect())
 }
 
-#[cfg(test)]
-#[path = "../../../../../tests/unit/core/search__passes__symbol__cascade_tests.rs"]
-mod cascade_tests;

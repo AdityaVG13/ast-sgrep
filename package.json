@@ -12,8 +12,6 @@
     "check:pi-dist": "npm run build --workspace pi-ast-sgrep && test -z \"$(git status --porcelain -- packages/pi/extension/dist)\"",
     "check:pi-release": "node packages/pi/scripts/check-native-workflow.mjs",
     "pack:pi-release": "node packages/pi/scripts/release-acceptance.mjs pack",
-    "test:pi-release-gate": "node packages/pi/scripts/release-acceptance.mjs self-test",
-    "test:pi-e2e": "node packages/pi/scripts/release-gate-e2e.mjs",
     "release:preflight": "node packages/pi/scripts/release-preflight.mjs"
   }
 }

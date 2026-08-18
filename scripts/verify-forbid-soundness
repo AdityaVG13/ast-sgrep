@@ -30,7 +30,6 @@ product_roots=(
   crates/ast-sgrep-lsp/src/lib.rs
   crates/ast-sgrep-mcp/src/lib.rs
   crates/ast-sgrep-plugins/src/lib.rs
-  crates/ast-sgrep-testkit/src/lib.rs
 )
 for root in "${product_roots[@]}"; do
   if ! grep -q '#!\[forbid(unsafe_code)\]' "$root"; then

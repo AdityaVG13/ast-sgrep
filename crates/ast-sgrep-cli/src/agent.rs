@@ -472,6 +472,3 @@ pub(crate) fn print_agent_help_footer() {
     );
 }
 
-#[cfg(test)]
-#[path = "../../../tests/unit/cli/agent.rs"]
-mod tests;

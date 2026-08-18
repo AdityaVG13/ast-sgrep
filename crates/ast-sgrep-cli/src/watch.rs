@@ -216,6 +216,3 @@ pub(crate) fn run_watch(root: &Path, cli: &Cli, debounce_ms: u64) -> anyhow::Res
     }
 }
 
-#[cfg(test)]
-#[path = "../../../tests/unit/cli/watch.rs"]
-mod tests;

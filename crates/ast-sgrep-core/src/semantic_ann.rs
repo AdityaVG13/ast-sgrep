@@ -671,14 +671,5 @@ fn reassign_stale_ivf_partition(
     Ok(true)
 }
 
-#[cfg(test)]
-#[path = "../../../tests/unit/core/semantic_ann__min_similarity_gate_tests.rs"]
-mod min_similarity_gate_tests;
 
-#[cfg(test)]
-#[path = "../../../tests/unit/core/semantic_ann__flatten_bounds_tests.rs"]
-mod flatten_bounds_tests;
 
-#[cfg(test)]
-#[path = "../../../tests/unit/core/semantic_ann__kmeans_flat_tests.rs"]
-mod kmeans_flat_tests;

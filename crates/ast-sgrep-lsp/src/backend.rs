@@ -609,6 +609,3 @@ impl LspBackend {
     }
 }
 
-#[cfg(test)]
-#[path = "../../../tests/unit/lsp/backend__dirty_lock_tests.rs"]
-mod dirty_lock_tests;

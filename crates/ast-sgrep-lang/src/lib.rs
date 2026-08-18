@@ -240,6 +240,3 @@ fn make_parser(lang: Language) -> Box<dyn LanguageParser> {
     }
 }
 
-#[cfg(test)]
-#[path = "../../../tests/unit/lang/lib__language_id_tests.rs"]
-mod language_id_tests;

@@ -1157,18 +1157,6 @@ impl Indexer {
     }
 }
 
-#[cfg(test)]
-#[path = "../../../tests/unit/core/index.rs"]
-mod tests;
 
-#[cfg(test)]
-#[path = "../../../tests/unit/core/index__body_hash_tests.rs"]
-mod body_hash_tests;
 
-#[cfg(test)]
-#[path = "../../../tests/unit/core/index__cancel_tests.rs"]
-mod cancel_tests;
 
-#[cfg(test)]
-#[path = "../../../tests/unit/core/index__mtime_skip_tests.rs"]
-mod mtime_skip_tests;

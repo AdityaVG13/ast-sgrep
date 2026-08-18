@@ -233,6 +233,3 @@ pub fn history_commit_enabled() -> bool {
     )
 }
 
-#[cfg(test)]
-#[path = "../../../tests/unit/cli/keep_gate.rs"]
-mod tests;

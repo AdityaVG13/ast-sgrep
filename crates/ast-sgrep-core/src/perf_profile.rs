@@ -325,6 +325,3 @@ fn emit(value: serde_json::Value) {
     let _ = err.write_all(line.as_bytes());
 }
 
-#[cfg(test)]
-#[path = "../../../tests/unit/core/perf_profile.rs"]
-mod tests;

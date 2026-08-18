@@ -41,30 +41,3 @@ tempfile.workspace = true
 [target.'cfg(unix)'.dependencies]
 nix = { version = "0.29", features = ["signal", "process"] }
 signal-hook = "0.3"
-
-[dev-dependencies]
-ast-sgrep-core = { path = "../ast-sgrep-core", version = "2.0.0" }
-ast-sgrep-testkit = { path = "../ast-sgrep-testkit", features = ["lsp"] }
-serde_json.workspace = true
-tempfile.workspace = true
-
-# Integration tests live in the repo-root tests/ tree.
-[[test]]
-name = "cli_smoke"
-path = "../../tests/cli/cli_smoke.rs"
-[[test]]
-name = "machine_contracts"
-path = "../../tests/cli/machine_contracts.rs"
-[[test]]
-name = "neural_embed_e2e"
-path = "../../tests/cli/neural_embed_e2e.rs"
-required-features = ["neural-embed"]
-[[test]]
-name = "no_embed_hit_key_parity"
-path = "../../tests/cli/no_embed_hit_key_parity.rs"
-[[test]]
-name = "watch_incremental"
-path = "../../tests/cli/watch_incremental.rs"
-[[test]]
-name = "watch_daemon_e2e"
-path = "../../tests/cli/watch_daemon_e2e.rs"

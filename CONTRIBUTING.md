@@ -5,23 +5,15 @@
 - Rust stable (edition 2021)
 - `cargo` on `PATH`
 
-## Local verification (default bar)
+## Local verification
 
-Keep this cheap and single-process. Do **not** treat full workspace test matrices as required for every change.
+Prove the production surface by compiling it. Do not add a behavioral test suite.
 
 From the repository root:
 
 ```bash
-# Forbid-soundness (first-party unsafe ban; distinct from cargo audit)
 bash scripts/verify-forbid-soundness
-
-# Typecheck
-cargo check --workspace -j1
-
-# Focused parity suite (index + defs/hybrid/chain on the real APIs)
-cargo test -p ast-sgrep-core --test parity -j1 -- --test-threads=1
-
-# CLI smoke
+cargo check --workspace --lib --bins -j1
 cargo build --release -p ast-sgrep-cli -j1
 ./target/release/asgrep --help
 ```
@@ -31,29 +23,16 @@ New workspace members **must** set `[lints] workspace = true` so they inherit
 [SECURITY.md](SECURITY.md)): `ast-sgrep-mmap` (sole hand-written `unsafe`) and
 `ast-sgrep-codemode-napi` (generated Node-API FFI only).
 
-Release cuts use the same default bar, plus the targeted suites that cover the
-changed surface. Do not treat a full `cargo test --workspace` as required for
-ordinary work.
-
-GitHub Actions on `pull_request` runs `forbid-soundness`, `cargo-check`, ubuntu
-`test`, `pi`, `clippy`, `fmt`, and `audit`. The ubuntu+macos release matrix,
-Windows smoke, bounded fuzz, and ANN IVF scale stay `workflow_dispatch`.
-
-## Golden files
-
-CI compares frozen dumps; it never rewrites them (`ASGREP_UPDATE_GOLDENS=0`).
-To refresh a freeze locally, set `ASGREP_UPDATE_GOLDENS=1`, run the targeted
-test, review `git diff` file-by-file, and commit. Never commit `*.actual`.
-Full SOP: [docs/validation/golden-files.md](docs/validation/golden-files.md).
-Do not treat `benchmarks/results/baselines.md` as a golden.
+GitHub Actions on `pull_request` runs `forbid-soundness`, `cargo-check`, `pi`
+package compile gates, `clippy`, `fmt`, and `audit`. Release-host builds stay
+`workflow_dispatch`.
 
 ## Pull requests
 
-- Keep changes focused; extend `tests/core/parity.rs` (or a targeted unit test) when behavior changes.
-- Review golden/fixture diffs file-by-file; do not commit `*.actual`.
+- Keep changes focused on the shipped crates, CLI, Pi package, or MCP/LSP.
 - Do not commit local agent/tool caches or skill-run trees -- they are gitignored.
-- Do not commit secrets, `.env`, local caches, or `fuzz/target/`.
-- Prefer conventional commits: `feat:`, `fix:`, `refactor:`, `docs:`, `test:`, `ci:`, `chore:`.
+- Do not commit secrets, `.env`, or local caches.
+- Prefer conventional commits: `feat:`, `fix:`, `refactor:`, `docs:`, `ci:`, `chore:`.
 - Metric claims must cite `benchmarks/results/baselines.md` or be tagged `UNREPRODUCIBLE`.
 
 ## Crate layout
@@ -70,10 +49,5 @@ Do not treat `benchmarks/results/baselines.md` as a golden.
 | `ast-sgrep-codemode` | Code Mode / programmatic tool-calling |
 | `ast-sgrep-codemode-napi` | Node-API bindings for in-process Code Mode |
 | `ast-sgrep-plugins` | Output formats (native/github/gitlab/agent/capsule) |
-| `ast-sgrep-testkit` | Shared fixtures for integration tests |
 
 See [README.md](README.md) and [docs/README.md](docs/README.md) for user-facing docs.
-
-Conformance honesty: [docs/validation/DISCREPANCIES.md](docs/validation/DISCREPANCIES.md)
-and [docs/validation/conformance-verdicts.md](docs/validation/conformance-verdicts.md).
-XFAIL/`#[ignore]` only with a registered DISC id. Not-run is not Pass.

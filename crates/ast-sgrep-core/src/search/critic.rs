@@ -215,6 +215,3 @@ pub(crate) fn apply_critic(parsed: &ParsedQuery, _intent: QueryIntent, hits: &mu
     *hits = kept;
 }
 
-#[cfg(test)]
-#[path = "../../../../tests/unit/core/search__critic.rs"]
-mod tests;

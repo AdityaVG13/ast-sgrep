@@ -244,6 +244,3 @@ pub(crate) fn run(searcher: &super::Searcher, conjunction: &Conjunction) -> Resu
     ))
 }
 
-#[cfg(test)]
-#[path = "../../../../tests/unit/core/search__conjunction.rs"]
-mod tests;

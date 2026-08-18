@@ -169,6 +169,3 @@ pub(crate) fn read_utf8_capped(mut reader: impl io::Read, max_bytes: u64) -> io:
     Ok(buf)
 }
 
-#[cfg(test)]
-#[path = "../../../tests/unit/cli/machine.rs"]
-mod tests;

@@ -33,12 +33,6 @@ bash scripts/verify-forbid-soundness
 
 Both are required. Passing audit does not mean forbid-soundness holds.
 
-### `fuzz/` exclusion
-
-The `fuzz/` tree is excluded from the workspace (`Cargo.toml` `exclude`).
-Fuzz targets may need facilities that product code forbids. Bounded fuzz jobs
-in CI still exercise parsers; they are not a license to weaken product crates.
-
 ## Environment trust
 
 See [docs/env-trust.md](docs/env-trust.md) for embed URL allowlists,

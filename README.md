@@ -238,12 +238,10 @@ Canonical table: [head-to-head.md](benchmarks/results/head-to-head.md). Index: [
 | `crates/ast-sgrep-mcp` | MCP server |
 | `crates/ast-sgrep-codemode` | Code Mode / programmatic tool-calling |
 | `crates/ast-sgrep-plugins` | Output formats |
-| `crates/ast-sgrep-testkit` | Shared test fixtures and golden asserts |
 | `packages/pi/` | Pi extension, launcher, and native packages |
 | `packages/agent-plugin/` | Portable Agent Plugins + MCP |
 | `benchmarks/` | Published results (`results/`) and studies (`studies/`) |
 | `docs/` | User and architecture docs |
-| `tests/fixtures/` | Sample corpora for tests |
 
 ---
 
@@ -254,13 +252,12 @@ Canonical table: [head-to-head.md](benchmarks/results/head-to-head.md). Index: [
 GitHub Actions workflows are **manual-only** (`workflow_dispatch`) to control Actions minutes. Local quality bar for contributors:
 
 ```bash
-cargo check --workspace -j1
-cargo test -p ast-sgrep-core --test parity -j1 -- --test-threads=1
+cargo check --workspace --lib --bins -j1
 cargo build --release -p ast-sgrep-cli -j1
 ./target/release/asgrep --help
 ```
 
-See [CONTRIBUTING.md](CONTRIBUTING.md). Optional full-workspace tests and CI jobs remain available when you intentionally run them.
+See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ---
 

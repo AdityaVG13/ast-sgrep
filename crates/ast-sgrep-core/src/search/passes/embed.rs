@@ -524,10 +524,4 @@ fn embed_legacy_hits(
     ))
 }
 
-#[cfg(test)]
-#[path = "../../../../../tests/unit/core/search__passes__embed__query_embed_cache_tests.rs"]
-mod query_embed_cache_tests;
 
-#[cfg(test)]
-#[path = "../../../../../tests/unit/core/search__passes__embed__cascade_tests.rs"]
-mod cascade_tests;

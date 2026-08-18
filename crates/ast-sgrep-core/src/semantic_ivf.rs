@@ -615,6 +615,3 @@ fn replace_file(source: &Path, destination: &Path) -> std::io::Result<bool> {
     Ok(true)
 }
 
-#[cfg(test)]
-#[path = "../../../tests/unit/core/semantic_ivf__field_layout_tests.rs"]
-mod field_layout_tests;

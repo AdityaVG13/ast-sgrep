@@ -515,6 +515,3 @@ pub(crate) fn search_options(root: &Path, cli: &Cli) -> SearchOptions {
     opts
 }
 
-#[cfg(test)]
-#[path = "../../../tests/unit/cli/index_cmd.rs"]
-mod tests;

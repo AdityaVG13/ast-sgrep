@@ -37,9 +37,6 @@ Canonical entry points for humans and agents. Prefer this list over scavenging t
 |-----|----------|
 | [../CONTRIBUTING.md](../CONTRIBUTING.md) | Local verification bar and PR hygiene |
 | [RELEASING.md](RELEASING.md) | Release checklist |
-| [validation/DISCREPANCIES.md](validation/DISCREPANCIES.md) | Registered intentional divergences (XFAIL ids) |
-| [validation/golden-files.md](validation/golden-files.md) | Compare-only goldens; how to refresh locally |
-| [validation/conformance-verdicts.md](validation/conformance-verdicts.md) | Fail / Ignore / XFAIL / Not-run |
 | [validation/negative-ledgers.md](validation/negative-ledgers.md) | Product fail-closed cases (must error, not empty hits) |
 | [validation/machine-json-schema.md](validation/machine-json-schema.md) | Agent JSON envelope |
 | [validation/compact-output.md](validation/compact-output.md) | Compact CLI output |
@@ -60,5 +57,4 @@ ast-sgrep-lsp    → language server
 ast-sgrep-mcp    → MCP stdio server
 ast-sgrep-codemode → Code Mode / PTC tools + plan runner
 ast-sgrep-plugins→ JSON/output formats
-ast-sgrep-testkit→ shared fixtures for tests
 ```

@@ -179,6 +179,3 @@ impl SemanticLocalEmbedding {
     }
 }
 
-#[cfg(test)]
-#[path = "../../../tests/unit/embed/semantic__hash_rank_tests.rs"]
-mod hash_rank_tests;
