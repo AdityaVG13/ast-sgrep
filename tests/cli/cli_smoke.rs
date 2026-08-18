@@ -163,6 +163,109 @@ fn search_no_auto_index_fails_closed_when_empty() {
 }
 
 #[test]
+fn search_refreshes_stale_index_after_edit() {
+    let root = TempDir::new().expect("root");
+    let planted = root.path().join("planted.rs");
+    fs::write(&planted, "fn planted_symbol() {}\n").expect("source");
+    let index = root.path().join("index.db");
+    let (code, value, _stdout, stderr) = run_json(&[
+        "--json",
+        "--no-embed",
+        "--index-path",
+        index.to_str().unwrap(),
+        "search",
+        "planted_symbol",
+        root.path().to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "stderr={stderr} value={value}");
+    assert!(stderr.is_empty(), "machine mode must stay silent: {stderr}");
+    assert_eq!(value["ok"], true);
+
+    fs::write(
+        &planted,
+        "fn planted_symbol() {}\nfn planted_after_edit() {}\n",
+    )
+    .expect("edit");
+    let later = std::time::SystemTime::now() + std::time::Duration::from_secs(2);
+    fs::File::options()
+        .write(true)
+        .open(&planted)
+        .expect("open planted")
+        .set_modified(later)
+        .expect("bump mtime");
+
+    let (code, value, _stdout, stderr) = run_json(&[
+        "--json",
+        "--no-embed",
+        "--index-path",
+        index.to_str().unwrap(),
+        "search",
+        "planted_after_edit",
+        root.path().to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "stderr={stderr} value={value}");
+    assert!(stderr.is_empty(), "machine mode must stay silent: {stderr}");
+    assert_eq!(value["ok"], true);
+    let hits = value["hits"].as_array().expect("hits");
+    assert!(
+        hits.iter().any(|hit| {
+            hit["symbol"] == "planted_after_edit"
+                || hit["excerpt"]
+                    .as_str()
+                    .is_some_and(|excerpt| excerpt.contains("planted_after_edit"))
+        }),
+        "search must pick up the edit without a separate index; got {hits:?}"
+    );
+}
+
+#[test]
+fn search_no_auto_index_skips_refresh_after_edit() {
+    let root = TempDir::new().expect("root");
+    let planted = root.path().join("planted.rs");
+    fs::write(&planted, "fn planted_symbol() {}\n").expect("source");
+    let index = root.path().join("index.db");
+    let (code, value, _stdout, stderr) = run_json(&[
+        "--json",
+        "--no-embed",
+        "--index-path",
+        index.to_str().unwrap(),
+        "search",
+        "planted_symbol",
+        root.path().to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "stderr={stderr} value={value}");
+    assert_eq!(value["ok"], true);
+
+    fs::write(&planted, "fn planted_symbol() {}\nfn planted_frozen() {}\n").expect("edit");
+    let later = std::time::SystemTime::now() + std::time::Duration::from_secs(2);
+    fs::File::options()
+        .write(true)
+        .open(&planted)
+        .expect("open planted")
+        .set_modified(later)
+        .expect("bump mtime");
+
+    let (code, value, _stdout, stderr) = run_json(&[
+        "--no-auto-index",
+        "--json",
+        "--no-embed",
+        "--index-path",
+        index.to_str().unwrap(),
+        "search",
+        "word:planted_frozen",
+        root.path().to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "stderr={stderr} value={value}");
+    assert!(stderr.is_empty(), "machine mode must stay silent: {stderr}");
+    assert_eq!(value["ok"], true);
+    let hits = value["hits"].as_array().expect("hits");
+    assert!(
+        hits.is_empty(),
+        "--no-auto-index must not refresh; got {hits:?}"
+    );
+}
+
+#[test]
 fn chain_auto_indexes_an_empty_checkout() {
     let root = TempDir::new().expect("root");
     fs::write(

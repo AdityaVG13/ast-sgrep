@@ -214,6 +214,12 @@ pub struct IndexStats {
     pub callers_extracted: usize,
     pub imports_extracted: usize,
 }
+impl IndexStats {
+    /// True when the walk wrote or deleted at least one file row.
+    pub fn mutated(&self) -> bool {
+        self.files_indexed > 0 || self.files_removed > 0
+    }
+}
 #[derive(Debug, Clone, Copy, Default)]
 pub struct FileIndexStats {
     pub symbols: usize,

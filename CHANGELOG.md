@@ -12,7 +12,8 @@ This changelog follows [Keep a Changelog](https://keepachangelog.com/) conventio
 ### Fixed
 
 - `pi-ast-sgrep` no longer imports `node:sqlite` at load time, so Pi/OMP/ZMP can boot under Bun via `bun:sqlite`.
-- `asgrep search` indexes an empty checkout on first use instead of exiting 2. Pass `--no-auto-index` to keep the old fail-closed error.
+- `asgrep search` indexes an empty checkout on first use, and incrementally refreshes a non-empty index, instead of returning stale or empty hits. Pass `--no-auto-index` to keep the old fail-closed empty-index error and skip refresh.
+- `--lang` aliases include every indexed source extension (`ts`, `h`, `hpp`, `py`, `rs`, …) so SQL filters match stored language ids.
 
 ### Changed
 

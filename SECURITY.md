@@ -43,4 +43,5 @@ See [docs/env-trust.md](docs/env-trust.md) for embed URL allowlists,
 Open a GitHub issue with reproduction steps for security-sensitive defects.
 Prefer fail-closed behavior: missing roots, untrusted env, and empty indexes
 when `--no-auto-index` is set must surface as errors — never silent empty
-success. Search indexes an empty checkout first unless that flag is set.
+success. Search indexes an empty checkout and incrementally refreshes a
+non-empty index first unless that flag is set.

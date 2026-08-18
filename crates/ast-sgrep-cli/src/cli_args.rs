@@ -276,7 +276,7 @@ pub(crate) struct Cli {
     #[arg(
         long,
         global = true,
-        help = "Language filter (typescript or ts, javascript or js, python or py, rust or rs, …)"
+        help = "Language filter: stored id or file extension (ts, hpp, py, rs, h, …)"
     )]
     pub(crate) lang: Option<String>,
     /// 0obi: `fast-unsafe` can corrupt the index on power loss, so it must be
@@ -295,7 +295,7 @@ pub(crate) struct Cli {
         env = "ASGREP_NO_AUTO_INDEX",
         action = clap::ArgAction::SetTrue,
         value_parser = clap::builder::BoolishValueParser::new(),
-        help = "Fail if the index is empty instead of indexing automatically"
+        help = "Do not auto-index an empty checkout or refresh a stale index"
     )]
     pub(crate) no_auto_index: bool,
     /// Search-tuning for bare (no-subcommand) search only — not inherited by capabilities/doctor (vdqo).

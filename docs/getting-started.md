@@ -182,7 +182,7 @@ Machine-oriented catalog: `asgrep capabilities --json` (clap-derived; preferred 
 | `--ann-probes` | `ASGREP_ANN_PROBES` | IVF clusters to probe |
 | `--rerank` | `ASGREP_RERANK` | Local cross-encoder rerank (feature-gated) |
 | `--rerank-top-k` | `ASGREP_RERANK_TOP_K` | Rerank candidate pool (default 20) |
-| `--lang` | | Filter by canonical id or alias: `typescript`/`ts`/`tsx`, `javascript`/`js`, `python`/`py`, `rust`/`rs`, `go`, … |
+| `--lang` | | Filter by stored id or file extension: `ts`/`tsx`, `js`, `py`, `rs`, `h`/`hpp`, `go`, … |
 | `--index-path` | `ASGREP_INDEX_PATH` | Custom index DB path (**privileged sink**; pin disables gen reindex) |
 
 Store index in cache instead of repo:
@@ -250,9 +250,9 @@ asgrep bench . --iterations 100
 | Symptom | Check |
 |---------|-------|
 | No semantic hits | `asgrep status`, embed backend, chunk count; try without `--no-embed` |
-| Stale results after edit | `asgrep reindex .` or re-run `index` (incremental should catch changes) |
+| Stale results after edit | `asgrep search` incrementally refreshes unless `--no-auto-index`. If still stale, `asgrep reindex .` |
 | `pattern:` returns nothing | Prefer simpler native shapes; optional [ast-grep](https://github.com/ast-grep/ast-grep) CLI only for exotic fallbacks |
-| Slow first search after clone | Index not built, run `asgrep index .` |
+| Slow first search after clone | First search indexes an empty checkout automatically, or run `asgrep index .` |
 | IVF not loading | Fingerprint mismatch after reindex, sidecar rebuilds automatically |
 
 ## Next steps

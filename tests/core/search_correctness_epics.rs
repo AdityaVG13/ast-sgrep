@@ -271,13 +271,15 @@ fn iva9_5_literal_lang_filter_not_starved_by_path_limit() {
         .all(|h| h.language.as_deref() == Some("rust")));
 }
 
-/// br-5l6 — `--lang ts` must match stored `typescript` (SQL equality used the raw alias).
+/// br-5l6 / br-j5g — `--lang` aliases (file extensions) must match stored ids.
 #[test]
-fn lang_alias_ts_matches_indexed_typescript() {
+fn lang_aliases_match_indexed_source_extensions() {
     let temp = TempDir::new().unwrap();
     let root = temp.path();
-    write_src(root, "a.py", "unique_alias_needle = 1\n");
-    write_src(root, "b.ts", "const unique_alias_needle = 1;\n");
+    for (ext, _) in ast_sgrep_lang::Language::SOURCE_EXTENSIONS {
+        let needle = format!("alias_needle_{ext}");
+        write_src(root, &format!("n.{ext}"), &alias_source(ext, &needle));
+    }
     let index_path = root.join("index.db");
     let mut indexer = Indexer::new(IndexOptions {
         root: root.to_path_buf(),
@@ -288,28 +290,34 @@ fn lang_alias_ts_matches_indexed_typescript() {
     })
     .unwrap();
     indexer.index_all().unwrap();
-    let searcher = Searcher::new(SearchOptions {
-        root: root.to_path_buf(),
-        index_path: Some(index_path.clone()),
-        lang_filter: Some("ts".into()),
-        limit: 16,
-        use_embed: false,
-        ..SearchOptions::default()
-    })
-    .unwrap();
-    let resp = searcher.search("word:unique_alias_needle").unwrap();
-    assert!(
-        resp.hits.iter().any(|h| h.file.contains("b.ts")),
-        "--lang ts must hit typescript; got {:#?}",
-        resp.hits
-    );
-    assert!(
-        resp.hits
-            .iter()
-            .all(|h| h.language.as_deref() == Some("typescript")),
-        "alias must canonicalize to stored id; got {:#?}",
-        resp.hits
-    );
+    for (ext, lang) in ast_sgrep_lang::Language::SOURCE_EXTENSIONS {
+        let needle = format!("alias_needle_{ext}");
+        let searcher = Searcher::new(SearchOptions {
+            root: root.to_path_buf(),
+            index_path: Some(index_path.clone()),
+            lang_filter: Some((*ext).into()),
+            limit: 16,
+            use_embed: false,
+            ..SearchOptions::default()
+        })
+        .unwrap();
+        let resp = searcher.search(&format!("word:{needle}")).unwrap();
+        assert!(
+            resp.hits
+                .iter()
+                .any(|h| h.file.ends_with(&format!(".{ext}"))),
+            "--lang {ext} must hit n.{ext}; got {:#?}",
+            resp.hits
+        );
+        assert!(
+            resp.hits
+                .iter()
+                .all(|h| h.language.as_deref() == Some(lang.as_str())),
+            "alias {ext} must canonicalize to {}; got {:#?}",
+            lang.as_str(),
+            resp.hits
+        );
+    }
     let js_only = Searcher::new(SearchOptions {
         root: root.to_path_buf(),
         index_path: Some(index_path),
@@ -319,13 +327,32 @@ fn lang_alias_ts_matches_indexed_typescript() {
         ..SearchOptions::default()
     })
     .unwrap()
-    .search("word:unique_alias_needle")
+    .search("word:alias_needle_ts")
     .unwrap();
     assert!(
         js_only.hits.is_empty(),
         "--lang js must not match .ts; got {:#?}",
         js_only.hits
     );
+}
+
+fn alias_source(ext: &str, needle: &str) -> String {
+    match ext {
+        "rs" => format!("fn {needle}() {{}}\n"),
+        "ts" | "tsx" | "js" | "jsx" | "mjs" | "cjs" => format!("const {needle} = 1;\n"),
+        "py" | "pyi" => format!("{needle} = 1\n"),
+        "go" => format!("package p\nvar {needle} = 1\n"),
+        "java" => format!("class T {{ int {needle} = 1; }}\n"),
+        "cs" => format!("class T {{ int {needle} = 1; }}\n"),
+        "rb" => format!("{needle} = 1\n"),
+        "swift" => format!("let {needle} = 1\n"),
+        "c" | "h" | "cpp" | "cc" | "cxx" | "hpp" | "hxx" | "hh" | "ipp" => {
+            format!("int {needle} = 1;\n")
+        }
+        "kt" | "kts" => format!("val {needle} = 1\n"),
+        "php" => format!("<?php function {needle}() {{}}\n"),
+        other => panic!("missing snippet for extension {other}"),
+    }
 }
 
 /// iva9.6 — under-filled / empty ANN is not treated as sufficient.

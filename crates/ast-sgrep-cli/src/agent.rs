@@ -80,7 +80,7 @@ pub(crate) fn capabilities_json(_cli: &Cli) -> anyhow::Result<Value> {
         "indexed_source": {
             "policy": "Do not spawn rg on indexed source.",
             "exact_text": "Use literal:<term> for exact substring presence in indexed languages.",
-            "freshness": "CLI: run asgrep watch <ROOT>; Pi and Code Mode refresh before search with a 30-second default correctness lease; LSP applies document open/change/save/close before the next request.",
+            "freshness": "CLI: search incrementally refreshes unless --no-auto-index; run asgrep watch <ROOT> for long-lived sessions; Pi and Code Mode refresh before search with a 30-second default correctness lease; LSP applies document open/change/save/close before the next request.",
             "outside_contract": "Use ripgrep only for logs and unindexed or unsupported files."
         },
         "aliases": ["ast-sgrep"],
@@ -287,8 +287,8 @@ pub(crate) fn robot_guide_markdown() -> &'static str {
 2. `asgrep robot-docs guide` — this handbook.
 3. `asgrep doctor --robot-triage` — health + recovery commands using the effective root.
 ## Quick start
-1. `asgrep --json --format compact "natural language intent" .` — ranked hits with bounded snippets. First search indexes an empty checkout automatically.
-2. `asgrep index . --json` — explicit refresh. Pass `--no-auto-index` on search to fail closed instead.
+1. `asgrep --json --format compact "natural language intent" .` — ranked hits with bounded snippets. First search indexes an empty checkout, and incrementally refreshes a non-empty index, automatically.
+2. `asgrep index . --json` — explicit refresh. Pass `--no-auto-index` on search to skip auto-index and refresh.
 ## Indexed source / freshness
 - Do not spawn `rg` on indexed source. Use `literal:<term>` for exact substring presence and unprefixed search for ranked code navigation.
 - For a long-running CLI session, run `asgrep watch <root>`. A pending batch starts after the debounce quiet period or after at most three debounce windows under continuous events; indexing time still depends on the project.
@@ -320,7 +320,7 @@ See `capabilities --json` → `environment`. Common: `ASGREP_INDEX_PATH`, `ASGRE
 - `ASGREP_DURABILITY=fast-unsafe` (or `--durability fast-unsafe`) opts into power-loss corruption risk during write batches. `asgrep doctor` / `status` surface it; MCP/Code Mode inherit the env.
 - MCP and Code Mode / NAPI jail tool `root` under the configured workspace (`escapes configured workspace`). Host duty remains: set `ASGREP_ROOT` / Session root intentionally; NAPI inherits Session (not a free root).
 ## Common mistakes
-- Empty index fail-closed: pass `--no-auto-index` (or `ASGREP_NO_AUTO_INDEX=1`) if search must not index first.
+- Empty index / stale freeze: pass `--no-auto-index` (or `ASGREP_NO_AUTO_INDEX=1`) if search must not index or refresh.
 - Missing ROOT is an operational error; it is never reported as an empty result.
 - Full rebuild: prefer `asgrep reindex --dry-run <root> --json` before `reindex`.
 - Output format is not `json`: use `--json` and optionally `--format compact` (not `--format json`).

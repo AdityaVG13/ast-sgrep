@@ -57,27 +57,30 @@ pub(crate) fn ensure_nonempty_index(root: &Path, file_count: usize) -> anyhow::R
     Ok(())
 }
 
-/// Index an empty checkout in-process. Returns true when the caller must reopen.
-pub(crate) fn auto_index_if_empty(
+/// Index an empty checkout, or incrementally refresh a non-empty one.
+/// Returns true when the caller must reopen the store/searcher.
+pub(crate) fn ensure_fresh_index(
     root: &Path,
     cli: &Cli,
     file_count: usize,
 ) -> anyhow::Result<bool> {
-    if file_count > 0 {
-        return Ok(false);
-    }
     if cli.no_auto_index {
-        ensure_nonempty_index(root, 0)?;
+        ensure_nonempty_index(root, file_count)?;
         return Ok(false);
     }
-    let mut indexer = open_indexer(root, cli)?;
-    if !cli.search_machine_output() {
+    let empty = file_count == 0;
+    if empty && !cli.search_machine_output() {
         eprintln!("asgrep: indexing {} ...", root.display());
     }
-    indexer
+    let mut indexer = open_indexer(root, cli)?;
+    let stats = indexer
         .index_all()
         .with_context(|| format!("auto-index failed for {}", root.display()))?;
-    Ok(true)
+    let mutated = empty || stats.mutated();
+    if mutated && !empty && !cli.search_machine_output() {
+        eprintln!("asgrep: refreshed index for {}", root.display());
+    }
+    Ok(mutated)
 }
 
 pub(crate) fn open_indexed_store(root: &Path, cli: &Cli) -> anyhow::Result<IndexStore> {
@@ -91,7 +94,7 @@ pub(crate) fn open_indexed_store(root: &Path, cli: &Cli) -> anyhow::Result<Index
         .context("failed to open index")
     };
     let store = open()?;
-    if auto_index_if_empty(root, cli, store.status()?.file_count)? {
+    if ensure_fresh_index(root, cli, store.status()?.file_count)? {
         open()
     } else {
         Ok(store)
@@ -475,7 +478,7 @@ pub(crate) fn print_status_command(cli: &Cli, root: &Path) -> anyhow::Result<()>
 pub(crate) fn open_searcher(root: &Path, cli: &Cli) -> anyhow::Result<ast_sgrep_core::Searcher> {
     let root = ensure_existing_root(root, cli)?;
     let searcher = open_searcher_raw(&root, cli)?;
-    if auto_index_if_empty(&root, cli, searcher.store().status()?.file_count)? {
+    if ensure_fresh_index(&root, cli, searcher.store().status()?.file_count)? {
         return open_searcher_raw(&root, cli);
     }
     Ok(searcher)
