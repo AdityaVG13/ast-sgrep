@@ -39,8 +39,9 @@ Release cuts use the same default bar, plus the targeted suites that cover the
 changed surface. Do not treat a full `cargo test --workspace` as required for
 ordinary work.
 
-GitHub Actions on `pull_request` runs `forbid-soundness`, `cargo-check`, ubuntu
-`test`, `pi`, `clippy`, `fmt`, and `audit`. The ubuntu+macos release matrix and Windows smoke stay `workflow_dispatch`.
+GitHub Actions is manual-only (`workflow_dispatch`). PR and branch pushes do
+not start workflows. Dispatch **CI** from the Actions tab when you want the
+GitHub matrix; use the local bar above for ordinary work.
 
 ## Golden files
 

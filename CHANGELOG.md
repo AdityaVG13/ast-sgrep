@@ -17,6 +17,7 @@ This changelog follows [Keep a Changelog](https://keepachangelog.com/) conventio
 
 ### Changed
 
+- GitHub Actions `CI` no longer runs on `pull_request`; dispatch it from the Actions tab. Other workflows were already `workflow_dispatch` only.
 - Repository hygiene: drop campaign scripts and process docs; keep only clone-required `scripts/` (`rustc-capped`, `cpu-limit-exec.py`, `verify-forbid-soundness`).
 - Keep search, index, and Pi behavior tests under `tests/`. Drop campaign fuzz, benches, keep-gates, process suites, and crate-source `#[cfg(test)]` stubs.
 

@@ -40,9 +40,7 @@ Published numbers follow Agents.md honesty (fingerprint + status tag, or
 
 ## PR vs dispatch (B4)
 
-Pull requests already run the ubuntu `test` job (`cargo test --workspace`,
-compare-only) plus `forbid-soundness`, `cargo-check`, `clippy`, `fmt`, `audit`,
-and `pi`. The macos/ubuntu **release** matrix (`build-and-test`) and
-Windows/fuzz/`ann-ivf-scale` jobs stay `workflow_dispatch`. Do not add a second silent full
-matrix on every PR. The cheaper local gate is the targeted default bar in
-[CONTRIBUTING.md](../../CONTRIBUTING.md).
+GitHub Actions is `workflow_dispatch` only (no `pull_request` / `push`
+triggers). Dispatch **CI** when you want compare-only goldens on GitHub.
+Do not add a silent full matrix on every PR. The cheaper local gate is the
+targeted default bar in [CONTRIBUTING.md](../../CONTRIBUTING.md).
