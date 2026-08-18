@@ -5,7 +5,7 @@ Does not require cargo. Run from the repository root:
 
     python3 tests/fixtures/migration/build_legacy.py
 
-Then `cargo test -p ast-sgrep-core --test semantic_chunk_migration committed_v`.
+Then `cargo test -p ast-sgrep-core --test semantic_chunk_migration committed_schema`.
 Do not treat these files as published-number goldens.
 """
 
@@ -31,8 +31,8 @@ def write(path: Path, version: int) -> None:
 
 def main() -> None:
     root = Path(__file__).resolve().parent
-    write(root / "v5_empty.sqlite", 5)
-    write(root / "v99_unsupported.sqlite", 99)
+    write(root / "schema5_empty.sqlite", 5)
+    write(root / "schema99_unsupported.sqlite", 99)
 
 
 if __name__ == "__main__":

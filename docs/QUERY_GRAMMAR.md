@@ -125,4 +125,4 @@ Tests: `tests/unit/core/search__conjunction.rs` and
 - [How it works](how-it-works.md) — hybrid ranking overview
 - [Semantic search](semantic-search.md) — embed backends
 - [Structural patterns](../README.md) — pattern examples in the main README
-- [COVERAGE](validation/COVERAGE.md) — clause family status
+- [DISCREPANCIES](validation/DISCREPANCIES.md) — registered intentional divergences

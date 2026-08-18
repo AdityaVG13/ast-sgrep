@@ -682,10 +682,10 @@ impl IndexStore {
             |row| Ok((row.get(0)?, row.get(1)?)),
         )?)
     }
-    /// True when the index was built with the legacy `"semantic"` embed backend.
-    /// Search refuses this meta; indexing must rewrite every chunk before
-    /// promoting to `"semantic-v2"` (semantic_v1_rewrite contract).
-    pub fn needs_semantic_v1_rewrite(&self) -> Result<bool> {
+    /// True when the index still stores the unversioned `"semantic"` backend.
+    /// Search refuses that meta; indexing must rewrite every chunk before
+    /// promoting to the current `"semantic-v2"` identity.
+    pub fn needs_legacy_semantic_rewrite(&self) -> Result<bool> {
         Ok(self.get_meta("embed_backend")?.as_deref() == Some("semantic"))
     }
     /// Start a proven-complete semantic rewrite inside the caller's bulk
@@ -1001,5 +1001,5 @@ impl IndexStore {
 mod restore_synchronous_tests;
 
 #[cfg(test)]
-#[path = "../../../../../tests/unit/core/store__sqlite__pass3_deep_core_tests.rs"]
-mod pass3_deep_core_tests;
+#[path = "../../../../../tests/unit/core/store_sqlite_deep.rs"]
+mod store_sqlite_deep;

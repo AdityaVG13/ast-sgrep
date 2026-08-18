@@ -354,11 +354,11 @@ fn embed_query_vector(
     let stored_backend = store.get_meta("embed_backend")?;
     let stored_model = store.get_meta("embed_model")?;
     let dim = stored_dim.unwrap_or(ast_sgrep_embed::default_semantic_dim());
-    // e2hc.13: a legacy semantic-v1 store must not serve semantic results —
-    // chunks are unversioned; only a full rewrite (index_all) may promote.
-    if store.needs_semantic_v1_rewrite()? {
+    // An unversioned embed_backend="semantic" store must not serve results —
+    // only a full rewrite (index_all) may promote the layout.
+    if store.needs_legacy_semantic_rewrite()? {
         return Err(crate::StoreError::Other(
-            "index advertises legacy semantic-v1; run `asgrep reindex` to rewrite every chunk before semantic search"
+            "index advertises an unversioned semantic backend; run `asgrep reindex` to rewrite every chunk before semantic search"
                 .into(),
         ));
     }

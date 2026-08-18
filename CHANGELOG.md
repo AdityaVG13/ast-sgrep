@@ -13,6 +13,10 @@ This changelog follows [Keep a Changelog](https://keepachangelog.com/) conventio
 - `pi-ast-sgrep` no longer imports `node:sqlite` at load time, so Pi/OMP/ZMP can boot under Bun via `bun:sqlite`.
 - `asgrep search` indexes an empty checkout on first use instead of exiting 2. Pass `--no-auto-index` to keep the old fail-closed error.
 
+### Changed
+
+- Repository hygiene: drop campaign scripts and process docs; keep only clone-required `scripts/` (`rustc-capped`, `cpu-limit-exec.py`, `verify-forbid-soundness`, `fetch-neural-e2e-model`). Rename leftover `v1`/`v2`/`pass3`/`p1` test and API surfaces.
+
 ## Version Timeline
 
 | Version | Date | Summary |

@@ -111,8 +111,8 @@ path = "../../tests/core/literal_diff.rs"
 name = "metamorphic"
 path = "../../tests/core/metamorphic.rs"
 [[test]]
-name = "p1_correctness_batch"
-path = "../../tests/core/p1_correctness_batch.rs"
+name = "correctness_batch"
+path = "../../tests/core/correctness_batch.rs"
 [[test]]
 name = "parity"
 path = "../../tests/core/parity.rs"
@@ -162,8 +162,8 @@ path = "../../tests/core/semantic_chunk_migration.rs"
 name = "semantic_ivf_roundtrip"
 path = "../../tests/core/semantic_ivf_roundtrip.rs"
 [[test]]
-name = "semantic_v1_rewrite"
-path = "../../tests/core/semantic_v1_rewrite.rs"
+name = "semantic_layout_rewrite"
+path = "../../tests/core/semantic_layout_rewrite.rs"
 [[test]]
 name = "signal_provenance"
 path = "../../tests/core/signal_provenance.rs"

@@ -8,10 +8,10 @@ Canonical entry points for humans and agents. Prefer this list over scavenging t
 |-----|----------|----------|
 | [../README.md](../README.md) | Everyone | Product overview, install, quick start |
 | [getting-started.md](getting-started.md) | Users | Pi-first and standalone install, index, queries, flags, troubleshooting |
-| [pi-package.md](pi-package.md) | Pi users/operators | Canonical install/use/update/debug/remove guide; data, security, privacy, compatibility, and provenance |
+| [pi-package.md](pi-package.md) | Pi users/operators | Install, use, update, debug, remove; data, security, privacy |
 | [comparison.md](comparison.md) | Users | When to use ast-sgrep vs ripgrep vs ast-grep |
 
-## Product depth
+## Product
 
 | Doc | Contents |
 |-----|----------|
@@ -22,29 +22,31 @@ Canonical entry points for humans and agents. Prefer this list over scavenging t
 | [fusion-ranking.md](fusion-ranking.md) | Weighted RRF, post-fusion critic, agent `why` |
 | [cascade-query-planner.md](cascade-query-planner.md) | Retrieval cascade and causal follow-ups |
 | [mcp.md](mcp.md) | `asgrep-mcp` setup for agents |
-| [codemode.md](codemode.md) | Code Mode: JS program orchestration (Pi primary); XOR with MCP — never both |
+| [codemode.md](codemode.md) | Code Mode: JS program orchestration (Pi primary); XOR with MCP |
 | [use-cases.md](use-cases.md) | Agents, LSP, JSON formats, CI patterns |
+| [structural-patterns.md](structural-patterns.md) | Pattern syntax and language coverage |
+| [symbol-normalization.md](symbol-normalization.md) | Identifier folding used by defs/callers |
+| [index-consistency.md](index-consistency.md) | When the index is considered current |
+| [signal-provenance.md](signal-provenance.md) | How a hit explains itself |
+| [env-trust.md](env-trust.md) | Environment and binary-path trust |
+| [panic-poison.md](panic-poison.md) | Mutex poison and fail-closed recovery |
 
-## Quality and operations
+## Contributor
 
 | Doc | Contents |
 |-----|----------|
-| [benchmarks.md](benchmarks.md) | Methodology reading order + local smoke |
-| [PERF_INVENTORY.md](PERF_INVENTORY.md) | Hot-path cost notes + measurement caveats |
-| [RELEASING.md](RELEASING.md) | Release checklist |
 | [../CONTRIBUTING.md](../CONTRIBUTING.md) | Local verification bar and PR hygiene |
+| [RELEASING.md](RELEASING.md) | Release checklist |
 | [validation/DISCREPANCIES.md](validation/DISCREPANCIES.md) | Registered intentional divergences (XFAIL ids) |
-| [validation/COVERAGE.md](validation/COVERAGE.md) | Conformance surface skeleton |
+| [validation/golden-files.md](validation/golden-files.md) | Compare-only goldens; how to refresh locally |
 | [validation/conformance-verdicts.md](validation/conformance-verdicts.md) | Fail / Ignore / XFAIL / Not-run |
-| [validation/proof-pack.md](validation/proof-pack.md) | Minimal reproducible ranking/honesty gates |
-| [validation/oracle-dispatch.md](validation/oracle-dispatch.md) | Channel × scenario → authoritative oracle |
-| [progress/README.md](progress/README.md) | Campaign negative ledgers (perf / conformance / surface) |
-| [contracts/README.md](contracts/README.md) | Surface matrix + oracle dispatch + score weights |
-| [../benchmarks/README.md](../benchmarks/README.md) | Benchmark folder index and error budgets |
+| [validation/negative-ledgers.md](validation/negative-ledgers.md) | Product fail-closed cases (must error, not empty hits) |
+| [validation/machine-json-schema.md](validation/machine-json-schema.md) | Agent JSON envelope |
+| [validation/compact-output.md](validation/compact-output.md) | Compact CLI output |
+| [validation/neural-trust.md](validation/neural-trust.md) | Optional in-process neural embeddings |
+| [validation/semantic-ivf-mmap.md](validation/semantic-ivf-mmap.md) | IVF sidecar layout |
 
-Published result tables (`head-to-head`, `speed`, `bakeoff`, `losses`, `baselines`)
-live under [`../benchmarks/results/`](../benchmarks/results/); start from the
-folder README rather than duplicating that index here.
+Published result tables live under [`../benchmarks/results/`](../benchmarks/results/); start from [`../benchmarks/README.md`](../benchmarks/README.md).
 
 ## Crate map
 
@@ -60,7 +62,3 @@ ast-sgrep-codemode → Code Mode / PTC tools + plan runner
 ast-sgrep-plugins→ JSON/output formats
 ast-sgrep-testkit→ shared fixtures for tests
 ```
-
-## CI note
-
-Workflows under `.github/workflows/` are **`workflow_dispatch` only** (manual). They do not run on every push/PR. Trigger from the GitHub Actions tab when needed.

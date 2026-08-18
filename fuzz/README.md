@@ -128,6 +128,5 @@ crates' normal dependencies.
 
 - `.github/workflows/ci.yml` `bounded-fuzz` job (workflow_dispatch): real bins
   only (`query_grammar`, `rank`), seeds synced first.
-- `scripts/local-release-gate.sh`: both baseline bins, 30s each.
 
 PR-tier continuous fuzz is optional/short; deep campaigns stay dispatch/nightly.

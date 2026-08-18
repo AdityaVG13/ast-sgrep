@@ -167,8 +167,8 @@ impl EmbedBackend {
         match self {
             Self::Auto => "auto",
             Self::Neural => "neural",
-            // "semantic" is the legacy v1 marker (needs_semantic_v1_rewrite);
-            // the versioned v2 identity is what gets stored and compared.
+            // Unversioned "semantic" is a legacy marker
+            // (needs_legacy_semantic_rewrite); the stored identity is semantic-v2.
             Self::Semantic => "semantic-v2",
         }
     }
@@ -1085,14 +1085,14 @@ impl Indexer {
         Ok(true)
     }
     /// Full semantic identity check (28vo/e2hc.13): the stored embed backend
-    /// must equal the active preference exactly, no legacy v1 rewrite pending,
+    /// must equal the active preference exactly, no legacy rewrite pending,
     /// and the configured model must match what was recorded at index time.
     fn semantic_identity_matches(&self) -> Result<bool> {
-        // Legacy unversioned semantic-v1 (e2hc.13): force rewrite even under
-        // Auto. Without this, Auto skips the backend mismatch check and a
+        // Unversioned embed_backend="semantic" must force a full rewrite even
+        // under Auto. Otherwise Auto skips the backend mismatch check and a
         // single-file update can flip meta to semantic-v2 while sibling
-        // chunks remain v1.
-        if self.store.needs_semantic_v1_rewrite()? {
+        // chunks stay on the old layout.
+        if self.store.needs_legacy_semantic_rewrite()? {
             return Ok(false);
         }
         // Exact backend identity only (ast-sgrep-28vo): Auto is not a

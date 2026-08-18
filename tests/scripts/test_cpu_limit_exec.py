@@ -5,7 +5,7 @@ import unittest
 
 
 def load_limiter():
-    path = Path(__file__).with_name("cpu-limit-exec.py")
+    path = Path(__file__).resolve().parents[2] / "scripts" / "cpu-limit-exec.py"
     spec = importlib.util.spec_from_file_location("cpu_limit_exec", path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)

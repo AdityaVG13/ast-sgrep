@@ -2,7 +2,7 @@
 
 > **Ledger mix:** see [`benchmarks/README.md`](../README.md) status tags.
 > Historical GATE rows below are `UNREPRODUCIBLE`. The 2026-08-05 self-corpus
-> block is `reproducible-in-tree` via `scripts/run-benchmarks.sh`.
+> block is `reproducible-in-tree` via `asgrep bench`.
 
 This consolidated GATE table reports only measurements already recorded in repository artifacts; it does **not** combine or extrapolate runs. Lower latency is better. Times are wall-clock p50 milliseconds, rounded to two decimals from the raw values below.
 
@@ -48,10 +48,10 @@ The Semgrep artifact stores `asgrep_sum_p50_ms = 1520.555`, `semgrep_sum_p50_ms 
 
 ## 2026-08-05 measured (self corpus, 1,107 tracked files)
 
-**Status: `reproducible-in-tree`.** `scripts/run-benchmarks.sh`. Raw hyperfine
+**Status: `reproducible-in-tree`.** `asgrep bench`. Raw hyperfine
 JSON is run output, not a second canonical MRR fingerprint.
 
-> New rows from `scripts/run-benchmarks.sh` (reproducible from this tree; raw
+> New rows from `asgrep bench` (reproducible from this tree; raw
 > hyperfine JSON in the run output). Same-machine rows for the 1.4.0 release
 > states; p95 wall-clock. Baseline = `origin/main` `cea904a`, pr21 =
 > `5de7eb0`, pr26 = `137863f`.
@@ -86,8 +86,8 @@ those reproduce fragments were deleted rather than left dangling.
 For the 2026-08-05 self-corpus latency rows:
 
 ```bash
-cargo build --profile release-perf -p ast-sgrep-cli
-bash scripts/run-benchmarks.sh
+cargo build --release -p ast-sgrep-cli
+./target/release/asgrep --json bench . --suite self --fixture self --iterations 5
 ```
 
 For corpus pins, versions, host metadata, feature flags, and noise, treat

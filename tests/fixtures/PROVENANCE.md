@@ -47,7 +47,7 @@ conformance result and `assert_golden_json_at`. Do not reimplement scrub/compare
 
 | Artifact | Purpose | Generator | Discipline | Scrub |
 |---|---|---|---|---|
-| `tests/fixtures/ivf/good_v2.ivf` | Tiny dim=4 / 4-chunk valid sidecar | `ASGREP_UPDATE_GOLDENS=1 cargo test -p ast-sgrep-core --test semantic_ivf_roundtrip committed_v2_frame` | Format break → new DISC + fixture | none |
+| `tests/fixtures/ivf/good.ivf` | Tiny dim=4 / 4-chunk valid sidecar | `ASGREP_UPDATE_GOLDENS=1 cargo test -p ast-sgrep-core --test semantic_ivf_roundtrip committed_ivf_frame` | Format break → new DISC + fixture | none |
 | `tests/fixtures/ivf/bad_magic.ivf` | Reject: first byte flipped | same | fail-closed, no panic | none |
 | `tests/fixtures/ivf/truncated.ivf` | Reject: last 4 bytes dropped | same | fail-closed, no panic | none |
 
@@ -67,8 +67,8 @@ immutable.
 
 | Artifact | Purpose | user_version |
 |---|---|---|
-| `tests/fixtures/migration/v5_empty.sqlite` | Pre-v7 semantic-layout + later FTS/lexicon migrations | 5 |
-| `tests/fixtures/migration/v99_unsupported.sqlite` | Newer-than-supported fail-closed | 99 |
+| `tests/fixtures/migration/schema5_empty.sqlite` | Pre-schema-7 semantic-layout + later FTS/lexicon migrations | 5 |
+| `tests/fixtures/migration/schema99_unsupported.sqlite` | Newer-than-supported fail-closed | 99 |
 
 In-process layout wipes remain in `tests/core/semantic_chunk_migration.rs`.
 Keep these DBs tiny; do not check in full sample indexes.

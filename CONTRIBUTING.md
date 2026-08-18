@@ -31,29 +31,13 @@ New workspace members **must** set `[lints] workspace = true` so they inherit
 [SECURITY.md](SECURITY.md)): `ast-sgrep-mmap` (sole hand-written `unsafe`) and
 `ast-sgrep-codemode-napi` (generated Node-API FFI only).
 
-Before a Rust release cut, run the local release gate manually:
+Release cuts use the same default bar, plus the targeted suites that cover the
+changed surface. Do not treat a full `cargo test --workspace` as required for
+ordinary work.
 
-```bash
-bash scripts/local-release-gate.sh
-```
-
-That gate checks formatting, workspace clippy and tests, then exercises ranking
-invariants with a bounded 30-second fuzz run. It requires stable Rust, nightly
-Rust, and `cargo-fuzz`. It is **not** invoked by Pi `release-acceptance` (npm
-pack/verify/gate/publish). Ordinary changes should keep using the cheaper,
-targeted default bar above.
-
-Merge honesty (optional, does not replace T0): `bash scripts/run-proof-pack.sh`
-writes `tests/artifacts/compliance/COMPLIANCE_REPORT.md`. See
-[docs/validation/proof-pack.md](docs/validation/proof-pack.md).
-
-GitHub Actions on every `pull_request` runs `forbid-soundness`, `cargo-check`,
-ubuntu `test` (`cargo test --workspace`, compare-only goldens), `pi`, `clippy`,
-`fmt`, and `audit`. The ubuntu+macos **release** matrix (`build-and-test`),
-Windows smoke, bounded fuzz, and **ANN IVF scale** (`ann-ivf-scale`, ignored
-release test at 2048+10000 vectors) stay `workflow_dispatch` (Actions tab). Speed
-and bake-off workflows execute real harnesses and fail on correctness, identity,
-or latency threshold breaches.
+GitHub Actions on `pull_request` runs `forbid-soundness`, `cargo-check`, ubuntu
+`test`, `pi`, `clippy`, `fmt`, and `audit`. The ubuntu+macos release matrix,
+Windows smoke, bounded fuzz, and ANN IVF scale stay `workflow_dispatch`.
 
 ## Golden files
 
@@ -90,7 +74,6 @@ Do not treat `benchmarks/results/baselines.md` as a golden.
 
 See [README.md](README.md) and [docs/README.md](docs/README.md) for user-facing docs.
 
-Conformance honesty: [docs/validation/DISCREPANCIES.md](docs/validation/DISCREPANCIES.md),
-[docs/validation/COVERAGE.md](docs/validation/COVERAGE.md), and
-[docs/validation/conformance-verdicts.md](docs/validation/conformance-verdicts.md).
+Conformance honesty: [docs/validation/DISCREPANCIES.md](docs/validation/DISCREPANCIES.md)
+and [docs/validation/conformance-verdicts.md](docs/validation/conformance-verdicts.md).
 XFAIL/`#[ignore]` only with a registered DISC id. Not-run is not Pass.
