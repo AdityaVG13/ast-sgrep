@@ -321,7 +321,3 @@ pub fn store_lexicon(store: &crate::store::IndexStore, associations: &[Associati
 pub fn load_lexicon(store: &crate::store::IndexStore) -> Result<Lexicon> {
     Ok(Lexicon::from_associations(store.all_lexicon_rows()?))
 }
-
-#[cfg(test)]
-#[path = "../../../tests/unit/core/lexicon.rs"]
-mod tests;

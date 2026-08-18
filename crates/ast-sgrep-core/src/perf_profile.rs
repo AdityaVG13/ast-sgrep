@@ -324,4 +324,3 @@ fn emit(value: serde_json::Value) {
     let mut err = std::io::stderr().lock();
     let _ = err.write_all(line.as_bytes());
 }
-

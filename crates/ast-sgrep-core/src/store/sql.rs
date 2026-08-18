@@ -346,10 +346,6 @@ DELETE FROM scip_facts; DELETE FROM callers; DELETE FROM symbols; DELETE FROM li
 DELETE FROM embed_cache; \
 DELETE FROM meta WHERE key NOT IN ('root', 'semantic_data_version', 'index_data_version', 'lexicon_data_version');";
 
-#[cfg(test)]
-#[path = "../../../../tests/unit/core/store__sql__clear_all_sql_tests.rs"]
-mod clear_all_sql_tests;
-
 pub(crate) fn emb_vec(r: &rusqlite::Row<'_>, idx: usize) -> rusqlite::Result<Vec<f32>> {
     let v: Vec<u8> = r.get(idx)?;
     // Fail closed on corrupt blobs (bead ast-sgrep-j97d.5qpa) -- never default to zeros.
@@ -419,7 +415,3 @@ pub fn integrity_check(conn: &Connection) -> Result<String> {
     conn.query_row("PRAGMA integrity_check", [], |row| row.get(0))
         .map_err(Into::into)
 }
-
-#[cfg(test)]
-#[path = "../../../../tests/unit/core/store__sql__escape_tests.rs"]
-mod escape_tests;

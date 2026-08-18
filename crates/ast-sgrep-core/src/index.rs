@@ -9,7 +9,6 @@ use crate::store::{IndexStore, RefreshLinesInput, UpsertFileInput};
 use crate::Result;
 use ast_sgrep_lang::{detect_language, Language, ParserRegistry};
 use rayon::prelude::*;
-use std::cell::Cell;
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -39,31 +38,6 @@ fn run_index_parallel<R: Send>(thread_limit: Option<usize>, work: impl FnOnce() 
 }
 
 pub use crate::index_watch::canonicalize_affected_path;
-
-thread_local! {
-    /// Test-only: when set, [`Indexer::rebuild_dirty_sidecars`] returns Err after the
-    /// bulk SQLite commit so callers can pin Err-path cache invalidation.
-    /// Thread-local so parallel `cargo test` workers do not cross-contaminate.
-    static FORCE_SIDECAR_REBUILD_ERR: Cell<bool> = const { Cell::new(false) };
-}
-
-/// RAII guard that forces sidecar rebuild to fail on this thread (simulates
-/// mid-sidecar Err after durable bulk commit). Clears the flag on drop.
-#[doc(hidden)]
-pub struct ForceSidecarRebuildErr;
-
-impl Drop for ForceSidecarRebuildErr {
-    fn drop(&mut self) {
-        FORCE_SIDECAR_REBUILD_ERR.with(|c| c.set(false));
-    }
-}
-
-/// Arm the mid-sidecar rebuild failure inject for the current thread.
-#[doc(hidden)]
-pub fn force_sidecar_rebuild_err() -> ForceSidecarRebuildErr {
-    FORCE_SIDECAR_REBUILD_ERR.with(|c| c.set(true));
-    ForceSidecarRebuildErr
-}
 
 /// Maximum exact paths accepted by one incremental update request.
 pub const MAX_INCREMENTAL_PATHS: usize = 1_024;
@@ -676,12 +650,6 @@ impl Indexer {
     }
     fn rebuild_dirty_sidecars(&self, _stats: &IndexStats, semantic_ivf_dirty: bool) -> Result<()> {
         self.check_cancel()?;
-        // After bulk commit: injectable Err so MCP/CM tests pin invalidate-on-Err.
-        if FORCE_SIDECAR_REBUILD_ERR.with(|c| c.get()) {
-            return Err(crate::StoreError::Other(
-                "forced sidecar rebuild failure after bulk commit (test inject)".into(),
-            ));
-        }
         let file_count = self.store.status()?.file_count;
         if crate::tantivy_index::should_use_tantivy(file_count, self.options.use_tantivy) {
             self.rebuild_tantivy_sidecar()?;
@@ -1156,19 +1124,3 @@ impl Indexer {
         Ok(rows_from_extraction(&extraction))
     }
 }
-
-#[cfg(test)]
-#[path = "../../../tests/unit/core/index.rs"]
-mod tests;
-
-#[cfg(test)]
-#[path = "../../../tests/unit/core/index__body_hash_tests.rs"]
-mod body_hash_tests;
-
-#[cfg(test)]
-#[path = "../../../tests/unit/core/index__cancel_tests.rs"]
-mod cancel_tests;
-
-#[cfg(test)]
-#[path = "../../../tests/unit/core/index__mtime_skip_tests.rs"]
-mod mtime_skip_tests;

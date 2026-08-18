@@ -52,7 +52,7 @@ Do not treat `benchmarks/results/baselines.md` as a golden.
 
 ## Pull requests
 
-- Keep changes focused; extend `tests/core/parity.rs` (or a targeted unit test) when behavior changes.
+- Keep changes focused; extend an intent suite under `tests/` via `ast-sgrep-testkit` when search, index, or Pi behavior changes.
 - Review golden/fixture diffs file-by-file; do not commit `*.actual`.
 - Do not commit local agent/tool caches or skill-run trees -- they are gitignored.
 - Do not commit secrets, `.env`, local caches.

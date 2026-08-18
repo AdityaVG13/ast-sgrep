@@ -35,8 +35,16 @@ jobs:
             echo "#[test] must not live in crates/*/src; put tests under tests/" >&2
             exit 1
           fi
+          if grep -R --include='*.rs' -n '#\[path =' crates/*/src; then
+            echo "#[path] test stubs must not live in crates/*/src; use [[test]] under tests/" >&2
+            exit 1
+          fi
           if ls -d crates/*/tests 2>/dev/null; then
             echo "crates/*/tests must not exist; use tests/<crate>/" >&2
+            exit 1
+          fi
+          if [ -d tests/unit ]; then
+            echo "tests/unit is crate-private wiring; keep intent suites under tests/<crate>/" >&2
             exit 1
           fi
       - name: test workspace

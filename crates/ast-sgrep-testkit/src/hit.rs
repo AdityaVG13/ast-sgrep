@@ -46,4 +46,3 @@ fn hit_key(hit: &Value) -> Result<HitKey, String> {
         caller: field("caller"),
     })
 }
-

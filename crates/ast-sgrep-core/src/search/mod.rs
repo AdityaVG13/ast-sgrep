@@ -11,14 +11,8 @@ use crate::store::IndexStore;
 use crate::Result;
 pub use critic::CriticNote;
 pub use field_weight::EmbedFieldScores;
-#[cfg(test)]
-use finish::apply_rerank_order;
 pub use finish::finish_response;
 pub(crate) use finish::finish_response_checked;
-#[cfg(test)]
-use finish::{
-    definition_query_affinity, enforce_result_gates, excerpt_term_coverage, rerank_candidate_limit,
-};
 pub use fusion::dedup_hits;
 use passes::embed::{run_embed_pass, SemanticCache};
 use passes::lexical::lexical_pass;
@@ -1051,7 +1045,3 @@ fn hex32(bytes: &[u8; 32]) -> String {
     }
     out
 }
-
-#[cfg(test)]
-#[path = "../../../../tests/unit/core/search.rs"]
-mod tests;

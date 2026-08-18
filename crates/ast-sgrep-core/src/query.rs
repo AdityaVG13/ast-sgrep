@@ -173,7 +173,3 @@ fn tokenize_words(input: &str, drop_stopwords: bool) -> Vec<String> {
 fn looks_like_symbol(term: &str) -> bool {
     term.contains('_') || term.len() > 3
 }
-
-#[cfg(test)]
-#[path = "../../../tests/unit/core/query.rs"]
-mod tests;

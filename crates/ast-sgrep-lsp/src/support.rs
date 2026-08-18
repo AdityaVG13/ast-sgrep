@@ -515,4 +515,3 @@ pub fn call_hierarchy_endpoint(root: &Path, file: &str, line: u32, name: &str) -
 fn line_utf16_len(line: &str) -> u32 {
     line.chars().map(|c| c.len_utf16() as u32).sum()
 }
-

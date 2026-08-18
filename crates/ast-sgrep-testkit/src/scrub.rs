@@ -115,4 +115,3 @@ fn rule(pattern: &'static str, replacement: &'static str) -> Rule {
         replacement,
     }
 }
-

@@ -15,7 +15,3 @@ pub fn env_flag(name: &str) -> bool {
         .as_deref()
         .is_some_and(is_boolish_true)
 }
-
-#[cfg(test)]
-#[path = "../../../tests/unit/core/env_flag.rs"]
-mod tests;

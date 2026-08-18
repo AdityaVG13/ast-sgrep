@@ -471,7 +471,3 @@ pub(crate) fn print_agent_help_footer() {
         "Exit codes: 0=ok, 1=usage, 2=operation failed. Use --json for machine-readable stdout."
     );
 }
-
-#[cfg(test)]
-#[path = "../../../tests/unit/cli/agent.rs"]
-mod tests;

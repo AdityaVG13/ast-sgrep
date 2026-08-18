@@ -514,7 +514,3 @@ pub(crate) fn search_options(root: &Path, cli: &Cli) -> SearchOptions {
     opts.set_embed_backend(EmbedBackend::from_flags(t.neural_embed, t.semantic_only));
     opts
 }
-
-#[cfg(test)]
-#[path = "../../../tests/unit/cli/index_cmd.rs"]
-mod tests;

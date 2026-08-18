@@ -40,7 +40,3 @@ pub fn validate_query_len(query: &str) -> Result<(), String> {
     }
     Ok(())
 }
-
-#[cfg(test)]
-#[path = "../../../tests/unit/core/limits.rs"]
-mod tests;

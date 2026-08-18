@@ -179,7 +179,8 @@ fn committed_schema5_sqlite_migrates_to_current_schema() {
 fn committed_schema99_sqlite_is_rejected_without_panic() {
     let temp = TempDir::new().unwrap();
     let dest = temp.path().join("index.db");
-    std::fs::copy(migration_fixture("schema99_unsupported.sqlite"), &dest).expect("copy schema99 fixture");
+    std::fs::copy(migration_fixture("schema99_unsupported.sqlite"), &dest)
+        .expect("copy schema99 fixture");
     match IndexStore::open(temp.path(), Some(&dest)) {
         Ok(_) => panic!("newer schema must fail closed"),
         Err(err) => {

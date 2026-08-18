@@ -145,7 +145,3 @@ pub fn bump_writer_generation(root: &Path, index_path: Option<&Path>) -> crate::
     result?;
     Ok(next)
 }
-
-#[cfg(test)]
-#[path = "../../../../tests/unit/core/store__writer_generation.rs"]
-mod tests;

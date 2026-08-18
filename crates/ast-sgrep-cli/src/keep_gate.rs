@@ -232,4 +232,3 @@ pub fn history_commit_enabled() -> bool {
         Some("1") | Some("true") | Some("yes") | Some("on")
     )
 }
-

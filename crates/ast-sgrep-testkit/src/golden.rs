@@ -269,4 +269,3 @@ fn unified_diff(expected: &str, actual: &str, max_hunks: usize) -> String {
     }
     out
 }
-

@@ -400,4 +400,3 @@ pub fn ranking_stability(left: &[String], right: &[String]) -> RankingStability 
         rank_correlation,
     }
 }
-

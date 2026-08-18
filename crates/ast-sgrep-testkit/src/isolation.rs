@@ -130,4 +130,3 @@ pub fn with_temp_index<R>(f: impl FnOnce(&IsolatedIndexSession) -> R) -> R {
     let session = IsolatedIndexSession::new();
     f(&session)
 }
-

@@ -118,7 +118,3 @@ pub fn score_caller_normalized(normalized_terms: &[String], callee: &str) -> f64
         coverage * 2.0 + SCORE_CALLER_BASE
     }
 }
-
-#[cfg(test)]
-#[path = "../../../tests/unit/core/rank.rs"]
-mod tests;

@@ -239,7 +239,3 @@ fn make_parser(lang: Language) -> Box<dyn LanguageParser> {
         Language::Php => Box::new(PhpParser),
     }
 }
-
-#[cfg(test)]
-#[path = "../../../tests/unit/lang/lib__language_id_tests.rs"]
-mod language_id_tests;

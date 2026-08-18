@@ -345,5 +345,3 @@ fn show_index_error(stdout: &mut impl Write, surface: &str, err: &anyhow::Error)
 pub fn log(msg: &str) {
     let _ = writeln!(io::stderr(), "[asgrep-lsp] {msg}");
 }
-
-
