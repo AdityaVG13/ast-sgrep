@@ -537,8 +537,9 @@ impl IndexStore {
             &self.conn,
             "SELECT language FROM files WHERE path=?1",
             &[&path],
-            |r| r.get(0),
+            |row| row.get::<_, Option<String>>(0),
         )
+        .map(Option::flatten)
     }
     pub fn pattern_node_count(&self) -> Result<usize> {
         count_star(&self.conn, "pattern_nodes")

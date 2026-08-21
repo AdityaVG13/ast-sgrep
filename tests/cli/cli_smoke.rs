@@ -555,6 +555,7 @@ fn search_file_filter_reuses_one_repository_index() {
     fs::create_dir_all(root.path().join("b")).unwrap();
     fs::write(root.path().join("a/one.rs"), "fn shared_symbol() {}\n").unwrap();
     fs::write(root.path().join("b/two.rs"), "fn shared_symbol() {}\n").unwrap();
+    fs::write(root.path().join("README.md"), "# untyped indexed document\n").unwrap();
     let index = root.path().join(".asgrep/index.db");
 
     let (code, value, _stdout, stderr) = run_json(&[
@@ -579,6 +580,22 @@ fn search_file_filter_reuses_one_repository_index() {
     assert!(index.is_file());
     assert!(!root.path().join("a/.asgrep/index.db").exists());
     assert!(!root.path().join("b/.asgrep/index.db").exists());
+
+    let (code, value, _stdout, stderr) = run_json(&[
+        "--json",
+        "--no-embed",
+        "--lang",
+        "rust",
+        "--index-path",
+        index.to_str().unwrap(),
+        "search",
+        "--file-filter",
+        "a/**",
+        "shared_symbol",
+        root.path().to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "stderr={stderr} value={value}");
+    assert_eq!(value["ok"], true);
 }
 
 #[test]
