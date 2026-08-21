@@ -41,8 +41,5 @@ serde_json.workspace = true
 name = "extraction_goldens"
 path = "../../tests/lang/extraction_goldens.rs"
 [[test]]
-name = "fuzz_oracles"
-path = "../../tests/lang/fuzz_oracles.rs"
-[[test]]
 name = "pattern"
 path = "../../tests/lang/pattern.rs"

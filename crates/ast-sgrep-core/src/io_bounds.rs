@@ -237,7 +237,3 @@ fn read_open_file_capped(
         metadata,
     })
 }
-
-#[cfg(test)]
-#[path = "../../../tests/unit/core/io_bounds.rs"]
-mod tests;

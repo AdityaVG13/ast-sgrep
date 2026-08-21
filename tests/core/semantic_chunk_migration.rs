@@ -161,12 +161,12 @@ fn migration_fixture(name: &str) -> PathBuf {
 
 /// ghiw.4: checked-in user_version=5 DB migrates to current schema (12).
 #[test]
-fn committed_v5_sqlite_migrates_to_current_schema() {
+fn committed_schema5_sqlite_migrates_to_current_schema() {
     let temp = TempDir::new().unwrap();
     let dest = temp.path().join("index.db");
-    std::fs::copy(migration_fixture("v5_empty.sqlite"), &dest).expect("copy v5 fixture");
+    std::fs::copy(migration_fixture("schema5_empty.sqlite"), &dest).expect("copy schema5 fixture");
     let store =
-        IndexStore::open(temp.path(), Some(&dest)).expect("v5 fixture must open and migrate");
+        IndexStore::open(temp.path(), Some(&dest)).expect("schema5 fixture must open and migrate");
     let version: i64 = store
         .connection()
         .query_row("PRAGMA user_version", [], |r| r.get(0))
@@ -176,10 +176,11 @@ fn committed_v5_sqlite_migrates_to_current_schema() {
 
 /// ghiw.4: newer-than-supported user_version fails closed (no panic).
 #[test]
-fn committed_v99_sqlite_is_rejected_without_panic() {
+fn committed_schema99_sqlite_is_rejected_without_panic() {
     let temp = TempDir::new().unwrap();
     let dest = temp.path().join("index.db");
-    std::fs::copy(migration_fixture("v99_unsupported.sqlite"), &dest).expect("copy v99 fixture");
+    std::fs::copy(migration_fixture("schema99_unsupported.sqlite"), &dest)
+        .expect("copy schema99 fixture");
     match IndexStore::open(temp.path(), Some(&dest)) {
         Ok(_) => panic!("newer schema must fail closed"),
         Err(err) => {

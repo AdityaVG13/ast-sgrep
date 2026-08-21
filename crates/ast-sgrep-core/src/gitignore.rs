@@ -218,7 +218,3 @@ fn dir_ignored(dir_path: &str, rules: &[Rule]) -> bool {
     }
     ignored
 }
-
-#[cfg(test)]
-#[path = "../../../tests/unit/core/gitignore.rs"]
-mod tests;

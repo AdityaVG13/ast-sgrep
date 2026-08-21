@@ -11,7 +11,8 @@ use serde_json::{json, Value};
 use std::collections::HashSet;
 use std::io::Write;
 use std::path::{Component, Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::atomic::AtomicBool;
+use std::sync::{Arc, Mutex};
 
 use crate::tools::{call_tool, CallError};
 
@@ -65,6 +66,21 @@ pub struct CodeModeSession {
     /// Soft budget: number of index-touching tool calls this session.
     calls: usize,
     pub max_calls: usize,
+    /// Cooperative cancel for the in-flight `index_repo` walk/prepare.
+    cancel: Option<Arc<AtomicBool>>,
+}
+
+fn interactive_index_threads() -> usize {
+    std::env::var("ASGREP_INDEX_THREADS")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or_else(|| {
+            // Cancel polling exists, so interactive index can use the host width.
+            std::thread::available_parallelism()
+                .map(std::num::NonZeroUsize::get)
+                .unwrap_or(4)
+        })
 }
 
 impl CodeModeSession {
@@ -74,7 +90,12 @@ impl CodeModeSession {
             searcher_cache: Mutex::new(None),
             calls: 0,
             max_calls: 64,
+            cancel: None,
         }
+    }
+
+    pub fn set_cancel(&mut self, cancel: Option<Arc<AtomicBool>>) {
+        self.cancel = cancel;
     }
 
     pub fn from_env() -> Self {
@@ -322,6 +343,10 @@ impl CodeModeSession {
             embed_backend: EmbedBackend::Auto,
             ..IndexOptions::default()
         })?;
+        if let Some(cancel) = &self.cancel {
+            indexer.set_cancel(Arc::clone(cancel));
+        }
+        indexer.set_thread_limit(interactive_index_threads());
         // Bulk SQLite may commit before sidecar rebuild; invalidate on Ok and Err.
         let result: anyhow::Result<Value> = (|| {
             if let Some(paths) = paths {
@@ -355,14 +380,6 @@ impl CodeModeSession {
         })();
         self.invalidate_searcher_cache();
         result
-    }
-
-    #[cfg(test)]
-    fn searcher_cache_occupied(&self) -> bool {
-        self.searcher_cache
-            .lock()
-            .map(|g| g.is_some())
-            .unwrap_or(false)
     }
 }
 
@@ -490,11 +507,3 @@ fn incremental_paths(args: &Value, root: &Path) -> anyhow::Result<Option<Vec<Pat
     }
     Ok(Some(paths))
 }
-
-#[cfg(test)]
-#[path = "../../../tests/unit/codemode/session__index_err_cache_tests.rs"]
-mod index_err_cache_tests;
-
-#[cfg(test)]
-#[path = "../../../tests/unit/codemode/session__root_sandbox_tests.rs"]
-mod root_sandbox_tests;

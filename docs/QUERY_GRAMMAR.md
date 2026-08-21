@@ -6,8 +6,8 @@ input is hybrid retrieval; one leading mode prefix selects a single channel.
 One layer above the parser, `Searcher::search` recognizes exactly one
 two-channel conjunction form; see "Two-channel conjunction" below.
 
-Clause IDs **QG-xxx** (ghiw.2). Tests: `tests/unit/core/query.rs` (lib
-`query::tests`) and `tests/core/properties.rs` (`parse_never_panics`). Score is
+Clause IDs **QG-xxx** (ghiw.2). Parser and conjunction behavior live in
+`tests/core/conjunction_queries.rs` and `tests/core/parity.rs`. Score is
 **TBD** until a full conformance run (ghiw.5). Do not quote MUST% from this
 file.
 
@@ -110,8 +110,7 @@ imports: rusqlite AND semantic:"parameterized query"
 defs:handle AND NOT callers:test_
 ```
 
-Tests: `tests/unit/core/search__conjunction.rs` and
-`tests/core/conjunction_queries.rs`.
+Tests: `tests/core/conjunction_queries.rs`.
 
 ## What is not supported
 
@@ -125,4 +124,4 @@ Tests: `tests/unit/core/search__conjunction.rs` and
 - [How it works](how-it-works.md) — hybrid ranking overview
 - [Semantic search](semantic-search.md) — embed backends
 - [Structural patterns](../README.md) — pattern examples in the main README
-- [COVERAGE](validation/COVERAGE.md) — clause family status
+- [DISCREPANCIES](validation/DISCREPANCIES.md) — registered intentional divergences

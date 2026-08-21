@@ -7,8 +7,8 @@ use ast_sgrep_core::scip::{load_scip_index, ScipLoad, SCIP_CHANNEL};
 use ast_sgrep_core::search::DegradedChannel;
 use ast_sgrep_core::skip::should_skip_dir;
 use ast_sgrep_core::{
-    canonicalize_affected_path, index_db_path, EmbedBackend, IndexOptions, IndexStats, Indexer,
-    SearchOptions, MAX_INCREMENTAL_PATHS,
+    canonicalize_affected_path, index_db_path, EmbedBackend, IndexOptions, IndexStats, IndexStore,
+    Indexer, SearchOptions, MAX_INCREMENTAL_PATHS,
 };
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -55,6 +55,50 @@ pub(crate) fn ensure_nonempty_index(root: &Path, file_count: usize) -> anyhow::R
         );
     }
     Ok(())
+}
+
+/// Index an empty checkout, or incrementally refresh a non-empty one.
+/// Returns true when the caller must reopen the store/searcher.
+pub(crate) fn ensure_fresh_index(
+    root: &Path,
+    cli: &Cli,
+    file_count: usize,
+) -> anyhow::Result<bool> {
+    if cli.no_auto_index {
+        ensure_nonempty_index(root, file_count)?;
+        return Ok(false);
+    }
+    let empty = file_count == 0;
+    if empty && !cli.search_machine_output() {
+        eprintln!("asgrep: indexing {} ...", root.display());
+    }
+    let mut indexer = open_indexer(root, cli)?;
+    let stats = indexer
+        .index_all()
+        .with_context(|| format!("auto-index failed for {}", root.display()))?;
+    let mutated = empty || stats.mutated();
+    if mutated && !empty && !cli.search_machine_output() {
+        eprintln!("asgrep: refreshed index for {}", root.display());
+    }
+    Ok(mutated)
+}
+
+pub(crate) fn open_indexed_store(root: &Path, cli: &Cli) -> anyhow::Result<IndexStore> {
+    let open = || {
+        let (_, index_path) = resolve_root_index(cli, root);
+        IndexStore::open_with_durability(
+            root,
+            index_path.as_deref(),
+            cli.durability.unwrap_or_default(),
+        )
+        .context("failed to open index")
+    };
+    let store = open()?;
+    if ensure_fresh_index(root, cli, store.status()?.file_count)? {
+        open()
+    } else {
+        Ok(store)
+    }
 }
 
 pub(crate) fn open_indexer(root: &Path, cli: &Cli) -> anyhow::Result<Indexer> {
@@ -433,17 +477,23 @@ pub(crate) fn print_status_command(cli: &Cli, root: &Path) -> anyhow::Result<()>
 
 pub(crate) fn open_searcher(root: &Path, cli: &Cli) -> anyhow::Result<ast_sgrep_core::Searcher> {
     let root = ensure_existing_root(root, cli)?;
-    let opts = search_options(&root, cli);
+    let searcher = open_searcher_raw(&root, cli)?;
+    if ensure_fresh_index(&root, cli, searcher.store().status()?.file_count)? {
+        return open_searcher_raw(&root, cli);
+    }
+    Ok(searcher)
+}
+
+fn open_searcher_raw(root: &Path, cli: &Cli) -> anyhow::Result<ast_sgrep_core::Searcher> {
+    let opts = search_options(root, cli);
     let db = index_db_display(&opts.root, opts.index_path.as_deref());
-    let searcher = ast_sgrep_core::Searcher::new(opts).with_context(|| {
+    ast_sgrep_core::Searcher::new(opts).with_context(|| {
         format!(
             "failed to open index at {} (root {})",
             db.display(),
             root.display()
         )
-    })?;
-    ensure_nonempty_index(&root, searcher.store().status()?.file_count)?;
-    Ok(searcher)
+    })
 }
 
 pub(crate) fn search_options(root: &Path, cli: &Cli) -> SearchOptions {
@@ -461,13 +511,10 @@ pub(crate) fn search_options(root: &Path, cli: &Cli) -> SearchOptions {
         ann_probes: t.ann_probes,
         use_rerank: t.rerank,
         rerank_top_k: t.rerank_top_k.clamp(1, ast_sgrep_core::MAX_OUTPUT_RESULTS),
+        file_filter: t.file_filter,
         ..SearchOptions::default()
     };
     // Exclusive collapse: Neural > Semantic > Auto.
     opts.set_embed_backend(EmbedBackend::from_flags(t.neural_embed, t.semantic_only));
     opts
 }
-
-#[cfg(test)]
-#[path = "../../../tests/unit/cli/index_cmd.rs"]
-mod tests;

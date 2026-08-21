@@ -391,16 +391,16 @@ fn fixture_vectors() -> (usize, Vec<f32>, [u8; 32]) {
 
 /// ghiw.4: committed VERSION=2 frame + reject samples (wrong magic / truncated).
 #[test]
-fn committed_v2_frame_opens_and_reject_samples_fail_closed() {
+fn committed_ivf_frame_opens_and_reject_samples_fail_closed() {
     let (dim, vectors, fingerprint) = fixture_vectors();
-    let good = ivf_fixture("good_v2.ivf");
+    let good = ivf_fixture("good.ivf");
     let bad_magic = ivf_fixture("bad_magic.ivf");
     let truncated = ivf_fixture("truncated.ivf");
     if updating_goldens() {
         std::fs::create_dir_all(good.parent().expect("ivf dir")).expect("create ivf dir");
         let index = SemanticAnnIndex::build_from_flat(&vectors, dim);
-        save_semantic_ivf(&good, fingerprint, dim, &vectors, &index).expect("write good_v2");
-        let bytes = std::fs::read(&good).expect("read good_v2");
+        save_semantic_ivf(&good, fingerprint, dim, &vectors, &index).expect("write good.ivf");
+        let bytes = std::fs::read(&good).expect("read good.ivf");
         let mut flipped = bytes.clone();
         flipped[0] ^= 0xff;
         std::fs::write(&bad_magic, flipped).expect("write bad_magic");
@@ -409,8 +409,8 @@ fn committed_v2_frame_opens_and_reject_samples_fail_closed() {
         return;
     }
     let loaded = load_semantic_ivf(&good, fingerprint)
-        .expect("open good_v2")
-        .expect("good v2 frame");
+        .expect("open good.ivf")
+        .expect("good IVF frame");
     assert_eq!(loaded.dim, dim);
     assert_eq!(loaded.vectors(), vectors);
     assert!(

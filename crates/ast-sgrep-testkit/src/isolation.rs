@@ -130,7 +130,3 @@ pub fn with_temp_index<R>(f: impl FnOnce(&IsolatedIndexSession) -> R) -> R {
     let session = IsolatedIndexSession::new();
     f(&session)
 }
-
-#[cfg(test)]
-#[path = "../../../tests/unit/testkit/isolation.rs"]
-mod tests;

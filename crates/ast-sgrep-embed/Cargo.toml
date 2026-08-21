@@ -44,7 +44,3 @@ fastembed = { version = "5", optional = true, default-features = false, features
 ort = { version = "=2.0.0-rc.12", optional = true, default-features = false, features = [
     "coreml",
 ] }
-
-[[example]]
-name = "bench_neural"
-required-features = ["neural-embed"]

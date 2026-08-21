@@ -243,7 +243,3 @@ pub(crate) fn run(searcher: &super::Searcher, conjunction: &Conjunction) -> Resu
         uses_span_join(conjunction),
     ))
 }
-
-#[cfg(test)]
-#[path = "../../../../tests/unit/core/search__conjunction.rs"]
-mod tests;

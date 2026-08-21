@@ -14,7 +14,7 @@ Part of `ast-sgrep-iw8`.
 
 ## 2026-08-05 release-state run (self corpus)
 
-**Status: `reproducible-in-tree`.** `scripts/run-benchmarks.sh` reproduces
+**Status: `reproducible-in-tree`.** `asgrep bench` reproduces
 these rows. This section is **not** covered by any file-level UNREPRODUCIBLE
 banner. Quality MRR fingerprints remain in [`baselines.md`](baselines.md).
 
@@ -148,7 +148,8 @@ and `results/<UTC>/speed-headtohead` are not in this tree. Truncated
 To regenerate the **2026-08-05** self-corpus rows only:
 
 ```bash
-bash scripts/run-benchmarks.sh
+cargo build --release -p ast-sgrep-cli
+./target/release/asgrep --json bench . --suite self --fixture self --iterations 5
 ```
 
 ## Results

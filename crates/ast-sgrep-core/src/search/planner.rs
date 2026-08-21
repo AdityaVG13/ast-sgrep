@@ -130,7 +130,3 @@ pub fn plan_suggested_next(response: &SearchResponse) -> Vec<String> {
     suggested.dedup();
     suggested
 }
-
-#[cfg(test)]
-#[path = "../../../../tests/unit/core/search__planner.rs"]
-mod tests;

@@ -1,6 +1,6 @@
 {
   "name": "pi-ast-sgrep",
-  "version": "2.0.0",
+  "version": "2.0.2",
   "description": "Native Code Mode, structural, graph, and semantic code search for Pi",
   "type": "module",
   "license": "MIT",
@@ -53,7 +53,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "build:native": "cargo build -p ast-sgrep-codemode-napi --release && node ./scripts/copy-native.mjs",
-    "test": "ASGREP_CODEMODE_BACKEND=cli node --import tsx --test ../../../tests/pi/extension/code-mode.test.ts ../../../tests/pi/extension/codemode.test.ts ../../../tests/pi/extension/commands.test.ts ../../../tests/pi/extension/present.test.ts ../../../tests/pi/extension/runtime.test.ts ../../../tests/pi/extension/security.test.ts ../../../tests/pi/extension/session-pool.test.ts ../../../tests/pi/extension/skill-workflow.test.ts ../../../tests/pi/extension/tools.test.ts",
+    "test": "ASGREP_CODEMODE_BACKEND=cli node --import tsx --test ../../../tests/pi/extension/code-mode.test.ts ../../../tests/pi/extension/codemode.test.ts ../../../tests/pi/extension/commands.test.ts ../../../tests/pi/extension/present.test.ts ../../../tests/pi/extension/runtime.test.ts ../../../tests/pi/extension/security.test.ts ../../../tests/pi/extension/session-pool.test.ts ../../../tests/pi/extension/skill-workflow.test.ts ../../../tests/pi/extension/sqlite.test.ts ../../../tests/pi/extension/tools.test.ts",
     "test:native": "node --import tsx --test ../../../tests/pi/extension/native-inprocess.test.ts",
     "test:all": "npm test && npm run test:native",
     "prepack": "npm run build"

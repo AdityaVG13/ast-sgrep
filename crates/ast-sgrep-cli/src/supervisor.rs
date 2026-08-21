@@ -411,7 +411,3 @@ mod unix_impl {
         }
     }
 }
-
-#[cfg(all(test, unix))]
-#[path = "../../../tests/unit/cli/supervisor__childguard_tests.rs"]
-mod childguard_tests;

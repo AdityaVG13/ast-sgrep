@@ -1,3 +1,4 @@
+[CHANGELOG.md#C07C]
 # Changelog
 
 All notable changes to **ast-sgrep** — hybrid code search that understands intent (lexical FTS + AST graph + offline semantic ranking).
@@ -8,10 +9,24 @@ This changelog follows [Keep a Changelog](https://keepachangelog.com/) conventio
 
 ## Unreleased
 
+### Fixed
+
+- `pi-ast-sgrep` no longer imports `node:sqlite` at load time, so Pi/OMP/ZMP can boot under Bun via `bun:sqlite`.
+- `asgrep search` indexes an empty checkout on first use, and incrementally refreshes a non-empty index, instead of returning stale or empty hits. Pass `--no-auto-index` to keep the old fail-closed empty-index error and skip refresh.
+- `--lang` aliases include every indexed source extension (`ts`, `h`, `hpp`, `py`, `rs`, …) so SQL filters match stored language ids.
+
+### Changed
+
+- GitHub Actions `CI` no longer runs on `pull_request`; dispatch it from the Actions tab. Other workflows were already `workflow_dispatch` only.
+- Repository hygiene: drop campaign scripts and process docs; keep only clone-required `scripts/` (`rustc-capped`, `cpu-limit-exec.py`, `verify-forbid-soundness`).
+- Keep search, index, and Pi behavior tests under `tests/`. Drop campaign fuzz, benches, keep-gates, process suites, and crate-source `#[cfg(test)]` stubs.
+
 ## Version Timeline
 
 | Version | Date | Summary |
 |---------|------|---------|
+| [v2.0.2](#v202-2026-08-16) | 2026-08-16 | Pi package: first search no longer full-walks a ready index; cancel stops in-flight index |
+| [v2.0.1](#v201-2026-08-16) | 2026-08-16 | Pi package: truncate asgrep TUI chrome so long queries no longer crash Pi |
 | [v2.0.0](#v200-2026-08-15) | 2026-08-15 | Local-first major: five PRs (#27, #29–#32). Remote embed APIs removed; critic, conjunction, SCIP, Pi results |
 | [v1.4.0](#v140-2026-08-06) | 2026-08-06 | 7-PR release: Code Mode (PTC), 13-language pattern surface, search/ranking correctness, LSP symbol fixes, watch freshness, durability hardening, quality gates + anti-bloat |
 | [v1.3.2](https://github.com/AdityaVG13/ast-sgrep/releases/tag/v1.3.2) | 2026-07-23 | **The Pi Package Update** — "Out of the Alpha and into the Light" |
@@ -19,6 +34,26 @@ This changelog follows [Keep a Changelog](https://keepachangelog.com/) conventio
 | [v1.1.0-alpha.1](https://github.com/AdityaVG13/ast-sgrep/tree/v1.1.0-alpha.1) | 2026-07-17 | Pi npm bootstrap, SSH-signed tag verification |
 | [v1.1.0-alpha](https://github.com/AdityaVG13/ast-sgrep/releases/tag/v1.1.0-alpha) | 2026-07-12 | FTS per-file delete hardening |
 | [v1.0.0-alpha](https://github.com/AdityaVG13/ast-sgrep/releases/tag/v1.0.0-alpha) | 2026-07-11 | First alpha |
+
+---
+
+## v2.0.2 (2026-08-16)
+
+`pi-ast-sgrep` 2.0.2. Native CLI, launcher, and platform packages stay at 2.0.0.
+
+### Fixed
+
+- Pi first search no longer walks a ready, clean index. The refresh interval re-checks status instead of hashing the tree.
+- Last cancelled search waiter aborts the shared in-flight index so workers cannot keep running after Pi moves on.
+- Incremental `index_all` skips unchanged files by stored mtime before read/hash. Code Mode indexing uses host parallelism by default (`ASGREP_INDEX_THREADS` still caps). Native mtime skip and cancel polling land in the next family rebuild; this patch ships the Pi freshness coordinator immediately.
+
+## v2.0.1 (2026-08-16)
+
+`pi-ast-sgrep` 2.0.1. Native CLI, launcher, and platform packages stay at 2.0.0.
+
+### Fixed
+
+- Pi TUI no longer exits when asgrep renders a long search query. `AsgrepText.render()` now truncates to the terminal width.
 
 ---
 

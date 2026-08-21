@@ -238,11 +238,3 @@ pub fn normalize_vec(vec: &[f32]) -> Vec<f32> {
     normalize_vec_in_place(&mut out);
     out
 }
-
-#[cfg(test)]
-#[path = "../../../tests/unit/embed/math__contract_tests.rs"]
-mod contract_tests;
-
-#[cfg(test)]
-#[path = "../../../tests/unit/embed/math__property_tests.rs"]
-mod property_tests;

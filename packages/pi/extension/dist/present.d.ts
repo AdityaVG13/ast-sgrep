@@ -45,6 +45,9 @@ export declare function formatSearchResult(response: EnvelopeLike, meta: {
 }, theme?: PresentTheme): string;
 export declare function formatStatusResult(response: EnvelopeLike, theme?: PresentTheme): string;
 export declare function formatIndexResult(command: string, response: EnvelopeLike, theme?: PresentTheme): string;
+/** Local stand-in so we do not take a pi-tui dependency. Over-counts wide glyphs rather than under-count. */
+export declare function visibleWidth(text: string): number;
+export declare function truncateToWidth(text: string, maxWidth: number, ellipsis?: string): string;
 export declare function formatCodemodeResult(value: unknown, meta?: {
     stats?: {
         calls: number;
@@ -62,6 +65,6 @@ export declare class AsgrepText {
     constructor(text?: string);
     setText(text: string): void;
     invalidate(): void;
-    render(_width: number): string[];
+    render(width: number): string[];
 }
 export declare function presentText(formatted: string, last: unknown): AsgrepText;

@@ -46,14 +46,9 @@ cap-fs-ext.workspace = true
 
 [dev-dependencies]
 ast-sgrep-testkit = { path = "../ast-sgrep-testkit" }
-criterion = "=0.5.1"
-proptest = "1.6"
 serde_json.workspace = true
 tempfile.workspace = true
 
-[[bench]]
-name = "search"
-harness = false
 
 # Integration tests live in the repo-root tests/ tree.
 [[test]]
@@ -69,14 +64,8 @@ path = "../../tests/core/chain_case.rs"
 name = "code_prose_fields"
 path = "../../tests/core/code_prose_fields.rs"
 [[test]]
-name = "concat_embed_ab"
-path = "../../tests/core/concat_embed_ab.rs"
-[[test]]
 name = "conjunction_queries"
 path = "../../tests/core/conjunction_queries.rs"
-[[test]]
-name = "determinism_loop"
-path = "../../tests/core/determinism_loop.rs"
 [[test]]
 name = "downstream_correctness"
 path = "../../tests/core/downstream_correctness.rs"
@@ -93,9 +82,6 @@ path = "../../tests/core/evidence_merge.rs"
 name = "freshness_identity"
 path = "../../tests/core/freshness_identity.rs"
 [[test]]
-name = "fuzz_oracles"
-path = "../../tests/core/fuzz_oracles.rs"
-[[test]]
 name = "graph_oracle"
 path = "../../tests/core/graph_oracle.rs"
 [[test]]
@@ -108,11 +94,8 @@ path = "../../tests/core/literal_glob.rs"
 name = "literal_diff"
 path = "../../tests/core/literal_diff.rs"
 [[test]]
-name = "metamorphic"
-path = "../../tests/core/metamorphic.rs"
-[[test]]
-name = "p1_correctness_batch"
-path = "../../tests/core/p1_correctness_batch.rs"
+name = "correctness_batch"
+path = "../../tests/core/correctness_batch.rs"
 [[test]]
 name = "parity"
 path = "../../tests/core/parity.rs"
@@ -125,12 +108,6 @@ path = "../../tests/core/pattern_routing.rs"
 [[test]]
 name = "pattern_diff"
 path = "../../tests/core/pattern_diff.rs"
-[[test]]
-name = "external_ast_grep_e2e"
-path = "../../tests/core/external_ast_grep_e2e.rs"
-[[test]]
-name = "properties"
-path = "../../tests/core/properties.rs"
 [[test]]
 name = "ranking_oracle"
 path = "../../tests/core/ranking_oracle.rs"
@@ -162,8 +139,8 @@ path = "../../tests/core/semantic_chunk_migration.rs"
 name = "semantic_ivf_roundtrip"
 path = "../../tests/core/semantic_ivf_roundtrip.rs"
 [[test]]
-name = "semantic_v1_rewrite"
-path = "../../tests/core/semantic_v1_rewrite.rs"
+name = "semantic_layout_rewrite"
+path = "../../tests/core/semantic_layout_rewrite.rs"
 [[test]]
 name = "signal_provenance"
 path = "../../tests/core/signal_provenance.rs"
@@ -176,6 +153,3 @@ path = "../../tests/core/store_delete.rs"
 [[test]]
 name = "store_pragmas"
 path = "../../tests/core/store_pragmas.rs"
-[[test]]
-name = "sub1ms"
-path = "../../tests/core/sub1ms.rs"

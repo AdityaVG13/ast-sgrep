@@ -14,9 +14,6 @@ members = [
     "crates/ast-sgrep-codemode-napi",
 ]
 default-members = ["crates/ast-sgrep-cli"]
-# fuzz/ is excluded: cargo-fuzz targets may need `unsafe` and live outside the
-# product forbid-soundness gate (see SECURITY.md). Still covered by bounded-fuzz CI.
-exclude = ["fuzz"]
 
 [workspace.package]
 version = "2.0.0"
@@ -47,7 +44,6 @@ blake3 = "1.5"
 memmap2 = "0.9"
 bytemuck = "1.21"
 clap = { version = "=4.5.23", features = ["derive", "env"] }
-criterion = "=0.5.1"
 idna = "=1.0.3"
 idna_adapter = "=1.0.0"
 rusqlite = { version = "0.40", features = ["bundled", "fallible_uint"] }

@@ -84,6 +84,97 @@ export function formatIndexResult(command, response, theme) {
     const tail = count === undefined ? "done" : `${count} file${count === 1 ? "" : "s"}`;
     return header(theme, command, [tail]);
 }
+function ansiLengthAt(text, index) {
+    if (text.charCodeAt(index) !== 0x1b)
+        return 0;
+    const next = text[index + 1];
+    if (next === "[") {
+        let cursor = index + 2;
+        while (cursor < text.length) {
+            const code = text.charCodeAt(cursor);
+            if (code >= 0x40 && code <= 0x7e)
+                return cursor - index + 1;
+            cursor += 1;
+        }
+        return text.length - index;
+    }
+    if (next === "]") {
+        let cursor = index + 2;
+        while (cursor < text.length) {
+            if (text.charCodeAt(cursor) === 0x07)
+                return cursor - index + 1;
+            if (text.charCodeAt(cursor) === 0x1b && text[cursor + 1] === "\\")
+                return cursor - index + 2;
+            cursor += 1;
+        }
+        return text.length - index;
+    }
+    if (next === "P" || next === "X" || next === "^" || next === "_") {
+        let cursor = index + 2;
+        while (cursor < text.length) {
+            if (text.charCodeAt(cursor) === 0x1b && text[cursor + 1] === "\\")
+                return cursor - index + 2;
+            cursor += 1;
+        }
+        return text.length - index;
+    }
+    return Math.min(2, text.length - index);
+}
+function cellWidthAt(text, index) {
+    const code = text.charCodeAt(index);
+    if (code === 0x09)
+        return { width: 3, length: 1 };
+    if (code >= 0xd800 && code <= 0xdbff)
+        return { width: 2, length: 2 };
+    if (code <= 0x1f || (code >= 0x7f && code <= 0x9f))
+        return { width: 0, length: 1 };
+    if (code <= 0x7e)
+        return { width: 1, length: 1 };
+    return { width: 2, length: 1 };
+}
+/** Local stand-in so we do not take a pi-tui dependency. Over-counts wide glyphs rather than under-count. */
+export function visibleWidth(text) {
+    let width = 0;
+    for (let index = 0; index < text.length;) {
+        const ansi = ansiLengthAt(text, index);
+        if (ansi > 0) {
+            index += ansi;
+            continue;
+        }
+        const cell = cellWidthAt(text, index);
+        width += cell.width;
+        index += cell.length;
+    }
+    return width;
+}
+export function truncateToWidth(text, maxWidth, ellipsis = "...") {
+    const limit = Math.max(0, maxWidth);
+    if (limit <= 0)
+        return "";
+    if (visibleWidth(text) <= limit)
+        return text;
+    const ellipsisWidth = visibleWidth(ellipsis);
+    if (ellipsisWidth >= limit)
+        return ellipsis.slice(0, limit);
+    const budget = limit - ellipsisWidth;
+    let kept = "";
+    let width = 0;
+    for (let index = 0; index < text.length;) {
+        const ansi = ansiLengthAt(text, index);
+        if (ansi > 0) {
+            kept += text.slice(index, index + ansi);
+            index += ansi;
+            continue;
+        }
+        const cell = cellWidthAt(text, index);
+        if (width + cell.width > budget)
+            break;
+        kept += text.slice(index, index + cell.length);
+        width += cell.width;
+        index += cell.length;
+    }
+    return `${kept}${ellipsis}`;
+}
 function compactValue(value) {
     if (value === null || value === undefined)
         return String(value);
@@ -149,8 +240,11 @@ export class AsgrepText {
         this.#text = text;
     }
     invalidate() { }
-    render(_width) {
-        return this.#text.length === 0 ? [""] : this.#text.split("\n");
+    render(width) {
+        const maxWidth = Math.max(1, width);
+        if (this.#text.length === 0)
+            return [""];
+        return this.#text.split("\n").map((line) => truncateToWidth(line, maxWidth));
     }
 }
 export function presentText(formatted, last) {

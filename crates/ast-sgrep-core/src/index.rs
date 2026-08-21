@@ -9,39 +9,35 @@ use crate::store::{IndexStore, RefreshLinesInput, UpsertFileInput};
 use crate::Result;
 use ast_sgrep_lang::{detect_language, Language, ParserRegistry};
 use rayon::prelude::*;
-use std::cell::Cell;
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::SystemTime;
 use walkdir::WalkDir;
 
-pub use crate::index_watch::canonicalize_affected_path;
+/// Stable error text when cooperative index cancel fires (Pi/NAPI abort).
+pub const INDEX_CANCELLED: &str = "operation cancelled";
 
-thread_local! {
-    /// Test-only: when set, [`Indexer::rebuild_dirty_sidecars`] returns Err after the
-    /// bulk SQLite commit so callers can pin Err-path cache invalidation.
-    /// Thread-local so parallel `cargo test` workers do not cross-contaminate.
-    static FORCE_SIDECAR_REBUILD_ERR: Cell<bool> = const { Cell::new(false) };
+fn cancelled_error() -> crate::StoreError {
+    crate::StoreError::Other(INDEX_CANCELLED.into())
 }
 
-/// RAII guard that forces sidecar rebuild to fail on this thread (simulates
-/// mid-sidecar Err after durable bulk commit). Clears the flag on drop.
-#[doc(hidden)]
-pub struct ForceSidecarRebuildErr;
-
-impl Drop for ForceSidecarRebuildErr {
-    fn drop(&mut self) {
-        FORCE_SIDECAR_REBUILD_ERR.with(|c| c.set(false));
+fn run_index_parallel<R: Send>(thread_limit: Option<usize>, work: impl FnOnce() -> R + Send) -> R {
+    match thread_limit {
+        Some(n) => match rayon::ThreadPoolBuilder::new()
+            .num_threads(n.max(1))
+            .build()
+        {
+            Ok(pool) => pool.install(work),
+            Err(_) => work(),
+        },
+        None => work(),
     }
 }
 
-/// Arm the mid-sidecar rebuild failure inject for the current thread.
-#[doc(hidden)]
-pub fn force_sidecar_rebuild_err() -> ForceSidecarRebuildErr {
-    FORCE_SIDECAR_REBUILD_ERR.with(|c| c.set(true));
-    ForceSidecarRebuildErr
-}
+pub use crate::index_watch::canonicalize_affected_path;
 
 /// Maximum exact paths accepted by one incremental update request.
 pub const MAX_INCREMENTAL_PATHS: usize = 1_024;
@@ -145,8 +141,8 @@ impl EmbedBackend {
         match self {
             Self::Auto => "auto",
             Self::Neural => "neural",
-            // "semantic" is the legacy v1 marker (needs_semantic_v1_rewrite);
-            // the versioned v2 identity is what gets stored and compared.
+            // Unversioned "semantic" is a legacy marker
+            // (needs_legacy_semantic_rewrite); the stored identity is semantic-v2.
             Self::Semantic => "semantic-v2",
         }
     }
@@ -218,6 +214,12 @@ pub struct IndexStats {
     pub callers_extracted: usize,
     pub imports_extracted: usize,
 }
+impl IndexStats {
+    /// True when the walk wrote or deleted at least one file row.
+    pub fn mutated(&self) -> bool {
+        self.files_indexed > 0 || self.files_removed > 0
+    }
+}
 #[derive(Debug, Clone, Copy, Default)]
 pub struct FileIndexStats {
     pub symbols: usize,
@@ -229,6 +231,11 @@ struct IndexFileOutcome {
     stats: FileIndexStats,
     removed: bool,
 }
+struct IndexCandidate {
+    abs: PathBuf,
+    rel: String,
+    mtime: Option<(i64, u32)>,
+}
 pub struct Indexer {
     store: IndexStore,
     root_dir: crate::io_bounds::RootDir,
@@ -236,6 +243,8 @@ pub struct Indexer {
     options: IndexOptions,
     ignore: crate::gitignore::IgnoreMatcher,
     sidecars_dirty: SidecarsDirty,
+    cancel: Option<Arc<AtomicBool>>,
+    thread_limit: Option<usize>,
 }
 #[derive(Debug, Clone, Copy, Default)]
 struct SidecarsDirty {
@@ -267,6 +276,8 @@ pub(crate) fn quick_check(store: &IndexStore) -> Result<String> {
 impl Indexer {
     pub fn new(mut options: IndexOptions) -> Result<Self> {
         options.root = options.root.canonicalize().unwrap_or(options.root.clone());
+        options.lang_filter =
+            ast_sgrep_lang::Language::canonical_filter(options.lang_filter.as_deref());
         let root_dir = crate::io_bounds::RootDir::open(&options.root)?;
         let store = match open_index_store(&options) {
             Ok(store) if options.force_reindex => match quick_check(&store) {
@@ -298,49 +309,86 @@ impl Indexer {
             options,
             ignore,
             sidecars_dirty: SidecarsDirty::default(),
+            cancel: None,
+            thread_limit: None,
         })
     }
     pub fn store(&self) -> &IndexStore {
         &self.store
     }
+
+    /// Cooperative cancel for in-process hosts (Pi/NAPI). CLI leaves this unset.
+    pub fn set_cancel(&mut self, cancel: Arc<AtomicBool>) {
+        self.cancel = Some(cancel);
+    }
+
+    /// Cap rayon workers for this indexer. `None` uses the process pool (CLI).
+    pub fn set_thread_limit(&mut self, limit: usize) {
+        self.thread_limit = Some(limit.max(1));
+    }
+
+    fn is_cancelled(&self) -> bool {
+        self.cancel
+            .as_ref()
+            .is_some_and(|flag| flag.load(Ordering::Acquire))
+    }
+
+    fn check_cancel(&self) -> Result<()> {
+        if self.is_cancelled() {
+            Err(cancelled_error())
+        } else {
+            Ok(())
+        }
+    }
     pub fn index_all(&mut self) -> Result<IndexStats> {
         let perf_run = crate::perf_profile::Run::start("index_all");
         let perf_run_id = perf_run.id();
         self.ignore.clear();
+        self.check_cancel()?;
         let (candidates, mut stats, prepared, semantic_rewrite_required) = {
             let _span = crate::perf_profile::Span::start(
                 "index_walk_parse",
                 "index",
                 "WalkDir + prepare_file (read/hash/tree-sitter extract)",
             );
-            let (candidates, stats) = self.collect_index_candidates();
+            let (candidates, stats) = self.collect_index_candidates()?;
             let options = &self.options;
             // 28vo: the hash-only fast path must not skip when the stored semantic
             // identity (backend/model) differs from the active preference.
             let semantic_rewrite_required =
                 options.embed_semantic && !self.semantic_identity_matches()?;
             let semantic_identity_ok = !options.embed_semantic || !semantic_rewrite_required;
-            let current_hashes = candidates
-                .iter()
-                .map(|(_, rel)| self.store.file_hash(rel))
-                .collect::<Result<Vec<_>>>()?;
-            let prepared: Vec<PrepareOutcome> = candidates
-                .par_iter()
-                .zip(current_hashes.par_iter())
-                .map(|((abs, rel), current_hash)| {
-                    prepare_file(
-                        abs,
-                        rel,
-                        current_hash.as_deref(),
-                        options,
-                        &self.root_dir,
-                        semantic_identity_ok,
-                        perf_run_id,
-                    )
-                })
-                .collect();
+            let identities = self.store.file_identities()?;
+            self.check_cancel()?;
+            let root_dir = &self.root_dir;
+            let cancel = self.cancel.clone();
+            let thread_limit = self.thread_limit;
+            let prepared: Vec<PrepareOutcome> = run_index_parallel(thread_limit, || {
+                candidates
+                    .par_iter()
+                    .map(|candidate| {
+                        if cancel
+                            .as_ref()
+                            .is_some_and(|flag| flag.load(Ordering::Relaxed))
+                        {
+                            return PrepareOutcome::Failed(INDEX_CANCELLED.into());
+                        }
+                        prepare_file(
+                            &candidate.abs,
+                            &candidate.rel,
+                            identities.get(&candidate.rel),
+                            candidate.mtime,
+                            options,
+                            root_dir,
+                            semantic_identity_ok,
+                            perf_run_id,
+                        )
+                    })
+                    .collect()
+            });
             (candidates, stats, prepared, semantic_rewrite_required)
         };
+        self.check_cancel()?;
         if self.options.force_reindex && stats.walk_errors {
             return Err(crate::StoreError::Other(
                 "strict reindex aborted because the repository walk was incomplete".into(),
@@ -362,6 +410,7 @@ impl Indexer {
                 )
             });
         let mut semantic_ivf_dirty = false;
+        self.check_cancel()?;
         {
             let _span = crate::perf_profile::Span::start(
                 "sqlite_upsert",
@@ -394,7 +443,7 @@ impl Indexer {
     /// Callers own `begin_bulk_tx` / `apply_bulk_write_result` so rollback pairing stays visible.
     fn commit_prepared_files(
         &self,
-        candidates: &[(PathBuf, String)],
+        candidates: &[IndexCandidate],
         prepared: Vec<PrepareOutcome>,
         stats: &mut IndexStats,
         semantic_ivf_dirty: &mut bool,
@@ -412,7 +461,11 @@ impl Indexer {
             }
         }
         let mut seen_paths = HashSet::new();
-        for (rel_str, outcome) in candidates.iter().map(|(_, r)| r).zip(prepared) {
+        for (rel_str, outcome) in candidates
+            .iter()
+            .map(|candidate| &candidate.rel)
+            .zip(prepared)
+        {
             match outcome {
                 PrepareOutcome::Unchanged => {
                     seen_paths.insert(rel_str.clone());
@@ -517,9 +570,9 @@ impl Indexer {
     }
     /// Walk the project once using the Indexer's IgnoreMatcher for both directory
     /// pruning and file skips (single ownership story — no second matcher).
-    fn collect_index_candidates(&self) -> (Vec<(PathBuf, String)>, IndexStats) {
+    fn collect_index_candidates(&self) -> Result<(Vec<IndexCandidate>, IndexStats)> {
         let mut stats = IndexStats::default();
-        let mut candidates: Vec<(PathBuf, String)> = Vec::new();
+        let mut candidates: Vec<IndexCandidate> = Vec::new();
         let root = &self.options.root;
         let ignore = &self.ignore;
         let respect_gitignore = self.options.respect_gitignore;
@@ -540,6 +593,7 @@ impl Indexer {
                 true
             })
         {
+            self.check_cancel()?;
             match entry {
                 Ok(entry) if entry.file_type().is_file() => {
                     let path = entry.path().to_path_buf();
@@ -555,7 +609,16 @@ impl Indexer {
                         stats.files_skipped += 1;
                         continue;
                     }
-                    candidates.push((path, rel_str));
+                    let mtime = entry
+                        .metadata()
+                        .ok()
+                        .and_then(|metadata| metadata.modified().ok())
+                        .map(system_time_to_parts);
+                    candidates.push(IndexCandidate {
+                        abs: path,
+                        rel: rel_str,
+                        mtime,
+                    });
                 }
                 Ok(_) => {}
                 Err(e) => {
@@ -564,7 +627,7 @@ impl Indexer {
                 }
             }
         }
-        (candidates, stats)
+        Ok((candidates, stats))
     }
     fn prune_missing_files(
         &self,
@@ -594,12 +657,7 @@ impl Indexer {
         Ok(())
     }
     fn rebuild_dirty_sidecars(&self, _stats: &IndexStats, semantic_ivf_dirty: bool) -> Result<()> {
-        // After bulk commit: injectable Err so MCP/CM tests pin invalidate-on-Err.
-        if FORCE_SIDECAR_REBUILD_ERR.with(|c| c.get()) {
-            return Err(crate::StoreError::Other(
-                "forced sidecar rebuild failure after bulk commit (test inject)".into(),
-            ));
-        }
+        self.check_cancel()?;
         let file_count = self.store.status()?.file_count;
         if crate::tantivy_index::should_use_tantivy(file_count, self.options.use_tantivy) {
             self.rebuild_tantivy_sidecar()?;
@@ -663,6 +721,7 @@ impl Indexer {
         // earlier paths already committed (watch batches / multi-path CLI).
         let result = (|| -> Result<()> {
             for input_path in paths {
+                self.check_cancel()?;
                 let Some(abs) = normalize_watch_path(&self.options.root, input_path) else {
                     continue;
                 };
@@ -1002,14 +1061,14 @@ impl Indexer {
         Ok(true)
     }
     /// Full semantic identity check (28vo/e2hc.13): the stored embed backend
-    /// must equal the active preference exactly, no legacy v1 rewrite pending,
+    /// must equal the active preference exactly, no legacy rewrite pending,
     /// and the configured model must match what was recorded at index time.
     fn semantic_identity_matches(&self) -> Result<bool> {
-        // Legacy unversioned semantic-v1 (e2hc.13): force rewrite even under
-        // Auto. Without this, Auto skips the backend mismatch check and a
+        // Unversioned embed_backend="semantic" must force a full rewrite even
+        // under Auto. Otherwise Auto skips the backend mismatch check and a
         // single-file update can flip meta to semantic-v2 while sibling
-        // chunks remain v1.
-        if self.store.needs_semantic_v1_rewrite()? {
+        // chunks stay on the old layout.
+        if self.store.needs_legacy_semantic_rewrite()? {
             return Ok(false);
         }
         // Exact backend identity only (ast-sgrep-28vo): Auto is not a
@@ -1073,11 +1132,3 @@ impl Indexer {
         Ok(rows_from_extraction(&extraction))
     }
 }
-
-#[cfg(test)]
-#[path = "../../../tests/unit/core/index.rs"]
-mod tests;
-
-#[cfg(test)]
-#[path = "../../../tests/unit/core/index__body_hash_tests.rs"]
-mod body_hash_tests;

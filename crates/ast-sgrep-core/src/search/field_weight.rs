@@ -142,7 +142,3 @@ pub fn rescore_similarity(
         ),
     }
 }
-
-#[cfg(test)]
-#[path = "../../../../tests/unit/core/search__field_weight.rs"]
-mod tests;

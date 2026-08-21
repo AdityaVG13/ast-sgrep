@@ -54,28 +54,70 @@ impl Language {
             Language::Php,
         ]
     }
-    /// Parse a language id into a `Language`, accepting `Language::as_str` forms
-    /// and common aliases (including Title Case labels from external tools).
+
+    /// Indexed source extensions and the language they store as.
+    ///
+    /// Shared by [`Language::parse`] / `--lang` filters and [`detect_language`]
+    /// so an alias like `h` or `hpp` cannot drift from on-disk ids.
+    pub const SOURCE_EXTENSIONS: &[(&str, Language)] = &[
+        ("rs", Language::Rust),
+        ("ts", Language::TypeScript),
+        ("tsx", Language::TypeScript),
+        ("js", Language::JavaScript),
+        ("jsx", Language::JavaScript),
+        ("mjs", Language::JavaScript),
+        ("cjs", Language::JavaScript),
+        ("py", Language::Python),
+        ("pyi", Language::Python),
+        ("go", Language::Go),
+        ("java", Language::Java),
+        ("cs", Language::CSharp),
+        ("rb", Language::Ruby),
+        ("swift", Language::Swift),
+        ("c", Language::C),
+        ("h", Language::C),
+        ("cpp", Language::Cpp),
+        ("cc", Language::Cpp),
+        ("cxx", Language::Cpp),
+        ("hpp", Language::Cpp),
+        ("hxx", Language::Cpp),
+        ("hh", Language::Cpp),
+        ("ipp", Language::Cpp),
+        ("kt", Language::Kotlin),
+        ("kts", Language::Kotlin),
+        ("php", Language::Php),
+    ];
+
+    /// Language for a file extension (`ts`, `hpp`, `pyi`, …). Case-insensitive.
+    pub fn from_extension(ext: &str) -> Option<Language> {
+        let lower = ext.trim().to_ascii_lowercase();
+        Self::SOURCE_EXTENSIONS
+            .iter()
+            .find(|(candidate, _)| *candidate == lower)
+            .map(|(_, lang)| *lang)
+    }
+
+    /// Parse a language id into a `Language`, accepting `Language::as_str` forms,
+    /// indexed file extensions, and common name aliases (including Title Case).
     pub fn parse(raw: &str) -> Option<Language> {
         let trimmed = raw.trim();
         if trimmed.is_empty() {
             return None;
         }
         let lower = trimmed.to_ascii_lowercase();
+        if let Some(lang) = Self::from_extension(&lower) {
+            return Some(lang);
+        }
         match lower.as_str() {
-            "rust" | "rs" => Some(Language::Rust),
-            "typescript" | "ts" | "tsx" => Some(Language::TypeScript),
-            "javascript" | "js" | "jsx" | "mjs" | "cjs" => Some(Language::JavaScript),
-            "python" | "py" | "pyi" => Some(Language::Python),
-            "go" | "golang" => Some(Language::Go),
-            "java" => Some(Language::Java),
-            "csharp" | "c#" | "cs" | "c-sharp" => Some(Language::CSharp),
-            "ruby" | "rb" => Some(Language::Ruby),
-            "swift" => Some(Language::Swift),
-            "c" => Some(Language::C),
-            "cpp" | "c++" | "cc" | "cxx" => Some(Language::Cpp),
-            "kotlin" | "kt" | "kts" => Some(Language::Kotlin),
-            "php" => Some(Language::Php),
+            "rust" => Some(Language::Rust),
+            "typescript" => Some(Language::TypeScript),
+            "javascript" => Some(Language::JavaScript),
+            "python" => Some(Language::Python),
+            "golang" => Some(Language::Go),
+            "csharp" | "c#" | "c-sharp" => Some(Language::CSharp),
+            "ruby" => Some(Language::Ruby),
+            "c++" => Some(Language::Cpp),
+            "kotlin" => Some(Language::Kotlin),
             _ => None,
         }
     }
@@ -85,6 +127,18 @@ impl Language {
         Self::parse(raw)
             .map(|lang| lang.as_str().to_string())
             .unwrap_or_else(|| raw.trim().to_ascii_lowercase())
+    }
+
+    /// Canonical language id for index storage and SQL filters.
+    ///
+    /// Known aliases (`ts`, `hpp`, `py`, `rs`, `h`, …) map to [`Language::as_str`].
+    /// Blank input is no filter. Unknown labels are lowercased.
+    pub fn canonical_filter(raw: Option<&str>) -> Option<String> {
+        let trimmed = raw?.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+        Some(Self::normalize_id(trimmed))
     }
 }
 
@@ -142,24 +196,8 @@ pub struct ExtractionResult {
 }
 pub fn detect_language(path: &Path, content: Option<&str>) -> Option<Language> {
     if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-        let lang = match ext.to_lowercase().as_str() {
-            "rs" => Some(Language::Rust),
-            "ts" | "tsx" => Some(Language::TypeScript),
-            "js" | "jsx" | "mjs" | "cjs" => Some(Language::JavaScript),
-            "py" | "pyi" => Some(Language::Python),
-            "go" => Some(Language::Go),
-            "java" => Some(Language::Java),
-            "cs" => Some(Language::CSharp),
-            "rb" => Some(Language::Ruby),
-            "swift" => Some(Language::Swift),
-            "c" | "h" => Some(Language::C),
-            "cpp" | "cc" | "cxx" | "hpp" | "hxx" | "hh" | "ipp" => Some(Language::Cpp),
-            "kt" | "kts" => Some(Language::Kotlin),
-            "php" => Some(Language::Php),
-            _ => None,
-        };
-        if lang.is_some() {
-            return lang;
+        if let Some(lang) = Language::from_extension(ext) {
+            return Some(lang);
         }
     }
     let trimmed = content?.trim_start();
@@ -241,5 +279,91 @@ fn make_parser(lang: Language) -> Box<dyn LanguageParser> {
 }
 
 #[cfg(test)]
-#[path = "../../../tests/unit/lang/lib__language_id_tests.rs"]
-mod language_id_tests;
+mod canonical_filter_tests {
+    use super::{detect_language, Language};
+    use std::path::Path;
+
+    const NAME_ALIASES: &[(&str, &str)] = &[
+        ("rust", "rust"),
+        ("typescript", "typescript"),
+        ("javascript", "javascript"),
+        ("python", "python"),
+        ("golang", "go"),
+        ("csharp", "csharp"),
+        ("c#", "csharp"),
+        ("c-sharp", "csharp"),
+        ("ruby", "ruby"),
+        ("c++", "cpp"),
+        ("kotlin", "kotlin"),
+        ("TypeScript", "typescript"),
+    ];
+
+    #[test]
+    fn every_source_extension_canonicalizes_and_detects() {
+        for (ext, lang) in Language::SOURCE_EXTENSIONS {
+            assert_eq!(
+                Language::canonical_filter(Some(ext)).as_deref(),
+                Some(lang.as_str()),
+                "extension {ext}"
+            );
+            let rel = format!("n.{ext}");
+            let path = Path::new(&rel);
+            assert_eq!(
+                detect_language(path, None),
+                Some(*lang),
+                "detect_language({ext})"
+            );
+            assert_eq!(Language::from_extension(ext), Some(*lang));
+            assert_eq!(
+                Language::from_extension(&ext.to_ascii_uppercase()),
+                Some(*lang)
+            );
+        }
+    }
+
+    #[test]
+    fn stored_ids_and_name_aliases_parse() {
+        for lang in Language::all() {
+            assert_eq!(Language::parse(lang.as_str()), Some(*lang));
+        }
+        for (raw, stored) in NAME_ALIASES {
+            assert_eq!(
+                Language::canonical_filter(Some(raw)).as_deref(),
+                Some(*stored),
+                "alias {raw}"
+            );
+        }
+    }
+
+    #[test]
+    fn aliases_map_to_stored_ids() {
+        assert_eq!(
+            Language::canonical_filter(Some("ts")).as_deref(),
+            Some("typescript")
+        );
+        assert_eq!(
+            Language::canonical_filter(Some("hpp")).as_deref(),
+            Some("cpp")
+        );
+        assert_eq!(Language::canonical_filter(Some("h")).as_deref(), Some("c"));
+        assert_eq!(
+            Language::canonical_filter(Some("c#")).as_deref(),
+            Some("csharp")
+        );
+    }
+
+    #[test]
+    fn blank_is_no_filter() {
+        assert_eq!(Language::canonical_filter(None), None);
+        assert_eq!(Language::canonical_filter(Some("")), None);
+        assert_eq!(Language::canonical_filter(Some("  ")), None);
+    }
+
+    #[test]
+    fn unknown_labels_lowercase() {
+        assert_eq!(
+            Language::canonical_filter(Some("Fortran")).as_deref(),
+            Some("fortran")
+        );
+    }
+}

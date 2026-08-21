@@ -91,8 +91,11 @@ aborts the run's `AbortSignal` and terminates the disposable worker, so
 queued host calls, later bridge calls, and the JavaScript program cannot keep
 calling the pooled NAPI `Session` after timeout. Waiters that have not yet
 taken the session mutex return `operation cancelled` instead of blocking the
-pool. A single SQLite/native call that already holds the mutex may finish its
-current operation before observing cancellation; its late response is discarded.
+pool. Read/search calls that already hold the mutex may finish their current
+operation; `index_repo` polls the abort flag during walk/prepare and returns
+`operation cancelled` without committing. The Pi freshness coordinator also
+aborts that shared index when the last waiter cancels, so a timed-out search
+cannot leave rayon workers running.
 
 **Root jail (host duty):** `CodeModeSession` / NAPI tool `root` args are jailed
 under the configured session workspace the same way MCP jails under

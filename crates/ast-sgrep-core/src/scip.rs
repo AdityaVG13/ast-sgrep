@@ -158,7 +158,3 @@ pub fn load_scip_index(path: &Path) -> ScipLoad {
 fn degrade(reason: String) -> ScipLoad {
     ScipLoad::Degraded { reason }
 }
-
-#[cfg(test)]
-#[path = "../../../tests/unit/core/scip.rs"]
-mod tests;

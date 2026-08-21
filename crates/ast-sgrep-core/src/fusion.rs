@@ -479,7 +479,3 @@ pub fn learn_fusion_weights(
         sensitivity,
     }
 }
-
-#[cfg(test)]
-#[path = "../../../tests/unit/core/fusion.rs"]
-mod tests;

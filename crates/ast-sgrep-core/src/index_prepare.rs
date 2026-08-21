@@ -1,7 +1,6 @@
 //! Prepare / hash / extract-row helpers for indexing.
 //! Extracted from `index.rs` (EXP-007 / F-002 prepare/hash cluster). Leaf-ward of
-//! `Indexer`; watch-path helpers live in `index_watch` (EXP-008); FORCE_SIDECAR
-//! stays in `index` (F-003).
+//! `Indexer`; watch-path helpers live in `index_watch` (EXP-008).
 
 use crate::index::{split_content_lines, IndexOptions, SplitLines};
 use crate::store::{CallerRow, ImportRow, SymbolRow};
@@ -141,12 +140,21 @@ pub(crate) fn materialize_upsert(
 pub(crate) fn prepare_file(
     abs: &Path,
     rel: &str,
-    current_hash: Option<&str>,
+    stored: Option<&crate::store::FileIdentity>,
+    walk_mtime: Option<(i64, u32)>,
     options: &IndexOptions,
     root_dir: &crate::io_bounds::RootDir,
     semantic_identity_ok: bool,
     perf_run_id: Option<u64>,
 ) -> PrepareOutcome {
+    if !options.force_reindex && semantic_identity_ok {
+        if let (Some(stored), Some((secs, nanos))) = (stored, walk_mtime) {
+            if stored.mtime_secs == secs && stored.mtime_nanos == nanos {
+                return PrepareOutcome::Unchanged;
+            }
+        }
+    }
+    let current_hash = stored.map(|identity| identity.content_hash.as_str());
     let source =
         match root_dir.read_text_capped(Path::new(rel), crate::io_bounds::MAX_INDEX_FILE_BYTES) {
             Ok(source) => source,

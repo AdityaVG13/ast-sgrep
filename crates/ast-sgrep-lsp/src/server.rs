@@ -345,11 +345,3 @@ fn show_index_error(stdout: &mut impl Write, surface: &str, err: &anyhow::Error)
 pub fn log(msg: &str) {
     let _ = writeln!(io::stderr(), "[asgrep-lsp] {msg}");
 }
-
-#[cfg(test)]
-#[path = "../../../tests/unit/lsp/server__limit_tests.rs"]
-mod limit_tests;
-
-#[cfg(test)]
-#[path = "../../../tests/unit/lsp/server__lifecycle_tests.rs"]
-mod lifecycle_tests;

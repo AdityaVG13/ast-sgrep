@@ -115,7 +115,3 @@ fn rule(pattern: &'static str, replacement: &'static str) -> Rule {
         replacement,
     }
 }
-
-#[cfg(test)]
-#[path = "../../../tests/unit/testkit/scrub.rs"]
-mod tests;

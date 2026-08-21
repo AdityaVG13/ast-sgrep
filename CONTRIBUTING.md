@@ -21,9 +21,13 @@ cargo check --workspace -j1
 # Focused parity suite (index + defs/hybrid/chain on the real APIs)
 cargo test -p ast-sgrep-core --test parity -j1 -- --test-threads=1
 
-# CLI smoke
+# CLI smoke (search + auto-index)
+cargo test -p ast-sgrep-cli --test cli_smoke -j1 -- --test-threads=1
 cargo build --release -p ast-sgrep-cli -j1
 ./target/release/asgrep --help
+
+# Pi search/index behavior when touching packages/pi
+npm test --workspace pi-ast-sgrep
 ```
 
 New workspace members **must** set `[lints] workspace = true` so they inherit
@@ -31,29 +35,13 @@ New workspace members **must** set `[lints] workspace = true` so they inherit
 [SECURITY.md](SECURITY.md)): `ast-sgrep-mmap` (sole hand-written `unsafe`) and
 `ast-sgrep-codemode-napi` (generated Node-API FFI only).
 
-Before a Rust release cut, run the local release gate manually:
+Release cuts use the same default bar, plus the targeted suites that cover the
+changed surface. Do not treat a full `cargo test --workspace` as required for
+ordinary work.
 
-```bash
-bash scripts/local-release-gate.sh
-```
-
-That gate checks formatting, workspace clippy and tests, then exercises ranking
-invariants with a bounded 30-second fuzz run. It requires stable Rust, nightly
-Rust, and `cargo-fuzz`. It is **not** invoked by Pi `release-acceptance` (npm
-pack/verify/gate/publish). Ordinary changes should keep using the cheaper,
-targeted default bar above.
-
-Merge honesty (optional, does not replace T0): `bash scripts/run-proof-pack.sh`
-writes `tests/artifacts/compliance/COMPLIANCE_REPORT.md`. See
-[docs/validation/proof-pack.md](docs/validation/proof-pack.md).
-
-GitHub Actions on every `pull_request` runs `forbid-soundness`, `cargo-check`,
-ubuntu `test` (`cargo test --workspace`, compare-only goldens), `pi`, `clippy`,
-`fmt`, and `audit`. The ubuntu+macos **release** matrix (`build-and-test`),
-Windows smoke, bounded fuzz, and **ANN IVF scale** (`ann-ivf-scale`, ignored
-release test at 2048+10000 vectors) stay `workflow_dispatch` (Actions tab). Speed
-and bake-off workflows execute real harnesses and fail on correctness, identity,
-or latency threshold breaches.
+GitHub Actions is manual-only (`workflow_dispatch`). PR and branch pushes do
+not start workflows. Dispatch **CI** from the Actions tab when you want the
+GitHub matrix; use the local bar above for ordinary work.
 
 ## Golden files
 
@@ -65,10 +53,10 @@ Do not treat `benchmarks/results/baselines.md` as a golden.
 
 ## Pull requests
 
-- Keep changes focused; extend `tests/core/parity.rs` (or a targeted unit test) when behavior changes.
+- Keep changes focused; extend an intent suite under `tests/` via `ast-sgrep-testkit` when search, index, or Pi behavior changes.
 - Review golden/fixture diffs file-by-file; do not commit `*.actual`.
 - Do not commit local agent/tool caches or skill-run trees -- they are gitignored.
-- Do not commit secrets, `.env`, local caches, or `fuzz/target/`.
+- Do not commit secrets, `.env`, local caches.
 - Prefer conventional commits: `feat:`, `fix:`, `refactor:`, `docs:`, `test:`, `ci:`, `chore:`.
 - Metric claims must cite `benchmarks/results/baselines.md` or be tagged `UNREPRODUCIBLE`.
 
@@ -86,11 +74,6 @@ Do not treat `benchmarks/results/baselines.md` as a golden.
 | `ast-sgrep-codemode` | Code Mode / programmatic tool-calling |
 | `ast-sgrep-codemode-napi` | Node-API bindings for in-process Code Mode |
 | `ast-sgrep-plugins` | Output formats (native/github/gitlab/agent/capsule) |
-| `ast-sgrep-testkit` | Shared fixtures for integration tests |
+| `ast-sgrep-testkit` | Shared fixtures for search, index, and Pi tests |
 
 See [README.md](README.md) and [docs/README.md](docs/README.md) for user-facing docs.
-
-Conformance honesty: [docs/validation/DISCREPANCIES.md](docs/validation/DISCREPANCIES.md),
-[docs/validation/COVERAGE.md](docs/validation/COVERAGE.md), and
-[docs/validation/conformance-verdicts.md](docs/validation/conformance-verdicts.md).
-XFAIL/`#[ignore]` only with a registered DISC id. Not-run is not Pass.

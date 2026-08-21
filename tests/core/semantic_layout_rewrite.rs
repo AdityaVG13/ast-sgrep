@@ -1,8 +1,8 @@
-//! Regression for e2hc.13 partial semantic-v1 → v2 migration.
+//! Regression for partial unversioned-semantic layout migration.
 //!
-//! A store advertising embed_backend="semantic" (unversioned v1) must not flip
-//! to "semantic-v2" after a single-file update under Auto — that opened the
-//! search gate while sibling chunks remained v1. Full index_all may promote.
+//! A store advertising embed_backend="semantic" must not flip to
+//! "semantic-v2" after a single-file update under Auto — that opened the
+//! search gate while sibling chunks stayed on the old layout. Full index_all may promote.
 use ast_sgrep_core::{IndexOptions, Indexer, SearchOptions, Searcher};
 use std::fs;
 
@@ -11,7 +11,7 @@ fn write_py(root: &std::path::Path, name: &str, body: &str) {
 }
 
 #[test]
-fn single_file_update_does_not_promote_semantic_v1_meta() {
+fn single_file_update_does_not_promote_unversioned_semantic_meta() {
     let corpus = tempfile::tempdir().unwrap();
     let index_dir = tempfile::tempdir().unwrap();
     let index_path = index_dir.path().join("index.db");
@@ -43,12 +43,12 @@ fn single_file_update_does_not_promote_semantic_v1_meta() {
         Some("semantic-v2")
     );
 
-    // Simulate a pre-e2hc.13 store that still advertises unversioned v1.
+    // Simulate a store that still advertises the unversioned backend.
     indexer
         .store()
         .set_meta("embed_backend", "semantic")
         .unwrap();
-    assert!(indexer.store().needs_semantic_v1_rewrite().unwrap());
+    assert!(indexer.store().needs_legacy_semantic_rewrite().unwrap());
 
     // Content change on only one file (watch / update_paths path).
     write_py(
@@ -67,7 +67,7 @@ fn single_file_update_does_not_promote_semantic_v1_meta() {
             .unwrap()
             .as_deref(),
         Some("semantic"),
-        "partial update must not advertise semantic-v2 while siblings may still be v1"
+        "partial update must not advertise semantic-v2 while siblings may still be unversioned"
     );
 
     let searcher = Searcher::new(SearchOptions {
@@ -80,16 +80,16 @@ fn single_file_update_does_not_promote_semantic_v1_meta() {
     .unwrap();
     let err = searcher
         .search("credential legacy")
-        .expect_err("search must refuse semantic-v1 meta");
+        .expect_err("search must refuse unversioned semantic meta");
     let msg = err.to_string();
     assert!(
-        msg.contains("semantic backend is v1") || msg.contains("reindex"),
+        msg.contains("unversioned semantic backend") || msg.contains("reindex"),
         "unexpected error: {msg}"
     );
 }
 
 #[test]
-fn index_all_promotes_semantic_v1_after_full_rewrite() {
+fn index_all_promotes_unversioned_semantic_after_full_rewrite() {
     let corpus = tempfile::tempdir().unwrap();
     let index_dir = tempfile::tempdir().unwrap();
     let index_path = index_dir.path().join("index.db");
@@ -114,7 +114,7 @@ fn index_all_promotes_semantic_v1_after_full_rewrite() {
     let stats = indexer.index_all().unwrap();
     assert!(
         stats.files_indexed >= 2,
-        "v1 rewrite must re-embed reachable files, got {:?}",
+        "legacy rewrite must re-embed reachable files, got {:?}",
         stats
     );
     assert_eq!(
@@ -126,11 +126,11 @@ fn index_all_promotes_semantic_v1_after_full_rewrite() {
         Some("semantic-v2"),
         "full index_all must promote after rewriting all reachable files"
     );
-    assert!(!indexer.store().needs_semantic_v1_rewrite().unwrap());
+    assert!(!indexer.store().needs_legacy_semantic_rewrite().unwrap());
 }
 
 #[test]
-fn partial_full_index_does_not_promote_semantic_v1_meta() {
+fn partial_full_index_does_not_promote_unversioned_semantic_meta() {
     let corpus = tempfile::tempdir().unwrap();
     let index_dir = tempfile::tempdir().unwrap();
     let index_path = index_dir.path().join("index.db");

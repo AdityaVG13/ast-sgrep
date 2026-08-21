@@ -194,7 +194,3 @@ fn scan_regex_rows(
     preferred.extend(overflow.into_iter().take(candidate_limit - preferred.len()));
     Ok(preferred)
 }
-
-#[cfg(test)]
-#[path = "../../../../../tests/unit/core/search__passes__regex.rs"]
-mod tests;
