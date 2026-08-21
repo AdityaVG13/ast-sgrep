@@ -118,17 +118,20 @@ fn run_cli(cli: &Cli) -> anyhow::Result<()> {
     if cli.robot_help {
         return agent::emit_robot_guide(cli);
     }
-    // --format is search-only (implies machine JSON for search envelopes).
-    // Index/reindex/bench accept --json for machine output; do not accept and
-    // silently ignore --format (d2a1.12).
-    if cli.active_tuning().format.is_some()
-        && !matches!(
-            cli.command.as_ref(),
-            None | Some(Commands::Search(_) | Commands::Keyword(_) | Commands::Semantic(_))
-        )
-    {
+    // Search-only flags must fail on commands that cannot apply them.
+    let search_command = matches!(
+        cli.command.as_ref(),
+        None | Some(Commands::Search(_) | Commands::Keyword(_) | Commands::Semantic(_))
+    );
+    let tuning = cli.active_tuning();
+    if tuning.format.is_some() && !search_command {
         return Err(usage_error(
             "--format applies only to search, keyword, or semantic commands",
+        ));
+    }
+    if tuning.file_filter.is_some() && !search_command {
+        return Err(usage_error(
+            "--file-filter applies only to search, keyword, or semantic commands",
         ));
     }
     match cli.command.as_ref() {

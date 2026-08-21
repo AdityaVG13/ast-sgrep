@@ -152,6 +152,12 @@ pub(crate) struct SearchTuning {
         help = "Response-wide compact snippet token budget"
     )]
     pub(crate) response_snippet_tokens: usize,
+    #[arg(
+        long,
+        value_name = "GLOB",
+        help = "Restrict search hits to a repository-relative file glob"
+    )]
+    pub(crate) file_filter: Option<String>,
     /// m38g: a whole-response token budget that picks per-result detail,
     /// instead of truncating every excerpt to the same ceiling.
     #[arg(
@@ -563,6 +569,9 @@ impl Cli {
             }
             if o.response_snippet_tokens != DEFAULT_RESPONSE_SNIPPET_TOKENS {
                 t.response_snippet_tokens = o.response_snippet_tokens;
+            }
+            if o.file_filter.is_some() {
+                t.file_filter.clone_from(&o.file_filter);
             }
             if o.budget_tokens.is_some() {
                 t.budget_tokens = o.budget_tokens;

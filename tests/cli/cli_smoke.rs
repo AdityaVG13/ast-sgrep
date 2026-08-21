@@ -547,3 +547,55 @@ fn codemod_apply_refuses_parent_symlink_swap() {
     assert!(error.to_string().contains("failed to verify"), "{error:#}");
     assert_eq!(fs::read_to_string(outside_file).unwrap(), original);
 }
+
+#[test]
+fn search_file_filter_reuses_one_repository_index() {
+    let root = TempDir::new().expect("root");
+    fs::create_dir_all(root.path().join("a")).unwrap();
+    fs::create_dir_all(root.path().join("b")).unwrap();
+    fs::write(root.path().join("a/one.rs"), "fn shared_symbol() {}\n").unwrap();
+    fs::write(root.path().join("b/two.rs"), "fn shared_symbol() {}\n").unwrap();
+    let index = root.path().join(".asgrep/index.db");
+
+    let (code, value, _stdout, stderr) = run_json(&[
+        "--json",
+        "--no-embed",
+        "--index-path",
+        index.to_str().unwrap(),
+        "search",
+        "--file-filter",
+        "a/**",
+        "shared_symbol",
+        root.path().to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "stderr={stderr} value={value}");
+    let hits = value["hits"].as_array().expect("hits");
+    assert!(!hits.is_empty());
+    assert!(hits.iter().all(|hit| {
+        hit["file"]
+            .as_str()
+            .is_some_and(|file| file.starts_with("a/"))
+    }));
+    assert!(index.is_file());
+    assert!(!root.path().join("a/.asgrep/index.db").exists());
+    assert!(!root.path().join("b/.asgrep/index.db").exists());
+}
+
+#[test]
+fn file_filter_is_rejected_by_non_search_commands() {
+    let root = TempDir::new().expect("root");
+    let (code, value, _stdout, stderr) = run_json(&[
+        "--json",
+        "index",
+        "--file-filter",
+        "src/**",
+        root.path().to_str().unwrap(),
+    ]);
+    assert_eq!(code, 1, "stderr={stderr} value={value}");
+    assert!(stderr.is_empty());
+    assert!(
+        value["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("--file-filter applies only"))
+    );
+}

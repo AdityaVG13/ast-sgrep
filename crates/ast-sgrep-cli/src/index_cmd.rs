@@ -511,6 +511,7 @@ pub(crate) fn search_options(root: &Path, cli: &Cli) -> SearchOptions {
         ann_probes: t.ann_probes,
         use_rerank: t.rerank,
         rerank_top_k: t.rerank_top_k.clamp(1, ast_sgrep_core::MAX_OUTPUT_RESULTS),
+        file_filter: t.file_filter,
         ..SearchOptions::default()
     };
     // Exclusive collapse: Neural > Semantic > Auto.
