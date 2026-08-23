@@ -101,6 +101,15 @@ fn literal_sql(
 ) -> Result<Vec<SearchHit>> {
     // Escape metacharacters so the needle is matched literally.
     let limit = options.limit.max(100);
+    // Word mode post-filters rows for whole-word boundaries AFTER the SQL
+    // window; substring-only rows consume window slots, so over-fetch by a
+    // bounded multiple to give the filter candidates. Still capped so a huge
+    // corpus cannot turn this into an unbounded scan.
+    let sql_limit = if parsed.mode == QueryMode::Word {
+        limit.saturating_mul(16)
+    } else {
+        limit
+    };
     let lang = options.lang_filter.as_deref();
     let pattern = if options.case_insensitive {
         format!("%{}%", crate::store::sql::escape_like_term(needle))
@@ -110,8 +119,8 @@ fn literal_sql(
     let sql = literal_sql_template(options.case_insensitive, lang.is_some());
     let mut stmt = store.connection().prepare_cached(sql)?;
     let rows = match lang {
-        Some(lang) => stmt.query_map(params![pattern, limit as i64, lang], map_line_row)?,
-        None => stmt.query_map(params![pattern, limit as i64], map_line_row)?,
+        Some(lang) => stmt.query_map(params![pattern, sql_limit as i64, lang], map_line_row)?,
+        None => stmt.query_map(params![pattern, sql_limit as i64], map_line_row)?,
     };
     let word_mode = parsed.mode == QueryMode::Word;
     // SQL already matched the literal; word_mode only needs a boundary postfilter.

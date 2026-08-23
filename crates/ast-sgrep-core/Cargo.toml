@@ -91,6 +91,12 @@ path = "../../tests/core/lexicon_learning.rs"
 name = "literal_glob"
 path = "../../tests/core/literal_glob.rs"
 [[test]]
+name = "literal_word_limit_window"
+path = "../../tests/core/literal_word_limit_window.rs"
+[[test]]
+name = "regex_class_literal"
+path = "../../tests/core/regex_class_literal.rs"
+[[test]]
 name = "literal_diff"
 path = "../../tests/core/literal_diff.rs"
 [[test]]
