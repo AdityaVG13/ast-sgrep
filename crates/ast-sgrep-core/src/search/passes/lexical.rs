@@ -151,8 +151,7 @@ fn lexical_from_field(
         .join(",");
     let id_sql = format!("SELECT id, path, language FROM files WHERE id IN ({placeholders})");
     let mut ident_stmt = store.connection().prepare_cached(&id_sql)?;
-    let mut bind: Vec<&dyn rusqlite::ToSql> =
-        ids.iter().map(|id| id as &dyn rusqlite::ToSql).collect();
+    let bind: Vec<&dyn rusqlite::ToSql> = ids.iter().map(|id| id as &dyn rusqlite::ToSql).collect();
     let mut id_rows = ident_stmt.query(bind.as_slice())?;
     let mut idents: std::collections::HashMap<i64, (String, Option<String>)> =
         std::collections::HashMap::with_capacity(ids.len());
