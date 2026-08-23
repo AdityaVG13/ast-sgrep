@@ -133,6 +133,51 @@ pub(crate) fn scoped() {}
 }
 
 #[test]
+fn kernel_pattern_matrix_covers_rust_typescript_and_python() {
+    let cases = [
+        (
+            Language::Rust,
+            "struct Service { value: i32 }\nfn dispatch() { service_call(); }\n",
+            "struct $NAME { $$$BODY }",
+            "fn $NAME($$$) { $$$BODY }",
+            "service_call($$$)",
+        ),
+        (
+            Language::TypeScript,
+            "class Service { run() { serviceCall(); } }\nfunction dispatch() { serviceCall(); }\n",
+            "class $NAME { $$$BODY }",
+            "function $NAME($$$) { $$$BODY }",
+            "serviceCall($$$)",
+        ),
+        (
+            Language::Python,
+            "class Service:\n    def run(self):\n        service_call()\n\ndef dispatch():\n    service_call()\n",
+            "class $NAME: $$$BODY",
+            "def $NAME($$$): $$$BODY",
+            "service_call($$$)",
+        ),
+    ];
+
+    for (language, source, declaration, function, call) in cases {
+        assert!(
+            classify_native(declaration).is_some(),
+            "unclassified declaration pattern {declaration:?}"
+        );
+        for pattern in [declaration, function, call] {
+            let hits = match_pattern(language, source, pattern).unwrap();
+            assert!(
+                !hits.is_empty(),
+                "language={language:?} pattern={pattern:?}"
+            );
+            assert!(
+                !needs_ast_grep_fallback(pattern),
+                "language={language:?} pattern={pattern:?}"
+            );
+        }
+    }
+}
+
+#[test]
 fn native_call_matches_exact_callee() {
     let src = "fn main() { process_request(1); other(2); }\n";
     let hits = match_pattern(Language::Rust, src, "process_request($$$)").unwrap();

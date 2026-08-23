@@ -222,7 +222,7 @@ pub fn classify_native(pattern: &str) -> Option<NativeKind> {
     for &(prefix, is_class) in DECL_PATTERN_PREFIXES {
         if let Some(rest) = declaration.strip_prefix(prefix) {
             let head = rest
-                .split(|c: char| c == '(' || c == '{' || c == '<' || c.is_whitespace())
+                .split(|c: char| c == '(' || c == '{' || c == '<' || c == ':' || c.is_whitespace())
                 .next()
                 .unwrap_or("")
                 .trim();
@@ -1161,7 +1161,7 @@ fn declaration_name_capture(pattern: &str) -> Option<&str> {
     DECL_PATTERN_PREFIXES.iter().find_map(|(prefix, _)| {
         let rest = declaration.strip_prefix(prefix)?;
         let head = rest
-            .split(|c: char| c == '(' || c == '{' || c == '<' || c.is_whitespace())
+            .split(|c: char| c == '(' || c == '{' || c == '<' || c == ':' || c.is_whitespace())
             .next()?;
         capture_name(head)
     })

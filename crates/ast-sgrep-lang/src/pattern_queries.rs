@@ -207,12 +207,18 @@ pub(crate) const CLASS_QUERY_TABLE: &[(&[Language], &str, &[&str])] = &[
     (
         &[Language::JavaScript, Language::TypeScript],
         "class",
-        &["(class_declaration name: (identifier) @name) @match"],
+        &[
+            "(class_declaration name: (identifier) @name) @match",
+            "(class_declaration name: (type_identifier) @name) @match",
+        ],
     ),
     (
         &[Language::JavaScript, Language::TypeScript],
         "type",
-        &["(class_declaration name: (identifier) @name) @match"],
+        &[
+            "(class_declaration name: (identifier) @name) @match",
+            "(class_declaration name: (type_identifier) @name) @match",
+        ],
     ),
     // Ruby
     (
