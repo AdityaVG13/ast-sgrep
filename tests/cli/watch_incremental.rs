@@ -149,6 +149,26 @@ fn deny_by_default_root_reincludes_nested_source_tree() {
 }
 
 #[test]
+fn language_filtered_reindex_tolerates_untyped_files() {
+    let (_dir, root) = temp_project();
+    fs::write(root.join("Cargo.toml"), "[package]\nname = \"mixed\"\n").unwrap();
+    let mut initial = indexer_for(&root);
+    initial.index_all().expect("initial mixed-language index");
+    drop(initial);
+
+    let mut filtered = Indexer::new(IndexOptions {
+        root: root.clone(),
+        embed_semantic: false,
+        lang_filter: Some("rust".into()),
+        ..IndexOptions::default()
+    })
+    .expect("filtered indexer");
+    filtered
+        .reindex_all()
+        .expect("nullable file language must not abort filtered reindex");
+}
+
+#[test]
 fn update_paths_reports_language_filter_removal_as_removed() {
     let (_dir, root) = temp_project();
     let mut initial = indexer_for(&root);
