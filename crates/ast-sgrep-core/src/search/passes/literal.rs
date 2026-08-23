@@ -30,9 +30,19 @@ fn literal_trigram(
     needle: &str,
 ) -> Result<Vec<SearchHit>> {
     let query = crate::fts::escape_fts_term(needle);
+    // No ORDER BY here: a TEMP B-TREE sort would materialize the whole trigram
+    // doclist before the first row, defeating the lazy budget break below.
+    // Candidates stream in posting order, the loop stops at the retained
+    // budget, and ordering by (path, line_no) is restored in Rust over the
+    // small candidate set — identical output for under-budget queries.
+    let _tri_span = crate::perf_profile::Span::start(
+        "literal_trigram_scan",
+        "search",
+        "trigram doclist walk + join",
+    );
     let mut stmt = store.connection().prepare_cached(
         "SELECT f.path, f.language, l.line_no, l.content
-         FROM lines_trigram JOIN lines l ON l.rowid = lines_trigram.rowid JOIN files f ON f.id = l.file_id WHERE lines_trigram MATCH ?1 ORDER BY f.path, l.line_no",
+         FROM lines_trigram JOIN lines l ON l.rowid = lines_trigram.rowid JOIN files f ON f.id = l.file_id WHERE lines_trigram MATCH ?1",
     )?;
     let rows = stmt.query_map(params![query], map_line_row)?;
     let needle_lower = options.case_insensitive.then(|| needle.to_lowercase());
@@ -51,7 +61,9 @@ fn literal_trigram(
             break;
         }
     }
+    drop(_tri_span);
     drop(stmt);
+    hits.sort_by(|a, b| a.file.cmp(&b.file).then(a.line_start.cmp(&b.line_start)));
     hits.truncate(retained_limit(options));
     attach_context(store, options, &mut hits)?;
     Ok(hits)
