@@ -108,6 +108,31 @@ fn native_fn_meta_matches_rust() {
 }
 
 #[test]
+fn declaration_modifiers_match_in_process() {
+    let rust = r#"
+struct Hidden {
+    value: i32,
+}
+pub struct Visible {
+    value: i32,
+}
+fn hidden() {}
+pub(crate) fn scoped() {}
+"#;
+
+    let public_struct =
+        match_pattern(Language::Rust, rust, "pub struct $NAME { $$$BODY }").unwrap();
+    assert_eq!(public_struct.len(), 1, "hits={public_struct:?}");
+    assert_eq!(public_struct[0].captures["NAME"], "Visible");
+    assert!(!needs_ast_grep_fallback("pub struct $NAME { $$$BODY }"));
+
+    let scoped_fn =
+        match_pattern(Language::Rust, rust, "pub(crate) fn $NAME($$$) { $$$BODY }").unwrap();
+    assert_eq!(scoped_fn.len(), 1, "hits={scoped_fn:?}");
+    assert_eq!(scoped_fn[0].captures["NAME"], "scoped");
+}
+
+#[test]
 fn native_call_matches_exact_callee() {
     let src = "fn main() { process_request(1); other(2); }\n";
     let hits = match_pattern(Language::Rust, src, "process_request($$$)").unwrap();
