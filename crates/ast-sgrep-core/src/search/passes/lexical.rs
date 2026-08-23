@@ -1,6 +1,6 @@
 use crate::query::ParsedQuery;
 use crate::rank::score_lexical_rrf;
-use crate::search::passes::bmh::{asgrep_line_hit, map_line_row};
+use crate::search::passes::bmh::asgrep_line_hit;
 use crate::search::types::matches_lang;
 use crate::search::types::{SearchHit, SearchOptions};
 use crate::store::IndexStore;
@@ -87,6 +87,11 @@ fn lexical_from_fts(
 }
 
 /// Run the lexical query against one analyzer field (vvpk).
+///
+// Join-free hot path: the FTS table itself stores `file_id`, `line_no`, and
+// `content` columns, so ranking + projection need no per-row joins. Only the
+// ≤limit surviving rows resolve `(file_id → path, language)` via one bounded
+// IN-list lookup — same output, a fraction of the join cost on large corpora.
 fn lexical_from_field(
     store: &IndexStore,
     options: &SearchOptions,
@@ -96,30 +101,80 @@ fn lexical_from_field(
     matches: &mut LineMatches,
 ) -> Result<()> {
     let fts_query = fts_query.to_string();
+    // Lang filter in SQL before ORDER/LIMIT so a lang page cannot go empty (iva9.5).
     let (sql, lang_bind): (String, Option<&str>) = match options.lang_filter.as_deref() {
         Some(lang) => (
             format!(
-                "SELECT f.path, f.language, l.line_no, l.content
-         FROM {field} JOIN files f ON f.id = {field}.file_id JOIN lines l ON l.file_id = {field}.file_id AND l.line_no = {field}.line_no WHERE {field} MATCH ?1 AND f.language = ?3 ORDER BY bm25({field}), f.path, l.line_no LIMIT ?2"
+                "SELECT t.file_id, t.line_no, t.content \
+                 FROM {field} t WHERE t MATCH ?1 AND t.file_id IN \
+                   (SELECT id FROM files WHERE language = ?3) \
+                 ORDER BY bm25({field}) LIMIT ?2"
             ),
             Some(lang),
         ),
         None => (
             format!(
-                "SELECT f.path, f.language, l.line_no, l.content
-         FROM {field} JOIN files f ON f.id = {field}.file_id JOIN lines l ON l.file_id = {field}.file_id AND l.line_no = {field}.line_no WHERE {field} MATCH ?1 ORDER BY bm25({field}), f.path, l.line_no LIMIT ?2"
+                "SELECT t.file_id, t.line_no, t.content \
+                 FROM {field} t WHERE t MATCH ?1 ORDER BY bm25({field}) LIMIT ?2"
             ),
             None,
         ),
     };
     let sql = sql.as_str();
     let mut stmt = store.connection().prepare_cached(sql)?;
-    let rows = match lang_bind {
-        Some(lang) => stmt.query_map(params![fts_query, limit as i64, lang], map_line_row)?,
-        None => stmt.query_map(params![fts_query, limit as i64], map_line_row)?,
+    let rows: Vec<(i64, u32, String)> = match lang_bind {
+        Some(lang) => {
+            let map = |r: &rusqlite::Row<'_>| Ok((r.get(0)?, r.get(1)?, r.get(2)?));
+            stmt.query_map(params![fts_query, limit as i64, lang], map)?
+                .collect::<std::result::Result<Vec<_>, _>>()?
+        }
+        None => {
+            let map = |r: &rusqlite::Row<'_>| Ok((r.get(0)?, r.get(1)?, r.get(2)?));
+            stmt.query_map(params![fts_query, limit as i64], map)?
+                .collect::<std::result::Result<Vec<_>, _>>()?
+        }
     };
-    for (rank, row) in rows.enumerate() {
-        accumulate(options, matches, row?, rank);
+    if rows.is_empty() {
+        return Ok(());
+    }
+    // Resolve identities for exactly the file_ids that survived ranking.
+    let ids = {
+        let mut seen = std::collections::HashSet::new();
+        rows.iter()
+            .map(|(id, _, _)| *id)
+            .filter(|id| seen.insert(*id))
+            .collect::<Vec<_>>()
+    };
+    let placeholders = std::iter::repeat("?")
+        .take(ids.len())
+        .collect::<Vec<_>>()
+        .join(",");
+    let id_sql = format!("SELECT id, path, language FROM files WHERE id IN ({placeholders})");
+    let mut ident_stmt = store.connection().prepare_cached(&id_sql)?;
+    let mut bind: Vec<&dyn rusqlite::ToSql> =
+        ids.iter().map(|id| id as &dyn rusqlite::ToSql).collect();
+    let mut id_rows = ident_stmt.query(bind.as_slice())?;
+    let mut idents: std::collections::HashMap<i64, (String, Option<String>)> =
+        std::collections::HashMap::with_capacity(ids.len());
+    while let Some(row) = id_rows.next()? {
+        let id: i64 = row.get(0)?;
+        let path: String = row.get(1)?;
+        let language: Option<String> = row.get(2)?;
+        idents.insert(id, (path, language));
+    }
+    drop(id_rows);
+    drop(ident_stmt);
+    for (rank, (file_id, line_no, content)) in rows.into_iter().enumerate() {
+        // A file deleted between the two statements yields no identity; skip it.
+        let Some((path, language)) = idents.get(&file_id) else {
+            continue;
+        };
+        accumulate(
+            options,
+            matches,
+            (path.clone(), language.clone(), line_no, content),
+            rank,
+        );
     }
     Ok(())
 }
