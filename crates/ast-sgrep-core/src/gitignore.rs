@@ -184,6 +184,12 @@ fn glob_matches(pattern: &str, text: &str) -> bool {
             return glob_matches(rest, text) || text.split('/').any(|seg| glob_matches(rest, seg));
         }
     }
+    // A single '*' follows gitignore segment semantics and never crosses '/'.
+    // Root rule /* therefore ignores root entries but not descendants of an
+    // explicitly re-included directory such as !/crates/.
+    if !pat.contains('/') && text.contains('/') {
+        return false;
+    }
     if let Some(suffix) = pat.strip_prefix('*') {
         return text.ends_with(suffix) || text.split('/').any(|seg| seg.ends_with(suffix));
     }
