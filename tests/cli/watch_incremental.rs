@@ -116,6 +116,39 @@ fn update_paths_is_bounded_and_prunes_newly_ignored_rows() {
 }
 
 #[test]
+fn deny_by_default_root_reincludes_nested_source_tree() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path().canonicalize().expect("canonicalize");
+    fs::create_dir_all(root.join("crates/app/src")).unwrap();
+    fs::write(
+        root.join("crates/app/src/lib.rs"),
+        "pub struct ReincludedSource;\n",
+    )
+    .unwrap();
+    fs::write(root.join("ignored.rs"), "pub struct IgnoredRoot;\n").unwrap();
+    fs::write(root.join(".gitignore"), "/*\n!/crates/\n").unwrap();
+
+    let mut indexer = Indexer::new(IndexOptions {
+        root: root.clone(),
+        embed_semantic: false,
+        respect_gitignore: true,
+        ..IndexOptions::default()
+    })
+    .expect("indexer");
+    indexer.reindex_all().expect("reindex");
+
+    assert!(
+        indexer
+            .store()
+            .file_hash("crates/app/src/lib.rs")
+            .unwrap()
+            .is_some(),
+        "re-included nested source must be indexed"
+    );
+    assert!(indexer.store().file_hash("ignored.rs").unwrap().is_none());
+}
+
+#[test]
 fn update_paths_reports_language_filter_removal_as_removed() {
     let (_dir, root) = temp_project();
     let mut initial = indexer_for(&root);
