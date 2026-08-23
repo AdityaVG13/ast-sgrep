@@ -432,3 +432,25 @@ target/release-perf/asgrep bench /tmp/scale-ann-r5s-20260711 --index-path /tmp/s
 ```
 
 `ASGREP_SQLITE_DEFAULTS` disables only `mmap_size` and `cache_size` tuning for diagnostic comparison. Durability remains identical: existing WAL mode is reused without a write-class journal transition; new stores switch to WAL once; `synchronous=NORMAL` and `wal_autocheckpoint=1000` are unchanged. SQLite records WAL mode persistently and recovers it after abrupt process death. The focused `store::pragmas::tests::wal_mode_survives_connection_reopen` test verifies the persisted mode, committed data, and `PRAGMA integrity_check` after closing and reopening the database.
+
+## 2026-08-23 warm distinct-query levers (PR #33 branch)
+
+**Status: `reproducible-in-tree`.** Harness: `codemode-serve` over the repo's
+own index (`.asgrep/index.db`), 300 distinct single-term queries, per-request
+pipe round-trip timed client-side; binaries from
+`cargo build --profile release-perf -p ast-sgrep-cli` at commits 8db30768
+(base) and ebfaace3+ (levers). Raw logs and A/B binaries in `/tmp/asgrep-bench/`
+on the bench host; regenerate with the golden.py/decomp.py scripts committed to
+that host directory.
+
+| Surface | base p50 | lever p50 | note |
+|---------|---------:|----------:|------|
+| warm identical-repeat (response cache) | ~0.11 ms | ~0.11 ms | sub-1ms path, unchanged |
+| warm distinct single-term literal/hybrid | 3.8–5.4 ms | 2.7–2.9 ms | −28% p50, −19% p10 |
+| mixed 600-term batch throughput | 6.35 ms/call | 5.23 ms/call | −18% |
+| one-shot CLI wall (spawn floor) | 21.5 ms | unchanged | process spawn dominates |
+
+Levers: trigram ORDER BY materialization removed (TEMP B-TREE over full
+doclists up to 28k rows); lexical stage join-free with bounded identity
+batch-fetch. Correctness: 35-contract golden battery byte-identical except
+≥16-hit overflow subsets (same class as pre-existing budget cut).
