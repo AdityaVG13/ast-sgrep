@@ -30,8 +30,6 @@ const VOCAB_DDL: &str = "CREATE VIRTUAL TABLE IF NOT EXISTS temp.asgrep_trigram_
 /// Above this many distinct trigrams the needle is already selective enough
 /// that extra df lookups cannot pay for themselves (~34us per lookup measured).
 const MAX_DF_LOOKUPS: usize = 24;
-/// Cache cap: long sessions issuing thousands of distinct needles stay bounded.
-const DF_CACHE_CAP: usize = 8192;
 /// Trigram byte length of the trigram tokenizer.
 const TRIGRAM_LEN: usize = 3;
 /// A df at or below this count is treated as "rare enough". Tuned by A/B on

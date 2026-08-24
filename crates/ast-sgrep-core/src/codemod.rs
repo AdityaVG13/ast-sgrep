@@ -213,15 +213,49 @@ pub fn apply_codemod(plan: &CodemodPlan) -> anyhow::Result<CodemodApplyResult> {
         // root. A file swapped for an in-root symlink between plan and apply
         // would pass verification, get renamed into the backup slot, and be
         // deleted by success cleanup. Fail closed instead.
-        if root_dir
-            .symlink_metadata(&staged[index].relative)?
-            .file_type()
-            .is_symlink()
-        {
-            bail!(
-                "source changed after codemod planning: {} is now a symlink",
-                staged[index].relative.display()
-            );
+        let is_symlink = root_dir
+            .symlink_metadata(&staged[index].relative)
+            .map(|meta| meta.file_type().is_symlink())
+            .unwrap_or(false);
+        if is_symlink {
+            // br-hbd follow-up: this refusal sits INSIDE the swap loop, so it
+            // must restore the pre-apply tree like any other commit failure.
+            let rollback = rollback_committed(&root_dir, &mut staged, index);
+            cleanup_staged(&root_dir, &staged);
+            return Err(match rollback {
+                Some(rb) => anyhow::anyhow!(
+                    "source changed after codemod planning: {} is now a symlink; \
+                     rollback also failed: {rb}",
+                    staged[index].relative.display()
+                ),
+                None => anyhow::anyhow!(
+                    "source changed after codemod planning: {} is now a symlink; \
+                     all changes rolled back",
+                    staged[index].relative.display()
+                ),
+            });
+        }
+        // br-i04: verification happened once per file during staging, but the
+        // swap loop runs afterwards — a concurrent writer can land in between
+        // with no error (silent lost update). Re-read each source immediately
+        // before its swap; anything other than the planned original refuses
+        // the whole transaction.
+        let current = root_dir.read_to_string(&staged[index].relative)?;
+        if current != plan.files[index].original {
+            let rollback = rollback_committed(&root_dir, &mut staged, index);
+            cleanup_staged(&root_dir, &staged);
+            return Err(match rollback {
+                Some(rb) => anyhow::anyhow!(
+                    "source changed after codemod planning: {}; rollback also \
+                     failed: {rb}",
+                    plan.files[index].path
+                ),
+                None => anyhow::anyhow!(
+                    "source changed after codemod planning: {}; all changes \
+                     rolled back",
+                    plan.files[index].path
+                ),
+            });
         }
         let backup = unique_sibling_path(&staged[index].relative, "backup", index)?;
         if let Err(error) = root_dir.rename(&staged[index].relative, &root_dir, &backup) {
