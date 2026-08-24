@@ -22,6 +22,12 @@ pub(crate) struct SemanticCache {
     index_data_version: i64,
     semantic_data_version: i64,
     embed_backend: String,
+    /// SQLite `PRAGMA data_version` at load time (br-yp1). Bumps on EVERY
+    /// committed database write — including foreign raw-SQL mutations through
+    /// a separate connection that move none of the local counters above — so
+    /// a cached chunk set can never outlive an external writer's commit.
+    /// `None` means the pragma was unreadable and the context was NOT cached.
+    data_version: Option<i64>,
     chunks: Arc<Vec<SemanticChunkRow>>,
     flat_vectors: Arc<Vec<f32>>,
 }
@@ -50,6 +56,13 @@ pub(crate) fn load_semantic_context(
     let max_id = store.semantic_chunk_max_id()?.unwrap_or(0);
     let index_data_version = store.index_data_version()?;
     let semantic_data_version = store.semantic_data_version()?;
+    // br-yp1: the local counters above miss foreign raw-SQL mutations. SQLite's
+    // PRAGMA data_version bumps on every committed write by ANY connection; an
+    // unreadable pragma fails closed (no caching) rather than pinning a value.
+    let data_version = store
+        .connection()
+        .query_row("PRAGMA data_version", [], |row| row.get::<_, i64>(0))
+        .ok();
     let embed_backend = store
         .get_meta("embed_backend")?
         .unwrap_or_else(|| "semantic".into());
@@ -63,6 +76,8 @@ pub(crate) fn load_semantic_context(
                 && c.index_data_version == index_data_version
                 && c.semantic_data_version == semantic_data_version
                 && c.embed_backend == embed_backend
+                && c.data_version.is_some()
+                && c.data_version == data_version
             {
                 return Ok(Some(EmbedContext {
                     chunks: Arc::clone(&c.chunks),
@@ -82,6 +97,7 @@ pub(crate) fn load_semantic_context(
         index_data_version,
         semantic_data_version,
         embed_backend,
+        data_version,
         chunks: Arc::new(chunks),
         flat_vectors: Arc::new(flat_vectors),
     };
