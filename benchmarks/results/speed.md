@@ -550,3 +550,25 @@ microbenchmarks on an index copy. Binaries: `asgrep_head` = `17fbec27`;
 
 Both recorded with retry predicates in
 `docs/progress/perf-negative-results.md::callers-fts-trigram-index`.
+
+## 2026-08-24 pattern-query walk prune (PR #33 branch)
+
+**Status: `reproducible-in-tree`.** Harness: `/tmp/asgrep-bench/pattern_clean.py`
+(distinct braced declaration patterns through `codemode-serve` with explicit
+root, per-request client timing). Binaries: `asgrep_pr` = `80c08b38`;
+`asgrep_final2` = `96c95c89`.
+
+| surface | base | now | note |
+|---------|-----:|----:|------|
+| distinct structural pattern query (first touch) | ~1,730–1,870 ms | **~77–92 ms** | ~20x; walk pruned at gitignored dirs |
+| repeated pattern query (response cache) | ~0.11–0.19 ms | ~0.11–0.19 ms | unchanged |
+| warm distinct literal/hybrid p50 | ~1.9–2.1 ms | ~2.0 ms | unchanged |
+| golden battery | — | 35/35 byte-identical | |
+
+Root cause of the old 1.7s: WalkDir visited the entire tree (~164k entries
+including target/) and applied gitignore per-file afterwards. ast-grep's
+apparent 20ms on this box is the same prune strategy plus a parallel walker.
+
+CPU profile (`ps` lifetime + cputime deltas): idle serve ≈ 0.3% of one core;
+sustained 140 calls/s ≈ 12 µs CPU per literal call; worst single structural
+query ≈ 10 ms CPU ≈ 0.06% of machine capacity. Far below any 3–4% budget.
