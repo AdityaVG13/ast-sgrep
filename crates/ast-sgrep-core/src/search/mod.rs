@@ -524,7 +524,14 @@ impl Searcher {
                     }
                 }
             };
-            finish_response_checked(&parsed, &self.options, hits, true)
+            finish::finish_response_checked_lazy(
+                    &parsed,
+                    &self.options,
+                    hits,
+                    true,
+                    Some(&self.store),
+                    true,
+                )
         })
     }
     /// Raw hits for one side of a conjunction (P0 channel-conjunction).

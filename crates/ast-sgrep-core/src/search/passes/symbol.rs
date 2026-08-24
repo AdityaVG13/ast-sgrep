@@ -96,7 +96,18 @@ fn caller_rows_to_hits(
     parsed: &ParsedQuery,
     mode: CallerMatchMode,
 ) -> Result<Vec<SearchHit>> {
-    caller_rows_to_hits_resolved(store, rows, options, parsed, mode, None)
+    caller_rows_to_hits_opts(store, rows, options, parsed, mode, None, true)
+}
+fn caller_rows_to_hits_opts(
+    store: &IndexStore,
+    rows: Vec<CallerQueryRow>,
+    options: &SearchOptions,
+    parsed: &ParsedQuery,
+    mode: CallerMatchMode,
+    store_for_resolution: Option<&IndexStore>,
+    attach_excerpts: bool,
+) -> Result<Vec<SearchHit>> {
+    caller_rows_to_hits_resolved_opts(store, rows, options, parsed, mode, store_for_resolution, attach_excerpts)
 }
 
 /// dvc4: same as above, but classifies how each name match resolved when a
@@ -108,6 +119,17 @@ fn caller_rows_to_hits_resolved(
     parsed: &ParsedQuery,
     mode: CallerMatchMode,
     store: Option<&IndexStore>,
+) -> Result<Vec<SearchHit>> {
+    caller_rows_to_hits_resolved_opts(excerpt_store, rows, options, parsed, mode, store, true)
+}
+fn caller_rows_to_hits_resolved_opts(
+    excerpt_store: &IndexStore,
+    rows: Vec<CallerQueryRow>,
+    options: &SearchOptions,
+    parsed: &ParsedQuery,
+    mode: CallerMatchMode,
+    store: Option<&IndexStore>,
+    attach_excerpts: bool,
 ) -> Result<Vec<SearchHit>> {
     let primary_lower = parsed.primary_symbol().map(|s| s.to_lowercase());
     // am6l: normalize query terms once per query, not once per scored row.
@@ -160,7 +182,9 @@ fn caller_rows_to_hits_resolved(
     }
     retain_scored_hits(&mut caller_hits, options);
     retain_scored_hits(&mut graph_hits, options);
-    attach_indexed_excerpts(excerpt_store, &mut caller_hits)?;
+    if attach_excerpts {
+        attach_indexed_excerpts(excerpt_store, &mut caller_hits)?;
+    }
     if let Some(store) = store {
         let mut candidate_counts = HashMap::new();
         let scip_refs = store.scip_fact_set(false)?;
@@ -184,7 +208,22 @@ fn retain_scored_hits(hits: &mut Vec<SearchHit>, options: &SearchOptions) {
     hits.truncate(limit);
 }
 
-fn attach_indexed_excerpts(store: &IndexStore, hits: &mut [SearchHit]) -> Result<()> {
+pub(crate) fn attach_indexed_excerpts_if_empty(
+    store: &IndexStore,
+    hits: &mut [SearchHit],
+) -> Result<()> {
+    for hit in hits.iter_mut() {
+        if !hit.excerpt.is_empty() {
+            continue;
+        }
+        let before = hit.line_start.saturating_sub(u32::try_from(0).unwrap_or(0));
+        let _ = before;
+        hit.excerpt = store
+            .indexed_excerpt_in_range(&hit.file, hit.line_start, hit.line_end)?;
+    }
+    Ok(())
+}
+pub(crate) fn attach_indexed_excerpts(store: &IndexStore, hits: &mut [SearchHit]) -> Result<()> {
     for hit in hits {
         hit.excerpt = store.indexed_excerpt_in_range(&hit.file, hit.line_start, hit.line_end)?;
     }
@@ -256,6 +295,16 @@ fn symbol_span_rows_to_hits(
     kind: HitKind,
     score_for: impl Fn(&str) -> f64,
 ) -> Result<Vec<SearchHit>> {
+    symbol_span_rows_to_hits_opts(store, rows, options, kind, score_for, true)
+}
+fn symbol_span_rows_to_hits_opts(
+    store: &IndexStore,
+    rows: Vec<SymbolSpanRow>,
+    options: &SearchOptions,
+    kind: HitKind,
+    score_for: impl Fn(&str) -> f64,
+    attach_excerpts: bool,
+) -> Result<Vec<SearchHit>> {
     let mut hits = Vec::with_capacity(rows.len());
     for (path, language, name, sym_kind, line_start, line_end) in rows {
         if !matches_lang(language.as_deref(), options.lang_filter.as_deref()) {
@@ -273,7 +322,9 @@ fn symbol_span_rows_to_hits(
         }));
     }
     retain_scored_hits(&mut hits, options);
-    attach_indexed_excerpts(store, &mut hits)?;
+    if attach_excerpts {
+        attach_indexed_excerpts(store, &mut hits)?;
+    }
     if kind == HitKind::Def {
         attach_scip_def_resolutions(store, &mut hits)?;
     }
@@ -326,10 +377,15 @@ pub fn symbol_pass_for_files(
         like_terms_filter("s.name", &parsed.terms, options.lang_filter.as_deref());
     restrict_to_files(&mut where_clause, &mut bind, Some(allowed_files));
     let rows = query_symbol_spans(store, &where_clause, bind, SYMBOL_SQL_LIMIT)?;
-    let mut hits = symbol_span_rows_to_hits(store, rows, options, HitKind::Def, |name| {
-        score_def(&parsed.terms, name)
-    })?;
-    hits.extend(caller_rows_to_hits(
+    let mut hits = symbol_span_rows_to_hits_opts(
+        store,
+        rows,
+        options,
+        HitKind::Def,
+        |name| score_def(&parsed.terms, name),
+        false,
+    )?;
+    hits.extend(caller_rows_to_hits_opts(
         store,
         query_caller_rows(
             store,
@@ -342,6 +398,8 @@ pub fn symbol_pass_for_files(
         options,
         parsed,
         CallerMatchMode::Hybrid,
+        None,
+        false,
     )?);
     Ok(hits)
 }
@@ -373,18 +431,25 @@ pub fn anchor_pass_for_files(
     restrict_to_files(&mut where_clause, &mut bind, Some(allowed_files));
     let rows = query_symbol_spans(store, &where_clause, bind, SYMBOL_SQL_LIMIT)?;
     let term_count = parsed.terms.len();
-    symbol_span_rows_to_hits(store, rows, options, HitKind::Anchor, |name| {
-        let matched = parsed
-            .terms
-            .iter()
-            .filter(|term| crate::rank::score_symbol(term, name) > 0.0)
-            .count();
-        if matched == 0 {
-            0.0
-        } else {
-            SCORE_ANCHOR * (matched as f64 / term_count as f64).sqrt()
-        }
-    })
+    symbol_span_rows_to_hits_opts(
+        store,
+        rows,
+        options,
+        HitKind::Anchor,
+        |name| {
+            let matched = parsed
+                .terms
+                .iter()
+                .filter(|term| crate::rank::score_symbol(term, name) > 0.0)
+                .count();
+            if matched == 0 {
+                0.0
+            } else {
+                SCORE_ANCHOR * (matched as f64 / term_count as f64).sqrt()
+            }
+        },
+        false,
+    )
 }
 
 pub fn anchor_pass(

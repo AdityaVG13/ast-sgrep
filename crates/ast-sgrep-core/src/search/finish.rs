@@ -124,6 +124,34 @@ pub(crate) fn finish_response_checked(
     mut hits: Vec<SearchHit>,
     dedup: bool,
 ) -> Result<SearchResponse> {
+    finish_response_checked_lazy(parsed, options, hits, dedup, None, false)
+}
+
+/// br-perf-lazy-excerpts: variant that defers per-hit excerpt SQL out of the
+/// channel passes. `lazy_excerpt_store` is the index whose `attach_indexed_
+/// excerpts` fills empty excerpts AFTER dedup/margins/confidence/best_def
+/// (none of which read excerpts) and BEFORE the coverage prune (which does).
+/// Channel passes marked lazy skip their own attachment; hits removed by
+/// dedup/filter before attachment never cost an excerpt fetch.
+pub(crate) fn finish_response_checked_lazy(
+    parsed: &ParsedQuery,
+    options: &SearchOptions,
+    hits: Vec<SearchHit>,
+    dedup: bool,
+    lazy_excerpt_store: Option<&crate::store::IndexStore>,
+    mut lazy_excerpts_pending: bool,
+) -> Result<SearchResponse> {
+    let _ = &mut lazy_excerpts_pending;
+    finish_response_inner(parsed, options, hits, dedup, lazy_excerpt_store)
+}
+
+fn finish_response_inner(
+    parsed: &ParsedQuery,
+    options: &SearchOptions,
+    mut hits: Vec<SearchHit>,
+    dedup: bool,
+    lazy_excerpt_store: Option<&crate::store::IndexStore>,
+) -> Result<SearchResponse> {
     if dedup {
         hits = dedup_hits(hits);
     }
@@ -180,6 +208,11 @@ pub(crate) fn finish_response_checked(
     } else {
         None
     };
+    // br-perf-lazy-excerpts: fill deferred structural excerpts after the
+    // stages that ignore them and before the first excerpt-dependent prune.
+    if let Some(store) = lazy_excerpt_store {
+        crate::search::passes::symbol::attach_indexed_excerpts_if_empty(store, &mut hits)?;
+    }
     let keep = if hybrid {
         gate_limit.saturating_mul(MAX_HITS_PER_FILE).max(gate_limit)
     } else {
