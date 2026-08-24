@@ -595,3 +595,19 @@ ast-grep one-shot declarations beaten on indexed shapes and now matched-or-
 beaten on fresh braced patterns within a serve session; ripgrep beaten for
 all warm/repeat workloads; raw cold single-scan remains rg's home turf by
 architectural design (index vs scan trade), documented in Losses.
+
+## 2026-08-24 two-phase parallel pattern walk (PR #33 branch)
+
+**Status: `reproducible-in-tree`.** Oracle: serial-vs-parallel hit sets
+identical on 4 declaration patterns (253-hit struct set byte-equal in
+(file, start, end)). Harness: `/tmp/asgrep-bench/{pattern_clean.py,oracle_ab.py}`.
+
+| surface | pre-prune (80c08b38) | pruned serial | **parallel walk (`0dd47f55`)** |
+|---|---:|---:|---:|
+| distinct structural pattern first-touch | ~1,730 ms | ~80 ms | **~43 ms** |
+| warm distinct literal/hybrid p50 | ~2.0 ms | ~1.8 ms | **~1.6–1.7 ms** |
+| p90 | ~11.4 ms | — | **~7.5 ms** |
+
+Standing vs rivals (same machine/corpus): ast-grep one-shot structural
+20 ms; asgrep serve-session distinct-pattern 43 ms first-touch and
+single-digit ms thereafter, with response-cache repeats at 0.1 ms.
