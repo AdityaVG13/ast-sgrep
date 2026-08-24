@@ -150,3 +150,15 @@ _(none)_
 - **measured_result:** premise stale: there is no per-term loop left to batch. Direct measurement of the exact statement shapes with a 100-path IN-list on this corpus: <5 ms per query (below shell timer resolution) for both stages.
 - **retry_condition_predicate:** Reopen only if a profiler attributes >=10% of warm distinct-query time to symbol_pass_for_files or caller_rows frames despite the existing batching (form 3: profiler-gated).
 - **bead_id:** (none)
+
+### `trigram-scan-cost-attribution` (Open pointer)
+
+- **target_workload:** literal_trigram_scan span = 25% of warm distinct-query time (avg 906us/scan over 3,700 scans)
+- **files_touched:** `no-source-patch-attempted`
+- **correctness_proof:** not-applicable (measurement pass)
+- **evidence_artifacts_paths:** `/tmp/asgrep-bench/` trigram_cost_model.py (cost vs doclist size: slope ~= 0us/posting, quartiles 1.497 vs 1.498 ms), phrase_vs_single.py (phrase vs single-middle-trigram MATCH: 457 vs 391 ms total, huge per-term variance, +8 ms regression worst case), defer_join_bench.py (deferred rowid->lines/files join past LIMIT: -3%, i.e. joins are free)
+- **baseline_configuration:** current ebfaace3-shape trigram scan
+- **candidate_configuration:** three prototypes evaluated in SQL directly: posting-cap LIMIT (see closed entry above), deferred join (rejected here), subset-trigram MATCH + Rust verify of remaining trigrams (content_matches_literal already guarantees exactness)
+- **measured_result:** scan cost is FLAT vs doclist size and grows with TERM LENGTH (more trigrams intersected by FTS5 phrase machinery: fts5NextMethod/fts5ExprNodeTest_STRING frames). Deferred join saves nothing (joins are 1:1 rowid lookups on a warm page cache). Subset-trigram saves ~15% total ONLY with a lucky rare-trigram pick; blind picks regress badly (a common middle trigram floods the candidate pool).
+- **retry_condition_predicate:** Reopen only with trigram document-frequency metadata available at query time (e.g., persisted per-token df sidecar or FTS5 function support) so the RAREST trigram can be picked deterministically AND a profiler still attributes >=10% of warm-path time to fts5 frames; then subset-MATCH + Rust verify is output-identical by construction and bounded-variance (form 3: profiler-gated + form 4: dependency/metadata-gated).
+- **bead_id:** (none)
