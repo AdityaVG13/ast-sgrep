@@ -294,24 +294,41 @@ fn search_pattern_native_profiled(
     let mut subroots: Vec<PathBuf> = Vec::new();
     for entry in WalkDir::new(&root)
         .follow_links(false)
-        .max_depth(1)
+        .max_depth(2)
         .into_iter()
         .filter_map(|entry| entry.ok())
     {
+        let depth = entry.depth(); // 0=root, 1=direct child, 2=grandchild
         let path = entry.into_path();
         if path == root {
             continue;
         }
-        if should_skip_dir(&path) {
-            continue;
-        }
-        if path.is_dir() {
+        let ft = path
+            .symlink_metadata()
+            .map(|m| m.is_dir())
+            .unwrap_or(false);
+        if ft {
+            if should_skip_dir(&path) {
+                continue;
+            }
             let rel = path.strip_prefix(&root).unwrap_or(&path);
             if ignore_prune.is_dir_ignored(rel) {
                 continue;
             }
-            subroots.push(path);
-        } else if path.is_file() && !should_skip_file(&path) {
+            // Direct children AND grandchild dirs become parallel subroots;
+            // a grandchild's files are covered by its own task and excluded
+            // from the ancestor's walk by the ancestor skip-set below.
+            if depth == 1 {
+                subroots.push(path);
+            } else if depth == 2 {
+                let parent_in_set = subroots
+                    .iter()
+                    .any(|p| path.starts_with(p));
+                if !parent_in_set {
+                    subroots.push(path);
+                }
+            }
+        } else if depth == 1 && !should_skip_file(&path) {
             let rel_ok = path
                 .strip_prefix(&root)
                 .map(|rel| !ignore.is_ignored(rel))
