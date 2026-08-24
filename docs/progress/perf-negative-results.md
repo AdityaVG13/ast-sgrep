@@ -102,3 +102,15 @@ _(none)_
 - **measured_result:** ~0.8ms saved per lexical stage invocation
 - **retry_condition_predicate:** Revisit only if bm25 top-k heap behavior changes in vendored SQLite such that the join becomes free (form 5: dependency-version-gated).
 - **bead_id:** (none — closed as keep, commit ebfaace3)
+
+### `finish-coverage-comparator-recompute`
+
+- **target_workload:** warm distinct literal/hybrid search through codemode-serve, self corpus (1,100+ files); finish.rs response finishing
+- **files_touched:** `crates/ast-sgrep-core/src/search/finish.rs`
+- **correctness_proof:** 35-contract golden battery byte-identical between A/B binaries (golden.py capture on base HEAD build, verify on lever build)
+- **evidence_artifacts_paths:** `/tmp/asgrep-bench/` single2.py (repo-root serve driver, warm-up excluded, 299 distinct queries), asgrep_base3 vs asgrep_v4, golden_v4base/manifest.json
+- **baseline_configuration:** excerpt_term_coverage evaluated inside the prune select_nth comparator (two full excerpt scans + to_lowercase allocation per comparison) at commit 7dd5fa32; warm distinct p50 ~2.5ms
+- **candidate_configuration:** coverage computed once per hit into (key, hit) pairs before prune/select/sort (permutation-proof by construction — keys travel with hits); identical comparator values
+- **measured_result:** no improvement: p50 base {4.08, 2.50, 2.68, 2.65, 2.46} vs lever {2.42, 2.67, 2.59, 2.54, 2.80}; limit=25 rounds {2.41/2.66/2.74 base vs 2.67/2.75/3.07 lever}. Deltas within run-to-run noise; the prune branch rarely engages at real query shapes (prune_keep=4x+32 over the gate limit), so the comparator recomputes are not a measurable share of warm-path time.
+- **retry_condition_predicate:** Revisit only when a profiler attributes >=5% of search_process_request time to excerpt_term_coverage frames on warm distinct queries (form 3: profiler-gated).
+- **bead_id:** (none — measured and rejected this campaign, reverted before commit)
