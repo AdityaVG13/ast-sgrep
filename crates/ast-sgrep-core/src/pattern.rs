@@ -228,6 +228,47 @@ fn read_pattern_bytes_capped(path: &Path) -> Option<Vec<u8>> {
     }
 }
 
+
+/// Collect indexable files under `base` (inclusive), applying skip rules and
+/// the shared gitignore matcher. Used by both serial root listing and the
+/// parallel per-subtree phase of the two-phase walk.
+fn list_files_under(
+    ignore: &crate::gitignore::IgnoreMatcher,
+    root: &Path,
+    base: &Path,
+) -> Vec<PathBuf> {
+    WalkDir::new(base)
+        .follow_links(false)
+        .into_iter()
+        .filter_entry(move |entry: &walkdir::DirEntry| {
+            if should_skip_dir(entry.path()) {
+                return false;
+            }
+            if entry.depth() == 0 {
+                return true;
+            }
+            let ft = entry.file_type();
+            if !ft.is_dir() {
+                return true;
+            }
+            let Ok(rel) = entry.path().strip_prefix(root) else {
+                return true;
+            };
+            !ignore.is_dir_ignored(rel)
+        })
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| entry.file_type().is_file())
+        .filter_map(|entry| {
+            let path = entry.into_path();
+            if should_skip_file(&path) {
+                return None;
+            }
+            let rel = path.strip_prefix(root).ok()?;
+            (!ignore.is_ignored(rel)).then_some(path)
+        })
+        .collect::<Vec<PathBuf>>()
+}
+
 fn search_pattern_native_profiled(
     pattern: &str,
     root: &Path,
@@ -243,36 +284,55 @@ fn search_pattern_native_profiled(
     let ignore_prune = std::sync::Arc::clone(&ignore);
     let prune_root = root.clone();
     let walk_started = Instant::now();
-    let paths = WalkDir::new(&root)
+    // br-perf-parwalk: two-phase traversal. Phase 1 walks shallowly (depth 2)
+    // to enumerate top-level subroots, pruning skipped/ignored dirs; phase 2
+    // walks each subroot on a rayon thread and the per-subtree file lists are
+    // concatenated. Same file set as the single serial walk (oracle-tested):
+    // partitioning by subtree cannot duplicate or drop files.
+    // Depth-2 subroots (skipped/ignored pruned), root files handled directly.
+    let mut root_files = Vec::new();
+    let mut subroots: Vec<PathBuf> = Vec::new();
+    for entry in WalkDir::new(&root)
         .follow_links(false)
+        .max_depth(1)
         .into_iter()
-        .filter_entry(move |entry| {
-            if should_skip_dir(entry.path()) {
-                return false;
-            }
-            let ft = entry.file_type();
-            if !ft.is_dir() {
-                return true;
-            }
-            let Ok(rel) = entry.path().strip_prefix(&prune_root) else {
-                return true;
-            };
-            if rel.as_os_str().is_empty() {
-                return true;
-            }
-            !ignore_prune.is_dir_ignored(rel)
-        })
         .filter_map(|entry| entry.ok())
-        .filter(|entry| entry.file_type().is_file())
-        .filter_map(|entry| {
-            let path = entry.into_path();
-            if should_skip_file(&path) {
-                return None;
+    {
+        let path = entry.into_path();
+        if path == root {
+            continue;
+        }
+        if should_skip_dir(&path) {
+            continue;
+        }
+        if path.is_dir() {
+            let rel = path.strip_prefix(&root).unwrap_or(&path);
+            if ignore_prune.is_dir_ignored(rel) {
+                continue;
             }
-            let rel = path.strip_prefix(&root).ok()?;
-            (!ignore.is_ignored(rel)).then_some(path)
-        })
-        .collect::<Vec<PathBuf>>();
+            subroots.push(path);
+        } else if path.is_file() && !should_skip_file(&path) {
+            let rel_ok = path
+                .strip_prefix(&root)
+                .map(|rel| !ignore.is_ignored(rel))
+                .unwrap_or(false);
+            if rel_ok {
+                root_files.push(path);
+            }
+        }
+    }
+    let paths = {
+        let mut all: Vec<PathBuf> = subroots
+            .par_iter()
+            .map(|sub| {
+                let thread_ignore = crate::gitignore::IgnoreMatcher::new(&root);
+                list_files_under(&thread_ignore, &root, sub)
+            })
+            .flatten()
+            .collect();
+        all.extend(root_files);
+        all
+    };
     let walk_ns = walk_started.elapsed().as_nanos();
     let required_literal = use_prefilter
         .then(|| required_pattern_literal(pattern))
