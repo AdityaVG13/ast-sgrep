@@ -103,6 +103,18 @@ _(none)_
 - **retry_condition_predicate:** Revisit only if bm25 top-k heap behavior changes in vendored SQLite such that the join becomes free (form 5: dependency-version-gated).
 - **bead_id:** (none — closed as keep, commit ebfaace3)
 
+### `trigram-posting-cap-in-sql-limit`
+
+- **target_workload:** warm distinct literal/hybrid search through codemode-serve, self corpus (1,102 files, 103k trigram lines); literal_trigram_scan span
+- **files_touched:** `crates/ast-sgrep-core/src/search/passes/literal.rs`
+- **correctness_proof:** 35-contract golden battery byte-identical between A/B binaries (asgrep_base4 @ 1be70c9b vs asgrep_v5)
+- **evidence_artifacts_paths:** `/tmp/asgrep-bench/` doclist_probe.py (postings distribution over the 300 bench terms), single2.py interleaved rounds, ASGREP_PERF_PROFILE span dumps spans_v5_a/b.jsonl
+- **baseline_configuration:** unbounded SQL stream + hit-count break at max(limit,100) (ebfaace3 shape); warm distinct p50 ~2.55ms; literal_trigram_scan = 25% of warm-path time, avg 906us/scan
+- **candidate_configuration:** SQL LIMIT = max(limit,100)x24 postings (2,400 at the prefilter limit) so low-density terms stop streaming instead of walking their whole doclist
+- **measured_result:** no improvement: p50 base {2.60, 2.64, 2.52} vs lever {2.62, 2.71, 2.52}; trigram span share 25.0% vs 24.8%; avg/scan 906us vs 910us. Postings probe explains why: p50=85, p75=441, p90=1332, max=4,874 — the hit-count break already bounds every dense term at ~100 rows, so the only population the posting cap trims (doclist >2,400 AND <100 hits) is empty on this corpus.
+- **retry_condition_predicate:** Revisit only if a postings probe on the target corpus shows a non-empty tail (terms whose doclist exceeds the hit-break budget while yielding fewer hits than the budget), or a profiler attributes >=10% of warm distinct-query time to fts5NextMethod/sqlite3_step frames under literal_trigram_scan AFTER a two-phase deferred-join prototype measures >=15% span reduction (form 3: profiler-gated).
+- **bead_id:** (none — measured and rejected this campaign, reverted before commit)
+
 ### `finish-coverage-comparator-recompute`
 
 - **target_workload:** warm distinct literal/hybrid search through codemode-serve, self corpus (1,100+ files); finish.rs response finishing
