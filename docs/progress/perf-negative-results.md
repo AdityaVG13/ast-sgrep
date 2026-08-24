@@ -198,3 +198,17 @@ _(none)_
 - **measured_result:** not a keep: single2 p50 {2.16, 2.01, 2.00, 2.10} (median 2.055 vs base 2.045 — within noise), load3 27843 calls @4.31 ms (~7% WORSE throughput). Root cause of the null result: the unrestricted caller LIKE scan shape (the 4.2 ms frame measured in isolation) does not occur on this workload — hybrid always passes allowed_files, so the live caller query is already file-list-driven (~62 us). The flame profile's likeFunc frames belong to the s.name LIKE (symbols, cheap) and the file-restricted caller query, not to an unbounded scan. Also measured and rejected along the way: removing ORDER BY from LITERAL_SQL saves ~11 ms raw on sub-3-char terms BUT violates the byte-identity gate even for under-budget queries because fusion assigns scores from candidate POSITION over a saturated SQL window (fx-lang-py order flip).
 - **retry_condition_predicate:** Reopen ONLY if (a) a profiler shows >=10% of warm-path time in caller-table scans WITHOUT a file IN-list restriction on the same workload (i.e., a call path that reaches query_caller_rows with allowed_files=None), or (b) the product adds a callers_fts consumer for another feature so the index maintenance cost is amortized (form 3: profiler-gated).
 - **bead_id:** (none)
+
+### `pattern-walk-finer-partitioning-depth3-frontier` (CLOSED 2026-08-24)
+
+- **date:** 2026-08-24
+- **candidate_name:** `pattern-walk-finer-partitioning-depth3-frontier`
+- **target_workload:** distinct braced structural pattern first-touch through codemode-serve, self corpus (545 indexed files after gitignore prune; ~164k on-disk entries)
+- **files_touched:** prototype measured and reverted (three variants); shipped alternative is BFS-levels walker in `crates/ast-sgrep-core/src/pattern.rs` (`ASGREP_WALK_THREADS` knob) — see `3bffdbe5`
+- **correctness_proof:** serial-vs-candidate hit-set oracle identical on four declaration patterns (253-hit `struct $NAME { $$$ }` set equal in `(file, start, end)`); the depth-3 frontier variant was correct but slower; two subroot-replacement variants produced file-set coverage bugs (554/522/557 vs oracle 545) and were reverted per three-strikes rule
+- **evidence_artifacts_paths:** `/tmp/asgrep-bench/phase2.py` (phase instrumentation), `/tmp/asgrep-bench/oracle_ab.py` (identity oracle), `/tmp/asgrep-bench/clamp_sweep.py` (2/4/8/16-worker sweep), binaries `asgrep_v28..v34`; numbers in `benchmarks/results/speed.md::2026-08-24 BFS parallel walk`
+- **baseline_configuration:** macOS arm64 (M5 Max), release-perf, HEAD `9524e08c` — distinct pattern 43–48 ms
+- **candidate_configuration:** (a) depth-3 fixed frontier (serial phase-1 stats to depth 3, depth-3 dirs as units); (b/c) mixed-depth subroot replacement sets — all rejected; BFS levels with capped pool adopted instead
+- **measured_result:** depth-3 frontier: walk 40–55 ms + scan 6–23 ms → totals 57–104 ms vs shipped 43–48 ms — SLOWER (Amdahl: phase-1 serial stats grew with depth). Clamp sweep on adopted BFS: 2 workers 57/65/85 ms (min/avg/max), 4 workers 37/41/51 ms (shipped default), 8 workers 26/31/39 ms, 16 workers 31/35/41 ms.
+- **retry_condition_predicate:** Reopen finer partitioning ONLY with a PARALLEL phase-1 (concurrent per-dir read_dir fan-out or the `ignore` crate if dependency policy allows); deeper SERIAL enumeration is measured counterproductive (form 4 + dependency gate).
+- **bead_id:** br-kcx (closed: landed)
