@@ -126,3 +126,27 @@ _(none)_
 - **measured_result:** no improvement: p50 base {4.08, 2.50, 2.68, 2.65, 2.46} vs lever {2.42, 2.67, 2.59, 2.54, 2.80}; limit=25 rounds {2.41/2.66/2.74 base vs 2.67/2.75/3.07 lever}. Deltas within run-to-run noise; the prune branch rarely engages at real query shapes (prune_keep=4x+32 over the gate limit), so the comparator recomputes are not a measurable share of warm-path time.
 - **retry_condition_predicate:** Revisit only when a profiler attributes >=5% of search_process_request time to excerpt_term_coverage frames on warm distinct queries (form 3: profiler-gated).
 - **bead_id:** (none — measured and rejected this campaign, reverted before commit)
+
+### `lexical-fts-fallback-double-query-scope-reclass`
+
+- **target_workload:** warm distinct queries; lexical_from_fts fallback-field re-query (vvpk analyzer routing, lines_fts porter vs lines_code_fts identifier)
+- **files_touched:** `no-source-patch-attempted`
+- **correctness_proof:** not-applicable (measurement + call-site audit only)
+- **evidence_artifacts_paths:** `/tmp/asgrep-bench/` probe3.py (per-term two-field replay: primary/fallback timings, postings counts, new-key yield over the 300 bench terms); rg of lexical_pass call sites
+- **baseline_configuration:** fallback fires when unique (path,line) keys < limit after the primary field query
+- **candidate_configuration:** none built — the campaign brief's premise ("rare terms pay double on the codemode warm path") does not hold: lexical_pass is called ONLY from Searcher::search_lexical, which no codemode tool reaches (hybrid search_hybrid uses the trigram literal prefilter instead). Its real consumers are MCP AgentSearchMode::Keyword and one CLI path.
+- **measured_result:** scope reclassification, not a rejection of a measured candidate. On the bench traffic the fallback fires on 65% of terms but averages 0.34 ms/query (15 postings avg when fired) — ~0.22 ms amortized per query, 30% of lexical SQL time, which itself is off the codemode hot path. Worth revisiting ONLY as an MCP-keyword-mode improvement.
+- **retry_condition_predicate:** Revisit as an MCP Keyword-mode optimization if MCP keyword-search p50 becomes a tracked surface with a profile showing >=15% of its time in the fallback field query (form 3: profiler-gated, surface-scoped).
+- **bead_id:** (none)
+
+### `symbol-caller-per-term-batching-premise-stale`
+
+- **target_workload:** hybrid search structural stage (symbol_pass_for_files / caller rows)
+- **files_touched:** `no-source-patch-attempted`
+- **correctness_proof:** not-applicable (premise refuted by code reading)
+- **evidence_artifacts_paths:** crates/ast-sgrep-core/src/store/sql.rs like_terms_filter/or_like_filter (OR of lower(col) LIKE across ALL terms in ONE query); symbol.rs symbol_pass_for_files/caller_terms_filter call sites; direct sqlite3 timings on .asgrep/index.db
+- **baseline_configuration:** current HEAD already batches every term into a single OR-LIKE statement per stage (one symbols query + one callers query), bounded by SYMBOL_SQL_LIMIT/CALLER_SQL_LIMIT=500 and the files IN-list
+- **candidate_configuration:** "batch across terms" — already implemented upstream of this campaign entry
+- **measured_result:** premise stale: there is no per-term loop left to batch. Direct measurement of the exact statement shapes with a 100-path IN-list on this corpus: <5 ms per query (below shell timer resolution) for both stages.
+- **retry_condition_predicate:** Reopen only if a profiler attributes >=10% of warm distinct-query time to symbol_pass_for_files or caller_rows frames despite the existing batching (form 3: profiler-gated).
+- **bead_id:** (none)
