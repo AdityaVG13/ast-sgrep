@@ -212,3 +212,17 @@ _(none)_
 - **measured_result:** depth-3 frontier: walk 40–55 ms + scan 6–23 ms → totals 57–104 ms vs shipped 43–48 ms — SLOWER (Amdahl: phase-1 serial stats grew with depth). Clamp sweep on adopted BFS: 2 workers 57/65/85 ms (min/avg/max), 4 workers 37/41/51 ms (shipped default), 8 workers 26/31/39 ms, 16 workers 31/35/41 ms.
 - **retry_condition_predicate:** Reopen finer partitioning ONLY with a PARALLEL phase-1 (concurrent per-dir read_dir fan-out or the `ignore` crate if dependency policy allows); deeper SERIAL enumeration is measured counterproductive (form 4 + dependency gate).
 - **bead_id:** br-kcx (closed: landed)
+
+### `hybrid-cold-needle-tail-sub1ms` (CLOSED 2026-08-24 — goal infeasible as stated; partial levers landed)
+
+- **date:** 2026-08-24
+- **candidate_name:** `hybrid-cold-needle-tail-sub1ms`
+- **target_workload:** FIRST-touch (response-cache-missing) high-df literal needles through hybrid search, codemode-serve, self corpus; baseline p99 14–20.5 ms / max 22–26 ms vs pipeline floor 0.156 ms
+- **files_touched:** `crates/ast-sgrep-core/src/store/sql.rs` (cache_size −16384 → −71680), `crates/ast-sgrep-core/src/store/trigram_df.rs` (bulk vocab preload per generation), `crates/ast-sgrep-core/src/search/passes/symbol.rs` (IN-list bucket quantization) — commit `0a08adc`
+- **correctness_proof:** golden battery 35/35 byte-identical; trigram_df 5, trigram_shortcut 4, pattern_routing, cli_smoke 14 green; IN-membership equivalence by construction (duplicates don't change membership)
+- **evidence_artifacts_paths:** `/tmp/asgrep-bench/{single_tail,tail_queries,discrim,percall_spans,isolated_spans,multi_cold,cache_fill,cache_fill37}.py`, samples `ws_*.txt`/`single_cold.txt`/`multi_cold.txt`, span dumps `hyb*.jsonl`
+- **baseline_configuration:** macOS arm64 M5 Max, release-perf, `b06cdd43`; p50 1.7–2.0 / p90 10.6–11.8 / p99 14–20.5 / max 22–26 ms
+- **candidate_configuration:** three levers above, measured individually and combined (`asgrep_v37/v38`)
+- **measured_result:** combined: p99 18.9 ms / max 20.7 ms — a bounded improvement (~15–25% of tail), NOT the sub-1ms target. Triangulated attribution (env-gated spans + `sample` on worker + subtraction): the cold tail is SQLite row-streaming and B-tree page walking for each first-touch needle's trigram postings plus structural-stage SQL — candidate-volume work bounded below by data volume. Repeat queries already sit at 0.11–0.17 ms and literal:-direct cold needles at 0.3–0.7 ms.
+- **retry_condition_predicate:** Sub-1ms p99 across ALL first-touch needles is achievable only by (a) persisting an answer cache across sessions with explicit staleness semantics (semantics-changing, needs product sign-off), or (b) restricting the metric to warm/repeat or literal:-direct workloads (already sub-ms). Reopen only if one of those two product decisions is made (form 8: blocked on architectural/product decision).
+- **bead_id:** (none — closed this campaign)
