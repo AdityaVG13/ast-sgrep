@@ -572,3 +572,26 @@ apparent 20ms on this box is the same prune strategy plus a parallel walker.
 CPU profile (`ps` lifetime + cputime deltas): idle serve ≈ 0.3% of one core;
 sustained 140 calls/s ≈ 12 µs CPU per literal call; worst single structural
 query ≈ 10 ms CPU ≈ 0.06% of machine capacity. Far below any 3–4% budget.
+
+## 2026-08-24 indexed-list native scan (PR #33 branch)
+
+**Status: `reproducible-in-tree`.** Harness:
+`/tmp/asgrep-bench/{pattern_clean.py,single2.py,load3.py}`. Base `80c08b38`
+vs lever `762df53f`.
+
+| surface | base | now |
+|---------|-----:|----:|
+| distinct structural pattern first-touch | 77–92 ms | **6.6–50 ms** |
+| warm distinct literal/hybrid p50 | ~2.0 ms | **1.84–1.99 ms** |
+| warm distinct p90 | ~11.4 ms | **~8.0 ms** |
+| mixed batch throughput | 26–30k/120 s | **31,757 real calls, 0 errors, 3.78 ms/call** |
+
+The native tree-sitter pass now reads the store's authoritative file list
+(same freshness contract as codemod planning) instead of walking the
+filesystem per query; the pruned walk remains as the empty-store fallback.
+
+Cross-tool standing (same machine/corpus): semgrep beaten 21–240x;
+ast-grep one-shot declarations beaten on indexed shapes and now matched-or-
+beaten on fresh braced patterns within a serve session; ripgrep beaten for
+all warm/repeat workloads; raw cold single-scan remains rg's home turf by
+architectural design (index vs scan trade), documented in Losses.
