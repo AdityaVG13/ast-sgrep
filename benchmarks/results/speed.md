@@ -527,3 +527,26 @@ Both prototypes are recorded with retry predicates in
 `docs/progress/perf-negative-results.md::warm-fixed-cost-memoization-probes`.
 The routing contract they relied on is pinned by
 `tests/core/literal_threshold_probe.rs`.
+
+## 2026-08-24 callers-FTS prototype + ORDER BY removal probe (PR #33 branch)
+
+**Status: `reproducible-in-tree` (negative results, both reverted).**
+Harnesses: `/tmp/asgrep-bench/{single2.py,load3.py,flame_drive.py}`; raw SQL
+microbenchmarks on an index copy. Binaries: `asgrep_head` = `17fbec27`;
+`asgrep_vB2` = callers-FTS lever.
+
+1. Flame re-attribution at HEAD: `literal_prefilter_pass` 45% of run loop,
+   `symbol_pass_for_files` 35% (caller LIKE + symbol LIKE), trigram scans
+   ~16%. An unrestricted caller-table LIKE scan measured 4.2 ms raw — but the
+   hybrid cascade always passes a file IN-list to that query (~62 us live).
+2. callers trigram FTS prototype: 41x faster in isolation (4.2 ms -> ~75 us),
+   output-equivalent on 30/30 corpus terms — yet end-to-end p50 {2.16, 2.01,
+   2.00, 2.10} vs base {1.98, 2.03, 2.06, 2.06} and throughput 27843 vs
+   29873 calls/120 s. The targeted frame was not hot in vivo.
+3. LITERAL_SQL ORDER BY removal: 11.5 ms -> sub-ms for sub-3-char terms raw,
+   BUT flips hit order for under-budget queries (fx-lang-py) because fusion
+   scores derive from candidate position over a saturated SQL window.
+   Violates the byte-identity gate; rejected.
+
+Both recorded with retry predicates in
+`docs/progress/perf-negative-results.md::callers-fts-trigram-index`.
