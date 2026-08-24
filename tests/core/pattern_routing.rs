@@ -28,6 +28,27 @@ fn pattern_prefix_routes_to_native_or_index_hits() {
 }
 
 #[test]
+fn rust_function_body_template_matches_without_external_ast_grep() {
+    let session = indexed_rs("fn alpha() { beta(); }\nfn beta() {}\n");
+    let searcher = session.searcher(SearchOptions {
+        use_embed: false,
+        limit: 32,
+        ..session.search_options()
+    });
+    let response = searcher
+        .search("pattern:fn $NAME() { $$$BODY }")
+        .expect("native pattern search");
+    assert!(
+        response
+            .hits
+            .iter()
+            .any(|hit| hit.excerpt.contains("fn alpha")),
+        "native function template must find alpha: {:?}",
+        response.hits
+    );
+}
+
+#[test]
 fn malformed_function_tail_does_not_use_broad_cached_signature() {
     let session = indexed_rs("fn first() {}\nfn second() {}\n");
     let searcher = session.searcher(SearchOptions {

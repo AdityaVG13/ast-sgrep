@@ -171,6 +171,46 @@ pub enum NativeKind {
     If { body: Option<BodyTemplate> },
 }
 
+fn strip_declaration_modifiers(pattern: &str) -> (&str, Option<&str>) {
+    const MODIFIERS: &[&str] = &[
+        "export default ",
+        "export ",
+        "public ",
+        "private ",
+        "protected ",
+        "internal ",
+        "abstract ",
+        "static ",
+        "final ",
+        "async ",
+        "unsafe ",
+        "pub ",
+    ];
+
+    let original = pattern.trim();
+    let mut rest = original;
+    loop {
+        if let Some(after_pub) = rest.strip_prefix("pub(") {
+            if let Some(close) = after_pub.find(") ") {
+                let Some(next) = after_pub.get(close + 2..) else {
+                    break;
+                };
+                rest = next;
+                continue;
+            }
+        }
+        let Some(next) = MODIFIERS
+            .iter()
+            .find_map(|modifier| rest.strip_prefix(*modifier))
+        else {
+            break;
+        };
+        rest = next;
+    }
+    let modifiers = original.strip_suffix(rest).unwrap_or_default().trim();
+    (rest, (!modifiers.is_empty()).then_some(modifiers))
+}
+
 /// Classify a metavariable / structural pattern into the native subset.
 pub fn classify_native(pattern: &str) -> Option<NativeKind> {
     let p = pattern.trim();
@@ -178,10 +218,11 @@ pub fn classify_native(pattern: &str) -> Option<NativeKind> {
     if is_if_prefixed(p) {
         return classify_if_template(p);
     }
+    let (declaration, _) = strip_declaration_modifiers(p);
     for &(prefix, is_class) in DECL_PATTERN_PREFIXES {
-        if let Some(rest) = p.strip_prefix(prefix) {
+        if let Some(rest) = declaration.strip_prefix(prefix) {
             let head = rest
-                .split(|c: char| c == '(' || c == '{' || c == '<' || c.is_whitespace())
+                .split(|c: char| c == '(' || c == '{' || c == '<' || c == ':' || c.is_whitespace())
                 .next()
                 .unwrap_or("")
                 .trim();
@@ -351,6 +392,7 @@ fn validate_argument_pattern(arguments: &str) -> Option<()> {
 }
 
 fn pattern_argument_text(pattern: &str) -> Option<&str> {
+    let (pattern, _) = strip_declaration_modifiers(pattern);
     let open = pattern.find('(')?;
     let tail = pattern.get(open + 1..)?;
     let close = tail.find(')')?;
@@ -450,6 +492,7 @@ fn match_structural(
     let tree = parse_source(lang, source)?;
     let mut out = Vec::new();
     let arguments = argument_template(pattern);
+    let (_, declaration_modifiers) = strip_declaration_modifiers(pattern);
     match kind {
         NativeKind::Function { name, body } => {
             run_queries(
@@ -458,6 +501,7 @@ fn match_structural(
                 tree.root_node(),
                 source,
                 queries_for(FUNCTION_QUERY_TABLE, lang),
+                declaration_modifiers,
                 name.as_deref(),
                 None,
                 body.as_ref(),
@@ -473,6 +517,7 @@ fn match_structural(
                 tree.root_node(),
                 source,
                 class_queries_for(lang, keyword),
+                declaration_modifiers,
                 name.as_deref(),
                 Some((lang, *keyword)),
                 None,
@@ -505,6 +550,7 @@ fn run_queries(
     root: Node,
     source: &str,
     queries: &'static [&'static str],
+    declaration_modifiers: Option<&str>,
     name_filter: Option<&str>,
     class_filter: Option<(Language, &str)>,
     body_filter: Option<&BodyTemplate>,
@@ -538,6 +584,9 @@ fn run_queries(
             if is_in_comment_or_string(&node) {
                 continue;
             }
+            if !declaration_modifiers_match(&node, source, declaration_modifiers) {
+                continue;
+            }
             if let Some((lang, keyword)) = class_filter {
                 if !class_keyword_matches(lang, &node, source, keyword) {
                     continue;
@@ -560,6 +609,22 @@ fn run_queries(
         }
     }
     Ok(())
+}
+
+fn declaration_modifiers_match(node: &Node, source: &str, modifiers: Option<&str>) -> bool {
+    let Some(modifiers) = modifiers else {
+        return true;
+    };
+    [Some(*node), node.parent()]
+        .into_iter()
+        .flatten()
+        .filter_map(|candidate| node_text(&candidate, source))
+        .any(|text| {
+            text.trim_start()
+                .strip_prefix(modifiers)
+                .and_then(|rest| rest.chars().next())
+                .is_some_and(char::is_whitespace)
+        })
 }
 
 fn class_keyword_matches(lang: Language, node: &Node, source: &str, keyword: &str) -> bool {
@@ -1092,10 +1157,11 @@ fn capture_name(token: &str) -> Option<&str> {
 }
 
 fn declaration_name_capture(pattern: &str) -> Option<&str> {
+    let (declaration, _) = strip_declaration_modifiers(pattern);
     DECL_PATTERN_PREFIXES.iter().find_map(|(prefix, _)| {
-        let rest = pattern.trim().strip_prefix(prefix)?;
+        let rest = declaration.strip_prefix(prefix)?;
         let head = rest
-            .split(|c: char| c == '(' || c == '{' || c == '<' || c.is_whitespace())
+            .split(|c: char| c == '(' || c == '{' || c == '<' || c == ':' || c.is_whitespace())
             .next()?;
         capture_name(head)
     })
