@@ -121,9 +121,23 @@ impl TrigramDfCache {
                 state.gen = gen;
                 return TrigramShortcut::Full;
             }
-            state.unavailable = false;
-            state.gen = gen;
-            state.cache.entries.clear();
+            // br-perf-vocab-preload: fts5vocab point lookups walk the whole
+            // term index per probe (~ms each), which put ~11ms on every
+            // cold needle's df path. One bulk preload per generation turns
+            // every later probe into a HashMap hit. Bounded by corpus
+            // vocabulary size (~1-2MB for 30-50k trigrams here).
+            match preload_vocab(store) {
+                Ok(entries) => {
+                    state.unavailable = false;
+                    state.gen = gen;
+                    state.cache.entries = entries;
+                }
+                Err(_) => {
+                    state.unavailable = true;
+                    state.gen = gen;
+                    return TrigramShortcut::Full;
+                }
+            }
         }
         let conn = store.connection();
         // Sequential probe-and-stop: ask only for the df values needed to
@@ -202,6 +216,38 @@ fn ensure_vocab_table(store: &IndexStore) -> Result<(), crate::StoreError> {
 /// decode failure) — distinct from a genuine df of 0, which the vocab reports
 /// only as an absent row; callers treat None as fall-back-to-phrase and a 0
 /// as merely the best rarity candidate (never trusted absence).
+
+/// Bulk-load every (term, doc) pair from the ephemeral fts5vocab table.
+/// One ordered pass over the vocabulary per generation replaces O(terms)
+/// linear point-probes; entries then serve HashMap-speed df lookups.
+fn preload_vocab(
+    store: &IndexStore,
+) -> Result<HashMap<String, i64>, crate::StoreError> {
+    let conn = store.connection();
+    let sql = format!("SELECT term, doc FROM {VOCAB_TABLE}");
+    let mut stmt = conn
+        .prepare_cached(&sql)
+        .map_err(|e| crate::StoreError::Other(format!("vocab preload prepare: {e}")))?;
+    let mut map = HashMap::new();
+    use std::iter::Iterator as _;
+    let mut rows = stmt
+        .query([])
+        .map_err(|e| crate::StoreError::Other(format!("vocab preload query: {e}")))?;
+    while let Some(row) = rows
+        .next()
+        .map_err(|e| crate::StoreError::Other(format!("vocab preload row: {e}")))?
+    {
+        let term: String = row
+            .get(0)
+            .map_err(|e| crate::StoreError::Other(format!("vocab preload term: {e}")))?;
+        let doc: i64 = row
+            .get(1)
+            .map_err(|e| crate::StoreError::Other(format!("vocab preload doc: {e}")))?;
+        map.insert(term, doc);
+    }
+    Ok(map)
+}
+
 fn fetch_one(conn: &rusqlite::Connection, term: &str) -> Option<i64> {
     let sql = format!("SELECT doc FROM {VOCAB_TABLE} WHERE term = ?1");
     let mut stmt = conn.prepare_cached(&sql).ok()?;

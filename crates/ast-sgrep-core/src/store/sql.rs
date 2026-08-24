@@ -407,7 +407,13 @@ pub fn configure_connection_with(
         durability.steady_pragma()
     ))?;
     if std::env::var_os("ASGREP_SQLITE_DEFAULTS").is_none() {
-        conn.execute_batch("PRAGMA mmap_size = 268435456; PRAGMA cache_size = -16384;")?;
+        // br-perf-tail-cache: a serve session's p99/p100 is cold-page btree
+        // I/O for each first-touch needle's trigram doclists. The self-corpus
+        // index is ~58MB; a 70MB page cache makes the whole index
+        // page-cache-resident in one long-lived session, flattening the
+        // tail to memory speed after one warm pass. Read-path only; mmap
+        // stays on so anything beyond the cache is still syscall-free.
+        conn.execute_batch("PRAGMA mmap_size = 268435456; PRAGMA cache_size = -71680;")?;
     }
     Ok(())
 }

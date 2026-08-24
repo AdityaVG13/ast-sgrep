@@ -48,12 +48,32 @@ fn restrict_to_files(
     let Some(allowed_files) = allowed_files else {
         return;
     };
-    let mut paths = allowed_files.iter().collect::<Vec<_>>();
+    let mut paths: Vec<String> = allowed_files.iter().cloned().collect();
     paths.sort_unstable();
+    // br-perf-inlist-bucket: quantize the placeholder count up to a power of
+    // two by repeating the last path. IN-membership is unchanged by
+    // duplicates, and the SQL text becomes stable within a bucket so
+    // prepare_cached stops re-parsing a fresh statement per distinct file
+    // count (the tail-profile showed sqlite3RunParser/yy_reduce churn from
+    // per-count statement text).
+    let n = paths.len();
+    let bucket = if n == 0 {
+        0
+    } else {
+        (n - 1).next_power_of_two().max(8)
+    };
     where_clause.push_str(" AND f.path IN (");
-    where_clause.push_str(&vec!["?"; paths.len()].join(","));
+    where_clause.push_str(&vec!["?"; bucket].join(","));
     where_clause.push(')');
-    bind.extend(paths.into_iter().cloned());
+    if bucket > n {
+        if let Some(last) = paths.last().cloned() {
+            for _ in n..bucket {
+                paths.push(last.clone());
+            }
+        }
+    }
+    debug_assert_eq!(paths.len(), bucket);
+    bind.extend(paths);
 }
 
 fn query_caller_rows(
