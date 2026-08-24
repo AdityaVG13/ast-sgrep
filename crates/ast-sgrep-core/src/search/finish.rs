@@ -79,6 +79,16 @@ fn cmp_ranked_hits(
     primary
         .then_with(|| a.file.cmp(&b.file))
         .then_with(|| a.line_start.cmp(&b.line_start))
+        // Total-order tail (br-23f): sort_unstable_by is NOT stable and the
+        // input order feeding it comes from a randomly seeded HashMap
+        // (lexical_from_fts), so any residual Equal flips hit order between
+        // processes and breaks the documented cross-process byte-stability
+        // contract. These arms evaluate only on exact upstream ties.
+        .then_with(|| a.line_end.cmp(&b.line_end))
+        .then_with(|| a.symbol.cmp(&b.symbol))
+        .then_with(|| a.caller.cmp(&b.caller))
+        .then_with(|| a.callee.cmp(&b.callee))
+        .then_with(|| a.excerpt.cmp(&b.excerpt))
 }
 
 fn same_definition_locus(hit: &SearchHit, definition: &SearchHit) -> bool {
