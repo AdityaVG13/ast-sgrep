@@ -258,7 +258,8 @@ pub use pattern::{
     DECL_KIND_PREFIXES, DECL_PATTERN_PREFIXES,
 };
 pub use signature::{
-    cached_pattern_signatures, required_pattern_literal, structural_term_signatures, DECL_PREFIXES,
+    cached_pattern_signatures, candidate_kind_signatures, required_pattern_literal,
+    structural_term_signatures, DECL_PREFIXES,
 };
 fn make_parser(lang: Language) -> Box<dyn LanguageParser> {
     match lang {

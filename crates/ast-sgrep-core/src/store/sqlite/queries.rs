@@ -551,6 +551,25 @@ impl IndexStore {
     ) -> Result<Vec<PatternNodeRow>> {
         self.pattern_nodes_matching_inner(signature, lang, None)
     }
+    /// Distinct paths holding at least one node with any of `signatures`.
+    ///
+    /// Narrows the native tree-sitter pass to files that can possibly contain
+    /// a match (every native match is a node of the pattern's kind, hence
+    /// indexed under one of these signatures). The native matcher still decides
+    /// every hit, so over-broad candidates never change results.
+    pub fn pattern_node_candidate_paths(
+        &self,
+        signatures: &[String],
+        lang: Option<&str>,
+    ) -> Result<std::collections::HashSet<String>> {
+        let mut paths = std::collections::HashSet::new();
+        for signature in signatures {
+            for row in self.pattern_nodes_matching(signature, lang)? {
+                paths.insert(row.path);
+            }
+        }
+        Ok(paths)
+    }
     pub(crate) fn pattern_nodes_matching_limited(
         &self,
         signature: &str,

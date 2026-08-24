@@ -88,19 +88,28 @@ pub fn search_pattern(
             }
         }
     }
-    // Unparseable patterns are match-none, not errors (pattern_routing):
-    // the native engine rejecting garbage must not fail the whole search.
-    let native_accepted = match search_pattern_native(pattern, root, lang_filter) {
-        Ok(native) => {
-            for hit in native {
-                if seen.insert((hit.file.clone(), hit.line_start, hit.line_end)) {
-                    hits.push(hit);
-                }
-            }
-            true
+    // br-perf-candidates: narrow the native walk to files holding a node of
+    // the pattern's kind when the exact shape is not indexable. Sound: files
+    // without such a node cannot contain a match; the native matcher still
+    // decides every hit on surviving files.
+    let candidate_paths = match ast_sgrep_lang::candidate_kind_signatures(pattern) {
+        Some(kinds) if store.pattern_node_count()? > 0 => {
+            Some(store.pattern_node_candidate_paths(&kinds, lang_filter)?)
         }
-        Err(_) => false,
+        _ => None,
     };
+    let native_accepted =
+        match search_pattern_native_profiled(pattern, root, lang_filter, true, candidate_paths) {
+            Ok(native) => {
+                for hit in native.hits {
+                    if seen.insert((hit.file.clone(), hit.line_start, hit.line_end)) {
+                        hits.push(hit);
+                    }
+                }
+                true
+            }
+            Err(_) => false,
+        };
     if native_accepted && hits.is_empty() && needs_ast_grep_fallback(pattern) {
         // Fail-closed (iva9.7): exotic shapes never return silent empty when
         // the structural fallback is disabled or unavailable.
@@ -147,13 +156,6 @@ fn search_pattern_cached(
     hits.sort_by(|a, b| a.file.cmp(&b.file).then(a.line_start.cmp(&b.line_start)));
     Ok(hits)
 }
-fn search_pattern_native(
-    pattern: &str,
-    root: &Path,
-    lang_filter: Option<&str>,
-) -> Result<Vec<SearchHit>> {
-    Ok(search_pattern_native_profiled(pattern, root, lang_filter, true)?.hits)
-}
 
 pub fn profile_pattern_search(
     pattern: &str,
@@ -167,10 +169,10 @@ pub fn profile_pattern_search(
             crate::StoreError::Other(format!("failed to build pattern profiling pool: {error}"))
         })?;
     let baseline = single_worker
-        .install(|| search_pattern_native_profiled(pattern, root, lang_filter, false))?;
+        .install(|| search_pattern_native_profiled(pattern, root, lang_filter, false, None))?;
     let serial = single_worker
-        .install(|| search_pattern_native_profiled(pattern, root, lang_filter, true))?;
-    let parallel = search_pattern_native_profiled(pattern, root, lang_filter, true)?;
+        .install(|| search_pattern_native_profiled(pattern, root, lang_filter, true, None))?;
+    let parallel = search_pattern_native_profiled(pattern, root, lang_filter, true, None)?;
     let identity = |hits: &[SearchHit]| {
         hits.iter()
             .map(|hit| (hit.file.clone(), hit.line_start, hit.line_end))
@@ -231,17 +233,35 @@ fn search_pattern_native_profiled(
     root: &Path,
     lang_filter: Option<&str>,
     use_prefilter: bool,
+    candidate_paths: Option<std::collections::HashSet<String>>,
 ) -> Result<NativeSearchOutput> {
     let canonical = ast_sgrep_lang::Language::canonical_filter(lang_filter);
     let lang_filter = canonical.as_deref();
     let total_started = Instant::now();
     let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
-    let ignore = crate::gitignore::IgnoreMatcher::new(&root);
+    let ignore = std::sync::Arc::new(crate::gitignore::IgnoreMatcher::new(&root));
+    let ignore_prune = std::sync::Arc::clone(&ignore);
+    let prune_root = root.clone();
     let walk_started = Instant::now();
     let paths = WalkDir::new(&root)
         .follow_links(false)
         .into_iter()
-        .filter_entry(|entry| !should_skip_dir(entry.path()))
+        .filter_entry(move |entry| {
+            if should_skip_dir(entry.path()) {
+                return false;
+            }
+            let ft = entry.file_type();
+            if !ft.is_dir() {
+                return true;
+            }
+            let Ok(rel) = entry.path().strip_prefix(&prune_root) else {
+                return true;
+            };
+            if rel.as_os_str().is_empty() {
+                return true;
+            }
+            !ignore_prune.is_dir_ignored(rel)
+        })
         .filter_map(|entry| entry.ok())
         .filter(|entry| entry.file_type().is_file())
         .filter_map(|entry| {
@@ -262,6 +282,15 @@ fn search_pattern_native_profiled(
         .par_iter()
         .map(|path| {
             let prefilter_started = Instant::now();
+            if let Some(allowed) = &candidate_paths {
+                let rel_ok = path
+                    .strip_prefix(&root)
+                    .map(|rel| allowed.contains(&rel.to_string_lossy().replace('\\', "/")))
+                    .unwrap_or(false);
+                if !rel_ok {
+                    return NativeFileResult::default();
+                }
+            }
             let Some(bytes) = read_pattern_bytes_capped(path) else {
                 return NativeFileResult::default();
             };
