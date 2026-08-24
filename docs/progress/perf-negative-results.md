@@ -226,3 +226,17 @@ _(none)_
 - **measured_result:** combined: p99 18.9 ms / max 20.7 ms — a bounded improvement (~15–25% of tail), NOT the sub-1ms target. Triangulated attribution (env-gated spans + `sample` on worker + subtraction): the cold tail is SQLite row-streaming and B-tree page walking for each first-touch needle's trigram postings plus structural-stage SQL — candidate-volume work bounded below by data volume. Repeat queries already sit at 0.11–0.17 ms and literal:-direct cold needles at 0.3–0.7 ms.
 - **retry_condition_predicate:** Sub-1ms p99 across ALL first-touch needles is achievable only by (a) persisting an answer cache across sessions with explicit staleness semantics (semantics-changing, needs product sign-off), or (b) restricting the metric to warm/repeat or literal:-direct workloads (already sub-ms). Reopen only if one of those two product decisions is made (form 8: blocked on architectural/product decision).
 - **bead_id:** (none — closed this campaign)
+
+### `hybrid-structural-excerpt-lazy-attach` (LANDED 2026-08-24 — keep, 2x on high-df cold)
+
+- **date:** 2026-08-24
+- **candidate_name:** `hybrid-structural-excerpt-lazy-attach`
+- **target_workload:** first-touch hybrid needles (response-cache-missing), codemode-serve, self corpus; structural passes were fetching one indexed excerpt SQL per candidate hit before fusion discarded most of them
+- **files_touched:** `crates/ast-sgrep-core/src/search/finish.rs`, `search/mod.rs` (hybrid finish → lazy variant), `search/passes/symbol.rs` (`*_opts(attach_excerpts)` params; `attach_indexed_excerpts_if_empty`) — commit `251446fe`
+- **correctness_proof:** golden battery 35/35 byte-identical on a freshly rebuilt index; fusion input member sets identical (attachment moved, not removed); critic/prune see identical excerpts for every survivor. NOTE: verify goldens only against a same-session index — stale-index drift produces false DIFFs (both binaries agree pairwise).
+- **evidence_artifacts_paths:** `/tmp/asgrep-bench/{discrim,single_tail,burst_driver,multi_cold}.py`, samples `tail_sample.txt`/`ws_*.txt`, span dumps `hyb*.jsonl`
+- **baseline_configuration:** macOS arm64 M5 Max, release-perf, `d59380a6`; high-df cold needles avg 24.9 ms; tail battery p99 19.4–19.9 ms
+- **candidate_configuration:** symbol def/caller/anchor passes skip per-hit excerpt attachment in the hybrid path; `finish_response_checked_lazy` attaches once post-dedup/pre-prune via `attach_indexed_excerpts_if_empty`
+- **measured_result:** KEEP — high-df cold needles 24.9 → 12.4 ms avg (2x); tail battery p99 17.3–18.8 ms / max ~23 ms (modest, low-df-dominated); sustained load unchanged (27.2k calls/120s, 0 errors). Triangulated attribution: rusqlite Rows streaming + sqlite3_step + string materialization were ≥70% of tail samples.
+- **retry_condition_predicate:** Further tail reduction requires cutting row *streams*, not storage: batched/deferred join variants were measured neutral-to-negative warm (`trigram-scan-cost-attribution`), so reopen only with a parallel phase-1 walker or an async SQLite reader (form 8: architectural dependency).
+- **bead_id:** (none)
