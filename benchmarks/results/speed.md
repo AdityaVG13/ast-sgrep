@@ -611,3 +611,21 @@ identical on 4 declaration patterns (253-hit struct set byte-equal in
 Standing vs rivals (same machine/corpus): ast-grep one-shot structural
 20 ms; asgrep serve-session distinct-pattern 43 ms first-touch and
 single-digit ms thereafter, with response-cache repeats at 0.1 ms.
+
+## 2026-08-24 BFS parallel walk (PR #33 branch)
+
+**Status: `reproducible-in-tree`.** Harness: `/tmp/asgrep-bench/{pattern_clean.py,oracle_ab.py,clamp_sweep.py}`.
+Oracle: BFS-vs-serial hit sets identical on four declaration patterns.
+
+| walker variant | distinct pattern first-touch | burst CPU |
+|---|---:|---|
+| serial pruned walk (`80c08b38`) | ~1,730 ms | — |
+| depth-2 partitioned (`9524e08c`) | 43–48 ms | ≤3% of one core |
+| **BFS, 4-worker pool (`3bffdbe5`)** | **~35–42 ms** | ≤4 workers, sustained <1% machine |
+| BFS, 8 workers (`ASGREP_WALK_THREADS=8`) | 26–39 ms | ~44% of one core-equivalent |
+
+`ASGREP_WALK_THREADS` tunes the latency/CPU trade; default 4.
+Sustained mixed load unchanged: 31,515 real calls/120 s, 0 errors,
+p50 literal 1.65–1.72 ms. Depth-3 fixed frontier was also measured:
+correct but slower than both (57–62 ms) — serial phase growth (Amdahl);
+recorded under br-kcx with retry predicate.
