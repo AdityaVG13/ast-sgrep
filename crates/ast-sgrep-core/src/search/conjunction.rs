@@ -78,12 +78,43 @@ fn strip_wrapping_quotes(s: &str) -> &str {
     }
 }
 
+/// True when `needle` occurs in `s` OUTSIDE double-quoted spans. A `"`
+/// toggles quoting; an unterminated span extends to end-of-string. Byte-safe:
+/// every byte matched here is ASCII, so slice indices stay on char boundaries.
+fn contains_outside_quotes(s: &str, needle: &str) -> bool {
+    split_outside_quotes(s, needle).is_some()
+}
+
+/// Split at the FIRST `needle` that sits outside double-quoted spans, or
+/// `None` when every occurrence is quoted payload (or absent). Keeps quoted
+/// payloads such as `literal:"cats AND dogs"` intact instead of splitting on
+/// separator-looking bytes inside them.
+fn split_outside_quotes<'a>(s: &'a str, needle: &str) -> Option<(&'a str, &'a str)> {
+    let mut in_quotes = false;
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'"' => in_quotes = !in_quotes,
+            _ if !in_quotes && bytes[i..].starts_with(needle.as_bytes()) => {
+                return Some((&s[..i], &s[i + needle.len()..]));
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    None
+}
+
 /// Parse a two-channel conjunction. Returns `None` (fall through to ordinary
 /// search) unless the query is exactly `<channel> AND [NOT] <channel>`.
 pub(crate) fn parse(raw: &str) -> Option<Conjunction> {
     let raw = raw.trim();
-    let (lhs, rhs) = raw.split_once(" AND ")?;
-    if rhs.contains(" AND ") {
+    // Separator scan is quote-aware: an ` AND ` inside a quoted payload
+    // (`semantic:"cats AND dogs"`, `literal:"a AND b"`) is payload bytes, not
+    // a channel boundary (br-9kb).
+    let (lhs, rhs) = split_outside_quotes(raw, " AND ")?;
+    if contains_outside_quotes(rhs, " AND ") {
         // Two channels only in v1.
         return None;
     }
