@@ -102,11 +102,15 @@ fn lexical_from_field(
 ) -> Result<()> {
     let fts_query = fts_query.to_string();
     // Lang filter in SQL before ORDER/LIMIT so a lang page cannot go empty (iva9.5).
+    // FTS5 resolves MATCH through the table-name pseudo-column: an alias
+    // ("FROM lines_fts t WHERE t MATCH") fails with "no such column" (ebfaace3
+    // regression). Keep the join-free projection but always qualify MATCH with
+    // the real table name.
     let (sql, lang_bind): (String, Option<&str>) = match options.lang_filter.as_deref() {
         Some(lang) => (
             format!(
-                "SELECT t.file_id, t.line_no, t.content \
-                 FROM {field} t WHERE t MATCH ?1 AND t.file_id IN \
+                "SELECT file_id, line_no, content \
+                 FROM {field} WHERE {field} MATCH ?1 AND file_id IN \
                    (SELECT id FROM files WHERE language = ?3) \
                  ORDER BY bm25({field}) LIMIT ?2"
             ),
@@ -114,8 +118,8 @@ fn lexical_from_field(
         ),
         None => (
             format!(
-                "SELECT t.file_id, t.line_no, t.content \
-                 FROM {field} t WHERE t MATCH ?1 ORDER BY bm25({field}) LIMIT ?2"
+                "SELECT file_id, line_no, content \
+                 FROM {field} WHERE {field} MATCH ?1 ORDER BY bm25({field}) LIMIT ?2"
             ),
             None,
         ),
