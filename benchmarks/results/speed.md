@@ -454,3 +454,23 @@ Levers: trigram ORDER BY materialization removed (TEMP B-TREE over full
 doclists up to 28k rows); lexical stage join-free with bounded identity
 batch-fetch. Correctness: 35-contract golden battery byte-identical except
 ≥16-hit overflow subsets (same class as pre-existing budget cut).
+
+## 2026-08-23 warm-path cost decomposition (PR #33 branch)
+
+**Status: `reproducible-in-tree`.** Harness: `/tmp/asgrep-bench/floor_probe.py`
+(codemode-serve over the repo's own index; 60 distinct guaranteed-zero-posting
+queries vs the 299-term distinct bench battery; per-request client timing,
+warm-up excluded; interleaved rounds on an idle machine).
+
+| Surface | median | interpretation |
+|---------|-------:|----------------|
+| fixed pipeline floor (zero-posting miss queries) | ~0.156 ms | parse, stage dispatch, finishing, response encode — everything except candidate volume |
+| warm distinct single-term literal/hybrid | ~2.5–3.3 ms | volume-dependent cost dominates (~16x the floor) |
+
+Implication for the sub-1ms target: the response-cache repeat path (0.11 ms)
+and the zero-hit path (0.16 ms) prove the fixed overhead is already far below
+budget. Remaining cost scales with candidate volume; the largest attributed
+block is the trigram scan span (~25% of warm-path time), whose cost is flat in
+doclist size but grows with term length (FTS5 phrase intersection). See
+`docs/progress/perf-negative-results.md` (`trigram-scan-cost-attribution`) for
+the measured prototypes and the df-metadata retry predicate.
