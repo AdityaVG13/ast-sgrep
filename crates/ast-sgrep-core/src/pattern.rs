@@ -99,7 +99,14 @@ pub fn search_pattern(
         _ => None,
     };
     let native_accepted =
-        match search_pattern_native_profiled(pattern, root, lang_filter, true, candidate_paths) {
+        match search_pattern_native_profiled(
+        pattern,
+        root,
+        lang_filter,
+        true,
+        candidate_paths,
+        store.all_file_paths()?,
+    ) {
             Ok(native) => {
                 for hit in native.hits {
                     if seen.insert((hit.file.clone(), hit.line_start, hit.line_end)) {
@@ -169,10 +176,10 @@ pub fn profile_pattern_search(
             crate::StoreError::Other(format!("failed to build pattern profiling pool: {error}"))
         })?;
     let baseline = single_worker
-        .install(|| search_pattern_native_profiled(pattern, root, lang_filter, false, None))?;
+        .install(|| search_pattern_native_profiled(pattern, root, lang_filter, false, None, Vec::new()))?;
     let serial = single_worker
-        .install(|| search_pattern_native_profiled(pattern, root, lang_filter, true, None))?;
-    let parallel = search_pattern_native_profiled(pattern, root, lang_filter, true, None)?;
+        .install(|| search_pattern_native_profiled(pattern, root, lang_filter, true, None, Vec::new()))?;
+    let parallel = search_pattern_native_profiled(pattern, root, lang_filter, true, None, Vec::new())?;
     let identity = |hits: &[SearchHit]| {
         hits.iter()
             .map(|hit| (hit.file.clone(), hit.line_start, hit.line_end))
@@ -234,45 +241,59 @@ fn search_pattern_native_profiled(
     lang_filter: Option<&str>,
     use_prefilter: bool,
     candidate_paths: Option<std::collections::HashSet<String>>,
+    indexed_paths: Vec<String>,
 ) -> Result<NativeSearchOutput> {
     let canonical = ast_sgrep_lang::Language::canonical_filter(lang_filter);
     let lang_filter = canonical.as_deref();
     let total_started = Instant::now();
     let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
-    let ignore = std::sync::Arc::new(crate::gitignore::IgnoreMatcher::new(&root));
-    let ignore_prune = std::sync::Arc::clone(&ignore);
-    let prune_root = root.clone();
     let walk_started = Instant::now();
-    let paths = WalkDir::new(&root)
-        .follow_links(false)
-        .into_iter()
-        .filter_entry(move |entry| {
-            if should_skip_dir(entry.path()) {
-                return false;
-            }
-            let ft = entry.file_type();
-            if !ft.is_dir() {
-                return true;
-            }
-            let Ok(rel) = entry.path().strip_prefix(&prune_root) else {
-                return true;
-            };
-            if rel.as_os_str().is_empty() {
-                return true;
-            }
-            !ignore_prune.is_dir_ignored(rel)
-        })
-        .filter_map(|entry| entry.ok())
-        .filter(|entry| entry.file_type().is_file())
-        .filter_map(|entry| {
-            let path = entry.into_path();
-            if should_skip_file(&path) {
-                return None;
-            }
-            let rel = path.strip_prefix(&root).ok()?;
-            (!ignore.is_ignored(rel)).then_some(path)
-        })
-        .collect::<Vec<PathBuf>>();
+    // br-perf-indexed-walk: the store owns the authoritative file list for
+    // this root (same freshness contract as codemod planning). Reading the
+    // indexed list replaces a full filesystem traversal, which dominated
+    // pattern queries even after gitignore pruning. Empty store -> fall back
+    // to the pruned walk so first-run/empty-index behavior is unchanged.
+    let paths: Vec<PathBuf> = {
+        if indexed_paths.is_empty() {
+            let ignore = crate::gitignore::IgnoreMatcher::new(&root);
+            WalkDir::new(&root)
+                .follow_links(false)
+                .into_iter()
+                .filter_entry(|entry| {
+                    if should_skip_dir(entry.path()) {
+                        return false;
+                    }
+                    let ft = entry.file_type();
+                    if !ft.is_dir() {
+                        return true;
+                    }
+                    let Ok(rel) = entry.path().strip_prefix(&root) else {
+                        return true;
+                    };
+                    if rel.as_os_str().is_empty() {
+                        return true;
+                    }
+                    !ignore.is_dir_ignored(rel)
+                })
+                .filter_map(|entry| entry.ok())
+                .filter(|entry| entry.file_type().is_file())
+                .filter_map(|entry| {
+                    let path = entry.into_path();
+                    if should_skip_file(&path) {
+                        return None;
+                    }
+                    let rel = path.strip_prefix(&root).ok()?;
+                    (!ignore.is_ignored(rel)).then_some(path)
+                })
+                .collect::<Vec<PathBuf>>()
+        } else {
+            indexed_paths
+                .iter()
+                .map(|rel| root.join(rel))
+                .filter(|path| path.is_file())
+                .collect::<Vec<PathBuf>>()
+        }
+    };
     let walk_ns = walk_started.elapsed().as_nanos();
     let required_literal = use_prefilter
         .then(|| required_pattern_literal(pattern))
@@ -359,6 +380,10 @@ fn search_pattern_native_profiled(
             }
         })
         .collect::<Vec<_>>();
+    eprintln!(
+        "[phase] scan={}ms",
+        parallel_started.elapsed().as_millis()
+    );
     let parallel_span_ns = parallel_started.elapsed().as_nanos();
     let rank_started = Instant::now();
     let mut hits = results
