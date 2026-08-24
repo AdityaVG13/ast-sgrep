@@ -491,10 +491,6 @@ fn cleanup_leftovers(parent_full: &Path) {
     }
 }
 
-fn parent_of(path: &Path) -> &Path {
-    path.parent().unwrap_or_else(|| Path::new("."))
-}
-
 /// Match `.name.asgrep-codemod-{role}-*` sidecar names (any pid/clock/nonce tail).
 fn is_codemod_sidecar(file_name: &str, role: &str) -> bool {
     let Some(rest) = file_name.strip_prefix('.') else {

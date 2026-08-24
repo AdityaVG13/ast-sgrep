@@ -166,6 +166,8 @@ pub struct IndexStore {
     cache_seq: std::cell::Cell<i64>,
     /// Write-durability profile for this connection (0obi).
     durability: crate::store::Durability,
+    /// Trigram document-frequency memo (br-umh rarest-trigram scan shortcut).
+    trigram_df: crate::store::trigram_df::TrigramDfCache,
 }
 mod queries;
 mod writes;
@@ -210,6 +212,7 @@ impl IndexStore {
             bulk_tx_owns: std::cell::Cell::new(false),
             cache_seq: std::cell::Cell::new(0),
             durability,
+            trigram_df: crate::store::trigram_df::TrigramDfCache::new(),
         };
         store.init_schema()?;
         init_cache_seq(&store.conn, &store.cache_seq)?;
@@ -319,6 +322,10 @@ impl IndexStore {
         // beyond the public facade (l115). Do not open a second connection to
         // the same db_path from agent surfaces.
         &self.conn
+    }
+    /// Trigram document-frequency memo (br-umh rarest-trigram scan shortcut).
+    pub(crate) fn trigram_df(&self) -> &crate::store::trigram_df::TrigramDfCache {
+        &self.trigram_df
     }
     pub fn set_meta(&self, key: &str, value: &str) -> Result<()> {
         self.conn.prepare_cached( "INSERT INTO meta(key, value) VALUES(?1, ?2) ON CONFLICT(key) DO UPDATE SET value = excluded.value",

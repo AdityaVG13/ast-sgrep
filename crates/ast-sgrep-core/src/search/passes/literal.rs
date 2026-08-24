@@ -5,6 +5,7 @@ use crate::search::passes::bmh::{
 };
 use crate::search::types::matches_lang;
 use crate::search::types::{SearchHit, SearchOptions};
+use crate::store::trigram_df::TrigramShortcut;
 use crate::store::IndexStore;
 use crate::Result;
 use rusqlite::params;
@@ -29,7 +30,27 @@ fn literal_trigram(
     parsed: &ParsedQuery,
     needle: &str,
 ) -> Result<Vec<SearchHit>> {
+    // Rarest-trigram df shortcut (br-umh): when trustworthy document-frequency
+    // data shows one needle trigram to be rare, MATCH only that trigram instead
+    // of making FTS5 intersect every trigram of the phrase. Safety: only
+    // trigrams derived from the needle are candidates, so any candidate's
+    // posting list is a superset of true matches, and content_matches_literal
+    // reverify restores exactness — poisoned dfs can change speed, not output.
+    if let TrigramShortcut::Match(tri) = store.trigram_df().scan_shortcut(store, needle) {
+        let query = crate::fts::escape_fts_term(&tri);
+        return scan_trigram_matches(store, options, parsed, needle, &query);
+    }
     let query = crate::fts::escape_fts_term(needle);
+    scan_trigram_matches(store, options, parsed, needle, &query)
+}
+
+fn scan_trigram_matches(
+    store: &IndexStore,
+    options: &SearchOptions,
+    parsed: &ParsedQuery,
+    needle: &str,
+    query: &str,
+) -> Result<Vec<SearchHit>> {
     // No ORDER BY here: a TEMP B-TREE sort would materialize the whole trigram
     // doclist before the first row, defeating the lazy budget break below.
     // Candidates stream in posting order, the loop stops at the retained

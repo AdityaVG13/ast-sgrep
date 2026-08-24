@@ -160,3 +160,6 @@ path = "../../tests/core/store_delete.rs"
 [[test]]
 name = "store_pragmas"
 path = "../../tests/core/store_pragmas.rs"
+[[test]]
+name = "trigram_shortcut"
+path = "../../tests/core/trigram_shortcut.rs"

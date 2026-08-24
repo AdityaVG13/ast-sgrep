@@ -474,3 +474,32 @@ block is the trigram scan span (~25% of warm-path time), whose cost is flat in
 doclist size but grows with term length (FTS5 phrase intersection). See
 `docs/progress/perf-negative-results.md` (`trigram-scan-cost-attribution`) for
 the measured prototypes and the df-metadata retry predicate.
+
+## 2026-08-23 trigram df rarest-trigram MATCH (br-umh, PR #33 branch)
+
+**Status: `reproducible-in-tree`.** Harnesses: `/tmp/asgrep-bench/golden.py`
+(35-contract byte-identity battery, capture from base then verify lever),
+`single2.py` (300 distinct single-term queries through `codemode-serve`,
+repo-root cwd, warm-up excluded, per-request client timing, interleaved A/B),
+`load3.py` (mixed 600-term batch throughput, fresh process per 5000 calls).
+Binaries: `asgrep_base5` = clean HEAD `6c44dca3` release-perf build;
+`asgrep_v9` = lever at RARE_ENOUGH_DF=2048.
+
+| metric | base | lever | note |
+|--------|-----:|------:|------|
+| distinct-query p50 | 2.30–2.73 ms | 1.96–2.23 ms | ~21% p50 across 4 interleaved rounds |
+| distinct-query p10 | 0.81–0.89 ms | 0.73–0.75 ms | ~13% |
+| distinct-query p90 | 11.83–12.17 ms | 10.98–11.18 ms | ~8% |
+| mixed batch avg/call | 4.67 ms | 3.65 ms | −22%, 25699→32891 real calls / 120 s, 0 errors |
+| golden battery | — | 35/35 byte-identical | under-budget contracts unchanged |
+
+Threshold tuning (same harness): RARE_ENOUGH_DF=256 rarely engaged and netted
+**negative** (~+0.3 ms p50; the corpus's median trigram df is 85 but p75=441,
+p90=1332 sit above the gate); 4096 engaged everywhere and measured p50
+{2.02, 1.86, 1.86} vs base {2.46, 2.49, 2.28}. Shipped 2048: above this
+corpus's p90 df, below the worst-case single-scan bound that larger corpora
+could make painful. Correctness: df comes from an ephemeral temp fts5vocab
+table over the live index (no sidecar to drift); only needle-derived trigrams
+are ever candidates, so any scanned posting list is a superset of true matches
+and the Rust reverify keeps output exact — poisoned/stale dfs can change
+speed, never results (regression-proven: tests/core/trigram_shortcut.rs).

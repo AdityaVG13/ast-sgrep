@@ -151,14 +151,26 @@ _(none)_
 - **retry_condition_predicate:** Reopen only if a profiler attributes >=10% of warm distinct-query time to symbol_pass_for_files or caller_rows frames despite the existing batching (form 3: profiler-gated).
 - **bead_id:** (none)
 
-### `trigram-scan-cost-attribution` (Open pointer)
+### `trigram-scan-cost-attribution` (CLOSED 2026-08-23 — predicate satisfied by br-umh)
 
 - **target_workload:** literal_trigram_scan span = 25% of warm distinct-query time (avg 906us/scan over 3,700 scans)
-- **files_touched:** `no-source-patch-attempted`
+- **files_touched:** `no-source-patch-attempted` (attribution pass); superseded by the br-umh implementation below
 - **correctness_proof:** not-applicable (measurement pass)
 - **evidence_artifacts_paths:** `/tmp/asgrep-bench/` trigram_cost_model.py (cost vs doclist size: slope ~= 0us/posting, quartiles 1.497 vs 1.498 ms), phrase_vs_single.py (phrase vs single-middle-trigram MATCH: 457 vs 391 ms total, huge per-term variance, +8 ms regression worst case), defer_join_bench.py (deferred rowid->lines/files join past LIMIT: -3%, i.e. joins are free)
 - **baseline_configuration:** current ebfaace3-shape trigram scan
 - **candidate_configuration:** three prototypes evaluated in SQL directly: posting-cap LIMIT (see closed entry above), deferred join (rejected here), subset-trigram MATCH + Rust verify of remaining trigrams (content_matches_literal already guarantees exactness)
 - **measured_result:** scan cost is FLAT vs doclist size and grows with TERM LENGTH (more trigrams intersected by FTS5 phrase machinery: fts5NextMethod/fts5ExprNodeTest_STRING frames). Deferred join saves nothing (joins are 1:1 rowid lookups on a warm page cache). Subset-trigram saves ~15% total ONLY with a lucky rare-trigram pick; blind picks regress badly (a common middle trigram floods the candidate pool).
 - **retry_condition_predicate:** Reopen only with trigram document-frequency metadata available at query time (e.g., persisted per-token df sidecar or FTS5 function support) so the RAREST trigram can be picked deterministically AND a profiler still attributes >=10% of warm-path time to fts5 frames; then subset-MATCH + Rust verify is output-identical by construction and bounded-variance (form 3: profiler-gated + form 4: dependency/metadata-gated).
-- **bead_id:** (none)
+- **closure:** predicate satisfied and landed as br-umh (2026-08-23): ephemeral temp fts5vocab df source, deterministic rarest pick, ~21% warm distinct p50 reduction with 35/35 byte-identical goldens. Row: `benchmarks/results/speed.md::2026-08-23 trigram df rarest-trigram MATCH`. The >=10% profiler-attribution condition was measured at 25% (this entry).
+
+### `trigram-df-gate-too-tight-256` (Open pointer)
+
+- **target_workload:** warm distinct literal/trigram search, self corpus (median trigram doc-frequency 85, p75=441, p90=1332)
+- **files_touched:** `crates/ast-sgrep-core/src/store/trigram_df.rs` (threshold constant only; final ship value 2048)
+- **correctness_proof:** tests/core/trigram_shortcut.rs green at all measured thresholds
+- **evidence_artifacts_paths:** `/tmp/asgrep-bench/` single2.py rounds in `benchmarks/results/speed.md::2026-08-23 trigram df rarest-trigram MATCH` (256 rows) and binaries asgrep_base5/asgrep_v6/asgrep_v9
+- **baseline_configuration:** full-phrase trigram MATCH (base p50 2.30-2.73 ms across interleaved rounds)
+- **candidate_configuration:** rarest-trigram shortcut with RARE_ENOUGH_DF=256 (v6 binary)
+- **measured_result:** not a keep at 256: p50 {2.79, 2.78, 2.60, 2.70} vs base {2.50, 2.54, 2.28, 2.59} — consistently ~+0.3 ms. The gate excluded the population that benefits: most battery needles' best trigram sits between 441 and 1332 df, so the picker paid lookup overhead (~35us x several probes) and then fell back to the unchanged full-phrase scan.
+- **retry_condition_predicate:** Revisit a tight rarity gate ONLY on a corpus whose postings-probe shows a materially lower df distribution (e.g., median df < 64), or after per-term cost modeling shows single-posting scans winning below that median (form 4: corpus-shape-gated).
+- **bead_id:** br-umh
