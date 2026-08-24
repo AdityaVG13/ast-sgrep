@@ -112,7 +112,7 @@ impl CodeModeSession {
 
     /// Dispatch any catalog tool by name.
     pub fn call(&mut self, name: &str, args: Value) -> Result<Value, CallError> {
-        self.bump_call().map_err(CallError::from)?;
+        self.bump_call()?;
         let value = call_tool(self, name, args)?;
         let bytes = encoded_json_len(&value)?;
         if bytes > MAX_CALL_RESPONSE_BYTES {
@@ -123,12 +123,15 @@ impl CodeModeSession {
         Ok(value)
     }
 
-    pub(crate) fn bump_call(&mut self) -> anyhow::Result<()> {
+    /// True once the sticky call budget is exhausted (br-r49): serve callers
+    /// must answer the offending request once and then stop, not flood.
+    pub fn exhausted(&self) -> bool {
+        self.calls >= self.max_calls
+    }
+
+    pub(crate) fn bump_call(&mut self) -> Result<(), CallError> {
         if self.calls >= self.max_calls {
-            return Err(anyhow!(
-                "codemode call budget exceeded (max_calls={})",
-                self.max_calls
-            ));
+            return Err(CallError::BudgetExhausted(self.max_calls));
         }
         self.calls += 1;
         Ok(())

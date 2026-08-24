@@ -372,3 +372,52 @@ fn chain_default_top_n_matches_core_default() {
             || value.get("query").is_some()
     );
 }
+
+/// Regression for br-r49: after the sticky session exhausts its call budget,
+/// run_serve used to keep answering EVERY subsequent request with the same
+/// per-call budget error until the client gave up — an endless flood that
+/// hides the outage instead of reporting it once, loudly, and stopping.
+///
+/// Contract: the first request past the budget gets exactly ONE budget-exceeded
+/// error response, then run_serve terminates with Err (the CLI process fails).
+#[test]
+fn sticky_serve_fails_once_and_stops_after_budget_exhaustion() {
+    let (_tmp, config) = indexed_config();
+    // Serve pins max_calls=10_000. `select` is a pure projection tool (no
+    // index work), so driving past the budget stays cheap. Five overflow
+    // requests: pre-fix each one gets its own identical error response.
+    const BUDGET: usize = 10_000;
+    const OVERFLOW: usize = 5;
+    let mut input = String::new();
+    for i in 0..BUDGET + OVERFLOW {
+        input.push_str(
+            &serde_json::to_string(&ServeRequest::Call {
+                id: format!("c{i}"),
+                tool: "select".into(),
+                args: json!({"value": {"v": i}, "fields": ["v"]}),
+            })
+            .unwrap(),
+        );
+        input.push('\n');
+    }
+    input.push_str(&serde_json::to_string(&ServeRequest::End).unwrap());
+    input.push('\n');
+
+    let mut out = Vec::new();
+    let result = run_serve(config, Cursor::new(input), &mut out);
+    assert!(
+        result.is_err(),
+        "run_serve must terminate with an error once the call budget is \
+         exhausted; it returned Ok and kept serving"
+    );
+    let text = String::from_utf8(out).unwrap();
+    let budget_errors = text
+        .lines()
+        .filter(|line| line.contains("\"ok\":false") && line.contains("budget"))
+        .count();
+    assert_eq!(
+        budget_errors, 1,
+        "exactly ONE budget-exceeded response may be emitted before the \
+         session dies; got {budget_errors}"
+    );
+}
