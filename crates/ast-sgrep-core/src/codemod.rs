@@ -10,6 +10,7 @@ use cap_std::ambient_authority;
 use cap_std::fs::{Dir, OpenOptions};
 use serde::Serialize;
 use std::collections::BTreeSet;
+use std::fs;
 use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -83,6 +84,13 @@ pub fn plan_codemod(
     let root_dir = RootDir::open(&root)?;
     let store = IndexStore::open(&root, index_path)?;
     let indexed_paths = store.all_file_paths()?;
+    // br-1xx: heal a tree left inconsistent by an apply process that died
+    // mid-swap (canonical path missing, orphaned `.name.asgrep-codemod-backup-*`
+    // beside it) BEFORE reading the planned files, so a re-run recovers the
+    // previous content instead of failing verification with ENOENT. Runs on
+    // std::fs because planning has no Dir handle yet; `root` is canonical and
+    // sidecar names are matched by exact marker, so confinement holds.
+    recover_orphans(&root, &indexed_paths)?;
     if indexed_paths.is_empty() {
         bail!(
             "index is empty for {}; run: asgrep index {} --json",
@@ -166,9 +174,6 @@ pub fn apply_codemod(plan: &CodemodPlan) -> anyhow::Result<CodemodApplyResult> {
         });
     }
 
-    // Keep every apply operation capability-relative to one stable project
-    // root handle. A parent replaced by a symlink after planning therefore
-    // cannot redirect reads, staging, renames, or rollback outside the root.
     let root_dir = Dir::open_ambient_dir(&plan.root, ambient_authority())
         .with_context(|| format!("failed to open project root: {}", plan.root.display()))?;
     let mut staged = Vec::with_capacity(plan.files.len());
@@ -203,6 +208,21 @@ pub fn apply_codemod(plan: &CodemodPlan) -> anyhow::Result<CodemodApplyResult> {
     }
 
     for index in 0..staged.len() {
+        // br-hbd: plan-time reads are O_NOFOLLOW but apply-time verification
+        // follows final-component symlinks whose destination stays inside the
+        // root. A file swapped for an in-root symlink between plan and apply
+        // would pass verification, get renamed into the backup slot, and be
+        // deleted by success cleanup. Fail closed instead.
+        if root_dir
+            .symlink_metadata(&staged[index].relative)?
+            .file_type()
+            .is_symlink()
+        {
+            bail!(
+                "source changed after codemod planning: {} is now a symlink",
+                staged[index].relative.display()
+            );
+        }
         let backup = unique_sibling_path(&staged[index].relative, "backup", index)?;
         if let Err(error) = root_dir.rename(&staged[index].relative, &root_dir, &backup) {
             let rollback = rollback_committed(&root_dir, &mut staged, index);
@@ -403,15 +423,92 @@ fn rollback_committed(
         let Some(backup) = file.backup.take() else {
             continue;
         };
-        if let Err(error) = root_dir.remove_file(&file.relative) {
-            first_error.get_or_insert(error);
-            continue;
-        }
+        // br-bci: rename(backup -> path) replaces any existing file atomically
+        // on POSIX. The previous remove_file-then-rename sequence had a crash
+        // window that left the path missing AND the edited content destroyed.
         if let Err(error) = root_dir.rename(backup, root_dir, &file.relative) {
             first_error.get_or_insert(error);
         }
     }
     first_error
+}
+
+/// br-1xx: heal a tree left inconsistent by an apply process that died
+/// mid-swap. For every planned path, restore the newest orphaned backup when
+/// the canonical file is gone, then delete stale stage/backup leftovers so
+/// re-runs recover instead of failing verification with ENOENT.
+fn recover_orphans(root: &Path, planned_paths: &[String]) -> anyhow::Result<()> {
+    for path in planned_paths {
+        let relative = confined_relative_path(path)?;
+        let full = root.join(relative);
+        if full.symlink_metadata().is_ok() {
+            // Canonical file present: nothing to heal at this path. Stale
+            // backups beside a live file are left alone here — they are
+            // removed by normal success cleanup of their own apply.
+            continue;
+        }
+        let Some(parent) = relative.parent() else {
+            continue;
+        };
+        let parent_full = root.join(parent);
+        let mut orphans: Vec<PathBuf> = Vec::new();
+        for entry in fs::read_dir(&parent_full)
+            .with_context(|| format!("failed to scan {}", parent_full.display()))?
+            .filter_map(|e| e.ok())
+        {
+            let file_name = entry.file_name();
+            if is_codemod_sidecar(file_name.to_string_lossy().as_ref(), "backup") {
+                orphans.push(file_name.into());
+            }
+        }
+        orphans.sort();
+        if let Some(newest) = orphans.pop() {
+            let candidate = parent_full.join(newest);
+            // Restore only if the sidecar is a regular file holding complete
+            // content (it was fsynced before the swap that died).
+            if candidate.symlink_metadata()?.is_file() {
+                fs::rename(candidate, &full)?;
+            }
+        }
+        cleanup_leftovers(&parent_full);
+    }
+    Ok(())
+}
+
+/// Remove stale `.name.asgrep-codemod-{stage,backup}-*` sidecars beside `path`
+/// whose canonical file exists (or after its backup has been restored).
+fn cleanup_leftovers(parent_full: &Path) {
+    let Ok(entries) = fs::read_dir(parent_full) else {
+        return;
+    };
+    for entry in entries.filter_map(|e| e.ok()) {
+        let file_name = entry.file_name();
+        let name = file_name.to_string_lossy().as_ref().to_owned();
+        if !is_codemod_sidecar(&name, "stage") && !is_codemod_sidecar(&name, "backup") {
+            continue;
+        }
+        let _ = fs::remove_file(parent_full.join(&file_name));
+    }
+}
+
+fn parent_of(path: &Path) -> &Path {
+    path.parent().unwrap_or_else(|| Path::new("."))
+}
+
+/// Match `.name.asgrep-codemod-{role}-*` sidecar names (any pid/clock/nonce tail).
+fn is_codemod_sidecar(file_name: &str, role: &str) -> bool {
+    let Some(rest) = file_name.strip_prefix('.') else {
+        return false;
+    };
+    let marker = ".asgrep-codemod-";
+    let Some(marker_pos) = rest.find(marker) else {
+        return false;
+    };
+    let after_marker = &rest[marker_pos + marker.len()..];
+    match after_marker.split_once('-') {
+        Some((found_role, tail)) => found_role == role && !tail.is_empty(),
+        None => false,
+    }
 }
 
 fn cleanup_staged(root_dir: &Dir, staged: &[StagedFile]) {
