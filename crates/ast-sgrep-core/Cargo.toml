@@ -80,6 +80,9 @@ path = "../../tests/core/e2e_smoke.rs"
 name = "finish_determinism"
 path = "../../tests/core/finish_determinism.rs"
 [[test]]
+name = "literal_threshold_probe"
+path = "../../tests/core/literal_threshold_probe.rs"
+[[test]]
 name = "evidence_merge"
 path = "../../tests/core/evidence_merge.rs"
 [[test]]

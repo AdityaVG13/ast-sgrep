@@ -503,3 +503,27 @@ table over the live index (no sidecar to drift); only needle-derived trigrams
 are ever candidates, so any scanned posting list is a superset of true matches
 and the Rust reverify keeps output exact — poisoned/stale dfs can change
 speed, never results (regression-proven: tests/core/trigram_shortcut.rs).
+
+## 2026-08-24 post-br-umh warm-path attribution + fixed-cost memoization probes (PR #33 branch)
+
+**Status: `reproducible-in-tree` (negative result).** Harnesses:
+`/tmp/asgrep-bench/flame_drive.py` (10 s `sample` of the codemode-serve worker
+while serving distinct queries) and `single2.py` interleaved A/B. Binaries:
+`asgrep_head` = clean HEAD `a160e30d`; `asgrep_vA` = memoization prototype.
+
+Attribution at HEAD (`flames_head.txt`, 7330 run-loop samples / 2679 served
+calls ≈ 2.74 ms/call): `literal_prefilter_pass` 45% (of which the LIKE caller
+scan inside `symbol_pass_for_files`'s prefilter stage is separately visible at
+35% — the two overlap in the tree), trigram scans ~16%, threshold COUNT probe
+~1%, finish/ranking <1%. The dominant single frame is the prefilter's
+unrestricted caller LIKE scan.
+
+| variant | p50 rounds | verdict |
+|---------|-----------|---------|
+| HEAD `a160e30d` | {2.22, 2.03, 2.09, 2.02} ms | baseline |
+| gen-keyed threshold-probe memoization + prefilter hit reuse | {2.54, 2.80, 2.43, 2.61} ms | **reverted: −0.3–0.6 ms regression** |
+
+Both prototypes are recorded with retry predicates in
+`docs/progress/perf-negative-results.md::warm-fixed-cost-memoization-probes`.
+The routing contract they relied on is pinned by
+`tests/core/literal_threshold_probe.rs`.

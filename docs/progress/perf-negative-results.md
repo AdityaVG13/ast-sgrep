@@ -174,3 +174,15 @@ _(none)_
 - **measured_result:** not a keep at 256: p50 {2.79, 2.78, 2.60, 2.70} vs base {2.50, 2.54, 2.28, 2.59} — consistently ~+0.3 ms. The gate excluded the population that benefits: most battery needles' best trigram sits between 441 and 1332 df, so the picker paid lookup overhead (~35us x several probes) and then fell back to the unchanged full-phrase scan.
 - **retry_condition_predicate:** Revisit a tight rarity gate ONLY on a corpus whose postings-probe shows a materially lower df distribution (e.g., median df < 64), or after per-term cost modeling shows single-posting scans winning below that median (form 4: corpus-shape-gated).
 - **bead_id:** br-umh
+
+### `warm-fixed-cost-memoization-probes` (Open pointer)
+
+- **target_workload:** warm distinct single-term literal/hybrid search through codemode-serve over the self corpus (1,100+ files, ~103k indexed lines); post-br-umh baseline p50 ~2.0-2.2 ms
+- **files_touched:** `no-source-patch-attempted` (prototypes measured, then reverted; only a routing-contract test landed)
+- **correctness_proof:** tests/core/literal_threshold_probe.rs pins the trigram-vs-SQL routing decision (the observable effect of the probed value) so future memoization cannot change results
+- **evidence_artifacts_paths:** `/tmp/asgrep-bench/flames_head.txt` (10 s worker sample at HEAD: 7330 run-loop samples / 2679 calls ≈ 2.74 ms/call); raw-SQL microbenchmarks on an index copy (`df_probe.db`): threshold COUNT probe ~40 us/call, caller LIKE scan without file restriction ~4.2 ms, with the 100-file IN-list ~62 us
+- **baseline_configuration:** HEAD `a160e30d` release-perf build
+- **candidate_configuration:** (A) gen-keyed memoization of `indexed_line_count_at_least(BMH_LINE_THRESHOLD)` on the store; (B) reuse of the main scan's hits inside `literal_prefilter_pass` for single-term queries
+- **measured_result:** not keeps — interleaved A/B (4 rounds) measured candidate p50 {2.54, 2.80, 2.43, 2.61} vs base {2.22, 2.03, 2.09, 2.02}: both fixes REGRESSED p50 by ~0.3-0.6 ms despite removing work the flame profile attributed at ~1% (probe) and ~15% (prefilter re-scan). Root cause hypotheses for the regression: (A) the Mutex lock + generation read on every call costs more than the 40 us COUNT it saves under this access pattern; (B) hoisting/branching around the prefilter loop perturbed inlining/code layout of the hottest loop. Neither hypothesis was confirmed with a targeted experiment before revert.
+- **retry_condition_predicate:** Reopen either fix ONLY after a profiler attributes >=5% of warm-path time to the specific frame being memoized/hoisted AND a microbenchmark shows the saved operation costing more than the added synchronization (for A: COUNT probe > mutex+gen read, measured per-access) on the target hardware (form 3: profiler-gated + form 4: measurement-gated).
+- **bead_id:** (none)
