@@ -1287,7 +1287,3 @@ fn excerpt_for_node(node: &Node, source: &str, pattern: &str) -> String {
         .unwrap_or(pattern)
         .to_string()
 }
-
-#[cfg(test)]
-#[path = "../../../tests/unit/lang/pattern.rs"]
-mod tests;

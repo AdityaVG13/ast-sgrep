@@ -58,6 +58,88 @@ pub fn tool_catalog() -> Vec<ToolDef> {
             read_only: true,
         },
         ToolDef {
+            name: "find",
+            description: "Lexical / identifier lookup (word:). Faster than hybrid search when you already know the token. Prefixed queries (defs:, callers:, blast:, literal:, regex:, pattern:) pass through. blast:Symbol reverse-walks callers; blast:path uses imports.",
+            kind: ToolKind::Search,
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Exact token or prefixed query"},
+                    "root": {"type": "string", "description": ROOT_ARG_DESC},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 500},
+                    "format": {"type": "string", "enum": ["agent", "capsule"], "default": "capsule"},
+                    "excerpt_lines": {"type": "integer", "minimum": 0}
+                },
+                "required": ["query"],
+                "additionalProperties": false
+            }),
+            capsule_default: true,
+            read_only: true,
+        },
+        ToolDef {
+            name: "read",
+            description: "Batched line windows from the index (file_lines), with disk fallback. Prefer one read({ refs }) over N calls. Caps at 32 windows.",
+            kind: ToolKind::Search,
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string"},
+                    "start": {"type": "integer", "minimum": 1},
+                    "end": {"type": "integer", "minimum": 1},
+                    "ref": {"type": "string", "description": "file#Lstart-Lend"},
+                    "refs": {
+                        "type": "array",
+                        "items": {
+                            "oneOf": [
+                                {"type": "string"},
+                                {"type": "object", "properties": {
+                                    "path": {"type": "string"},
+                                    "start": {"type": "integer"},
+                                    "end": {"type": "integer"},
+                                    "ref": {"type": "string"}
+                                }}
+                            ]
+                        }
+                    },
+                    "root": {"type": "string", "description": ROOT_ARG_DESC},
+                    "context_lines": {"type": "integer", "minimum": 0},
+                    "max_chars": {"type": "integer", "minimum": 1}
+                },
+                "additionalProperties": false
+            }),
+            capsule_default: true,
+            read_only: true,
+        },
+        ToolDef {
+            name: "edit",
+            description: "Unique string replace jailed to the session root, then targeted reindex of touched paths. oldText must match exactly once. Serial with other mutations.",
+            kind: ToolKind::Index,
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string"},
+                    "oldText": {"type": "string"},
+                    "newText": {"type": "string"},
+                    "edits": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "path": {"type": "string"},
+                                "oldText": {"type": "string"},
+                                "newText": {"type": "string"}
+                            },
+                            "required": ["path", "oldText", "newText"]
+                        }
+                    },
+                    "root": {"type": "string", "description": ROOT_ARG_DESC}
+                },
+                "additionalProperties": false
+            }),
+            capsule_default: false,
+            read_only: false,
+        },
+        ToolDef {
             name: "semantic",
             description: "Semantic/embed pass only. Prefer when query words may not appear in source (e.g. credential renewal → auth_refresh).",
             kind: ToolKind::Search,

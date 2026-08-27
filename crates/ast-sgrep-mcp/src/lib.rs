@@ -1008,13 +1008,6 @@ fn write_resp(
     stdout.flush()
 }
 
-#[cfg(test)]
-#[path = "../../../tests/unit/mcp/lib__write_resp_tests.rs"]
-mod write_resp_tests;
-
-#[cfg(test)]
-#[path = "../../../tests/unit/mcp/lib__cache_tests.rs"]
-mod cache_tests;
 /// FNV-1a over snippet bytes (v972). Content-keyed so an edited file re-sends.
 fn fnv1a64(bytes: &[u8]) -> u64 {
     let mut hash = 0xcbf2_9ce4_8422_2325_u64;

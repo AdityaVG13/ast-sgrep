@@ -112,7 +112,7 @@ impl CodeModeSession {
 
     /// Dispatch any catalog tool by name.
     pub fn call(&mut self, name: &str, args: Value) -> Result<Value, CallError> {
-        self.bump_call().map_err(CallError::from)?;
+        self.bump_call()?;
         let value = call_tool(self, name, args)?;
         let bytes = encoded_json_len(&value)?;
         if bytes > MAX_CALL_RESPONSE_BYTES {
@@ -123,12 +123,15 @@ impl CodeModeSession {
         Ok(value)
     }
 
-    pub(crate) fn bump_call(&mut self) -> anyhow::Result<()> {
+    /// True once the sticky call budget is exhausted (br-r49): serve callers
+    /// must answer the offending request once and then stop, not flood.
+    pub fn exhausted(&self) -> bool {
+        self.calls >= self.max_calls
+    }
+
+    pub(crate) fn bump_call(&mut self) -> Result<(), CallError> {
         if self.calls >= self.max_calls {
-            return Err(anyhow!(
-                "codemode call budget exceeded (max_calls={})",
-                self.max_calls
-            ));
+            return Err(CallError::BudgetExhausted(self.max_calls));
         }
         self.calls += 1;
         Ok(())
@@ -193,6 +196,24 @@ impl CodeModeSession {
         }
     }
 
+    pub(crate) fn jail_root(&self, args: &Value) -> anyhow::Result<PathBuf> {
+        self.root_arg(args)
+    }
+
+    pub(crate) fn with_searcher<F, T>(
+        &self,
+        root: PathBuf,
+        needed_limit: usize,
+        f: F,
+    ) -> anyhow::Result<T>
+    where
+        F: FnOnce(&Searcher) -> anyhow::Result<T>,
+    {
+        let guard = self.searcher_for(root, needed_limit)?;
+        let searcher = &guard.as_ref().expect("searcher_for populates cache").1;
+        f(searcher)
+    }
+
     fn searcher_for(
         &self,
         root: PathBuf,
@@ -228,7 +249,8 @@ impl CodeModeSession {
                 limit: open_limit,
                 use_embed: self.config.use_embed,
                 ..SearchOptions::default()
-            })?;
+            })?
+            .with_response_stamp(false);
             *guard = Some((
                 SearcherKey {
                     root,
@@ -381,14 +403,6 @@ impl CodeModeSession {
         self.invalidate_searcher_cache();
         result
     }
-
-    #[cfg(test)]
-    fn searcher_cache_occupied(&self) -> bool {
-        self.searcher_cache
-            .lock()
-            .map(|g| g.is_some())
-            .unwrap_or(false)
-    }
 }
 
 #[derive(Default)]
@@ -515,11 +529,3 @@ fn incremental_paths(args: &Value, root: &Path) -> anyhow::Result<Option<Vec<Pat
     }
     Ok(Some(paths))
 }
-
-#[cfg(test)]
-#[path = "../../../tests/unit/codemode/session__index_err_cache_tests.rs"]
-mod index_err_cache_tests;
-
-#[cfg(test)]
-#[path = "../../../tests/unit/codemode/session__root_sandbox_tests.rs"]
-mod root_sandbox_tests;

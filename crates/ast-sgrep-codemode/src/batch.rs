@@ -59,7 +59,7 @@ pub enum ParallelMode {
     Serial,
     /// One Searcher per call on rayon (only when all tools are read-only).
     Parallel,
-    /// Serial unless N>=4 read-only calls (heuristic).
+    /// Always serial warm. Parallel SQLite opens dominate unique sub-ms lookups.
     #[default]
     Auto,
 }
@@ -157,8 +157,8 @@ fn choose_parallel(mode: ParallelMode, calls: &[BatchCall]) -> bool {
     match mode {
         ParallelMode::Serial => false,
         ParallelMode::Parallel => true,
-        // Parallel opens are expensive; only pay them when enough work might overlap.
-        ParallelMode::Auto => calls.len() >= 4,
+        // Unique search/find is ~0.5–1ms; N Searcher opens are the serial wall.
+        ParallelMode::Auto => false,
     }
 }
 
@@ -402,6 +402,22 @@ pub fn run_serve(
                     )?;
                     continue;
                 }
+                // br-r49: a spent session answers the offending request once
+                // and then dies — never a flood of identical budget errors.
+                if session.exhausted() {
+                    write_line(
+                        &mut stdout,
+                        &ServeResponse::Result {
+                            id,
+                            ok: false,
+                            value: None,
+                            error: Some(bound_error(
+                                CallError::BudgetExhausted(session.max_calls).to_string(),
+                            )),
+                        },
+                    )?;
+                    return Err(CallError::BudgetExhausted(session.max_calls));
+                }
                 let result = match session.call(&tool, args) {
                     Ok(value) => ServeResponse::Result {
                         id,
@@ -447,6 +463,20 @@ pub fn run_serve(
                     continue;
                 }
                 let started = Instant::now();
+                // br-r49: same fail-once contract as single calls — a spent
+                // session answers the batch once and stops.
+                if session.exhausted() {
+                    write_line(
+                        &mut stdout,
+                        &ServeResponse::Error {
+                            id: Some(id),
+                            error: bound_error(
+                                CallError::BudgetExhausted(session.max_calls).to_string(),
+                            ),
+                        },
+                    )?;
+                    return Err(CallError::BudgetExhausted(session.max_calls));
+                }
                 let mut results: Vec<_> = calls.iter().map(|c| invoke(&mut session, c)).collect();
                 enforce_batch_response_budget(&mut results);
                 let all_ok = results.iter().all(|r| r.ok);

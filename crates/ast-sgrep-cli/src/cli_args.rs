@@ -152,6 +152,12 @@ pub(crate) struct SearchTuning {
         help = "Response-wide compact snippet token budget"
     )]
     pub(crate) response_snippet_tokens: usize,
+    #[arg(
+        long,
+        value_name = "GLOB",
+        help = "Restrict search hits to a repository-relative file glob"
+    )]
+    pub(crate) file_filter: Option<String>,
     /// m38g: a whole-response token budget that picks per-result detail,
     /// instead of truncating every excerpt to the same ceiling.
     #[arg(
@@ -273,7 +279,11 @@ pub(crate) struct Cli {
         help = "Override index database path"
     )]
     pub(crate) index_path: Option<PathBuf>,
-    #[arg(long, global = true, help = "Language filter")]
+    #[arg(
+        long,
+        global = true,
+        help = "Language filter: stored id or file extension (ts, hpp, py, rs, h, …)"
+    )]
     pub(crate) lang: Option<String>,
     /// 0obi: `fast-unsafe` can corrupt the index on power loss, so it must be
     /// asked for by name; it is never reached by default.
@@ -285,6 +295,15 @@ pub(crate) struct Cli {
         help = "Index write durability: strict|balanced|fast-unsafe (default balanced)"
     )]
     pub(crate) durability: Option<ast_sgrep_core::Durability>,
+    #[arg(
+        long = "no-auto-index",
+        global = true,
+        env = "ASGREP_NO_AUTO_INDEX",
+        action = clap::ArgAction::SetTrue,
+        value_parser = clap::builder::BoolishValueParser::new(),
+        help = "Do not auto-index an empty checkout or refresh a stale index"
+    )]
+    pub(crate) no_auto_index: bool,
     /// Search-tuning for bare (no-subcommand) search only — not inherited by capabilities/doctor (vdqo).
     #[command(flatten)]
     pub(crate) tuning: SearchTuning,
@@ -550,6 +569,9 @@ impl Cli {
             }
             if o.response_snippet_tokens != DEFAULT_RESPONSE_SNIPPET_TOKENS {
                 t.response_snippet_tokens = o.response_snippet_tokens;
+            }
+            if o.file_filter.is_some() {
+                t.file_filter.clone_from(&o.file_filter);
             }
             if o.budget_tokens.is_some() {
                 t.budget_tokens = o.budget_tokens;

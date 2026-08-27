@@ -186,9 +186,9 @@ These are **checked-in run summaries**, not portable guarantees. Hardware, corpu
 | Known regressions | `UNREPRODUCIBLE` | Published without suppression | [losses.md](benchmarks/results/losses.md) |
 | 2026-08-05 release run (self corpus) | `reproducible-in-tree` | Structural pattern 31× faster on the quality path; literal ≈ ripgrep; cold index 906 ms p95 | [speed.md](benchmarks/results/speed.md) |
 
-Measured 2026-08-05 on the self corpus (1,107 tracked files; `scripts/run-benchmarks.sh`) on the **integrated release/1.4.0 tree**: cold index **2.3 s p95** with semantic embedding (budget breach on the grown corpus -- the 285 ms budget was set for 110 files; SHA unrecorded; the original 88.5 s pr21 build was fixed by capping child chunks, `0ba34da`), warm literal **19.5 ms** (≈ ripgrep 15.7 ms), structural pattern **33.1 ms** with the quality batch vs **987 ms** without (ast-grep: 24.2 ms), semantic NL **19.6 ms**. Full provenance in [speed.md](benchmarks/results/speed.md). 2.0 did not republish that suite; do not treat those rows as a 2.0 fingerprint.
+Measured 2026-08-05 on the self corpus (1,107 tracked files) on the **integrated release/1.4.0 tree**: cold index **2.3 s p95** with semantic embedding (budget breach on the grown corpus -- the 285 ms budget was set for 110 files; SHA unrecorded; the original 88.5 s pr21 build was fixed by capping child chunks, `0ba34da`), warm literal **19.5 ms** (≈ ripgrep 15.7 ms), structural pattern **33.1 ms** with the quality batch vs **987 ms** without (ast-grep: 24.2 ms), semantic NL **19.6 ms**. Full provenance in [speed.md](benchmarks/results/speed.md). 2.0 did not republish that suite; do not treat those rows as a 2.0 fingerprint.
 
-Canonical table: [head-to-head.md](benchmarks/results/head-to-head.md). Index: [benchmarks/README.md](benchmarks/README.md). Methodology: [docs/benchmarks.md](docs/benchmarks.md).
+Canonical table: [head-to-head.md](benchmarks/results/head-to-head.md). Index: [benchmarks/README.md](benchmarks/README.md).
 
 **Quality snapshot (UNREPRODUCIBLE):** cite only fingerprint `self-hybrid-d3eab74` in [baselines.md](benchmarks/results/baselines.md#retrieval-quality--self-corpus-18-gold-queries) -- hybrid MRR **0.712**, Recall@k **0.889**, nDCG@k **0.751**. The gold harness is absent. Do not quote the superseded ≈0.75 / 0.94 row (`self-hist-pre-29129bd`) as current. On some foreign corpora the offline embedder currently adds little over lexical + AST.
 
@@ -219,7 +219,7 @@ Canonical table: [head-to-head.md](benchmarks/results/head-to-head.md). Index: [
 | [Semantic search](docs/semantic-search.md) | Chunks, providers, IVF-ANN |
 | [Fusion ranking](docs/fusion-ranking.md) | RRF, post-fusion critic, `why` |
 | [Cascade planner](docs/cascade-query-planner.md) | Retrieval cascade and causal follow-ups |
-| [Benchmarks](docs/benchmarks.md) | Methodology, reproduction, losses |
+| [Benchmarks](benchmarks/README.md) | Methodology, reproduction, losses |
 | [Comparison](docs/comparison.md) | vs ripgrep / ast-grep |
 | [MCP](docs/mcp.md) · [Code Mode](docs/codemode.md) · [Use cases](docs/use-cases.md) · [Releasing](docs/RELEASING.md) | Agents, PTC, LSP, release checklist |
 
@@ -238,12 +238,12 @@ Canonical table: [head-to-head.md](benchmarks/results/head-to-head.md). Index: [
 | `crates/ast-sgrep-mcp` | MCP server |
 | `crates/ast-sgrep-codemode` | Code Mode / programmatic tool-calling |
 | `crates/ast-sgrep-plugins` | Output formats |
-| `crates/ast-sgrep-testkit` | Shared test fixtures and golden asserts |
+| `crates/ast-sgrep-testkit` | Shared fixtures for search/index/Pi tests |
+| `tests/` | Search, index, and Pi behavior tests |
 | `packages/pi/` | Pi extension, launcher, and native packages |
 | `packages/agent-plugin/` | Portable Agent Plugins + MCP |
 | `benchmarks/` | Published results (`results/`) and studies (`studies/`) |
 | `docs/` | User and architecture docs |
-| `tests/fixtures/` | Sample corpora for tests |
 
 ---
 
@@ -256,11 +256,12 @@ GitHub Actions workflows are **manual-only** (`workflow_dispatch`) to control Ac
 ```bash
 cargo check --workspace -j1
 cargo test -p ast-sgrep-core --test parity -j1 -- --test-threads=1
+cargo test -p ast-sgrep-cli --test cli_smoke -j1 -- --test-threads=1
 cargo build --release -p ast-sgrep-cli -j1
 ./target/release/asgrep --help
 ```
 
-See [CONTRIBUTING.md](CONTRIBUTING.md). Optional full-workspace tests and CI jobs remain available when you intentionally run them.
+See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ---
 

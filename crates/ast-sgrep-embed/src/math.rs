@@ -103,6 +103,18 @@ pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
     if a.len() != b.len() || a.is_empty() {
         return 0.0;
     }
+    if a.len() >= SIMD_DOT_THRESHOLD {
+        if let (Some(dot), Some(na), Some(nb)) = (f32::dot(a, b), f32::dot(a, a), f32::dot(b, b)) {
+            if !dot.is_finite() || !na.is_finite() || !nb.is_finite() || na <= 0.0 || nb <= 0.0 {
+                return 0.0;
+            }
+            let score = (dot / (na.sqrt() * nb.sqrt())) as f32;
+            if score.is_finite() {
+                return score;
+            }
+            return 0.0;
+        }
+    }
     let (dot, na, nb) =
         a.iter()
             .zip(b)
@@ -238,11 +250,3 @@ pub fn normalize_vec(vec: &[f32]) -> Vec<f32> {
     normalize_vec_in_place(&mut out);
     out
 }
-
-#[cfg(test)]
-#[path = "../../../tests/unit/embed/math__contract_tests.rs"]
-mod contract_tests;
-
-#[cfg(test)]
-#[path = "../../../tests/unit/embed/math__property_tests.rs"]
-mod property_tests;

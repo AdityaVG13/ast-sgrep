@@ -33,12 +33,6 @@ bash scripts/verify-forbid-soundness
 
 Both are required. Passing audit does not mean forbid-soundness holds.
 
-### `fuzz/` exclusion
-
-The `fuzz/` tree is excluded from the workspace (`Cargo.toml` `exclude`).
-Fuzz targets may need facilities that product code forbids. Bounded fuzz jobs
-in CI still exercise parsers; they are not a license to weaken product crates.
-
 ## Environment trust
 
 See [docs/env-trust.md](docs/env-trust.md) for embed URL allowlists,
@@ -47,5 +41,7 @@ See [docs/env-trust.md](docs/env-trust.md) for embed URL allowlists,
 ## Reporting
 
 Open a GitHub issue with reproduction steps for security-sensitive defects.
-Prefer fail-closed behavior: missing roots, empty indexes, and untrusted env
-must surface as errors — never silent empty success.
+Prefer fail-closed behavior: missing roots, untrusted env, and empty indexes
+when `--no-auto-index` is set must surface as errors — never silent empty
+success. Search indexes an empty checkout and incrementally refreshes a
+non-empty index first unless that flag is set.

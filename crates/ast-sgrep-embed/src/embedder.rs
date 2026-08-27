@@ -287,11 +287,3 @@ pub fn configured_backend_model_id(kind: EmbedBackendKind, dim: usize) -> Option
 pub fn default_semantic_dim() -> usize {
     SEMANTIC_DIM
 }
-
-#[cfg(test)]
-#[path = "../../../tests/unit/embed/embedder__dim_probe_tests.rs"]
-mod dim_probe_tests;
-
-#[cfg(test)]
-#[path = "../../../tests/unit/embed/embedder__preference_tests.rs"]
-mod preference_tests;

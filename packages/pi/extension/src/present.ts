@@ -34,8 +34,8 @@ export const ASGREP_PROMPT_SNIPPET =
 
 export const ASGREP_PROMPT_GUIDELINES = [
   "For any code lookup (find a function, callers, defs, intent, structural pattern, or imports), call asgrep or asgrep_search immediately. Do not wait for the user to mention ast-sgrep.",
-  "Prefer the asgrep Code Mode tool when you need more than one lookup, filtering, or parallel work. Write JavaScript that calls asgrep.search / semantic / chain / defs / callers / imports / indexStatus / indexRepo and return a small shaped value.",
-  "Use grep only for exact log strings, filenames, or config keys. Use Pi write/edit to change files; asgrep does not mutate source.",
+  "Prefer the asgrep Code Mode tool when you need more than one lookup, filtering, or parallel work. Write JavaScript that calls asgrep.search / find / read / edit and return a small shaped value. Independent lookups: Promise.all.",
+  "Use grep only for exact log strings, filenames, or config keys. asgrep.edit does unique string replace plus targeted reindex; oldText must match exactly once.",
 ] as const;
 
 function paint(theme: PresentTheme | undefined, role: string, text: string, bold = false): string {

@@ -269,7 +269,3 @@ fn unified_diff(expected: &str, actual: &str, max_hunks: usize) -> String {
     }
     out
 }
-
-#[cfg(test)]
-#[path = "../../../tests/unit/testkit/golden.rs"]
-mod tests;

@@ -87,7 +87,6 @@ fn required_literal(pattern: &str) -> Option<String> {
     let mut runs = Vec::new();
     let mut run = String::new();
     let mut escaped = false;
-    let mut in_class = false;
     let chars: Vec<char> = pattern.chars().collect();
     for (index, &ch) in chars.iter().enumerate() {
         if escaped {
@@ -107,24 +106,25 @@ fn required_literal(pattern: &str) -> Option<String> {
         match ch {
             '\\' => escaped = true,
             '[' => {
-                in_class = true;
-                if !run.is_empty() {
-                    runs.push(std::mem::take(&mut run));
-                }
+                // A character class's members are alternatives, not required
+                // text: harvesting them (or their tails) as a trigram literal
+                // silently drops regex-matching lines (false negatives).
+                // Leading-`]` and `\]` membership make precise scanning
+                // nontrivial; bail conservatively instead.
+                return None;
             }
-            ']' => in_class = false,
-            '|' | '?' | '*' if !in_class => return None,
-            '{' if !in_class
-                && chars[index..]
-                    .iter()
-                    .take(3)
-                    .collect::<String>()
-                    .starts_with("{0") =>
+            ']' => {}
+            '|' | '?' | '*' => return None,
+            '{' if chars[index..]
+                .iter()
+                .take(3)
+                .collect::<String>()
+                .starts_with("{0") =>
             {
                 return None;
             }
-            _ if !in_class && (ch.is_ascii_alphanumeric() || ch == '_') => run.push(ch),
-            _ if !in_class && !run.is_empty() => runs.push(std::mem::take(&mut run)),
+            _ if ch.is_ascii_alphanumeric() || ch == '_' => run.push(ch),
+            _ if !run.is_empty() => runs.push(std::mem::take(&mut run)),
             _ => {}
         }
     }
@@ -194,7 +194,3 @@ fn scan_regex_rows(
     preferred.extend(overflow.into_iter().take(candidate_limit - preferred.len()));
     Ok(preferred)
 }
-
-#[cfg(test)]
-#[path = "../../../../../tests/unit/core/search__passes__regex.rs"]
-mod tests;

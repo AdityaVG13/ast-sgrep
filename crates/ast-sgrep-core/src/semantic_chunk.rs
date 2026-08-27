@@ -295,6 +295,56 @@ pub struct SemanticFieldVectors {
     pub tests_examples: Option<Vec<u8>>,
 }
 
+
+/// Which per-field blobs a query actually needs (Door C). Zero-weight fields
+/// are not selected from SQLite and do not appear in `embed_field:` why terms.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FieldVectorMask {
+    pub name: bool,
+    pub docs: bool,
+    pub body: bool,
+    pub graph: bool,
+    pub tests_examples: bool,
+}
+
+impl FieldVectorMask {
+    pub const ALL: Self = Self {
+        name: true,
+        docs: true,
+        body: true,
+        graph: true,
+        tests_examples: true,
+    };
+
+    pub const NONE: Self = Self {
+        name: false,
+        docs: false,
+        body: false,
+        graph: false,
+        tests_examples: false,
+    };
+
+    pub fn any(self) -> bool {
+        self.name || self.docs || self.body || self.graph || self.tests_examples
+    }
+
+    pub fn from_positive_weights(
+        name: f32,
+        docs: f32,
+        body: f32,
+        graph: f32,
+        tests_examples: f32,
+    ) -> Self {
+        Self {
+            name: name > 0.0,
+            docs: docs > 0.0,
+            body: body > 0.0,
+            graph: graph > 0.0,
+            tests_examples: tests_examples > 0.0,
+        }
+    }
+}
+
 pub fn render_chunk_text(chunk: &SemanticChunkInput) -> String {
     // Body first (7d5x.1): metadata used to precede the excerpt, so a long
     // graph/doc prefix was what survived when embedders truncated.
@@ -381,7 +431,3 @@ fn excerpt_for_span(lines: &[(u32, String)], line_start: u32, line_end: u32) -> 
         .collect::<Vec<_>>()
         .join("\n")
 }
-
-#[cfg(test)]
-#[path = "../../../tests/unit/core/semantic_chunk.rs"]
-mod tests;

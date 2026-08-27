@@ -1,5 +1,5 @@
 import { Type } from "typebox";
-import { createAsgrepConnector, runCodemode, runNativeBatch, runBatchViaStdin, CODEMODE_TYPES_FOR_MODEL, NativeSessionPool, argvFor, asEnvelope, } from "./codemode/index.js";
+import { createAsgrepConnector, runCodemode, runNativeBatch, runBatchViaStdin, CODEMODE_TYPES_FOR_MODEL, NativeSessionPool, argvFor, asEnvelope, warmCodemodeSandbox, resetCodemodeSandboxForTests, } from "./codemode/index.js";
 import { AstSgrepRuntime, FreshnessCoordinator, RuntimeError } from "./runtime.js";
 import { ASGREP_PROMPT_GUIDELINES, ASGREP_PROMPT_SNIPPET, formatCodemodeCall, formatCodemodeResult, formatIndexCall, formatIndexResult, formatSearchCall, formatSearchResult, formatStatusCall, formatStatusResult, presentText, } from "./present.js";
 const DEFAULT_LIMIT = 8;
@@ -223,7 +223,7 @@ export function registerAstSgrepTools(pi, runtime = new AstSgrepRuntime(pi), fre
             try {
                 ensurePool();
                 const root = await resolveRoot(ctx.cwd);
-                await pool.acquire(root);
+                await Promise.all([pool.acquire(root), warmCodemodeSandbox()]);
             }
             catch {
                 // Doctor reports backend errors; a failed warmup must not block the session.
@@ -233,6 +233,7 @@ export function registerAstSgrepTools(pi, runtime = new AstSgrepRuntime(pi), fre
     pi.on("session_shutdown", () => {
         freshness.shutdown?.();
         void pool.shutdown();
+        void resetCodemodeSandboxForTests();
     });
     // Primary surface: Code Mode -- in-process NAPI (MCP-class), compose in JS.
     // Sibling to MCP: pick one surface; both link core, never each other.
@@ -243,21 +244,21 @@ export function registerAstSgrepTools(pi, runtime = new AstSgrepRuntime(pi), fre
         promptGuidelines: [...ASGREP_PROMPT_GUIDELINES],
         description: [
             "Primary code-search tool for this project. Call it whenever you need to find, trace, or understand code — do not wait for the user to mention asgrep.",
-            "Write JavaScript that calls typed asgrep.* methods. Compose with await / Promise.all, filter in code, return only the shaped final value.",
+            "Write JavaScript that calls asgrep.search, asgrep.find, asgrep.read, and asgrep.edit. Compose with await / Promise.all, filter in code, return only the shaped final value.",
             "Runs in-process (native addon) with a warm Searcher for the Pi session.",
             "",
             CODEMODE_TYPES_FOR_MODEL,
             "",
             "Example:",
             "async () => {",
-            "  const [seed, status] = await Promise.all([",
-            "    asgrep.search({ query: 'auth refresh', limit: 5 }),",
-            "    asgrep.indexStatus(),",
+            "  const seed = await asgrep.search({ query: 'auth refresh', limit: 5 });",
+            "  const hit = seed.hits?.[0];",
+            "  if (!hit) return { seed };",
+            "  const [defs, window] = await Promise.all([",
+            "    asgrep.find({ query: 'defs:' + hit.symbol, limit: 5 }),",
+            "    asgrep.read({ refs: [hit.ref] }),",
             "  ]);",
-            "  const symbol = seed.hits?.[0]?.symbol;",
-            "  if (!symbol) return { seed, status };",
-            "  const graph = await asgrep.chain({ query: symbol, limit: 20 });",
-            "  return { symbol, nodes: graph.nodes?.slice?.(0, 10) ?? graph, status };",
+            "  return { symbol: hit.symbol, defs: defs.hits, window };",
             "}",
         ].join("\n"),
         parameters: codemodeParameters,
@@ -320,6 +321,7 @@ export function registerAstSgrepTools(pi, runtime = new AstSgrepRuntime(pi), fre
                 const codemodeOptions = { stats: bundle.stats };
                 codemodeOptions.timeoutMs = Math.max(1, deadline - Date.now());
                 codemodeOptions.signal = operationSignal;
+                await warmCodemodeSandbox().catch(() => undefined);
                 const outcome = await runCodemode(params.code, bundle.asgrep, codemodeOptions);
                 report(onUpdate, "codemode", "completed");
                 if (!outcome.ok) {

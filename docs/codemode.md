@@ -39,7 +39,7 @@ duplicates index opens, and confuses the model about which surface to call.
                                             │
                                             ▼
                                       asgrep.search()
-                                      asgrep.chain()
+                                      asgrep.find() / asgrep.read()
                                       Promise.all([...])
                                       filter / shape
                                             │
@@ -60,10 +60,11 @@ duplicates index opens, and confuses the model about which surface to call.
 `pi-ast-sgrep` exposes **`asgrep`** as the primary tool:
 
 ```text
-Model ──► asgrep({ code }) ──► restricted Node `vm` context
+Model ──► asgrep({ code }) ──► in-process `node:vm` (no Worker)
                                               │
-                                              │  asgrep.search / chain / defs / …
+                                              │  asgrep.search / find / read / edit
                                               │  Promise.all → same-tick coalesce
+                                              │  in-context asgrep + JSON host bridge
                                               │       │
                                               │       ├─ in-process NAPI Session
                                               │       │     (CodeModeSession → core)
@@ -72,24 +73,20 @@ Model ──► asgrep({ code }) ──► restricted Node `vm` context
                                         shaped return + stats
 ```
 
-The runner exposes only a serialized `asgrep.*` bridge and console. Its `node:vm`
-context disables string and WebAssembly code generation and does not expose
-`process`, module loading, networking, or filesystem globals. Node does not
-consider `vm` an adversarial-code security boundary, however, and the installed
-Pi package itself has the user's privileges. Code Mode is for bounded
-orchestration, not OS isolation.
+The runner is **in-process** (OpenCode / nicknisi: no Worker sandbox, no OS jail).
+`node:vm` hides `process` / `require` and can interrupt synchronous loops.
+`asgrep` / `console` are constructed inside the context from a JSON host bridge
+so host `Function` cannot leak. Node does not consider `vm` an adversarial-code
+security boundary. Same trust as Pi `bash`.
 
-Each disposable worker is limited to 256 host calls, bounded bridge arguments,
-responses, logs, and final results, plus explicit heap and stack ceilings. Raw
-memory and WebAssembly globals are unavailable because their backing stores are
-not reliably covered by V8 heap limits. The native Code Mode boundary also caps
-each encoded tool value at 1 MiB and complete batch responses at 4 MiB, before
-Node-API converts them into extension-host objects.
+Each program is limited to 256 host calls, bounded arguments, logs, and
+serialized results. Raw memory and WebAssembly globals are unavailable.
+The native Code Mode boundary also caps each encoded tool value at 1 MiB
+and complete batch responses at 4 MiB.
 
 One deadline covers freshness work and the Code Mode program. The soft wall
-aborts the run's `AbortSignal` and terminates the disposable worker, so
-queued host calls, later bridge calls, and the JavaScript program cannot keep
-calling the pooled NAPI `Session` after timeout. Waiters that have not yet
+aborts the run's `AbortSignal`, so queued host calls and later `asgrep.*`
+calls cannot keep using the pooled NAPI `Session` after timeout. Waiters that have not yet
 taken the session mutex return `operation cancelled` instead of blocking the
 pool. Read/search calls that already hold the mutex may finish their current
 operation; `index_repo` polls the abort flag during walk/prepare and returns
@@ -111,14 +108,15 @@ Wall time ≈ serial + parallel_work / N.
 
 | Serial cost (cut hard) | Parallel fraction |
 |------------------------|-------------------|
-| Process spawn, SQLite open, freshness once per Code Mode call | Independent searches inside `Promise.all` |
+| SQLite open once per session; in-process `vm` (no Worker spawn) | Independent `search`/`find`/`read` inside `Promise.all` |
 
 Same-tick coalesce turns N serial spawn costs into **one** batch process. Prefer
 **session-scoped sticky serve** (`codemode-serve`): one warm Searcher per project
 root for the whole Pi session — shared by Code Mode programs, direct tools, and
 freshness checks (same idea as pi-codex-conversion's long-lived Code Mode host).
-Inside a one-shot batch, Rust defaults to **serial warm**; parallel opens only
-when Auto sees ≥4 read-only calls or Parallel is forced.
+Inside a one-shot batch, Rust **Auto is always serial warm**. Unique search/find
+is ~0.5–1 ms; N parallel SQLite opens are the serial wall. Force `Parallel`
+only for an explicit experiment.
 
 ### Why no CLI spawn (Pi / Code Mode)
 
@@ -147,25 +145,23 @@ Example the model writes:
 
 ```js
 async () => {
-  const [seed, status] = await Promise.all([
-    asgrep.search({ query: "auth refresh", limit: 5 }),
-    asgrep.indexStatus(),
+  const seed = await asgrep.search({ query: "auth refresh", limit: 5 });
+  const hit = seed.hits?.[0];
+  if (!hit) return { seed };
+  const [defs, window] = await Promise.all([
+    asgrep.find({ query: `defs:${hit.symbol}`, limit: 5 }),
+    asgrep.read({ refs: [hit.ref] }),
   ]);
-  const symbol = seed.hits?.[0]?.symbol;
-  if (!symbol) return { seed, status };
-  const graph = await asgrep.chain({ query: symbol, limit: 20 });
-  return { symbol, nodes: graph.nodes?.slice?.(0, 10) ?? graph, status };
+  return { symbol: hit.symbol, defs: defs.hits, window };
 }
 ```
 
 Runner capabilities: `asgrep.*`, `Promise`, `JSON`, arrays/objects/math. No
 direct `require`, `process`, `fetch`, or filesystem globals. The configured wall
-deadline terminates the disposable worker, including synchronous or microtask
-loops entered after an `await`, and bounds awaited host calls. Call arguments,
-bridge responses, collected console output, serialized results, and worker
-heap/stack size are capped before returning to the extension host. The worker's
-`node:vm` context is still not an OS security boundary; deployments executing
-adversarial programs must isolate the entire extension process.
+deadline interrupts synchronous `vm` loops and aborts awaited host calls.
+Call arguments, logs, and serialized results are capped. There is no Worker:
+a busy microtask loop after `await` can pin the Pi event loop (same as nicknisi
+in-process Code Mode). Do not treat this as an OS jail.
 
 ## Rust crate `ast-sgrep-codemode`
 

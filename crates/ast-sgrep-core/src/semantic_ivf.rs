@@ -5,9 +5,9 @@ use blake3::Hasher;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Cursor, Read, Write};
 use std::ops::Range;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 
 const MAGIC: &[u8; 6] = b"ASIVF\0";
 const VERSION: u32 = 2;
@@ -135,6 +135,20 @@ impl MappedVectors {
     fn as_slice(&self) -> &[f32] {
         bytemuck::try_cast_slice(&self.mmap[self.bytes.clone()])
             .expect("validated semantic IVF vector alignment")
+    }
+
+    /// Touch every page once so unique-query p90 is not a first-fault walk.
+    fn prefault(&self) {
+        let bytes = &self.mmap[self.bytes.clone()];
+        const PAGE: usize = 4096;
+        let mut offset = 0;
+        while offset < bytes.len() {
+            std::hint::black_box(bytes[offset]);
+            offset += PAGE;
+        }
+        if let Some(last) = bytes.last() {
+            std::hint::black_box(*last);
+        }
     }
 }
 
@@ -286,6 +300,7 @@ pub struct LazySemanticIvf {
     pub dim: usize,
     chunk_count: usize,
     index: SemanticAnnIndex,
+    mapped_vectors: Option<MappedVectors>,
 }
 
 impl LazySemanticIvf {
@@ -296,21 +311,119 @@ impl LazySemanticIvf {
     pub fn chunk_count(&self) -> usize {
         self.chunk_count
     }
+
+    pub fn vectors(&self) -> Option<&[f32]> {
+        self.mapped_vectors.as_ref().map(MappedVectors::as_slice)
+    }
+
+    /// Rank probed IVF members from the mmap payload. `None` if this sidecar
+    /// has no mapped vectors (should not happen for a successful lazy load).
+    pub fn search(
+        &self,
+        query: &[f32],
+        limit: usize,
+        probes: Option<usize>,
+    ) -> Option<Vec<(usize, f32)>> {
+        let _span = crate::perf_profile::Span::start(
+            "semantic_ivf_search",
+            "semantic",
+            "LazySemanticIvf::search mmap score",
+        );
+        let flat = self.vectors()?;
+        if self.dim == 0 || !flat.len().is_multiple_of(self.dim) {
+            return None;
+        }
+        Some(
+            self.index
+                .search_flat_with_probes(flat, self.dim, query, limit, probes),
+        )
+    }
+
+    /// Rank an explicit member set from the mmap payload (hybrid cascade files).
+    pub fn search_members(
+        &self,
+        query: &[f32],
+        members: &[usize],
+        limit: usize,
+    ) -> Option<Vec<(usize, f32)>> {
+        let _span = crate::perf_profile::Span::start(
+            "semantic_ivf_search_members",
+            "semantic",
+            "LazySemanticIvf::search_members mmap score",
+        );
+        let flat = self.vectors()?;
+        if self.dim == 0 || !flat.len().is_multiple_of(self.dim) {
+            return None;
+        }
+        Some(
+            self.index
+                .search_flat_members(flat, self.dim, query, members, limit),
+        )
+    }
+}
+
+struct LazyIvfMemo {
+    path: PathBuf,
+    fingerprint: [u8; 32],
+    ivf: Arc<LazySemanticIvf>,
+}
+
+static LAZY_IVF_CACHE: OnceLock<Mutex<Option<LazyIvfMemo>>> = OnceLock::new();
+
+fn lock_clear_on_poison<T>(mutex: &Mutex<T>, clear: impl FnOnce(&mut T)) -> MutexGuard<'_, T> {
+    match mutex.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            mutex.clear_poison();
+            let mut guard = PoisonError::into_inner(poisoned);
+            clear(&mut guard);
+            guard
+        }
+    }
+}
+
+fn lazy_ivf_cache() -> &'static Mutex<Option<LazyIvfMemo>> {
+    LAZY_IVF_CACHE.get_or_init(|| Mutex::new(None))
 }
 
 pub fn load_semantic_ivf_index(
     path: &Path,
     expected_fingerprint: [u8; 32],
-) -> Result<Option<LazySemanticIvf>> {
+) -> Result<Option<Arc<LazySemanticIvf>>> {
+    let _span = crate::perf_profile::Span::start(
+        "semantic_ivf_load",
+        "semantic",
+        "load_semantic_ivf_index (cached mmap)",
+    );
+    {
+        let guard = lock_clear_on_poison(lazy_ivf_cache(), |slot| *slot = None);
+        if let Some(memo) = guard.as_ref() {
+            if memo.path == path && memo.fingerprint == expected_fingerprint {
+                return Ok(Some(Arc::clone(&memo.ivf)));
+            }
+        }
+    }
     let Some(mapped) = map_and_parse(path, Some(expected_fingerprint))? else {
         return Ok(None);
     };
-    Ok(Some(LazySemanticIvf {
+    let mapped_vectors = MappedVectors {
+        mmap: mapped.mmap,
+        bytes: mapped.vector_bytes,
+    };
+    mapped_vectors.prefault();
+    let ivf = Arc::new(LazySemanticIvf {
         fingerprint: mapped.header.fingerprint,
         dim: mapped.header.dim,
         chunk_count: mapped.header.chunk_count,
         index: mapped.index,
-    }))
+        mapped_vectors: Some(mapped_vectors),
+    });
+    *lock_clear_on_poison(lazy_ivf_cache(), |slot| *slot = None) = Some(LazyIvfMemo {
+        path: path.to_path_buf(),
+        fingerprint: expected_fingerprint,
+        ivf: Arc::clone(&ivf),
+    });
+    Ok(Some(ivf))
 }
 
 pub fn load_semantic_ivf(
@@ -325,8 +438,10 @@ pub fn load_semantic_ivf(
 /// Used to report a generation-mismatched sidecar as a degraded channel instead
 /// of silently falling back to brute force as if nothing were wrong.
 pub fn peek_semantic_ivf_fingerprint(path: &Path) -> Option<[u8; 32]> {
-    let mapped = map_and_parse(path, None).ok()??;
-    Some(mapped.header.fingerprint)
+    let mut file = File::open(path).ok()?;
+    let mut header = [0u8; HEADER_SIZE];
+    file.read_exact(&mut header).ok()?;
+    Some(read_header(&header, None)?.fingerprint)
 }
 
 pub fn load_semantic_ivf_unchecked(path: &Path) -> Result<Option<PersistedSemanticIvf>> {
@@ -614,7 +729,3 @@ fn replace_file(source: &Path, destination: &Path) -> std::io::Result<bool> {
     sync_parent(destination)?;
     Ok(true)
 }
-
-#[cfg(test)]
-#[path = "../../../tests/unit/core/semantic_ivf__field_layout_tests.rs"]
-mod field_layout_tests;

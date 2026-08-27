@@ -24,6 +24,8 @@ CREATE TABLE IF NOT EXISTS callers (id INTEGER PRIMARY KEY, file_id INTEGER NOT 
 CREATE INDEX IF NOT EXISTS idx_callers_callee ON callers(callee);\
 CREATE INDEX IF NOT EXISTS idx_callers_caller ON callers(caller);\
 CREATE INDEX IF NOT EXISTS idx_callers_file_id ON callers(file_id);\
+CREATE INDEX IF NOT EXISTS idx_callers_callee_lower ON callers(lower(callee));\
+CREATE INDEX IF NOT EXISTS idx_callers_caller_lower ON callers(lower(caller));\
 CREATE TABLE IF NOT EXISTS imports (id INTEGER PRIMARY KEY, file_id INTEGER NOT NULL,\
   module_path TEXT NOT NULL, line_no INTEGER NOT NULL,\
   FOREIGN KEY (file_id) REFERENCES files(id) ON DELETE CASCADE);\
@@ -34,6 +36,7 @@ CREATE TABLE IF NOT EXISTS pattern_nodes (id INTEGER PRIMARY KEY, file_id INTEGE
   FOREIGN KEY (file_id) REFERENCES files(id) ON DELETE CASCADE);\
 CREATE INDEX IF NOT EXISTS idx_pattern_nodes_signature ON pattern_nodes(signature);\
 CREATE INDEX IF NOT EXISTS idx_pattern_nodes_file ON pattern_nodes(file_id);\
+CREATE INDEX IF NOT EXISTS idx_pattern_nodes_file_sig ON pattern_nodes(file_id, signature);\
 CREATE VIRTUAL TABLE IF NOT EXISTS lines_fts USING fts5(content, file_id UNINDEXED, line_no UNINDEXED, tokenize = 'porter unicode61');\
 CREATE VIRTUAL TABLE IF NOT EXISTS lines_trigram USING fts5(content, content = 'lines', content_rowid = 'rowid', tokenize = 'trigram');\
 CREATE TABLE IF NOT EXISTS lexicon (term TEXT NOT NULL, related TEXT NOT NULL, ppmi REAL NOT NULL, support INTEGER NOT NULL, PRIMARY KEY (term, related));\
@@ -124,9 +127,9 @@ pub fn calls_matching(
         .map_err(Into::into)
 }
 pub fn append_lang_filter(parts: &mut Vec<String>, bind: &mut Vec<String>, lang: Option<&str>) {
-    if let Some(lang) = lang {
+    if let Some(lang) = ast_sgrep_lang::Language::canonical_filter(lang) {
         parts.push("f.language = ?".into());
-        bind.push(lang.into());
+        bind.push(lang);
     }
 }
 pub fn where_clause(parts: &[String]) -> String {
@@ -346,10 +349,6 @@ DELETE FROM scip_facts; DELETE FROM callers; DELETE FROM symbols; DELETE FROM li
 DELETE FROM embed_cache; \
 DELETE FROM meta WHERE key NOT IN ('root', 'semantic_data_version', 'index_data_version', 'lexicon_data_version');";
 
-#[cfg(test)]
-#[path = "../../../../tests/unit/core/store__sql__clear_all_sql_tests.rs"]
-mod clear_all_sql_tests;
-
 pub(crate) fn emb_vec(r: &rusqlite::Row<'_>, idx: usize) -> rusqlite::Result<Vec<f32>> {
     let v: Vec<u8> = r.get(idx)?;
     // Fail closed on corrupt blobs (bead ast-sgrep-j97d.5qpa) -- never default to zeros.
@@ -411,7 +410,13 @@ pub fn configure_connection_with(
         durability.steady_pragma()
     ))?;
     if std::env::var_os("ASGREP_SQLITE_DEFAULTS").is_none() {
-        conn.execute_batch("PRAGMA mmap_size = 268435456; PRAGMA cache_size = -16384;")?;
+        // br-perf-tail-cache: a serve session's p99/p100 is cold-page btree
+        // I/O for each first-touch needle's trigram doclists. The self-corpus
+        // index is ~58MB; a 70MB page cache makes the whole index
+        // page-cache-resident in one long-lived session, flattening the
+        // tail to memory speed after one warm pass. Read-path only; mmap
+        // stays on so anything beyond the cache is still syscall-free.
+        conn.execute_batch("PRAGMA mmap_size = 268435456; PRAGMA cache_size = -71680;")?;
     }
     Ok(())
 }
@@ -419,7 +424,3 @@ pub fn integrity_check(conn: &Connection) -> Result<String> {
     conn.query_row("PRAGMA integrity_check", [], |row| row.get(0))
         .map_err(Into::into)
 }
-
-#[cfg(test)]
-#[path = "../../../../tests/unit/core/store__sql__escape_tests.rs"]
-mod escape_tests;

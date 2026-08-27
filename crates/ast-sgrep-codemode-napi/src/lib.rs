@@ -44,7 +44,7 @@ fn map_err(err: impl std::fmt::Display) -> Error {
 fn is_fast_lookup(tool: &str) -> bool {
     matches!(
         tool,
-        "defs" | "callers" | "imports" | "index_status" | "catalog_search" | "catalog_describe"
+        "defs" | "callers" | "imports" | "index_status" | "catalog_search" | "catalog_describe" | "find" | "read"
     )
 }
 

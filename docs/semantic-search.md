@@ -17,7 +17,7 @@ Each function or method contributes up to 32 distinct child spans. One-line func
 
 At search time, child vectors are compared by cosine similarity (or IVF-ANN at scale), grouped by parent, and ranked by the maximum child score. One parent result is returned with up to three highest-scoring raw source children as its snippet; enrichment text is used only to produce vectors and is never exposed as source. This gives fine-grained matching without losing a meaningful read unit or letting a large function consume multiple result slots.
 
-Each chunk also stores separate vectors for its name metadata, documentation, body, graph neighborhood, and tests or usage examples. Test/example text is recognized from conventional test/example paths and symbols, plus example-bearing documentation. Conceptual queries weight docs, body, and examples; symbol queries weight names; structural behavior queries weight body, graph, and examples. JSON embed hits expose the available similarities in `embed_fields`, and human-readable evidence includes `embed_field:<field>=<score>` terms.
+Each chunk also stores separate vectors for its name metadata, documentation, body, graph neighborhood, and tests or usage examples. Test/example text is recognized from conventional test/example paths and symbols, plus example-bearing documentation. Conceptual queries weight docs, body, and examples; symbol queries weight names; structural behavior queries weight body, graph, and examples. Search ranks concatenated chunk vectors first (from the IVF mmap at scale), then fetches and rescores only the top-N survivors, and only the intent-weighted field columns. JSON embed hits expose those weighted similarities in `embed_fields`, and human-readable evidence includes `embed_field:<field>=<score>` for weighted fields only. Literal intent keeps the concatenated score and omits field terms.
 
 Schema version 6 clears legacy whole-symbol vectors, cached vectors, backend/model identity, and stored file fingerprints. The next index refresh rebuilds every file into the child-to-parent layout, so old and new layouts cannot mix. Backend model identity is persisted for hashed semantic and in-process neural vectors; indexing refreshes and search refuses stale vectors after a configured model change. Indexes that still record `cloud` or `ollama` hard-error until `asgrep reindex`.
 
@@ -101,10 +101,17 @@ With `--json`, defaults to **agent** format.
 | &lt; `ann_threshold` symbols (default 2000) | Brute-force cosine over all vectors | Sub-millisecond |
 | ≥ threshold | IVF-ANN with persisted `.asgrep/semantic.ivf` | Fast approximate NN; no k-means rebuild on restart |
 
-Adaptive search probes at most 90% of populated clusters by default. The bound
-is deliberate: the 2048-vector quality fixture misses the 0.99 recall target at
-75%, while 90% restores exact top-10 recall and remains below the 95% candidate
-ceiling.
+Adaptive search probes at most 90% of populated clusters by default on corpora
+up to 10,000 vectors. The bound is deliberate: the 2048-vector quality fixture
+misses the 0.99 recall target at 75%, while 90% restores exact top-10 recall and
+remains below the 95% candidate ceiling. Above 10,000 vectors, nprobe is capped
+at 8 so unique-query scoring stays under 1 ms (16 probes was p90 1.2 ms on the
+54k-chunk corpus). The IVF payload is prefaulted on first load so unique-query
+p90 is not a cold page-fault walk. Hybrid search scores only mmap rows whose
+files survived the lexical/structural cascade, then SQLite-fetches those top-N
+survivors -- not every concat blob in the cascade files. Hybrid cascade
+prefilter skips 1-2 character tokens (they cannot use trigrams and would
+full-table `LIKE` scan). `--ann-probes` still requests an explicit probe count.
 
 Release-mode RCH measurements use 64 deterministic queries at dimension 32:
 
@@ -144,7 +151,19 @@ asgrep --ann-threshold 5000 index .
 
 The version-2 IVF sidecar stores a bounded cluster index followed by 4096-byte-aligned vectors. Open validates and decodes the cluster metadata, then retains the vector payload as a read-only mmap; it does not deserialize vectors into heap memory. Atomic temp-file publication keeps existing mappings valid, and a **fingerprint** mismatch triggers rebuild. Language-filtered searches use their filtered in-memory vectors and never overwrite the shared global sidecar.
 
+Delta `asgrep index` after a file edit reassigns every current vector to the existing IVF centroids and rewrites cluster postings. It does not rerun k-means. Centroids stay frozen until `asgrep reindex` (or an embedding-identity rewrite) rebuilds them. Search still refuses a sidecar whose fingerprint no longer matches the store.
+
 On a 10,000-vector medium fixture, measured p99 was 0.963 ms cold, 0.135 ms for a fresh inode under normal cache policy, and 0.037 ms warm. Methodology and byte accounting are recorded in [semantic IVF mmap validation](validation/semantic-ivf-mmap.md).
+
+On a 54,732-chunk hashed corpus (`idx_big`), unique-query `asgrep semantic` is
+**p50 0.51 ms / p90 0.74 ms** (n=85, `codemode-serve`, limit 8). Default hybrid
+on the same unique-query set is **p50 1.27 ms / p90 8.4 ms**: the IVF mmap path
+is tens of microseconds; remaining hybrid time is lexical discovery plus
+finish/fanout, not nprobe. High-df conceptual terms (for example `encode
+payload`) still sit in the p90 tail. `pi-ast-sgrep` Code Mode `asgrep.search`
+is this hybrid path; `asgrep.semantic` is the sub-1 ms unique path.
+
+
 
 LSP `initializationOptions` also accepts `annThreshold`, see [use-cases.md](use-cases.md).
 

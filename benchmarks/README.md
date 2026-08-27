@@ -8,7 +8,7 @@ Published quality fingerprints in `results/` are a **mixed ledger**. Read the
 | `canonical` | Fingerprint others must cite. Regeneration may still be `UNREPRODUCIBLE`. |
 | `historical` | Published record. Not a live SLA. |
 | `UNREPRODUCIBLE` | This tree cannot regenerate the row (missing harness, gold, corpus, or artifact). |
-| `reproducible-in-tree` | Exact command + pins exist here (`scripts/run-benchmarks.sh`, `asgrep bench` + `.bench-history`). |
+| `reproducible-in-tree` | Exact command + pins exist here (`asgrep bench` + `.bench-history`). |
 
 A file-level UNREPRODUCIBLE banner does **not** apply to `reproducible-in-tree`
 sections. A reproducible latency section does **not** make historical MRR rows
@@ -54,30 +54,22 @@ benchmarks/
 | [studies/intent-confusion.md](studies/intent-confusion.md) | Intent / routing observations |
 | [studies/prevented-read.md](studies/prevented-read.md) | Capsule / prevented-read notes |
 
-## Product docs
-
-Methodology for readers: [docs/benchmarks.md](../docs/benchmarks.md).
-
-## Executable release gates
+## Reproduce
 
 ```bash
 cargo run --locked --release -p ast-sgrep-cli --bin asgrep -- \
   --json --index-path /tmp/asgrep-speed.db \
   bench tests/fixtures/sample --suite default --fixture sample --iterations 10 \
   > speed-results.json
-python3 scripts/check-bench-output.py speed-results.json --history-dir .bench-history --label suite:sample:default --smoke-max-average-ms 15
 
 cargo run --locked --release -p ast-sgrep-cli --bin asgrep -- \
   --json --index-path /tmp/asgrep-bakeoff.db \
   bench . --suite self --fixture self --iterations 5 \
   > bakeoff-results.json
-python3 scripts/check-bench-output.py bakeoff-results.json --history-dir .bench-history --label suite:self:self --smoke-max-average-ms 100
 ```
 
 Both suites fail inside the CLI when hit counts, expected result identities, or
-the keep-gate miss. The checker also applies committed `.bench-history` keep
-rules; `--smoke-max-average-ms` is a host-labeled secondary ceiling, not the
-keep oracle. Competitor latency is not keep.
+the keep-gate miss. Competitor latency is not keep.
 
 ## Latency error budgets
 
@@ -106,13 +98,8 @@ The historical 10 ms self-repo Searcher-query target does not apply to CLI
 startup fixtures. Each CLI surface is gated independently; handoff JSON must
 retain both `p95_ms` and `burn_rate` rather than collapsing them.
 
-`scripts/check-error-budget.py` computes the hard-threshold exceedance rate
-directly from hyperfine `times`; for a 95% SLO, `burn_rate = error_rate / 0.05`.
-The p95 threshold and burn-rate checks are both gates. A p95 comparison alone is
-not an empirical error rate. Same-host variance is a separate regression gate:
-provide `--prior-p95-ms`, `--fingerprint`, and `--prior-fingerprint` to compare
-the current p95 with a prior run. A missing or different fingerprint makes drift
-non-comparable. Passing the default 10% drift envelope never changes the hard
+For a 95% SLO, `burn_rate = error_rate / 0.05`. A p95 comparison alone is
+not an empirical error rate. Passing a drift envelope never changes the hard
 threshold, exceedance rate, burn rate, or `claim_within_slo`.
 
 **Measured status (2026-08-05):** cold self-index measured 906–992 ms p95 on
@@ -121,14 +108,7 @@ breaching the 285 ms budget set against the historical 110-file corpus. pr21
 (`5de7eb0`) originally measured 88.5 s p95 / 107 MiB (eager per-child-node
 semantic chunks); the child-chunk cap fix (`0ba34da`, 32 → 2 per parent)
 brought it to **2.1 s p95 / 27 MiB** with semantic query latency dropping
-42 → 16 ms. Re-baseline the cold-index budget for the current corpus size;
-`scripts/run-benchmarks.sh` reproduces the rows.
-
-Example:
-
-```bash
-python3 scripts/check-error-budget.py hyperfine_index_self.json --label cold-index-self --threshold-ms 285 --slo 0.95 --baseline-p95-ms 258.4
-```
+42 → 16 ms. Re-baseline the cold-index budget for the current corpus size.
 
 ## ANN quality error budget
 

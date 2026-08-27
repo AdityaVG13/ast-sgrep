@@ -6,7 +6,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { createAsgrepConnector } from "../../../packages/pi/extension/src/codemode/connector.js";
 import { createCodemodeDispatcher, argvFor, asEnvelope } from "../../../packages/pi/extension/src/codemode/dispatch.js";
-import { normalizeCode, runCodemode } from "../../../packages/pi/extension/src/codemode/runner.js";
+import { normalizeCode, resetCodemodeSandboxForTests, runCodemode, warmCodemodeSandbox } from "../../../packages/pi/extension/src/codemode/runner.js";
 import { runBatchViaStdin, startStickyWorker } from "../../../packages/pi/extension/src/codemode/worker.js";
 import type { MachineEnvelope } from "../../../packages/pi/extension/src/runtime.js";
 
@@ -500,20 +500,17 @@ test("runner interrupts synchronous infinite loops", async () => {
   if (!outcome.ok) assert.match(outcome.error, /timed out|timeout/iu);
 });
 
-test("runner terminates microtask loops without blocking the extension host", async () => {
+test("runner timeout rejects a hanging await without a Worker", async () => {
   const bundle = createAsgrepConnector({
     async run(): Promise<MachineEnvelope> {
       return { tool: "asgrep", schema_version: "1.0.0", ok: true };
     },
   }, { cwd: "/project" });
   const started = Date.now();
-  const outcome = await runCodemode(`
-    Promise.resolve().then(function spin() { Promise.resolve().then(spin); });
-    return await new Promise(() => {});
-  `, bundle.asgrep, { timeoutMs: 20 });
+  const outcome = await runCodemode(`return await new Promise(() => {});`, bundle.asgrep, { timeoutMs: 20 });
   assert.equal(outcome.ok, false);
   if (!outcome.ok) assert.match(outcome.error, /timed out|timeout/iu);
-  assert.ok(Date.now() - started < 2_000, "sandbox termination should remain bounded");
+  assert.ok(Date.now() - started < 2_000, "in-process timeout should remain bounded");
 });
 
 test("runner serializes result getters inside the VM timeout", async () => {
@@ -712,6 +709,20 @@ test("argvFor emits typed-equivalent CLI for spawn fallback", () => {
     () => argvFor("catalog_search", { query: "search" }),
     /no direct CLI fallback/,
   );
+  assert.deepEqual(argvFor("find", { query: "hello", limit: 8, excerpt_lines: 0 }), [
+    "--json", "--format", "agent-capsule", "--limit", "8", "--excerpt-lines", "0", "word:hello", ".",
+  ]);
+  assert.deepEqual(argvFor("find", { query: "defs:Foo", limit: 4 }), [
+    "--json", "--format", "agent-capsule", "--limit", "4", "--excerpt-lines", "0", "defs:Foo", ".",
+  ]);
+  assert.deepEqual(argvFor("find", { query: "blast:Foo", limit: 4 }), [
+    "--json", "--format", "agent-capsule", "--limit", "4", "--excerpt-lines", "0", "callers:Foo", ".",
+  ]);
+  assert.deepEqual(argvFor("find", { query: "blast:src/auth.ts", limit: 4 }), [
+    "--json", "--format", "agent-capsule", "--limit", "4", "--excerpt-lines", "0", "imports:src/auth.ts", ".",
+  ]);
+  assert.throws(() => argvFor("read", { path: "a.ts" }), /no direct CLI fallback/);
+  assert.throws(() => argvFor("edit", { path: "a.ts", oldText: "a", newText: "b" }), /no direct CLI fallback/);
 });
 
 test("asEnvelope does not let payload clobber ok/tool", () => {
@@ -736,4 +747,85 @@ test("createCodemodeDispatcher exposes wave stats", async () => {
   assert.equal(stats().waves, 1);
   assert.equal(stats().calls, 2);
   assert.equal(stats().parallelSpawnCalls, 2);
+});
+
+test("find/read/edit ride the same Promise.all wave", async () => {
+  const tools: string[] = [];
+  const host = {
+    async run(): Promise<MachineEnvelope> {
+      throw new Error("run should not be used");
+    },
+    sticky: {
+      async call(tool: string) {
+        tools.push(tool);
+        return { tool: "asgrep", schema_version: "1.0.0", ok: true, hits: [{ symbol: tool }] };
+      },
+      async batch(calls: Array<{ id: string; tool: string }>) {
+        for (const c of calls) tools.push(c.tool);
+        return {
+          results: calls.map((c) => ({
+            id: c.id,
+            ok: true,
+            value: { tool: "asgrep", schema_version: "1.0.0", ok: true, hits: [{ symbol: c.tool }] },
+          })),
+        };
+      },
+      async end() {},
+    },
+  };
+  const bundle = createAsgrepConnector(host, { cwd: "/p" });
+  const outcome = await runCodemode(
+    `async () => {
+      const [a, b, c] = await Promise.all([
+        asgrep.search({ query: "one" }),
+        asgrep.find({ query: "Foo" }),
+        asgrep.read({ path: "a.ts", start: 1, end: 2 }),
+      ]);
+      return { a: a.hits[0].symbol, b: b.hits[0].symbol, c: c.hits[0].symbol };
+    }`,
+    bundle.asgrep,
+    { stats: bundle.stats },
+  );
+  assert.equal(outcome.ok, true, outcome.ok ? undefined : outcome.error);
+  assert.deepEqual(outcome.result, { a: "search", b: "find", c: "read" });
+  assert.equal(bundle.stats().waves, 1);
+  assert.deepEqual(tools.sort(), ["find", "read", "search"]);
+});
+
+test("edit is a mutating tool and does not spawn-replay after sticky failure", async () => {
+  const transportFailure = new Error("sticky died");
+  let spawnFallbacks = 0;
+  const dispatcher = createCodemodeDispatcher({
+    sticky: {
+      async call() { throw new Error("not used"); },
+      async batch() { throw transportFailure; },
+      async end() {},
+    },
+    async run() {
+      spawnFallbacks += 1;
+      return asEnvelope({ hits: [] });
+    },
+  });
+  const results = await Promise.allSettled([
+    dispatcher.host.call("edit", { path: "a.ts", oldText: "a", newText: "b" }, { cwd: "/p" }),
+    dispatcher.host.call("search", { query: "auth" }, { cwd: "/p" }),
+  ]);
+  assert.deepEqual(results.map(({ status }) => status), ["rejected", "rejected"]);
+  assert.equal(spawnFallbacks, 0);
+});
+
+test("in-process Code Mode activation stays off Worker spawn", async () => {
+  const bundle = createAsgrepConnector({
+    async run(): Promise<MachineEnvelope> {
+      return { tool: "asgrep", schema_version: "1.0.0", ok: true, hits: [] };
+    },
+  }, { cwd: "/p" });
+  await resetCodemodeSandboxForTests();
+  await warmCodemodeSandbox();
+  const first = await runCodemode("return 1", bundle.asgrep);
+  const second = await runCodemode("return 2", bundle.asgrep);
+  assert.equal(first.ok, true, first.ok ? undefined : first.error);
+  assert.equal(second.ok, true, second.ok ? undefined : second.error);
+  assert.equal(second.result, 2);
+  assert.ok(second.wallMs < 20, `in-process activation ${second.wallMs}ms`);
 });

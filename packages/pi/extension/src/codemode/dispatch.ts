@@ -67,7 +67,7 @@ type Pending = {
 };
 
 const MAX_WAVE = 32;
-const MUTATING_TOOLS = new Set(["index_repo"]);
+const MUTATING_TOOLS = new Set(["index_repo", "edit"]);
 
 const abortError = (): Error => Object.assign(new Error("codemode aborted"), { name: "AbortError" });
 
@@ -297,11 +297,13 @@ type ArgvSpec =
   | { form: "capsule"; key: "query" | "symbol" | "module"; prefix?: string }
   | { form: "semantic" }
   | { form: "chain" }
+  | { form: "find" }
   | { form: "status" }
   | { form: "index_repo" };
 
 const ARGV_SPEC: Record<string, ArgvSpec> = {
   search: { form: "capsule", key: "query" },
+  find: { form: "find" },
   semantic: { form: "semantic" },
   chain: { form: "chain" },
   defs: { form: "capsule", key: "symbol", prefix: "defs" },
@@ -336,6 +338,17 @@ export function argvFor(tool: string, args: Record<string, unknown>): string[] {
   const capsule = ["--json", "--format", "agent-capsule", "--limit", String(limit), "--excerpt-lines", String(excerpt)];
   if (spec.form === "semantic") {
     return ["semantic", argStr(args, "query"), ".", ...capsule];
+  }
+  if (spec.form === "find") {
+    const raw = argStr(args, "query").trim();
+    let token = raw;
+    if (/^blast:/i.test(raw)) {
+      const target = raw.slice(raw.indexOf(":") + 1).trim();
+      token = /[\\/.]/.test(target) ? `imports:${target}` : `callers:${target}`;
+    } else if (!/^(defs|callers|imports|literal|regex|word|pattern):/i.test(raw)) {
+      token = `word:${raw}`;
+    }
+    return [...capsule, token, "."];
   }
   // capsule (+ optional prefix for defs/callers/imports)
   const raw = argStr(args, spec.key);

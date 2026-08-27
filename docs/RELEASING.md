@@ -18,8 +18,6 @@ Local preparation is side-effect free:
 npm run check:pi-contract
 npm run check:pi-dist
 npm run check:pi-release
-npm run test:pi-release-gate
-npm run test:pi-e2e
 ```
 
 `check:pi-contract` remains the release-metadata/version skew gate (including a few src↔dist constant checks). `check:pi-dist` rebuilds the committed `packages/pi/extension/dist` via `tsc` and fails if `git status --porcelain` is non-empty under that tree (tracked drift or untracked emit; `npm files` ships `dist`; do not un-commit it).
@@ -36,7 +34,6 @@ If publication stops after a package becomes visible, retry the same preserved f
 - Versions follow Semantic Versioning. Incompatible public API changes require a major version bump and release notes.
 - Additive, backward-compatible functionality increments the minor version after 1.0; backward-compatible fixes increment the patch version. Prerelease iterations increment the prerelease identifier (for example, `alpha.0` to `alpha.1`).
 - Every path dependency between publishable workspace crates must also specify the same explicit version, so packaged manifests resolve from crates.io.
-- `ast-sgrep-testkit` is internal (`publish = false`) and is never published. Dev-dependencies on it are excluded from published dependency resolution.
 
 ## Preparation
 

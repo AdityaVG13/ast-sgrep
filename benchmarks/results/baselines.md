@@ -254,7 +254,7 @@ requests".
 
 Cold-index figures include hashed-embedding generation (the default `index`
 path). They are larger than the older `run-scale.sh` table in
-`docs/benchmarks.md`, which indexed with different roots and machine state;
+an older methodology note, which indexed with different roots and machine state;
 this table is the pinned reference going forward.
 
 ## Watch mode -- per-save incremental index work

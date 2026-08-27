@@ -79,6 +79,16 @@ fn cmp_ranked_hits(
     primary
         .then_with(|| a.file.cmp(&b.file))
         .then_with(|| a.line_start.cmp(&b.line_start))
+        // Total-order tail (br-23f): sort_unstable_by is NOT stable and the
+        // input order feeding it comes from a randomly seeded HashMap
+        // (lexical_from_fts), so any residual Equal flips hit order between
+        // processes and breaks the documented cross-process byte-stability
+        // contract. These arms evaluate only on exact upstream ties.
+        .then_with(|| a.line_end.cmp(&b.line_end))
+        .then_with(|| a.symbol.cmp(&b.symbol))
+        .then_with(|| a.caller.cmp(&b.caller))
+        .then_with(|| a.callee.cmp(&b.callee))
+        .then_with(|| a.excerpt.cmp(&b.excerpt))
 }
 
 fn same_definition_locus(hit: &SearchHit, definition: &SearchHit) -> bool {
@@ -111,8 +121,36 @@ pub fn finish_response(
 pub(crate) fn finish_response_checked(
     parsed: &ParsedQuery,
     options: &SearchOptions,
+    hits: Vec<SearchHit>,
+    dedup: bool,
+) -> Result<SearchResponse> {
+    finish_response_checked_lazy(parsed, options, hits, dedup, None, false)
+}
+
+/// br-perf-lazy-excerpts: variant that defers per-hit excerpt SQL out of the
+/// channel passes. `lazy_excerpt_store` is the index whose `attach_indexed_
+/// excerpts` fills empty excerpts AFTER dedup/margins/confidence/best_def
+/// (none of which read excerpts) and BEFORE the coverage prune (which does).
+/// Channel passes marked lazy skip their own attachment; hits removed by
+/// dedup/filter before attachment never cost an excerpt fetch.
+pub(crate) fn finish_response_checked_lazy(
+    parsed: &ParsedQuery,
+    options: &SearchOptions,
+    hits: Vec<SearchHit>,
+    dedup: bool,
+    lazy_excerpt_store: Option<&crate::store::IndexStore>,
+    mut lazy_excerpts_pending: bool,
+) -> Result<SearchResponse> {
+    let _ = &mut lazy_excerpts_pending;
+    finish_response_inner(parsed, options, hits, dedup, lazy_excerpt_store)
+}
+
+fn finish_response_inner(
+    parsed: &ParsedQuery,
+    options: &SearchOptions,
     mut hits: Vec<SearchHit>,
     dedup: bool,
+    lazy_excerpt_store: Option<&crate::store::IndexStore>,
 ) -> Result<SearchResponse> {
     if dedup {
         hits = dedup_hits(hits);
@@ -170,6 +208,11 @@ pub(crate) fn finish_response_checked(
     } else {
         None
     };
+    // br-perf-lazy-excerpts: fill deferred structural excerpts after the
+    // stages that ignore them and before the first excerpt-dependent prune.
+    if let Some(store) = lazy_excerpt_store {
+        crate::search::passes::symbol::attach_indexed_excerpts_if_empty(store, &mut hits)?;
+    }
     let keep = if hybrid {
         gate_limit.saturating_mul(MAX_HITS_PER_FILE).max(gate_limit)
     } else {
@@ -177,20 +220,8 @@ pub(crate) fn finish_response_checked(
     };
     let prune_keep = keep.saturating_mul(4).max(keep.saturating_add(32));
     let multi_term = parsed.terms.len() > 1;
-    if hits.len() > prune_keep {
-        // Keep coverage in the pre-truncate sort key so high-coverage lower-score
-        // hits survive the keep*4 prune (8mb8).
-        hits.select_nth_unstable_by(prune_keep, |a, b| {
-            cmp_ranked_hits(
-                a,
-                excerpt_term_coverage(&parsed.terms, a),
-                b,
-                excerpt_term_coverage(&parsed.terms, b),
-                multi_term,
-            )
-        });
-        hits.truncate(prune_keep);
-    }
+    // Coverage is a pure function of (terms, excerpt). Compute once per hit so
+    // select_nth / sort do not re-lowercase excerpts on every comparison.
     let mut keyed: Vec<(u32, SearchHit)> = hits
         .into_iter()
         .map(|h| (excerpt_term_coverage(&parsed.terms, &h), h))
@@ -198,6 +229,10 @@ pub(crate) fn finish_response_checked(
     let mut compare = |(ca, a): &(u32, SearchHit), (cb, b): &(u32, SearchHit)| {
         cmp_ranked_hits(a, *ca, b, *cb, multi_term)
     };
+    if keyed.len() > prune_keep {
+        keyed.select_nth_unstable_by(prune_keep, &mut compare);
+        keyed.truncate(prune_keep);
+    }
     if keyed.len() > keep {
         keyed.select_nth_unstable_by(keep, &mut compare);
         keyed.truncate(keep);
@@ -357,6 +392,10 @@ fn contains_term_token(text: &str, term: &str) -> bool {
         })
 }
 pub(super) fn excerpt_term_coverage(terms: &[String], hit: &SearchHit) -> u32 {
+    if terms.is_empty() {
+        return 0;
+    }
+    let mut excerpt_lower: Option<String> = None;
     terms
         .iter()
         .filter(|term| {
@@ -364,7 +403,8 @@ pub(super) fn excerpt_term_coverage(terms: &[String], hit: &SearchHit) -> u32 {
             if term.chars().any(|c| c.is_uppercase()) {
                 contains_term_token(&hit.excerpt, term)
             } else {
-                contains_term_token(&hit.excerpt.to_lowercase(), &term.to_lowercase())
+                let lowered = excerpt_lower.get_or_insert_with(|| hit.excerpt.to_lowercase());
+                contains_term_token(lowered, &term.to_lowercase())
             }
         })
         .count() as u32

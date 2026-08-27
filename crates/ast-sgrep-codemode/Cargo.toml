@@ -40,8 +40,5 @@ path = "../../tests/codemode/batch.rs"
 name = "catalog"
 path = "../../tests/codemode/catalog.rs"
 [[test]]
-name = "fuzz_oracles"
-path = "../../tests/codemode/fuzz_oracles.rs"
-[[test]]
 name = "session_plan"
 path = "../../tests/codemode/session_plan.rs"

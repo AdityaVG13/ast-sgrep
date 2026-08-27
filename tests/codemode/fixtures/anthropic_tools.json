@@ -53,6 +53,159 @@
     "allowed_callers": [
       "code_execution_20260120"
     ],
+    "description": "Lexical / identifier lookup (word:). Faster than hybrid search when you already know the token. Prefixed queries (defs:, callers:, blast:, literal:, regex:, pattern:) pass through. blast:Symbol reverse-walks callers; blast:path uses imports.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "excerpt_lines": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "format": {
+          "default": "capsule",
+          "enum": [
+            "agent",
+            "capsule"
+          ],
+          "type": "string"
+        },
+        "limit": {
+          "maximum": 500,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "query": {
+          "description": "Exact token or prefixed query",
+          "type": "string"
+        },
+        "root": {
+          "description": "Optional subdirectory under the session workspace root (foreign paths are refused)",
+          "type": "string"
+        }
+      },
+      "required": [
+        "query"
+      ],
+      "type": "object"
+    },
+    "name": "find"
+  },
+  {
+    "allowed_callers": [
+      "code_execution_20260120"
+    ],
+    "description": "Batched line windows from the index (file_lines), with disk fallback. Prefer one read({ refs }) over N calls. Caps at 32 windows.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "context_lines": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "end": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "max_chars": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "path": {
+          "type": "string"
+        },
+        "ref": {
+          "description": "file#Lstart-Lend",
+          "type": "string"
+        },
+        "refs": {
+          "items": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "properties": {
+                  "end": {
+                    "type": "integer"
+                  },
+                  "path": {
+                    "type": "string"
+                  },
+                  "ref": {
+                    "type": "string"
+                  },
+                  "start": {
+                    "type": "integer"
+                  }
+                },
+                "type": "object"
+              }
+            ]
+          },
+          "type": "array"
+        },
+        "root": {
+          "description": "Optional subdirectory under the session workspace root (foreign paths are refused)",
+          "type": "string"
+        },
+        "start": {
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "name": "read"
+  },
+  {
+    "description": "Unique string replace jailed to the session root, then targeted reindex of touched paths. oldText must match exactly once. Serial with other mutations.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "edits": {
+          "items": {
+            "properties": {
+              "newText": {
+                "type": "string"
+              },
+              "oldText": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path",
+              "oldText",
+              "newText"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "newText": {
+          "type": "string"
+        },
+        "oldText": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "root": {
+          "description": "Optional subdirectory under the session workspace root (foreign paths are refused)",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "edit"
+  },
+  {
+    "allowed_callers": [
+      "code_execution_20260120"
+    ],
     "description": "Semantic/embed pass only. Prefer when query words may not appear in source (e.g. credential renewal → auth_refresh).",
     "input_schema": {
       "additionalProperties": false,

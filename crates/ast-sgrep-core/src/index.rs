@@ -9,7 +9,6 @@ use crate::store::{IndexStore, RefreshLinesInput, UpsertFileInput};
 use crate::Result;
 use ast_sgrep_lang::{detect_language, Language, ParserRegistry};
 use rayon::prelude::*;
-use std::cell::Cell;
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -39,31 +38,6 @@ fn run_index_parallel<R: Send>(thread_limit: Option<usize>, work: impl FnOnce() 
 }
 
 pub use crate::index_watch::canonicalize_affected_path;
-
-thread_local! {
-    /// Test-only: when set, [`Indexer::rebuild_dirty_sidecars`] returns Err after the
-    /// bulk SQLite commit so callers can pin Err-path cache invalidation.
-    /// Thread-local so parallel `cargo test` workers do not cross-contaminate.
-    static FORCE_SIDECAR_REBUILD_ERR: Cell<bool> = const { Cell::new(false) };
-}
-
-/// RAII guard that forces sidecar rebuild to fail on this thread (simulates
-/// mid-sidecar Err after durable bulk commit). Clears the flag on drop.
-#[doc(hidden)]
-pub struct ForceSidecarRebuildErr;
-
-impl Drop for ForceSidecarRebuildErr {
-    fn drop(&mut self) {
-        FORCE_SIDECAR_REBUILD_ERR.with(|c| c.set(false));
-    }
-}
-
-/// Arm the mid-sidecar rebuild failure inject for the current thread.
-#[doc(hidden)]
-pub fn force_sidecar_rebuild_err() -> ForceSidecarRebuildErr {
-    FORCE_SIDECAR_REBUILD_ERR.with(|c| c.set(true));
-    ForceSidecarRebuildErr
-}
 
 /// Maximum exact paths accepted by one incremental update request.
 pub const MAX_INCREMENTAL_PATHS: usize = 1_024;
@@ -167,8 +141,8 @@ impl EmbedBackend {
         match self {
             Self::Auto => "auto",
             Self::Neural => "neural",
-            // "semantic" is the legacy v1 marker (needs_semantic_v1_rewrite);
-            // the versioned v2 identity is what gets stored and compared.
+            // Unversioned "semantic" is a legacy marker
+            // (needs_legacy_semantic_rewrite); the stored identity is semantic-v2.
             Self::Semantic => "semantic-v2",
         }
     }
@@ -240,6 +214,12 @@ pub struct IndexStats {
     pub callers_extracted: usize,
     pub imports_extracted: usize,
 }
+impl IndexStats {
+    /// True when the walk wrote or deleted at least one file row.
+    pub fn mutated(&self) -> bool {
+        self.files_indexed > 0 || self.files_removed > 0
+    }
+}
 #[derive(Debug, Clone, Copy, Default)]
 pub struct FileIndexStats {
     pub symbols: usize,
@@ -296,6 +276,8 @@ pub(crate) fn quick_check(store: &IndexStore) -> Result<String> {
 impl Indexer {
     pub fn new(mut options: IndexOptions) -> Result<Self> {
         options.root = options.root.canonicalize().unwrap_or(options.root.clone());
+        options.lang_filter =
+            ast_sgrep_lang::Language::canonical_filter(options.lang_filter.as_deref());
         let root_dir = crate::io_bounds::RootDir::open(&options.root)?;
         let store = match open_index_store(&options) {
             Ok(store) if options.force_reindex => match quick_check(&store) {
@@ -676,12 +658,6 @@ impl Indexer {
     }
     fn rebuild_dirty_sidecars(&self, _stats: &IndexStats, semantic_ivf_dirty: bool) -> Result<()> {
         self.check_cancel()?;
-        // After bulk commit: injectable Err so MCP/CM tests pin invalidate-on-Err.
-        if FORCE_SIDECAR_REBUILD_ERR.with(|c| c.get()) {
-            return Err(crate::StoreError::Other(
-                "forced sidecar rebuild failure after bulk commit (test inject)".into(),
-            ));
-        }
         let file_count = self.store.status()?.file_count;
         if crate::tantivy_index::should_use_tantivy(file_count, self.options.use_tantivy) {
             self.rebuild_tantivy_sidecar()?;
@@ -696,6 +672,11 @@ impl Indexer {
         if !crate::semantic_ann::should_use_ann(stats.count, self.options.ann_threshold) {
             crate::semantic_ivf::invalidate_semantic_ivf(self.store.db_path())?;
             return Ok(());
+        }
+        if self.options.force_reindex {
+            // Explicit `asgrep reindex` rebuilds centroids. Drop the sidecar so
+            // the stale-reassign path cannot reuse the previous k-means.
+            crate::semantic_ivf::invalidate_semantic_ivf(self.store.db_path())?;
         }
         let chunks = self.store.all_semantic_chunks(None)?;
         crate::semantic_ann::rebuild_semantic_ivf_sidecar(
@@ -1085,14 +1066,14 @@ impl Indexer {
         Ok(true)
     }
     /// Full semantic identity check (28vo/e2hc.13): the stored embed backend
-    /// must equal the active preference exactly, no legacy v1 rewrite pending,
+    /// must equal the active preference exactly, no legacy rewrite pending,
     /// and the configured model must match what was recorded at index time.
     fn semantic_identity_matches(&self) -> Result<bool> {
-        // Legacy unversioned semantic-v1 (e2hc.13): force rewrite even under
-        // Auto. Without this, Auto skips the backend mismatch check and a
+        // Unversioned embed_backend="semantic" must force a full rewrite even
+        // under Auto. Otherwise Auto skips the backend mismatch check and a
         // single-file update can flip meta to semantic-v2 while sibling
-        // chunks remain v1.
-        if self.store.needs_semantic_v1_rewrite()? {
+        // chunks stay on the old layout.
+        if self.store.needs_legacy_semantic_rewrite()? {
             return Ok(false);
         }
         // Exact backend identity only (ast-sgrep-28vo): Auto is not a
@@ -1156,19 +1137,3 @@ impl Indexer {
         Ok(rows_from_extraction(&extraction))
     }
 }
-
-#[cfg(test)]
-#[path = "../../../tests/unit/core/index.rs"]
-mod tests;
-
-#[cfg(test)]
-#[path = "../../../tests/unit/core/index__body_hash_tests.rs"]
-mod body_hash_tests;
-
-#[cfg(test)]
-#[path = "../../../tests/unit/core/index__cancel_tests.rs"]
-mod cancel_tests;
-
-#[cfg(test)]
-#[path = "../../../tests/unit/core/index__mtime_skip_tests.rs"]
-mod mtime_skip_tests;

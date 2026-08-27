@@ -1,3 +1,4 @@
+[CHANGELOG.md#C07C]
 # Changelog
 
 All notable changes to **ast-sgrep** — hybrid code search that understands intent (lexical FTS + AST graph + offline semantic ranking).
@@ -7,6 +8,18 @@ This changelog follows [Keep a Changelog](https://keepachangelog.com/) conventio
 **Scope window:** v1.0.0-alpha (2026-07-11) → v2.0.0 (2026-08-15). The v1.4.0 section covers seven earlier PRs plus direct-to-main commits since v1.3.2; research evidence is logged in [`CHANGELOG_RESEARCH.md`](CHANGELOG_RESEARCH.md).
 
 ## Unreleased
+
+### Fixed
+
+- `pi-ast-sgrep` no longer imports `node:sqlite` at load time, so Pi/OMP/ZMP can boot under Bun via `bun:sqlite`.
+- `asgrep search` indexes an empty checkout on first use, and incrementally refreshes a non-empty index, instead of returning stale or empty hits. Pass `--no-auto-index` to keep the old fail-closed empty-index error and skip refresh.
+- `--lang` aliases include every indexed source extension (`ts`, `h`, `hpp`, `py`, `rs`, …) so SQL filters match stored language ids.
+
+### Changed
+
+- GitHub Actions `CI` no longer runs on `pull_request`; dispatch it from the Actions tab. Other workflows were already `workflow_dispatch` only.
+- Repository hygiene: drop campaign scripts and process docs; keep only clone-required `scripts/` (`rustc-capped`, `cpu-limit-exec.py`, `verify-forbid-soundness`).
+- Keep search, index, and Pi behavior tests under `tests/`. Drop campaign fuzz, benches, keep-gates, process suites, and crate-source `#[cfg(test)]` stubs.
 
 ## Version Timeline
 

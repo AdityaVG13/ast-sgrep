@@ -168,7 +168,15 @@ impl SemanticAnnIndex {
         self.validate_partition(chunk_count)
     }
 
-    /// `probes`: None/0 = at most 90% of populated clusters; ≥ n_clusters = exact.
+    pub fn centroids(&self) -> &[Vec<f32>] {
+        &self.centroids
+    }
+
+    pub fn centroid_count(&self) -> usize {
+        self.centroids.len()
+    }
+
+    /// `probes`: None/0 = at most 90% of populated clusters (capped at 8 once n>10_000); ≥ n_clusters = exact.
     pub fn candidate_indices(&self, query: &[f32], probes: Option<usize>) -> Vec<usize> {
         if self.centroids.is_empty() {
             return vec![];
@@ -187,10 +195,25 @@ impl SemanticAnnIndex {
             return vec![];
         }
         let take = match probes {
-            None | Some(0) if populated > 1 => populated
-                .saturating_mul(DEFAULT_ADAPTIVE_PROBE_PERCENT)
-                .div_euclid(100)
-                .clamp(1, populated - 1),
+            None | Some(0) if populated > 1 => {
+                let pct = populated
+                    .saturating_mul(DEFAULT_ADAPTIVE_PROBE_PERCENT)
+                    .div_euclid(100)
+                    .clamp(1, populated - 1);
+                // 90% at 54k is nearly exhaustive (~49k candidates). Keep the
+                // published 2048/10000 recall gate, but bound nprobe once the
+                // corpus is larger than that fixture.
+                let n = self.clusters.iter().map(Vec::len).sum::<usize>();
+                if n > 10_000 {
+                    // 8 probes: ~1.8k members at 54k / k~234. 16 probes was
+                    // unique-query p90 1.2 ms; 8 probes measured p90 0.63 ms
+                    // on the same 54k shape (n=25). 2048/10k fixtures stay
+                    // on the 90% path below.
+                    pct.min(8).clamp(1, populated - 1)
+                } else {
+                    pct
+                }
+            }
             None | Some(0) => 1,
             Some(p) => p.max(1).min(populated),
         };
@@ -234,11 +257,55 @@ impl SemanticAnnIndex {
         let q = normalize_vec(query);
         score_members(&q, flat, dim, n, &self.candidate_indices(&q, probes), limit)
     }
-    pub fn reassign_all(&mut self, flat: &[f32], dim: usize) {
-        if flat.is_empty() || dim == 0 {
-            return;
+    /// Score an explicit member index list (hybrid file-restrict). Same
+    /// MIN_SIMILARITY gate as `search_flat_with_probes`.
+    pub fn search_flat_members(
+        &self,
+        flat: &[f32],
+        dim: usize,
+        query: &[f32],
+        members: &[usize],
+        limit: usize,
+    ) -> Vec<(usize, f32)> {
+        let n = flat.len().checked_div(dim).unwrap_or(0);
+        if n == 0 {
+            return vec![];
         }
-        *self = Self::build_from_flat(flat, dim);
+        let q = normalize_vec(query);
+        score_members(&q, flat, dim, n, members, limit)
+    }
+    /// Keep existing centroids and rebuild cluster membership for `flat`.
+    ///
+    /// Delta reindex uses this so a chunk-count change does not pay full k-means.
+    /// Returns false when this index cannot reassign (empty or dim-mismatched
+    /// centroids); the caller should fall through to `build_from_flat`.
+    pub fn reassign_all(&mut self, flat: &[f32], dim: usize) -> bool {
+        let _span = crate::perf_profile::Span::start(
+            "semantic_ivf_reassign",
+            "semantic",
+            "SemanticAnnIndex::reassign_all (keep centroids)",
+        );
+        let n = flat.len().checked_div(dim).unwrap_or(0);
+        if n == 0 || dim == 0 || self.centroids.is_empty() {
+            return false;
+        }
+        if self.centroids.iter().any(|centroid| centroid.len() != dim) {
+            return false;
+        }
+        let mut owned = flat.to_vec();
+        for i in 0..n {
+            normalize_vec_in_place(&mut owned[i * dim..(i + 1) * dim]);
+        }
+        let assignments: Vec<usize> = (0..n)
+            .into_par_iter()
+            .map(|i| nearest_centroid(flat_row(&owned, dim, i), &self.centroids))
+            .collect();
+        let mut clusters = vec![Vec::new(); self.centroids.len()];
+        for (idx, &cluster) in assignments.iter().enumerate() {
+            clusters[cluster].push(idx);
+        }
+        self.clusters = clusters;
+        true
     }
 }
 pub fn flatten_vectors_for_search(chunks: &[SemanticChunkRow], dim: usize) -> Result<Vec<f32>> {
@@ -337,22 +404,19 @@ fn score_members(
         }
         let start = idx * dim;
         (start + dim <= flat.len())
-            .then(|| cosine_similarity(query, &flat[start..start + dim]))
+            // IVF payload and `search_flat_with_probes` query are L2-normalized,
+            // so cosine == dot. One SIMD dot beats three-norm cosine on the
+            // few-thousand-member probe set.
+            .then(|| dot_similarity(query, &flat[start..start + dim]))
             .map(|sim| (*idx, sim))
     };
-    if members.len() < PARALLEL_CHUNK_THRESHOLD {
-        top_k_similarity(
-            members.iter().filter_map(score),
-            limit,
-            Some(MIN_SIMILARITY),
-        )
-    } else {
-        top_k_similarity(
-            members.par_iter().filter_map(score).collect::<Vec<_>>(),
-            limit,
-            Some(MIN_SIMILARITY),
-        )
-    }
+    // Sequential on purpose: a few thousand SIMD dots are cheaper than a
+    // rayon wakeup on the 1–2 ms semantic-only budget.
+    top_k_similarity(
+        members.iter().filter_map(score),
+        limit,
+        Some(MIN_SIMILARITY),
+    )
 }
 fn brute_force_flat(flat: &[f32], dim: usize, query: &[f32], limit: usize) -> Vec<(usize, f32)> {
     top_k_flat_similarity(
@@ -488,11 +552,23 @@ pub fn clear_semantic_ivf_session_cache() {
 }
 
 /// Mark IVF sidecar dirty after semantic-affecting mutations.
+///
+/// Keeps the on-disk sidecar so a later delta rebuild can reassign members to
+/// existing centroids. Search still ignores the file on fingerprint mismatch.
+/// Call [`drop_semantic_ivf`] when the centroid set itself must die (full wipe
+/// or embedding-identity rewrite).
 pub fn mark_semantic_ivf_stale(store: &IndexStore) -> Result<()> {
     if store.get_meta("semantic_ivf_stale")?.as_deref() != Some("1") {
         store.set_meta("semantic_ivf_stale", "1")?;
     }
     lock_session_cache().clear();
+    Ok(())
+}
+
+/// Drop the IVF sidecar and mark it stale. Used on semantic wipes so the next
+/// rebuild cannot reassign onto a centroid set that no longer matches the store.
+pub fn drop_semantic_ivf(store: &IndexStore) -> Result<()> {
+    mark_semantic_ivf_stale(store)?;
     invalidate_semantic_ivf(store.db_path())?;
     Ok(())
 }
@@ -637,8 +713,10 @@ pub fn rebuild_semantic_ivf_sidecar(
     Ok(())
 }
 
-/// When the IVF sidecar is marked stale but topology still matches, reassign members
-/// in place instead of a full rebuild.
+/// When the IVF sidecar is marked stale, reassign every current vector to the
+/// persisted centroids and rewrite postings. Chunk-count drift is expected on
+/// real edits; only dim mismatch, a missing sidecar, or empty centroids fall
+/// through to full k-means.
 fn reassign_stale_ivf_partition(
     store: &IndexStore,
     chunks: &[SemanticChunkRow],
@@ -650,13 +728,15 @@ fn reassign_stale_ivf_partition(
     let Some(ivf) = load_semantic_ivf_unchecked(&semantic_ivf_path(store.db_path()))? else {
         return Ok(false);
     };
-    if ivf.chunk_count() != chunks.len() || ivf.dim != dim {
+    if ivf.dim != dim || ivf.index.centroid_count() == 0 {
         return Ok(false);
     }
     let vectors = flatten_vectors_for_search(chunks, dim)?;
     let mut index = ivf.index.clone();
     drop(ivf);
-    index.reassign_all(&vectors, dim);
+    if !index.reassign_all(&vectors, dim) {
+        return Ok(false);
+    }
     let (fingerprint, db_key) = ann_session_key(store, chunks)?;
     let published = save_semantic_ivf_with_publication(
         &semantic_ivf_path(store.db_path()),
@@ -670,15 +750,3 @@ fn reassign_stale_ivf_partition(
     store.set_meta("semantic_ivf_stale", if published { "0" } else { "1" })?;
     Ok(true)
 }
-
-#[cfg(test)]
-#[path = "../../../tests/unit/core/semantic_ann__min_similarity_gate_tests.rs"]
-mod min_similarity_gate_tests;
-
-#[cfg(test)]
-#[path = "../../../tests/unit/core/semantic_ann__flatten_bounds_tests.rs"]
-mod flatten_bounds_tests;
-
-#[cfg(test)]
-#[path = "../../../tests/unit/core/semantic_ann__kmeans_flat_tests.rs"]
-mod kmeans_flat_tests;

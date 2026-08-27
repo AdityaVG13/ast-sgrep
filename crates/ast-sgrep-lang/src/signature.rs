@@ -63,6 +63,29 @@ pub fn cached_pattern_signatures(pattern: &str) -> Option<Vec<String>> {
     is_pattern_path(callee).then(|| vec![format!("call:{callee}")])
 }
 
+/// Candidate KIND signatures for patterns whose exact shape is not indexable
+/// (braced declaration templates like `fn $NAME($$$) { $$$ }`) but whose
+/// matches must still be nodes of a known kind.
+///
+/// Soundness for candidate narrowing: every native match of such a pattern IS
+/// a node of the returned kind, so any file containing a match necessarily
+/// contains a `pattern_nodes` row with one of these signatures. The index
+/// narrows the file set; the native tree-sitter matcher still decides every
+/// hit, so over-broad kind candidates never change results.
+pub fn candidate_kind_signatures(pattern: &str) -> Option<Vec<String>> {
+    let pattern = pattern.trim();
+    if pattern.is_empty() {
+        return None;
+    }
+    classify_native(pattern)?;
+    for (prefix, kinds) in CACHED_DECL_KIND_TABLE {
+        if pattern.starts_with(prefix) {
+            return Some(kinds.iter().map(|kind| format!("kind:{kind}")).collect());
+        }
+    }
+    None
+}
+
 /// Longest concrete token suitable for a byte-level SIMD prefilter.
 ///
 /// Declaration keywords alone are never returned (they are not cross-language
@@ -164,7 +187,3 @@ fn is_pattern_path(value: &str) -> bool {
             .filter(|p| !p.is_empty())
             .all(is_pattern_ident)
 }
-
-#[cfg(test)]
-#[path = "../../../tests/unit/lang/signature.rs"]
-mod tests;

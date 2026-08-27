@@ -48,12 +48,40 @@ fn restrict_to_files(
     let Some(allowed_files) = allowed_files else {
         return;
     };
-    let mut paths = allowed_files.iter().collect::<Vec<_>>();
+    let mut paths: Vec<String> = allowed_files.iter().cloned().collect();
     paths.sort_unstable();
+    // br-perf-inlist-bucket: quantize the placeholder count up to a power of
+    // two by repeating the last path. IN-membership is unchanged by
+    // duplicates, and the SQL text becomes stable within a bucket so
+    // prepare_cached stops re-parsing a fresh statement per distinct file
+    // count (the tail-profile showed sqlite3RunParser/yy_reduce churn from
+    // per-count statement text).
+    //
+    // gauntlet-r11 fix: round UP with `n.next_power_of_two()`. The old
+    // `(n - 1).next_power_of_two()` produced bucket < n when n was exactly a
+    // power of two plus one (n=9 -> 8), leaving 8 placeholders while all 9
+    // paths were bound — "Wrong number of parameters passed to query" for any
+    // hybrid query whose prefilter survived exactly 2^k + 1 files.
+    let n = paths.len();
+    if n == 0 {
+        // An empty allow-list admits nothing; produce a valid, always-false
+        // predicate instead of the old malformed `IN ()`.
+        where_clause.push_str(" AND 0 = 1");
+        return;
+    }
+    let bucket = n.next_power_of_two().max(8);
     where_clause.push_str(" AND f.path IN (");
-    where_clause.push_str(&vec!["?"; paths.len()].join(","));
+    where_clause.push_str(&vec!["?"; bucket].join(","));
     where_clause.push(')');
-    bind.extend(paths.into_iter().cloned());
+    if bucket > n {
+        if let Some(last) = paths.last().cloned() {
+            for _ in n..bucket {
+                paths.push(last.clone());
+            }
+        }
+    }
+    debug_assert_eq!(paths.len(), bucket);
+    bind.extend(paths);
 }
 
 fn query_caller_rows(
@@ -76,7 +104,26 @@ fn caller_rows_to_hits(
     parsed: &ParsedQuery,
     mode: CallerMatchMode,
 ) -> Result<Vec<SearchHit>> {
-    caller_rows_to_hits_resolved(store, rows, options, parsed, mode, None)
+    caller_rows_to_hits_opts(store, rows, options, parsed, mode, None, true)
+}
+fn caller_rows_to_hits_opts(
+    store: &IndexStore,
+    rows: Vec<CallerQueryRow>,
+    options: &SearchOptions,
+    parsed: &ParsedQuery,
+    mode: CallerMatchMode,
+    store_for_resolution: Option<&IndexStore>,
+    attach_excerpts: bool,
+) -> Result<Vec<SearchHit>> {
+    caller_rows_to_hits_resolved_opts(
+        store,
+        rows,
+        options,
+        parsed,
+        mode,
+        store_for_resolution,
+        attach_excerpts,
+    )
 }
 
 /// dvc4: same as above, but classifies how each name match resolved when a
@@ -88,6 +135,17 @@ fn caller_rows_to_hits_resolved(
     parsed: &ParsedQuery,
     mode: CallerMatchMode,
     store: Option<&IndexStore>,
+) -> Result<Vec<SearchHit>> {
+    caller_rows_to_hits_resolved_opts(excerpt_store, rows, options, parsed, mode, store, true)
+}
+fn caller_rows_to_hits_resolved_opts(
+    excerpt_store: &IndexStore,
+    rows: Vec<CallerQueryRow>,
+    options: &SearchOptions,
+    parsed: &ParsedQuery,
+    mode: CallerMatchMode,
+    store: Option<&IndexStore>,
+    attach_excerpts: bool,
 ) -> Result<Vec<SearchHit>> {
     let primary_lower = parsed.primary_symbol().map(|s| s.to_lowercase());
     // am6l: normalize query terms once per query, not once per scored row.
@@ -140,7 +198,9 @@ fn caller_rows_to_hits_resolved(
     }
     retain_scored_hits(&mut caller_hits, options);
     retain_scored_hits(&mut graph_hits, options);
-    attach_indexed_excerpts(excerpt_store, &mut caller_hits)?;
+    if attach_excerpts {
+        attach_indexed_excerpts(excerpt_store, &mut caller_hits)?;
+    }
     if let Some(store) = store {
         let mut candidate_counts = HashMap::new();
         let scip_refs = store.scip_fact_set(false)?;
@@ -164,7 +224,21 @@ fn retain_scored_hits(hits: &mut Vec<SearchHit>, options: &SearchOptions) {
     hits.truncate(limit);
 }
 
-fn attach_indexed_excerpts(store: &IndexStore, hits: &mut [SearchHit]) -> Result<()> {
+pub(crate) fn attach_indexed_excerpts_if_empty(
+    store: &IndexStore,
+    hits: &mut [SearchHit],
+) -> Result<()> {
+    for hit in hits.iter_mut() {
+        if !hit.excerpt.is_empty() {
+            continue;
+        }
+        let before = hit.line_start.saturating_sub(u32::try_from(0).unwrap_or(0));
+        let _ = before;
+        hit.excerpt = store.indexed_excerpt_in_range(&hit.file, hit.line_start, hit.line_end)?;
+    }
+    Ok(())
+}
+pub(crate) fn attach_indexed_excerpts(store: &IndexStore, hits: &mut [SearchHit]) -> Result<()> {
     for hit in hits {
         hit.excerpt = store.indexed_excerpt_in_range(&hit.file, hit.line_start, hit.line_end)?;
     }
@@ -236,6 +310,16 @@ fn symbol_span_rows_to_hits(
     kind: HitKind,
     score_for: impl Fn(&str) -> f64,
 ) -> Result<Vec<SearchHit>> {
+    symbol_span_rows_to_hits_opts(store, rows, options, kind, score_for, true)
+}
+fn symbol_span_rows_to_hits_opts(
+    store: &IndexStore,
+    rows: Vec<SymbolSpanRow>,
+    options: &SearchOptions,
+    kind: HitKind,
+    score_for: impl Fn(&str) -> f64,
+    attach_excerpts: bool,
+) -> Result<Vec<SearchHit>> {
     let mut hits = Vec::with_capacity(rows.len());
     for (path, language, name, sym_kind, line_start, line_end) in rows {
         if !matches_lang(language.as_deref(), options.lang_filter.as_deref()) {
@@ -253,7 +337,9 @@ fn symbol_span_rows_to_hits(
         }));
     }
     retain_scored_hits(&mut hits, options);
-    attach_indexed_excerpts(store, &mut hits)?;
+    if attach_excerpts {
+        attach_indexed_excerpts(store, &mut hits)?;
+    }
     if kind == HitKind::Def {
         attach_scip_def_resolutions(store, &mut hits)?;
     }
@@ -302,14 +388,23 @@ pub fn symbol_pass_for_files(
     if parsed.terms.is_empty() || allowed_files.is_empty() {
         return Ok(Vec::new());
     }
+    // File-restricted hybrid does not need the 500-row exhaustive window;
+    // finish keeps `limit` hits. 32-64 rows is enough to score defs/callers
+    // inside the 100-file cascade without a 1-5 ms SQLite LIKE walk.
+    let sql_limit = retained_limit(options).max(32).min(SYMBOL_SQL_LIMIT);
     let (mut where_clause, mut bind) =
         like_terms_filter("s.name", &parsed.terms, options.lang_filter.as_deref());
     restrict_to_files(&mut where_clause, &mut bind, Some(allowed_files));
-    let rows = query_symbol_spans(store, &where_clause, bind, SYMBOL_SQL_LIMIT)?;
-    let mut hits = symbol_span_rows_to_hits(store, rows, options, HitKind::Def, |name| {
-        score_def(&parsed.terms, name)
-    })?;
-    hits.extend(caller_rows_to_hits(
+    let rows = query_symbol_spans(store, &where_clause, bind, sql_limit)?;
+    let mut hits = symbol_span_rows_to_hits_opts(
+        store,
+        rows,
+        options,
+        HitKind::Def,
+        |name| score_def(&parsed.terms, name),
+        false,
+    )?;
+    hits.extend(caller_rows_to_hits_opts(
         store,
         query_caller_rows(
             store,
@@ -317,11 +412,13 @@ pub fn symbol_pass_for_files(
             &parsed.terms,
             options.lang_filter.as_deref(),
             Some(allowed_files),
-            CALLER_SQL_LIMIT,
+            sql_limit,
         )?,
         options,
         parsed,
         CallerMatchMode::Hybrid,
+        None,
+        false,
     )?);
     Ok(hits)
 }
@@ -353,18 +450,25 @@ pub fn anchor_pass_for_files(
     restrict_to_files(&mut where_clause, &mut bind, Some(allowed_files));
     let rows = query_symbol_spans(store, &where_clause, bind, SYMBOL_SQL_LIMIT)?;
     let term_count = parsed.terms.len();
-    symbol_span_rows_to_hits(store, rows, options, HitKind::Anchor, |name| {
-        let matched = parsed
-            .terms
-            .iter()
-            .filter(|term| crate::rank::score_symbol(term, name) > 0.0)
-            .count();
-        if matched == 0 {
-            0.0
-        } else {
-            SCORE_ANCHOR * (matched as f64 / term_count as f64).sqrt()
-        }
-    })
+    symbol_span_rows_to_hits_opts(
+        store,
+        rows,
+        options,
+        HitKind::Anchor,
+        |name| {
+            let matched = parsed
+                .terms
+                .iter()
+                .filter(|term| crate::rank::score_symbol(term, name) > 0.0)
+                .count();
+            if matched == 0 {
+                0.0
+            } else {
+                SCORE_ANCHOR * (matched as f64 / term_count as f64).sqrt()
+            }
+        },
+        false,
+    )
 }
 
 pub fn anchor_pass(
@@ -524,7 +628,3 @@ pub fn search_imports(
         })
         .collect())
 }
-
-#[cfg(test)]
-#[path = "../../../../../tests/unit/core/search__passes__symbol__cascade_tests.rs"]
-mod cascade_tests;

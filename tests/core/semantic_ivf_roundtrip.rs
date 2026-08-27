@@ -43,6 +43,11 @@ fn semantic_ivf_roundtrip_and_fingerprint_gate() {
             .collect::<HashSet<_>>(),
         (0..6).collect()
     );
+    let query = vec![0.1f32; dim];
+    assert_eq!(
+        lazy.search(&query, 3, Some(usize::MAX)).expect("mapped lazy vectors"),
+        loaded.index.search_flat(loaded.vectors(), dim, &query, 3)
+    );
     let wrong_fp = compute_ann_fingerprint(6, 5, dim, Some("test"), 0);
     assert!(load_semantic_ivf(&path, wrong_fp).unwrap().is_none());
     assert!(load_semantic_ivf_index(&path, wrong_fp).unwrap().is_none());
@@ -55,7 +60,6 @@ fn semantic_ivf_roundtrip_and_fingerprint_gate() {
         .expect("unchecked load");
     assert!(unchecked.is_mapped());
     assert_eq!(unchecked.vectors(), vectors);
-    let query = vec![0.1f32; dim];
     assert_eq!(
         index.search_flat(&vectors, dim, &query, 3),
         loaded.index.search_flat(loaded.vectors(), dim, &query, 3)
@@ -320,6 +324,103 @@ fn adaptive_ivf_recall_at_10_stays_within_quality_error_budget() {
 }
 
 #[test]
+fn reassign_all_keeps_centroids_when_chunk_count_drifts() {
+    let dim = 8usize;
+    let seed = 0xA11_0516_u64;
+    let base = normalized_flat_vectors(64, dim, seed);
+    let mut index = SemanticAnnIndex::build_from_flat(&base, dim);
+    let centroids = index.centroids().to_vec();
+    assert!(!centroids.is_empty());
+
+    let grown = normalized_flat_vectors(80, dim, seed);
+    assert!(index.reassign_all(&grown, dim));
+    assert_eq!(index.centroids(), centroids.as_slice());
+    assert!(index.validate_partition(80));
+
+    let shrunk = normalized_flat_vectors(48, dim, seed);
+    assert!(index.reassign_all(&shrunk, dim));
+    assert_eq!(index.centroids(), centroids.as_slice());
+    assert!(index.validate_partition(48));
+
+    assert!(
+        !index.reassign_all(&grown, 4),
+        "dim mismatch must refuse reassign"
+    );
+    let mut empty = SemanticAnnIndex::build_from_flat(&[], dim);
+    assert!(!empty.reassign_all(&grown, dim));
+}
+
+fn adaptive_recall_at_10(
+    index: &SemanticAnnIndex,
+    flat: &[f32],
+    dim: usize,
+    vector_count: usize,
+) -> f64 {
+    const RECALL_SLO: f64 = 0.99;
+    let limit = 10usize;
+    let mut matches = 0usize;
+    let mut expected = 0usize;
+    let candidate_ceiling = (vector_count * 95).div_ceil(100);
+    for qi in (0..vector_count).step_by(8) {
+        let query = &flat[qi * dim..(qi + 1) * dim];
+        let exact: HashSet<_> = index
+            .search_flat_with_probes(flat, dim, query, limit, Some(usize::MAX))
+            .into_iter()
+            .map(|(idx, _)| idx)
+            .collect();
+        let candidates = index.candidate_indices(query, None);
+        assert!(
+            candidates.len() <= candidate_ceiling,
+            "adaptive probing scanned {} of {vector_count} candidates, above the 95% ceiling",
+            candidates.len()
+        );
+        let adaptive: HashSet<_> = index
+            .search_flat(flat, dim, query, limit)
+            .into_iter()
+            .map(|(idx, _)| idx)
+            .collect();
+        matches += exact.intersection(&adaptive).count();
+        expected += exact.len();
+    }
+    let recall = matches as f64 / expected as f64;
+    eprintln!("reassign adaptive IVF n={vector_count} recall@10={recall:.6}");
+    let miss_rate = 1.0 - recall;
+    let burn_rate = miss_rate / (1.0 - RECALL_SLO);
+    assert!(
+        burn_rate <= 1.0 + f64::EPSILON,
+        "centroid-preserving reassign exceeded quality error budget: n={vector_count} recall@10={recall:.6}, burn_rate={burn_rate:.3}"
+    );
+    recall
+}
+
+#[test]
+fn centroid_preserving_reassign_keeps_adaptive_recall_after_appends() {
+    let dim = 32usize;
+    let seed = 0x5D0_036_u64;
+    let base_n = 2048usize;
+    let base = normalized_flat_vectors(base_n, dim, seed);
+    let mut index = SemanticAnnIndex::build_from_flat(&base, dim);
+    let centroids = index.centroids().to_vec();
+    adaptive_recall_at_10(&index, &base, dim, base_n);
+
+    for extra in [1usize, 10, 50] {
+        let n = base_n + extra;
+        let flat = normalized_flat_vectors(n, dim, seed);
+        assert!(
+            index.reassign_all(&flat, dim),
+            "reassign must succeed after +{extra} vectors"
+        );
+        assert_eq!(
+            index.centroids(),
+            centroids.as_slice(),
+            "reassign must not rebuild centroids after +{extra}"
+        );
+        assert!(index.validate_partition(n));
+        adaptive_recall_at_10(&index, &flat, dim, n);
+    }
+}
+
+#[test]
 #[ignore = "release-mode ANN recall/latency tradeoff; gated by workflow_dispatch job ann-ivf-scale"]
 fn adaptive_ivf_tradeoff_at_2048_and_10000_vectors() {
     let dim = 32usize;
@@ -391,16 +492,16 @@ fn fixture_vectors() -> (usize, Vec<f32>, [u8; 32]) {
 
 /// ghiw.4: committed VERSION=2 frame + reject samples (wrong magic / truncated).
 #[test]
-fn committed_v2_frame_opens_and_reject_samples_fail_closed() {
+fn committed_ivf_frame_opens_and_reject_samples_fail_closed() {
     let (dim, vectors, fingerprint) = fixture_vectors();
-    let good = ivf_fixture("good_v2.ivf");
+    let good = ivf_fixture("good.ivf");
     let bad_magic = ivf_fixture("bad_magic.ivf");
     let truncated = ivf_fixture("truncated.ivf");
     if updating_goldens() {
         std::fs::create_dir_all(good.parent().expect("ivf dir")).expect("create ivf dir");
         let index = SemanticAnnIndex::build_from_flat(&vectors, dim);
-        save_semantic_ivf(&good, fingerprint, dim, &vectors, &index).expect("write good_v2");
-        let bytes = std::fs::read(&good).expect("read good_v2");
+        save_semantic_ivf(&good, fingerprint, dim, &vectors, &index).expect("write good.ivf");
+        let bytes = std::fs::read(&good).expect("read good.ivf");
         let mut flipped = bytes.clone();
         flipped[0] ^= 0xff;
         std::fs::write(&bad_magic, flipped).expect("write bad_magic");
@@ -409,8 +510,8 @@ fn committed_v2_frame_opens_and_reject_samples_fail_closed() {
         return;
     }
     let loaded = load_semantic_ivf(&good, fingerprint)
-        .expect("open good_v2")
-        .expect("good v2 frame");
+        .expect("open good.ivf")
+        .expect("good IVF frame");
     assert_eq!(loaded.dim, dim);
     assert_eq!(loaded.vectors(), vectors);
     assert!(

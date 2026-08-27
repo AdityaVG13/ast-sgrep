@@ -9,6 +9,9 @@ use thiserror::Error;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToolName {
     Search,
+    Find,
+    Read,
+    Edit,
     Semantic,
     Chain,
     Defs,
@@ -26,6 +29,9 @@ impl ToolName {
     pub fn parse(name: &str) -> Option<Self> {
         Some(match name {
             "search" | "code_search" => Self::Search,
+            "find" => Self::Find,
+            "read" | "code_read" => Self::Read,
+            "edit" | "code_edit" => Self::Edit,
             "semantic" => Self::Semantic,
             "chain" => Self::Chain,
             "defs" => Self::Defs,
@@ -44,6 +50,9 @@ impl ToolName {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Search => "search",
+            Self::Find => "find",
+            Self::Read => "read",
+            Self::Edit => "edit",
             Self::Semantic => "semantic",
             Self::Chain => "chain",
             Self::Defs => "defs",
@@ -65,6 +74,10 @@ pub enum CallError {
     UnknownTool(String),
     #[error("{0}")]
     InvalidArgs(String),
+    /// The sticky session's call budget is exhausted (br-r49). Serve must
+    /// answer once and stop instead of flooding identical per-call errors.
+    #[error("codemode call budget exceeded (max_calls={0})")]
+    BudgetExhausted(usize),
     #[error(transparent)]
     Json(#[from] serde_json::Error),
     #[error(transparent)]
@@ -80,6 +93,9 @@ pub fn call_tool(
     let tool = ToolName::parse(name).ok_or_else(|| CallError::UnknownTool(name.to_string()))?;
     match tool {
         ToolName::Search => session.search(&args).map_err(CallError::from),
+        ToolName::Find => session.find(&args).map_err(CallError::from),
+        ToolName::Read => session.read_windows(&args).map_err(CallError::from),
+        ToolName::Edit => session.edit_files(&args).map_err(CallError::from),
         ToolName::Semantic => {
             let mut a = args;
             if let Some(obj) = a.as_object_mut() {

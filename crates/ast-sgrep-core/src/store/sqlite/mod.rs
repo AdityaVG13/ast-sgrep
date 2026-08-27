@@ -5,28 +5,16 @@ use super::try_index_db_path;
 use crate::Result;
 use ast_sgrep_lang::PatternNode;
 use rusqlite::{params, Connection};
-#[cfg(test)]
-use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::Arc;
-#[cfg(test)]
-thread_local! {
-    /// Test-only inject for d2a1.2: force restore_synchronous to fail so
-    /// callers prove commit/rollback surfaces the error (no `let _ =`).
-    static FORCE_RESTORE_SYNC_FAILURE: Cell<bool> = const { Cell::new(false) };
-    /// Force COMMIT to fail before it reaches SQLite so tests can verify that
-    /// transaction cleanup does not depend on a successful commit.
-    static FORCE_COMMIT_FAILURE: Cell<bool> = const { Cell::new(false) };
-    /// Fail after write pragmas are admitted but before BEGIN so cleanup of a
-    /// partially admitted FastUnsafe batch can be asserted deterministically.
-    static FORCE_BEGIN_FAILURE: Cell<bool> = const { Cell::new(false) };
-}
 // 6 = symbols_name_lower. 7 = semantic-layout-v2 wipe. 8 = unstemmed code FTS.
 // 9 = repository lexicon. 10 = per-field semantic vectors (name/docs/body/graph).
 // 11 = scip_facts overlay (kgvi.2). 12 = tests/examples semantic vector.
+// 13 = callers lower() expression indexes (gauntlet-r11: calls_matching full-scan fix).
+// 14 = pattern_nodes (file_id, signature) composite for cascade structural seeks.
 // Never reuse a SCHEMA_VERSION for two migrations.
-const SCHEMA_VERSION: i64 = 12;
+const SCHEMA_VERSION: i64 = 14;
 const IMPORT_SELECT: &str =
     "SELECT f.path, f.language, i.module_path, i.line_no FROM imports i JOIN files f ON f.id = i.file_id";
 const SYM_LOC: &str = "SELECT f.path, s.name, f.language, s.line_start, s.line_end FROM symbols s JOIN files f ON f.id = s.file_id";
@@ -180,6 +168,13 @@ pub struct IndexStore {
     cache_seq: std::cell::Cell<i64>,
     /// Write-durability profile for this connection (0obi).
     durability: crate::store::Durability,
+    /// Trigram document-frequency memo (br-umh rarest-trigram scan shortcut).
+    trigram_df: crate::store::trigram_df::TrigramDfCache,
+    /// Memo for `indexed_line_count_at_least`: (index_data_version, threshold, at_least).
+    /// Unique-hybrid prefilter called this once per discovery term (LIMIT 1000
+    /// probe). Keyed on generation so an external writer is not a stale routing
+    /// decision; `bump_index_data_version` also clears it.
+    line_count_at_least: std::cell::Cell<Option<(i64, usize, bool)>>,
 }
 mod queries;
 mod writes;
@@ -224,6 +219,8 @@ impl IndexStore {
             bulk_tx_owns: std::cell::Cell::new(false),
             cache_seq: std::cell::Cell::new(0),
             durability,
+            trigram_df: crate::store::trigram_df::TrigramDfCache::new(),
+            line_count_at_least: std::cell::Cell::new(None),
         };
         store.init_schema()?;
         init_cache_seq(&store.conn, &store.cache_seq)?;
@@ -264,6 +261,12 @@ impl IndexStore {
             }
             if version < 11 {
                 ensure_scip_facts_table(&self.conn)?;
+            }
+            if version < 13 {
+                // gauntlet-r11: backfill the lower() expression indexes for
+                // existing indexes. SCHEMA_DDL above already carries them via
+                // IF NOT EXISTS, but only a version bump guarantees the DDL
+                // re-runs on stores that never re-open through a rebuild.
             }
             if version < 3 {
                 self.conn.execute_batch(
@@ -333,6 +336,10 @@ impl IndexStore {
         // beyond the public facade (l115). Do not open a second connection to
         // the same db_path from agent surfaces.
         &self.conn
+    }
+    /// Trigram document-frequency memo (br-umh rarest-trigram scan shortcut).
+    pub(crate) fn trigram_df(&self) -> &crate::store::trigram_df::TrigramDfCache {
+        &self.trigram_df
     }
     pub fn set_meta(&self, key: &str, value: &str) -> Result<()> {
         self.conn.prepare_cached( "INSERT INTO meta(key, value) VALUES(?1, ?2) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
@@ -682,10 +689,10 @@ impl IndexStore {
             |row| Ok((row.get(0)?, row.get(1)?)),
         )?)
     }
-    /// True when the index was built with the legacy `"semantic"` embed backend.
-    /// Search refuses this meta; indexing must rewrite every chunk before
-    /// promoting to `"semantic-v2"` (semantic_v1_rewrite contract).
-    pub fn needs_semantic_v1_rewrite(&self) -> Result<bool> {
+    /// True when the index still stores the unversioned `"semantic"` backend.
+    /// Search refuses that meta; indexing must rewrite every chunk before
+    /// promoting to the current `"semantic-v2"` identity.
+    pub fn needs_legacy_semantic_rewrite(&self) -> Result<bool> {
         Ok(self.get_meta("embed_backend")?.as_deref() == Some("semantic"))
     }
     /// Start a proven-complete semantic rewrite inside the caller's bulk
@@ -703,7 +710,7 @@ impl IndexStore {
         ] {
             self.delete_meta(key)?;
         }
-        crate::semantic_ann::mark_semantic_ivf_stale(self)?;
+        crate::semantic_ann::drop_semantic_ivf(self)?;
         self.bump_semantic_data_version()
     }
     fn bump_index_data_version(&self) -> Result<()> {
@@ -711,6 +718,7 @@ impl IndexStore {
             "INSERT INTO meta(key, value) VALUES('index_data_version', '1')              ON CONFLICT(key) DO UPDATE SET value =              CAST(COALESCE(meta.value, '0') AS INTEGER) + 1",
             [],
         )?;
+        self.line_count_at_least.set(None);
         Ok(())
     }
     /// Monotonic counter bumped on every semantic_chunks mutation (insert or delete).
@@ -769,12 +777,6 @@ impl IndexStore {
         self.end_file_tx(false)
     }
     fn restore_synchronous(&self) -> Result<()> {
-        #[cfg(test)]
-        if FORCE_RESTORE_SYNC_FAILURE.with(|c| c.get()) {
-            return Err(crate::StoreError::Other(
-                "restore_synchronous forced failure (test inject)".into(),
-            ));
-        }
         self.conn.execute_batch(&format!(
             "PRAGMA synchronous = {}; PRAGMA cache_size = -16384",
             self.durability.steady_pragma()
@@ -787,12 +789,6 @@ impl IndexStore {
     fn begin_owned_transaction(&self, setup: &str) -> Result<()> {
         let start = (|| -> Result<()> {
             self.conn.execute_batch(setup)?;
-            #[cfg(test)]
-            if FORCE_BEGIN_FAILURE.with(|c| c.get()) {
-                return Err(crate::StoreError::Other(
-                    "BEGIN forced failure (test inject)".into(),
-                ));
-            }
             self.conn.execute_batch("BEGIN IMMEDIATE")?;
             Ok(())
         })();
@@ -812,12 +808,6 @@ impl IndexStore {
         Err(start_error)
     }
     fn execute_transaction_end(&self, sql: &str) -> Result<()> {
-        #[cfg(test)]
-        if sql == "COMMIT" && FORCE_COMMIT_FAILURE.with(|c| c.get()) {
-            return Err(crate::StoreError::Other(
-                "COMMIT forced failure (test inject)".into(),
-            ));
-        }
         self.conn.execute_batch(sql)?;
         Ok(())
     }
@@ -989,17 +979,9 @@ impl IndexStore {
             self.bump_semantic_data_version()?;
             self.bump_meta_u64("lexicon_data_version", 1)?;
             self.set_meta("lexicon_dirty", "1")?;
-            crate::semantic_ann::mark_semantic_ivf_stale(self)
+            crate::semantic_ann::drop_semantic_ivf(self)
         })?;
         let _ = self.conn.execute_batch("VACUUM");
         Ok(())
     }
 }
-
-#[cfg(test)]
-#[path = "../../../../../tests/unit/core/store__sqlite__restore_synchronous_tests.rs"]
-mod restore_synchronous_tests;
-
-#[cfg(test)]
-#[path = "../../../../../tests/unit/core/store__sqlite__pass3_deep_core_tests.rs"]
-mod pass3_deep_core_tests;

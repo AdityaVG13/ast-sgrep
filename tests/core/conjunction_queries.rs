@@ -221,3 +221,88 @@ fn and_not_removes_right_match_beyond_normal_channel_page() {
         "late right match must subtract left"
     );
 }
+
+// --- Quoted payloads containing " AND " must not split or bail (br-9kb) ---
+
+/// Fixture for quote-awareness: `app.rs` carries callers of `helper` plus the
+/// byte-exact source line `"cats AND dogs"` (double quotes included — literal
+/// payloads are byte-exact, quotes are not stripped). `other.rs` holds a
+/// caller of `helper` and a `frobnicate17` token but no `cats AND dogs`, so
+/// intersections are decidable by construction.
+fn quoted_and_root() -> TempDir {
+    let temp = TempDir::new().unwrap();
+    write_src(
+        temp.path(),
+        "src/app.rs",
+        "fn helper() {}\nfn caller_one() {\n    helper();\n}\nlet note = \"cats AND dogs\";\n",
+    );
+    write_src(
+        temp.path(),
+        "src/other.rs",
+        "fn unrelated() {\n    helper();\n}\nlet flag = frobnicate17;\n",
+    );
+    temp
+}
+
+#[test]
+fn quoted_and_payload_still_forms_a_two_channel_conjunction() {
+    let temp = quoted_and_root();
+    let searcher = indexed_searcher(temp.path());
+    // The only ` AND ` outside quotes separates the two channels; the one
+    // inside `literal:"cats AND dogs"` is payload and must not split or bail.
+    let response = searcher
+        .search("word:helper AND literal:\"cats AND dogs\"")
+        .unwrap();
+    assert!(
+        !response.hits.is_empty(),
+        "word:helper AND literal:\"cats AND dogs\" must execute as a \
+         conjunction (word channel ∩ literal channel); falling back to \
+         ordinary search silently drops the intersection — got {} hits",
+        response.hits.len()
+    );
+    assert!(
+        response.hits.iter().all(|hit| hit.file == "src/app.rs"),
+        "intersection must keep only files matched by BOTH channels \
+         (other.rs lacks \"cats AND dogs\"): {:?}",
+        response
+            .hits
+            .iter()
+            .map(|hit| hit.file.as_str())
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn quoted_and_not_right_channel_still_subtracts() {
+    let temp = quoted_and_root();
+    let searcher = indexed_searcher(temp.path());
+    let response = searcher
+        .search("word:frobnicate17 AND NOT literal:\"skip AND me\"")
+        .unwrap();
+    assert!(
+        response.hits.iter().any(|h| h.file == "src/other.rs"),
+        "AND NOT with a quoted right payload must still subtract at file \
+         scope and keep the unmatched left side — got {} hits",
+        response.hits.len()
+    );
+}
+
+#[test]
+fn single_channel_quoted_and_is_not_a_conjunction() {
+    let temp = quoted_and_root();
+    let searcher = indexed_searcher(temp.path());
+    // Zero unquoted separators: the entire string is one literal payload.
+    // Must resolve through the literal channel (byte-exact), not degrade.
+    let response = searcher.search("literal:\"cats AND dogs\"").unwrap();
+    assert!(
+        response
+            .hits
+            .iter()
+            .any(|h| h.file == "src/app.rs" && h.excerpt.contains("\"cats AND dogs\"")),
+        "literal:\"cats AND dogs\" must return the byte-exact source line"
+    );
+    assert!(
+        !response.hits.iter().any(|h| h.file == "src/other.rs"),
+        "literal channel must stay byte-exact: other.rs has no such bytes"
+    );
+}

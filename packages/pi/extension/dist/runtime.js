@@ -1,8 +1,8 @@
 import { realpath } from "node:fs/promises";
 import { constants, accessSync, existsSync, readdirSync, realpathSync, statSync, watch } from "node:fs";
-import { DatabaseSync } from "node:sqlite";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
 import { resolveBinary } from "ast-sgrep";
+import { openIndexDatabase } from "./sqlite.js";
 export const RUNTIME_VERSION = "2.0.0";
 export const MACHINE_SCHEMA_VERSION = "1.0.0";
 export const CONFIG_SCHEMA_VERSION = 1;
@@ -694,7 +694,7 @@ function inspectIndexFile(path) {
         return "missing";
     let database;
     try {
-        database = new DatabaseSync(path, { readOnly: true });
+        database = openIndexDatabase(path, { readOnly: true });
         const row = database.prepare("PRAGMA user_version").get();
         const version = Number(Object.values(row ?? {})[0]);
         if (version > INDEX_FORMAT_VERSION) {

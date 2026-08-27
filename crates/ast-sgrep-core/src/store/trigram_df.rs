@@ -1,0 +1,290 @@
+//! Rarest-trigram df picker for the literal trigram scan (bead br-umh).
+//!
+//! The scan's cost grows with TERM LENGTH because the FTS5 phrase machinery
+//! intersects every trigram of the needle. Picking only the rarest trigram as
+//! the MATCH term bounds that cost to a single posting list; the existing
+//! `content_matches_literal` reverify in `passes::literal` keeps output
+//! exact (subset postings are a superset of phrase matches by construction:
+//! every line containing the full needle necessarily contains each of its
+//! trigrams, and FTS5 phrase matching is itself trigram-intersection).
+//!
+//! Document frequencies come from an ephemeral `temp` fts5vocab virtual
+//! table over the live `lines_trigram` index — no persisted sidecar, so the
+//! df view can never drift from any writer path (insert, delete,
+//! bulk rebuild). Results are memoized per store keyed on
+//! `index_data_version`; every miss or error degrades silently to the
+//! previous full-phrase MATCH behavior.
+use crate::store::IndexStore;
+use rusqlite::OptionalExtension as _;
+use std::collections::HashMap;
+use std::sync::Mutex;
+
+/// Vocab table name inside the temp schema. `IF NOT EXISTS` keeps steady-state
+/// ensure cost sub-microsecond after first use on a connection.
+const VOCAB_TABLE: &str = "temp.asgrep_trigram_vocab";
+/// Ephemeral fts5vocab instance over the live external-content trigram field.
+/// 'row' variant: (term TEXT PRIMARY KEY, doc INTEGER, cnt INTEGER) with doc =
+/// number of distinct indexed rows containing the term.
+const VOCAB_DDL: &str = "CREATE VIRTUAL TABLE IF NOT EXISTS temp.asgrep_trigram_vocab \
+                         USING fts5vocab('main', 'lines_trigram', 'row')";
+/// Above this many distinct trigrams the needle is already selective enough
+/// that extra df lookups cannot pay for themselves (~34us per lookup measured).
+const MAX_DF_LOOKUPS: usize = 24;
+/// Trigram byte length of the trigram tokenizer.
+const TRIGRAM_LEN: usize = 3;
+/// A df at or below this count is treated as "rare enough". Tuned by A/B on
+/// the self corpus (benchmarks/results/speed.md::2026-08-23 trigram df):
+/// 256 rarely engaged (excludes p75-p90 trigrams); 4096 engaged everywhere
+/// and won ~20% p50; 2048 keeps the win while bounding the worst-case
+/// single-trigram scan (~2k rows x ~1us) on corpora far larger than this one.
+const RARE_ENOUGH_DF: i64 = 2048;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum TrigramShortcut {
+    /// Scan the posting intersection of 1–2 rarest needle trigrams. Safety:
+    /// only trigrams DERIVED FROM THE NEEDLE are candidates, so poisoned dfs
+    /// can change speed, not output. One trigram's postings are a superset of
+    /// phrase matches; AND of two needle trigrams is a tighter superset.
+    /// `content_matches_literal` reverify restores exactness. Empty scan
+    /// proves absence (RED-proven by c2b/c3 regressions).
+    Match(Vec<String>),
+    /// No trustworthy df data (or no rare trigram): scan with the previous
+    /// full-phrase MATCH. Identical to pre-lever behavior.
+    Full,
+}
+
+#[derive(Default)]
+struct DfCacheInner {
+    /// gen when the vocab table was last ensured + per-term document counts.
+    entries: HashMap<String, i64>,
+}
+
+/// Per-Searcher memoization of trigram document frequencies. Invalidated by
+/// generation bump; never authoritative (all misses fall back).
+pub(crate) struct TrigramDfCache {
+    inner: Mutex<DfState>,
+}
+
+struct DfState {
+    cache: DfCacheInner,
+    gen: i64,
+    /// Set once the vocab table could not be created (e.g. SQLite built
+    /// without fts5vocab): stop retrying for this store generation.
+    unavailable: bool,
+}
+
+impl TrigramDfCache {
+    pub(crate) fn new() -> Self {
+        Self {
+            inner: Mutex::new(DfState {
+                cache: DfCacheInner {
+                    entries: HashMap::new(),
+                },
+                gen: 0,
+                unavailable: false,
+            }),
+        }
+    }
+
+    /// Shortcut decision for scanning `needle`, per the contract on
+    /// [`TrigramShortcut`]. Never errors: every uncertain outcome degrades to
+    /// [`TrigramShortcut::Full`], preserving pre-lever behavior.
+    pub(crate) fn scan_shortcut(&self, store: &IndexStore, needle: &str) -> TrigramShortcut {
+        // The trigram tokenizer case-folds; ASCII lowercase folding is exact,
+        // but Unicode folding is not reproduced here, so restrict the fast
+        // path to pure-ASCII needles where fold identity holds.
+        if !needle.is_ascii() {
+            return TrigramShortcut::Full;
+        }
+        let needle_lower = needle.to_lowercase();
+        let Some(trigrams) = distinct_trigrams(&needle_lower) else {
+            return TrigramShortcut::Full;
+        };
+        let Ok(mut state) = self.inner.lock() else {
+            return TrigramShortcut::Full;
+        };
+        let gen = match store.index_data_version() {
+            Ok(gen) => gen,
+            // Unreadable generation: no trustworthy invalidation signal.
+            Err(_) => return TrigramShortcut::Full,
+        };
+        let cache_valid = state.gen == gen;
+        if state.unavailable && cache_valid {
+            return TrigramShortcut::Full;
+        }
+        if !cache_valid {
+            if ensure_vocab_table(store).is_err() {
+                state.unavailable = true;
+                state.gen = gen;
+                return TrigramShortcut::Full;
+            }
+            // br-perf-vocab-preload: fts5vocab point lookups walk the whole
+            // term index per probe (~ms each), which put ~11ms on every
+            // cold needle's df path. One bulk preload per generation turns
+            // every later probe into a HashMap hit. Bounded by corpus
+            // vocabulary size (~1-2MB for 30-50k trigrams here).
+            match preload_vocab(store) {
+                Ok(entries) => {
+                    state.unavailable = false;
+                    state.gen = gen;
+                    state.cache.entries = entries;
+                }
+                Err(_) => {
+                    state.unavailable = true;
+                    state.gen = gen;
+                    return TrigramShortcut::Full;
+                }
+            }
+        }
+        let conn = store.connection();
+        // After vocab preload, df lookups are HashMap hits. Collect every
+        // needle trigram so we can AND the two rarest: a single common
+        // trigram's 2k-row LIKE-reject walk was the unique-hybrid prefilter
+        // wall for absent concept tokens. A df of 0 is NOT trusted as
+        // "absent" (poisonable); it just wins the rarity contest.
+        let mut ranked: Vec<(i64, &str)> = Vec::with_capacity(trigrams.len());
+        for tri in &trigrams {
+            let df = match state.cache.entries.get(*tri) {
+                Some(df) => *df,
+                None => {
+                    let Some(df) = fetch_one(conn, tri) else {
+                        // Unknown df (lookup failed): abandon the fast path —
+                        // never confuse "unknown" with "absent".
+                        return TrigramShortcut::Full;
+                    };
+                    state.cache.entries.insert((*tri).to_string(), df);
+                    df
+                }
+            };
+            ranked.push((df, tri));
+        }
+        pick_shortcut(&ranked)
+    }
+}
+
+/// Pick 1–2 rarest trigrams whose smallest df is rare enough to shortcut.
+pub(crate) fn pick_shortcut(ranked: &[(i64, &str)]) -> TrigramShortcut {
+    if ranked.is_empty() {
+        return TrigramShortcut::Full;
+    }
+    let mut ranked = ranked.to_vec();
+    ranked.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(b.1)));
+    if ranked[0].0 > RARE_ENOUGH_DF {
+        return TrigramShortcut::Full;
+    }
+    let mut terms = vec![ranked[0].1.to_string()];
+    if ranked.len() > 1 && ranked[0].1 != ranked[1].1 {
+        terms.push(ranked[1].1.to_string());
+    }
+    TrigramShortcut::Match(terms)
+}
+
+/// Distinct lowercased trigrams, or None when the needle is too short for a
+/// trigram or has too many for the df probe budget.
+fn distinct_trigrams(needle_lower: &str) -> Option<Vec<&str>> {
+    let bytes = needle_lower.as_bytes();
+    if bytes.len() < TRIGRAM_LEN {
+        return None;
+    }
+    let count = bytes.len() - TRIGRAM_LEN + 1;
+    if count > MAX_DF_LOOKUPS {
+        return None;
+    }
+    let mut seen = std::collections::HashSet::with_capacity(count);
+    let mut out = Vec::with_capacity(count);
+    for i in 0..count {
+        let tri = &needle_lower[i..i + TRIGRAM_LEN];
+        if seen.insert(tri) {
+            out.push(tri);
+        }
+    }
+    Some(out)
+}
+
+fn ensure_vocab_table(store: &IndexStore) -> Result<(), crate::StoreError> {
+    let conn = store.connection();
+    // Name-collision defense (RED-proven by c2_decoy_vocab_table_is_not_trusted):
+    // a same-named temp vtab created by other in-tree code would hand us its
+    // vocabulary as if it were ours. Drop any squatter before creating.
+    conn.execute("DROP TABLE IF EXISTS temp.asgrep_trigram_vocab", [])
+        .map_err(|e| crate::StoreError::Other(format!("fts5vocab unavailable: {e}")))?;
+    conn.execute_batch(VOCAB_DDL)
+        .map_err(|e| crate::StoreError::Other(format!("fts5vocab unavailable: {e}")))
+}
+
+/// Fetch a single term's document count. None means "unknown" (lookup or
+/// decode failure) — distinct from a genuine df of 0, which the vocab reports
+/// only as an absent row; callers treat None as fall-back-to-phrase and a 0
+/// as merely the best rarity candidate (never trusted absence).
+
+/// Bulk-load every (term, doc) pair from the ephemeral fts5vocab table.
+/// One ordered pass over the vocabulary per generation replaces O(terms)
+/// linear point-probes; entries then serve HashMap-speed df lookups.
+fn preload_vocab(store: &IndexStore) -> Result<HashMap<String, i64>, crate::StoreError> {
+    let conn = store.connection();
+    let sql = format!("SELECT term, doc FROM {VOCAB_TABLE}");
+    let mut stmt = conn
+        .prepare_cached(&sql)
+        .map_err(|e| crate::StoreError::Other(format!("vocab preload prepare: {e}")))?;
+    let mut map = HashMap::new();
+    use std::iter::Iterator as _;
+    let mut rows = stmt
+        .query([])
+        .map_err(|e| crate::StoreError::Other(format!("vocab preload query: {e}")))?;
+    while let Some(row) = rows
+        .next()
+        .map_err(|e| crate::StoreError::Other(format!("vocab preload row: {e}")))?
+    {
+        let term: String = row
+            .get(0)
+            .map_err(|e| crate::StoreError::Other(format!("vocab preload term: {e}")))?;
+        let doc: i64 = row
+            .get(1)
+            .map_err(|e| crate::StoreError::Other(format!("vocab preload doc: {e}")))?;
+        map.insert(term, doc);
+    }
+    Ok(map)
+}
+
+fn fetch_one(conn: &rusqlite::Connection, term: &str) -> Option<i64> {
+    let sql = format!("SELECT doc FROM {VOCAB_TABLE} WHERE term = ?1");
+    let mut stmt = conn.prepare_cached(&sql).ok()?;
+    // No row = genuinely absent from the vocabulary = zero documents.
+    stmt.query_row(rusqlite::params![term], |row| row.get::<_, i64>(0))
+        .optional()
+        .ok()
+        .flatten()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ascii_trigram_extraction_dedups_and_bounds() {
+        let tris = distinct_trigrams("process_request").unwrap();
+        // 15 chars -> 13 sliding windows; none repeat.
+        assert_eq!(tris.len(), 13);
+        assert_eq!(tris.first(), Some(&"pro"));
+        assert_eq!(tris.last(), Some(&"est"));
+        assert!(distinct_trigrams("ab").is_none());
+        assert!(distinct_trigrams("").is_none());
+        let long = "x".repeat(40);
+        assert!(distinct_trigrams(&long).is_none(), "over lookup budget");
+    }
+
+    #[test]
+    fn pick_shortcut_ands_two_rarest_when_selective() {
+        let ranked = [(12_i64, "ial"), (80_i64, "cre"), (4000_i64, "den")];
+        match pick_shortcut(&ranked) {
+            TrigramShortcut::Match(terms) => assert_eq!(terms, vec!["ial".to_string(), "cre".to_string()]),
+            other => panic!("expected Match, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn pick_shortcut_falls_back_when_all_trigrams_are_common() {
+        let ranked = [(3000_i64, "the"), (5000_i64, "and")];
+        assert_eq!(pick_shortcut(&ranked), TrigramShortcut::Full);
+    }
+}

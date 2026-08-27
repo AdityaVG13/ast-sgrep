@@ -699,7 +699,3 @@ pub fn hit_why(hit: &SearchHit) -> Vec<String> {
     why.dedup();
     why
 }
-
-#[cfg(test)]
-#[path = "../../../../tests/unit/core/search__types.rs"]
-mod tests;

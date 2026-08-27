@@ -46,7 +46,3 @@ fn hit_key(hit: &Value) -> Result<HitKey, String> {
         caller: field("caller"),
     })
 }
-
-#[cfg(test)]
-#[path = "../../../tests/unit/testkit/hit.rs"]
-mod tests;

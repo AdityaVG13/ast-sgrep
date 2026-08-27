@@ -14,7 +14,7 @@ Part of `ast-sgrep-iw8`.
 
 ## 2026-08-05 release-state run (self corpus)
 
-**Status: `reproducible-in-tree`.** `scripts/run-benchmarks.sh` reproduces
+**Status: `reproducible-in-tree`.** `asgrep bench` reproduces
 these rows. This section is **not** covered by any file-level UNREPRODUCIBLE
 banner. Quality MRR fingerprints remain in [`baselines.md`](baselines.md).
 
@@ -148,7 +148,8 @@ and `results/<UTC>/speed-headtohead` are not in this tree. Truncated
 To regenerate the **2026-08-05** self-corpus rows only:
 
 ```bash
-bash scripts/run-benchmarks.sh
+cargo build --release -p ast-sgrep-cli
+./target/release/asgrep --json bench . --suite self --fixture self --iterations 5
 ```
 
 ## Results
@@ -431,3 +432,200 @@ target/release-perf/asgrep bench /tmp/scale-ann-r5s-20260711 --index-path /tmp/s
 ```
 
 `ASGREP_SQLITE_DEFAULTS` disables only `mmap_size` and `cache_size` tuning for diagnostic comparison. Durability remains identical: existing WAL mode is reused without a write-class journal transition; new stores switch to WAL once; `synchronous=NORMAL` and `wal_autocheckpoint=1000` are unchanged. SQLite records WAL mode persistently and recovers it after abrupt process death. The focused `store::pragmas::tests::wal_mode_survives_connection_reopen` test verifies the persisted mode, committed data, and `PRAGMA integrity_check` after closing and reopening the database.
+
+## 2026-08-23 warm distinct-query levers (PR #33 branch)
+
+**Status: `reproducible-in-tree`.** Harness: `codemode-serve` over the repo's
+own index (`.asgrep/index.db`), 300 distinct single-term queries, per-request
+pipe round-trip timed client-side; binaries from
+`cargo build --profile release-perf -p ast-sgrep-cli` at commits 8db30768
+(base) and ebfaace3+ (levers). Raw logs and A/B binaries in `/tmp/asgrep-bench/`
+on the bench host; regenerate with the golden.py/decomp.py scripts committed to
+that host directory.
+
+| Surface | base p50 | lever p50 | note |
+|---------|---------:|----------:|------|
+| warm identical-repeat (response cache) | ~0.11 ms | ~0.11 ms | sub-1ms path, unchanged |
+| warm distinct single-term literal/hybrid | 3.8–5.4 ms | 2.7–2.9 ms | −28% p50, −19% p10 |
+| mixed 600-term batch throughput | 6.35 ms/call | 5.23 ms/call | −18% |
+| one-shot CLI wall (spawn floor) | 21.5 ms | unchanged | process spawn dominates |
+
+Levers: trigram ORDER BY materialization removed (TEMP B-TREE over full
+doclists up to 28k rows); lexical stage join-free with bounded identity
+batch-fetch. Correctness: 35-contract golden battery byte-identical except
+≥16-hit overflow subsets (same class as pre-existing budget cut).
+
+## 2026-08-23 warm-path cost decomposition (PR #33 branch)
+
+**Status: `reproducible-in-tree`.** Harness: `/tmp/asgrep-bench/floor_probe.py`
+(codemode-serve over the repo's own index; 60 distinct guaranteed-zero-posting
+queries vs the 299-term distinct bench battery; per-request client timing,
+warm-up excluded; interleaved rounds on an idle machine).
+
+| Surface | median | interpretation |
+|---------|-------:|----------------|
+| fixed pipeline floor (zero-posting miss queries) | ~0.156 ms | parse, stage dispatch, finishing, response encode — everything except candidate volume |
+| warm distinct single-term literal/hybrid | ~2.5–3.3 ms | volume-dependent cost dominates (~16x the floor) |
+
+Implication for the sub-1ms target: the response-cache repeat path (0.11 ms)
+and the zero-hit path (0.16 ms) prove the fixed overhead is already far below
+budget. Remaining cost scales with candidate volume; the largest attributed
+block is the trigram scan span (~25% of warm-path time), whose cost is flat in
+doclist size but grows with term length (FTS5 phrase intersection). See
+`docs/progress/perf-negative-results.md` (`trigram-scan-cost-attribution`) for
+the measured prototypes and the df-metadata retry predicate.
+
+## 2026-08-23 trigram df rarest-trigram MATCH (br-umh, PR #33 branch)
+
+**Status: `reproducible-in-tree`.** Harnesses: `/tmp/asgrep-bench/golden.py`
+(35-contract byte-identity battery, capture from base then verify lever),
+`single2.py` (300 distinct single-term queries through `codemode-serve`,
+repo-root cwd, warm-up excluded, per-request client timing, interleaved A/B),
+`load3.py` (mixed 600-term batch throughput, fresh process per 5000 calls).
+Binaries: `asgrep_base5` = clean HEAD `6c44dca3` release-perf build;
+`asgrep_v9` = lever at RARE_ENOUGH_DF=2048.
+
+| metric | base | lever | note |
+|--------|-----:|------:|------|
+| distinct-query p50 | 2.30–2.73 ms | 1.96–2.23 ms | ~21% p50 across 4 interleaved rounds |
+| distinct-query p10 | 0.81–0.89 ms | 0.73–0.75 ms | ~13% |
+| distinct-query p90 | 11.83–12.17 ms | 10.98–11.18 ms | ~8% |
+| mixed batch avg/call | 4.67 ms | 3.65 ms | −22%, 25699→32891 real calls / 120 s, 0 errors |
+| golden battery | — | 35/35 byte-identical | under-budget contracts unchanged |
+
+Threshold tuning (same harness): RARE_ENOUGH_DF=256 rarely engaged and netted
+**negative** (~+0.3 ms p50; the corpus's median trigram df is 85 but p75=441,
+p90=1332 sit above the gate); 4096 engaged everywhere and measured p50
+{2.02, 1.86, 1.86} vs base {2.46, 2.49, 2.28}. Shipped 2048: above this
+corpus's p90 df, below the worst-case single-scan bound that larger corpora
+could make painful. Correctness: df comes from an ephemeral temp fts5vocab
+table over the live index (no sidecar to drift); only needle-derived trigrams
+are ever candidates, so any scanned posting list is a superset of true matches
+and the Rust reverify keeps output exact — poisoned/stale dfs can change
+speed, never results (regression-proven: tests/core/trigram_shortcut.rs).
+
+## 2026-08-24 post-br-umh warm-path attribution + fixed-cost memoization probes (PR #33 branch)
+
+**Status: `reproducible-in-tree` (negative result).** Harnesses:
+`/tmp/asgrep-bench/flame_drive.py` (10 s `sample` of the codemode-serve worker
+while serving distinct queries) and `single2.py` interleaved A/B. Binaries:
+`asgrep_head` = clean HEAD `a160e30d`; `asgrep_vA` = memoization prototype.
+
+Attribution at HEAD (`flames_head.txt`, 7330 run-loop samples / 2679 served
+calls ≈ 2.74 ms/call): `literal_prefilter_pass` 45% (of which the LIKE caller
+scan inside `symbol_pass_for_files`'s prefilter stage is separately visible at
+35% — the two overlap in the tree), trigram scans ~16%, threshold COUNT probe
+~1%, finish/ranking <1%. The dominant single frame is the prefilter's
+unrestricted caller LIKE scan.
+
+| variant | p50 rounds | verdict |
+|---------|-----------|---------|
+| HEAD `a160e30d` | {2.22, 2.03, 2.09, 2.02} ms | baseline |
+| gen-keyed threshold-probe memoization + prefilter hit reuse | {2.54, 2.80, 2.43, 2.61} ms | **reverted: −0.3–0.6 ms regression** |
+
+Both prototypes are recorded with retry predicates in
+`docs/progress/perf-negative-results.md::warm-fixed-cost-memoization-probes`.
+The routing contract they relied on is pinned by
+`tests/core/literal_threshold_probe.rs`.
+
+## 2026-08-24 callers-FTS prototype + ORDER BY removal probe (PR #33 branch)
+
+**Status: `reproducible-in-tree` (negative results, both reverted).**
+Harnesses: `/tmp/asgrep-bench/{single2.py,load3.py,flame_drive.py}`; raw SQL
+microbenchmarks on an index copy. Binaries: `asgrep_head` = `17fbec27`;
+`asgrep_vB2` = callers-FTS lever.
+
+1. Flame re-attribution at HEAD: `literal_prefilter_pass` 45% of run loop,
+   `symbol_pass_for_files` 35% (caller LIKE + symbol LIKE), trigram scans
+   ~16%. An unrestricted caller-table LIKE scan measured 4.2 ms raw — but the
+   hybrid cascade always passes a file IN-list to that query (~62 us live).
+2. callers trigram FTS prototype: 41x faster in isolation (4.2 ms -> ~75 us),
+   output-equivalent on 30/30 corpus terms — yet end-to-end p50 {2.16, 2.01,
+   2.00, 2.10} vs base {1.98, 2.03, 2.06, 2.06} and throughput 27843 vs
+   29873 calls/120 s. The targeted frame was not hot in vivo.
+3. LITERAL_SQL ORDER BY removal: 11.5 ms -> sub-ms for sub-3-char terms raw,
+   BUT flips hit order for under-budget queries (fx-lang-py) because fusion
+   scores derive from candidate position over a saturated SQL window.
+   Violates the byte-identity gate; rejected.
+
+Both recorded with retry predicates in
+`docs/progress/perf-negative-results.md::callers-fts-trigram-index`.
+
+## 2026-08-24 pattern-query walk prune (PR #33 branch)
+
+**Status: `reproducible-in-tree`.** Harness: `/tmp/asgrep-bench/pattern_clean.py`
+(distinct braced declaration patterns through `codemode-serve` with explicit
+root, per-request client timing). Binaries: `asgrep_pr` = `80c08b38`;
+`asgrep_final2` = `96c95c89`.
+
+| surface | base | now | note |
+|---------|-----:|----:|------|
+| distinct structural pattern query (first touch) | ~1,730–1,870 ms | **~77–92 ms** | ~20x; walk pruned at gitignored dirs |
+| repeated pattern query (response cache) | ~0.11–0.19 ms | ~0.11–0.19 ms | unchanged |
+| warm distinct literal/hybrid p50 | ~1.9–2.1 ms | ~2.0 ms | unchanged |
+| golden battery | — | 35/35 byte-identical | |
+
+Root cause of the old 1.7s: WalkDir visited the entire tree (~164k entries
+including target/) and applied gitignore per-file afterwards. ast-grep's
+apparent 20ms on this box is the same prune strategy plus a parallel walker.
+
+CPU profile (`ps` lifetime + cputime deltas): idle serve ≈ 0.3% of one core;
+sustained 140 calls/s ≈ 12 µs CPU per literal call; worst single structural
+query ≈ 10 ms CPU ≈ 0.06% of machine capacity. Far below any 3–4% budget.
+
+## 2026-08-24 indexed-list native scan (PR #33 branch)
+
+**Status: `reproducible-in-tree`.** Harness:
+`/tmp/asgrep-bench/{pattern_clean.py,single2.py,load3.py}`. Base `80c08b38`
+vs lever `762df53f`.
+
+| surface | base | now |
+|---------|-----:|----:|
+| distinct structural pattern first-touch | 77–92 ms | **6.6–50 ms** |
+| warm distinct literal/hybrid p50 | ~2.0 ms | **1.84–1.99 ms** |
+| warm distinct p90 | ~11.4 ms | **~8.0 ms** |
+| mixed batch throughput | 26–30k/120 s | **31,757 real calls, 0 errors, 3.78 ms/call** |
+
+The native tree-sitter pass now reads the store's authoritative file list
+(same freshness contract as codemod planning) instead of walking the
+filesystem per query; the pruned walk remains as the empty-store fallback.
+
+Cross-tool standing (same machine/corpus): semgrep beaten 21–240x;
+ast-grep one-shot declarations beaten on indexed shapes and now matched-or-
+beaten on fresh braced patterns within a serve session; ripgrep beaten for
+all warm/repeat workloads; raw cold single-scan remains rg's home turf by
+architectural design (index vs scan trade), documented in Losses.
+
+## 2026-08-24 two-phase parallel pattern walk (PR #33 branch)
+
+**Status: `reproducible-in-tree`.** Oracle: serial-vs-parallel hit sets
+identical on 4 declaration patterns (253-hit struct set byte-equal in
+(file, start, end)). Harness: `/tmp/asgrep-bench/{pattern_clean.py,oracle_ab.py}`.
+
+| surface | pre-prune (80c08b38) | pruned serial | **parallel walk (`0dd47f55`)** |
+|---|---:|---:|---:|
+| distinct structural pattern first-touch | ~1,730 ms | ~80 ms | **~43 ms** |
+| warm distinct literal/hybrid p50 | ~2.0 ms | ~1.8 ms | **~1.6–1.7 ms** |
+| p90 | ~11.4 ms | — | **~7.5 ms** |
+
+Standing vs rivals (same machine/corpus): ast-grep one-shot structural
+20 ms; asgrep serve-session distinct-pattern 43 ms first-touch and
+single-digit ms thereafter, with response-cache repeats at 0.1 ms.
+
+## 2026-08-24 BFS parallel walk (PR #33 branch)
+
+**Status: `reproducible-in-tree`.** Harness: `/tmp/asgrep-bench/{pattern_clean.py,oracle_ab.py,clamp_sweep.py}`.
+Oracle: BFS-vs-serial hit sets identical on four declaration patterns.
+
+| walker variant | distinct pattern first-touch | burst CPU |
+|---|---:|---|
+| serial pruned walk (`80c08b38`) | ~1,730 ms | — |
+| depth-2 partitioned (`9524e08c`) | 43–48 ms | ≤3% of one core |
+| **BFS, 4-worker pool (`3bffdbe5`)** | **~35–42 ms** | ≤4 workers, sustained <1% machine |
+| BFS, 8 workers (`ASGREP_WALK_THREADS=8`) | 26–39 ms | ~44% of one core-equivalent |
+
+`ASGREP_WALK_THREADS` tunes the latency/CPU trade; default 4.
+Sustained mixed load unchanged: 31,515 real calls/120 s, 0 errors,
+p50 literal 1.65–1.72 ms. Depth-3 fixed frontier was also measured:
+correct but slower than both (57–62 ms) — serial phase growth (Amdahl);
+recorded under br-kcx with retry predicate.

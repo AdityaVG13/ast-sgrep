@@ -1,6 +1,6 @@
 //! Intent-weighted combination of per-field embedding similarities (7d5x.3).
 use crate::intent::QueryIntent;
-use crate::semantic_chunk::SemanticFieldVectors;
+use crate::semantic_chunk::{FieldVectorMask, SemanticFieldVectors};
 use ast_sgrep_embed::{cosine_similarity, embed_from_bytes};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -10,6 +10,18 @@ pub struct FieldWeights {
     pub body: f32,
     pub graph: f32,
     pub tests_examples: f32,
+}
+
+impl FieldWeights {
+    pub fn mask(self) -> FieldVectorMask {
+        FieldVectorMask::from_positive_weights(
+            self.name,
+            self.docs,
+            self.body,
+            self.graph,
+            self.tests_examples,
+        )
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -82,8 +94,15 @@ pub fn decode_field_vector(bytes: Option<&[u8]>) -> Option<Vec<f32>> {
     embed_from_bytes(bytes).ok()
 }
 
-pub fn score_fields(query: &[f32], fields: &SemanticFieldVectors) -> EmbedFieldScores {
-    let sim = |blob: Option<&Vec<u8>>| {
+pub fn score_fields(
+    query: &[f32],
+    fields: &SemanticFieldVectors,
+    weights: FieldWeights,
+) -> EmbedFieldScores {
+    let sim = |weight: f32, blob: Option<&Vec<u8>>| {
+        if weight <= 0.0 {
+            return None;
+        }
         let vector = decode_field_vector(blob.map(Vec::as_slice))?;
         if vector.len() != query.len() {
             return None;
@@ -91,11 +110,11 @@ pub fn score_fields(query: &[f32], fields: &SemanticFieldVectors) -> EmbedFieldS
         Some(cosine_similarity(query, &vector))
     };
     EmbedFieldScores {
-        name: sim(fields.name.as_ref()),
-        docs: sim(fields.docs.as_ref()),
-        body: sim(fields.body.as_ref()),
-        graph: sim(fields.graph.as_ref()),
-        tests_examples: sim(fields.tests_examples.as_ref()),
+        name: sim(weights.name, fields.name.as_ref()),
+        docs: sim(weights.docs, fields.docs.as_ref()),
+        body: sim(weights.body, fields.body.as_ref()),
+        graph: sim(weights.graph, fields.graph.as_ref()),
+        tests_examples: sim(weights.tests_examples, fields.tests_examples.as_ref()),
     }
 }
 
@@ -127,8 +146,9 @@ pub fn rescore_similarity(
     fields: &SemanticFieldVectors,
     intent: QueryIntent,
 ) -> (f32, Option<EmbedFieldScores>) {
-    let scores = score_fields(query, fields);
-    match combine_field_scores(field_weights(intent), &scores) {
+    let weights = field_weights(intent);
+    let scores = score_fields(query, fields, weights);
+    match combine_field_scores(weights, &scores) {
         Some(mixed) => (mixed, Some(scores)),
         None => (
             primary,
@@ -144,5 +164,46 @@ pub fn rescore_similarity(
 }
 
 #[cfg(test)]
-#[path = "../../../../tests/unit/core/search__field_weight.rs"]
-mod tests;
+mod tests {
+    use super::*;
+    use crate::semantic_chunk::SemanticFieldVectors;
+
+    fn blob(values: &[f32]) -> Vec<u8> {
+        values.iter().flat_map(|v| v.to_le_bytes()).collect()
+    }
+
+    fn populated_fields() -> SemanticFieldVectors {
+        SemanticFieldVectors {
+            name: Some(blob(&[1.0, 0.0])),
+            docs: Some(blob(&[0.0, 1.0])),
+            body: Some(blob(&[1.0, 1.0])),
+            graph: Some(blob(&[0.5, 0.5])),
+            tests_examples: Some(blob(&[0.0, 0.0])),
+        }
+    }
+
+    #[test]
+    fn literal_intent_skips_zero_weight_why_terms() {
+        let query = [1.0, 0.0];
+        let (score, notes) = rescore_similarity(0.42, &query, &populated_fields(), QueryIntent::Literal);
+        assert_eq!(score, 0.42);
+        assert!(notes.is_none(), "literal why must not emit unweighted embed_field terms: {notes:?}");
+        assert!(!field_weights(QueryIntent::Literal).mask().any());
+    }
+
+    #[test]
+    fn symbol_intent_scores_only_name() {
+        let query = [1.0, 0.0];
+        let (score, notes) = rescore_similarity(0.1, &query, &populated_fields(), QueryIntent::Symbol);
+        let notes = notes.expect("symbol queries expose the name field");
+        assert!(notes.name.is_some());
+        assert!(notes.docs.is_none());
+        assert!(notes.body.is_none());
+        assert!(notes.graph.is_none());
+        assert!(notes.tests_examples.is_none());
+        assert!(score > 0.9, "name-only mix should keep the name cosine, got {score}");
+        let why = notes.why_terms();
+        assert!(why.iter().any(|t| t.starts_with("embed_field:name=")), "{why:?}");
+        assert!(why.iter().all(|t| t.starts_with("embed_field:name=")), "{why:?}");
+    }
+}

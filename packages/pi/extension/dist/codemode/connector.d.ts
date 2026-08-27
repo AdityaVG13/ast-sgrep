@@ -1,5 +1,5 @@
 import type { MachineEnvelope } from "../runtime.js";
-import type { ChainArgs, SearchArgs } from "./types.js";
+import type { ChainArgs, EditArgs, FindArgs, ReadArgs, SearchArgs } from "./types.js";
 import { type BatchCapableHost, type DispatchStats } from "./dispatch.js";
 /**
  * Spawn/CLI transport. Hosts provide argv `run` only — never a typed twin.
@@ -25,6 +25,15 @@ export type DispatchSurface = {
 };
 export type AsgrepConnector = {
     search(input: SearchArgs, options?: {
+        signal?: AbortSignal;
+    }): Promise<MachineEnvelope>;
+    find(input: FindArgs, options?: {
+        signal?: AbortSignal;
+    }): Promise<MachineEnvelope>;
+    read(input: ReadArgs, options?: {
+        signal?: AbortSignal;
+    }): Promise<MachineEnvelope>;
+    edit(input: EditArgs, options?: {
         signal?: AbortSignal;
     }): Promise<MachineEnvelope>;
     semantic(input: SearchArgs, options?: {
