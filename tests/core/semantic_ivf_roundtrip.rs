@@ -43,6 +43,11 @@ fn semantic_ivf_roundtrip_and_fingerprint_gate() {
             .collect::<HashSet<_>>(),
         (0..6).collect()
     );
+    let query = vec![0.1f32; dim];
+    assert_eq!(
+        lazy.search(&query, 3, Some(usize::MAX)).expect("mapped lazy vectors"),
+        loaded.index.search_flat(loaded.vectors(), dim, &query, 3)
+    );
     let wrong_fp = compute_ann_fingerprint(6, 5, dim, Some("test"), 0);
     assert!(load_semantic_ivf(&path, wrong_fp).unwrap().is_none());
     assert!(load_semantic_ivf_index(&path, wrong_fp).unwrap().is_none());
@@ -55,7 +60,6 @@ fn semantic_ivf_roundtrip_and_fingerprint_gate() {
         .expect("unchecked load");
     assert!(unchecked.is_mapped());
     assert_eq!(unchecked.vectors(), vectors);
-    let query = vec![0.1f32; dim];
     assert_eq!(
         index.search_flat(&vectors, dim, &query, 3),
         loaded.index.search_flat(loaded.vectors(), dim, &query, 3)

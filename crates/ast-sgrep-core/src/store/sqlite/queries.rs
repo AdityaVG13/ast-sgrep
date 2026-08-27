@@ -30,6 +30,28 @@ fn read_field_vector_row(
     ))
 }
 
+fn field_blob_sql(on: bool, column: &'static str) -> &'static str {
+    if on {
+        column
+    } else {
+        "NULL"
+    }
+}
+
+fn field_vectors_by_ids_sql(
+    mask: crate::semantic_chunk::FieldVectorMask,
+    placeholders: &str,
+) -> String {
+    format!(
+        "SELECT id, {}, {}, {}, {}, {} FROM semantic_chunks WHERE id IN ({placeholders})",
+        field_blob_sql(mask.name, "vector_name"),
+        field_blob_sql(mask.docs, "vector_docs"),
+        field_blob_sql(mask.body, "vector_body"),
+        field_blob_sql(mask.graph, "vector_graph"),
+        field_blob_sql(mask.tests_examples, "vector_tests_examples"),
+    )
+}
+
 impl IndexStore {
     pub fn file_hash(&self, rel_path: &str) -> Result<Option<String>> {
         optional_row(
@@ -238,19 +260,33 @@ impl IndexStore {
         Ok(empty != 0)
     }
     pub fn semantic_chunk_stats(&self, lang: Option<&str>) -> Result<SemanticChunkStats> {
-        let max_id = self.semantic_chunk_max_id()?.unwrap_or(0);
-        let (count, dim): (usize, usize) = if let Some(l) = lang {
+        // Do not `MAX(length(vector))` over the table: that scans every blob
+        // (~5 ms at 54k). IVF and search require uniform dim, so one row is
+        // enough. COUNT/MAX(id) stay on the integer PK.
+        let (count, max_id, dim): (usize, i64, usize) = if let Some(l) = lang {
             self.conn.query_row(
-                "SELECT COUNT(*), COALESCE(MAX(length(sc.vector)/4),0) FROM semantic_chunks sc JOIN files f ON f.id=sc.file_id WHERE f.language=?1",
-                params![l], |r| Ok((r.get(0)?, r.get(1)?)), )?
+                "SELECT COUNT(*), COALESCE(MAX(sc.id),0),                  COALESCE(length((SELECT sc2.vector FROM semantic_chunks sc2                     JOIN files f2 ON f2.id=sc2.file_id WHERE f2.language=?1 LIMIT 1))/4, 0)                  FROM semantic_chunks sc JOIN files f ON f.id=sc.file_id WHERE f.language=?1",
+                params![l],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )?
         } else {
             self.conn.query_row(
-                "SELECT COUNT(*), COALESCE(MAX(length(vector)/4),0) FROM semantic_chunks",
+                "SELECT COUNT(*), COALESCE(MAX(id),0),                  COALESCE(length((SELECT vector FROM semantic_chunks LIMIT 1))/4, 0)                  FROM semantic_chunks",
                 [],
-                |r| Ok((r.get(0)?, r.get(1)?)),
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
             )?
         };
         Ok(SemanticChunkStats { count, max_id, dim })
+    }
+
+    pub fn semantic_primary_dim(&self) -> Result<usize> {
+        Ok(optional_row(
+            &self.conn,
+            "SELECT length(vector)/4 FROM semantic_chunks LIMIT 1",
+            &[],
+            |row| row.get::<_, i64>(0),
+        )?
+        .unwrap_or(0) as usize)
     }
     pub fn semantic_chunk_ids(&self, lang: Option<&str>) -> Result<Vec<i64>> {
         let (sql, l) = if lang.is_some() {
@@ -260,6 +296,41 @@ impl IndexStore {
         };
         query_map_rows(&self.conn, sql, l, |r| r.get(0))
     }
+    pub fn semantic_chunk_hits_by_ids(
+        &self,
+        ids: &[i64],
+    ) -> Result<Vec<(i64, ast_sgrep_embed::SemanticChunkRow)>> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut out = Vec::with_capacity(ids.len());
+        for batch in ids.chunks(500) {
+            let ph = std::iter::repeat_n("?", batch.len())
+                .collect::<Vec<_>>()
+                .join(",");
+            let sql = format!(
+                "SELECT sc.id, f.path, sc.line_start, sc.line_end, sc.symbol_name, sc.text                  FROM semantic_chunks sc JOIN files f ON f.id=sc.file_id WHERE sc.id IN ({ph})"
+            );
+            let mut stmt = self.conn.prepare_cached(&sql)?;
+            let rows = stmt.query_map(rusqlite::params_from_iter(batch.iter()), |r| {
+                let id: i64 = r.get(0)?;
+                let row = (
+                    r.get(1)?,
+                    r.get(2)?,
+                    r.get(3)?,
+                    r.get::<_, Option<String>>(4)?.unwrap_or_default(),
+                    r.get(5)?,
+                    Vec::new(),
+                );
+                Ok((id, row))
+            })?;
+            for row in rows {
+                out.push(row?);
+            }
+        }
+        Ok(out)
+    }
+
     pub fn semantic_chunks_by_ids(
         &self,
         ids: &[i64],
@@ -331,17 +402,19 @@ impl IndexStore {
     pub fn semantic_field_vectors_by_ids(
         &self,
         ids: &[i64],
+        mask: crate::semantic_chunk::FieldVectorMask,
     ) -> Result<std::collections::HashMap<i64, crate::semantic_chunk::SemanticFieldVectors>> {
+        if ids.is_empty() || !mask.any() {
+            return Ok(std::collections::HashMap::new());
+        }
         let mut out = std::collections::HashMap::with_capacity(ids.len());
         for batch in ids.chunks(500) {
             let placeholders = std::iter::repeat_n("?", batch.len())
                 .collect::<Vec<_>>()
                 .join(",");
-            let sql = format!(
-                "SELECT id, vector_name, vector_docs, vector_body, vector_graph, vector_tests_examples \
-                 FROM semantic_chunks WHERE id IN ({placeholders})"
-            );
+            let sql = field_vectors_by_ids_sql(mask, &placeholders);
             // I5a: same statement-cache rationale as semantic_chunks_by_ids.
+            // Mask cardinality is tiny (intent × bucket), so prepare_cached still hits.
             let mut stmt = self.conn.prepare_cached(&sql)?;
             let rows = stmt.query_map(
                 rusqlite::params_from_iter(batch.iter()),
@@ -369,7 +442,7 @@ impl IndexStore {
         Ok(out)
     }
     /// gauntlet-r6 (B1): shared batched replacement for the per-path loops in
-    /// `semantic_chunks_for_files` / `semantic_field_vectors_for_files`. The
+    /// `semantic_chunks_for_files`. The
     /// loops emit, for each byte-sorted path, that path's rows in ascending
     /// `sc.id`; one `WHERE f.path IN (…) ORDER BY f.path, sc.id` produces the
     /// identical sequence (Rust String sort == SQLite BINARY collation on
@@ -431,26 +504,24 @@ impl IndexStore {
         &self,
         files: &std::collections::HashSet<String>,
         lang: Option<&str>,
-    ) -> Result<Vec<ast_sgrep_embed::SemanticChunkRow>> {
+    ) -> Result<Vec<(i64, ast_sgrep_embed::SemanticChunkRow)>> {
         self.semantic_rows_batched(
             files,
             lang,
-            "f.path, sc.line_start, sc.line_end, sc.symbol_name, sc.text, sc.vector",
-            read_sem_row,
+            "sc.id, f.path, sc.line_start, sc.line_end, sc.symbol_name, sc.text, sc.vector",
+            |r| {
+                let id: i64 = r.get(0)?;
+                let row = (
+                    r.get(1)?,
+                    r.get(2)?,
+                    r.get(3)?,
+                    r.get::<_, Option<String>>(4)?.unwrap_or_default(),
+                    r.get(5)?,
+                    emb_vec(r, 6)?,
+                );
+                Ok((id, row))
+            },
         )
-    }
-    pub(crate) fn semantic_field_vectors_for_files(
-        &self,
-        files: &std::collections::HashSet<String>,
-        lang: Option<&str>,
-    ) -> Result<Vec<crate::semantic_chunk::SemanticFieldVectors>> {
-        let rows = self.semantic_rows_batched(
-            files,
-            lang,
-            "sc.id, sc.vector_name, sc.vector_docs, sc.vector_body, sc.vector_graph, sc.vector_tests_examples",
-            read_field_vector_row,
-        )?;
-        Ok(rows.into_iter().map(|(_, fields)| fields).collect())
     }
     pub(crate) fn legacy_embeddings_for_files(
         &self,

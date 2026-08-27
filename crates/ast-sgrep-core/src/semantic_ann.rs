@@ -176,7 +176,7 @@ impl SemanticAnnIndex {
         self.centroids.len()
     }
 
-    /// `probes`: None/0 = at most 90% of populated clusters; ≥ n_clusters = exact.
+    /// `probes`: None/0 = at most 90% of populated clusters (capped at sqrt(k) in 16..=48 once n>10_000); ≥ n_clusters = exact.
     pub fn candidate_indices(&self, query: &[f32], probes: Option<usize>) -> Vec<usize> {
         if self.centroids.is_empty() {
             return vec![];
@@ -195,10 +195,22 @@ impl SemanticAnnIndex {
             return vec![];
         }
         let take = match probes {
-            None | Some(0) if populated > 1 => populated
-                .saturating_mul(DEFAULT_ADAPTIVE_PROBE_PERCENT)
-                .div_euclid(100)
-                .clamp(1, populated - 1),
+            None | Some(0) if populated > 1 => {
+                let pct = populated
+                    .saturating_mul(DEFAULT_ADAPTIVE_PROBE_PERCENT)
+                    .div_euclid(100)
+                    .clamp(1, populated - 1);
+                // 90% at 54k is nearly exhaustive (~49k candidates). Keep the
+                // published 2048/10000 recall gate, but bound nprobe once the
+                // corpus is larger than that fixture.
+                let n = self.clusters.iter().map(Vec::len).sum::<usize>();
+                if n > 10_000 {
+                    let bounded = ((populated as f64).sqrt() as usize).clamp(16, 48);
+                    pct.min(bounded).clamp(1, populated - 1)
+                } else {
+                    pct
+                }
+            }
             None | Some(0) => 1,
             Some(p) => p.max(1).min(populated),
         };
@@ -372,22 +384,19 @@ fn score_members(
         }
         let start = idx * dim;
         (start + dim <= flat.len())
-            .then(|| cosine_similarity(query, &flat[start..start + dim]))
+            // IVF payload and `search_flat_with_probes` query are L2-normalized,
+            // so cosine == dot. One SIMD dot beats three-norm cosine on the
+            // few-thousand-member probe set.
+            .then(|| dot_similarity(query, &flat[start..start + dim]))
             .map(|sim| (*idx, sim))
     };
-    if members.len() < PARALLEL_CHUNK_THRESHOLD {
-        top_k_similarity(
-            members.iter().filter_map(score),
-            limit,
-            Some(MIN_SIMILARITY),
-        )
-    } else {
-        top_k_similarity(
-            members.par_iter().filter_map(score).collect::<Vec<_>>(),
-            limit,
-            Some(MIN_SIMILARITY),
-        )
-    }
+    // Sequential on purpose: a few thousand SIMD dots are cheaper than a
+    // rayon wakeup on the 1–2 ms semantic-only budget.
+    top_k_similarity(
+        members.iter().filter_map(score),
+        limit,
+        Some(MIN_SIMILARITY),
+    )
 }
 fn brute_force_flat(flat: &[f32], dim: usize, query: &[f32], limit: usize) -> Vec<(usize, f32)> {
     top_k_flat_similarity(

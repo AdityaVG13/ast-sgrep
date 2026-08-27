@@ -671,6 +671,7 @@ impl Searcher {
     }
     pub fn search_semantic(&self, query_str: &str) -> Result<SearchResponse> {
         validate_query_arg(query_str)?;
+        let _perf_run = crate::perf_profile::Run::start("search_semantic");
         self.cached("sem", query_str, || {
             let parsed = ParsedQuery::parse(query_str);
             let expanded = self.repository_expanded_query(&parsed)?;
