@@ -587,11 +587,19 @@ fn query_embed_cache() -> &'static Mutex<HashMap<String, Vec<f32>>> {
 fn embed_store_meta(store: &IndexStore) -> Result<(Option<String>, Option<String>)> {
     {
         let db = store.db_path().to_string_lossy().into_owned();
+        let index_data_version = store.index_data_version()?;
+        let semantic_data_version = store.semantic_data_version()?;
         let guard = lock_clear_on_poison(chunk_id_cache(), |slot| {
             *slot = None;
         });
         if let Some(memo) = guard.as_ref() {
-            if memo.db == db {
+            // Path-only hits are stale after reindex: lang-filtered IVF returns
+            // None before refreshing this memo, then brute-force embed would
+            // reuse the previous generation's backend/model.
+            if memo.db == db
+                && memo.index_data_version == index_data_version
+                && memo.semantic_data_version == semantic_data_version
+            {
                 return Ok((memo.embed_backend.clone(), memo.embed_model.clone()));
             }
         }
