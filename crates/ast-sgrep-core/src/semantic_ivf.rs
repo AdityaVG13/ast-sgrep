@@ -136,6 +136,20 @@ impl MappedVectors {
         bytemuck::try_cast_slice(&self.mmap[self.bytes.clone()])
             .expect("validated semantic IVF vector alignment")
     }
+
+    /// Touch every page once so unique-query p90 is not a first-fault walk.
+    fn prefault(&self) {
+        let bytes = &self.mmap[self.bytes.clone()];
+        const PAGE: usize = 4096;
+        let mut offset = 0;
+        while offset < bytes.len() {
+            std::hint::black_box(bytes[offset]);
+            offset += PAGE;
+        }
+        if let Some(last) = bytes.last() {
+            std::hint::black_box(*last);
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -324,6 +338,28 @@ impl LazySemanticIvf {
                 .search_flat_with_probes(flat, self.dim, query, limit, probes),
         )
     }
+
+    /// Rank an explicit member set from the mmap payload (hybrid cascade files).
+    pub fn search_members(
+        &self,
+        query: &[f32],
+        members: &[usize],
+        limit: usize,
+    ) -> Option<Vec<(usize, f32)>> {
+        let _span = crate::perf_profile::Span::start(
+            "semantic_ivf_search_members",
+            "semantic",
+            "LazySemanticIvf::search_members mmap score",
+        );
+        let flat = self.vectors()?;
+        if self.dim == 0 || !flat.len().is_multiple_of(self.dim) {
+            return None;
+        }
+        Some(
+            self.index
+                .search_flat_members(flat, self.dim, query, members, limit),
+        )
+    }
 }
 
 struct LazyIvfMemo {
@@ -370,15 +406,17 @@ pub fn load_semantic_ivf_index(
     let Some(mapped) = map_and_parse(path, Some(expected_fingerprint))? else {
         return Ok(None);
     };
+    let mapped_vectors = MappedVectors {
+        mmap: mapped.mmap,
+        bytes: mapped.vector_bytes,
+    };
+    mapped_vectors.prefault();
     let ivf = Arc::new(LazySemanticIvf {
         fingerprint: mapped.header.fingerprint,
         dim: mapped.header.dim,
         chunk_count: mapped.header.chunk_count,
         index: mapped.index,
-        mapped_vectors: Some(MappedVectors {
-            mmap: mapped.mmap,
-            bytes: mapped.vector_bytes,
-        }),
+        mapped_vectors: Some(mapped_vectors),
     });
     *lock_clear_on_poison(lazy_ivf_cache(), |slot| *slot = None) = Some(LazyIvfMemo {
         path: path.to_path_buf(),

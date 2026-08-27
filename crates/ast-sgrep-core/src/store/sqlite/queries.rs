@@ -296,6 +296,16 @@ impl IndexStore {
         };
         query_map_rows(&self.conn, sql, l, |r| r.get(0))
     }
+    /// Same ORDER BY id as `semantic_chunk_ids(None)`, with the chunk's file path.
+    /// IVF mmap row i is ids[i]; hybrid file-restrict uses paths[i].
+    pub fn semantic_chunk_ids_and_paths(&self) -> Result<Vec<(i64, String)>> {
+        query_map_rows(
+            &self.conn,
+            "SELECT sc.id, f.path FROM semantic_chunks sc JOIN files f ON f.id=sc.file_id ORDER BY sc.id",
+            None,
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+    }
     pub fn semantic_chunk_hits_by_ids(
         &self,
         ids: &[i64],

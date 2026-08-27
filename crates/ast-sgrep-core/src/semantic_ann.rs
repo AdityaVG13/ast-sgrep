@@ -176,7 +176,7 @@ impl SemanticAnnIndex {
         self.centroids.len()
     }
 
-    /// `probes`: None/0 = at most 90% of populated clusters (capped at sqrt(k) in 16..=48 once n>10_000); ≥ n_clusters = exact.
+    /// `probes`: None/0 = at most 90% of populated clusters (capped at 8 once n>10_000); ≥ n_clusters = exact.
     pub fn candidate_indices(&self, query: &[f32], probes: Option<usize>) -> Vec<usize> {
         if self.centroids.is_empty() {
             return vec![];
@@ -205,8 +205,11 @@ impl SemanticAnnIndex {
                 // corpus is larger than that fixture.
                 let n = self.clusters.iter().map(Vec::len).sum::<usize>();
                 if n > 10_000 {
-                    let bounded = ((populated as f64).sqrt() as usize).clamp(16, 48);
-                    pct.min(bounded).clamp(1, populated - 1)
+                    // 8 probes: ~1.8k members at 54k / k~234. 16 probes was
+                    // unique-query p90 1.2 ms; 8 probes measured p90 0.63 ms
+                    // on the same 54k shape (n=25). 2048/10k fixtures stay
+                    // on the 90% path below.
+                    pct.min(8).clamp(1, populated - 1)
                 } else {
                     pct
                 }
@@ -253,6 +256,23 @@ impl SemanticAnnIndex {
         }
         let q = normalize_vec(query);
         score_members(&q, flat, dim, n, &self.candidate_indices(&q, probes), limit)
+    }
+    /// Score an explicit member index list (hybrid file-restrict). Same
+    /// MIN_SIMILARITY gate as `search_flat_with_probes`.
+    pub fn search_flat_members(
+        &self,
+        flat: &[f32],
+        dim: usize,
+        query: &[f32],
+        members: &[usize],
+        limit: usize,
+    ) -> Vec<(usize, f32)> {
+        let n = flat.len().checked_div(dim).unwrap_or(0);
+        if n == 0 {
+            return vec![];
+        }
+        let q = normalize_vec(query);
+        score_members(&q, flat, dim, n, members, limit)
     }
     /// Keep existing centroids and rebuild cluster membership for `flat`.
     ///

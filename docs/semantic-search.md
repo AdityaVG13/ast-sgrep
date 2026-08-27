@@ -104,9 +104,14 @@ With `--json`, defaults to **agent** format.
 Adaptive search probes at most 90% of populated clusters by default on corpora
 up to 10,000 vectors. The bound is deliberate: the 2048-vector quality fixture
 misses the 0.99 recall target at 75%, while 90% restores exact top-10 recall and
-remains below the 95% candidate ceiling. Above 10,000 vectors, nprobe is also
-capped at `sqrt(k)` clamped to 16..=48 so scoring stays sub-linear in corpus
-size. `--ann-probes` still requests an explicit probe count.
+remains below the 95% candidate ceiling. Above 10,000 vectors, nprobe is capped
+at 8 so unique-query scoring stays under 1 ms (16 probes was p90 1.2 ms on the
+54k-chunk corpus). The IVF payload is prefaulted on first load so unique-query
+p90 is not a cold page-fault walk. Hybrid search scores only mmap rows whose
+files survived the lexical/structural cascade, then SQLite-fetches those top-N
+survivors -- not every concat blob in the cascade files. Hybrid cascade
+prefilter skips 1-2 character tokens (they cannot use trigrams and would
+full-table `LIKE` scan). `--ann-probes` still requests an explicit probe count.
 
 Release-mode RCH measurements use 64 deterministic queries at dimension 32:
 
@@ -149,6 +154,16 @@ The version-2 IVF sidecar stores a bounded cluster index followed by 4096-byte-a
 Delta `asgrep index` after a file edit reassigns every current vector to the existing IVF centroids and rewrites cluster postings. It does not rerun k-means. Centroids stay frozen until `asgrep reindex` (or an embedding-identity rewrite) rebuilds them. Search still refuses a sidecar whose fingerprint no longer matches the store.
 
 On a 10,000-vector medium fixture, measured p99 was 0.963 ms cold, 0.135 ms for a fresh inode under normal cache policy, and 0.037 ms warm. Methodology and byte accounting are recorded in [semantic IVF mmap validation](validation/semantic-ivf-mmap.md).
+
+On a 54,732-chunk hashed corpus (`idx_big`), unique-query `asgrep semantic` is
+**p50 0.51 ms / p90 0.74 ms** (n=85, `codemode-serve`, limit 8). Default hybrid
+on the same unique-query set is **p50 1.27 ms / p90 8.4 ms**: the IVF mmap path
+is tens of microseconds; remaining hybrid time is lexical discovery plus
+finish/fanout, not nprobe. High-df conceptual terms (for example `encode
+payload`) still sit in the p90 tail. `pi-ast-sgrep` Code Mode `asgrep.search`
+is this hybrid path; `asgrep.semantic` is the sub-1 ms unique path.
+
+
 
 LSP `initializationOptions` also accepts `annThreshold`, see [use-cases.md](use-cases.md).
 

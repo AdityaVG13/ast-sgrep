@@ -727,13 +727,41 @@ impl Searcher {
     }
     fn search_hybrid(&self, parsed: &ParsedQuery) -> Result<Vec<SearchHit>> {
         // Constraint cascade: each stage receives only files that survived the prior stage.
-        let mut lexical = literal_prefilter_pass(&self.store, &self.options, parsed)?;
-        let expanded = self.repository_expanded_query(parsed)?;
-        let semantic_query = expanded.as_ref().unwrap_or(parsed);
-        let candidate_lexical = match &expanded {
-            Some(expanded) => literal_prefilter_pass(&self.store, &self.options, expanded)?,
-            None => lexical.clone(),
+        let expanded = {
+            let _span = crate::perf_profile::Span::start(
+                "hybrid_vocab_expand",
+                "search",
+                "repository_expanded_query",
+            );
+            self.repository_expanded_query(parsed)?
         };
+        let semantic_query = expanded.as_ref().unwrap_or(parsed);
+        // Candidate discovery: original 3+ char terms, then repository
+        // associations, then offline concept-group tokens (credential ->
+        // auth/token/...). 1-2 char tokens stay out of the prefilter.
+        let mut discovery = semantic_query.clone();
+        if crate::intent::classify(parsed) == crate::intent::QueryIntent::Conceptual {
+            let mut extra = 0usize;
+            for tok in ast_sgrep_embed::tokenize(&ast_sgrep_embed::expand_concepts(&parsed.raw)) {
+                if extra >= 8 {
+                    break;
+                }
+                if tok.chars().count() >= 3 && !discovery.terms.contains(&tok) {
+                    discovery.terms.push(tok);
+                    extra += 1;
+                }
+            }
+        }
+        let lexical = {
+            let _span = crate::perf_profile::Span::start(
+                "hybrid_lexical_prefilter",
+                "search",
+                "literal_prefilter_pass",
+            );
+            literal_prefilter_pass(&self.store, &self.options, &discovery)?
+        };
+        let mut lexical = lexical;
+        let candidate_lexical = lexical.clone();
         let lexical_files = candidate_lexical
             .iter()
             .map(|hit| hit.file.clone())
@@ -742,17 +770,47 @@ impl Searcher {
             return Ok(Vec::new());
         }
 
-        let ast_matches =
-            structural_index_pass(&self.store, &self.options, parsed, &lexical_files)?;
-        let mut structural =
-            symbol_pass_for_files(&self.store, &self.options, parsed, &lexical_files)?;
-        structural.extend(anchor_pass_for_files(
-            &self.store,
-            &self.options,
-            parsed,
-            &lexical_files,
-        )?);
-        structural.extend(ast_matches);
+        // Structural stages keep the user's 3+ char terms (not concept
+        // extras). 1-2 char tokens would LIKE '%0%' across symbols/callers.
+        let mut stage_query = parsed.clone();
+        stage_query.terms.retain(|term| term.chars().count() >= 3);
+
+        let ast_matches = {
+            let _span = crate::perf_profile::Span::start(
+                "hybrid_structural_index",
+                "search",
+                "structural_index_pass",
+            );
+            structural_index_pass(&self.store, &self.options, &stage_query, &lexical_files)?
+        };
+        // Conceptual NL: pattern_nodes are cheap (~20 µs). Def/caller LIKE
+        // across the 100-file cascade is ~1-4 ms and is the unique-hybrid
+        // remainder after IVF is already sub-1 ms. Identifier queries keep
+        // the full structural pass.
+        let mut structural = ast_matches;
+        if crate::intent::classify(parsed) != crate::intent::QueryIntent::Conceptual {
+            structural.extend({
+                let _span = crate::perf_profile::Span::start(
+                    "hybrid_symbol_pass",
+                    "search",
+                    "symbol_pass_for_files",
+                );
+                symbol_pass_for_files(&self.store, &self.options, &stage_query, &lexical_files)?
+            });
+            structural.extend({
+                let _span = crate::perf_profile::Span::start(
+                    "hybrid_anchor_pass",
+                    "search",
+                    "anchor_pass_for_files",
+                );
+                anchor_pass_for_files(
+                    &self.store,
+                    &self.options,
+                    &stage_query,
+                    &lexical_files,
+                )?
+            });
+        }
         let structural_files = structural
             .iter()
             .map(|hit| hit.file.clone())
@@ -869,12 +927,20 @@ fn literal_prefilter_pass(
     options: &SearchOptions,
     parsed: &ParsedQuery,
 ) -> Result<Vec<SearchHit>> {
-    let mut terms = parsed
+    // Trigram MATCH needs 3 chars. Shorter needles use literal_sql LIKE/GLOB
+    // with ORDER BY over the whole `lines` table — ~22 ms on a 54k-file
+    // corpus for a digit like "0". Cascade file discovery does not need them.
+    let terms = parsed
         .terms
         .iter()
-        .filter(|term| !term.is_empty())
+        .filter(|term| term.chars().count() >= 3)
         .collect::<Vec<_>>();
-    terms.sort_by_key(|term| std::cmp::Reverse(term.chars().count()));
+    if terms.is_empty() {
+        return Ok(Vec::new());
+    }
+    // Keep caller order (user terms, then expansions). Stop at the first
+    // term that yields files so a later high-df concept token such as
+    // "update" cannot replace a precise earlier match.
     let mut prefilter_options = options.clone();
     prefilter_options.case_insensitive = true;
     prefilter_options.limit = CASCADE_PREFILTER_FILE_LIMIT;
@@ -885,6 +951,9 @@ fn literal_prefilter_pass(
             *file_scores.entry(hit.file.clone()).or_default() +=
                 hit.score * term.chars().count() as f64;
             hits.push(hit);
+        }
+        if !file_scores.is_empty() {
+            break;
         }
     }
     let mut ranked_files = file_scores.into_iter().collect::<Vec<_>>();

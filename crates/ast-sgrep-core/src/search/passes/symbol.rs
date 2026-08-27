@@ -388,10 +388,14 @@ pub fn symbol_pass_for_files(
     if parsed.terms.is_empty() || allowed_files.is_empty() {
         return Ok(Vec::new());
     }
+    // File-restricted hybrid does not need the 500-row exhaustive window;
+    // finish keeps `limit` hits. 32-64 rows is enough to score defs/callers
+    // inside the 100-file cascade without a 1-5 ms SQLite LIKE walk.
+    let sql_limit = retained_limit(options).max(32).min(SYMBOL_SQL_LIMIT);
     let (mut where_clause, mut bind) =
         like_terms_filter("s.name", &parsed.terms, options.lang_filter.as_deref());
     restrict_to_files(&mut where_clause, &mut bind, Some(allowed_files));
-    let rows = query_symbol_spans(store, &where_clause, bind, SYMBOL_SQL_LIMIT)?;
+    let rows = query_symbol_spans(store, &where_clause, bind, sql_limit)?;
     let mut hits = symbol_span_rows_to_hits_opts(
         store,
         rows,
@@ -408,7 +412,7 @@ pub fn symbol_pass_for_files(
             &parsed.terms,
             options.lang_filter.as_deref(),
             Some(allowed_files),
-            CALLER_SQL_LIMIT,
+            sql_limit,
         )?,
         options,
         parsed,

@@ -249,6 +249,94 @@ pub(crate) fn embed_pass_lazy_ivf_with_rescoring(
         hit_limit,
     )))
 }
+
+/// Hybrid cascade: score only IVF mmap rows whose path is in `allowed_files`.
+/// Avoids SQLite-fetching concat blobs for every survivor file (~29 ms at 54k).
+fn embed_pass_lazy_ivf_for_files(
+    store: &IndexStore,
+    options: &SearchOptions,
+    parsed: &ParsedQuery,
+    allowed_files: &HashSet<String>,
+    use_field_rescoring: bool,
+) -> Result<Option<Vec<SearchHit>>> {
+    if parsed.terms.is_empty() || !options.use_embed || allowed_files.is_empty() {
+        return Ok(Some(Vec::new()));
+    }
+    if options.lang_filter.is_some() {
+        return Ok(None);
+    }
+    let (ids, paths, dim) = cached_semantic_chunk_index(store)?;
+    let count = ids.len();
+    if paths.len() != count {
+        return Ok(None);
+    }
+    let max_id = ids.last().copied().unwrap_or(0);
+    if !crate::semantic_ann::should_use_ann(count, options.ann_threshold) || dim == 0 {
+        return Ok(None);
+    }
+    let backend = store
+        .get_meta("embed_backend")?
+        .unwrap_or_else(|| "semantic".into());
+    let fingerprint = crate::semantic_ivf::compute_ann_fingerprint(
+        count,
+        max_id,
+        dim,
+        Some(&backend),
+        store.index_data_version()?,
+    );
+    let path = crate::semantic_ivf::semantic_ivf_path(store.db_path());
+    let Some(ivf) = crate::semantic_ivf::load_semantic_ivf_index(&path, fingerprint)? else {
+        return Ok(None);
+    };
+    if ivf.chunk_count() != count || ivf.dim != dim {
+        return Ok(None);
+    }
+    let members: Vec<usize> = paths
+        .iter()
+        .enumerate()
+        .filter(|(_, p)| allowed_files.contains(p.as_str()))
+        .map(|(i, _)| i)
+        .collect();
+    if members.is_empty() {
+        return Ok(Some(Vec::new()));
+    }
+    let query = parsed.terms.join(" ");
+    let query_vec = embed_query_vector(store, options, &query, Some(dim))?;
+    let intent = classify(parsed);
+    let hit_limit = EMBED_HIT_LIMIT.max(options.limit);
+    let pool = field_rescore_pool(hit_limit);
+    let Some(ranked_payload) = ivf.search_members(&query_vec, &members, pool) else {
+        return Ok(None);
+    };
+    if ranked_payload.is_empty() {
+        return Ok(Some(Vec::new()));
+    }
+    let candidate_ids: Vec<i64> = ranked_payload
+        .iter()
+        .filter_map(|(idx, _)| ids.get(*idx).copied())
+        .collect();
+    if candidate_ids.len() != ranked_payload.len() {
+        return Ok(None);
+    }
+    let Some(chunks) = rows_in_id_order(store, &candidate_ids)? else {
+        return Ok(None);
+    };
+    let ranked: Vec<(usize, f32)> = ranked_payload
+        .iter()
+        .enumerate()
+        .map(|(i, (_, score))| (i, *score))
+        .collect();
+    let fields = fields_for_ids(store, &candidate_ids, use_field_rescoring, intent)?;
+    Ok(Some(embed_hits_rescored(
+        &chunks,
+        ranked,
+        &query_vec,
+        &fields,
+        intent,
+        hit_limit,
+    )))
+}
+
 pub fn embed_pass_for_files(
     store: &IndexStore,
     options: &SearchOptions,
@@ -277,6 +365,15 @@ pub(crate) fn embed_pass_for_files_with_rescoring(
     // one microsecond-scale EXISTS probe per query.
     if store.semantic_sources_empty()? {
         return Ok(Vec::new());
+    }
+    if let Some(hits) = embed_pass_lazy_ivf_for_files(
+        store,
+        options,
+        parsed,
+        allowed_files,
+        use_field_rescoring,
+    )? {
+        return Ok(hits);
     }
     let query = parsed.terms.join(" ");
     let intent = classify(parsed);
@@ -396,6 +493,7 @@ struct ChunkIdMemo {
     index_data_version: i64,
     semantic_data_version: i64,
     ids: Arc<Vec<i64>>,
+    paths: Arc<Vec<String>>,
     dim: usize,
 }
 
@@ -408,6 +506,13 @@ fn chunk_id_cache() -> &'static Mutex<Option<ChunkIdMemo>> {
 }
 
 fn cached_semantic_chunk_ids(store: &IndexStore) -> Result<(Arc<Vec<i64>>, usize)> {
+    let (ids, _paths, dim) = cached_semantic_chunk_index(store)?;
+    Ok((ids, dim))
+}
+
+fn cached_semantic_chunk_index(
+    store: &IndexStore,
+) -> Result<(Arc<Vec<i64>>, Arc<Vec<String>>, usize)> {
     let index_data_version = store.index_data_version()?;
     let semantic_data_version = store.semantic_data_version()?;
     let db = store.db_path().to_string_lossy().into_owned();
@@ -420,11 +525,19 @@ fn cached_semantic_chunk_ids(store: &IndexStore) -> Result<(Arc<Vec<i64>>, usize
                 && memo.index_data_version == index_data_version
                 && memo.semantic_data_version == semantic_data_version
             {
-                return Ok((Arc::clone(&memo.ids), memo.dim));
+                return Ok((Arc::clone(&memo.ids), Arc::clone(&memo.paths), memo.dim));
             }
         }
     }
-    let ids = Arc::new(store.semantic_chunk_ids(None)?);
+    let pairs = store.semantic_chunk_ids_and_paths()?;
+    let mut ids = Vec::with_capacity(pairs.len());
+    let mut paths = Vec::with_capacity(pairs.len());
+    for (id, path) in pairs {
+        ids.push(id);
+        paths.push(path);
+    }
+    let ids = Arc::new(ids);
+    let paths = Arc::new(paths);
     let dim = store.semantic_primary_dim()?;
     *lock_clear_on_poison(chunk_id_cache(), |slot| {
         *slot = None;
@@ -433,9 +546,10 @@ fn cached_semantic_chunk_ids(store: &IndexStore) -> Result<(Arc<Vec<i64>>, usize
         index_data_version,
         semantic_data_version,
         ids: Arc::clone(&ids),
+        paths: Arc::clone(&paths),
         dim,
     });
-    Ok((ids, dim))
+    Ok((ids, paths, dim))
 }
 
 fn query_embed_cache() -> &'static Mutex<HashMap<String, Vec<f32>>> {
