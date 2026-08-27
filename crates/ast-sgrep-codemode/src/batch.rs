@@ -59,7 +59,7 @@ pub enum ParallelMode {
     Serial,
     /// One Searcher per call on rayon (only when all tools are read-only).
     Parallel,
-    /// Serial unless N>=4 read-only calls (heuristic).
+    /// Always serial warm. Parallel SQLite opens dominate unique sub-ms lookups.
     #[default]
     Auto,
 }
@@ -157,8 +157,8 @@ fn choose_parallel(mode: ParallelMode, calls: &[BatchCall]) -> bool {
     match mode {
         ParallelMode::Serial => false,
         ParallelMode::Parallel => true,
-        // Parallel opens are expensive; only pay them when enough work might overlap.
-        ParallelMode::Auto => calls.len() >= 4,
+        // Unique search/find is ~0.5–1ms; N Searcher opens are the serial wall.
+        ParallelMode::Auto => false,
     }
 }
 

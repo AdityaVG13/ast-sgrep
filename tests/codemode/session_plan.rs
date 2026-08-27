@@ -240,3 +240,95 @@ fn session_embed_on_indexes_and_returns_semantic_hits() {
         "expected embed hits through the session API: {out}"
     );
 }
+
+fn writable_session() -> (TempDir, CodeModeSession) {
+    let temp = TempDir::new().expect("tempdir");
+    fs::write(temp.path().join("hello.py"), "def hello():\n    return 1\n").expect("write");
+    let index_path = temp.path().join("index.db");
+    let mut indexer = Indexer::new(IndexOptions {
+        root: temp.path().to_path_buf(),
+        index_path: Some(index_path.clone()),
+        embed_semantic: false,
+        ..IndexOptions::default()
+    })
+    .expect("indexer");
+    indexer.index_all().expect("index");
+    let session = CodeModeSession::new(SessionConfig {
+        root: temp.path().canonicalize().expect("canon root"),
+        index_path: Some(index_path),
+        limit: 8,
+        use_embed: false,
+        ..SessionConfig::default()
+    });
+    (temp, session)
+}
+
+#[test]
+fn find_is_lexical_word_lookup() {
+    let (_tmp, mut session) = writable_session();
+    let out = session
+        .call("find", json!({"query": "hello", "limit": 8}))
+        .expect("find");
+    let hits = out["hits"].as_array().expect("hits");
+    assert!(
+        hits.iter().any(|h| h["file"].as_str().unwrap_or("").contains("hello.py")),
+        "find hello should hit hello.py: {out}"
+    );
+}
+
+
+#[test]
+fn read_returns_indexed_line_window() {
+    let (_tmp, mut session) = writable_session();
+    let out = session
+        .call("read", json!({"path": "hello.py", "start": 1, "end": 2}))
+        .expect("read");
+    assert_eq!(out["ok"], true);
+    assert_eq!(out["count"], 1);
+    let text = out["windows"][0]["text"].as_str().expect("text");
+    assert!(text.contains("def hello"), "{text}");
+}
+
+#[test]
+fn edit_unique_replace_then_reindex() {
+    let (_tmp, mut session) = writable_session();
+    let out = session
+        .call(
+            "edit",
+            json!({
+                "path": "hello.py",
+                "oldText": "return 1",
+                "newText": "return 2"
+            }),
+        )
+        .expect("edit");
+    assert_eq!(out["ok"], true);
+    assert_eq!(out["changed"], 1);
+    let body = fs::read_to_string(_tmp.path().join("hello.py")).expect("reread");
+    assert!(body.contains("return 2"), "{body}");
+    let window = session
+        .call("read", json!({"path": "hello.py", "start": 1, "end": 2}))
+        .expect("read after edit");
+    let text = window["windows"][0]["text"].as_str().expect("text");
+    assert!(text.contains("return 2"), "{text}");
+}
+
+#[test]
+fn edit_rejects_non_unique_old_text() {
+    let (_tmp, mut session) = writable_session();
+    let err = session
+        .call(
+            "edit",
+            json!({
+                "path": "hello.py",
+                "oldText": "e",
+                "newText": "x"
+            }),
+        )
+        .expect_err("non-unique must fail");
+    assert!(
+        err.to_string().contains("exactly once"),
+        "{err}"
+    );
+}
+

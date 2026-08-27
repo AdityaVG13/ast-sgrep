@@ -13,10 +13,10 @@
 //! `Path::starts_with`), matching MCP `sandbox_root`. Foreign roots fail closed
 //! with `escapes configured workspace`. NAPI inherits the same Session contract.
 //!
-//! Pi's primary agent surface is the **JS sandbox** in
+//! Pi's primary agent surface is in-process Code Mode in
 //! `packages/pi/extension/src/codemode/` (`asgrep` tool). This Rust
 //! crate serves Rust hosts and emits Anthropic/OpenAI/Cloudflare-shaped tool
-//! definitions for hosts that already provide a code-execution sandbox.
+//! definitions for hosts that already provide a code-execution runtime.
 //!
 //! # Pattern
 //!
@@ -43,6 +43,7 @@
 pub mod adapters;
 pub mod batch;
 pub mod catalog;
+mod io;
 pub mod plan;
 pub mod session;
 pub mod tools;

@@ -10,6 +10,9 @@ fn catalog_exposes_core_and_discovery_tools() {
     let names: Vec<_> = tool_catalog().iter().map(|t| t.name).collect();
     for required in [
         "search",
+        "find",
+        "read",
+        "edit",
         "semantic",
         "chain",
         "defs",

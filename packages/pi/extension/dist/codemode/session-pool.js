@@ -19,6 +19,8 @@ const FAST_LOOKUP = new Set([
     "index_status",
     "catalog_search",
     "catalog_describe",
+    "find",
+    "read",
 ]);
 function isBusyError(cause) {
     const message = cause instanceof Error ? cause.message : String(cause);

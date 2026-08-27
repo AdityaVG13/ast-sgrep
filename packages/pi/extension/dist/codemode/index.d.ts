@@ -10,8 +10,8 @@
  * client. They never import each other. Do not install both for the same agent.
  */
 export { createAsgrepConnector, type AsgrepConnector, type ConnectorHost, type DispatchSurface, type ConnectorBundle, } from "./connector.js";
-export { runCodemode, normalizeCode, type CodemodeRunResult, type CodemodeRunSuccess, type CodemodeRunFailure } from "./runner.js";
-export { CODEMODE_TYPES_FOR_MODEL, type SearchArgs, type ChainArgs } from "./types.js";
+export { runCodemode, normalizeCode, warmCodemodeSandbox, resetCodemodeSandboxForTests, type CodemodeRunResult, type CodemodeRunSuccess, type CodemodeRunFailure } from "./runner.js";
+export { CODEMODE_TYPES_FOR_MODEL, CODEMODE_HOST_METHODS, type SearchArgs, type FindArgs, type ReadArgs, type EditArgs, type ChainArgs, type CodemodeHostMethod } from "./types.js";
 export { createCodemodeDispatcher, runNativeBatch, argvFor, asEnvelope, type DispatchStats, type BatchCapableHost, type StickyWorker, type BatchResult, } from "./dispatch.js";
 export { startStickyWorker, runBatchViaStdin } from "./worker.js";
 export { NativeSessionPool, sharedNativePool } from "./session-pool.js";

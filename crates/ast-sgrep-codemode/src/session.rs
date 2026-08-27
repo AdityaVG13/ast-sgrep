@@ -196,6 +196,24 @@ impl CodeModeSession {
         }
     }
 
+    pub(crate) fn jail_root(&self, args: &Value) -> anyhow::Result<PathBuf> {
+        self.root_arg(args)
+    }
+
+    pub(crate) fn with_searcher<F, T>(
+        &self,
+        root: PathBuf,
+        needed_limit: usize,
+        f: F,
+    ) -> anyhow::Result<T>
+    where
+        F: FnOnce(&Searcher) -> anyhow::Result<T>,
+    {
+        let guard = self.searcher_for(root, needed_limit)?;
+        let searcher = &guard.as_ref().expect("searcher_for populates cache").1;
+        f(searcher)
+    }
+
     fn searcher_for(
         &self,
         root: PathBuf,

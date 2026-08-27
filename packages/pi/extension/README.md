@@ -57,7 +57,7 @@ Pi can make one `asgrep` call like this:
 
 ```json
 {
-  "code": "async () => {\n  const seed = await asgrep.search({ query: 'where are access tokens refreshed?', limit: 5 });\n  const symbol = seed.hits?.[0]?.symbol;\n  if (!symbol) return { seed };\n  const [defs, callers] = await Promise.all([\n    asgrep.defs({ symbol, limit: 5 }),\n    asgrep.callers({ symbol, limit: 10 }),\n  ]);\n  return { symbol, defs: defs.hits, callers: callers.hits };\n}"
+  "code": "async () => {\n  const seed = await asgrep.search({ query: 'where are access tokens refreshed?', limit: 5 });\n  const hit = seed.hits?.[0];\n  if (!hit) return { seed };\n  const [defs, window] = await Promise.all([\n    asgrep.find({ query: 'defs:' + hit.symbol, limit: 5 }),\n    asgrep.read({ refs: [hit.ref] }),\n  ]);\n  return { symbol: hit.symbol, defs: defs.hits, window };\n}"
 }
 ```
 
@@ -69,28 +69,21 @@ The Code Mode program receives these asynchronous methods on `asgrep`:
 
 | Method | Use |
 |---|---|
-| `asgrep.search({ query, limit?, excerptLines? })` | Search by intent, symbol, or a prefixed structural query. |
-| `asgrep.semantic({ query, limit?, excerptLines? })` | Search local semantic embeddings directly. |
-| `asgrep.defs({ symbol, limit? })` | Find definitions for one symbol. |
-| `asgrep.callers({ symbol, limit? })` | Find call sites for one symbol. |
-| `asgrep.imports({ module, limit? })` | Find imports of one module. |
-| `asgrep.chain({ query, limit? })` | Trace related symbols and graph edges. |
-| `asgrep.indexStatus()` | Read index and backend state. |
-| `asgrep.indexRepo({ force? })` | Create, refresh, or rebuild the index. |
-| `asgrep.catalogSearch({ query })` | Discover less common ast-sgrep operations. |
-| `asgrep.catalogDescribe({ name })` | Read the schema for a discovered operation. |
+| `asgrep.search({ query, limit?, excerptLines? })` | Hybrid search: intent, symbol, or prefixed `defs:` / `callers:` / `pattern:` query. |
+| `asgrep.find({ query, limit?, excerptLines? })` | Lexical / identifier lookup (`word:`). Prefixed queries pass through. |
+| `asgrep.read({ path, start, end }` or `{ refs }`) | Batched line windows from the index. Prefer one call with `refs`. |
+| `asgrep.edit({ path, oldText, newText }` or `{ edits }`) | Unique string replace jailed to the project root, then targeted reindex. |
 
 Use `Promise.all` for independent calls. Filter, map, sort, and slice intermediate values in JavaScript. Return only the evidence needed for the next reasoning step.
 
-Code Mode runs in a disposable worker with a restricted `node:vm` context that exposes only a serialized `asgrep.*` bridge and console. String and WebAssembly code generation are disabled, ambient Node globals such as `process` and `require` are not exposed, and terminating the worker contains synchronous and microtask CPU loops. Node does not consider `vm` an adversarial-code security boundary, however, and the installed Pi package has full OS-user access; do not treat Code Mode as an OS jail. Prefer Code Mode **or** MCP for a client, never both.
+Code Mode runs **in-process** in a restricted `node:vm` context (no Worker sandbox, no OS jail). `asgrep` and `console` are built inside the context; the host only exposes a JSON bridge and a log sink so host `Function` cannot leak. Return shapes are declared on `asgrep.*` (muscle memory). `find({ query: "blast:Symbol" })` reverse-walks callers; `blast:path/to/file.ts` uses imports. Same trust boundary as Pi `bash`. Prefer Code Mode **or** MCP for a client, never both.
 
 The bridge rejects oversized call arguments and serialized results, allows at
 most 256 host calls per program, and caps collected console output before it
-reaches the extension host. Raw-memory and WebAssembly globals are unavailable;
-worker heap/stack limits contain the remaining accidental memory growth. Native
-tool values are capped at 1 MiB each and complete batch responses at 4 MiB before
-Node-API converts them into extension-host objects. These bounds do not turn `node:vm` into an OS
-sandbox.
+reaches the extension host. Raw-memory and WebAssembly globals are unavailable.
+Native tool values are capped at 1 MiB each and complete batch responses at 4 MiB
+before Node-API converts them into extension-host objects. These bounds do not
+turn `node:vm` into an OS sandbox.
 
 ## Direct one-shot search
 

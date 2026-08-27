@@ -40,6 +40,27 @@ export function createAsgrepConnector(host, context, options = {}) {
             excerpt_lines: clampExcerpt(input.excerptLines),
             format: input.format === "agent" ? "agent" : "capsule",
         }, callOptions?.signal),
+        find: (input, callOptions) => call("find", {
+            query: input.query,
+            limit: clampLimit(input.limit),
+            excerpt_lines: clampExcerpt(input.excerptLines),
+            format: input.format === "agent" ? "agent" : "capsule",
+        }, callOptions?.signal),
+        read: (input, callOptions) => call("read", {
+            ...(typeof input.path === "string" ? { path: input.path } : {}),
+            ...(input.start !== undefined ? { start: input.start } : {}),
+            ...(input.end !== undefined ? { end: input.end } : {}),
+            ...(typeof input.ref === "string" ? { ref: input.ref } : {}),
+            ...(input.refs !== undefined ? { refs: input.refs } : {}),
+            ...(input.contextLines !== undefined ? { context_lines: input.contextLines } : {}),
+            ...(input.maxChars !== undefined ? { max_chars: input.maxChars } : {}),
+        }, callOptions?.signal),
+        edit: (input, callOptions) => call("edit", {
+            ...(typeof input.path === "string" ? { path: input.path } : {}),
+            ...(typeof input.oldText === "string" ? { oldText: input.oldText } : {}),
+            ...(typeof input.newText === "string" ? { newText: input.newText } : {}),
+            ...(input.edits !== undefined ? { edits: input.edits } : {}),
+        }, callOptions?.signal),
         semantic: (input, callOptions) => call("semantic", {
             query: input.query,
             limit: clampLimit(input.limit),

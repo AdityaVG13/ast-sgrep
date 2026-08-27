@@ -78,6 +78,33 @@ fn batch_serial_warm_is_default_for_small_waves() {
 }
 
 #[test]
+fn batch_auto_never_opens_n_searchers() {
+    let (_tmp, config) = indexed_config();
+    let calls = (0..4)
+        .map(|i| BatchCall {
+            id: i.to_string(),
+            tool: "search".into(),
+            args: json!({"query": "auth", "limit": 3}),
+        })
+        .collect();
+    let response = run_batch(
+        config.clone(),
+        &BatchRequest {
+            root: Some(config.root.clone()),
+            index_path: config.index_path.clone(),
+            use_embed: Some(false),
+            limit: Some(5),
+            parallel: None,
+            parallel_mode: Some(ParallelMode::Auto),
+            calls,
+        },
+    )
+    .expect("batch");
+    assert_eq!(response.mode, "serial");
+    assert_eq!(response.results.len(), 4);
+}
+
+#[test]
 fn batch_parallel_forced_returns_per_call_results() {
     let (_tmp, config) = indexed_config();
     let response = run_batch(

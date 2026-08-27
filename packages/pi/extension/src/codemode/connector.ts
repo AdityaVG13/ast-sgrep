@@ -1,5 +1,5 @@
 import type { MachineEnvelope } from "../runtime.js";
-import type { ChainArgs, SearchArgs } from "./types.js";
+import type { ChainArgs, EditArgs, FindArgs, ReadArgs, SearchArgs } from "./types.js";
 import {
   createCodemodeDispatcher,
   type BatchCapableHost,
@@ -35,6 +35,9 @@ export type DispatchSurface = {
 
 export type AsgrepConnector = {
   search(input: SearchArgs, options?: { signal?: AbortSignal }): Promise<MachineEnvelope>;
+  find(input: FindArgs, options?: { signal?: AbortSignal }): Promise<MachineEnvelope>;
+  read(input: ReadArgs, options?: { signal?: AbortSignal }): Promise<MachineEnvelope>;
+  edit(input: EditArgs, options?: { signal?: AbortSignal }): Promise<MachineEnvelope>;
   semantic(input: SearchArgs, options?: { signal?: AbortSignal }): Promise<MachineEnvelope>;
   chain(input: ChainArgs, options?: { signal?: AbortSignal }): Promise<MachineEnvelope>;
   defs(input: { symbol: string; limit?: number; excerptLines?: number }, options?: { signal?: AbortSignal }): Promise<MachineEnvelope>;
@@ -98,6 +101,30 @@ export function createAsgrepConnector(
         limit: clampLimit(input.limit),
         excerpt_lines: clampExcerpt(input.excerptLines),
         format: input.format === "agent" ? "agent" : "capsule",
+      }, callOptions?.signal),
+    find: (input, callOptions) =>
+      call("find", {
+        query: input.query,
+        limit: clampLimit(input.limit),
+        excerpt_lines: clampExcerpt(input.excerptLines),
+        format: input.format === "agent" ? "agent" : "capsule",
+      }, callOptions?.signal),
+    read: (input, callOptions) =>
+      call("read", {
+        ...(typeof input.path === "string" ? { path: input.path } : {}),
+        ...(input.start !== undefined ? { start: input.start } : {}),
+        ...(input.end !== undefined ? { end: input.end } : {}),
+        ...(typeof input.ref === "string" ? { ref: input.ref } : {}),
+        ...(input.refs !== undefined ? { refs: input.refs } : {}),
+        ...(input.contextLines !== undefined ? { context_lines: input.contextLines } : {}),
+        ...(input.maxChars !== undefined ? { max_chars: input.maxChars } : {}),
+      }, callOptions?.signal),
+    edit: (input, callOptions) =>
+      call("edit", {
+        ...(typeof input.path === "string" ? { path: input.path } : {}),
+        ...(typeof input.oldText === "string" ? { oldText: input.oldText } : {}),
+        ...(typeof input.newText === "string" ? { newText: input.newText } : {}),
+        ...(input.edits !== undefined ? { edits: input.edits } : {}),
       }, callOptions?.signal),
     semantic: (input, callOptions) =>
       call("semantic", {
