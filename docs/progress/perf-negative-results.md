@@ -9,7 +9,61 @@ Skill headers: gauntlet WP3 / K-3. Predicate forms: `docs/progress/README.md`.
 
 ## Closed
 
-_(none -- no in-tree measurement close on this seed)_
+### `gauntlet-2026-08-26-caller-subquery-id-list` (REJECTED 2026-08-26 — raw-SQL A/B, not shipped)
+
+- **date:** 2026-08-26
+- **candidate_name:** `caller-file-restriction-via-id-list`
+- **target_workload:** warm distinct hybrid search through codemode-serve, self corpus (545 indexed files); symbol_pass_for_files caller-rows SQL (sampler: 38.8% of worker time; likeFunc 9%, TEXT materialization trio ~13%)
+- **files_touched:** prototype patched and reverted (`crates/ast-sgrep-core/src/search/passes/symbol.rs` restrict_to_files); no shipped change
+- **correctness_proof:** row sets byte-identical in raw-SQL A/B on an index copy (both variants); golden battery captured separately for the L2 lever in the same session
+- **evidence_artifacts_paths:** `/tmp/asgrep-bench/sql_probe2.py` (interleaved microbench), `/tmp/asgrep-bench/flames_g0.txt` (8 s worker sample), `/tmp/asgrep-bench/probe_g.db`
+- **baseline_configuration:** `AND f.path IN (?…)` after the LIKE OR-filter; macOS arm64 M5 Max, release-perf, HEAD `8bc467cb`, warm distinct p50 ~1.9 ms
+- **candidate_configuration:** (a) `AND f.id IN (SELECT id FROM files WHERE path IN (?…))` — subquery form measured SLOWER (2.5 vs 1.9 ms standalone); (b) pre-resolved integer `c.file_id IN (?…)` with one id-resolution probe — within noise (+0.1 ms on a deliberately inflated 100-path probe)
+- **measured_result:** not keeps. The planner already drives from idx_callers_file_id via the join; the LIKE evaluation dominates over path-probe overhead at this corpus shape.
+- **retry_condition_predicate:** Reopen ONLY if a profiler attributes >=10% of warm-path time to `sqlite3BtreeMove`/rowid-probe frames inside the caller query on a corpus whose allowed_files set exceeds ~1000 paths per query (form 3 + form 4: corpus-shape-gated).
+- **bead_id:** (none)
+
+### `gauntlet-2026-08-26-trigram-survivor-identity` (MEASURED NEUTRAL — reverted before commit)
+
+- **date:** 2026-08-26
+- **candidate_name:** `trigram-scan-deferred-identity-resolution`
+- **target_workload:** literal_trigram_scan span = 11.7% of wall on warm distinct queries; rusqlite Rows streaming = 21.9% of worker samples (path/language TEXT materialization for rejected postings)
+- **files_touched:** prototype landed, verified, measured, reverted (`crates/ast-sgrep-core/src/search/passes/literal.rs` scan_trigram_matches)
+- **correctness_proof:** 35/35 golden battery byte-identical between asgrep_g0 (base) and asgrep_g1 (lever), same-session index
+- **evidence_artifacts_paths:** `/tmp/asgrep-bench/golden_g0/manifest.json`, interleaved bench rounds in session log; sampler `flames_g0.txt`
+- **baseline_configuration:** joined stream `SELECT f.path, f.language, l.line_no, l.content … JOIN files`; p50 {1.99,1.83,1.84,1.85} across 4 interleaved rounds
+- **candidate_configuration:** stream `(file_id, line_no, content)` unjoined; HashMap-memoized per-file identity resolution only for rows passing content_matches_literal; matches_lang moved after reverify (filters commute)
+- **measured_result:** p50 {1.93,1.81,1.84,1.82} — deltas within run-to-run noise; only p10 improved consistently (~5%). Root cause: `l.content` must materialize per posting regardless (the reverify reads it); path/language were the minor slice of valueToText frames.
+- **retry_condition_predicate:** Reopen ONLY when a profiler attributes >=5% of worker time specifically to `files`-table row materialization (not `lines.content`) under literal scans — e.g., if excerpt/preview handling starts copying full file identity per posting (form 3).
+- **bead_id:** (none)
+
+### `gauntlet-2026-08-26-like-prelowered-bind` (WITHIN NOISE — reverted before commit)
+
+- **date:** 2026-08-26
+- **candidate_name:** `or-like-prelowered-pattern-bind`
+- **target_workload:** same caller/symbol LIKE chain as above; two lower() evaluations per candidate row
+- **files_touched:** prototype patched and reverted (`crates/ast-sgrep-core/src/store/sql.rs` or_like_filter)
+- **correctness_proof:** 35/35 goldens byte-identical (pattern mirrors SQLite ASCII-only lower() exactly); all consumers bind-only, verified by grep
+- **evidence_artifacts_paths:** interleaved rounds in session log; `flames_g0.txt`
+- **baseline_configuration:** `'%' || lower(?) || '%'` per-row expression; p50 {1.76,1.75,1.70,1.69}
+- **candidate_configuration:** fully pre-lowered `%term%` pattern bound once per query; p50 {1.77,1.74,1.94,1.62} — median-equal, wider spread
+- **measured_result:** within noise; below keep-gate threshold.
+- **retry_condition_predicate:** Reopen ONLY if lower() appears >=8% in a flame profile of the caller query on some corpus (it was <2% here) (form 3).
+- **bead_id:** (none)
+
+### `gauntlet-2026-08-26-index-write-shaping` (REJECTED — probes only, index surface untouched)
+
+- **date:** 2026-08-26
+- **candidate_name:** `cold-index-write-phase-shaping`
+- **target_workload:** cold full index build, self corpus: 1.448 s ± 0.039 s (hyperfine, 5 runs); sqlite_upsert span = 66% of wall (959 ms), walk+parse = 34%; FTS5 maintenance dominates upsert (fts5UpdateMethod 25.8% incl. trigram tokenize 10.5%)
+- **files_touched:** `no-source-patch-attempted` (raw-SQL probes on schema clones)
+- **correctness_proof:** posting-set equality verified between fill strategies (MATCH counts identical for probe terms); multi-VALUES probe abandoned before any integration
+- **evidence_artifacts_paths:** `/tmp/asgrep-bench/{batch_probe,tri_probe}.py`, `/tmp/asgrep-bench/sample_index.py`, `/tmp/asgrep-bench/flames_idx.txt`, idx_spans.jsonl
+- **baseline_configuration:** per-line loop of 4 prepared INSERTs (lines, lines_fts porter, lines_code_fts unicode61, lines_trigram external-content) inside bulk tx; page_size default
+- **candidate_configuration:** (a) chunked multi-VALUES INSERT (64/batch) — REGRESSED 674 vs 441 ms/50k lines: fresh statement text per chunk defeats prepare_cached; (b) trigram backfill via `INSERT INTO lines_trigram(rowid,content) SELECT rowid,content FROM lines` — only −6% of trigram stage (~28 ms/build): tokenization dominates, not insert machinery; (c) page_size 8k/16k/32k — noise; (d) post-load `optimize` merge — +3 MB DB size for ~8% cold MATCH gain, warm unchanged
+- **measured_result:** no adoptable lever; write floor is FTS5 tokenization itself.
+- **retry_condition_predicate:** Reopen batched writes ONLY with stable-statement batching (fixed max placeholder count padded with no-op rows) AND a profiler showing sqlite3RunParser/prepare churn >=5% of index wall (form 3). Revisit tokenize choice only as a product decision (changes postings, needs reindex contract) (form 8).
+- **bead_id:** (none)
 
 ## Open (pointer imports)
 
@@ -74,6 +128,118 @@ _(none -- no in-tree measurement close on this seed)_
 - **evidence_artifact_paths:** none in this tree yet
 - **retry_condition_predicate:** Retry only if a profiler attributes a clearly-above-noise share to IVF residual leaf work on a frozen corpus (hoy3.1 MEASURE).
 - **bead_id:** `ast-sgrep-ho-ivf-residual-ho-20260807-hoy3.1`
+
+### `gauntlet-2026-08-26-semantic-batched-file-fetch` (KEPT 2026-08-26 — equivalence hardening, perf neutral on measured corpora)
+
+- **date:** 2026-08-26
+- **candidate_name:** `semantic-chunks-batched-in-list` (B1)
+- **target_workload:** the flat (non-IVF) embed path's two per-file loops — `semantic_chunks_for_files` + `semantic_field_vectors_for_files` ran one point-query per allowed file per call (~100–545 statements × 2 per query). Raw-SQL probe on the populated index: batched IN-list is sequence-identical and 1.4–1.7× faster standalone.
+- **files_touched:** `crates/ast-sgrep-core/src/store/sqlite/queries.rs` (`semantic_rows_batched`; both functions rewired; `map_sorted_files` retained for `legacy_embeddings_for_files`)
+- **correctness_proof:** sequence equality by construction — loops emit byte-sorted-path groups, `sc.id`-ascending within path; single `ORDER BY f.path, sc.id` reproduces it (Rust String sort == BINARY collation). Padding uses impossible value `''` (no real indexed path is empty) so row multiplicity is exact — unlike the caller-query bucket trick which repeats a real value. Golden battery 35/35 identical vs base; populated-index hybrid/semantic/lang-filtered batch payloads identical.
+- **evidence_artifacts_paths:** `/tmp/asgrep-bench/batch_sem_probe.py`, `/tmp/asgrep-bench/probe_sem.db`, golden_final manifest, interleaved rounds in session log
+- **baseline_configuration:** per-path cached point queries; populated+embed p50 {11.52,11.70,11.60,11.54} ms
+- **candidate_configuration:** one power-of-two-bucket IN-list query per call
+- **measured_result:** p50 {11.47,11.81,11.58,11.77} (+0.9% = noise) on the IVF-served populated corpus, and {1.12→1.09 ms} on a below-threshold index — because on live workloads the IVF lazy path (chunks ≥ 2000) or small allowed_files sets make these loops a minor cost. KEPT for statement-count scaling: cost was O(files×2 statements) with prepare-cache pressure from varying placeholder counts at lang-filter boundaries; now O(1) stable-text statements. No regression anywhere measured.
+- **retry_condition_predicate:** Perf re-measurement ONLY on a corpus where hybrid queries pass >1000 allowed_files to an embed-enabled index WITHOUT a valid IVF sidecar (fingerprint mismatch or below-threshold build) — there the removed O(files) fan-out dominates (form 4: corpus-shape-gated).
+- **bead_id:** (none)
+
+### `gauntlet-2026-08-26-ivf-byids-prepare-cache` (LANDED 2026-08-26 — BELOW GATE on this corpus; scaling-motivated)
+
+- **date:** 2026-08-26
+- **candidate_name:** `semantic-by-ids-statement-cache` (I5a)
+- **target_workload:** populated index (6062 chunks), embed ON, IVF lazy path: `semantic_chunks_by_ids` + `semantic_field_vectors_by_ids` ran `conn.prepare()` (NOT cached) per 500-id batch — ~22 statement parses per cache-miss query at ~5.4k candidates.
+- **files_touched:** `crates/ast-sgrep-core/src/store/sqlite/queries.rs` (two `prepare` → `prepare_cached`)
+- **correctness_proof:** byte-identical by construction (same SQL text, same binds, same row map); golden battery 35/35 identical vs base
+- **evidence_artifacts_paths:** interleaved A/B rounds in session log
+- **baseline_configuration:** fresh prepare per batch; p50 {11.32,11.35,11.14,11.06} ms (median 11.23)
+- **candidate_configuration:** `prepare_cached`; p50 {11.15,11.52,11.00,10.89} (median 11.07, −1.4%, direction-consistent 3/4 rounds but below the −3% gate)
+- **measured_result:** BELOW GATE on this corpus. Kept anyway as pure infra hygiene: identical SQL/binds, removes parse churn that scales linearly with candidate volume (bigger semantic corpora pay proportionally more), zero risk surface.
+- **retry_condition_predicate:** Re-measure on an embed-enabled corpus with >=50k chunks through the IVF path; expect the delta to cross the gate there (form 4: corpus-shape-gated).
+- **bead_id:** (none)
+
+### `gauntlet-2026-08-26-callers-lower-expression-index` (LANDED 2026-08-26 — keep, schema v13; 2000x lookup)
+
+- **date:** 2026-08-26
+- **candidate_name:** `callers-lower-expression-indexes` (schema 13)
+- **target_workload:** graph surfaces (`chain`, `call-path`) and any consumer of `store.incoming_calls`/`outgoing_calls`: `calls_matching` ran `WHERE lower(c.callee) = lower(?1)` — a FULL SCAN of all caller rows (25k) per lookup, 20 ms each, because the existing raw-column indexes cannot serve `lower()` expressions.
+- **files_touched:** `crates/ast-sgrep-core/src/store/sql.rs` (SCHEMA_DDL + `idx_callers_callee_lower`/`idx_callers_caller_lower`), `crates/ast-sgrep-core/src/store/sqlite/mod.rs` (SCHEMA_VERSION 12 → 13, `< 13` migration arm)
+- **correctness_proof:** expression indexes are on the IDENTICAL expressions the query already evaluated (`lower(callee)`, `lower(caller)`) — same query text, same results, planner-only change. Chain JSON output byte-identical g7 vs g8 on the migrated index (all battery keys); migration verified on a copied v12 index (user_version 12→13, both indexes present, no data rebuild).
+- **evidence_artifacts_paths:** EXPLAIN before (`SCAN c`) vs after (`SEARCH c USING INDEX idx_callers_callee_lower`); raw-SQL timings in session log; `golden_v13/manifest.json`
+- **baseline_configuration:** incoming_calls('run_search') = 20.2 ms per lookup on the populated corpus
+- **candidate_configuration:** two lower() expression indexes; 0.01 ms per lookup (~2000x)
+- **measured_result:** KEEP. One-shot CLI walls for chain/call-path stay ~105–230 ms — spawn + seed search + BFS breadth dominate at this corpus's hop counts — but every per-hop lookup drops from 20 ms to microseconds, scaling with traversal volume. Migration is lazy (next open bumps user_version and builds two indexes inside the existing transaction).
+- **retry_condition_predicate:** No reopen path needed. If a future schema bump lands alongside, keep both migrations ordered (`< N` arms) per the never-reuse rule.
+- **bead_id:** (none)
+
+### `gauntlet-2026-08-26-inlist-bucket-shrink-bugfix` (FIXED 2026-08-26 — latent correctness bug found by round-11 probing)
+
+- **date:** 2026-08-26
+- **candidate_name:** `inlist-bucket-power-of-two-shrink` (bugfix)
+- **target_workload:** ANY hybrid/symbol query whose allowed_files size is exactly `2^k + 1` (9, 17, 33…): `restrict_to_files` computed `(n-1).next_power_of_two()` = n−1 for those sizes, emitting FEWER placeholders than bound paths → rusqlite "Wrong number of parameters passed to query. Got 9, needed 8". The bug shipped in br-perf-inlist-bucket and was inherited by the B1 batched fetch. Reproduced deterministically: hybrid `run_search` at limit 8/16 (allowed_files = 9) failed; limits 3/32 passed.
+- **files_touched:** `crates/ast-sgrep-core/src/search/passes/symbol.rs` (restrict_to_files), `crates/ast-sgrep-core/src/store/sqlite/queries.rs` (semantic_rows_batched). Fix: `n.next_power_of_two().max(8)` (round UP), plus empty-set guards (`AND 0 = 1` / early return) replacing the old malformed `IN ()` shape.
+- **correctness_proof:** limit sweep 1..65 × six queries × migrated index: 72/72 OK post-fix (previously 9/17 shapes failed); golden battery re-captured post-fix (`golden_v13`); e2e_smoke 9, snapshot_generation 6, trigram_shortcut 4, cli_smoke 14 all green.
+- **evidence_artifacts_paths:** `/tmp/b1repro` (in-process reproducer sweeping SearchOptions.limit), session log A/B rounds
+- **baseline_configuration:** `(n - 1).next_power_of_two().max(8)`
+- **candidate_configuration:** `n.next_power_of_two().max(8)`
+- **measured_result:** FIXED. Perf neutral (placeholder count changes only at former failure shapes).
+- **retry_condition_predicate:** None — defect class eliminated at both sites. Any future bucketed IN-list must use round-up semantics; add to review checklist.
+- **bead_id:** (none)
+
+### `gauntlet-2026-08-26-trigram-sql-reverify` (LANDED 2026-08-26 — keep, tail −16% on dense scans)
+
+- **date:** 2026-08-26
+- **candidate_name:** `trigram-scan-sql-side-glob-reverify` (T1)
+- **target_workload:** literal_prefilter = 74% of worker samples on lang-filtered broad queries over a 351k-line corpus (1501 files); inside it, `likeFunc`+`patternCompare`+`strcspn` ≈ 40% — the Rust-side `content_matches_literal` reverify ran per streamed posting with full TEXT materialization of path/language/content for every candidate, including rejected ones.
+- **files_touched:** `crates/ast-sgrep-core/src/search/passes/literal.rs` (scan_trigram_matches): for case-sensitive non-word needles the reverify predicate (identically `GLOB '*<needle>*'`, escaped via the same `escape_glob_literal` helper as the literal_sql arm) is pushed into SQL; word_mode and case_insensitive keep the Rust verify.
+- **correctness_proof:** same rows, same predicate, same streaming order — output identical by construction. Golden battery 35/35 byte-identical (`golden_v13`); big-corpus equivalence sweep (dense/sparse/word/case-insensitive/metachar needles) g8↔g9 all identical.
+- **evidence_artifacts_paths:** `/tmp/asgrep-bench/flames_big.txt` (worker sample at scale), raw-SQL probe (sql-glob 0.6 vs rust-verify 1.8 ms per dense scan), interleaved rounds in session log
+- **baseline_configuration:** Rust reverify per posting; big-corpus dense-needle p90 {8.85, 8.92, 9.99} ms
+- **candidate_configuration:** SQL-side GLOB; p90 {6.89, 7.49, 9.24} ms (median −16%); cold-start worst case avoided entirely (g8 r0 outlier 51.9 ms mean-top vs g9 15.2); warm steady-state neutral (~2.4 ms both); repo corpus unchanged (g9 1.66 vs g8 1.61–1.68)
+- **measured_result:** KEEP — tail win concentrated exactly where predicted (dense postings × sparse content), zero regression elsewhere.
+- **retry_condition_predicate:** If a future word_mode/case-insensitive tail shows up in profiles, extend pushdown with the corresponding SQL predicates (word boundaries need a REGEXP/function arm or post-filter) — only under sampler evidence ≥5%.
+- **bead_id:** (none)
+
+### `gauntlet-2026-08-26-ivf-byids-prepare-cache-retest` (MEASURED AT SCALE — prediction failed, entry updated)
+
+- **date:** 2026-08-26
+- **candidate_name:** `semantic-by-ids-statement-cache` (I5a) — retry-predicate test
+- **target_workload:** synthetic 54,722-chunk corpus (1501 files, 289k caller edges), embed ON through IVF path: g5 (no I5a) vs g6 (I5a) on the same v12 index, 800 distinct symbol needles.
+- **files_touched:** none this round
+- **correctness_proof:** not-applicable (measurement pass)
+- **evidence_artifacts_paths:** session log interleaved rounds; `/tmp/asgrep-bench/gen_bigcorpus.py`, idx_bigv12/index.db
+- **baseline_configuration:** p50 {14.09, 14.03} ms (g5)
+- **candidate_configuration:** p50 {14.12, 13.98} ms (g6) — −0.2%, below gate
+- **measured_result:** RETRY PREDICTION FAILED. The original entry predicted the delta would cross the −3% gate at ≥50k chunks; measured −0.2–0.8%. Statement-parse churn was already amortized by SQLite's internal schema cache; the by-ids cost is row fetch + decode, not parsing. I5a stays as harmless hygiene but its scaling rationale is retired.
+- **retry_condition_predicate:** CLOSED as scaling-motivated-only. No further measurement passes warranted absent a profiler showing prepare/parse frames ≥5% on the IVF path (form 3).
+- **bead_id:** (none)
+
+### `gauntlet-2026-08-26-b1-flat-path-at-scale` (MEASURED 2026-08-26 — hypothesis closed, predicate shape unreachable)
+
+- **date:** 2026-08-26
+- **candidate_name:** `semantic-chunks-batched-in-list` (B1) — retry-predicate test at scale
+- **target_workload:** the original B1 retry predicate required hybrid queries passing >1000 allowed_files to an embed-enabled index WITHOUT a valid IVF sidecar. Built exactly that: 54,722-chunk corpus, sidecar removed to force the flat path, g0 (per-file loops) vs g5 (batched).
+- **files_touched:** none this round
+- **correctness_proof:** not-applicable (measurement pass)
+- **evidence_artifacts_paths:** `/tmp/asgrep-bench/idx_bigv12/` (sidecar `.ivf.bak`), session log rounds; capsule-shape probes (35/80/163/176 ms for 1/2/3/4-term needles)
+- **baseline_configuration:** g0 per-path loops; battery + broad natural-language needles
+- **candidate_configuration:** g5 batched IN-list
+- **measured_result:** NO WIN AVAILABLE. p90 on battery shapes {16.2–18.5} both binaries; capsule shapes ~100ms p90 both. Root cause: allowed_files reaching the embed pass is bounded by the prefilter output — the >1000-file shape requires the prefilter to pass >1000 files AND the IVF sidecar to be absent, which co-occur only on pathological indexes (stale sidecar + near-empty lexical channel). The predicate's premise was wrong: statement fan-out never dominates because file sets are pre-narrowed.
+- **retry_condition_predicate:** CLOSED. Only reachable if a future surface passes unfiltered (whole-corpus) file sets into the embed passes — e.g., a semantic-only sweep command. Re-check then (form 4).
+- **bead_id:** (none)
+
+### `gauntlet-2026-08-26-delta-reindex-ivf-rebuild` (LANDED 2026-08-26 — Door A: centroid-preserving reassign)
+
+- **date:** 2026-08-26
+- **candidate_name:** `delta-reindex-centroid-preserving-reassign` (Door A)
+- **target_workload:** incremental reindex on a large semantically-chunked index (54,722 chunks, 1501 files): editing ONE file cost **~48–58 s** per dir-mode delta pass. Span attribution on HEAD: `semantic_ivf_build` = 46.5 of 48.1 s (97%); walk+parse 7 ms; sqlite_upsert 180 ms. No-op passes cost ~1.5 s — hashing is not the bottleneck.
+- **files_touched:** `crates/ast-sgrep-core/src/semantic_ann.rs` (`reassign_all` keeps centroids; `mark_semantic_ivf_stale` no longer deletes sidecar; `drop_semantic_ivf`; `reassign_stale_ivf_partition` allows count drift), `index.rs` (`force_reindex` still invalidates sidecar so k-means runs), `store/sqlite/mod.rs` (wipe sites call `drop_semantic_ivf`), `tests/core/{semantic_ivf_roundtrip,durability_epics}.rs`, `docs/semantic-search.md`
+- **correctness_proof:** form-8: observable ANN recall may change; lexical/structural 35-contract goldens stay byte-identical. Fixture recall@10 vs frozen centroids (SLO 0.99): n=2048 0.998437; +1 0.998444; +10 0.998450; +50 0.998479. Centroids byte-identical across those reassigns. `semantic_ivf_roundtrip` 11/11 (1 ignored scale job); `durability_epics` 18/18. Sidecar kept on delta `remove_file`; `drop_semantic_ivf` still deletes.
+- **evidence_artifacts_paths:** cargo test `centroid_preserving_reassign` output; `/tmp/asgrep-bench/delta_spans.jsonl` (pre-change attribution)
+- **baseline_configuration:** any chunk-count change deleted `semantic.ivf` and fell through to 12-iter k-means (`reassign_all` was `*self = Self::build_from_flat`)
+- **candidate_configuration:** keep existing centroids; nearest-centroid assign every current vector; rewrite cluster postings and sidecar. Full k-means only on cold build / explicit `asgrep reindex` / embedding-identity wipe.
+- **measured_result:** recall KEEP on the 2048-vector CI fixture. 54k-chunk dir-mode wall-time NOT YET MEASURED — do not claim 48 s → 1.5 s (hashing already 1.5 s on no-op). Expected span name `semantic_ivf_reassign` instead of `semantic_ivf_build`.
+- **retry_condition_predicate:** Falsify if recall@10 < 0.99 after +1/+10/+50 appends vs frozen centroids — then stop; optional rebuild trigger only if that fails (`|Δn|/n > 0.25` or `sqrt(n).clamp(16,256)` changed). 54k keep-gate still open: dir-mode delta after one-function append must show the IVF span ≥2× faster, no-op still ~1.5 s, cold full index within ±3% (form 3).
+- **bead_id:** (none)
 
 ## Retired
 
@@ -239,4 +405,46 @@ _(none)_
 - **candidate_configuration:** symbol def/caller/anchor passes skip per-hit excerpt attachment in the hybrid path; `finish_response_checked_lazy` attaches once post-dedup/pre-prune via `attach_indexed_excerpts_if_empty`
 - **measured_result:** KEEP — high-df cold needles 24.9 → 12.4 ms avg (2x); tail battery p99 17.3–18.8 ms / max ~23 ms (modest, low-df-dominated); sustained load unchanged (27.2k calls/120s, 0 errors). Triangulated attribution: rusqlite Rows streaming + sqlite3_step + string materialization were ≥70% of tail samples.
 - **retry_condition_predicate:** Further tail reduction requires cutting row *streams*, not storage: batched/deferred join variants were measured neutral-to-negative warm (`trigram-scan-cost-attribution`), so reopen only with a parallel phase-1 walker or an async SQLite reader (form 8: architectural dependency).
+- **bead_id:** (none)
+
+### `gauntlet-2026-08-26-embed-empty-sources-guard` (LANDED 2026-08-26 — keep, correctness guard + small win)
+
+- **date:** 2026-08-26
+- **candidate_name:** `embed-pass-empty-sources-guard` (E1)
+- **target_workload:** default-config (embed ON) hybrid queries against any index whose semantic layer is empty — including this repo's own `.asgrep` and every index built with `--no-embed`. `embed_pass_for_files_with_rescoring` ran three per-file query loops (`semantic_chunks_for_files`, `semantic_field_vectors_for_files`, `legacy_embeddings_for_files`) before its `survivors.is_empty()` early return: ~3×N pointless statements per query.
+- **files_touched:** `crates/ast-sgrep-core/src/store/sqlite/queries.rs` (`semantic_sources_empty()`), `crates/ast-sgrep-core/src/search/passes/embed.rs` (guard at pass entry)
+- **correctness_proof:** output-identical by construction — with zero chunks AND zero embeddings every loop contributes no rows and the old code returned `Ok(Vec::new())`; the guard only skips proving that one point-query at a time. Golden battery 35/35 byte-identical; populated-index batch hashes identical.
+- **evidence_artifacts_paths:** `/tmp/asgrep-bench/golden_final/manifest.json`, interleaved A/B rounds in session log
+- **baseline_configuration:** macOS arm64 M5 Max, release-perf, HEAD `8bc467cb`, embed ON, repo index (0 chunks)
+- **candidate_configuration:** one `SELECT CASE WHEN EXISTS(…chunks…) OR EXISTS(…embeddings…) THEN 0 ELSE 1 END` probe (microseconds on non-empty stores) before the loops
+- **measured_result:** KEEP as a correctness/efficiency guard. Latency effect small on this corpus (~0.06–0.3 ms p50) because the loops are cheap per statement; cost scales with allowed_files count, so larger corpora benefit more.
+- **retry_condition_predicate:** No reopen path needed; behavior is strictly skip-provably-dead-work. If a future semantic source is added beyond these two tables, extend the probe in the same commit.
+- **bead_id:** (none)
+
+### `gauntlet-2026-08-26-snapshot-stamp-memoization` (LANDED 2026-08-26 — keep, −7–10% populated+embed p50)
+
+- **date:** 2026-08-26
+- **candidate_name:** `snapshot-stamp-generation-keyed-memo` (S1)
+- **target_workload:** FIRST surface mined with embed ON and a semantically POPULATED index (6062 chunks): hybrid distinct-query p50 12.5 ms vs 2.7 ms no-embed. Sampler: `snapshot_stamp` = 17.5% of worker CPU — per cache-miss query it re-ran `semantic_chunk_stats` (COUNT + MAX(length(vector)) over all chunk vectors ≈ 0.36 ms), `worktree_revision` (MAX over files), and the IVF sidecar mmap+parse peek — all pure functions of index contents.
+- **files_touched:** `crates/ast-sgrep-core/src/search/mod.rs` (`stamp_cache`/`stamp_degraded` fields, `cached_stamp_parts`, `take_stamp_degraded`, `semantic_manifest_impl`, snapshot_stamp rewiring)
+- **correctness_proof:** golden battery 35/35 byte-identical vs base on same-session index/corpus (g0 vs g4b); `snapshot_generation` tests green (6/6), incl. the stale-sidecar degraded-channel contract — mismatch verdicts are never memoized and unreadable-sidecar notes are drained per response so staleness stays loud. `git_head` deliberately stays uncached (worktree-bound, not generation-bound). Memo keys on full IndexGeneration (external data_version + local counters, br-yp1 semantics); pragma failure falls back to direct recompute (hdwh fail-open-to-recompute).
+- **evidence_artifacts_paths:** `/tmp/asgrep-bench/flames_embpop.txt` (worker sample on populated index), `/tmp/asgrep-bench/golden_final/`, interleaved rounds in session log
+- **baseline_configuration:** release-perf `8bc467cb` + E1; populated+embed p50 {13.09,12.92,12.33,12.28} ms; warm-distinct no-embed unchanged ~1.9 ms
+- **candidate_configuration:** generation-keyed memo of (worktree_revision, semantic_manifest) consulted inside snapshot_stamp
+- **measured_result:** KEEP — populated+embed p50 {11.96,12.02,11.48,11.62} then final-binary confirm −9.4%/−6.9%/−10.2% vs base; no-embed warm-distinct unchanged within noise ({1.66–2.12} across builds). Sustained load: 5195 calls/20 s, 0 errors.
+- **retry_condition_predicate:** Further stamp reduction is bounded by git_head file reads (kept fresh by design). Reopen ONLY if a profiler shows >=5% of worker time in read_git_head after this memo (would need a product decision on HEAD-freshness semantics) (form 3 + form 8).
+- **bead_id:** (none)
+
+### `embed-channel-rescoring-fetch-scale` (CLOSED 2026-08-26 — Door C parked; form 8 blocked on `why` contract)
+
+- **date:** 2026-08-26
+- **candidate_name:** `embed-channel-field-fetch-skip-zero-weight` (Door C)
+- **target_workload:** populated index (6k chunks), embed ON: IVF engages but adaptive probes take ~90% of clusters → ~5.4k candidate chunks per query; raw-SQL probes measured `semantic_field_vectors_by_ids(5500)` ≈ 8.7 ms and `semantic_chunks_by_ids(5500)` ≈ 2.9 ms per query. The 8.7 ms is **fetch** of 5 field blobs, not decode.
+- **files_touched:** `no-source-patch-attempted`
+- **correctness_proof:** not-applicable (closed without implementation)
+- **evidence_artifacts_paths:** idx_emb/index.db raw-SQL timings in session log; `flames_embpop.txt`; `docs/semantic-search.md` documents `embed_field:<field>=<score>`
+- **baseline_configuration:** `why_terms` emits every present field; `rescore_similarity` keeps scores when Literal weights are all zero; fields fetched for ALL ranked candidates before pruning to hit_limit
+- **candidate_configuration:** none built. Skipping decode while still selecting five blobs will not clear a −3% keep-gate. Door B (probe percent / top-N rescoring / columnar sidecar) stays parked: `DEFAULT_ADAPTIVE_PROBE_PERCENT = 90` is the published recall@10 ≥ 0.99 gate; top-N rescoring reorders fusion; columnar sidecar is a schema project for a 9.7 ms query tax.
+- **measured_result:** CLOSED as a decode-skip candidate. Remaining query path is ~1.77 ms warm / ~11 ms embed; the live product defect was one-file edit → 48–58 s (Door A), not this 8.7 ms fetch.
+- **retry_condition_predicate:** Reopen ONLY if the product `why` contract drops zero-weight field scores so those blobs need not be selected at all (form 8). Lowering probes or top-N rescoring requires a separate form-8 sign-off (recall / fusion-order).
 - **bead_id:** (none)
