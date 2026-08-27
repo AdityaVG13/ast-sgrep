@@ -157,3 +157,6 @@ fuzz/corpus/
 .rotational-code-analysis
 *.rotational-code-analysis/
 .code-upgrade-enterprise/
+# Internal campaign ledgers (local-only; not curated product docs)
+/docs/progress/
+
