@@ -119,14 +119,9 @@ function bootstrapSource(): string {
     const setResult = (value) => { resultValue = value; };
     const stringify = JSON.stringify;
     const stringifyBounded = (value, maxChars, label) => {
-      let remaining = maxChars;
-      const serialized = stringify(value, (key, item) => {
-        remaining -= key.length + 8;
-        if (typeof item === "string") remaining -= item.length;
-        if (remaining < 0) throw new Error("codemode " + label + " exceeds " + maxChars + " characters");
-        return item;
-      });
-      if (serialized !== undefined && serialized.length > maxChars) {
+      const serialized = stringify(value);
+      if (serialized === undefined) return serialized;
+      if (serialized.length > maxChars) {
         throw new Error("codemode " + label + " exceeds " + maxChars + " characters");
       }
       return serialized;
@@ -262,7 +257,7 @@ export async function runCodemode(
   const timeoutMs = Number.isFinite(requestedTimeout)
     ? Math.min(MAX_TIMER_MS, Math.max(1, Math.trunc(requestedTimeout)))
     : DEFAULT_TIMEOUT_MS;
-  const wall0 = Date.now();
+  const wall0 = performance.now();
   if (rawCode.length > MAX_CODE_CHARS) {
     return resultErr(`code exceeds ${MAX_CODE_CHARS} characters`, [], rawCode.slice(0, 200), wall0, options.stats);
   }
@@ -397,7 +392,7 @@ function resultOk(
   wall0: number,
   statsFn?: () => DispatchStats,
 ): CodemodeRunSuccess {
-  const out: CodemodeRunSuccess = { ok: true, result, logs, code, wallMs: Date.now() - wall0 };
+  const out: CodemodeRunSuccess = { ok: true, result, logs, code, wallMs: performance.now() - wall0 };
   const stats = statsFn?.();
   if (stats) out.stats = stats;
   return out;
@@ -410,7 +405,7 @@ function resultErr(
   wall0: number,
   statsFn?: () => DispatchStats,
 ): CodemodeRunFailure {
-  const out: CodemodeRunFailure = { ok: false, result: null, logs, error, code, wallMs: Date.now() - wall0 };
+  const out: CodemodeRunFailure = { ok: false, result: null, logs, error, code, wallMs: performance.now() - wall0 };
   const stats = statsFn?.();
   if (stats) out.stats = stats;
   return out;

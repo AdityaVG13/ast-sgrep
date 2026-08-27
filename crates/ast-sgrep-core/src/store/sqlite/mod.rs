@@ -170,6 +170,11 @@ pub struct IndexStore {
     durability: crate::store::Durability,
     /// Trigram document-frequency memo (br-umh rarest-trigram scan shortcut).
     trigram_df: crate::store::trigram_df::TrigramDfCache,
+    /// Memo for `indexed_line_count_at_least`: (index_data_version, threshold, at_least).
+    /// Unique-hybrid prefilter called this once per discovery term (LIMIT 1000
+    /// probe). Keyed on generation so an external writer is not a stale routing
+    /// decision; `bump_index_data_version` also clears it.
+    line_count_at_least: std::cell::Cell<Option<(i64, usize, bool)>>,
 }
 mod queries;
 mod writes;
@@ -215,6 +220,7 @@ impl IndexStore {
             cache_seq: std::cell::Cell::new(0),
             durability,
             trigram_df: crate::store::trigram_df::TrigramDfCache::new(),
+            line_count_at_least: std::cell::Cell::new(None),
         };
         store.init_schema()?;
         init_cache_seq(&store.conn, &store.cache_seq)?;
@@ -712,6 +718,7 @@ impl IndexStore {
             "INSERT INTO meta(key, value) VALUES('index_data_version', '1')              ON CONFLICT(key) DO UPDATE SET value =              CAST(COALESCE(meta.value, '0') AS INTEGER) + 1",
             [],
         )?;
+        self.line_count_at_least.set(None);
         Ok(())
     }
     /// Monotonic counter bumped on every semantic_chunks mutation (insert or delete).

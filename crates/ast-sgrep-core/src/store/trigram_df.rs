@@ -41,16 +41,13 @@ const RARE_ENOUGH_DF: i64 = 2048;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum TrigramShortcut {
-    /// Scan only the rarest trigram's posting list. Safety argument: only
-    /// trigrams DERIVED FROM THE NEEDLE are ever candidates, so poisoned or
-    /// stale document frequencies can influence WHICH trigram is scanned but
-    /// never what the scan reads; every line containing the full needle
-    /// necessarily contains each of its trigrams, so any candidate's posting
-    /// list is a superset of true matches, and the caller's
-    /// `content_matches_literal` reverify restores exactness. Absence is
-    /// therefore inferable safely: an empty reverified scan proves no line
-    /// contains the needle (RED-proven by c2b/c3 regressions).
-    Match(String),
+    /// Scan the posting intersection of 1–2 rarest needle trigrams. Safety:
+    /// only trigrams DERIVED FROM THE NEEDLE are candidates, so poisoned dfs
+    /// can change speed, not output. One trigram's postings are a superset of
+    /// phrase matches; AND of two needle trigrams is a tighter superset.
+    /// `content_matches_literal` reverify restores exactness. Empty scan
+    /// proves absence (RED-proven by c2b/c3 regressions).
+    Match(Vec<String>),
     /// No trustworthy df data (or no rare trigram): scan with the previous
     /// full-phrase MATCH. Identical to pre-lever behavior.
     Full,
@@ -140,14 +137,12 @@ impl TrigramDfCache {
             }
         }
         let conn = store.connection();
-        // Sequential probe-and-stop: ask only for the df values needed to
-        // find ONE rare-enough trigram. Cached answers are free; each miss
-        // costs one point lookup (~35us measured), so a needle whose first
-        // probed trigram is rare pays a single lookup. A df of 0 is NOT
-        // trusted as "absent" (poisonable within one generation); it just
-        // wins the rarity contest, and the caller's reverify keeps the scan
-        // exact while its empty result proves absence.
-        let mut best: Option<(i64, &str)> = None;
+        // After vocab preload, df lookups are HashMap hits. Collect every
+        // needle trigram so we can AND the two rarest: a single common
+        // trigram's 2k-row LIKE-reject walk was the unique-hybrid prefilter
+        // wall for absent concept tokens. A df of 0 is NOT trusted as
+        // "absent" (poisonable); it just wins the rarity contest.
+        let mut ranked: Vec<(i64, &str)> = Vec::with_capacity(trigrams.len());
         for tri in &trigrams {
             let df = match state.cache.entries.get(*tri) {
                 Some(df) => *df,
@@ -161,22 +156,27 @@ impl TrigramDfCache {
                     df
                 }
             };
-            let better = match best {
-                None => true,
-                Some((bd, _)) => df < bd,
-            };
-            if better {
-                best = Some((df, tri));
-            }
-            if best.is_some_and(|(bd, _)| bd <= RARE_ENOUGH_DF) {
-                break;
-            }
+            ranked.push((df, tri));
         }
-        match best {
-            Some((df, tri)) if df <= RARE_ENOUGH_DF => TrigramShortcut::Match((*tri).to_string()),
-            _ => TrigramShortcut::Full,
-        }
+        pick_shortcut(&ranked)
     }
+}
+
+/// Pick 1–2 rarest trigrams whose smallest df is rare enough to shortcut.
+pub(crate) fn pick_shortcut(ranked: &[(i64, &str)]) -> TrigramShortcut {
+    if ranked.is_empty() {
+        return TrigramShortcut::Full;
+    }
+    let mut ranked = ranked.to_vec();
+    ranked.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(b.1)));
+    if ranked[0].0 > RARE_ENOUGH_DF {
+        return TrigramShortcut::Full;
+    }
+    let mut terms = vec![ranked[0].1.to_string()];
+    if ranked.len() > 1 && ranked[0].1 != ranked[1].1 {
+        terms.push(ranked[1].1.to_string());
+    }
+    TrigramShortcut::Match(terms)
 }
 
 /// Distinct lowercased trigrams, or None when the needle is too short for a
@@ -271,5 +271,20 @@ mod tests {
         assert!(distinct_trigrams("").is_none());
         let long = "x".repeat(40);
         assert!(distinct_trigrams(&long).is_none(), "over lookup budget");
+    }
+
+    #[test]
+    fn pick_shortcut_ands_two_rarest_when_selective() {
+        let ranked = [(12_i64, "ial"), (80_i64, "cre"), (4000_i64, "den")];
+        match pick_shortcut(&ranked) {
+            TrigramShortcut::Match(terms) => assert_eq!(terms, vec!["ial".to_string(), "cre".to_string()]),
+            other => panic!("expected Match, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn pick_shortcut_falls_back_when_all_trigrams_are_common() {
+        let ranked = [(3000_i64, "the"), (5000_i64, "and")];
+        assert_eq!(pick_shortcut(&ranked), TrigramShortcut::Full);
     }
 }

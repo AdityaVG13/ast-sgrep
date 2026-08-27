@@ -155,22 +155,11 @@ pub(crate) fn embed_pass_lazy_ivf_with_rescoring(
     if options.lang_filter.is_some() {
         return Ok(None);
     }
-    let (ids, dim) = cached_semantic_chunk_ids(store)?;
+    let (ids, _paths, _path_order, dim, fingerprint) = cached_semantic_chunk_index(store)?;
     let count = ids.len();
-    let max_id = ids.last().copied().unwrap_or(0);
     if !crate::semantic_ann::should_use_ann(count, options.ann_threshold) || dim == 0 {
         return Ok(None);
     }
-    let backend = store
-        .get_meta("embed_backend")?
-        .unwrap_or_else(|| "semantic".into());
-    let fingerprint = crate::semantic_ivf::compute_ann_fingerprint(
-        count,
-        max_id,
-        dim,
-        Some(&backend),
-        store.index_data_version()?,
-    );
     let path = crate::semantic_ivf::semantic_ivf_path(store.db_path());
     let Some(ivf) = crate::semantic_ivf::load_semantic_ivf_index(&path, fingerprint)? else {
         return Ok(None);
@@ -231,7 +220,9 @@ pub(crate) fn embed_pass_lazy_ivf_with_rescoring(
     if candidate_ids.len() != ranked_payload.len() {
         return Ok(None);
     }
-    let Some(chunks) = rows_in_id_order(store, &candidate_ids)? else {
+    let Some((chunks, fields)) =
+        rows_and_fields_in_id_order(store, &candidate_ids, use_field_rescoring, intent)?
+    else {
         return Ok(None);
     };
     let ranked: Vec<(usize, f32)> = ranked_payload
@@ -239,7 +230,6 @@ pub(crate) fn embed_pass_lazy_ivf_with_rescoring(
         .enumerate()
         .map(|(i, (_, score))| (i, *score))
         .collect();
-    let fields = fields_for_ids(store, &candidate_ids, use_field_rescoring, intent)?;
     Ok(Some(embed_hits_rescored(
         &chunks,
         ranked,
@@ -265,25 +255,14 @@ fn embed_pass_lazy_ivf_for_files(
     if options.lang_filter.is_some() {
         return Ok(None);
     }
-    let (ids, paths, dim) = cached_semantic_chunk_index(store)?;
+    let (ids, paths, path_order, dim, fingerprint) = cached_semantic_chunk_index(store)?;
     let count = ids.len();
-    if paths.len() != count {
+    if paths.len() != count || path_order.len() != count {
         return Ok(None);
     }
-    let max_id = ids.last().copied().unwrap_or(0);
     if !crate::semantic_ann::should_use_ann(count, options.ann_threshold) || dim == 0 {
         return Ok(None);
     }
-    let backend = store
-        .get_meta("embed_backend")?
-        .unwrap_or_else(|| "semantic".into());
-    let fingerprint = crate::semantic_ivf::compute_ann_fingerprint(
-        count,
-        max_id,
-        dim,
-        Some(&backend),
-        store.index_data_version()?,
-    );
     let path = crate::semantic_ivf::semantic_ivf_path(store.db_path());
     let Some(ivf) = crate::semantic_ivf::load_semantic_ivf_index(&path, fingerprint)? else {
         return Ok(None);
@@ -291,12 +270,14 @@ fn embed_pass_lazy_ivf_for_files(
     if ivf.chunk_count() != count || ivf.dim != dim {
         return Ok(None);
     }
-    let members: Vec<usize> = paths
-        .iter()
-        .enumerate()
-        .filter(|(_, p)| allowed_files.contains(p.as_str()))
-        .map(|(i, _)| i)
-        .collect();
+    let members = {
+        let _span = crate::perf_profile::Span::start(
+            "semantic_member_filter",
+            "semantic",
+            "allowed_files -> IVF row indices",
+        );
+        member_indices_for_files(&paths, &path_order, allowed_files)
+    };
     if members.is_empty() {
         return Ok(Some(Vec::new()));
     }
@@ -318,7 +299,9 @@ fn embed_pass_lazy_ivf_for_files(
     if candidate_ids.len() != ranked_payload.len() {
         return Ok(None);
     }
-    let Some(chunks) = rows_in_id_order(store, &candidate_ids)? else {
+    let Some((chunks, fields)) =
+        rows_and_fields_in_id_order(store, &candidate_ids, use_field_rescoring, intent)?
+    else {
         return Ok(None);
     };
     let ranked: Vec<(usize, f32)> = ranked_payload
@@ -326,7 +309,6 @@ fn embed_pass_lazy_ivf_for_files(
         .enumerate()
         .map(|(i, (_, score))| (i, *score))
         .collect();
-    let fields = fields_for_ids(store, &candidate_ids, use_field_rescoring, intent)?;
     Ok(Some(embed_hits_rescored(
         &chunks,
         ranked,
@@ -356,16 +338,6 @@ pub(crate) fn embed_pass_for_files_with_rescoring(
     if parsed.terms.is_empty() || !options.use_embed || allowed_files.is_empty() {
         return Ok(Vec::new());
     }
-    // gauntlet-r4 (E1): when both persistent semantic sources are globally
-    // empty, the three per-file fetch loops below provably return nothing for
-    // ANY allowed_files set — skip them. Output-identical by construction:
-    // with zero chunks and zero embeddings every loop contributes no rows and
-    // `survivors.is_empty()` returns Ok(Vec::new()) anyway; this only skips
-    // the work of proving it one point-query at a time. Non-empty stores pay
-    // one microsecond-scale EXISTS probe per query.
-    if store.semantic_sources_empty()? {
-        return Ok(Vec::new());
-    }
     if let Some(hits) = embed_pass_lazy_ivf_for_files(
         store,
         options,
@@ -374,6 +346,12 @@ pub(crate) fn embed_pass_for_files_with_rescoring(
         use_field_rescoring,
     )? {
         return Ok(hits);
+    }
+    // gauntlet-r4 (E1): IVF miss only. Skip per-file fallback loops when both
+    // semantic sources are globally empty. The IVF success path never needed
+    // this EXISTS probe.
+    if store.semantic_sources_empty()? {
+        return Ok(Vec::new());
     }
     let query = parsed.terms.join(" ");
     let intent = classify(parsed);
@@ -494,7 +472,13 @@ struct ChunkIdMemo {
     semantic_data_version: i64,
     ids: Arc<Vec<i64>>,
     paths: Arc<Vec<String>>,
+    /// `paths` indices sorted by path so hybrid can map ~100 allowed files
+    /// without scanning all 54k chunk rows.
+    path_order: Arc<Vec<u32>>,
     dim: usize,
+    fingerprint: [u8; 32],
+    embed_backend: Option<String>,
+    embed_model: Option<String>,
 }
 
 /// `SELECT id FROM semantic_chunks ORDER BY id` is ~12 ms at 54k rows. The IVF
@@ -505,14 +489,35 @@ fn chunk_id_cache() -> &'static Mutex<Option<ChunkIdMemo>> {
     CHUNK_ID_CACHE.get_or_init(|| Mutex::new(None))
 }
 
-fn cached_semantic_chunk_ids(store: &IndexStore) -> Result<(Arc<Vec<i64>>, usize)> {
-    let (ids, _paths, dim) = cached_semantic_chunk_index(store)?;
-    Ok((ids, dim))
+fn member_indices_for_files(
+    paths: &[String],
+    path_order: &[u32],
+    allowed_files: &HashSet<String>,
+) -> Vec<usize> {
+    let mut members = Vec::new();
+    for file in allowed_files {
+        let found = path_order.binary_search_by(|&idx| {
+            paths[idx as usize].as_str().cmp(file.as_str())
+        });
+        let mut i = match found {
+            Ok(hit) => hit,
+            Err(_) => continue,
+        };
+        while i > 0 && paths[path_order[i - 1] as usize] == *file {
+            i -= 1;
+        }
+        while i < path_order.len() && paths[path_order[i] as usize] == *file {
+            members.push(path_order[i] as usize);
+            i += 1;
+        }
+    }
+    members.sort_unstable();
+    members
 }
 
 fn cached_semantic_chunk_index(
     store: &IndexStore,
-) -> Result<(Arc<Vec<i64>>, Arc<Vec<String>>, usize)> {
+) -> Result<(Arc<Vec<i64>>, Arc<Vec<String>>, Arc<Vec<u32>>, usize, [u8; 32])> {
     let index_data_version = store.index_data_version()?;
     let semantic_data_version = store.semantic_data_version()?;
     let db = store.db_path().to_string_lossy().into_owned();
@@ -525,7 +530,13 @@ fn cached_semantic_chunk_index(
                 && memo.index_data_version == index_data_version
                 && memo.semantic_data_version == semantic_data_version
             {
-                return Ok((Arc::clone(&memo.ids), Arc::clone(&memo.paths), memo.dim));
+                return Ok((
+                    Arc::clone(&memo.ids),
+                    Arc::clone(&memo.paths),
+                    Arc::clone(&memo.path_order),
+                    memo.dim,
+                    memo.fingerprint,
+                ));
             }
         }
     }
@@ -538,7 +549,20 @@ fn cached_semantic_chunk_index(
     }
     let ids = Arc::new(ids);
     let paths = Arc::new(paths);
+    let mut path_order: Vec<u32> = (0..paths.len() as u32).collect();
+    path_order.sort_by(|&a, &b| paths[a as usize].cmp(&paths[b as usize]));
+    let path_order = Arc::new(path_order);
     let dim = store.semantic_primary_dim()?;
+    let embed_backend = store.get_meta("embed_backend")?;
+    let embed_model = store.get_meta("embed_model")?;
+    let backend = embed_backend.clone().unwrap_or_else(|| "semantic".into());
+    let fingerprint = crate::semantic_ivf::compute_ann_fingerprint(
+        ids.len(),
+        ids.last().copied().unwrap_or(0),
+        dim,
+        Some(&backend),
+        index_data_version,
+    );
     *lock_clear_on_poison(chunk_id_cache(), |slot| {
         *slot = None;
     }) = Some(ChunkIdMemo {
@@ -547,13 +571,32 @@ fn cached_semantic_chunk_index(
         semantic_data_version,
         ids: Arc::clone(&ids),
         paths: Arc::clone(&paths),
+        path_order: Arc::clone(&path_order),
         dim,
+        fingerprint,
+        embed_backend,
+        embed_model,
     });
-    Ok((ids, paths, dim))
+    Ok((ids, paths, path_order, dim, fingerprint))
 }
 
 fn query_embed_cache() -> &'static Mutex<HashMap<String, Vec<f32>>> {
     QUERY_EMBED_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn embed_store_meta(store: &IndexStore) -> Result<(Option<String>, Option<String>)> {
+    {
+        let db = store.db_path().to_string_lossy().into_owned();
+        let guard = lock_clear_on_poison(chunk_id_cache(), |slot| {
+            *slot = None;
+        });
+        if let Some(memo) = guard.as_ref() {
+            if memo.db == db {
+                return Ok((memo.embed_backend.clone(), memo.embed_model.clone()));
+            }
+        }
+    }
+    Ok((store.get_meta("embed_backend")?, store.get_meta("embed_model")?))
 }
 
 fn embed_query_vector(
@@ -562,12 +605,11 @@ fn embed_query_vector(
     query: &str,
     stored_dim: Option<usize>,
 ) -> Result<Vec<f32>> {
-    let stored_backend = store.get_meta("embed_backend")?;
-    let stored_model = store.get_meta("embed_model")?;
+    let (stored_backend, stored_model) = embed_store_meta(store)?;
     let dim = stored_dim.unwrap_or(ast_sgrep_embed::default_semantic_dim());
     // An unversioned embed_backend="semantic" store must not serve results —
     // only a full rewrite (index_all) may promote the layout.
-    if store.needs_legacy_semantic_rewrite()? {
+    if stored_backend.as_deref() == Some("semantic") {
         return Err(crate::StoreError::Other(
             "index advertises an unversioned semantic backend; run `asgrep reindex` to rewrite every chunk before semantic search"
                 .into(),
@@ -662,6 +704,46 @@ fn assemble_rows_in_id_order(
     Ok(Some(chunks))
 }
 
+fn rows_and_fields_in_id_order(
+    store: &IndexStore,
+    ids: &[i64],
+    use_field_rescoring: bool,
+    intent: QueryIntent,
+) -> Result<Option<(Vec<SemanticChunkRow>, Vec<SemanticFieldVectors>)>> {
+    let mask = field_weights(intent).mask();
+    if ids.is_empty() {
+        return Ok(Some((Vec::new(), Vec::new())));
+    }
+    if !use_field_rescoring || !mask.any() {
+        let Some(chunks) = rows_in_id_order(store, ids)? else {
+            return Ok(None);
+        };
+        return Ok(Some((chunks, Vec::new())));
+    }
+    let _span = crate::perf_profile::Span::start(
+        "semantic_hit_fetch",
+        "semantic",
+        "sqlite metadata+fields for IVF survivors",
+    );
+    let fetched = store.semantic_hits_and_fields_by_ids(ids, mask)?;
+    let mut row_map = HashMap::with_capacity(fetched.len());
+    let mut field_map = HashMap::with_capacity(fetched.len());
+    for (id, row, fields) in fetched {
+        row_map.insert(id, row);
+        field_map.insert(id, fields);
+    }
+    let mut chunks = Vec::with_capacity(ids.len());
+    let mut fields = Vec::with_capacity(ids.len());
+    for id in ids {
+        let Some(row) = row_map.remove(id) else {
+            return Ok(None);
+        };
+        chunks.push(row);
+        fields.push(field_map.remove(id).unwrap_or_default());
+    }
+    Ok(Some((chunks, fields)))
+}
+
 fn fields_for_ids(
     store: &IndexStore,
     ids: &[i64],
@@ -672,10 +754,15 @@ fn fields_for_ids(
     if !use_field_rescoring || !mask.any() || ids.is_empty() {
         return Ok(Vec::new());
     }
-    let field_map = store.semantic_field_vectors_by_ids(ids, mask)?;
+    let _span = crate::perf_profile::Span::start(
+        "semantic_field_fetch",
+        "semantic",
+        "sqlite field vectors for IVF survivors",
+    );
+    let mut field_map = store.semantic_field_vectors_by_ids(ids, mask)?;
     Ok(ids
         .iter()
-        .map(|id| field_map.get(id).cloned().unwrap_or_default())
+        .map(|id| field_map.remove(id).unwrap_or_default())
         .collect())
 }
 
@@ -782,16 +869,16 @@ fn embed_similarity_hits(
     struct ParentMatch {
         best_index: usize,
         best_similarity: f32,
-        children: Vec<(f32, String)>,
+        children: Vec<(f32, usize)>,
     }
 
-    let mut parents = HashMap::<(String, u32, u32, String), ParentMatch>::new();
+    let mut parents = HashMap::<(&str, u32, u32, &str), ParentMatch>::new();
     for (index, similarity) in ranked {
         let Some((file, line_start, line_end, symbol, excerpt, _)) = chunks.get(index) else {
             continue;
         };
         let parent = parents
-            .entry((file.clone(), *line_start, *line_end, symbol.clone()))
+            .entry((file.as_str(), *line_start, *line_end, symbol.as_str()))
             .or_insert_with(|| ParentMatch {
                 best_index: index,
                 best_similarity: similarity,
@@ -801,8 +888,12 @@ fn embed_similarity_hits(
             parent.best_index = index;
             parent.best_similarity = similarity;
         }
-        if !parent.children.iter().any(|(_, child)| child == excerpt) {
-            parent.children.push((similarity, excerpt.clone()));
+        if !parent
+            .children
+            .iter()
+            .any(|&(_, idx)| chunks.get(idx).is_some_and(|row| row.4 == *excerpt))
+        {
+            parent.children.push((similarity, index));
         }
     }
     let mut parents = parents.into_values().collect::<Vec<_>>();
@@ -823,7 +914,7 @@ fn embed_similarity_hits(
                 right
                     .0
                     .total_cmp(&left.0)
-                    .then_with(|| left.1.cmp(&right.1))
+                    .then_with(|| chunks[left.1].4.cmp(&chunks[right.1].4))
             });
             parent.children.truncate(3);
             let (file, line_start, line_end, symbol, _, _) = &chunks[parent.best_index];
@@ -836,7 +927,7 @@ fn embed_similarity_hits(
                 excerpt: parent
                     .children
                     .into_iter()
-                    .map(|(_, excerpt)| excerpt)
+                    .map(|(_, idx)| chunks[idx].4.as_str())
                     .collect::<Vec<_>>()
                     .join("\n...\n"),
                 symbol: (!symbol.is_empty()).then_some(symbol.clone()),
@@ -863,4 +954,32 @@ fn embed_legacy_hits(
         &[],
         EMBED_HIT_LIMIT.max(options.limit),
     ))
+}
+
+#[cfg(test)]
+mod member_filter_tests {
+    use super::member_indices_for_files;
+    use std::collections::HashSet;
+
+    #[test]
+    fn member_indices_match_linear_scan() {
+        let paths: Vec<String> = vec![
+            "b.rs".into(),
+            "a.rs".into(),
+            "a.rs".into(),
+            "c.rs".into(),
+            "a.rs".into(),
+        ];
+        let mut path_order: Vec<u32> = (0..paths.len() as u32).collect();
+        path_order.sort_by(|&x, &y| paths[x as usize].cmp(&paths[y as usize]));
+        let allowed = HashSet::from(["a.rs".into(), "c.rs".into(), "z.rs".into()]);
+        let got = member_indices_for_files(&paths, &path_order, &allowed);
+        let expect: Vec<usize> = paths
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| allowed.contains(*p))
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(got, expect);
+    }
 }

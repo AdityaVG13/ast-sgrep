@@ -121,7 +121,7 @@ pub fn finish_response(
 pub(crate) fn finish_response_checked(
     parsed: &ParsedQuery,
     options: &SearchOptions,
-    mut hits: Vec<SearchHit>,
+    hits: Vec<SearchHit>,
     dedup: bool,
 ) -> Result<SearchResponse> {
     finish_response_checked_lazy(parsed, options, hits, dedup, None, false)
@@ -220,20 +220,8 @@ fn finish_response_inner(
     };
     let prune_keep = keep.saturating_mul(4).max(keep.saturating_add(32));
     let multi_term = parsed.terms.len() > 1;
-    if hits.len() > prune_keep {
-        // Keep coverage in the pre-truncate sort key so high-coverage lower-score
-        // hits survive the keep*4 prune (8mb8).
-        hits.select_nth_unstable_by(prune_keep, |a, b| {
-            cmp_ranked_hits(
-                a,
-                excerpt_term_coverage(&parsed.terms, a),
-                b,
-                excerpt_term_coverage(&parsed.terms, b),
-                multi_term,
-            )
-        });
-        hits.truncate(prune_keep);
-    }
+    // Coverage is a pure function of (terms, excerpt). Compute once per hit so
+    // select_nth / sort do not re-lowercase excerpts on every comparison.
     let mut keyed: Vec<(u32, SearchHit)> = hits
         .into_iter()
         .map(|h| (excerpt_term_coverage(&parsed.terms, &h), h))
@@ -241,6 +229,10 @@ fn finish_response_inner(
     let mut compare = |(ca, a): &(u32, SearchHit), (cb, b): &(u32, SearchHit)| {
         cmp_ranked_hits(a, *ca, b, *cb, multi_term)
     };
+    if keyed.len() > prune_keep {
+        keyed.select_nth_unstable_by(prune_keep, &mut compare);
+        keyed.truncate(prune_keep);
+    }
     if keyed.len() > keep {
         keyed.select_nth_unstable_by(keep, &mut compare);
         keyed.truncate(keep);
@@ -400,6 +392,10 @@ fn contains_term_token(text: &str, term: &str) -> bool {
         })
 }
 pub(super) fn excerpt_term_coverage(terms: &[String], hit: &SearchHit) -> u32 {
+    if terms.is_empty() {
+        return 0;
+    }
+    let mut excerpt_lower: Option<String> = None;
     terms
         .iter()
         .filter(|term| {
@@ -407,7 +403,8 @@ pub(super) fn excerpt_term_coverage(terms: &[String], hit: &SearchHit) -> u32 {
             if term.chars().any(|c| c.is_uppercase()) {
                 contains_term_token(&hit.excerpt, term)
             } else {
-                contains_term_token(&hit.excerpt.to_lowercase(), &term.to_lowercase())
+                let lowered = excerpt_lower.get_or_insert_with(|| hit.excerpt.to_lowercase());
+                contains_term_token(lowered, &term.to_lowercase())
             }
         })
         .count() as u32

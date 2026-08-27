@@ -86,6 +86,10 @@ pub struct Searcher {
     store: IndexStore,
     options: SearchOptions,
     use_field_rescoring: bool,
+    /// When false, skip snapshot_stamp + query_expansions. Code Mode capsules
+    /// discard both; unique-hybrid p50 paid git/HEAD + lexicon expand + extra
+    /// meta reads for JSON fields the model never sees.
+    stamp_response: bool,
     semantic_cache: Arc<Mutex<Option<SemanticCache>>>,
     lexicon_cache: Mutex<Option<(i64, crate::lexicon::Lexicon)>>,
     response_cache: Mutex<ResponseCache>,
@@ -94,6 +98,12 @@ pub struct Searcher {
     stamp_cache: Mutex<Option<(IndexGeneration, i64, Option<String>)>>,
     /// S1: drained degraded notes from the latest memoized manifest probe.
     stamp_degraded: Mutex<Vec<DegradedChannel>>,
+    /// `.git/HEAD` is independent of index generation. Probe once per Searcher;
+    /// index writes reopen via writer_generation.
+    git_head_cache: Mutex<Option<Option<String>>>,
+    /// `SearchOptions::cache_identity()` is identical for the Searcher
+    /// lifetime (options are frozen in `with_store`).
+    options_identity: String,
 }
 /// Fail closed when callers request optional neural/rerank paths that were
 pub fn validate_search_feature_flags(options: &SearchOptions) -> Result<()> {
@@ -159,10 +169,12 @@ impl Searcher {
         // stored `typescript` (br-5l6). matches_lang already aliases; SQL did not.
         options.lang_filter =
             ast_sgrep_lang::Language::canonical_filter(options.lang_filter.as_deref());
+        let options_identity = options.cache_identity();
         Self {
             store,
             options,
             use_field_rescoring: true,
+            stamp_response: true,
             semantic_cache: Arc::new(Mutex::new(None)),
             lexicon_cache: Mutex::new(None),
             response_cache: Mutex::new(ResponseCache {
@@ -177,6 +189,8 @@ impl Searcher {
             }),
             stamp_cache: Mutex::new(None),
             stamp_degraded: Mutex::new(Vec::new()),
+            git_head_cache: Mutex::new(None),
+            options_identity,
         }
     }
     pub fn store(&self) -> &IndexStore {
@@ -190,6 +204,10 @@ impl Searcher {
     /// searcher so adding it does not break exhaustive `SearchOptions` literals.
     pub fn with_field_rescoring(mut self, enabled: bool) -> Self {
         self.use_field_rescoring = enabled;
+        self
+    }
+    pub fn with_response_stamp(mut self, enabled: bool) -> Self {
+        self.stamp_response = enabled;
         self
     }
     fn index_gen(&self) -> Option<IndexGeneration> {
@@ -247,7 +265,7 @@ impl Searcher {
         // Full SearchOptions identity (nyui).
         format!(
             "{kind}\0{query}\0{}\0fr={}",
-            self.options.cache_identity(),
+            self.options_identity,
             self.use_field_rescoring
         )
     }
@@ -271,20 +289,25 @@ impl Searcher {
             false
         };
         let result = (|| {
+            if !self.stamp_response {
+                return compute();
+            }
             let (generation_before, lexicon_generation_before) =
                 self.store.search_data_versions()?;
             let mut response = compute()?;
-            let (generation_after, lexicon_generation_after) = self.store.search_data_versions()?;
-            if owns_snapshot
-                && (generation_after != generation_before
-                    || lexicon_generation_after != lexicon_generation_before)
-            {
-                return Err(crate::StoreError::Other(format!(
-                    "index generation changed during search \
-                     (index {generation_before} -> {generation_after}, \
-                      lexicon {lexicon_generation_before} -> {lexicon_generation_after}); \
-                     retry for a single-generation response"
-                )));
+            if owns_snapshot {
+                let (generation_after, lexicon_generation_after) =
+                    self.store.search_data_versions()?;
+                if generation_after != generation_before
+                    || lexicon_generation_after != lexicon_generation_before
+                {
+                    return Err(crate::StoreError::Other(format!(
+                        "index generation changed during search \
+                         (index {generation_before} -> {generation_after}, \
+                          lexicon {lexicon_generation_before} -> {lexicon_generation_after}); \
+                         retry for a single-generation response"
+                    )));
+                }
             }
 
             response.snapshot = self.snapshot_stamp(generation_before)?;
@@ -473,7 +496,16 @@ impl Searcher {
             generation,
             schema_version: self.store.schema_version(),
             worktree_revision,
-            git_head: read_git_head(&self.options.root),
+            git_head: {
+                let mut guard = lock_clear_on_poison(&self.git_head_cache, |v| *v = None);
+                if let Some(cached) = guard.as_ref() {
+                    cached.clone()
+                } else {
+                    let value = read_git_head(&self.options.root);
+                    *guard = Some(value.clone());
+                    value
+                }
+            },
             semantic_manifest,
             degraded_channels,
         })
@@ -497,6 +529,11 @@ impl Searcher {
         query: &str,
         compute: impl FnOnce() -> Result<SearchResponse>,
     ) -> Result<SearchResponse> {
+        if !self.stamp_response {
+            // Unique Code Mode never repeats a key; skip PRAGMA/gen probes
+            // that cannot admit a hit.
+            return self.fenced(compute);
+        }
         let Some(gen) = self.index_gen() else {
             return self.fenced(compute);
         };
@@ -604,23 +641,34 @@ impl Searcher {
                         crate::intent::route_hits(&parsed, &mut hits);
                         let intent = crate::intent::classify(&parsed);
                         let weights = crate::intent::weights_for(intent);
-                        crate::fusion::apply_weighted_rrf(&mut hits, &weights);
-                        // The in-process critic: corroboration gate, agreement
-                        // boost, and identifier-collision penalty on the fused
-                        // shortlist (P0 critic-on-shortlist).
-                        critic::apply_critic(&parsed, intent, &mut hits);
+                        {
+                            let _span = crate::perf_profile::Span::start(
+                                "hybrid_fusion_critic",
+                                "search",
+                                "weighted RRF + critic",
+                            );
+                            crate::fusion::apply_weighted_rrf(&mut hits, &weights);
+                            critic::apply_critic(&parsed, intent, &mut hits);
+                        }
                         hits
                     }
                 }
             };
-            finish::finish_response_checked_lazy(
-                &parsed,
-                &self.options,
-                hits,
-                true,
-                Some(&self.store),
-                true,
-            )
+            {
+                let _span = crate::perf_profile::Span::start(
+                    "search_finish_response",
+                    "search",
+                    "finish_response_checked_lazy",
+                );
+                finish::finish_response_checked_lazy(
+                    &parsed,
+                    &self.options,
+                    hits,
+                    true,
+                    Some(&self.store),
+                    true,
+                )
+            }
         })
     }
     /// Raw hits for one side of a conjunction (P0 channel-conjunction).
@@ -726,6 +774,7 @@ impl Searcher {
         })
     }
     fn search_hybrid(&self, parsed: &ParsedQuery) -> Result<Vec<SearchHit>> {
+        let intent = crate::intent::classify(parsed);
         // Constraint cascade: each stage receives only files that survived the prior stage.
         let expanded = {
             let _span = crate::perf_profile::Span::start(
@@ -740,7 +789,7 @@ impl Searcher {
         // associations, then offline concept-group tokens (credential ->
         // auth/token/...). 1-2 char tokens stay out of the prefilter.
         let mut discovery = semantic_query.clone();
-        if crate::intent::classify(parsed) == crate::intent::QueryIntent::Conceptual {
+        if intent == crate::intent::QueryIntent::Conceptual {
             let mut extra = 0usize;
             for tok in ast_sgrep_embed::tokenize(&ast_sgrep_embed::expand_concepts(&parsed.raw)) {
                 if extra >= 8 {
@@ -761,8 +810,7 @@ impl Searcher {
             literal_prefilter_pass(&self.store, &self.options, &discovery)?
         };
         let mut lexical = lexical;
-        let candidate_lexical = lexical.clone();
-        let lexical_files = candidate_lexical
+        let lexical_files = lexical
             .iter()
             .map(|hit| hit.file.clone())
             .collect::<HashSet<_>>();
@@ -781,8 +829,7 @@ impl Searcher {
         // 100-file cascade is still 1–4 ms. Identifier queries keep pattern
         // + defs + callers. Empty structural falls through to lexical
         // survivors + embed (ht1h.3).
-        let conceptual =
-            crate::intent::classify(parsed) == crate::intent::QueryIntent::Conceptual;
+        let conceptual = intent == crate::intent::QueryIntent::Conceptual;
         let ast_matches = if conceptual {
             Vec::new()
         } else {
@@ -836,14 +883,26 @@ impl Searcher {
         let mut hits = lexical;
         hits.extend(structural);
         if self.options.use_embed {
-            let semantic = passes::embed::embed_pass_for_files_with_rescoring(
-                &self.store,
-                &self.options,
-                semantic_query,
-                &working_files,
-                self.use_field_rescoring,
-            )?;
-            if crate::intent::classify(parsed) == crate::intent::QueryIntent::Conceptual {
+            let semantic = {
+                let _span = crate::perf_profile::Span::start(
+                    "hybrid_embed_pass",
+                    "search",
+                    "embed_pass_for_files_with_rescoring",
+                );
+                passes::embed::embed_pass_for_files_with_rescoring(
+                    &self.store,
+                    &self.options,
+                    semantic_query,
+                    &working_files,
+                    self.use_field_rescoring,
+                )?
+            };
+            if intent == crate::intent::QueryIntent::Conceptual {
+                let _span = crate::perf_profile::Span::start(
+                    "hybrid_conceptual_fanout",
+                    "search",
+                    "conceptual_fanout_pass",
+                );
                 hits.extend(conceptual_fanout_pass(
                     &self.store,
                     &self.options,
@@ -947,32 +1006,18 @@ fn literal_prefilter_pass(
     // Keep caller order (user terms, then expansions). Stop at the first
     // term that yields files so a later high-df concept token such as
     // "update" cannot replace a precise earlier match.
+    // Ranking among the first 100 posting lines is a no-op: 100 lines
+    // contain at most 100 files, which is the cascade cap.
     let mut prefilter_options = options.clone();
     prefilter_options.case_insensitive = true;
     prefilter_options.limit = CASCADE_PREFILTER_FILE_LIMIT;
-    let mut hits = Vec::new();
-    let mut file_scores = std::collections::HashMap::<String, f64>::new();
     for term in terms {
-        for hit in literal_pass(store, &prefilter_options, &ParsedQuery::literal(term))? {
-            *file_scores.entry(hit.file.clone()).or_default() +=
-                hit.score * term.chars().count() as f64;
-            hits.push(hit);
-        }
-        if !file_scores.is_empty() {
-            break;
+        let hits = literal_pass(store, &prefilter_options, &ParsedQuery::literal(term))?;
+        if !hits.is_empty() {
+            return Ok(hits);
         }
     }
-    let mut ranked_files = file_scores.into_iter().collect::<Vec<_>>();
-    ranked_files.sort_by(|(file_a, score_a), (file_b, score_b)| {
-        score_b.total_cmp(score_a).then_with(|| file_a.cmp(file_b))
-    });
-    let allowed_files = ranked_files
-        .into_iter()
-        .take(CASCADE_PREFILTER_FILE_LIMIT)
-        .map(|(file, _)| file)
-        .collect::<HashSet<_>>();
-    hits.retain(|hit| allowed_files.contains(&hit.file));
-    Ok(hits)
+    Ok(Vec::new())
 }
 
 /// Boost hybrid recall with pre-indexed pattern_nodes (decls/calls extracted at index time).

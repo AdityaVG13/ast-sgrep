@@ -305,11 +305,17 @@ fn parse_edit_value(value: &Value) -> anyhow::Result<EditSpec> {
 }
 
 fn unique_replace(haystack: &str, old: &str, new: &str) -> anyhow::Result<String> {
-    let count = haystack.matches(old).count();
-    if count != 1 {
-        return Err(anyhow!("oldText must match exactly once (found {count})"));
+    let Some(first) = haystack.find(old) else {
+        return Err(anyhow!("oldText must match exactly once (found 0)"));
+    };
+    if haystack[first + old.len()..].contains(old) {
+        return Err(anyhow!("oldText must match exactly once (found 2+)"));
     }
-    Ok(haystack.replacen(old, new, 1))
+    let mut out = String::with_capacity(haystack.len() - old.len() + new.len());
+    out.push_str(&haystack[..first]);
+    out.push_str(new);
+    out.push_str(&haystack[first + old.len()..]);
+    Ok(out)
 }
 
 fn jail_rel_path(root: &Path, raw: &str) -> anyhow::Result<PathBuf> {

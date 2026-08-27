@@ -249,7 +249,8 @@ impl CodeModeSession {
                 limit: open_limit,
                 use_embed: self.config.use_embed,
                 ..SearchOptions::default()
-            })?;
+            })?
+            .with_response_stamp(false);
             *guard = Some((
                 SearcherKey {
                     root,

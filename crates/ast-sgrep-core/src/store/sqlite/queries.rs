@@ -128,7 +128,15 @@ impl IndexStore {
     }
     /// True when indexed lines ≥ threshold (LIMIT probe; avoids full COUNT).
     pub fn indexed_line_count_at_least(&self, threshold: usize) -> Result<bool> {
-        super::super::sql::at_least_rows(&self.conn, "lines", threshold)
+        let gen = self.index_data_version()?;
+        if let Some((cached_gen, cached_threshold, cached)) = self.line_count_at_least.get() {
+            if cached_gen == gen && cached_threshold == threshold {
+                return Ok(cached);
+            }
+        }
+        let at_least = super::super::sql::at_least_rows(&self.conn, "lines", threshold)?;
+        self.line_count_at_least.set(Some((gen, threshold, at_least)));
+        Ok(at_least)
     }
     pub fn all_indexed_lines(&self) -> Result<Vec<IndexedLineRow>> {
         let mut stmt = self.conn.prepare_cached(
@@ -333,6 +341,57 @@ impl IndexStore {
                     Vec::new(),
                 );
                 Ok((id, row))
+            })?;
+            for row in rows {
+                out.push(row?);
+            }
+        }
+        Ok(out)
+    }
+
+    /// One IN-list round trip for IVF survivors: hit metadata plus the
+    /// intent-masked field blobs. Same rows as hits_by_ids + field_vectors_by_ids.
+    pub fn semantic_hits_and_fields_by_ids(
+        &self,
+        ids: &[i64],
+        mask: crate::semantic_chunk::FieldVectorMask,
+    ) -> Result<Vec<(i64, ast_sgrep_embed::SemanticChunkRow, crate::semantic_chunk::SemanticFieldVectors)>> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut out = Vec::with_capacity(ids.len());
+        for batch in ids.chunks(500) {
+            let ph = std::iter::repeat_n("?", batch.len())
+                .collect::<Vec<_>>()
+                .join(",");
+            let sql = format!(
+                "SELECT sc.id, f.path, sc.line_start, sc.line_end, sc.symbol_name, sc.text, {}, {}, {}, {}, {} \
+                 FROM semantic_chunks sc JOIN files f ON f.id=sc.file_id WHERE sc.id IN ({ph})",
+                field_blob_sql(mask.name, "sc.vector_name"),
+                field_blob_sql(mask.docs, "sc.vector_docs"),
+                field_blob_sql(mask.body, "sc.vector_body"),
+                field_blob_sql(mask.graph, "sc.vector_graph"),
+                field_blob_sql(mask.tests_examples, "sc.vector_tests_examples"),
+            );
+            let mut stmt = self.conn.prepare_cached(&sql)?;
+            let rows = stmt.query_map(rusqlite::params_from_iter(batch.iter()), |r| {
+                let id: i64 = r.get(0)?;
+                let row = (
+                    r.get(1)?,
+                    r.get(2)?,
+                    r.get(3)?,
+                    r.get::<_, Option<String>>(4)?.unwrap_or_default(),
+                    r.get(5)?,
+                    Vec::new(),
+                );
+                let fields = crate::semantic_chunk::SemanticFieldVectors {
+                    name: r.get(6)?,
+                    docs: r.get(7)?,
+                    body: r.get(8)?,
+                    graph: r.get(9)?,
+                    tests_examples: r.get(10)?,
+                };
+                Ok((id, row, fields))
             })?;
             for row in rows {
                 out.push(row?);

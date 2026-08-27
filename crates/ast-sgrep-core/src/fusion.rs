@@ -2,7 +2,7 @@ use crate::intent::ChannelWeights;
 use crate::rank::{rrf_score, RRF_K};
 use crate::search::{HitKind, SearchHit};
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -209,17 +209,17 @@ pub fn apply_weighted_rrf(hits: &mut Vec<SearchHit>, weights: &ChannelWeights) {
         return;
     }
     let mut channels: [Vec<usize>; 8] = std::array::from_fn(|_| Vec::new());
-    let mut members_by_result = BTreeMap::<(String, u32), Vec<usize>>::new();
+    let mut members_by_result = HashMap::<(&str, u32), Vec<usize>>::new();
     for (index, hit) in hits.iter().enumerate() {
         if hit.score.is_finite() && hit.score > 0.0 {
             channels[channel_for_kind(hit.kind).index()].push(index);
             members_by_result
-                .entry((hit.file.clone(), hit.line_start))
+                .entry((hit.file.as_str(), hit.line_start))
                 .or_default()
                 .push(index);
         }
     }
-    let mut ranks_by_result = HashMap::<(String, u32), ChannelRanks>::new();
+    let mut ranks_by_result = HashMap::<(&str, u32), ChannelRanks>::new();
     for channel in FusionChannel::ALL {
         let members = &mut channels[channel.index()];
         members.sort_by(|left, right| {
@@ -230,12 +230,12 @@ pub fn apply_weighted_rrf(hits: &mut Vec<SearchHit>, weights: &ChannelWeights) {
                 .then_with(|| hits[*left].line_start.cmp(&hits[*right].line_start))
                 .then_with(|| hits[*left].line_end.cmp(&hits[*right].line_end))
         });
-        let mut seen_results = std::collections::HashSet::new();
+        let mut seen_results = HashSet::<(&str, u32)>::new();
         let mut rank = 0usize;
         for index in members.iter().copied() {
             let hit = &hits[index];
-            let key = (hit.file.clone(), hit.line_start);
-            if seen_results.insert(key.clone()) {
+            let key = (hit.file.as_str(), hit.line_start);
+            if seen_results.insert(key) {
                 ranks_by_result
                     .entry(key)
                     .or_default()

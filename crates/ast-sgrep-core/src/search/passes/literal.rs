@@ -8,6 +8,7 @@ use crate::search::types::{SearchHit, SearchOptions};
 use crate::store::trigram_df::TrigramShortcut;
 use crate::store::IndexStore;
 use crate::Result;
+use memchr::memchr2;
 use rusqlite::params;
 pub fn literal_pass(
     store: &IndexStore,
@@ -24,6 +25,7 @@ pub fn literal_pass(
         literal_sql(store, options, parsed, needle)
     }
 }
+
 fn literal_trigram(
     store: &IndexStore,
     options: &SearchOptions,
@@ -36,8 +38,12 @@ fn literal_trigram(
     // trigrams derived from the needle are candidates, so any candidate's
     // posting list is a superset of true matches, and content_matches_literal
     // reverify restores exactness — poisoned dfs can change speed, not output.
-    if let TrigramShortcut::Match(tri) = store.trigram_df().scan_shortcut(store, needle) {
-        let query = crate::fts::escape_fts_term(&tri);
+    if let TrigramShortcut::Match(terms) = store.trigram_df().scan_shortcut(store, needle) {
+        let query = terms
+            .iter()
+            .map(|tri| crate::fts::escape_fts_term(tri))
+            .collect::<Vec<_>>()
+            .join(" AND ");
         return scan_trigram_matches(store, options, parsed, needle, &query);
     }
     let query = crate::fts::escape_fts_term(needle);
@@ -57,18 +63,21 @@ fn scan_trigram_matches(
     // budget, and ordering by (path, line_no) is restored in Rust over the
     // small candidate set — identical output for under-budget queries.
     //
-    // gauntlet-r13 (T1): for case-sensitive non-word needles the content
-    // reverify predicate is exactly GLOB '*<needle>*' with metacharacters
-    // escaped (same helper literal_sql uses), so it can be pushed into SQL.
-    // The doclist walk then skips TEXT materialization of path/language/
-    // content for rejected postings instead of paying valueToText per row and
-    // re-verifying in Rust. Output-identical: same rows, same predicate, same
-    // streaming order; word_mode and case_insensitive keep the Rust verify.
-    let push_reverify = !options.case_insensitive && parsed.mode != QueryMode::Word;
-    let sql = if push_reverify {
+    // gauntlet-r13 (T1): non-word reverify is GLOB (case-sensitive) or
+    // LIKE ESCAPE (ASCII case-insensitive, same predicate as literal_sql).
+    // Pushed into SQL so rejected postings never pay valueToText + Rust
+    // reverify. Word mode and non-ASCII CI keep the Rust verify.
+    let word_mode = parsed.mode == QueryMode::Word;
+    let sql_like = options.case_insensitive && !word_mode && needle.is_ascii();
+    let sql_glob = !options.case_insensitive && !word_mode;
+    let sql = if sql_like {
         "SELECT f.path, f.language, l.line_no, l.content \
          FROM lines_trigram JOIN lines l ON l.rowid = lines_trigram.rowid JOIN files f ON f.id = l.file_id \
-         WHERE lines_trigram MATCH ?1 AND l.content GLOB ?2"
+         WHERE lines_trigram MATCH ?1 AND l.content LIKE ?2 ESCAPE '\\' LIMIT ?3"
+    } else if sql_glob {
+        "SELECT f.path, f.language, l.line_no, l.content \
+         FROM lines_trigram JOIN lines l ON l.rowid = lines_trigram.rowid JOIN files f ON f.id = l.file_id \
+         WHERE lines_trigram MATCH ?1 AND l.content GLOB ?2 LIMIT ?3"
     } else {
         "SELECT f.path, f.language, l.line_no, l.content \
          FROM lines_trigram JOIN lines l ON l.rowid = lines_trigram.rowid JOIN files f ON f.id = l.file_id \
@@ -81,11 +90,28 @@ fn scan_trigram_matches(
     );
     let mut stmt = store.connection().prepare_cached(sql)?;
     let glob_pattern = format!("*{}*", crate::store::sql::escape_glob_literal(needle));
+    let like_pattern = format!("%{}%", crate::store::sql::escape_like_term(needle));
     let needle_lower = options.case_insensitive.then(|| needle.to_lowercase());
-    let word_mode = parsed.mode == QueryMode::Word;
+    let cap = options.limit.max(100) as i64;
+    // Lang-filtered scans must not SQL-LIMIT: skipped languages consume posting
+    // slots in Rust. Unique hybrid has no lang filter, so LIMIT equals the
+    // previous lazy break (posting order, first `cap` LIKE/GLOB rows).
+    let sql_cap = if options.lang_filter.is_some() { i64::MAX } else { cap };
     let mut hits = Vec::new();
-    if push_reverify {
-        let rows = stmt.query_map(params![query, glob_pattern], map_line_row)?;
+    if sql_like {
+        let rows = stmt.query_map(params![query, like_pattern, sql_cap], map_line_row)?;
+        for row in rows {
+            let (path, language, line_no, content) = row?;
+            if !matches_lang(language.as_deref(), options.lang_filter.as_deref()) {
+                continue;
+            }
+            hits.push(asgrep_line_hit(path, language, line_no, content, 1.0));
+            if hits.len() >= options.limit.max(100) {
+                break;
+            }
+        }
+    } else if sql_glob {
+        let rows = stmt.query_map(params![query, glob_pattern, sql_cap], map_line_row)?;
         for row in rows {
             let (path, language, line_no, content) = row?;
             if !matches_lang(language.as_deref(), options.lang_filter.as_deref()) {
@@ -200,7 +226,7 @@ fn literal_sql(
 }
 
 /// Shared case-fold + word/substring gate used by both trigram and SQL residual paths.
-/// Collapses the duplicated `if let Some(needle_lower)` decision tree (pass 8).
+/// ASCII needles skip the per-line `to_lowercase()` allocation (unique-hybrid prefilter).
 fn content_matches_literal(
     content: &str,
     needle: &str,
@@ -208,9 +234,48 @@ fn content_matches_literal(
     word_mode: bool,
 ) -> bool {
     match needle_lower {
+        Some(nl) if needle.is_ascii() && content.is_ascii() => {
+            has_ascii_ci_match(content.as_bytes(), nl.as_bytes(), word_mode)
+        }
         Some(nl) => has_literal_match(&content.to_lowercase(), nl, word_mode),
         None => has_literal_match(content, needle, word_mode),
     }
+}
+
+fn has_ascii_ci_match(haystack: &[u8], needle: &[u8], word_mode: bool) -> bool {
+    if needle.is_empty() {
+        return true;
+    }
+    if needle.len() > haystack.len() {
+        return false;
+    }
+    let first_lo = needle[0].to_ascii_lowercase();
+    let first_up = needle[0].to_ascii_uppercase();
+    let mut from = 0;
+    while from + needle.len() <= haystack.len() {
+        let Some(off) = memchr2(first_lo, first_up, &haystack[from..]) else {
+            return false;
+        };
+        let pos = from + off;
+        if pos + needle.len() > haystack.len() {
+            return false;
+        }
+        if haystack[pos..pos + needle.len()].eq_ignore_ascii_case(needle)
+            && (!word_mode || ascii_word_boundary(haystack, pos, needle.len()))
+        {
+            return true;
+        }
+        from = pos + 1;
+    }
+    false
+}
+
+fn ascii_word_boundary(haystack: &[u8], pos: usize, needle_len: usize) -> bool {
+    let is_word = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
+    let left_ok = pos == 0 || !is_word(haystack[pos - 1]);
+    let end = pos + needle_len;
+    let right_ok = end == haystack.len() || !is_word(haystack[end]);
+    left_ok && right_ok
 }
 
 fn has_literal_match(haystack: &str, needle: &str, word_mode: bool) -> bool {
@@ -220,4 +285,26 @@ fn has_literal_match(haystack: &str, needle: &str, word_mode: bool) -> bool {
     haystack
         .match_indices(needle)
         .any(|(pos, _)| is_word_boundary(haystack, pos, needle.len()))
+}
+
+#[cfg(test)]
+mod ascii_ci_tests {
+    use super::content_matches_literal;
+
+    fn agree(content: &str, needle: &str, word: bool) {
+        let lower = needle.to_lowercase();
+        let ascii = content_matches_literal(content, needle, Some(&lower), word);
+        let unicode = super::has_literal_match(&content.to_lowercase(), &lower, word);
+        assert_eq!(ascii, unicode, "content={content:?} needle={needle:?} word={word}");
+    }
+
+    #[test]
+    fn ascii_ci_matches_unicode_lowercase_on_ascii_inputs() {
+        for content in ["Encode payload", "encode payload", "ENCODE", "x_encode_y", "en"] {
+            for needle in ["encode", "Encode", "payload"] {
+                agree(content, needle, false);
+                agree(content, needle, true);
+            }
+        }
+    }
 }
