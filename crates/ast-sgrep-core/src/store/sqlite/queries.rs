@@ -741,6 +741,79 @@ impl IndexStore {
             None => query_cached_map(&self.conn, &sql, params![signature], map),
         }
     }
+    /// Hybrid structural stage: only matching signatures in the cascade files.
+    ///
+    /// Unbounded `pattern_nodes_matching` walks every row for a signature.
+    /// `INDEXED BY idx_pattern_nodes_file` walked every node in those files
+    /// (~1k–25k/file). Join `files` to `pattern_nodes` and let SQLite seek
+    /// `idx_pattern_nodes_file_sig` `(file_id, signature)`. No `ORDER BY`:
+    /// finish sorts the keep-set. Placeholders quantized to a power of two
+    /// ≥ 8, padded with `''` (no indexed path/signature is empty).
+    pub(crate) fn pattern_nodes_matching_for_files(
+        &self,
+        signatures: &[String],
+        lang: Option<&str>,
+        files: &std::collections::HashSet<String>,
+    ) -> Result<Vec<(PatternNodeRow, String)>> {
+        if files.is_empty() || signatures.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut paths: Vec<String> = files.iter().cloned().collect();
+        paths.sort_unstable();
+        let path_bucket = paths.len().next_power_of_two().max(8);
+        if path_bucket > paths.len() {
+            paths.resize(path_bucket, String::new());
+        }
+        let mut sigs: Vec<String> = signatures.to_vec();
+        sigs.sort_unstable();
+        sigs.dedup();
+        let sig_n = sigs.len();
+        let sig_bucket = sig_n.next_power_of_two().max(8);
+        if sig_bucket > sig_n {
+            sigs.resize(sig_bucket, String::new());
+        }
+        let path_ph = (1..=path_bucket)
+            .map(|i| format!("?{i}"))
+            .collect::<Vec<_>>()
+            .join(",");
+        let sig_start = path_bucket + 1;
+        let sig_end = path_bucket + sig_bucket;
+        let sig_ph = (sig_start..=sig_end)
+            .map(|i| format!("?{i}"))
+            .collect::<Vec<_>>()
+            .join(",");
+        let mut sql = format!(
+            "SELECT f.path, f.language, n.line_start, n.line_end, n.excerpt, n.signature \
+             FROM files f JOIN pattern_nodes n ON n.file_id = f.id \
+             WHERE f.path IN ({path_ph}) AND n.signature IN ({sig_ph})"
+        );
+        if lang.is_some() {
+            sql.push_str(&format!(" AND f.language = ?{}", sig_end + 1));
+        }
+        let map = |r: &rusqlite::Row<'_>| {
+            Ok((
+                PatternNodeRow {
+                    path: r.get(0)?,
+                    language: r.get(1)?,
+                    line_start: r.get(2)?,
+                    line_end: r.get(3)?,
+                    excerpt: r.get(4)?,
+                },
+                r.get::<_, String>(5)?,
+            ))
+        };
+        let mut bind: Vec<&str> = paths.iter().map(String::as_str).collect();
+        bind.extend(sigs.iter().map(String::as_str));
+        if let Some(language) = lang {
+            bind.push(language);
+        }
+        query_cached_map(
+            &self.conn,
+            &sql,
+            rusqlite::params_from_iter(bind.iter()),
+            map,
+        )
+    }
     pub fn file_text(&self, path: &str) -> Result<Option<String>> {
         let lines = self.file_lines(path)?;
         if lines.is_empty() {

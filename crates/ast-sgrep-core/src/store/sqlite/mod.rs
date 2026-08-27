@@ -12,8 +12,9 @@ use std::sync::Arc;
 // 9 = repository lexicon. 10 = per-field semantic vectors (name/docs/body/graph).
 // 11 = scip_facts overlay (kgvi.2). 12 = tests/examples semantic vector.
 // 13 = callers lower() expression indexes (gauntlet-r11: calls_matching full-scan fix).
+// 14 = pattern_nodes (file_id, signature) composite for cascade structural seeks.
 // Never reuse a SCHEMA_VERSION for two migrations.
-const SCHEMA_VERSION: i64 = 13;
+const SCHEMA_VERSION: i64 = 14;
 const IMPORT_SELECT: &str =
     "SELECT f.path, f.language, i.module_path, i.line_no FROM imports i JOIN files f ON f.id = i.file_id";
 const SYM_LOC: &str = "SELECT f.path, s.name, f.language, s.line_start, s.line_end FROM symbols s JOIN files f ON f.id = s.file_id";

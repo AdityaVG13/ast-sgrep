@@ -23,7 +23,7 @@ use passes::symbol::{
     symbol_pass_for_files,
 };
 pub use planner::{follow_ups_for_hit, margin_is_decisive, plan_suggested_next};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::Path;
@@ -775,7 +775,17 @@ impl Searcher {
         let mut stage_query = parsed.clone();
         stage_query.terms.retain(|term| term.chars().count() >= 3);
 
-        let ast_matches = {
+        // Conceptual NL skips the whole structural stage: pattern-node
+        // matching on generic tokens (`query`, `graph`, `render`) owned the
+        // unique-hybrid p99 shortlist, and def/caller LIKE across the
+        // 100-file cascade is still 1–4 ms. Identifier queries keep pattern
+        // + defs + callers. Empty structural falls through to lexical
+        // survivors + embed (ht1h.3).
+        let conceptual =
+            crate::intent::classify(parsed) == crate::intent::QueryIntent::Conceptual;
+        let ast_matches = if conceptual {
+            Vec::new()
+        } else {
             let _span = crate::perf_profile::Span::start(
                 "hybrid_structural_index",
                 "search",
@@ -783,12 +793,8 @@ impl Searcher {
             );
             structural_index_pass(&self.store, &self.options, &stage_query, &lexical_files)?
         };
-        // Conceptual NL: pattern_nodes are cheap (~20 µs). Def/caller LIKE
-        // across the 100-file cascade is ~1-4 ms and is the unique-hybrid
-        // remainder after IVF is already sub-1 ms. Identifier queries keep
-        // the full structural pass.
         let mut structural = ast_matches;
-        if crate::intent::classify(parsed) != crate::intent::QueryIntent::Conceptual {
+        if !conceptual {
             structural.extend({
                 let _span = crate::perf_profile::Span::start(
                     "hybrid_symbol_pass",
@@ -979,32 +985,41 @@ fn structural_index_pass(
     use crate::rank::SCORE_PATTERN;
     use crate::search::types::{HitKind, SpanHitInput};
     let lang = options.lang_filter.as_deref();
-    let mut hits = Vec::new();
-    let mut seen = std::collections::HashSet::new();
+    let mut sig_to_term = HashMap::<String, String>::new();
     for term in &parsed.terms {
         if term.len() < 3 || !term.chars().all(|c| c == '_' || c.is_alphanumeric()) {
             continue;
         }
-        let signatures = ast_sgrep_lang::structural_term_signatures(term);
-        for sig in &signatures {
-            for row in store.pattern_nodes_matching(sig, lang)? {
-                if !allowed_files.contains(&row.path)
-                    || !seen.insert((row.path.clone(), row.line_start, row.line_end))
-                {
-                    continue;
-                }
-                hits.push(SearchHit::span(SpanHitInput {
-                    kind: HitKind::Pattern,
-                    file: row.path,
-                    line_start: row.line_start,
-                    line_end: row.line_end,
-                    score: SCORE_PATTERN * 0.85,
-                    excerpt: row.excerpt,
-                    symbol: Some(term.clone()),
-                    language: row.language,
-                }));
-            }
+        for sig in ast_sgrep_lang::structural_term_signatures(term) {
+            sig_to_term.entry(sig).or_insert_with(|| term.clone());
         }
+    }
+    if sig_to_term.is_empty() {
+        return Ok(Vec::new());
+    }
+    let signatures: Vec<String> = sig_to_term.keys().cloned().collect();
+    let mut hits = Vec::new();
+    let mut seen = HashSet::new();
+    for (row, signature) in
+        store.pattern_nodes_matching_for_files(&signatures, lang, allowed_files)?
+    {
+        if !seen.insert((row.path.clone(), row.line_start, row.line_end)) {
+            continue;
+        }
+        let term = sig_to_term
+            .get(&signature)
+            .cloned()
+            .unwrap_or(signature);
+        hits.push(SearchHit::span(SpanHitInput {
+            kind: HitKind::Pattern,
+            file: row.path,
+            line_start: row.line_start,
+            line_end: row.line_end,
+            score: SCORE_PATTERN * 0.85,
+            excerpt: row.excerpt,
+            symbol: Some(term),
+            language: row.language,
+        }));
     }
     Ok(hits)
 }
