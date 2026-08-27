@@ -220,9 +220,7 @@ fn ensure_vocab_table(store: &IndexStore) -> Result<(), crate::StoreError> {
 /// Bulk-load every (term, doc) pair from the ephemeral fts5vocab table.
 /// One ordered pass over the vocabulary per generation replaces O(terms)
 /// linear point-probes; entries then serve HashMap-speed df lookups.
-fn preload_vocab(
-    store: &IndexStore,
-) -> Result<HashMap<String, i64>, crate::StoreError> {
+fn preload_vocab(store: &IndexStore) -> Result<HashMap<String, i64>, crate::StoreError> {
     let conn = store.connection();
     let sql = format!("SELECT term, doc FROM {VOCAB_TABLE}");
     let mut stmt = conn

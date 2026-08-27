@@ -56,30 +56,60 @@ fn scan_trigram_matches(
     // Candidates stream in posting order, the loop stops at the retained
     // budget, and ordering by (path, line_no) is restored in Rust over the
     // small candidate set — identical output for under-budget queries.
+    //
+    // gauntlet-r13 (T1): for case-sensitive non-word needles the content
+    // reverify predicate is exactly GLOB '*<needle>*' with metacharacters
+    // escaped (same helper literal_sql uses), so it can be pushed into SQL.
+    // The doclist walk then skips TEXT materialization of path/language/
+    // content for rejected postings instead of paying valueToText per row and
+    // re-verifying in Rust. Output-identical: same rows, same predicate, same
+    // streaming order; word_mode and case_insensitive keep the Rust verify.
+    let push_reverify = !options.case_insensitive && parsed.mode != QueryMode::Word;
+    let sql = if push_reverify {
+        "SELECT f.path, f.language, l.line_no, l.content \
+         FROM lines_trigram JOIN lines l ON l.rowid = lines_trigram.rowid JOIN files f ON f.id = l.file_id \
+         WHERE lines_trigram MATCH ?1 AND l.content GLOB ?2"
+    } else {
+        "SELECT f.path, f.language, l.line_no, l.content \
+         FROM lines_trigram JOIN lines l ON l.rowid = lines_trigram.rowid JOIN files f ON f.id = l.file_id \
+         WHERE lines_trigram MATCH ?1"
+    };
     let _tri_span = crate::perf_profile::Span::start(
         "literal_trigram_scan",
         "search",
         "trigram doclist walk + join",
     );
-    let mut stmt = store.connection().prepare_cached(
-        "SELECT f.path, f.language, l.line_no, l.content
-         FROM lines_trigram JOIN lines l ON l.rowid = lines_trigram.rowid JOIN files f ON f.id = l.file_id WHERE lines_trigram MATCH ?1",
-    )?;
-    let rows = stmt.query_map(params![query], map_line_row)?;
+    let mut stmt = store.connection().prepare_cached(sql)?;
+    let glob_pattern = format!("*{}*", crate::store::sql::escape_glob_literal(needle));
     let needle_lower = options.case_insensitive.then(|| needle.to_lowercase());
     let word_mode = parsed.mode == QueryMode::Word;
     let mut hits = Vec::new();
-    for row in rows {
-        let (path, language, line_no, content) = row?;
-        if !matches_lang(language.as_deref(), options.lang_filter.as_deref()) {
-            continue;
+    if push_reverify {
+        let rows = stmt.query_map(params![query, glob_pattern], map_line_row)?;
+        for row in rows {
+            let (path, language, line_no, content) = row?;
+            if !matches_lang(language.as_deref(), options.lang_filter.as_deref()) {
+                continue;
+            }
+            hits.push(asgrep_line_hit(path, language, line_no, content, 1.0));
+            if hits.len() >= options.limit.max(100) {
+                break;
+            }
         }
-        if !content_matches_literal(&content, needle, needle_lower.as_deref(), word_mode) {
-            continue;
-        }
-        hits.push(asgrep_line_hit(path, language, line_no, content, 1.0));
-        if hits.len() >= options.limit.max(100) {
-            break;
+    } else {
+        let rows = stmt.query_map(params![query], map_line_row)?;
+        for row in rows {
+            let (path, language, line_no, content) = row?;
+            if !matches_lang(language.as_deref(), options.lang_filter.as_deref()) {
+                continue;
+            }
+            if !content_matches_literal(&content, needle, needle_lower.as_deref(), word_mode) {
+                continue;
+            }
+            hits.push(asgrep_line_hit(path, language, line_no, content, 1.0));
+            if hits.len() >= options.limit.max(100) {
+                break;
+            }
         }
     }
     drop(_tri_span);

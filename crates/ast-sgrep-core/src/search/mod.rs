@@ -89,6 +89,11 @@ pub struct Searcher {
     semantic_cache: Arc<Mutex<Option<SemanticCache>>>,
     lexicon_cache: Mutex<Option<(i64, crate::lexicon::Lexicon)>>,
     response_cache: Mutex<ResponseCache>,
+    /// S1: generation-keyed memo for snapshot-stamp parts that are pure
+    /// functions of index contents (worktree revision + sidecar fingerprint).
+    stamp_cache: Mutex<Option<(IndexGeneration, i64, Option<String>)>>,
+    /// S1: drained degraded notes from the latest memoized manifest probe.
+    stamp_degraded: Mutex<Vec<DegradedChannel>>,
 }
 /// Fail closed when callers request optional neural/rerank paths that were
 pub fn validate_search_feature_flags(options: &SearchOptions) -> Result<()> {
@@ -170,6 +175,8 @@ impl Searcher {
                 order: std::collections::VecDeque::new(),
                 enabled: true,
             }),
+            stamp_cache: Mutex::new(None),
+            stamp_degraded: Mutex::new(Vec::new()),
         }
     }
     pub fn store(&self) -> &IndexStore {
@@ -198,6 +205,43 @@ impl Searcher {
             local,
             lexicon,
         })
+    }
+    /// gauntlet-r5 (S1): generation-keyed memo for the expensive, purely
+    /// generation-derived parts of `snapshot_stamp`. The chunk-stats scan
+    /// (COUNT + MAX(length(vector)) over every semantic row), the worktree
+    /// revision (MAX(mtime_secs) over files), and the sidecar fingerprint are
+    /// functions of the index contents alone: any change to them is gated by
+    /// a generation counter bump (external data_version or the local
+    /// counters — br-yp1 semantics). `git_head` deliberately stays uncached:
+    /// it reads the worktree's HEAD file and can move without any index
+    /// write. Memo validity therefore keys on IndexGeneration; on any pragma
+    /// failure we skip the memo entirely (fail-open to recompute, hdwh).
+    fn cached_stamp_parts(&self, gen: IndexGeneration) -> Option<(i64, Option<String>)> {
+        {
+            let guard = lock_clear_on_poison(&self.stamp_cache, |_| {});
+            if let Some((_, rev, manifest)) = guard.as_ref().filter(|(g, _, _)| *g == gen) {
+                return Some((*rev, manifest.clone()));
+            }
+        }
+        let worktree_revision = self.store.worktree_revision().ok()?;
+        let mut degraded = Vec::new();
+        let semantic_manifest = self.semantic_manifest_impl(&mut degraded);
+        // A mismatched-sidecar verdict depends on the stored sidecar vs the
+        // live stats comparison and must stay loud per query; only the
+        // memo-safe parts are cached here. Unreadable-sidecar notes are
+        // drained by the caller so each response reports its own probe.
+        {
+            let mut guard =
+                lock_clear_on_poison(&self.stamp_degraded, |v: &mut Vec<DegradedChannel>| {
+                    *v = Vec::new()
+                });
+            *guard = degraded;
+        }
+        {
+            let mut guard = lock_clear_on_poison(&self.stamp_cache, |_| {});
+            *guard = Some((gen, worktree_revision, semantic_manifest.clone()));
+        }
+        Some((worktree_revision, semantic_manifest))
     }
     fn cache_key(&self, kind: &str, query: &str) -> String {
         // Full SearchOptions identity (nyui).
@@ -302,6 +346,18 @@ impl Searcher {
         }
         Some(hex32(&stored))
     }
+    /// S1 helper: manifest probe without the generation parameter. The
+    /// generation enters only through `expected_semantic_fingerprint`, which
+    /// reads generation-gated stats; callers that already hold a fresh
+    /// `IndexGeneration` use this variant together with `cached_stamp_parts`.
+    fn semantic_manifest_impl(&self, degraded: &mut Vec<DegradedChannel>) -> Option<String> {
+        let generation = self
+            .store
+            .search_data_versions()
+            .map(|(local, _)| local)
+            .unwrap_or_default();
+        self.semantic_manifest(generation, degraded)
+    }
 
     /// Fingerprint the sidecar should carry for the current snapshot (d3l5).
     fn expected_semantic_fingerprint(&self, generation: i64) -> Option<[u8; 32]> {
@@ -391,15 +447,48 @@ impl Searcher {
     /// Describe the snapshot a response was read from (d3l5).
     fn snapshot_stamp(&self, generation: i64) -> Result<SnapshotStamp> {
         let mut degraded_channels = Vec::new();
-        let semantic_manifest = self.semantic_manifest(generation, &mut degraded_channels);
+        // S1: the generation-derived parts (worktree revision, sidecar
+        // fingerprint via the stats scan) are memoized per IndexGeneration.
+        // Fall back to the direct computation whenever the memo cannot be
+        // consulted (pragma failure) so behavior only ever gets slower, never
+        // different.
+        let (worktree_revision, semantic_manifest) = match self.index_gen() {
+            Some(gen) => self.cached_stamp_parts(gen).unwrap_or_else(|| {
+                let mut degraded = Vec::new();
+                (
+                    self.store.worktree_revision().unwrap_or_default(),
+                    self.semantic_manifest(generation, &mut degraded),
+                )
+            }),
+            None => {
+                let mut degraded = Vec::new();
+                (
+                    self.store.worktree_revision()?,
+                    self.semantic_manifest(generation, &mut degraded),
+                )
+            }
+        };
+        degraded_channels.extend(self.take_stamp_degraded());
         Ok(SnapshotStamp {
             generation,
             schema_version: self.store.schema_version(),
-            worktree_revision: self.store.worktree_revision()?,
+            worktree_revision,
             git_head: read_git_head(&self.options.root),
             semantic_manifest,
             degraded_channels,
         })
+    }
+    /// S1: degraded-channel notes produced by the most recent memoized
+    /// manifest probe (`sidecar_unreadable` only — a mismatch verdict is never
+    /// memoized, see `cached_stamp_parts`). Empty when the stamp was built
+    /// without the memo. The notes are drained once so each response reports
+    /// exactly what its own probe observed.
+    fn take_stamp_degraded(&self) -> Vec<DegradedChannel> {
+        let mut guard =
+            lock_clear_on_poison(&self.stamp_degraded, |v: &mut Vec<DegradedChannel>| {
+                *v = Vec::new()
+            });
+        std::mem::take(&mut *guard)
     }
 
     fn cached(
@@ -525,13 +614,13 @@ impl Searcher {
                 }
             };
             finish::finish_response_checked_lazy(
-                    &parsed,
-                    &self.options,
-                    hits,
-                    true,
-                    Some(&self.store),
-                    true,
-                )
+                &parsed,
+                &self.options,
+                hits,
+                true,
+                Some(&self.store),
+                true,
+            )
         })
     }
     /// Raw hits for one side of a conjunction (P0 channel-conjunction).

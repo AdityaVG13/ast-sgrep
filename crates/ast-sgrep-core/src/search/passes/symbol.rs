@@ -56,12 +56,20 @@ fn restrict_to_files(
     // prepare_cached stops re-parsing a fresh statement per distinct file
     // count (the tail-profile showed sqlite3RunParser/yy_reduce churn from
     // per-count statement text).
+    //
+    // gauntlet-r11 fix: round UP with `n.next_power_of_two()`. The old
+    // `(n - 1).next_power_of_two()` produced bucket < n when n was exactly a
+    // power of two plus one (n=9 -> 8), leaving 8 placeholders while all 9
+    // paths were bound — "Wrong number of parameters passed to query" for any
+    // hybrid query whose prefilter survived exactly 2^k + 1 files.
     let n = paths.len();
-    let bucket = if n == 0 {
-        0
-    } else {
-        (n - 1).next_power_of_two().max(8)
-    };
+    if n == 0 {
+        // An empty allow-list admits nothing; produce a valid, always-false
+        // predicate instead of the old malformed `IN ()`.
+        where_clause.push_str(" AND 0 = 1");
+        return;
+    }
+    let bucket = n.next_power_of_two().max(8);
     where_clause.push_str(" AND f.path IN (");
     where_clause.push_str(&vec!["?"; bucket].join(","));
     where_clause.push(')');
@@ -107,7 +115,15 @@ fn caller_rows_to_hits_opts(
     store_for_resolution: Option<&IndexStore>,
     attach_excerpts: bool,
 ) -> Result<Vec<SearchHit>> {
-    caller_rows_to_hits_resolved_opts(store, rows, options, parsed, mode, store_for_resolution, attach_excerpts)
+    caller_rows_to_hits_resolved_opts(
+        store,
+        rows,
+        options,
+        parsed,
+        mode,
+        store_for_resolution,
+        attach_excerpts,
+    )
 }
 
 /// dvc4: same as above, but classifies how each name match resolved when a
@@ -218,8 +234,7 @@ pub(crate) fn attach_indexed_excerpts_if_empty(
         }
         let before = hit.line_start.saturating_sub(u32::try_from(0).unwrap_or(0));
         let _ = before;
-        hit.excerpt = store
-            .indexed_excerpt_in_range(&hit.file, hit.line_start, hit.line_end)?;
+        hit.excerpt = store.indexed_excerpt_in_range(&hit.file, hit.line_start, hit.line_end)?;
     }
     Ok(())
 }

@@ -227,8 +227,6 @@ fn read_pattern_bytes_capped(path: &Path) -> Option<Vec<u8>> {
     }
 }
 
-
-
 /// Expand one directory for the BFS walker: returns its directly-held files
 /// (gitignore-filtered) and pruned child directories. `dir` is the dir being
 /// expanded; `root` anchors gitignore rel-path computation.

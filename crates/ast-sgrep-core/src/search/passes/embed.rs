@@ -244,6 +244,16 @@ pub(crate) fn embed_pass_for_files_with_rescoring(
     if parsed.terms.is_empty() || !options.use_embed || allowed_files.is_empty() {
         return Ok(Vec::new());
     }
+    // gauntlet-r4 (E1): when both persistent semantic sources are globally
+    // empty, the three per-file fetch loops below provably return nothing for
+    // ANY allowed_files set — skip them. Output-identical by construction:
+    // with zero chunks and zero embeddings every loop contributes no rows and
+    // `survivors.is_empty()` returns Ok(Vec::new()) anyway; this only skips
+    // the work of proving it one point-query at a time. Non-empty stores pay
+    // one microsecond-scale EXISTS probe per query.
+    if store.semantic_sources_empty()? {
+        return Ok(Vec::new());
+    }
     let query = parsed.terms.join(" ");
     let mut survivors =
         store.semantic_chunks_for_files(allowed_files, options.lang_filter.as_deref())?;
