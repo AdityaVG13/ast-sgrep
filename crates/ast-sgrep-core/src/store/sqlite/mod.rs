@@ -703,7 +703,7 @@ impl IndexStore {
         ] {
             self.delete_meta(key)?;
         }
-        crate::semantic_ann::mark_semantic_ivf_stale(self)?;
+        crate::semantic_ann::drop_semantic_ivf(self)?;
         self.bump_semantic_data_version()
     }
     fn bump_index_data_version(&self) -> Result<()> {
@@ -971,7 +971,7 @@ impl IndexStore {
             self.bump_semantic_data_version()?;
             self.bump_meta_u64("lexicon_data_version", 1)?;
             self.set_meta("lexicon_dirty", "1")?;
-            crate::semantic_ann::mark_semantic_ivf_stale(self)
+            crate::semantic_ann::drop_semantic_ivf(self)
         })?;
         let _ = self.conn.execute_batch("VACUUM");
         Ok(())

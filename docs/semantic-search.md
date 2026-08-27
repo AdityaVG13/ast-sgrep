@@ -144,6 +144,8 @@ asgrep --ann-threshold 5000 index .
 
 The version-2 IVF sidecar stores a bounded cluster index followed by 4096-byte-aligned vectors. Open validates and decodes the cluster metadata, then retains the vector payload as a read-only mmap; it does not deserialize vectors into heap memory. Atomic temp-file publication keeps existing mappings valid, and a **fingerprint** mismatch triggers rebuild. Language-filtered searches use their filtered in-memory vectors and never overwrite the shared global sidecar.
 
+Delta `asgrep index` after a file edit reassigns every current vector to the existing IVF centroids and rewrites cluster postings. It does not rerun k-means. Centroids stay frozen until `asgrep reindex` (or an embedding-identity rewrite) rebuilds them. Search still refuses a sidecar whose fingerprint no longer matches the store.
+
 On a 10,000-vector medium fixture, measured p99 was 0.963 ms cold, 0.135 ms for a fresh inode under normal cache policy, and 0.037 ms warm. Methodology and byte accounting are recorded in [semantic IVF mmap validation](validation/semantic-ivf-mmap.md).
 
 LSP `initializationOptions` also accepts `annThreshold`, see [use-cases.md](use-cases.md).

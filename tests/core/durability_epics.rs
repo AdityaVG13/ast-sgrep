@@ -143,7 +143,10 @@ fn remove_file_deletes_struct_body_meta_and_ivf() {
     assert!(store.get_meta(&format!("struct:{path}")).unwrap().is_none());
     assert!(store.get_meta(&format!("body:{path}")).unwrap().is_none());
     assert!(store.get_meta(&format!("eol:{path}")).unwrap().is_none());
-    assert!(!ivf.exists(), "IVF sidecar must be removed on remove_file");
+    assert!(
+        ivf.exists(),
+        "delta remove_file must keep the IVF sidecar so centroids can be reused"
+    );
     assert_eq!(
         store.get_meta("semantic_ivf_stale").unwrap().as_deref(),
         Some("1")
@@ -540,9 +543,10 @@ fn body_hash_mismatch_prevents_structure_skip() {
 }
 
 /// ubs-semantic-ivf-stale-swallow-skif: mark_semantic_ivf_stale must set the gate
-/// bit and remove an on-disk sidecar (Result, not fire-and-forget).
+/// bit. The sidecar stays on disk so delta rebuild can reassign to existing
+/// centroids; drop_semantic_ivf is the wipe path.
 #[test]
-fn mark_semantic_ivf_stale_sets_flag_and_invalidates_sidecar() {
+fn mark_semantic_ivf_stale_sets_flag_and_keeps_sidecar() {
     let temp = TempDir::new().unwrap();
     let store = IndexStore::open(temp.path(), None).unwrap();
     let sidecar = ast_sgrep_core::semantic_ivf::semantic_ivf_path(store.db_path());
@@ -555,13 +559,17 @@ fn mark_semantic_ivf_stale_sets_flag_and_invalidates_sidecar() {
         "stale flag must be durable so rebuild gate cannot miss it"
     );
     assert!(
-        !sidecar.exists(),
-        "IVF sidecar must be invalidated when mark succeeds"
+        sidecar.exists(),
+        "delta stale-mark must keep the IVF sidecar for centroid reuse"
     );
-    // Idempotent second mark still Ok and keeps the flag.
     ast_sgrep_core::semantic_ann::mark_semantic_ivf_stale(&store).unwrap();
     assert_eq!(
         store.get_meta("semantic_ivf_stale").unwrap().as_deref(),
         Some("1")
+    );
+    ast_sgrep_core::semantic_ann::drop_semantic_ivf(&store).unwrap();
+    assert!(
+        !sidecar.exists(),
+        "drop_semantic_ivf must remove the sidecar on a full wipe"
     );
 }

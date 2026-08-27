@@ -320,6 +320,103 @@ fn adaptive_ivf_recall_at_10_stays_within_quality_error_budget() {
 }
 
 #[test]
+fn reassign_all_keeps_centroids_when_chunk_count_drifts() {
+    let dim = 8usize;
+    let seed = 0xA11_0516_u64;
+    let base = normalized_flat_vectors(64, dim, seed);
+    let mut index = SemanticAnnIndex::build_from_flat(&base, dim);
+    let centroids = index.centroids().to_vec();
+    assert!(!centroids.is_empty());
+
+    let grown = normalized_flat_vectors(80, dim, seed);
+    assert!(index.reassign_all(&grown, dim));
+    assert_eq!(index.centroids(), centroids.as_slice());
+    assert!(index.validate_partition(80));
+
+    let shrunk = normalized_flat_vectors(48, dim, seed);
+    assert!(index.reassign_all(&shrunk, dim));
+    assert_eq!(index.centroids(), centroids.as_slice());
+    assert!(index.validate_partition(48));
+
+    assert!(
+        !index.reassign_all(&grown, 4),
+        "dim mismatch must refuse reassign"
+    );
+    let mut empty = SemanticAnnIndex::build_from_flat(&[], dim);
+    assert!(!empty.reassign_all(&grown, dim));
+}
+
+fn adaptive_recall_at_10(
+    index: &SemanticAnnIndex,
+    flat: &[f32],
+    dim: usize,
+    vector_count: usize,
+) -> f64 {
+    const RECALL_SLO: f64 = 0.99;
+    let limit = 10usize;
+    let mut matches = 0usize;
+    let mut expected = 0usize;
+    let candidate_ceiling = (vector_count * 95).div_ceil(100);
+    for qi in (0..vector_count).step_by(8) {
+        let query = &flat[qi * dim..(qi + 1) * dim];
+        let exact: HashSet<_> = index
+            .search_flat_with_probes(flat, dim, query, limit, Some(usize::MAX))
+            .into_iter()
+            .map(|(idx, _)| idx)
+            .collect();
+        let candidates = index.candidate_indices(query, None);
+        assert!(
+            candidates.len() <= candidate_ceiling,
+            "adaptive probing scanned {} of {vector_count} candidates, above the 95% ceiling",
+            candidates.len()
+        );
+        let adaptive: HashSet<_> = index
+            .search_flat(flat, dim, query, limit)
+            .into_iter()
+            .map(|(idx, _)| idx)
+            .collect();
+        matches += exact.intersection(&adaptive).count();
+        expected += exact.len();
+    }
+    let recall = matches as f64 / expected as f64;
+    eprintln!("reassign adaptive IVF n={vector_count} recall@10={recall:.6}");
+    let miss_rate = 1.0 - recall;
+    let burn_rate = miss_rate / (1.0 - RECALL_SLO);
+    assert!(
+        burn_rate <= 1.0 + f64::EPSILON,
+        "centroid-preserving reassign exceeded quality error budget: n={vector_count} recall@10={recall:.6}, burn_rate={burn_rate:.3}"
+    );
+    recall
+}
+
+#[test]
+fn centroid_preserving_reassign_keeps_adaptive_recall_after_appends() {
+    let dim = 32usize;
+    let seed = 0x5D0_036_u64;
+    let base_n = 2048usize;
+    let base = normalized_flat_vectors(base_n, dim, seed);
+    let mut index = SemanticAnnIndex::build_from_flat(&base, dim);
+    let centroids = index.centroids().to_vec();
+    adaptive_recall_at_10(&index, &base, dim, base_n);
+
+    for extra in [1usize, 10, 50] {
+        let n = base_n + extra;
+        let flat = normalized_flat_vectors(n, dim, seed);
+        assert!(
+            index.reassign_all(&flat, dim),
+            "reassign must succeed after +{extra} vectors"
+        );
+        assert_eq!(
+            index.centroids(),
+            centroids.as_slice(),
+            "reassign must not rebuild centroids after +{extra}"
+        );
+        assert!(index.validate_partition(n));
+        adaptive_recall_at_10(&index, &flat, dim, n);
+    }
+}
+
+#[test]
 #[ignore = "release-mode ANN recall/latency tradeoff; gated by workflow_dispatch job ann-ivf-scale"]
 fn adaptive_ivf_tradeoff_at_2048_and_10000_vectors() {
     let dim = 32usize;

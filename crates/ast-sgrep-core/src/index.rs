@@ -673,6 +673,11 @@ impl Indexer {
             crate::semantic_ivf::invalidate_semantic_ivf(self.store.db_path())?;
             return Ok(());
         }
+        if self.options.force_reindex {
+            // Explicit `asgrep reindex` rebuilds centroids. Drop the sidecar so
+            // the stale-reassign path cannot reuse the previous k-means.
+            crate::semantic_ivf::invalidate_semantic_ivf(self.store.db_path())?;
+        }
         let chunks = self.store.all_semantic_chunks(None)?;
         crate::semantic_ann::rebuild_semantic_ivf_sidecar(
             self.store(),

@@ -168,6 +168,14 @@ impl SemanticAnnIndex {
         self.validate_partition(chunk_count)
     }
 
+    pub fn centroids(&self) -> &[Vec<f32>] {
+        &self.centroids
+    }
+
+    pub fn centroid_count(&self) -> usize {
+        self.centroids.len()
+    }
+
     /// `probes`: None/0 = at most 90% of populated clusters; ≥ n_clusters = exact.
     pub fn candidate_indices(&self, query: &[f32], probes: Option<usize>) -> Vec<usize> {
         if self.centroids.is_empty() {
@@ -234,11 +242,38 @@ impl SemanticAnnIndex {
         let q = normalize_vec(query);
         score_members(&q, flat, dim, n, &self.candidate_indices(&q, probes), limit)
     }
-    pub fn reassign_all(&mut self, flat: &[f32], dim: usize) {
-        if flat.is_empty() || dim == 0 {
-            return;
+    /// Keep existing centroids and rebuild cluster membership for `flat`.
+    ///
+    /// Delta reindex uses this so a chunk-count change does not pay full k-means.
+    /// Returns false when this index cannot reassign (empty or dim-mismatched
+    /// centroids); the caller should fall through to `build_from_flat`.
+    pub fn reassign_all(&mut self, flat: &[f32], dim: usize) -> bool {
+        let _span = crate::perf_profile::Span::start(
+            "semantic_ivf_reassign",
+            "semantic",
+            "SemanticAnnIndex::reassign_all (keep centroids)",
+        );
+        let n = flat.len().checked_div(dim).unwrap_or(0);
+        if n == 0 || dim == 0 || self.centroids.is_empty() {
+            return false;
         }
-        *self = Self::build_from_flat(flat, dim);
+        if self.centroids.iter().any(|centroid| centroid.len() != dim) {
+            return false;
+        }
+        let mut owned = flat.to_vec();
+        for i in 0..n {
+            normalize_vec_in_place(&mut owned[i * dim..(i + 1) * dim]);
+        }
+        let assignments: Vec<usize> = (0..n)
+            .into_par_iter()
+            .map(|i| nearest_centroid(flat_row(&owned, dim, i), &self.centroids))
+            .collect();
+        let mut clusters = vec![Vec::new(); self.centroids.len()];
+        for (idx, &cluster) in assignments.iter().enumerate() {
+            clusters[cluster].push(idx);
+        }
+        self.clusters = clusters;
+        true
     }
 }
 pub fn flatten_vectors_for_search(chunks: &[SemanticChunkRow], dim: usize) -> Result<Vec<f32>> {
@@ -488,11 +523,23 @@ pub fn clear_semantic_ivf_session_cache() {
 }
 
 /// Mark IVF sidecar dirty after semantic-affecting mutations.
+///
+/// Keeps the on-disk sidecar so a later delta rebuild can reassign members to
+/// existing centroids. Search still ignores the file on fingerprint mismatch.
+/// Call [`drop_semantic_ivf`] when the centroid set itself must die (full wipe
+/// or embedding-identity rewrite).
 pub fn mark_semantic_ivf_stale(store: &IndexStore) -> Result<()> {
     if store.get_meta("semantic_ivf_stale")?.as_deref() != Some("1") {
         store.set_meta("semantic_ivf_stale", "1")?;
     }
     lock_session_cache().clear();
+    Ok(())
+}
+
+/// Drop the IVF sidecar and mark it stale. Used on semantic wipes so the next
+/// rebuild cannot reassign onto a centroid set that no longer matches the store.
+pub fn drop_semantic_ivf(store: &IndexStore) -> Result<()> {
+    mark_semantic_ivf_stale(store)?;
     invalidate_semantic_ivf(store.db_path())?;
     Ok(())
 }
@@ -637,8 +684,10 @@ pub fn rebuild_semantic_ivf_sidecar(
     Ok(())
 }
 
-/// When the IVF sidecar is marked stale but topology still matches, reassign members
-/// in place instead of a full rebuild.
+/// When the IVF sidecar is marked stale, reassign every current vector to the
+/// persisted centroids and rewrite postings. Chunk-count drift is expected on
+/// real edits; only dim mismatch, a missing sidecar, or empty centroids fall
+/// through to full k-means.
 fn reassign_stale_ivf_partition(
     store: &IndexStore,
     chunks: &[SemanticChunkRow],
@@ -650,13 +699,15 @@ fn reassign_stale_ivf_partition(
     let Some(ivf) = load_semantic_ivf_unchecked(&semantic_ivf_path(store.db_path()))? else {
         return Ok(false);
     };
-    if ivf.chunk_count() != chunks.len() || ivf.dim != dim {
+    if ivf.dim != dim || ivf.index.centroid_count() == 0 {
         return Ok(false);
     }
     let vectors = flatten_vectors_for_search(chunks, dim)?;
     let mut index = ivf.index.clone();
     drop(ivf);
-    index.reassign_all(&vectors, dim);
+    if !index.reassign_all(&vectors, dim) {
+        return Ok(false);
+    }
     let (fingerprint, db_key) = ann_session_key(store, chunks)?;
     let published = save_semantic_ivf_with_publication(
         &semantic_ivf_path(store.db_path()),
