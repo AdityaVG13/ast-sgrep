@@ -17,7 +17,7 @@ Each function or method contributes up to 32 distinct child spans. One-line func
 
 At search time, child vectors are compared by cosine similarity (or IVF-ANN at scale), grouped by parent, and ranked by the maximum child score. One parent result is returned with up to three highest-scoring raw source children as its snippet; enrichment text is used only to produce vectors and is never exposed as source. This gives fine-grained matching without losing a meaningful read unit or letting a large function consume multiple result slots.
 
-Each chunk also stores separate vectors for its name metadata, documentation, body, graph neighborhood, and tests or usage examples. Test/example text is recognized from conventional test/example paths and symbols, plus example-bearing documentation. Conceptual queries weight docs, body, and examples; symbol queries weight names; structural behavior queries weight body, graph, and examples. JSON embed hits expose the available similarities in `embed_fields`, and human-readable evidence includes `embed_field:<field>=<score>` terms.
+Each chunk also stores separate vectors for its name metadata, documentation, body, graph neighborhood, and tests or usage examples. Test/example text is recognized from conventional test/example paths and symbols, plus example-bearing documentation. Conceptual queries weight docs, body, and examples; symbol queries weight names; structural behavior queries weight body, graph, and examples. Search ranks concatenated chunk vectors first (from the IVF mmap at scale), then fetches and rescores only the top-N survivors, and only the intent-weighted field columns. JSON embed hits expose those weighted similarities in `embed_fields`, and human-readable evidence includes `embed_field:<field>=<score>` for weighted fields only. Literal intent keeps the concatenated score and omits field terms.
 
 Schema version 6 clears legacy whole-symbol vectors, cached vectors, backend/model identity, and stored file fingerprints. The next index refresh rebuilds every file into the child-to-parent layout, so old and new layouts cannot mix. Backend model identity is persisted for hashed semantic and in-process neural vectors; indexing refreshes and search refuses stale vectors after a configured model change. Indexes that still record `cloud` or `ollama` hard-error until `asgrep reindex`.
 
@@ -101,10 +101,12 @@ With `--json`, defaults to **agent** format.
 | &lt; `ann_threshold` symbols (default 2000) | Brute-force cosine over all vectors | Sub-millisecond |
 | ≥ threshold | IVF-ANN with persisted `.asgrep/semantic.ivf` | Fast approximate NN; no k-means rebuild on restart |
 
-Adaptive search probes at most 90% of populated clusters by default. The bound
-is deliberate: the 2048-vector quality fixture misses the 0.99 recall target at
-75%, while 90% restores exact top-10 recall and remains below the 95% candidate
-ceiling.
+Adaptive search probes at most 90% of populated clusters by default on corpora
+up to 10,000 vectors. The bound is deliberate: the 2048-vector quality fixture
+misses the 0.99 recall target at 75%, while 90% restores exact top-10 recall and
+remains below the 95% candidate ceiling. Above 10,000 vectors, nprobe is also
+capped at `sqrt(k)` clamped to 16..=48 so scoring stays sub-linear in corpus
+size. `--ann-probes` still requests an explicit probe count.
 
 Release-mode RCH measurements use 64 deterministic queries at dimension 32:
 

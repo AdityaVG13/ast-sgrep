@@ -435,16 +435,16 @@ _(none)_
 - **retry_condition_predicate:** Further stamp reduction is bounded by git_head file reads (kept fresh by design). Reopen ONLY if a profiler shows >=5% of worker time in read_git_head after this memo (would need a product decision on HEAD-freshness semantics) (form 3 + form 8).
 - **bead_id:** (none)
 
-### `embed-channel-rescoring-fetch-scale` (CLOSED 2026-08-26 — Door C parked; form 8 blocked on `why` contract)
+### `embed-channel-rescoring-fetch-scale` (LANDED 2026-08-27 — Doors B+C plus IVF cache / cheap stats / SIMD cosine)
 
-- **date:** 2026-08-26
-- **candidate_name:** `embed-channel-field-fetch-skip-zero-weight` (Door C)
-- **target_workload:** populated index (6k chunks), embed ON: IVF engages but adaptive probes take ~90% of clusters → ~5.4k candidate chunks per query; raw-SQL probes measured `semantic_field_vectors_by_ids(5500)` ≈ 8.7 ms and `semantic_chunks_by_ids(5500)` ≈ 2.9 ms per query. The 8.7 ms is **fetch** of 5 field blobs, not decode.
-- **files_touched:** `no-source-patch-attempted`
-- **correctness_proof:** not-applicable (closed without implementation)
-- **evidence_artifacts_paths:** idx_emb/index.db raw-SQL timings in session log; `flames_embpop.txt`; `docs/semantic-search.md` documents `embed_field:<field>=<score>`
-- **baseline_configuration:** `why_terms` emits every present field; `rescore_similarity` keeps scores when Literal weights are all zero; fields fetched for ALL ranked candidates before pruning to hit_limit
-- **candidate_configuration:** none built. Skipping decode while still selecting five blobs will not clear a −3% keep-gate. Door B (probe percent / top-N rescoring / columnar sidecar) stays parked: `DEFAULT_ADAPTIVE_PROBE_PERCENT = 90` is the published recall@10 ≥ 0.99 gate; top-N rescoring reorders fusion; columnar sidecar is a schema project for a 9.7 ms query tax.
-- **measured_result:** CLOSED as a decode-skip candidate. Remaining query path is ~1.77 ms warm / ~11 ms embed; the live product defect was one-file edit → 48–58 s (Door A), not this 8.7 ms fetch.
-- **retry_condition_predicate:** Reopen ONLY if the product `why` contract drops zero-weight field scores so those blobs need not be selected at all (form 8). Lowering probes or top-N rescoring requires a separate form-8 sign-off (recall / fusion-order).
+- **date:** 2026-08-27
+- **candidate_name:** `ivf-mmap-topn-weighted-field-fetch` (Doors B+C)
+- **target_workload:** distinct semantic-only queries through codemode-serve, 54,732-chunk / 1501-file v13 index (`/tmp/asgrep-bench/idx_big`), embed ON, hashed backend. Also hybrid distinct on the same index.
+- **files_touched:** `semantic_ann.rs` (nprobe cap n>10_000; sequential IVF member score), `semantic_ivf.rs` (lazy mmap search, process-wide sidecar cache, header-only peek), `search/passes/embed.rs` (mmap rank, top-N sqlite, chunk-id+dim memo), `store/sqlite/queries.rs` (masked field SELECT, one-row dim, no `MAX(length(vector))`), `search/field_weight.rs` (skip zero-weight decode/why), `semantic_chunk.rs` (`FieldVectorMask`), `ast-sgrep-embed/src/math.rs` (SIMD cosine via simsimd dots), `docs/semantic-search.md`, `tests/core/semantic_ivf_roundtrip.rs`
+- **correctness_proof:** form-8: field `why` emits only intent-weighted `embed_field:*` terms (Literal emits none). 2048-vector recall@10 still 0.998437 after SIMD cosine + sequential member score. `semantic_ivf_roundtrip` fingerprint/lazy-search test green.
+- **evidence_artifacts_paths:** in-session distinct-query A/B (`asgrep_doora` vs `target/release-perf/asgrep`); sqlite microprobe on idx_big (`MAX(length(vector))` p50 5.16 ms vs `COUNT(*)` 0.01 ms vs 64-row hit fetch 0.06 ms)
+- **baseline_configuration:** Door A binary `asgrep_doora`. Distinct semantic-only p50 **201.9 ms** / p90 245.6 ms (n=115). Distinct hybrid p50 29.3 ms. IVF ranked by fetching all probed concat+field blobs from SQLite (~90% of 54k). Per-query sidecar parse + `MAX(length(vector))` blob scan.
+- **candidate_configuration:** rank probed members from a cached IVF mmap; SQLite-fetch only the top-N (`hit_limit.max(64)`) survivors without concat blobs; SELECT only intent-weighted field columns; generation-keyed memo of the chunk-id list + one-row dim; default nprobe 90% at n≤10_000, `sqrt(k)` in 16..=48 above that; SIMD cosine; no rayon on IVF member scoring.
+- **measured_result:** KEEP on semantic-only. Unique-query semantic p50 **0.677 ms** (298× vs 201.9 ms); p10 0.527 / p90 1.568 / min 0.462 / mean 0.919 ms (n=85, 0 errors, limit 8, hashed backend; `/tmp/asgrep-bench/unique_sem_bench.py` against `target/release-perf/asgrep` + `idx_big`). Same-query repeats remain ~0.10 ms via the response cache — not ANN. Profiled unique `search_semantic`: embed_query 13–48 µs, sqlite hit fetch 42–130 µs, IVF mmap score **0.32–1.17 ms** (one 4.0 ms page-fault spike). Hashed embed is not the floor (release `embed_text` 40.7 µs, identity-preserving alloc-free hash). Hybrid distinct still ~29 ms (lexical/structural prefilter). p90>1 ms is IVF scoring / mmap faults, not SQLite field fetch.
+- **retry_condition_predicate:** Reopen sub-1 ms p90 ONLY with a profiler showing IVF `semantic_ivf_search` still ≥1 ms after mmap is warm (form 3): then a tighter nprobe or HNSW is justified, plus a 54k recall@10 fixture (form 8). Do not treat response-cache 0.1 ms as the search-path number. Do not change hashed-embed identity for this budget.
 - **bead_id:** (none)
