@@ -11,8 +11,9 @@ use std::sync::Arc;
 // 6 = symbols_name_lower. 7 = semantic-layout-v2 wipe. 8 = unstemmed code FTS.
 // 9 = repository lexicon. 10 = per-field semantic vectors (name/docs/body/graph).
 // 11 = scip_facts overlay (kgvi.2). 12 = tests/examples semantic vector.
+// 13 = callers lower() expression indexes (gauntlet-r11: calls_matching full-scan fix).
 // Never reuse a SCHEMA_VERSION for two migrations.
-const SCHEMA_VERSION: i64 = 12;
+const SCHEMA_VERSION: i64 = 13;
 const IMPORT_SELECT: &str =
     "SELECT f.path, f.language, i.module_path, i.line_no FROM imports i JOIN files f ON f.id = i.file_id";
 const SYM_LOC: &str = "SELECT f.path, s.name, f.language, s.line_start, s.line_end FROM symbols s JOIN files f ON f.id = s.file_id";
@@ -253,6 +254,12 @@ impl IndexStore {
             }
             if version < 11 {
                 ensure_scip_facts_table(&self.conn)?;
+            }
+            if version < 13 {
+                // gauntlet-r11: backfill the lower() expression indexes for
+                // existing indexes. SCHEMA_DDL above already carries them via
+                // IF NOT EXISTS, but only a version bump guarantees the DDL
+                // re-runs on stores that never re-open through a rebuild.
             }
             if version < 3 {
                 self.conn.execute_batch(

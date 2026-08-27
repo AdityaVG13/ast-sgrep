@@ -24,6 +24,8 @@ CREATE TABLE IF NOT EXISTS callers (id INTEGER PRIMARY KEY, file_id INTEGER NOT 
 CREATE INDEX IF NOT EXISTS idx_callers_callee ON callers(callee);\
 CREATE INDEX IF NOT EXISTS idx_callers_caller ON callers(caller);\
 CREATE INDEX IF NOT EXISTS idx_callers_file_id ON callers(file_id);\
+CREATE INDEX IF NOT EXISTS idx_callers_callee_lower ON callers(lower(callee));\
+CREATE INDEX IF NOT EXISTS idx_callers_caller_lower ON callers(lower(caller));\
 CREATE TABLE IF NOT EXISTS imports (id INTEGER PRIMARY KEY, file_id INTEGER NOT NULL,\
   module_path TEXT NOT NULL, line_no INTEGER NOT NULL,\
   FOREIGN KEY (file_id) REFERENCES files(id) ON DELETE CASCADE);\
