@@ -2,6 +2,7 @@
 use serde_json::Value;
 use std::path::PathBuf;
 use std::process::Command;
+use tempfile::TempDir;
 
 fn asgrep_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_asgrep"))
@@ -262,4 +263,48 @@ fn help_after_help_names_yes_and_json_short_flag() {
         "help must name -j/--json: {blob}"
     );
     assert!(blob.contains("--yes"), "help must name --yes: {blob}");
+}
+
+fn run_env(args: &[&str], env: &[(&str, &str)]) -> (i32, String, String) {
+    let mut cmd = Command::new(asgrep_bin());
+    cmd.args(args).env("NO_COLOR", "1");
+    for (key, value) in env {
+        cmd.env(key, value);
+    }
+    let output = cmd.output().expect("run asgrep");
+    (
+        output.status.code().unwrap_or(-1),
+        String::from_utf8_lossy(&output.stdout).into_owned(),
+        String::from_utf8_lossy(&output.stderr).into_owned(),
+    )
+}
+
+#[test]
+fn ci_and_term_dumb_suppress_index_progress() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path().join("proj");
+    std::fs::create_dir(&root).unwrap();
+    std::fs::write(
+        root.join("main.rs"),
+        "fn main() {}
+",
+    )
+    .unwrap();
+    let root_s = root.to_str().unwrap();
+    for env in [[("CI", "1")], [("TERM", "dumb")]] {
+        let (code, stdout, stderr) = run_env(&["index", "--dry-run", root_s], &env);
+        assert_eq!(code, 0, "env={env:?} stdout={stdout} stderr={stderr}");
+        assert!(
+            !stderr.contains("asgrep: dry-run scanned") && !stderr.contains("asgrep: indexing"),
+            "progress must be quiet in {env:?}: {stderr}"
+        );
+    }
+}
+
+#[test]
+fn no_color_flag_is_accepted_in_ci() {
+    let (code, stdout, stderr) = run_env(&["--no-color", "--json", "capabilities"], &[("CI", "1")]);
+    assert_eq!(code, 0, "stdout={stdout} stderr={stderr}");
+    let value: Value = serde_json::from_str(&stdout).expect("json stdout");
+    assert_eq!(value["command"], "capabilities");
 }

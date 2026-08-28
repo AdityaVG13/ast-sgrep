@@ -313,6 +313,7 @@
     "XDG_CACHE_HOME",
     "NO_COLOR",
     "CI",
+    "TERM",
     "SOURCE_DATE_EPOCH"
   ],
   "environment_bool_values": [

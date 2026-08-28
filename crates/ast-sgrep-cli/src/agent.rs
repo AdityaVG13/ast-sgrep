@@ -66,7 +66,7 @@ pub(crate) fn capabilities_json(_cli: &Cli) -> anyhow::Result<Value> {
             "precedence": "conflicting --root and positional ROOT is a usage error; effective_root prefers --root when set",
             "bin_aliases": ["asgrep", "ast-sgrep"]
         },
-        "environment": ["ASGREP_LIMIT", "ASGREP_INDEX_PATH", "ASGREP_DURABILITY", "ASGREP_NO_EMBED", "ASGREP_NO_AUTO_INDEX", "ASGREP_AUTO_INDEX", "ASGREP_NEURAL_EMBED", "ASGREP_NEURAL_FALLBACK", "ASGREP_SEMANTIC_ONLY", "ASGREP_TANTIVY", "ASGREP_ANN_THRESHOLD", "ASGREP_ANN_PROBES", "ASGREP_RERANK", "ASGREP_RERANK_TOP_K", "ASGREP_ALLOW_AST_GREP", "ASGREP_ALLOW_EXTERNAL_INDEX", "ASGREP_AST_GREP", "ASGREP_LEDGER_PATH", "ASGREP_USE_CACHE", "XDG_CACHE_HOME", "NO_COLOR", "CI", "SOURCE_DATE_EPOCH"],
+        "environment": ["ASGREP_LIMIT", "ASGREP_INDEX_PATH", "ASGREP_DURABILITY", "ASGREP_NO_EMBED", "ASGREP_NO_AUTO_INDEX", "ASGREP_AUTO_INDEX", "ASGREP_NEURAL_EMBED", "ASGREP_NEURAL_FALLBACK", "ASGREP_SEMANTIC_ONLY", "ASGREP_TANTIVY", "ASGREP_ANN_THRESHOLD", "ASGREP_ANN_PROBES", "ASGREP_RERANK", "ASGREP_RERANK_TOP_K", "ASGREP_ALLOW_AST_GREP", "ASGREP_ALLOW_EXTERNAL_INDEX", "ASGREP_AST_GREP", "ASGREP_LEDGER_PATH", "ASGREP_USE_CACHE", "XDG_CACHE_HOME", "NO_COLOR", "CI", "TERM", "SOURCE_DATE_EPOCH"],
         "environment_bool_values": ["1", "0", "true", "false", "yes", "no", "on", "off"],
         "sibling_binaries": [
             {"name":"asgrep-mcp","purpose":"MCP stdio server","launch":"asgrep-mcp (stdio JSON-RPC)"},
@@ -408,7 +408,7 @@ See `capabilities --json` → `commands` (complete clap catalog). Notable: `sear
 - `--help` after-help names the triad, `-j/--json`, and the `--yes` gate.
 - Typos: nearby flag/command spellings rewrite before clap (`--jsno` → `--json`, `capabilites` → `capabilities`, `docs` → `robot-docs`, `--dryrun` → `--dry-run`).
 ## Environment
-See `capabilities --json` → `environment`. Common: `ASGREP_INDEX_PATH`, `ASGREP_LIMIT`, `ASGREP_NO_EMBED`, `ASGREP_NO_AUTO_INDEX`, `ASGREP_DURABILITY`, `NO_COLOR`, `CI`, `SOURCE_DATE_EPOCH` (bench history timestamps).
+See `capabilities --json` → `environment`. Common: `ASGREP_INDEX_PATH`, `ASGREP_LIMIT`, `ASGREP_NO_EMBED`, `ASGREP_NO_AUTO_INDEX`, `ASGREP_DURABILITY`, `NO_COLOR`, `CI`, `TERM=dumb`, `SOURCE_DATE_EPOCH` (bench history timestamps). `CI=1` and `TERM=dumb` suppress progress chatter (`asgrep: indexing …`) so logs stay quiet without `--json`.
 ## Ops footguns (privileged sinks)
 - `ASGREP_INDEX_PATH` / `--index-path` is a **privileged sink**: any absolute writable path is accepted. Treat it like a database URL; do not point it at untrusted locations.
 - Index rebuilds are in-place on the default `.asgrep/` DB or a pinned `ASGREP_INDEX_PATH` (SQLite transactional rollback). There is no build-then-swap generation layout. Pinning only chooses which file; it does not change atomicity.
@@ -539,6 +539,29 @@ fn inject_robot_triage(
         rewritten.insert(1, std::ffi::OsString::from("doctor"));
     }
     rewritten
+}
+
+pub(crate) fn env_flag_truthy(name: &str) -> bool {
+    matches!(
+        std::env::var(name).ok().as_deref().map(str::trim),
+        Some("1")
+            | Some("true")
+            | Some("TRUE")
+            | Some("yes")
+            | Some("YES")
+            | Some("on")
+            | Some("ON")
+    )
+}
+
+/// CI / dumb terminals: keep stderr for errors, drop "indexing ..." progress chatter.
+pub(crate) fn suppress_progress() -> bool {
+    if env_flag_truthy("CI") {
+        return true;
+    }
+    std::env::var("TERM")
+        .ok()
+        .is_some_and(|term| term.eq_ignore_ascii_case("dumb"))
 }
 
 /// Recover Levenshtein-1 / transposition flag and subcommand typos before clap.

@@ -1,3 +1,4 @@
+use crate::agent;
 use crate::{index_options, search_options, Cli};
 use anyhow::{bail, Context};
 use ast_sgrep_core::search::DegradedChannel;
@@ -430,7 +431,7 @@ pub(crate) fn run_eval(cli: &Cli, args: &EvalArgs) -> anyhow::Result<()> {
             path
         }
     };
-    if !cli.json {
+    if !cli.json && !agent::suppress_progress() {
         eprintln!(
             "[asgrep eval] indexing {} into {} ...",
             root.display(),

@@ -1,5 +1,6 @@
 //! Index open, dry-run, and status helpers.
 
+use crate::agent;
 use crate::cli_args::{usage_error, Cli};
 use crate::machine::print_machine_json;
 use anyhow::Context;
@@ -69,7 +70,7 @@ pub(crate) fn ensure_fresh_index(
         return Ok(false);
     }
     let empty = file_count == 0;
-    if empty && !cli.search_machine_output() {
+    if empty && !cli.search_machine_output() && !agent::suppress_progress() {
         eprintln!("asgrep: indexing {} ...", root.display());
     }
     let mut indexer = open_indexer(root, cli)?;
@@ -77,7 +78,7 @@ pub(crate) fn ensure_fresh_index(
         .index_all()
         .with_context(|| format!("auto-index failed for {}", root.display()))?;
     let mutated = empty || stats.mutated();
-    if mutated && !empty && !cli.search_machine_output() {
+    if mutated && !empty && !cli.search_machine_output() && !agent::suppress_progress() {
         eprintln!("asgrep: refreshed index for {}", root.display());
     }
     Ok(mutated)
@@ -214,7 +215,7 @@ pub(crate) fn run_full_index(
         cli,
         force_reindex,
         |indexer| {
-            if !cli.json {
+            if !cli.json && !agent::suppress_progress() {
                 let verb = if force_reindex {
                     "reindexing"
                 } else {
@@ -385,7 +386,7 @@ pub(crate) fn run_index_dry_run(command: &str, root: &Path, cli: &Cli) -> anyhow
         }
     }
     walk(&root, &mut files, &mut skipped, &mut walk_errors);
-    if !cli.json {
+    if !cli.json && !agent::suppress_progress() {
         eprintln!(
             "asgrep: dry-run scanned {files} candidate files under {}",
             root.display()

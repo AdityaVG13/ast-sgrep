@@ -35,7 +35,7 @@ See `capabilities --json` → `commands` (complete clap catalog). Notable: `sear
 - `--help` after-help names the triad, `-j/--json`, and the `--yes` gate.
 - Typos: nearby flag/command spellings rewrite before clap (`--jsno` → `--json`, `capabilites` → `capabilities`, `docs` → `robot-docs`, `--dryrun` → `--dry-run`).
 ## Environment
-See `capabilities --json` → `environment`. Common: `ASGREP_INDEX_PATH`, `ASGREP_LIMIT`, `ASGREP_NO_EMBED`, `ASGREP_NO_AUTO_INDEX`, `ASGREP_DURABILITY`, `NO_COLOR`, `CI`, `SOURCE_DATE_EPOCH` (bench history timestamps).
+See `capabilities --json` → `environment`. Common: `ASGREP_INDEX_PATH`, `ASGREP_LIMIT`, `ASGREP_NO_EMBED`, `ASGREP_NO_AUTO_INDEX`, `ASGREP_DURABILITY`, `NO_COLOR`, `CI`, `TERM=dumb`, `SOURCE_DATE_EPOCH` (bench history timestamps). `CI=1` and `TERM=dumb` suppress progress chatter (`asgrep: indexing …`) so logs stay quiet without `--json`.
 ## Ops footguns (privileged sinks)
 - `ASGREP_INDEX_PATH` / `--index-path` is a **privileged sink**: any absolute writable path is accepted. Treat it like a database URL; do not point it at untrusted locations.
 - Index rebuilds are in-place on the default `.asgrep/` DB or a pinned `ASGREP_INDEX_PATH` (SQLite transactional rollback). There is no build-then-swap generation layout. Pinning only chooses which file; it does not change atomicity.
