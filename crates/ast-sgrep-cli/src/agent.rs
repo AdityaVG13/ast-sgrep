@@ -717,6 +717,13 @@ pub(crate) fn augment_clap_usage_message(msg: &str, command: &str) -> String {
         msg.push_str(example);
         msg.push_str("\nTip: QUERY is required; optional ROOT defaults to `.`.");
     }
+    if command == "codemod" && msg.contains("required arguments were not provided") {
+        msg.push('\n');
+        msg.push_str(
+            r#"Example: asgrep codemod --dry-run --pattern 'legacy($ARG)' --rewrite 'modern($ARG)' ."#,
+        );
+        msg.push_str("\nTip: always plan with --dry-run first; then omit --dry-run to apply.");
+    }
     msg
 }
 

@@ -89,3 +89,12 @@ fn json_stdout_is_standalone_for_jq() {
     );
 }
 
+#[test]
+fn codemod_missing_args_names_dry_run_command() {
+    let (code, stdout, stderr) = run(&["codemod"]);
+    assert_eq!(code, 1, "stdout={stdout} stderr={stderr}");
+    assert!(
+        stderr.contains("asgrep codemod --dry-run --pattern"),
+        "error must name the exact dry-run command: {stderr}"
+    );
+}
