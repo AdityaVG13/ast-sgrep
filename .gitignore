@@ -28,6 +28,9 @@ node_modules/
 .env.*
 !.env.example
 
+# Python / ruff local cache
+.ruff_cache/
+
 # Merge/backup artifacts
 *.orig
 *.bak
@@ -55,6 +58,7 @@ rust_out
 .unsafe-audit/
 .prosecution/
 agent_ergonomics_audit/
+.jeffreyskills/
 .agents/
 .claude/
 .codex/
@@ -63,6 +67,7 @@ agent_ergonomics_audit/
 /CLAUDE.md
 /GEMINI.md
 .skill-loop-progress.md
+.skill-loop-*/
 .doctor/
 .bv/
 .dolt/
@@ -116,10 +121,11 @@ tests/artifacts/
 # Golden mismatch dumps (assert_golden writes these on failure; never commit)
 *.actual
 
-# Local bench history scratch (committed SSoT is `.bench-history/*.latest.json`)
+# Local bench history scratch. Committed SSoT is repo-root `.bench-history/*.latest.json`.
 .bench-history.json
 **/.bench-history.json
-.bench-history/*.run.json
+**/.bench-history/*.run.json
+crates/**/.bench-history/
 
 # Agent skill specs (local-only)
 .agents/
@@ -138,9 +144,6 @@ tests/artifacts/
 
 # Internal research notes (not product docs)
 /CHANGELOG_RESEARCH.md
-
-# CLI benchmark-history state (regenerated on runs)
-**/.bench-history.json
 
 # Local tool/audit state (not product)
 .house-odds/**/.fszero/
