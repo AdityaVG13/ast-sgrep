@@ -104,6 +104,23 @@ impl ParsedQuery {
             .filter(|t| !t.is_empty())
             .unwrap_or_else(|| self.primary_symbol().unwrap_or_default().to_string())
     }
+    /// Identifier as the user typed it (`Searcher`, `auth_refresh`), not folded.
+    pub fn identifier_spelling(&self) -> Option<&str> {
+        if let Some(target) = self.target.as_deref() {
+            let trimmed = target.trim();
+            if !trimmed.is_empty() {
+                return Some(trimmed);
+            }
+        }
+        self.raw
+            .split(|c: char| !c.is_alphanumeric() && c != '_')
+            .find(|word| {
+                !word.is_empty()
+                    && (word.chars().any(char::is_uppercase)
+                        || word.contains('_')
+                        || looks_like_symbol(word))
+            })
+    }
     pub fn primary_symbol(&self) -> Option<&str> {
         let cased = self
             .raw

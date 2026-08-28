@@ -1,6 +1,6 @@
-# Comparison: ast-sgrep vs ast-grep vs ripgrep
+# Comparison: ast-sgrep vs ast-grep vs ripgrep vs Semgrep
 
-Three tools, three jobs. ast-sgrep is the **navigation and intent layer** you add when you need persistent, structured understanding of a codebase, not a replacement for fast grep or structural codemods.
+For **searching an indexed repo**, ast-sgrep replaces the other three. Identifiers, strings, structural shapes, defs/callers, and conceptual NL are one ranked list. The other tools remain specialists for jobs that are not search.
 
 ## Summary
 
@@ -26,57 +26,62 @@ Three tools, three jobs. ast-sgrep is the **navigation and intent layer** you ad
 
 | You want to… | Reach for |
 |---|---|
-| Ask *“where does X happen?”* across a whole repo | **ast-sgrep** |
-| Find who calls a function or where a symbol is defined | **ast-sgrep** |
+| Find a token, a definition, a caller, a shape, or an idea in an indexed repo | **ast-sgrep** |
+| Ask *“where does X happen?”* | **ast-sgrep** |
 | Query with different words than the code uses (*“credential renewal”*) | **ast-sgrep** |
 | Feed ranked, structured hits to an AI agent | **ast-sgrep** (`--json --format agent`) |
 | Jump to defs/refs/call hierarchy in an editor | **ast-sgrep** (`asgrep-lsp`) |
-| Rewrite code with AST-aware rules | **ast-grep** |
-| Match a syntactic shape (`class $C { $$$ }`) | **ast-grep** or `asgrep "pattern:…"` |
-| Grep logs, configs, or any file type fast | **ripgrep** |
-| One-off regex across unindexed or generated files | **ripgrep** |
+| Match a syntactic shape (`class $C { $$$ }`) | **ast-sgrep** `pattern:` (native indexed subset) |
+| Rewrite code with full ast-grep YAML rules | **ast-grep** |
+| Run SAST rule packs | **Semgrep** |
+| Grep logs, configs, or an unindexed tree | **ripgrep** |
 | Search inside a single huge file without indexing | **ripgrep** |
 
 ## Stack positioning
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│  Your workflow                                          │
+│  Indexed repo — search                                  │
+│    asgrep  (hybrid / defs / callers / pattern / NL)     │
 ├─────────────────────────────────────────────────────────┤
-│  ripgrep        →  scan anything, no setup             │
-│  ast-grep       →  patterns & codemods                  │
-│  ast-sgrep      →  persistent navigation + intent       │
+│  Not search                                             │
+│    ripgrep   → logs / unindexed / generated             │
+│    ast-grep  → full-rule rewrites                       │
+│    Semgrep   → SAST rule packs                          │
 └─────────────────────────────────────────────────────────┘
 ```
 
-**ast-sgrep complements the others today.** `pattern:` is a native indexed subset (not an ast-grep subprocess) and does not compete with ripgrep on raw scan speed over arbitrary unindexed files. See `docs/structural-patterns.md` and `DISC-pattern-native-subset`.
+On an indexed tree, do not spawn a second search tool. `pattern:` is a native
+indexed subset (not an ast-grep subprocess). ripgrep still wins raw scan of
+unindexed bytes; that is a different job. See `docs/structural-patterns.md`.
 
-## Campaign goal (not current status)
+## Search quality (the product bar)
 
-The goal is that a coding agent working in an indexed repo never needs a
-second search tool: ripgrep stays for logs and unindexed trees, and
-ast-grep / Semgrep become specialists rather than defaults. The engine is
-already moving that way without a sidecar model:
+A coding agent in an indexed repo should never need a second search tool.
+Ranking, not CLI milliseconds vs `rg`, is the contest:
+
+- Exact / PascalCase identifiers rank the definition first (`Searcher` before
+  `bench_searcher`).
+- Conceptual NL prefers code over markdown that repeats the query
+  (`credential renewal` → `auth_refresh`, not the README).
+- Vocabulary expansion is a precision tool, not a co-occurrence firehose.
+- Semantic has to retrieve on this repo, not only `tests/fixtures/sample`.
+
+Engine pieces that enforce that:
 
 - A deterministic post-fusion **critic** gates embed-only hits on
-  corroboration, boosts multi-channel agreement, and explains every hit
-  (`why` on agent JSON). See `docs/fusion-ranking.md`.
+  corroboration, boosts multi-channel agreement, demotes generic entrypoint
+  callers, and explains every hit (`why` on agent JSON). See
+  `docs/fusion-ranking.md`.
 - **Causal follow-ups**: `follow_up_queries` are derived from the actual
-  top hit (kind, symbol, margin), so the drill-down an agent would have
-  asked a second model for is already in the envelope.
+  top hit (kind, symbol, margin).
 - **Two-channel conjunction**: `pattern:... AND callers:x` performs a
-  span-level graph/structure join; other pairs retain file-level intersection,
-  and `AND NOT` subtracts at the corresponding scope. See
+  span-level graph/structure join; `AND NOT` subtracts. See
   `docs/QUERY_GRAMMAR.md`.
 
-Two bounded, opt-in local keep-gates now exist: indexed-language fixture file
-presence for `literal:` vs pinned ripgrep, and native Pattern-1 match sets vs
-pinned ast-grep. Default test runs leave both external rows Not-run unless the
-pinned binaries are explicitly provisioned through `ASGREP_DIFF_RG` and
-`ASGREP_DIFF_AST_GREP`. They do not establish full tool identity, cover
-unindexed files, or justify a replacement claim. This document therefore still
-describes complements, and the table above stays honest about the current
-subsets.
+`pattern:` does not claim full ast-grep rule identity. Keep-gates vs pinned
+ripgrep / ast-grep are opt-in (`ASGREP_DIFF_RG`, `ASGREP_DIFF_AST_GREP`) and
+measure match-set overlap, not "throw those binaries away for every task."
 
 ### Agent policy for indexed source
 

@@ -100,24 +100,24 @@ impl Default for ChannelWeights {
 pub fn default_weights(intent: QueryIntent) -> ChannelWeights {
     match intent {
         QueryIntent::Conceptual => ChannelWeights {
-            lexical: 1.1,
-            def: 0.9,
-            caller: 0.8,
-            graph: 0.7,
-            anchor: 0.8,
-            embed: 1.1,
+            lexical: 0.75,
+            def: 1.35,
+            caller: 0.45,
+            graph: 0.25,
+            anchor: 0.7,
+            embed: 1.45,
             pattern: 0.25,
-            import: 0.8,
+            import: 0.5,
         },
         QueryIntent::Symbol => ChannelWeights {
-            lexical: 1.0,
+            lexical: 0.8,
             def: 2.0,
-            caller: 1.15,
-            graph: 0.9,
+            caller: 1.0,
+            graph: 0.7,
             anchor: 1.0,
-            embed: 0.8,
+            embed: 0.7,
             pattern: 0.25,
-            import: 1.0,
+            import: 0.8,
         },
         _ => ChannelWeights::default(),
     }
@@ -187,11 +187,21 @@ fn channel_ceiling(parsed: &ParsedQuery, hit: &SearchHit) -> f64 {
         // cannot dilute evidence, while exact matches still outrank substrings.
         HitKind::Def => {
             let matched = matched_term_count(parsed, hit.symbol.as_deref()).max(1) as f64;
-            2.0 * SCORE_EXACT_SYMBOL * matched + SCORE_DEF_BASE
+            let denom = if parsed.identifier_spelling().is_some() {
+                (parsed.terms.len().max(1) as f64).max(matched)
+            } else {
+                matched
+            };
+            2.0 * SCORE_EXACT_SYMBOL * denom + SCORE_DEF_BASE
         }
         HitKind::Caller => {
             let matched = matched_term_count(parsed, hit.callee.as_deref()).max(1) as f64;
-            2.0 * SCORE_EXACT_SYMBOL * matched + SCORE_CALLER_BASE
+            let denom = if parsed.identifier_spelling().is_some() {
+                (parsed.terms.len().max(1) as f64).max(matched)
+            } else {
+                matched
+            };
+            2.0 * SCORE_EXACT_SYMBOL * denom + SCORE_CALLER_BASE
         }
         HitKind::Graph => SCORE_GRAPH,
         HitKind::Anchor => SCORE_ANCHOR,

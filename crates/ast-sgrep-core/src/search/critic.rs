@@ -18,7 +18,14 @@
 //! 3. **Identifier-collision penalty.** When the query names a compound
 //!    identifier (`auth_refresh`), a hit whose symbol is only a fragment of it
 //!    (`refresh`) is penalized unless the hit itself evidences the full
-//!    identifier.
+//!    identifier. The inverse also applies: `Searcher` demotes `bench_searcher`.
+//! 4. **Code over docs.** Markdown/changelog lexical hits lose to real code
+//!    evidence. Conceptual queries further demote leftover lexical hits when
+//!    a definition or embed exists.
+//! 5. **Conceptual symbols over entrypoints.** `main`/`start` callers lose to
+//!    defs whose names share concept tokens with the query (`auth_refresh` for
+//!    "credential renewal"). Partial identifier matches (`refresh` inside a
+//!    longer test name) lose to the exact spelling.
 //!
 //! The critic adjusts scores and annotates hits before `finish_response`
 //! assigns margins and confidence, so downstream honesty fields reflect the
@@ -35,6 +42,24 @@ pub const AGREEMENT_BOOST: f64 = 1.15;
 pub const FULL_AGREEMENT_BOOST: f64 = 1.25;
 /// Score multiplier for identifier-fragment collisions.
 pub const COLLISION_PENALTY: f64 = 0.85;
+/// Score multiplier when the hit symbol is a longer compound of the query identifier.
+pub const COMPOUND_SYMBOL_PENALTY: f64 = 0.4;
+/// Score multiplier when the hit symbol matches the typed identifier exactly.
+pub const EXACT_IDENTIFIER_BOOST: f64 = 1.8;
+/// Score multiplier when a def only shares a fragment of the typed identifier.
+pub const PARTIAL_IDENTIFIER_PENALTY: f64 = 0.45;
+/// Score multiplier for unrelated defs that leaked in on an identifier query.
+pub const UNRELATED_DEF_PENALTY: f64 = 0.5;
+/// Score multiplier for markdown/changelog lexical hits when code evidence exists.
+pub const PROSE_PATH_PENALTY: f64 = 0.4;
+/// Score multiplier for conceptual lexical hits when a def/embed exists.
+pub const CONCEPTUAL_LEXICAL_PENALTY: f64 = 0.55;
+/// Score multiplier for `main`/`start` callers on conceptual NL.
+pub const GENERIC_ENTRYPOINT_PENALTY: f64 = 0.3;
+/// Score multiplier when a conceptual hit's symbol shares concept tokens with the query.
+pub const CONCEPT_SYMBOL_BOOST: f64 = 1.4;
+/// Score multiplier for bench/measure/test helpers on conceptual NL.
+pub const INSTRUMENTATION_PENALTY: f64 = 0.55;
 
 /// Engine-derived critic annotation. Never trusted from the wire; JSON decode
 /// re-derives an empty set (same policy as `resolution`).
@@ -138,11 +163,148 @@ fn push_note(hit: &mut SearchHit, note: CriticNote) {
     }
 }
 
+pub(crate) fn identifier_tokens(symbol: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+    let mut previous_lower_or_digit = false;
+    for ch in symbol.chars() {
+        if !ch.is_alphanumeric() {
+            if !current.is_empty() {
+                tokens.push(std::mem::take(&mut current));
+            }
+            previous_lower_or_digit = false;
+            continue;
+        }
+        if ch.is_uppercase() && previous_lower_or_digit && !current.is_empty() {
+            tokens.push(std::mem::take(&mut current));
+        }
+        current.extend(ch.to_lowercase());
+        previous_lower_or_digit = ch.is_lowercase() || ch.is_ascii_digit();
+    }
+    if !current.is_empty() {
+        tokens.push(current);
+    }
+    tokens
+}
+
+fn is_prose_path(path: &str) -> bool {
+    let normalized = path.replace("\\", "/").to_ascii_lowercase();
+    let file = normalized.rsplit('/').next().unwrap_or(normalized.as_str());
+    file.ends_with(".md")
+        || file.ends_with(".mdx")
+        || file.ends_with(".rst")
+        || file.ends_with(".txt")
+        || file.starts_with("changelog")
+        || file.starts_with("readme")
+        || normalized.contains("/docs/")
+}
+
+fn query_identifier(parsed: &ParsedQuery, intent: QueryIntent) -> Option<String> {
+    if !matches!(intent, QueryIntent::Symbol | QueryIntent::Structural)
+        && parsed.mode != crate::query::QueryMode::Defs
+    {
+        return None;
+    }
+    parsed
+        .identifier_spelling()
+        .map(str::to_string)
+        .filter(|s| !s.is_empty())
+}
+
+fn is_compound_of(query_ident: &str, symbol: &str) -> bool {
+    let query = query_ident.to_lowercase();
+    let symbol_l = symbol.to_lowercase();
+    if symbol_l == query {
+        return false;
+    }
+    let tokens = identifier_tokens(symbol);
+    tokens.len() > 1 && tokens.iter().any(|token| token == &query)
+}
+
+const GENERIC_ENTRYPOINTS: &[&str] = &[
+    "main", "__main__", "<module>", "start", "run", "init", "test", "tests", "setup", "teardown",
+];
+
+pub(crate) fn is_generic_entrypoint(name: &str) -> bool {
+    let folded = name
+        .trim()
+        .trim_matches(|c| c == '<' || c == '>')
+        .to_ascii_lowercase();
+    GENERIC_ENTRYPOINTS.contains(&folded.as_str())
+}
+
+fn is_instrumentation_symbol(name: &str) -> bool {
+    let folded = name.to_ascii_lowercase();
+    folded.starts_with("measure_")
+        || folded.starts_with("bench_")
+        || folded.starts_with("test_")
+        || folded.starts_with("parity_")
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum IdentifierMatch {
+    Exact,
+    Folded,
+    Compound,
+    Partial,
+    None,
+}
+
+fn identifier_match(query_ident: &str, symbol: &str) -> IdentifierMatch {
+    if symbol == query_ident {
+        return IdentifierMatch::Exact;
+    }
+    if symbol.eq_ignore_ascii_case(query_ident) {
+        return IdentifierMatch::Folded;
+    }
+    if is_compound_of(query_ident, symbol) {
+        return IdentifierMatch::Compound;
+    }
+    let query_tokens = identifier_tokens(query_ident);
+    let symbol_tokens = identifier_tokens(symbol);
+    if query_tokens.is_empty() {
+        return IdentifierMatch::None;
+    }
+    let hits = query_tokens
+        .iter()
+        .filter(|token| {
+            symbol_tokens
+                .iter()
+                .any(|symbol_token| symbol_token == *token)
+        })
+        .count();
+    if hits == query_tokens.len() {
+        IdentifierMatch::Compound
+    } else if hits > 0 {
+        IdentifierMatch::Partial
+    } else {
+        IdentifierMatch::None
+    }
+}
+
+fn conceptual_symbol_affinity(parsed: &ParsedQuery, symbol: &str) -> usize {
+    let expanded: std::collections::HashSet<String> =
+        ast_sgrep_embed::tokenize(&ast_sgrep_embed::expand_concepts(&parsed.raw))
+            .into_iter()
+            .collect();
+    identifier_tokens(symbol)
+        .into_iter()
+        .filter(|token| expanded.contains(token))
+        .count()
+}
+
+fn is_code_kind(kind: HitKind) -> bool {
+    matches!(
+        kind,
+        HitKind::Def | HitKind::Embed | HitKind::Pattern | HitKind::Caller | HitKind::Anchor
+    )
+}
+
 /// Apply the deterministic critic to a fused hybrid shortlist.
 ///
 /// Runs after `fusion::apply_weighted_rrf` (contributor sets are final) and
 /// before `finish_response` (margins/confidence see critiqued scores).
-pub(crate) fn apply_critic(parsed: &ParsedQuery, _intent: QueryIntent, hits: &mut Vec<SearchHit>) {
+pub(crate) fn apply_critic(parsed: &ParsedQuery, intent: QueryIntent, hits: &mut Vec<SearchHit>) {
     if hits.is_empty() {
         return;
     }
@@ -182,6 +344,11 @@ pub(crate) fn apply_critic(parsed: &ParsedQuery, _intent: QueryIntent, hits: &mu
     }
 
     let fragments = identifier_fragments(parsed);
+    let query_ident = query_identifier(parsed, intent);
+    let has_code_evidence = hits
+        .iter()
+        .any(|hit| is_code_kind(hit.kind) && !is_prose_path(&hit.file));
+    let conceptual = intent == QueryIntent::Conceptual;
     let mut kept = Vec::with_capacity(hits.len());
     for (index, mut hit) in hits.drain(..).enumerate() {
         if uncorroborated.contains(&index) {
@@ -200,17 +367,152 @@ pub(crate) fn apply_critic(parsed: &ParsedQuery, _intent: QueryIntent, hits: &mu
                 push_note(&mut hit, CriticNote::ChannelAgreement);
             }
         }
-        if let Some(symbol) = hit.symbol.as_deref() {
-            let symbol = symbol.to_lowercase();
-            if let Some(full_ident) = fragments.get(&symbol) {
+        if let Some(symbol) = hit.symbol.clone() {
+            let folded = symbol.to_lowercase();
+            if let Some(full_ident) = fragments.get(&folded) {
                 let evidences_full = hit.excerpt.to_lowercase().contains(full_ident.as_str());
                 if !evidences_full {
                     hit.score *= COLLISION_PENALTY;
                     push_note(&mut hit, CriticNote::IdentifierCollision);
                 }
             }
+            if let Some(query_ident) = query_ident.as_deref() {
+                match identifier_match(query_ident, &symbol) {
+                    IdentifierMatch::Exact => hit.score *= EXACT_IDENTIFIER_BOOST,
+                    IdentifierMatch::Folded => {}
+                    IdentifierMatch::Compound => {
+                        hit.score *= COMPOUND_SYMBOL_PENALTY;
+                        push_note(&mut hit, CriticNote::IdentifierCollision);
+                    }
+                    IdentifierMatch::Partial => {
+                        hit.score *= PARTIAL_IDENTIFIER_PENALTY;
+                        push_note(&mut hit, CriticNote::IdentifierCollision);
+                    }
+                    IdentifierMatch::None => {
+                        if hit.kind == HitKind::Def {
+                            hit.score *= UNRELATED_DEF_PENALTY;
+                        }
+                    }
+                }
+            }
+        }
+        if has_code_evidence && hit.kind == HitKind::Asgrep && is_prose_path(&hit.file) {
+            hit.score *= PROSE_PATH_PENALTY;
+        }
+        if conceptual && has_code_evidence && hit.kind == HitKind::Asgrep {
+            hit.score *= CONCEPTUAL_LEXICAL_PENALTY;
+        }
+        if conceptual {
+            let caller = hit.caller.as_deref().unwrap_or("");
+            let symbol_name = hit.symbol.as_deref().unwrap_or("");
+            if matches!(hit.kind, HitKind::Caller | HitKind::Graph)
+                && (is_generic_entrypoint(caller) || is_generic_entrypoint(symbol_name))
+            {
+                hit.score *= GENERIC_ENTRYPOINT_PENALTY;
+            }
+            if let Some(symbol_name) = hit.symbol.as_deref() {
+                let affinity = conceptual_symbol_affinity(parsed, symbol_name);
+                if affinity >= 2
+                    || (affinity >= 1 && matches!(hit.kind, HitKind::Def | HitKind::Embed))
+                {
+                    hit.score *= CONCEPT_SYMBOL_BOOST;
+                }
+                if is_instrumentation_symbol(symbol_name) {
+                    hit.score *= INSTRUMENTATION_PENALTY;
+                }
+            }
         }
         kept.push(hit);
     }
     *hits = kept;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::search::SearchHit;
+
+    fn hit(kind: HitKind, file: &str, symbol: Option<&str>, score: f64) -> SearchHit {
+        SearchHit {
+            kind,
+            file: file.into(),
+            line_start: 1,
+            line_end: 1,
+            symbol: symbol.map(str::to_string),
+            caller: None,
+            callee: None,
+            language: Some("rust".into()),
+            score,
+            signal: kind.signal(),
+            contributors: vec![kind],
+            margin: 0.0,
+            confidence: 0.0,
+            resolution: None,
+            embed_fields: None,
+            critic: Vec::new(),
+            excerpt: String::new(),
+        }
+    }
+
+    #[test]
+    fn exact_identifier_outranks_compound_helpers() {
+        let parsed = ParsedQuery::parse("Searcher");
+        let mut hits = vec![
+            hit(HitKind::Def, "src/bench.rs", Some("bench_searcher"), 0.09),
+            hit(HitKind::Def, "src/search.rs", Some("Searcher"), 0.04),
+        ];
+        apply_critic(&parsed, QueryIntent::Symbol, &mut hits);
+        hits.sort_by(|a, b| b.score.total_cmp(&a.score));
+        assert_eq!(hits[0].symbol.as_deref(), Some("Searcher"));
+        assert!(hits[1].critic.contains(&CriticNote::IdentifierCollision));
+    }
+
+    #[test]
+    fn markdown_lexical_loses_to_code_on_conceptual_queries() {
+        let parsed = ParsedQuery::parse("credential renewal");
+        let mut hits = vec![
+            hit(HitKind::Asgrep, "README.md", None, 0.02),
+            hit(HitKind::Embed, "src/auth.rs", Some("auth_refresh"), 0.011),
+        ];
+        apply_critic(&parsed, QueryIntent::Conceptual, &mut hits);
+        hits.sort_by(|a, b| b.score.total_cmp(&a.score));
+        assert_eq!(hits[0].symbol.as_deref(), Some("auth_refresh"));
+    }
+
+    fn caller_hit(file: &str, caller: &str, callee: &str, score: f64) -> SearchHit {
+        let mut hit = hit(HitKind::Caller, file, Some(callee), score);
+        hit.caller = Some(caller.into());
+        hit.callee = Some(callee.into());
+        hit
+    }
+
+    #[test]
+    fn conceptual_def_outranks_generic_entrypoint_callers() {
+        let parsed = ParsedQuery::parse("credential renewal");
+        let mut hits = vec![
+            caller_hit("src/bin.rs", "main", "main", 0.028),
+            hit(HitKind::Def, "src/auth.rs", Some("auth_refresh"), 0.016),
+        ];
+        apply_critic(&parsed, QueryIntent::Conceptual, &mut hits);
+        hits.sort_by(|a, b| b.score.total_cmp(&a.score));
+        assert_eq!(hits[0].symbol.as_deref(), Some("auth_refresh"));
+    }
+
+    #[test]
+    fn partial_identifier_defs_lose_to_exact_spelling() {
+        let parsed = ParsedQuery::parse("auth_refresh");
+        let mut hits = vec![
+            hit(
+                HitKind::Def,
+                "tests/cli.rs",
+                Some("search_does_not_refresh_stale_index"),
+                0.05,
+            ),
+            hit(HitKind::Def, "src/auth.rs", Some("auth_refresh"), 0.04),
+        ];
+        apply_critic(&parsed, QueryIntent::Symbol, &mut hits);
+        hits.sort_by(|a, b| b.score.total_cmp(&a.score));
+        assert_eq!(hits[0].symbol.as_deref(), Some("auth_refresh"));
+        assert!(hits[1].critic.contains(&CriticNote::IdentifierCollision));
+    }
 }

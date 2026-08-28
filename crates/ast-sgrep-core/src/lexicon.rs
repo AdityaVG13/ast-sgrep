@@ -37,6 +37,11 @@ const STOP_TERMS: &[&str] = &[
     "result", "option", "string", "str", "usize", "i32", "u32", "bool",
 ];
 
+/// NL-template words that must not widen candidate discovery.
+const DO_NOT_EXPAND: &[&str] = &[
+    "how", "does", "what", "when", "where", "which", "who", "why", "work", "works", "working",
+];
+
 /// Split an identifier into lowercase subtokens: `refresh_token` and
 /// `refreshToken` both yield ["refresh", "token"].
 pub fn subtokens(identifier: &str) -> Vec<String> {
@@ -265,6 +270,9 @@ impl Lexicon {
     pub fn expand(&self, query_terms: &[String], max_added: usize) -> Vec<Association> {
         let mut added: Vec<Association> = Vec::new();
         for term in query_terms {
+            if DO_NOT_EXPAND.contains(&term.as_str()) {
+                continue;
+            }
             for association in self.related(term) {
                 if query_terms.contains(&association.related)
                     || added.iter().any(|a| a.related == association.related)

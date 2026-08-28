@@ -13,6 +13,8 @@ This changelog follows [Keep a Changelog](https://keepachangelog.com/) conventio
 
 - `pi-ast-sgrep` no longer imports `node:sqlite` at load time, so Pi/OMP/ZMP can boot under Bun via `bun:sqlite`.
 - Search opens the index read-only and no longer auto-indexes. `--no-auto-index` is the search default; pass `--auto-index` to opt in. `asgrep index` / `reindex` / `watch` remain the write path.
+- Unprefixed identifier search ranks the exact-case definition first (`Searcher` before `bench_searcher`). Conceptual queries prefer code over markdown that repeats the query, and still run defs/callers (not pattern matching) so `how does hybrid search work` hits `search_hybrid`.
+- Conceptual fanout seeds defs of concept-related symbols instead of flooding `callers:main`. `credential renewal` ranks `auth_refresh` over generic entrypoint callers; partial identifier matches (`refresh` in a longer test name) lose to the exact spelling. Identifier queries pull exact defs from the whole index so a 100-file lexical cascade cannot hide them.
 - SIGTERM/SIGHUP on the supervisor kills the worker within 100 ms (CONT then TERM then KILL) instead of waiting 5 s while holding a write lock.
 - Writers checkpoint WAL (`TRUNCATE`) on clean close and cap `journal_size_limit` at 64 MiB.
 - `asgrep version` prints `index_schema`. Doctor reports on-disk vs binary schema and the recovery command (`asgrep reindex` vs install a newer binary).

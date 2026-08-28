@@ -428,6 +428,10 @@ impl Searcher {
 
     /// Repository associations that apply to this query (ufk7).
     fn query_expansions(&self, query: &str, lexicon_generation: i64) -> Vec<QueryExpansion> {
+        let parsed = ParsedQuery::parse(query);
+        if crate::intent::classify(&parsed) == crate::intent::QueryIntent::Symbol {
+            return Vec::new();
+        }
         let terms = crate::lexicon::prose_terms(query);
         self.repository_associations(&terms, lexicon_generation)
             .into_iter()
@@ -822,12 +826,11 @@ impl Searcher {
         let mut stage_query = parsed.clone();
         stage_query.terms.retain(|term| term.chars().count() >= 3);
 
-        // Conceptual NL skips the whole structural stage: pattern-node
-        // matching on generic tokens (`query`, `graph`, `render`) owned the
-        // unique-hybrid p99 shortlist, and def/caller LIKE across the
-        // 100-file cascade is still 1–4 ms. Identifier queries keep pattern
-        // + defs + callers. Empty structural falls through to lexical
-        // survivors + embed (ht1h.3).
+        // Conceptual NL skips pattern-node matching on generic tokens
+        // (`query`, `graph`, `render`) which owned the unique-hybrid p99
+        // shortlist. Defs/callers still run so "how does hybrid search work"
+        // can rank `search_hybrid` instead of the query string in a bench
+        // fixture. Empty structural falls through to lexical + embed (ht1h.3).
         let conceptual = intent == crate::intent::QueryIntent::Conceptual;
         let ast_matches = if conceptual {
             Vec::new()
@@ -840,24 +843,30 @@ impl Searcher {
             structural_index_pass(&self.store, &self.options, &stage_query, &lexical_files)?
         };
         let mut structural = ast_matches;
-        if !conceptual {
-            structural.extend({
-                let _span = crate::perf_profile::Span::start(
-                    "hybrid_symbol_pass",
-                    "search",
-                    "symbol_pass_for_files",
-                );
-                symbol_pass_for_files(&self.store, &self.options, &stage_query, &lexical_files)?
-            });
-            structural.extend({
-                let _span = crate::perf_profile::Span::start(
-                    "hybrid_anchor_pass",
-                    "search",
-                    "anchor_pass_for_files",
-                );
-                anchor_pass_for_files(&self.store, &self.options, &stage_query, &lexical_files)?
-            });
+        structural.extend({
+            let _span = crate::perf_profile::Span::start(
+                "hybrid_symbol_pass",
+                "search",
+                "symbol_pass_for_files",
+            );
+            symbol_pass_for_files(&self.store, &self.options, &stage_query, &lexical_files)?
+        });
+        // Identifier queries must retrieve the exact definition even when the
+        // 100-file lexical cascade is full of substring coincidences.
+        if let Some(spelling) = parsed.identifier_spelling() {
+            if spelling.chars().count() >= 3 {
+                let def_query = ParsedQuery::parse(&format!("defs:{spelling}"));
+                structural.extend(search_defs(&self.store, &self.options, &def_query)?);
+            }
         }
+        structural.extend({
+            let _span = crate::perf_profile::Span::start(
+                "hybrid_anchor_pass",
+                "search",
+                "anchor_pass_for_files",
+            );
+            anchor_pass_for_files(&self.store, &self.options, &stage_query, &lexical_files)?
+        });
         let structural_files = structural
             .iter()
             .map(|hit| hit.file.clone())
@@ -900,6 +909,7 @@ impl Searcher {
                 hits.extend(conceptual_fanout_pass(
                     &self.store,
                     &self.options,
+                    &parsed.raw,
                     &semantic,
                 )?);
             }
@@ -909,74 +919,65 @@ impl Searcher {
     }
 }
 
+const FANOUT_CALLER_SCALE: f64 = 0.35;
+
 fn conceptual_fanout_pass(
     store: &IndexStore,
     options: &SearchOptions,
+    query: &str,
     semantic: &[SearchHit],
 ) -> Result<Vec<SearchHit>> {
+    let query_tokens: HashSet<String> =
+        ast_sgrep_embed::tokenize(&ast_sgrep_embed::expand_concepts(query))
+            .into_iter()
+            .collect();
     let mut seen_symbols = HashSet::new();
-    let symbols = semantic
-        .iter()
-        .filter_map(|hit| hit.symbol.as_deref())
-        .filter(|symbol| !symbol.is_empty())
-        .filter(|symbol| seen_symbols.insert(symbol.to_lowercase()))
+    let mut ranked = Vec::new();
+    for hit in semantic {
+        let Some(symbol) = hit.symbol.as_deref() else {
+            continue;
+        };
+        if symbol.is_empty() || critic::is_generic_entrypoint(symbol) {
+            continue;
+        }
+        if !seen_symbols.insert(symbol.to_lowercase()) {
+            continue;
+        }
+        let affinity = critic::identifier_tokens(symbol)
+            .into_iter()
+            .filter(|token| query_tokens.contains(token))
+            .count();
+        ranked.push((affinity, symbol));
+    }
+    if ranked.iter().any(|(affinity, _)| *affinity > 0) {
+        ranked.retain(|(affinity, _)| *affinity > 0);
+        ranked.sort_by(|left, right| right.0.cmp(&left.0).then_with(|| left.1.cmp(right.1)));
+    }
+    let symbols = ranked
+        .into_iter()
+        .map(|(_, symbol)| symbol)
         .take(NL_FANOUT_SYMBOL_LIMIT);
     let mut hits = Vec::new();
     let mut fanout_options = options.clone();
     fanout_options.limit = NL_FANOUT_HITS_PER_CHANNEL;
     for symbol in symbols {
+        let def_query = ParsedQuery::parse(&format!("defs:{symbol}"));
+        hits.extend(search_defs(store, &fanout_options, &def_query)?);
         let caller_query = ParsedQuery::parse(&format!("callers:{symbol}"));
         let mut caller_count = 0;
-        let mut graph_count = 0;
-        for hit in search_callers(store, &fanout_options, &caller_query)? {
-            let count = match hit.kind {
-                HitKind::Caller => &mut caller_count,
-                HitKind::Graph => &mut graph_count,
-                _ => continue,
-            };
-            if *count < NL_FANOUT_HITS_PER_CHANNEL {
-                hits.push(hit);
-                *count += 1;
-            }
-        }
-        hits.extend(structural_symbol_hits(
-            store,
-            options.lang_filter.as_deref(),
-            symbol,
-        )?);
-    }
-    Ok(hits)
-}
-
-fn structural_symbol_hits(
-    store: &IndexStore,
-    lang: Option<&str>,
-    symbol: &str,
-) -> Result<Vec<SearchHit>> {
-    use crate::rank::SCORE_PATTERN;
-
-    let mut hits = Vec::new();
-    let mut seen = HashSet::new();
-    for signature in &ast_sgrep_lang::structural_term_signatures(symbol) {
-        let remaining = NL_FANOUT_HITS_PER_CHANNEL.saturating_sub(hits.len());
-        if remaining == 0 {
-            break;
-        }
-        for row in store.pattern_nodes_matching_limited(signature, lang, remaining)? {
-            if !seen.insert((row.path.clone(), row.line_start, row.line_end)) {
+        for mut hit in search_callers(store, &fanout_options, &caller_query)? {
+            if hit.kind != HitKind::Caller {
                 continue;
             }
-            let excerpt = store.fill_pattern_excerpt(&row)?;
-            hits.push(SearchHit::span(SpanHitInput {
-                kind: HitKind::Pattern,
-                file: row.path,
-                line_start: row.line_start,
-                line_end: row.line_end,
-                score: SCORE_PATTERN * 0.85,
-                excerpt,
-                symbol: Some(symbol.to_owned()),
-                language: row.language,
-            }));
+            if caller_count >= NL_FANOUT_HITS_PER_CHANNEL {
+                continue;
+            }
+            if critic::is_generic_entrypoint(hit.caller.as_deref().unwrap_or("")) {
+                hit.score *= 0.25;
+            }
+            hit.score *= FANOUT_CALLER_SCALE;
+            hits.push(hit);
+            caller_count += 1;
         }
     }
     Ok(hits)

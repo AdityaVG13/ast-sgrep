@@ -25,7 +25,12 @@ check the results": no model, no network, pure evidence rules.
 - **Identifier-collision penalty.** When the query names a compound identifier
   (`auth_refresh`) and a hit's symbol is only a fragment of it (`refresh`)
   without evidencing the full identifier, the score is multiplied by 0.85
-  (`identifier_collision`).
+  (`identifier_collision`). The inverse also applies: `Searcher` demotes
+  `bench_searcher`, and a partial token match (`refresh` inside a longer test
+  name) loses to the exact spelling.
+- **Code over docs / entrypoints.** Markdown lexical hits lose when real code
+  exists. Conceptual queries boost symbols that share concept tokens with the
+  query and demote generic `main`/`start` callers.
 
 Critic notes surface as `critic:<note>` entries in each hit's `why` array on
 the agent envelope. The critic runs before margins and confidence are

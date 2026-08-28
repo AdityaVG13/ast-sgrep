@@ -303,23 +303,41 @@ fn kind_weight(kind: &str) -> f64 {
         _ => TYPE_SYMBOL_WEIGHT,
     }
 }
+
+/// Exact-case identifier names beat folded homonyms and never take the type penalty.
+fn symbol_match_weight(query_spelling: Option<&str>, name: &str, kind: &str) -> f64 {
+    let kind_w = kind_weight(kind);
+    let Some(query) = query_spelling.filter(|s| !s.is_empty()) else {
+        return kind_w;
+    };
+    if name == query {
+        2.5
+    } else if query.chars().any(|c| c.is_uppercase()) && name.eq_ignore_ascii_case(query) {
+        kind_w * 0.55
+    } else {
+        kind_w
+    }
+}
 fn symbol_span_rows_to_hits(
     store: &IndexStore,
     rows: Vec<SymbolSpanRow>,
     options: &SearchOptions,
+    parsed: &ParsedQuery,
     kind: HitKind,
     score_for: impl Fn(&str) -> f64,
 ) -> Result<Vec<SearchHit>> {
-    symbol_span_rows_to_hits_opts(store, rows, options, kind, score_for, true)
+    symbol_span_rows_to_hits_opts(store, rows, options, parsed, kind, score_for, true)
 }
 fn symbol_span_rows_to_hits_opts(
     store: &IndexStore,
     rows: Vec<SymbolSpanRow>,
     options: &SearchOptions,
+    parsed: &ParsedQuery,
     kind: HitKind,
     score_for: impl Fn(&str) -> f64,
     attach_excerpts: bool,
 ) -> Result<Vec<SearchHit>> {
+    let spelling = parsed.identifier_spelling();
     let mut hits = Vec::with_capacity(rows.len());
     for (path, language, name, sym_kind, line_start, line_end) in rows {
         if !matches_lang(language.as_deref(), options.lang_filter.as_deref()) {
@@ -330,7 +348,7 @@ fn symbol_span_rows_to_hits_opts(
             file: path,
             line_start,
             line_end,
-            score: score_for(&name) * kind_weight(&sym_kind),
+            score: score_for(&name) * symbol_match_weight(spelling, &name, &sym_kind),
             excerpt: String::new(),
             symbol: Some(name),
             language,
@@ -400,6 +418,7 @@ pub fn symbol_pass_for_files(
         store,
         rows,
         options,
+        parsed,
         HitKind::Def,
         |name| score_def(&parsed.terms, name),
         false,
@@ -454,6 +473,7 @@ pub fn anchor_pass_for_files(
         store,
         rows,
         options,
+        parsed,
         HitKind::Anchor,
         |name| {
             let matched = parsed
@@ -492,7 +512,7 @@ pub fn anchor_pass(
     let (where_clause, bind) = like_terms_filter("s.name", &terms, options.lang_filter.as_deref());
     let rows = query_symbol_spans(store, &where_clause, bind, SYMBOL_SQL_LIMIT)?;
     let term_count = parsed.terms.len();
-    symbol_span_rows_to_hits(store, rows, options, HitKind::Anchor, |name| {
+    symbol_span_rows_to_hits(store, rows, options, parsed, HitKind::Anchor, |name| {
         let matched = parsed
             .terms
             .iter()
@@ -517,7 +537,7 @@ pub(crate) fn def_hits_for_terms(
     let (where_clause, bind) =
         like_terms_filter("s.name", &parsed.terms, options.lang_filter.as_deref());
     let rows = query_symbol_spans(store, &where_clause, bind, limit)?;
-    symbol_span_rows_to_hits(store, rows, options, HitKind::Def, |name| {
+    symbol_span_rows_to_hits(store, rows, options, parsed, HitKind::Def, |name| {
         score_def(&parsed.terms, name)
     })
 }
@@ -605,7 +625,7 @@ pub fn search_defs(
     }
     let (where_clause, bind) = exact_eq_filter("s.name", name, options.lang_filter.as_deref());
     let rows = query_symbol_spans(store, &where_clause, bind, mode_sql_limit(options))?;
-    symbol_span_rows_to_hits(store, rows, options, HitKind::Def, |n| {
+    symbol_span_rows_to_hits(store, rows, options, &q, HitKind::Def, |n| {
         score_def(&q.terms, n)
     })
 }

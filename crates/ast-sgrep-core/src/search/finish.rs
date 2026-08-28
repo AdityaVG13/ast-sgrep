@@ -50,11 +50,18 @@ pub(super) fn definition_query_affinity(parsed: &ParsedQuery, hit: &SearchHit) -
         return 0;
     }
     let snake_spelling = symbol_tokens.join("_");
-    if symbol.to_lowercase() == snake_spelling {
+    let mut affinity: u8 = if symbol.to_lowercase() == snake_spelling {
         3
     } else {
         2
+    };
+    if parsed
+        .identifier_spelling()
+        .is_some_and(|spelling| spelling == symbol)
+    {
+        affinity = affinity.saturating_add(2);
     }
+    affinity
 }
 
 /// Shared ranking key for pre-truncate prune and final sort in `finish_response`.
@@ -219,7 +226,15 @@ fn finish_response_inner(
         gate_limit
     };
     let prune_keep = keep.saturating_mul(4).max(keep.saturating_add(32));
-    let multi_term = parsed.terms.len() > 1;
+    // Conceptual NL and identifier queries: docs that repeat the split
+    // tokens have perfect coverage and would otherwise bury the definition
+    // (`auth_refresh` must not lose to a comment that says "auth refresh").
+    let intent = crate::intent::classify(parsed);
+    let multi_term = parsed.terms.len() > 1
+        && !matches!(
+            intent,
+            crate::intent::QueryIntent::Conceptual | crate::intent::QueryIntent::Symbol
+        );
     // Coverage is a pure function of (terms, excerpt). Compute once per hit so
     // select_nth / sort do not re-lowercase excerpts on every comparison.
     let mut keyed: Vec<(u32, SearchHit)> = hits

@@ -89,6 +89,9 @@ path = "../../tests/core/evidence_merge.rs"
 name = "freshness_identity"
 path = "../../tests/core/freshness_identity.rs"
 [[test]]
+name = "identifier_ranking"
+path = "../../tests/core/identifier_ranking.rs"
+[[test]]
 name = "graph_oracle"
 path = "../../tests/core/graph_oracle.rs"
 [[test]]
