@@ -73,3 +73,19 @@ fn robot_next_aliases_robot_triage() {
     let value: Value = serde_json::from_str(&stdout).expect("json stdout");
     assert_eq!(value["command"], "doctor");
 }
+
+#[test]
+fn json_stdout_is_standalone_for_jq() {
+    let (code, stdout, stderr) = run(&["--json", "capabilities"]);
+    assert_eq!(code, 0, "stderr={stderr}");
+    assert!(
+        stdout.trim_start().starts_with("{"),
+        "stdout must be JSON without a log prefix: {stdout}"
+    );
+    let _: Value = serde_json::from_str(&stdout).expect("stdout is one JSON value");
+    assert!(
+        !stderr.contains('{'),
+        "diagnostics must not mix JSON into stderr: {stderr}"
+    );
+}
+
