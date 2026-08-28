@@ -470,6 +470,7 @@ const KNOWN_LONG_FLAGS: &[&str] = &[
     "debounce-ms",
     "scip",
     "robot-triage",
+    "robot-next",
     "requests",
     "yes",
     "force",
@@ -496,11 +497,41 @@ fn closest_long_flag(name: &str) -> Option<&'static str> {
         .map(|(flag, _)| flag)
 }
 
+fn inject_robot_triage(
+    raw: Vec<std::ffi::OsString>,
+    warnings: &mut Vec<String>,
+) -> Vec<std::ffi::OsString> {
+    let has_doctor = raw.iter().any(|arg| arg == "doctor");
+    let mut has_triage = false;
+    let mut rewritten = Vec::with_capacity(raw.len() + 1);
+    for arg in raw {
+        let text = arg.to_str().unwrap_or("");
+        if matches!(text, "--robot-next" | "--robot-diagnose") {
+            warnings.push(
+                "note: recovered mega-command as `--robot-triage`. Next time: asgrep doctor --robot-triage"
+                    .into(),
+            );
+            rewritten.push(std::ffi::OsString::from("--robot-triage"));
+            has_triage = true;
+            continue;
+        }
+        if text == "--robot-triage" {
+            has_triage = true;
+        }
+        rewritten.push(arg);
+    }
+    if has_triage && !has_doctor && !rewritten.is_empty() {
+        rewritten.insert(1, std::ffi::OsString::from("doctor"));
+    }
+    rewritten
+}
+
 /// Recover Levenshtein-1 / transposition flag and subcommand typos before clap.
 pub(crate) fn rewrite_typos(
     raw: Vec<std::ffi::OsString>,
 ) -> (Vec<std::ffi::OsString>, Vec<String>) {
     let mut warnings = Vec::new();
+    let raw = inject_robot_triage(raw, &mut warnings);
     let mut out = Vec::with_capacity(raw.len());
     let mut passthrough = false;
     let mut saw_positional = false;

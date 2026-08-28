@@ -53,3 +53,23 @@ fn colour_flag_is_a_noop_with_a_teaching_note() {
     assert_eq!(value["ok"], true);
     assert!(stderr.contains("ignored `--colour`"), "stderr={stderr}");
 }
+
+#[test]
+fn robot_triage_works_without_doctor_verb() {
+    let (code, stdout, stderr) = run(&["--robot-triage"]);
+    assert!(
+        code == 0 || code == 2,
+        "mega-command must run doctor, got {code} stderr={stderr} stdout={stdout}"
+    );
+    let value: Value = serde_json::from_str(&stdout).expect("json stdout");
+    assert_eq!(value["command"], "doctor");
+    assert!(value.get("robot_triage").is_some() || value["ok"].is_boolean());
+}
+
+#[test]
+fn robot_next_aliases_robot_triage() {
+    let (code, stdout, stderr) = run(&["--robot-next"]);
+    assert!(code == 0 || code == 2, "stderr={stderr} stdout={stdout}");
+    let value: Value = serde_json::from_str(&stdout).expect("json stdout");
+    assert_eq!(value["command"], "doctor");
+}
