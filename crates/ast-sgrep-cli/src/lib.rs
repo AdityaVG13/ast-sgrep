@@ -94,6 +94,10 @@ fn rewrite_search_path_alias(raw: Vec<OsString>) -> Vec<OsString> {
 
 fn run_process() -> ! {
     let raw_args = rewrite_search_path_alias(std::env::args_os().collect());
+    let (raw_args, typo_warnings) = agent::rewrite_typos(raw_args);
+    for warning in &typo_warnings {
+        eprintln!("{warning}");
+    }
     let cli = match Cli::try_parse_from(&raw_args) {
         Ok(cli) => cli,
         Err(error) => {

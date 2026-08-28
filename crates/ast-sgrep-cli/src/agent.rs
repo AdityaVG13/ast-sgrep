@@ -428,6 +428,145 @@ pub(crate) fn emit_robot_guide(cli: &Cli) -> anyhow::Result<()> {
     print_robot_guide();
     Ok(())
 }
+const KNOWN_LONG_FLAGS: &[&str] = &[
+    "json",
+    "robot-help",
+    "root",
+    "limit",
+    "index-path",
+    "lang",
+    "durability",
+    "no-auto-index",
+    "auto-index",
+    "no-embed",
+    "neural-embed",
+    "semantic-only",
+    "tantivy",
+    "ann-threshold",
+    "ann-probes",
+    "rerank",
+    "rerank-top-k",
+    "format",
+    "excerpt-lines",
+    "snippet-tokens",
+    "response-snippet-tokens",
+    "file-filter",
+    "path",
+    "budget-tokens",
+    "help",
+    "version",
+    "dry-run",
+    "pattern",
+    "rewrite",
+    "max-depth",
+    "max-nodes",
+    "max-edges",
+    "query",
+    "iterations",
+    "suite",
+    "fixture",
+    "queries-file",
+    "skip-index",
+    "debounce-ms",
+    "scip",
+    "robot-triage",
+    "requests",
+    "yes",
+    "force",
+];
+
+const COLOR_NOOPS: &[&str] = &["color", "colour", "no-color", "no-colour"];
+
+fn closest_long_flag(name: &str) -> Option<&'static str> {
+    if let Some(flag) = KNOWN_LONG_FLAGS.iter().copied().find(|flag| *flag == name) {
+        return Some(flag);
+    }
+    KNOWN_LONG_FLAGS
+        .iter()
+        .copied()
+        .map(|flag| (flag, edit_distance(name, flag)))
+        .min_by_key(|(_, distance)| *distance)
+        .filter(|(flag, distance)| {
+            is_adjacent_transposition(name, flag)
+                || *distance <= 1
+                || (*distance == 2
+                    && name.len().abs_diff(flag.len()) <= 1
+                    && name.len().min(flag.len()) >= 4)
+        })
+        .map(|(flag, _)| flag)
+}
+
+/// Recover Levenshtein-1 / transposition flag and subcommand typos before clap.
+pub(crate) fn rewrite_typos(
+    raw: Vec<std::ffi::OsString>,
+) -> (Vec<std::ffi::OsString>, Vec<String>) {
+    let mut warnings = Vec::new();
+    let mut out = Vec::with_capacity(raw.len());
+    let mut passthrough = false;
+    let mut saw_positional = false;
+    for (index, arg) in raw.into_iter().enumerate() {
+        if index == 0 || passthrough {
+            out.push(arg);
+            continue;
+        }
+        if arg == "--" {
+            passthrough = true;
+            out.push(arg);
+            continue;
+        }
+        let Some(text) = arg.to_str() else {
+            out.push(arg);
+            continue;
+        };
+        if let Some(rest) = text.strip_prefix("--") {
+            let (name, value) = match rest.split_once('=') {
+                Some((name, value)) => (name, Some(value)),
+                None => (rest, None),
+            };
+            let folded = name.to_ascii_lowercase();
+            if COLOR_NOOPS.contains(&folded.as_str()) {
+                warnings.push(format!(
+                    "note: ignored `--{name}`; asgrep is monochrome. Use NO_COLOR=1. Machine data: asgrep --json …"
+                ));
+                continue;
+            }
+            if let Some(canonical) = closest_long_flag(&folded) {
+                if canonical != folded {
+                    let rewritten = match value {
+                        Some(value) => format!("--{canonical}={value}"),
+                        None => format!("--{canonical}"),
+                    };
+                    warnings.push(format!(
+                        "note: recovered `--{name}` as `--{canonical}`. Next time: {rewritten}"
+                    ));
+                    out.push(std::ffi::OsString::from(rewritten));
+                    continue;
+                }
+            }
+            out.push(arg);
+            continue;
+        }
+        if text.starts_with('-') {
+            out.push(arg);
+            continue;
+        }
+        if !saw_positional {
+            saw_positional = true;
+            if let Some(canonical) = query_looks_like_subcommand_typo(text) {
+                if canonical != text {
+                    warnings.push(format!(
+                        "note: recovered `{text}` as `{canonical}`. Next time: asgrep {canonical} …"
+                    ));
+                    out.push(std::ffi::OsString::from(canonical));
+                    continue;
+                }
+            }
+        }
+        out.push(arg);
+    }
+    (out, warnings)
+}
+
 pub(crate) fn query_looks_like_subcommand_typo(query: &str) -> Option<&'static str> {
     let q = query.trim();
     if q.is_empty() || q.contains(' ') {
@@ -471,6 +610,11 @@ pub(crate) fn query_looks_like_subcommand_typo(query: &str) -> Option<&'static s
         "robot-docs",
         "doctor",
         "eval",
+        "codemod",
+        "codemode-batch",
+        "codemode-serve",
+        "find",
+        "query",
     ];
     COMMANDS
         .iter()

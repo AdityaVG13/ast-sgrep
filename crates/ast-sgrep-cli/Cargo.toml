@@ -50,6 +50,9 @@ tempfile.workspace = true
 
 # Integration tests live in the repo-root tests/ tree.
 [[test]]
+name = "agent_ergonomics"
+path = "../../tests/cli/agent_ergonomics.rs"
+[[test]]
 name = "cli_smoke"
 path = "../../tests/cli/cli_smoke.rs"
 [[test]]
