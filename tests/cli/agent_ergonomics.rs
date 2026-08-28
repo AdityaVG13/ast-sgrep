@@ -197,3 +197,33 @@ fn force_alias_is_accepted_as_yes() {
         "alias --force must be accepted: {blob}"
     );
 }
+
+#[test]
+fn capabilities_json_is_byte_stable() {
+    let (c1, s1, e1) = run(&["capabilities", "--json"]);
+    let (c2, s2, e2) = run(&["capabilities", "--json"]);
+    assert_eq!(c1, 0, "stderr={e1}");
+    assert_eq!(c2, 0, "stderr={e2}");
+    assert_eq!(
+        s1, s2,
+        "capabilities --json must be byte-identical across runs"
+    );
+}
+
+#[test]
+fn doctor_json_omits_tty_and_clock_fields() {
+    let (code, stdout, stderr) = run(&["--json", "doctor", "."]);
+    assert!(code == 0 || code == 2, "stderr={stderr}");
+    let value: Value = serde_json::from_str(&stdout).expect("json stdout");
+    assert!(
+        value.get("tty").is_none(),
+        "tty leaks host interactivity: {value}"
+    );
+    let blob = stdout.to_ascii_lowercase();
+    for needle in ["updated_unix_ms", "generated_at", "timestamp"] {
+        assert!(
+            !blob.contains(needle),
+            "doctor envelope must not include {needle}: {stdout}"
+        );
+    }
+}

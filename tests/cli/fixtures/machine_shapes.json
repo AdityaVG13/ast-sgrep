@@ -50,8 +50,7 @@
     "schema_version",
     "status",
     "suggested_commands",
-    "tool",
-    "tty"
+    "tool"
   ],
   "agent": [
     "command",

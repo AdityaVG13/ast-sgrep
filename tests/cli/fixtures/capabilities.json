@@ -1,6 +1,6 @@
 {
   "agent_contract": {
-    "deterministic": "stable JSON key ordering via serde_json; disable color with NO_COLOR=1",
+    "deterministic": "stable JSON key ordering via serde_json; doctor/capabilities envelopes omit TTY and wall-clock fields; bench history honors SOURCE_DATE_EPOCH; disable color with NO_COLOR=1",
     "stderr": "empty in machine modes; human diagnostics otherwise",
     "stdout": "one data payload in machine/default-agent modes"
   },

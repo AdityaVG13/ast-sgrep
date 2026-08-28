@@ -4,7 +4,6 @@ use ast_sgrep_core::semantic_ann::should_use_ann;
 use ast_sgrep_core::{IndexStore, StoreError, INDEX_SCHEMA_VERSION};
 use clap::{CommandFactory, Parser, Subcommand};
 use serde_json::{json, Value};
-use std::io::{self, IsTerminal};
 use std::path::Path;
 const TOOL: &str = "asgrep";
 #[derive(Parser)]
@@ -57,7 +56,7 @@ pub(crate) fn capabilities_json(_cli: &Cli) -> anyhow::Result<Value> {
     Ok(json!({
         "version": env!("CARGO_PKG_VERSION"),
         "description": command.get_about().map(|s| s.to_string()).unwrap_or_else(|| "Polyglot hybrid code search".into()),
-        "agent_contract": {"stdout": "one data payload in machine/default-agent modes", "stderr": "empty in machine modes; human diagnostics otherwise", "deterministic": "stable JSON key ordering via serde_json; disable color with NO_COLOR=1"},
+        "agent_contract": {"stdout": "one data payload in machine/default-agent modes", "stderr": "empty in machine modes; human diagnostics otherwise", "deterministic": "stable JSON key ordering via serde_json; doctor/capabilities envelopes omit TTY and wall-clock fields; bench history honors SOURCE_DATE_EPOCH; disable color with NO_COLOR=1"},
         "commands": commands,
         "global_flags": global_flags,
         "search_tuning_flags": search_tuning_flags,
@@ -365,7 +364,7 @@ fn doctor_triage_json(cli: &Cli, root: &Path) -> anyhow::Result<Value> {
         "asgrep robot-docs guide".to_string(),
     ]);
     Ok(
-        json!({"robot_triage": true, "root": root, "index_path": cli.index_path, "status": status, "issues": issues, "suggested_commands": next, "healthy": issues.is_empty(), "tty": io::stdout().is_terminal()}),
+        json!({"robot_triage": true, "root": root, "index_path": cli.index_path, "status": status, "issues": issues, "suggested_commands": next, "healthy": issues.is_empty()}),
     )
 }
 /// Agent handbook body (markdown). Single source for human stdout and --json envelope.

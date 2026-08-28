@@ -181,10 +181,7 @@ fn update_bench_history(
         "git_sha": git_sha,
         "profile": profile,
         "verdict": verdict.as_str(),
-        "updated_unix_ms": std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis() as u64)
-            .unwrap_or(0),
+        "updated_unix_ms": source_date_unix_ms(),
     });
     root.as_object_mut()
         .context("bench history root")?
@@ -647,4 +644,16 @@ fn run_bench_batch(
         }
     }
     Ok(())
+}
+
+fn source_date_unix_ms() -> u64 {
+    if let Ok(raw) = std::env::var("SOURCE_DATE_EPOCH") {
+        if let Ok(seconds) = raw.trim().parse::<u64>() {
+            return seconds.saturating_mul(1000);
+        }
+    }
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
 }
