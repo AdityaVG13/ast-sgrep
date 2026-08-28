@@ -75,20 +75,18 @@ Build or incrementally update the index. Pass `force: true` for full reindex.
 
 **Concurrency and cancel (intentional limits for trusted local agents):**
 
-- stdio MCP handles `tools/call` **sequentially** on one thread. A long
-  `index_repo` blocks other tool calls until it returns.
-- Concurrent `index_repo` calls share a process-wide single-flight lock; wait
-  time counts toward a **soft wall deadline** (600s). The deadline is checked
-  before start and after index work finishes -- it is **not** cooperative
-  mid-build cancellation. If the post-mutation check fails, the error notes
-  that the **index may already have committed** (caches are still invalidated).
-- There is **no** `$/cancel` / `notifications/cancelled` path and no cancel
-  token into `Indexer::{index_all,reindex_all}`. Clients cannot abort an
-  in-flight index over the wire.
-- Acceptable for single-tenant local agents (Cursor, Claude Desktop, Pi).
-  Multi-tenant hosts that need preemptive cancel require a product change:
-  multiplexed request read, request-scoped cancel flag, and cooperative
-  checkpoints in the indexer (tracked as `ast-sgrep-d2a1.16`).
+- stdio is official [`rmcp`](https://crates.io/crates/rmcp) (tokio). The
+  reader stays live while search/index run on blocking threads, so `ping`
+  and `notifications/cancelled` are not stuck behind `index_repo`.
+- Concurrent `index_repo` calls still share a process-wide single-flight lock;
+  wait time counts toward a **soft wall deadline** (600s). The deadline is
+  checked before start and after index work finishes. If the post-mutation
+  check fails, the error notes that the **index may already have committed**
+  (caches are still invalidated).
+- `notifications/cancelled` sets the indexer's cooperative cancel flag. The
+  walk/prepare loop returns `operation cancelled` without a new commit when
+  the flag is observed before the bulk write. A cancel that arrives after
+  commit is ignored, matching the MCP spec.
 
 ## Recommended agent loop
 

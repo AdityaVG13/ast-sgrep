@@ -1,6 +1,6 @@
 use ast_sgrep_testkit::{assert_golden_json_at, Scrubber};
 use serde_json::{json, Value};
-use std::io::Write;
+use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 /// Locate asgrep-mcp. `env!(CARGO_BIN_EXE_asgrep-mcp)` is unavailable when the
@@ -39,6 +39,14 @@ fn rpc_session(payloads: Vec<Value>, root: Option<&std::path::Path>) -> Vec<Valu
     rpc_session_env(payloads, root, &[])
 }
 
+fn initialize_params(protocol_version: &str) -> Value {
+    json!({
+        "protocolVersion": protocol_version,
+        "capabilities": {},
+        "clientInfo": {"name": "asgrep-mcp-test", "version": "0"}
+    })
+}
+
 fn rpc_session_env(
     payloads: Vec<Value>,
     root: Option<&std::path::Path>,
@@ -59,25 +67,50 @@ fn rpc_session_env(
             }
         }
     }
+    let needs_handshake = !payloads
+        .iter()
+        .any(|payload| payload["method"] == "initialize");
     let mut child = command.spawn().expect("spawn MCP");
-    {
-        let mut stdin = child.stdin.take().unwrap();
-        for payload in &payloads {
-            writeln!(stdin, "{payload}").unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    let mut stdout = BufReader::new(child.stdout.take().unwrap());
+    let send = |stdin: &mut std::process::ChildStdin, payload: &Value| {
+        writeln!(stdin, "{payload}").unwrap();
+        stdin.flush().unwrap();
+    };
+    let recv = |stdout: &mut BufReader<std::process::ChildStdout>| -> Value {
+        let mut line = String::new();
+        let n = stdout.read_line(&mut line).expect("read MCP line");
+        assert!(n > 0, "MCP closed stdout");
+        serde_json::from_str(line.trim()).expect("JSON-RPC")
+    };
+    if needs_handshake {
+        send(
+            &mut stdin,
+            &json!({
+                "jsonrpc":"2.0",
+                "id":"__init",
+                "method":"initialize",
+                "params": initialize_params("2025-11-25")
+            }),
+        );
+        let init = recv(&mut stdout);
+        assert_eq!(init["id"], "__init", "{init:#}");
+        send(
+            &mut stdin,
+            &json!({"jsonrpc":"2.0","method":"notifications/initialized"}),
+        );
+    }
+    let mut responses = Vec::new();
+    for payload in &payloads {
+        send(&mut stdin, payload);
+        if payload.get("id").is_some() {
+            responses.push(recv(&mut stdout));
         }
     }
-    let out = child.wait_with_output().expect("wait MCP");
-    assert!(
-        out.status.success(),
-        "stderr={}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    String::from_utf8(out.stdout)
-        .expect("utf8 stdout")
-        .lines()
-        .filter(|line| !line.trim().is_empty())
-        .map(|line| serde_json::from_str(line).expect("JSON-RPC"))
-        .collect()
+    drop(stdin);
+    let status = child.wait().expect("wait MCP");
+    assert!(status.success(), "MCP exited {status}");
+    responses
 }
 /// Parse the text payload of a tools/call result.
 fn tool_body(response: &Value) -> Value {
@@ -87,7 +120,9 @@ fn tool_body(response: &Value) -> Value {
 #[test]
 fn initialize_returns_protocol_and_tools_capability() {
     // r2lu: a client that names no revision gets the current one.
-    let r = rpc(json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}));
+    let r = rpc(
+        json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":initialize_params("2025-11-25")}),
+    );
     assert_eq!(r["id"], 1);
     assert_eq!(r["result"]["protocolVersion"], "2025-11-25");
     assert!(r["result"]["capabilities"]["tools"].is_object());
@@ -101,7 +136,7 @@ fn initialize_returns_protocol_and_tools_capability() {
 fn initialize_negotiates_the_requested_protocol_revision() {
     let legacy = rpc(json!({
         "jsonrpc":"2.0","id":1,"method":"initialize",
-        "params":{"protocolVersion":"2024-11-05"}
+        "params": initialize_params("2024-11-05")
     }));
     assert_eq!(
         legacy["result"]["protocolVersion"], "2024-11-05",
@@ -110,7 +145,7 @@ fn initialize_negotiates_the_requested_protocol_revision() {
 
     let current = rpc(json!({
         "jsonrpc":"2.0","id":2,"method":"initialize",
-        "params":{"protocolVersion":"2025-11-25"}
+        "params": initialize_params("2025-11-25")
     }));
     assert_eq!(current["result"]["protocolVersion"], "2025-11-25");
 
@@ -118,7 +153,7 @@ fn initialize_negotiates_the_requested_protocol_revision() {
     // must not be echoed back merely because the client requested it.
     let unknown = rpc(json!({
         "jsonrpc":"2.0","id":3,"method":"initialize",
-        "params":{"protocolVersion":"2026-07-28"}
+        "params": initialize_params("2026-07-28")
     }));
     assert_eq!(unknown["result"]["protocolVersion"], "2025-11-25");
 }
@@ -393,8 +428,9 @@ fn unknown_tool_remains_a_tool_error_result() {
 }
 
 #[test]
-fn parse_error_uses_jsonrpc_null_id() {
-    // JSON-RPC 2.0: when id cannot be detected, id MUST be null (not omitted).
+fn unparsable_stdio_is_ignored() {
+    // rmcp ignores unparsable input rather than emitting JSON-RPC -32700
+    // (modelcontextprotocol/rust-sdk#938). EOF before initialize is a clean exit.
     let mut command = Command::new(mcp_bin());
     command.stdin(Stdio::piped()).stdout(Stdio::piped());
     let mut child = command.spawn().expect("spawn MCP");
@@ -408,17 +444,11 @@ fn parse_error_uses_jsonrpc_null_id() {
         "stderr={}",
         String::from_utf8_lossy(&out.stderr)
     );
-    let lines: Vec<Value> = String::from_utf8(out.stdout)
-        .unwrap()
-        .lines()
-        .filter(|l| !l.trim().is_empty())
-        .map(|l| serde_json::from_str(l).expect("jsonrpc"))
-        .collect();
-    assert_eq!(lines.len(), 1, "{lines:?}");
-    let r = &lines[0];
-    assert_eq!(r["jsonrpc"], "2.0");
-    assert!(r["id"].is_null(), "parse error id must be null, got {r:#}");
-    assert_eq!(r["error"]["code"], -32700);
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    assert!(
+        stdout.lines().all(|line| line.trim().is_empty()),
+        "unparsable input must not produce JSON-RPC: {stdout:?}"
+    );
 }
 
 #[test]
@@ -678,7 +708,9 @@ fn mcp_fixture(name: &str) -> PathBuf {
 /// nz7i.3: freeze initialize + full tools/list descriptors (not just names).
 #[test]
 fn initialize_and_tools_list_match_goldens() {
-    let init = rpc(json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}));
+    let init = rpc(
+        json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":initialize_params("2025-11-25")}),
+    );
     let scrubbed: Value = serde_json::from_str(
         &Scrubber::machine_contract()
             .apply(&serde_json::to_string(&init["result"]).expect("serialize initialize")),
@@ -697,4 +729,126 @@ fn initialize_and_tools_list_match_goldens() {
             && tool.get("inputSchema").is_some()
     }));
     assert_golden_json_at(&mcp_fixture("tools_list.json"), &tools);
+}
+
+/// rmcp keeps reading stdio while a blocking tool runs, so ping is not stuck
+/// behind `index_repo`. `notifications/cancelled` trips the indexer cancel flag.
+#[test]
+fn ping_and_cancel_are_served_during_index_repo() {
+    use std::io::{BufRead, BufReader, Write as _};
+    use std::time::{Duration, Instant};
+
+    let temp = tempfile::tempdir().unwrap();
+    for index in 0..800 {
+        std::fs::write(
+            temp.path().join(format!("f{index}.rs")),
+            format!("pub fn f{index}() {{}}\n"),
+        )
+        .unwrap();
+    }
+
+    let mut child = Command::new(mcp_bin())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .env("ASGREP_ROOT", temp.path())
+        .spawn()
+        .expect("spawn MCP");
+    let mut stdin = child.stdin.take().expect("stdin");
+    let mut stdout = BufReader::new(child.stdout.take().expect("stdout"));
+    let send = |stdin: &mut std::process::ChildStdin, payload: Value| {
+        writeln!(stdin, "{payload}").unwrap();
+        stdin.flush().unwrap();
+    };
+    let recv = |stdout: &mut BufReader<std::process::ChildStdout>| -> Option<Value> {
+        let mut line = String::new();
+        let n = stdout.read_line(&mut line).expect("read MCP line");
+        if n == 0 {
+            return None;
+        }
+        Some(serde_json::from_str(line.trim()).expect("JSON-RPC"))
+    };
+
+    send(
+        &mut stdin,
+        json!({
+            "jsonrpc":"2.0",
+            "id":1,
+            "method":"initialize",
+            "params": initialize_params("2025-11-25")
+        }),
+    );
+    let init = recv(&mut stdout).expect("initialize");
+    assert_eq!(init["result"]["protocolVersion"], "2025-11-25", "{init:#}");
+    send(
+        &mut stdin,
+        json!({"jsonrpc":"2.0","method":"notifications/initialized"}),
+    );
+    send(
+        &mut stdin,
+        json!({
+            "jsonrpc":"2.0",
+            "id":2,
+            "method":"tools/call",
+            "params":{"name":"index_repo","arguments":{}}
+        }),
+    );
+    send(&mut stdin, json!({"jsonrpc":"2.0","id":3,"method":"ping"}));
+    send(
+        &mut stdin,
+        json!({
+            "jsonrpc":"2.0",
+            "method":"notifications/cancelled",
+            "params":{"requestId":2,"reason":"test"}
+        }),
+    );
+    send(&mut stdin, json!({"jsonrpc":"2.0","id":4,"method":"ping"}));
+
+    let started = Instant::now();
+    let mut ping = None;
+    let mut ping2 = None;
+    let mut index = None;
+    while ping.is_none() || ping2.is_none() {
+        assert!(
+            started.elapsed() < Duration::from_secs(20),
+            "timed out waiting for ping during index_repo"
+        );
+        let Some(message) = recv(&mut stdout) else {
+            break;
+        };
+        match message["id"].as_i64() {
+            Some(3) => ping = Some((started.elapsed(), message)),
+            Some(4) => ping2 = Some(message),
+            Some(2) => index = Some(message),
+            _ => {}
+        }
+    }
+    drop(stdin);
+    let _ = child.wait();
+
+    let (ping_at, ping_message) = ping.expect("ping");
+    assert!(
+        ping_message.get("error").is_none(),
+        "ping failed: {ping_message:#}"
+    );
+    assert!(
+        ping_at < Duration::from_millis(400),
+        "ping waited {ping_at:?} behind index_repo"
+    );
+    let ping2_message = ping2.expect("second ping after cancel");
+    assert!(
+        ping2_message.get("error").is_none(),
+        "follow-up ping failed: {ping2_message:#}"
+    );
+    if let Some(index_message) = index {
+        let body = index_message["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap_or_default();
+        let cancelled = index_message["result"]["isError"] == true || body.contains("cancelled");
+        let finished = index_message["result"]["isError"] == false;
+        assert!(
+            cancelled || finished,
+            "index_repo after cancel: {index_message:#}"
+        );
+    }
 }

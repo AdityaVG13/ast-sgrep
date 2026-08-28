@@ -1,7 +1,9 @@
 #![forbid(unsafe_code)]
 
 use anyhow::Context;
-fn main() -> anyhow::Result<()> {
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().collect();
     if args.len() == 2 {
         match args[1].as_str() {
@@ -16,7 +18,7 @@ fn main() -> anyhow::Result<()> {
             _ => {}
         }
     }
-    ast_sgrep_mcp::McpServer::from_env()
-        .context("MCP server init failed")?
-        .run_stdio()
+    ast_sgrep_mcp::serve_stdio()
+        .await
+        .context("MCP server init failed")
 }

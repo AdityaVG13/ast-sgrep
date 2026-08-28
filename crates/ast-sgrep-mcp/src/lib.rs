@@ -1,5 +1,9 @@
 //! MCP stdio server for snippet-first hierarchical ast-sgrep retrieval.
 //!
+//! Wire protocol is official `rmcp` over stdio. Tool dispatch stays synchronous
+//! on `spawn_blocking` so the reader can accept `ping` and `notifications/cancelled`
+//! while search or index holds SQLite.
+//!
 //! Warm path: a single process reuses one `Searcher` across search-channel calls
 //! (invalidated on `index_repo`) so AI agents avoid per-request SQLite open cost.
 //!
@@ -23,10 +27,10 @@
 
 #![forbid(unsafe_code)]
 
+mod handler;
 mod sandbox;
 
 use anyhow::Context;
-use ast_sgrep_core::io_bounds::{read_bounded_line, BoundedLine};
 use ast_sgrep_core::{EmbedBackend, IndexOptions, Indexer, SearchOptions, Searcher};
 use ast_sgrep_plugins::{
     format_response_with_budget, to_budgeted_compact_json, to_compact_miss_json, CompactBudget,
@@ -36,23 +40,16 @@ use sandbox::read_node;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::HashMap;
-use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, PoisonError};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
-/// Current handshake-based MCP revision this server implements (r2lu).
-///
-/// The 2026-07-28 revision removed `initialize`, requires per-request protocol
-/// metadata, and adds `server/discover`. Advertising it from this legacy stdio
-/// lifecycle would make modern clients select a protocol we do not implement.
-const PROTOCOL_VERSION: &str = "2025-11-25";
-/// Handshake-era revision kept for existing clients (r2lu).
-const LEGACY_PROTOCOL_VERSION: &str = "2024-11-05";
-/// Revisions this server will negotiate down to, newest first.
-const SUPPORTED_PROTOCOL_VERSIONS: [&str; 2] = [PROTOCOL_VERSION, LEGACY_PROTOCOL_VERSION];
-const SERVER_NAME: &str = "ast-sgrep";
-const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
+/// Serve MCP over stdio via official `rmcp`.
+pub async fn serve_stdio() -> anyhow::Result<()> {
+    handler::serve_stdio(McpServer::from_env()?).await
+}
+
 const MAX_AGENT_LIMIT: usize = 100;
 const MAX_READ_REFS: usize = 20;
 const MAX_CONTEXT_LINES: usize = 100;
@@ -153,15 +150,6 @@ struct IndexRepoArgs {
     force: bool,
 }
 
-#[derive(Debug, Deserialize)]
-struct JsonRpcRequest {
-    jsonrpc: String,
-    id: Option<Value>,
-    method: String,
-    #[serde(default)]
-    params: Value,
-}
-
 #[derive(Clone, PartialEq, Eq)]
 struct SearcherKey {
     root: PathBuf,
@@ -229,114 +217,7 @@ impl McpServer {
         })
     }
 
-    pub fn run_stdio(&self) -> anyhow::Result<()> {
-        let stdin = io::stdin();
-        let mut input = stdin.lock();
-        let mut stdout = io::stdout();
-        loop {
-            let Some(line) = read_bounded_line(&mut input, ast_sgrep_core::MAX_STDIN_LINE_BYTES)
-                .context("read stdin")?
-            else {
-                break;
-            };
-            let line = match line {
-                BoundedLine::Line(line) => line,
-                BoundedLine::TooLong => {
-                    // Reject before allocating the complete attacker-controlled line.
-                    // JSON-RPC 2.0 parse/invalid-id errors use id: null.
-                    write_resp(
-                        &mut stdout,
-                        Some(Value::Null),
-                        None,
-                        Some(json!({
-                            "code": -32600,
-                            "message": format!(
-                                "request line exceeds max {} bytes",
-                                ast_sgrep_core::MAX_STDIN_LINE_BYTES
-                            )
-                        })),
-                    )?;
-                    continue;
-                }
-            };
-            if line.iter().all(u8::is_ascii_whitespace) {
-                continue;
-            }
-            let request: JsonRpcRequest = match serde_json::from_slice(&line) {
-                Ok(req) => req,
-                Err(e) => {
-                    let code = if serde_json::from_slice::<Value>(&line).is_ok() {
-                        -32600
-                    } else {
-                        -32700
-                    };
-                    let label = if code == -32600 {
-                        "invalid request"
-                    } else {
-                        "parse error"
-                    };
-                    write_resp(
-                        &mut stdout,
-                        Some(Value::Null),
-                        None,
-                        Some(json!({"code": code, "message": format!("{label}: {e}")})),
-                    )?;
-                    continue;
-                }
-            };
-            if request.jsonrpc != "2.0" {
-                write_resp(
-                    &mut stdout,
-                    Some(Value::Null),
-                    None,
-                    Some(
-                        json!({"code": -32600, "message": "invalid request: jsonrpc must be 2.0"}),
-                    ),
-                )?;
-                continue;
-            }
-            if let Some(response) = self.handle_request(&request) {
-                match response {
-                    Ok(result) => write_resp(&mut stdout, request.id, Some(result), None)?,
-                    Err(error) => write_resp(&mut stdout, request.id, None, Some(error))?,
-                }
-            }
-        }
-        Ok(())
-    }
-
-    fn handle_request(&self, request: &JsonRpcRequest) -> Option<Result<Value, Value>> {
-        request.id.as_ref()?;
-        Some(match request.method.as_str() {
-            "initialize" => Ok(self.handle_initialize(&request.params)),
-            "tools/list" => Ok(self.handle_tools_list()),
-            "tools/call" => return self.handle_tools_call(&request.params).map(Ok),
-            "ping" => Ok(json!({})),
-            _ => Err(
-                json!({"code": -32601, "message": format!("method not found: {}", request.method)}),
-            ),
-        })
-    }
-
-    /// Negotiate a protocol revision (r2lu).
-    ///
-    /// A client that asks for a revision we support gets that revision back, so
-    /// handshake-era clients keep working unchanged. Anything else is answered
-    /// with our current revision, which is what the spec asks a server to do
-    /// when it cannot satisfy the request exactly.
-    fn handle_initialize(&self, params: &Value) -> Value {
-        let requested = params.get("protocolVersion").and_then(Value::as_str);
-        let negotiated = requested
-            .filter(|version| SUPPORTED_PROTOCOL_VERSIONS.contains(version))
-            .unwrap_or(PROTOCOL_VERSION);
-        json!({
-            "protocolVersion": negotiated,
-            "capabilities": { "tools": {} },
-            "serverInfo": { "name": SERVER_NAME, "version": SERVER_VERSION },
-        })
-    }
-
-    fn handle_tools_list(&self) -> Value {
+    pub(crate) fn tools_catalog(&self) -> Value {
         let search_properties = json!({
             "query": {"type": "string", "minLength": 1, "maxLength": ast_sgrep_core::MAX_QUERY_CHARS},
             "root": {"type": "string", "description": "Project root (defaults to ASGREP_ROOT or cwd)"},
@@ -414,30 +295,17 @@ impl McpServer {
         ]})
     }
 
-    fn handle_tools_call(&self, params: &Value) -> Option<Value> {
-        let name = params.get("name").and_then(|v| v.as_str()).unwrap_or("");
-        let args = params.get("arguments").cloned().unwrap_or(json!({}));
-        let result = self.dispatch_tool(name, &args);
-        Some(match result {
-            // r2lu: typed structuredContent for current clients, with the
-            // minified text kept as the fallback older clients still read.
-            Ok(text) => match serde_json::from_str::<Value>(&text) {
-                Ok(structured) => json!({
-                    "content": [{"type": "text", "text": text}],
-                    "structuredContent": structured,
-                    "isError": false
-                }),
-                Err(_) => json!({"content": [{"type": "text", "text": text}], "isError": false}),
-            },
-            Err(e) => {
-                json!({"content": [{"type": "text", "text": e.to_string()}], "isError": true})
-            }
-        })
-    }
-
     /// Tool name → handler. `code_search` remains a keyword alias (compat; protocol tests pin it).
     /// Argument shapes are parsed once here into trusted structs; handlers never re-validate wire keys.
-    fn dispatch_tool(&self, name: &str, args: &Value) -> anyhow::Result<String> {
+    pub(crate) fn dispatch_tool(
+        &self,
+        name: &str,
+        args: &Value,
+        cancel: Arc<AtomicBool>,
+    ) -> anyhow::Result<String> {
+        if cancel.load(Ordering::Acquire) {
+            anyhow::bail!(ast_sgrep_core::INDEX_CANCELLED);
+        }
         match name {
             // keyword_search and deprecated code_search share Keyword mode (compat alias).
             "keyword_search" | "code_search" => {
@@ -462,7 +330,7 @@ impl McpServer {
             }
             "index_repo" => {
                 let parsed = self.parse_index_repo(args)?;
-                self.tool_index_repo(parsed)
+                self.tool_index_repo(parsed, cancel)
             }
             other => Err(anyhow::anyhow!("unknown tool: {other}")),
         }
@@ -740,7 +608,14 @@ impl McpServer {
             resend_seen,
             budget_tokens,
         } = args;
-        let (searcher, generation) = self.searcher_for(root.clone(), limit)?;
+        let (searcher, generation) = match self.searcher_for(root.clone(), limit) {
+            Ok(pair) => pair,
+            Err(error) if error.to_string().contains("index is empty") => {
+                let miss = to_compact_miss_json(&query, &self.diagnose_miss(&root, mode));
+                return Ok(serde_json::to_string(&miss)?);
+            }
+            Err(error) => return Err(error),
+        };
         if matches!(mode, AgentSearchMode::Semantic) {
             if let Some(msg) = self
                 .search_options(root.clone(), limit)
@@ -935,7 +810,11 @@ impl McpServer {
         Ok(serde_json::to_string(&indexer.store().status()?)?)
     }
 
-    fn tool_index_repo(&self, args: IndexRepoArgs) -> anyhow::Result<String> {
+    fn tool_index_repo(
+        &self,
+        args: IndexRepoArgs,
+        cancel: Arc<AtomicBool>,
+    ) -> anyhow::Result<String> {
         let IndexRepoArgs { root, force } = args;
         // Single-flight wait counts toward the soft deadline (es7u).
         let started = Instant::now();
@@ -955,6 +834,7 @@ impl McpServer {
             },
             ..self.base_index_options(root)
         })?;
+        indexer.set_cancel(cancel);
         // index_all commits SQLite before sidecar rebuild; Err may still mean
         // durable mutation. Capture result then always sync session caches.
         let result = if force {
@@ -984,28 +864,6 @@ impl McpServer {
         Self::lock_or_recover(&self.path_registry, |registry| registry.clear()).clear();
         Self::lock_or_recover(&self.emitted_snippets, |seen| seen.clear()).clear();
     }
-}
-
-fn write_resp(
-    stdout: &mut impl Write,
-    id: Option<Value>,
-    result: Option<Value>,
-    error: Option<Value>,
-) -> io::Result<()> {
-    let mut body = json!({"jsonrpc": "2.0"});
-    if let Some(id) = id {
-        body["id"] = id;
-    }
-    if let Some(result) = result {
-        body["result"] = result;
-    }
-    if let Some(error) = error {
-        body["error"] = error;
-    }
-    // NDJSON over a pipe is block-buffered; without flush a long-lived MCP host
-    // (Cursor/Claude/etc.) never sees the response until the process exits.
-    writeln!(stdout, "{body}")?;
-    stdout.flush()
 }
 
 /// FNV-1a over snippet bytes (v972). Content-keyed so an edited file re-sends.
