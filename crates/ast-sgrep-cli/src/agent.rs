@@ -66,7 +66,7 @@ pub(crate) fn capabilities_json(_cli: &Cli) -> anyhow::Result<Value> {
             "precedence": "conflicting --root and positional ROOT is a usage error; effective_root prefers --root when set",
             "bin_aliases": ["asgrep", "ast-sgrep"]
         },
-        "environment": ["ASGREP_LIMIT", "ASGREP_INDEX_PATH", "ASGREP_DURABILITY", "ASGREP_NO_EMBED", "ASGREP_NO_AUTO_INDEX", "ASGREP_AUTO_INDEX", "ASGREP_NEURAL_EMBED", "ASGREP_NEURAL_FALLBACK", "ASGREP_SEMANTIC_ONLY", "ASGREP_TANTIVY", "ASGREP_ANN_THRESHOLD", "ASGREP_ANN_PROBES", "ASGREP_RERANK", "ASGREP_RERANK_TOP_K", "ASGREP_ALLOW_AST_GREP", "ASGREP_ALLOW_EXTERNAL_INDEX", "ASGREP_AST_GREP", "ASGREP_LEDGER_PATH", "ASGREP_USE_CACHE", "XDG_CACHE_HOME", "NO_COLOR", "CI"],
+        "environment": ["ASGREP_LIMIT", "ASGREP_INDEX_PATH", "ASGREP_DURABILITY", "ASGREP_NO_EMBED", "ASGREP_NO_AUTO_INDEX", "ASGREP_AUTO_INDEX", "ASGREP_NEURAL_EMBED", "ASGREP_NEURAL_FALLBACK", "ASGREP_SEMANTIC_ONLY", "ASGREP_TANTIVY", "ASGREP_ANN_THRESHOLD", "ASGREP_ANN_PROBES", "ASGREP_RERANK", "ASGREP_RERANK_TOP_K", "ASGREP_ALLOW_AST_GREP", "ASGREP_ALLOW_EXTERNAL_INDEX", "ASGREP_AST_GREP", "ASGREP_LEDGER_PATH", "ASGREP_USE_CACHE", "XDG_CACHE_HOME", "NO_COLOR", "CI", "SOURCE_DATE_EPOCH"],
         "environment_bool_values": ["1", "0", "true", "false", "yes", "no", "on", "off"],
         "sibling_binaries": [
             {"name":"asgrep-mcp","purpose":"MCP stdio server","launch":"asgrep-mcp (stdio JSON-RPC)"},
@@ -394,16 +394,21 @@ See `capabilities --json` → `commands` (complete clap catalog). Notable: `sear
 - Canonical: positional `ROOT` on the subcommand (or bare-search ROOT).
 - Alias: `--root ROOT`. Conflicting `--root` + positional ROOT → usage error.
 ## JSON / automation
-- `--format` implies `--json`. Prefer `--format compact` for bounded LLM consumption.
-- Machine mode emits one JSON value on stdout and no duplicate stderr diagnostics.
+- `--json` / `-j` emit one JSON value on stdout. `--format` implies `--json`. Prefer `--format compact` for bounded LLM consumption.
+- Recovered spellings: `--jason`, `--machine`, `--output-json`, `--format=json` → `--json`.
+- Machine mode emits no duplicate stderr diagnostics. Agent envelopes omit TTY and wall-clock fields.
 ## Index cancel / dry-run
 - `asgrep index --dry-run` / `asgrep reindex --dry-run` report planned work without mutating the index.
 - `asgrep codemod --pattern 'legacy($ARG)' --rewrite 'modern($ARG)' --dry-run .` emits a JSON edit plan without writing. Apply with `--yes` (alias `--force`): `asgrep codemod --yes --pattern 'legacy($ARG)' --rewrite 'modern($ARG)' .` commits one source transaction, then a separate index refresh. If refresh fails, source edits remain applied and the command reports `asgrep index` as recovery.
 - Index writes are transactional; an interrupted uncommitted write is rolled back when SQLite recovers.
 ## Exit codes
 - 0 success · 1 usage · 2 index/search failure
+## Confirmation / first-try recovery
+- Source writes: `asgrep codemod` apply requires `--yes` (alias `--force`). Always plan with `--dry-run` first.
+- `--help` after-help names the triad, `-j/--json`, and the `--yes` gate.
+- Typos: nearby flag/command spellings rewrite before clap (`--jsno` → `--json`, `capabilites` → `capabilities`, `docs` → `robot-docs`, `--dryrun` → `--dry-run`).
 ## Environment
-See `capabilities --json` → `environment`. Common: `ASGREP_INDEX_PATH`, `ASGREP_LIMIT`, `ASGREP_NO_EMBED`, `ASGREP_NO_AUTO_INDEX`, `ASGREP_DURABILITY`, `NO_COLOR`, `CI`.
+See `capabilities --json` → `environment`. Common: `ASGREP_INDEX_PATH`, `ASGREP_LIMIT`, `ASGREP_NO_EMBED`, `ASGREP_NO_AUTO_INDEX`, `ASGREP_DURABILITY`, `NO_COLOR`, `CI`, `SOURCE_DATE_EPOCH` (bench history timestamps).
 ## Ops footguns (privileged sinks)
 - `ASGREP_INDEX_PATH` / `--index-path` is a **privileged sink**: any absolute writable path is accepted. Treat it like a database URL; do not point it at untrusted locations.
 - Index rebuilds are in-place on the default `.asgrep/` DB or a pinned `ASGREP_INDEX_PATH` (SQLite transactional rollback). There is no build-then-swap generation layout. Pinning only chooses which file; it does not change atomicity.

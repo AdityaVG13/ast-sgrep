@@ -242,7 +242,7 @@ pub(crate) struct QueryCmd {
     name = "asgrep",
     version,
     about = "Polyglot hybrid code search",
-    after_help = "Agent triad: asgrep capabilities --json | robot-docs guide | doctor --robot-triage\nSibling binaries: asgrep-mcp (MCP stdio), asgrep-lsp (LSP)\nAlias: ast-sgrep\nExit: 0=ok 1=usage 2=fail\nRoot: positional ROOT is canonical; --root is an alias (conflict = usage error)"
+    after_help = "Agent triad: asgrep capabilities --json | robot-docs guide | doctor --robot-triage\nSibling binaries: asgrep-mcp (MCP stdio), asgrep-lsp (LSP)\nAlias: ast-sgrep\nJSON: -j/--json (stdout data); diagnostics on stderr\nWrites: asgrep codemod apply requires --yes (alias --force); prefer --dry-run first\nExit: 0=ok 1=usage 2=fail\nRoot: positional ROOT is canonical; --root is an alias (conflict = usage error)"
 )]
 pub(crate) struct Cli {
     #[command(subcommand)]

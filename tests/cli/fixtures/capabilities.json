@@ -312,7 +312,8 @@
     "ASGREP_USE_CACHE",
     "XDG_CACHE_HOME",
     "NO_COLOR",
-    "CI"
+    "CI",
+    "SOURCE_DATE_EPOCH"
   ],
   "environment_bool_values": [
     "1",

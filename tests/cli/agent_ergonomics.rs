@@ -227,3 +227,39 @@ fn doctor_json_omits_tty_and_clock_fields() {
         );
     }
 }
+
+#[test]
+fn capabilities_documents_yes_and_source_date_epoch() {
+    let (code, stdout, stderr) = run(&["capabilities", "--json"]);
+    assert_eq!(code, 0, "stderr={stderr}");
+    let value: Value = serde_json::from_str(&stdout).expect("json stdout");
+    let flags = value["global_flags"].as_array().expect("global_flags");
+    assert!(
+        flags.iter().any(|f| f.as_str() == Some("--yes")),
+        "capabilities must list --yes: {flags:?}"
+    );
+    let env = value["environment"].as_array().expect("environment");
+    assert!(
+        env.iter().any(|e| e.as_str() == Some("SOURCE_DATE_EPOCH")),
+        "capabilities must list SOURCE_DATE_EPOCH: {env:?}"
+    );
+    let codemod = value["commands"]
+        .as_array()
+        .expect("commands")
+        .iter()
+        .find(|c| c["name"] == "codemod")
+        .expect("codemod command");
+    assert_eq!(codemod["safe_mutating"]["kind"], "source_rewrite");
+}
+
+#[test]
+fn help_after_help_names_yes_and_json_short_flag() {
+    let (code, stdout, stderr) = run(&["--help"]);
+    assert_eq!(code, 0, "stderr={stderr}");
+    let blob = format!("{stdout}{stderr}");
+    assert!(
+        blob.contains("-j") && blob.contains("--json"),
+        "help must name -j/--json: {blob}"
+    );
+    assert!(blob.contains("--yes"), "help must name --yes: {blob}");
+}
