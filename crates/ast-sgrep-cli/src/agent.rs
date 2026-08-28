@@ -84,7 +84,7 @@ pub(crate) fn capabilities_json(_cli: &Cli) -> anyhow::Result<Value> {
             "outside_contract": "Use ripgrep only for logs and unindexed or unsupported files."
         },
         "aliases": ["ast-sgrep"],
-        "query_prefixes": ["callers:", "defs:", "imports:", "pattern:", "literal:", "regex:", "word:"],
+        "query_prefixes": ["callers:", "defs:", "imports:", "pattern:", "literal:", "regex:", "word:", "semantic:"],
         "output_limits": {
             "max_results": ast_sgrep_core::MAX_OUTPUT_RESULTS,
             "max_excerpt_lines": ast_sgrep_core::MAX_EXCERPT_LINES,
@@ -106,7 +106,7 @@ pub(crate) fn capabilities_json(_cli: &Cli) -> anyhow::Result<Value> {
             {"code": 1, "meaning": "usage error (missing required args, unknown flags, invalid --format, conflicting roots)"},
             {"code": 2, "meaning": "operational failure (index/search/IO) or doctor healthy:false"}
         ],
-        "canonical_tasks": ["asgrep capabilities --json", "asgrep robot-docs guide", "asgrep doctor --robot-triage", "asgrep --json --format compact \"where is auth refreshed\" ."],
+        "canonical_tasks": ["asgrep capabilities --json", "asgrep robot-docs guide", "asgrep --robot-triage", "asgrep --json --format compact \"where is auth refreshed\" ."],
         "notes": {
             "default_search": "Bare QUERY without a subcommand runs hybrid search; the word 'search' is not a required verb — use the `search`/`find`/`query` subcommand only when you want an explicit search command.",
             "format_implies_json": true,
@@ -365,7 +365,7 @@ pub(crate) fn robot_guide_markdown() -> &'static str {
 ## Agent triad (start here)
 1. `asgrep capabilities --json` — authoritative command/flag/env contract (derived from clap).
 2. `asgrep robot-docs guide` — this handbook.
-3. `asgrep doctor --robot-triage` — health + recovery commands using the effective root.
+3. `asgrep --robot-triage` (alias: `asgrep doctor --robot-triage`, `asgrep --robot-next`) — health + recovery in one call.
 ## Quick start
 1. `asgrep --json --format compact "natural language intent" .` — ranked hits with bounded snippets. Search is read-only; it does not auto-index.
 2. `asgrep index . --json` — build or refresh the index. Pass `--auto-index` on search only when you explicitly want search to write.

@@ -10,7 +10,7 @@
   "canonical_tasks": [
     "asgrep capabilities --json",
     "asgrep robot-docs guide",
-    "asgrep doctor --robot-triage",
+    "asgrep --robot-triage",
     "asgrep --json --format compact \"where is auth refreshed\" ."
   ],
   "command": "capabilities",
@@ -387,7 +387,8 @@
     "pattern:",
     "literal:",
     "regex:",
-    "word:"
+    "word:",
+    "semantic:"
   ],
   "root_specification": {
     "alias": "--root ROOT",
