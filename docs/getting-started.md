@@ -250,9 +250,9 @@ asgrep bench . --iterations 100
 | Symptom | Check |
 |---------|-------|
 | No semantic hits | `asgrep status`, embed backend, chunk count; try without `--no-embed` |
-| Stale results after edit | `asgrep search` incrementally refreshes unless `--no-auto-index`. If still stale, `asgrep reindex .` |
+| Stale results after edit | Search is read-only. Run `asgrep index .` or `asgrep reindex .`. |
 | `pattern:` returns nothing | Prefer simpler native shapes; optional [ast-grep](https://github.com/ast-grep/ast-grep) CLI only for exotic fallbacks |
-| Slow first search after clone | First search indexes an empty checkout automatically, or run `asgrep index .` |
+| Slow first search after clone | Run `asgrep index .` first. Search does not auto-index unless you pass `--auto-index`. |
 | IVF not loading | Fingerprint mismatch after reindex, sidecar rebuilds automatically |
 
 ## Next steps

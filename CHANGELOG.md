@@ -28,6 +28,7 @@ This changelog follows [Keep a Changelog](https://keepachangelog.com/) conventio
 - GitHub Actions `CI` no longer runs on `pull_request`; dispatch it from the Actions tab. Other workflows were already `workflow_dispatch` only.
 - Repository hygiene: drop campaign scripts and process docs; keep only clone-required `scripts/` (`rustc-capped`, `cpu-limit-exec.py`, `verify-forbid-soundness`).
 - Keep search, index, and Pi behavior tests under `tests/`. Drop campaign fuzz, benches, keep-gates, process suites, and crate-source `#[cfg(test)]` stubs.
+- Public `benchmarks/results/` drops campaign process docs (`FLOOR_PROMOTION_PROTOCOL`, fusion scorecard) and the 600-line missing-harness speed dump. Live CLI latency is the 2026-08-28 self-corpus row in `speed.md`. CI no longer installs `cargo-fuzz` against a crate that is not shipped.
 
 ## Version Timeline
 

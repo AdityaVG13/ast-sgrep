@@ -1,135 +1,93 @@
 # Benchmarks
 
-Published quality fingerprints in `results/` are a **mixed ledger**. Read the
-**status tag on each section**, not a single file-level banner.
+Published fingerprints in `results/` are a **mixed ledger**. Read the
+**status tag on each section**, not a file-level banner.
 
 | Tag | Meaning |
 |-----|---------|
 | `canonical` | Fingerprint others must cite. Regeneration may still be `UNREPRODUCIBLE`. |
 | `historical` | Published record. Not a live SLA. |
 | `UNREPRODUCIBLE` | This tree cannot regenerate the row (missing harness, gold, corpus, or artifact). |
-| `reproducible-in-tree` | Exact command + pins exist here (`asgrep bench` + `.bench-history`). |
+| `reproducible-in-tree` | Exact command + pins exist here. |
 
 A file-level UNREPRODUCIBLE banner does **not** apply to `reproducible-in-tree`
 sections. A reproducible latency section does **not** make historical MRR rows
 live. Do not invent replacement MRR/latency wins.
 
-Release-time gates run the in-tree CLI suites against the sample fixture and
-the repository itself. The [Speed benchmark workflow](https://github.com/AdityaVG13/ast-sgrep/actions/workflows/speed.yml)
-uploads JSON and fails on identity / hit / keep-gate regression. Large external
-corpora are still not vendored.
+Large external corpora are not vendored. `fuzz/` and `conformance/` are not
+shipped; clone-required helper scripts live in `scripts/`.
 
 ```text
 benchmarks/
   README.md                 ← you are here
-  results/                  ← scored comparisons and baselines
-    head-to-head.md
-    speed.md
-    bakeoff.md
-    losses.md
-    baselines.md
-    FLOOR_PROMOTION_PROTOCOL.md
-    fusion-scorecard.md
+  run_eval.sh               ← quality eval pack (raw output is gitignored)
+  fixtures/                 ← small labeled corpora
+  gold/                     ← gold queries for eval
+  results/                  ← scored comparisons
+    speed.md                ← CLI latency (live + archive)
+    head-to-head.md         ← competitor table
+    bakeoff.md              ← quality bake-off (UNREPRODUCIBLE)
+    losses.md               ← published retrieval losses
+    baselines.md            ← quality fingerprints
   studies/                  ← focused analyses
-    intent-confusion.md
-    prevented-read.md
 ```
 
 ## Start here
 
 | Doc | What it answers |
 |-----|-----------------|
-| [results/head-to-head.md](results/head-to-head.md) | Canonical cross-tool gate table |
-| [results/speed.md](results/speed.md) | Lexical / structural latency notes |
-| [results/bakeoff.md](results/bakeoff.md) | Offline bake-off narrative and scores |
+| [results/speed.md](results/speed.md) | Current self-corpus CLI latency |
+| [results/head-to-head.md](results/head-to-head.md) | Competitor table + historical GATE |
+| [results/bakeoff.md](results/bakeoff.md) | Offline quality bake-off |
 | [results/losses.md](results/losses.md) | Where we lose (published deliberately) |
-| [results/baselines.md](results/baselines.md) | Pinned floors and provenance |
-| [results/FLOOR_PROMOTION_PROTOCOL.md](results/FLOOR_PROMOTION_PROTOCOL.md) | S2 MEASURED FLOOR MATCH axes (C1 4.304 s stays until checklist + human ACK) |
-| [results/fusion-scorecard.md](results/fusion-scorecard.md) | Sub-1ms in-process parts vs multi-ms CLI competitor rows (e2hc.31) |
+| [results/baselines.md](results/baselines.md) | Pinned quality fingerprints |
 
 ## Studies
 
 | Doc | Topic |
 |------|--------|
 | [studies/intent-confusion.md](studies/intent-confusion.md) | Intent / routing observations |
-| [studies/prevented-read.md](studies/prevented-read.md) | Capsule / prevented-read notes |
+| [studies/prevented-read.md](studies/prevented-read.md) | Excerpt vs whole-file bytes |
 
 ## Reproduce
 
-```bash
-cargo run --locked --release -p ast-sgrep-cli --bin asgrep -- \
-  --json --index-path /tmp/asgrep-speed.db \
-  bench tests/fixtures/sample --suite default --fixture sample --iterations 10 \
-  > speed-results.json
+CLI latency (self corpus vs ripgrep / ast-grep): see the command block in
+[results/speed.md](results/speed.md).
 
-cargo run --locked --release -p ast-sgrep-cli --bin asgrep -- \
-  --json --index-path /tmp/asgrep-bakeoff.db \
-  bench . --suite self --fixture self --iterations 5 \
-  > bakeoff-results.json
+In-process identity suites (not the CLI competitor table):
+
+```bash
+ASGREP_BENCH_RATCHET=0 cargo run --locked --release -p ast-sgrep-cli --bin asgrep -- \
+  --json bench tests/fixtures/sample --suite default --fixture sample --iterations 20
+
+ASGREP_BENCH_RATCHET=0 cargo run --locked --release -p ast-sgrep-cli --bin asgrep -- \
+  --json bench . --suite self --fixture self --iterations 10
 ```
 
-Both suites fail inside the CLI when hit counts, expected result identities, or
-the keep-gate miss. Competitor latency is not keep.
+Quality pack (writes gitignored `results/raw/`):
 
-## Latency error budgets
+```bash
+./benchmarks/run_eval.sh
+```
 
-Published latency budgets are hard sample thresholds, separate from the measured
-tables in `results/`. A baseline above its threshold must not be published as a
-passing budget.
+## Latency notes
 
-| Surface | Status | Corpus file-count | git SHA | Hard p95 | SLO |
-|---------|--------|------------------:|---------|----------|-----|
-| cold self-index CLI (archived 110-file) | `historical` | 110 | unrecorded in-tree | 285 ms | 95% |
-| cold self-index CLI (current self) | `historical` (breached) | 1,107 | `cea904a` | 285 ms **must not be quoted as passing** | 95% |
-| literal CLI fixture | `reproducible-in-tree` (policy + keep-gate) | sample fixture | see `.bench-history` | 15 ms | 95% |
-| semantic CLI fixture | `reproducible-in-tree` (policy + keep-gate) | sample fixture | see `.bench-history` | 15 ms | 95% |
-| natural-language CLI fixture | `reproducible-in-tree` (policy + keep-gate) | sample fixture | see `.bench-history` | 15 ms | 95% |
+Published CLI numbers are sample measurements, not SLOs. The old 285 ms
+cold-index budget was set against a 110-file tree (SHA unrecorded) and is
+**not** a passing claim on the current repository.
 
-### Archived: 110-file cold-index budget
-
-The 285 ms p95 (prior 258.4 ms + 10% same-host variance, rounded up) was set
-against a **110-file** self corpus. SHA for that 110-file tree was **not
-recorded**. On 2026-08-05 the self corpus was **1,107 tracked files** at
-`cea904a`; measured cold index 906–992 ms p95 **breaches** 285 ms. Do not
-delete this miss. Do not invent a new passing cold-index number here
-(re-baseline is a later measurement, not this honesty pass).
-
-The historical 10 ms self-repo Searcher-query target does not apply to CLI
-startup fixtures. Each CLI surface is gated independently; handoff JSON must
-retain both `p95_ms` and `burn_rate` rather than collapsing them.
-
-For a 95% SLO, `burn_rate = error_rate / 0.05`. A p95 comparison alone is
-not an empirical error rate. Passing a drift envelope never changes the hard
-threshold, exceedance rate, burn rate, or `claim_within_slo`.
-
-**Measured status (2026-08-05):** cold self-index measured 906–992 ms p95 on
-the current 1,107-file self corpus (baseline `cea904a` and pr26 `137863f`),
-breaching the 285 ms budget set against the historical 110-file corpus. pr21
-(`5de7eb0`) originally measured 88.5 s p95 / 107 MiB (eager per-child-node
-semantic chunks); the child-chunk cap fix (`0ba34da`, 32 → 2 per parent)
-brought it to **2.1 s p95 / 27 MiB** with semantic query latency dropping
-42 → 16 ms. Re-baseline the cold-index budget for the current corpus size.
+| Surface | Status | Notes |
+|---------|--------|-------|
+| cold self-index CLI | `reproducible-in-tree` | 4.58 s p95 on 2026-08-28 (`2285ce29`) |
+| warm literal / pattern / semantic CLI | `reproducible-in-tree` | see [speed.md](results/speed.md) |
+| in-process Searcher | `reproducible-in-tree` | `asgrep bench`; sub-millisecond warm path, high first-query CV |
 
 ## ANN quality error budget
 
 Adaptive IVF has a **0.99 recall@10 SLO** against the same index queried
-with all clusters (`probes=all`). Miss rate is `1 - recall`; quality burn rate
-is `miss_rate / 0.01`. The narrowly filtered CI regression measures 64
-deterministic queries and fails when burn rate exceeds 1:
+with all clusters (`probes=all`):
 
 ```bash
-cargo test -p ast-sgrep-core --test semantic_ivf_roundtrip adaptive_ivf_recall_at_10_stays_within_quality_error_budget -- --nocapture
+cargo test -p ast-sgrep-core --test semantic_ivf_roundtrip \
+  adaptive_ivf_recall_at_10_stays_within_quality_error_budget -- --nocapture
 ```
-
-## Semantic IVF mmap open budget
-
-The medium fixture contains 10,000 vectors. Dedicated release-perf runs enable the 1 ms warm-open p99 gate explicitly; ordinary correctness runs avoid timing failures on contended hosts while still requiring mapped vectors and byte accounting.
-
-```bash
-ASGREP_PERF_ASSERTS=1 cargo test --locked --profile release-perf \
-  -p ast-sgrep-core --test semantic_ivf_roundtrip \
-  medium_mapped_sidecar_reports_open_p99 -- \
-  --exact --nocapture --test-threads=1
-```
-
-Cold, fresh-inode, and warm definitions plus the isolated probe are in [`docs/validation/semantic-ivf-mmap.md`](../docs/validation/semantic-ivf-mmap.md).

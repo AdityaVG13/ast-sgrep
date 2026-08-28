@@ -43,18 +43,7 @@ jobs:
           node-version: 22.19.0
           cache: npm
       - uses: dtolnay/rust-toolchain@stable
-      - name: Install nightly for fuzzing
-        run: rustup toolchain install nightly --profile minimal
       - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: fuzz -> target
-      - name: Cache cargo-fuzz
-        uses: actions/cache@v4
-        with:
-          path: ~/.cargo/bin/cargo-fuzz
-          key: cargo-fuzz-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'fuzz/Cargo.toml') }}
-      - name: Install cargo-fuzz
-        run: command -v cargo-fuzz >/dev/null || cargo install cargo-fuzz --locked
       - run: npm ci --ignore-scripts
       - name: Configure SSH tag verification
         run: |

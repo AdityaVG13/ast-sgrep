@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Reproducible evaluation pack (bead ast-sgrep-tef-eval-pack-d2dv).
+# Reproducible evaluation pack.
 #
-# Regenerates the candidate retrieval and token-efficiency measurements for the
-# `self` corpus in benchmarks/results/baselines.md. It does not fetch external
-# corpora; Rust dependencies must already be available or downloadable by Cargo.
+# Regenerates candidate retrieval and token-efficiency measurements for the
+# `self` corpus. It does not fetch external corpora; Rust dependencies must
+# already be available or downloadable by Cargo.
 #
 #   ./benchmarks/run_eval.sh            # build + evaluate + write raw artifacts
 #
@@ -44,8 +44,7 @@ echo "commit=$commit dirty=false"
 echo "== retrieval quality (self corpus) =="
 "$bin" eval --gold "$gold" . --json > "$out/self-quality.json"
 "$bin" eval --gold "$gold" . --json --ab no-embed > "$out/self-ab-no-embed.json"
-# 7d5x.4: intent-weighted per-field rescoring vs the concatenated chunk
-# vector alone. Same index, same gold, same fusion; only embed scoring moves.
+# Intent-weighted per-field rescoring vs the concatenated chunk vector.
 "$bin" eval --gold "$gold" . --json --ab concat-embed > "$out/self-ab-concat-embed.json"
 
 # 2. Graph-edge precision by resolution tier over a fixed, completely labeled

@@ -8,7 +8,7 @@
 
 **v2.0.0** · 13 languages · local-first semantic · critic + two-channel `AND` · Code Mode (on by default, no API key)
 
-> **ast-grep finds shapes. ripgrep finds strings. ast-sgrep finds intent.**
+> **One search tool.** Identifiers, natural language, defs/callers, semantic, and patterns — ranked. You do not need a second grep.
 
 ---
 
@@ -93,7 +93,9 @@ Also in this release, without changing the day-to-day query prefixes:
 
 ## Why this exists
 
-Most code search is either **fast text** (ripgrep) or **pattern matching** (ast-grep). Neither answers questions like *"where does credential renewal happen?"* when the words in your question do not appear in the code.
+For **search**, one tool is enough. You do not need ripgrep to find a token, ast-grep to find a shape, or Semgrep to find a concept. Index the repo once; unprefixed `asgrep` ranks the definition, the callers, the structural match, and the semantic near-miss in one list.
+
+Most other code search is either **fast text** (ripgrep) or **pattern matching** (ast-grep / Semgrep). Neither answers *"where does credential renewal happen?"* when those words never appear in the code, and neither ranks `Searcher` above `bench_searcher`.
 
 **ast-sgrep** builds a **persistent index**: symbols, caller/callee edges, imports, lexical FTS, and **symbol-level semantic vectors** enriched with call-graph context. Query in natural language or with graph prefixes; get ranked hits with excerpts for humans or agents.
 
@@ -117,15 +119,16 @@ Most code search is either **fast text** (ripgrep) or **pattern matching** (ast-
 
 ## Where it fits
 
-ast-sgrep **complements** ripgrep and ast-grep; it does not replace them.
+On an indexed tree, **asgrep is the search function.** Do not spawn ripgrep, ast-grep, or Semgrep to find code the index already covers.
 
-| Tool | Role |
+| Job | Tool |
 |------|------|
-| **[ripgrep](https://github.com/BurntSushi/ripgrep)** | Fast scan of any file. No index. |
-| **[ast-grep](https://github.com/ast-grep/ast-grep)** | Structural patterns and full-rule codemods |
-| **ast-sgrep** | Persistent navigation + intent: NL, defs/callers/graph, semantic hits, two-channel joins, agent JSON |
+| Find a name, a shape, a caller, or an idea | **ast-sgrep** (hybrid / `defs:` / `callers:` / `pattern:` / `literal:` / semantic) |
+| Logs, generated files, or a tree you have not indexed | [ripgrep](https://github.com/BurntSushi/ripgrep) |
+| Full-rule rewrites and exotic ast-grep YAML | [ast-grep](https://github.com/ast-grep/ast-grep) (asgrep `codemod` covers indexed native patterns) |
+| SAST rule packs | [Semgrep](https://github.com/semgrep/semgrep) |
 
-On an indexed tree, prefer `literal:` / hybrid search over spawning `rg` for source the index already covers. Keep ripgrep for logs and unindexed files. See [comparison.md](docs/comparison.md).
+Search quality is the product bar: exact identifiers rank the definition first, conceptual NL prefers code over docs that repeat the query, and vocabulary expansion is a precision tool. CLI process start on a tiny tree can still lose a raw `rg` race; that is not the contest. See [comparison.md](docs/comparison.md).
 
 ---
 
@@ -180,13 +183,12 @@ These are **checked-in run summaries**, not portable guarantees. Hardware, corpu
 
 | Recorded comparison | Status | Published result | Evidence |
 |---------------------|--------|------------------|----------|
-| Warm lexical suite vs ripgrep | `historical` / mixed | Strong on recorded cases | [speed.md](benchmarks/results/speed.md) |
-| Structural workloads vs ast-grep | `historical` (latency-only, not match-set) | Large speedups in recorded cases | [speed.md](benchmarks/results/speed.md) |
+| 2026-08-28 self corpus (445 tracked files) | `reproducible-in-tree` | Cold index 4.58 s p95; warm literal 19.0 ms vs rg 11.1 ms; `pattern:SearchHit` 129 ms vs ast-grep 26.5 ms; semantic NL 20.3 ms | [speed.md](benchmarks/results/speed.md) |
+| Warm lexical / structural at 23k–100k | `historical` / `UNREPRODUCIBLE` | Large speedups in that dump; latency-only for structural | [head-to-head.md](benchmarks/results/head-to-head.md) |
 | Cross-tool bake-off | `UNREPRODUCIBLE` | Mixed; inspect every row | [bakeoff.md](benchmarks/results/bakeoff.md) |
 | Known regressions | `UNREPRODUCIBLE` | Published without suppression | [losses.md](benchmarks/results/losses.md) |
-| 2026-08-05 release run (self corpus) | `reproducible-in-tree` | Structural pattern 31× faster on the quality path; literal ≈ ripgrep; cold index 906 ms p95 | [speed.md](benchmarks/results/speed.md) |
 
-Measured 2026-08-05 on the self corpus (1,107 tracked files) on the **integrated release/1.4.0 tree**: cold index **2.3 s p95** with semantic embedding (budget breach on the grown corpus -- the 285 ms budget was set for 110 files; SHA unrecorded; the original 88.5 s pr21 build was fixed by capping child chunks, `0ba34da`), warm literal **19.5 ms** (≈ ripgrep 15.7 ms), structural pattern **33.1 ms** with the quality batch vs **987 ms** without (ast-grep: 24.2 ms), semantic NL **19.6 ms**. Full provenance in [speed.md](benchmarks/results/speed.md). 2.0 did not republish that suite; do not treat those rows as a 2.0 fingerprint.
+Measured 2026-08-28 on Apple M5 Max from `2285ce29` (`release-perf`, rustc 1.98.0): a `git ls-files` copy of this tree (445 files, 4.6 MiB source; 398 indexed). Cold index **4.58 s p95** (schema 14, hashed semantic-v2 dim 256; `index.db` 104 MiB; IVF sidecar not built at this size). Warm `literal:SearchHit` **19.0 ms p95** vs ripgrep **11.1 ms**. Warm `pattern:SearchHit` **129 ms p95** vs ast-grep **26.5 ms** (latency-only, not match-set). Semantic NL **20.3 ms p95**. On this small self tree, ripgrep and ast-grep win those two CLI races; the 23k/100k historical dump is a different corpus. Full protocol in [speed.md](benchmarks/results/speed.md).
 
 Canonical table: [head-to-head.md](benchmarks/results/head-to-head.md). Index: [benchmarks/README.md](benchmarks/README.md).
 

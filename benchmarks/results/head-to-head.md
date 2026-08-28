@@ -1,96 +1,51 @@
 # Head-to-head results
 
-> **Ledger mix:** see [`benchmarks/README.md`](../README.md) status tags.
-> Historical GATE rows below are `UNREPRODUCIBLE`. The 2026-08-05 self-corpus
-> block is `reproducible-in-tree` via `asgrep bench`.
+> **Ledger mix:** see [`benchmarks/README.md`](../README.md). The 2026-08-28
+> self-corpus block is `reproducible-in-tree`. Older GATE rows are
+> `UNREPRODUCIBLE`.
 
-This consolidated GATE table reports only measurements already recorded in repository artifacts; it does **not** combine or extrapolate runs. Lower latency is better. Times are wall-clock p50 milliseconds, rounded to two decimals from the raw values below.
+This file reports only measurements already recorded in repository artifacts.
+It does not combine or extrapolate runs. Lower latency is better.
 
-## Results
+## 2026-08-28 measured (self corpus, 445 tracked files)
 
-**Status: `historical` + `UNREPRODUCIBLE`.** Latency-only. `parity clean` in
-the source dump meant **normalized (path, line) latency comparison succeeded**,
-**not** match-set / hit-identity equality (`DISC-pattern-native-subset`,
-`DISC-no-jell-harness`).
+**Status: `reproducible-in-tree`.** CLI `hyperfine` on a `git ls-files` copy.
+Raw protocol: [`speed.md`](speed.md).
 
-| Win class | Scale / suite | asgrep | Comparator | Result | Evidence |
-|---|---:|---:|---:|---:|---|
-| Warm lexical query | 23,000 files, 24 queries | **46.22 ms** aggregate p50 | ripgrep 253.99 ms | **24/24 wins; 5.50x faster** | *(historical machine-readable dump; not in-tree)* |
-| Warm lexical query | 100,000 files, 24 queries | **156.46 ms** aggregate p50 | ripgrep 1,317.30 ms | **24/24 wins; 8.42x faster** | *(historical machine-readable dump; not in-tree)* |
-| Structural query | 23,000 files | **18.93 ms** query-median p50 | ast-grep 188.77 ms | **9.97x faster; latency-only (not match-set)** | *(historical machine-readable dump; not in-tree)* |
-| Structural query | 100,000 files | **19.34 ms** query-median p50 | ast-grep 1,347.97 ms | **69.68x faster; latency-only (not match-set)** | *(historical machine-readable dump; not in-tree)* |
-| Structural hand-pattern suite | 29 unchanged patterns | **1,520.6 ms** sum of per-pattern p50s | Semgrep 31,875.3 ms | **20.96x faster** | *(historical machine-readable dump; not in-tree)* |
-| Retrieval quality | ripgrep, 14 gold queries | **0.605 MRR** (`rg-neural-rerank-d3eab74`; not default hybrid 0.290) | Semgrep hand-patterns 0.536 MRR | **+0.069 MRR** | [`losses.md`](losses.md) / [`baselines.md`](baselines.md) |
+| Win class | asgrep p95 | Comparator p95 | Result |
+|---|---:|---:|---|
+| Warm lexical (`literal:SearchHit`) | 19.0 ms | ripgrep 11.1 ms | **ripgrep** (1.7×) |
+| Structural (`pattern:SearchHit`) | 129 ms | ast-grep 26.5 ms | **ast-grep** (4.9×); latency-only, not match-set |
+| Warm semantic NL | 20.3 ms | — | indexed semantic; no scan-tool analogue |
+| Cold index | 4.58 s | — | no scan-tool analogue |
 
-The three speed win classes hold in the artifacts:
+Warm lexical is indexed-vs-scan: asgrep's index is built before timing;
+ripgrep scans on each query. No cold-start win is claimed.
 
-1. **Warm lexical:** `asgrep_wins == queries == 24` at both scales, with no unexplained result diffs.
-2. **Structural:** asgrep's query-median p50 is lower and `parity_clean == true`
-   at both scales. That flag is **latency-only** (normalized file+line timing
-   pairs). It is **not** a match-set correctness Pass.
-3. **Semgrep suite:** `31,875.276 / 1,520.555 = 20.96x` after published rounding.
+## Historical GATE (23k / 100k, 2026-07-10)
 
-Retrieval quality is separate because it is a relevance result, not a speed result.
+**Status: `historical` + `UNREPRODUCIBLE`.** Generating dumps are not in
+this tree. Latency-only. `parity_clean` in the source dump meant normalized
+(path, line) timing pairs succeeded, **not** match-set equality.
 
-## Exact artifact cross-check
+| Win class | Scale | asgrep | Comparator | Result |
+|---|---:|---:|---:|---|
+| Warm lexical | 23,000 files, 24 queries | 46.22 ms aggregate p50 | ripgrep 253.99 ms | 24/24; 5.50× |
+| Warm lexical | 100,000 files, 24 queries | 156.46 ms aggregate p50 | ripgrep 1,317.30 ms | 24/24; 8.42× |
+| Structural | 23,000 files | 18.93 ms query-median p50 | ast-grep 188.77 ms | 9.97× latency-only |
+| Structural | 100,000 files | 19.34 ms query-median p50 | ast-grep 1,347.97 ms | 69.68× latency-only |
+| Structural hand-pattern suite | 29 patterns | 1,520.6 ms sum of p50s | Semgrep 31,875.3 ms | 20.96× |
+| Retrieval quality | ripgrep, 14 gold | 0.605 MRR (`rg-neural-rerank-d3eab74`) | Semgrep 0.536 MRR | +0.069; **not** default hybrid 0.290 |
 
-| Artifact field | 23k / suite value | 100k value |
-|---|---:|---:|
-| lexical `asgrep_median_p50_ms` | `46.21808583000001` | `156.45849174` |
-| lexical `rg_median_p50_ms` | `253.98837289` | `1317.3037741500002` |
-| lexical `asgrep_wins / queries` | `24 / 24` | `24 / 24` |
-| structural `asgrep_query_median_p50_ms` | `18.933438000000002` | `19.344875000000002` |
-| structural `ast_grep_query_median_p50_ms` | `188.7684375` | `1347.9688125` |
-| structural `ast_grep_over_asgrep` | `9.970108836018053` | `69.68092647277379` |
-| structural `parity_clean` | `true` (latency-only; **not** hit-identity) | `true` (latency-only; **not** hit-identity) |
+Those large-corpus rows do not erase small-corpus losses: on the current
+self tree, ripgrep and ast-grep win the CLI races above. Query-level
+retrieval losses remain in [`losses.md`](losses.md).
 
-The Semgrep artifact stores `asgrep_sum_p50_ms = 1520.555`, `semgrep_sum_p50_ms = 31875.276`, `speedup_x = 20.96`, `patterns = 29`, match totals `51 / 19`, and `semgrep_unique_locations = 0`. The neural+rerank retrieval publication records `0.605 / 0.536` in [`losses.md`](losses.md) (fingerprint `rg-neural-rerank-d3eab74`); the canonical **default hybrid** ripgrep MRR remains **0.290** in [`baselines.md`](baselines.md).
+## Caveats
 
-## 2026-08-05 measured (self corpus, 1,107 tracked files)
-
-**Status: `reproducible-in-tree`.** `asgrep bench`. Raw hyperfine
-JSON is run output, not a second canonical MRR fingerprint.
-
-> New rows from `asgrep bench` (reproducible from this tree; raw
-> hyperfine JSON in the run output). Same-machine rows for the 1.4.0 release
-> states; p95 wall-clock. Baseline = `origin/main` `cea904a`, pr21 =
-> `5de7eb0`, pr26 = `137863f`.
-
-| Win class | Scale / suite | asgrep | Comparator | Result | Evidence |
-|---|---:|---:|---:|---:|---|
-| Warm lexical query | self corpus, 1,107 files | 19.5 ms p95 (release/1.4.0) | ripgrep 15.7 ms p95 | **parity** (1.24×) | [`speed.md`](speed.md) |
-| Structural pattern | self corpus, 1,107 files | 33.1 ms p95 (release/1.4.0) | ast-grep 24.2 ms p95 | 0.73× — ast-grep wins on this small corpus | [`speed.md`](speed.md) |
-| Structural pattern, pre-fix path | self corpus, 1,107 files | 986.9 ms p95 (baseline) | ast-grep 26.3 ms p95 | 37.5× slower — the pre-pr21 path | [`speed.md`](speed.md) |
-| Cold index build | self corpus | 992 ms → 2.3 s p95 (baseline → release/1.4.0) | — | pr21 embeds chunks at index time (27 MiB); was 88.5 s before the cap fix `0ba34da` | [`speed.md`](speed.md) |
-
-## Losses and caveats
-
-Read the query-level retrieval losses in [`losses.md`](losses.md). Three queries are explicit asgrep losses: `rg_std_printer` (rank 10 vs 1), `rg_json_output` (rank 2 vs 1), and `rg_overrides` (rank 5 vs 1). `rg_search_core` is a shared top-10 miss. The comparison is intentionally difficult but asymmetric: asgrep receives natural-language intents directly; Semgrep receives a hand-authored structural pattern per intent.
-
-- **Warm lexical is indexed-vs-scan.** asgrep's index is built before timing; ripgrep scans on each query. These rows measure repeated-query latency, not cold index construction.
-- **No cold-start win is claimed.** Index construction and first-query overhead are excluded. Measured cold-index rows and losses remain in [`SPEED.md`](speed.md).
-- **The lexical aggregate is a median across 24 query p50s,** not one monolithic command latency. The artifact reports zero unexplained result diffs.
-- **Structural parity is normalized by relative file and one-based line.** Each tool has one discarded prefix run and five measured runs; the statistic is median wall-clock time.
-- **The Semgrep suite is fixed, not universal.** Its 29 unchanged shorthand patterns come from the bake-off. The ratio does not generalize to arbitrary Semgrep rules.
-- **Semgrep rejects 20 of 29 patterns.** Those rows measure process startup plus rejection, not a successful full-corpus scan. They remain to avoid translating or dropping inputs after measurement design. Errors and normalized diffs are retained in *(historical machine-readable dump; not in-tree)*.
-- **Match counts are not directly equivalent for rejected/bare-expression patterns.** Accepted structural patterns have no Semgrep-only normalized location; two accepted bare identifiers are strict asgrep supersets under differing bare-expression semantics.
-- **Machine and run conditions matter.** Use provenance embedded in each JSON artifact. Do not compare a differently built binary or loaded host as though it were the same run.
-- **Older small-corpus losses remain published.** [`SPEED.md`](speed.md) records ripgrep winning lexical search on two of three earlier 82–917-file corpora. The 23k/100k result is a different 24-query suite and does not erase those losses.
-
-## Reproduce and verify
-
-**Status: mixed.** Historical GATE JSON dumps (`results-lexical-speed.json`,
-structural/semgrep writers named in older blocks) are **not** in this tree --
-those reproduce fragments were deleted rather than left dangling.
-
-For the 2026-08-05 self-corpus latency rows:
-
-```bash
-cargo build --release -p ast-sgrep-cli
-./target/release/asgrep --json bench . --suite self --fixture self --iterations 5
-```
-
-For corpus pins, versions, host metadata, feature flags, and noise, treat
-[`speed.md`](speed.md), [`losses.md`](losses.md), and [`baselines.md`](baselines.md)
-as authoritative rather than this rounded summary.
-
+- The lexical 23k/100k aggregate is a median across 24 query p50s, not one
+  command. The Semgrep suite is a fixed 29-pattern shorthand set; Semgrep
+  rejected 20 of 29 patterns (startup plus rejection, not a full scan).
+- Structural `parity_clean` is latency-only.
+- Machine and flags matter. Do not compare a differently built binary as
+  though it were the same run.

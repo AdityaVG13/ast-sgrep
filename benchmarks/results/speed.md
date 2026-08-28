@@ -1,631 +1,92 @@
 # Speed benchmarks
 
-> **Ledger mix:** see [`benchmarks/README.md`](../README.md). The 2026-08-05
-> self-corpus block is `reproducible-in-tree`. Older generated tables are
-> `historical` + `UNREPRODUCIBLE` (`speed-report.py`, `run-speed-headtohead.sh`,
-> `eval-bakeoff.py`, `run-speed.sh` are **not** in this tree).
+Companion to [`baselines.md`](baselines.md) (retrieval quality). This file
+owns **wall-clock CLI latency**. Any speed number quoted elsewhere must
+trace back to a dated row here or carry its own reproduce command.
 
-Companion to `BASELINES.md` (which owns retrieval-quality numbers). This file
-is the pinned source of truth for **wall-clock speed** claims comparing
-asgrep against ripgrep, ast-grep, and semgrep. Any speed number quoted
-elsewhere must trace back to a row here or carry its own reproduce command.
+Status tags: [`benchmarks/README.md`](../README.md).
 
-Part of `ast-sgrep-iw8`.
+## 2026-08-28 (self corpus, HEAD `2285ce29`)
 
-## 2026-08-05 release-state run (self corpus)
-
-**Status: `reproducible-in-tree`.** `asgrep bench` reproduces
-these rows. This section is **not** covered by any file-level UNREPRODUCIBLE
-banner. Quality MRR fingerprints remain in [`baselines.md`](baselines.md).
+**Status: `reproducible-in-tree`.** CLI process times via `hyperfine` on a
+copy of `git ls-files`. In-process `asgrep bench` times are a different
+surface (Searcher only, no process start) and are not mixed into this table.
 
 | Provenance | value |
 |------------|-------|
-| date | 2026-08-05 |
+| date | 2026-08-28 |
+| commit | `2285ce29` |
 | machine | Apple M5 Max, 18 cores (arm64), 48 GiB, macOS 26.5, APFS SSD |
-| corpus | tracked files of this repo at `cea904a` — 1,107 files, 6.3 MiB (`git ls-files` → rsync) |
+| corpus | tracked files → rsync workdir: **445 files**, 4.6 MiB source (index saw **398** files after skip rules) |
 | build | `cargo build --profile release-perf -p ast-sgrep-cli` |
-| rustc / python | 1.97.1 / 3.9.6 |
-| tools | ripgrep 15.1.0, ast-grep 0.45.0, hyperfine 1.20.0 |
-| states | baseline `origin/main` `cea904a` · pr21 `test/quality-batch-e2hc-19-oxbj` `5de7eb0` · pr26 `cursor/codemode-crate-scaffold-9228` `137863f` · **release/1.4.0** (all 7 PRs merged + gated, 66/66 workspace suites) |
-
-| Surface | baseline p95 | pr21 p95 | pr26 p95 | **release/1.4.0 p95** | comparator p95 | note |
-|---------|------------:|--------:|--------:|--------------------:|------------:|------|
-| cold index build | 992.0 ms | 2,087 ms | 906.3 ms | **2,257 ms** | — | pr21 embeds chunks at index time; was 88.5 s before the child-chunk cap fix (`0ba34da`) |
-| warm literal query | 20.7 ms | 17.3 ms | 16.4 ms | **19.5 ms** | rg 15.0–15.7 ms | ≈ ripgrep on this corpus |
-| warm semantic NL query | 19.2 ms | 16.2 ms | 18.6 ms | **19.6 ms** | — | integrated tree keeps the fixed IVF path |
-| structural pattern query | 986.9 ms | 29.4 ms | 940.6 ms | **33.1 ms** | ast-grep 23.1–24.2 ms | pr21's SIMD prefilter: 30× faster than the baseline path |
-| index size | 22 MiB | 27 MiB | 22 MiB | **27 MiB** | — | pr21 embeds 2,592 chunks (was 26,461 before the cap fix) |
-
-**2026-08-05 follow-up fix:** pr21's cold index was 88.5 s / 107 MiB because
-`build_semantic_chunks_with_patterns` created up to 32 chunks per parent
-function (one per AST child node) — 26,461 chunks for 1,403 symbols. The cap
-was lowered to 2 (`0ba34da`): index 88.5 s → 2.1 s p95, 107 → 27 MiB, and
-semantic NL query latency dropped 42 → 16 ms. The ANN recall@10 quality
-budget test still passes.
-
-**Budget status:** the published cold self-index budget (285 ms p95) is
-**breached** on the current self corpus by every state (906–992 ms p95). The
-budget was set against the historical 110-file corpus; the repo has grown to
-1,107 tracked files. Re-baseline before quoting that budget as passing. The
-15 ms fixture surfaces were not re-measured here — the rows above are
-self-corpus queries and are not comparable to the fixture budgets.
-
-## Scope
-
-**Status: `historical`.** The named helper scripts in this section
-(`run-speed.sh`, `eval-bakeoff.py`, `run-speed-headtohead.sh`,
-`speed-report.py`) are **absent** from this tree. Treat the remainder of this
-file (except the 2026-08-05 block) as a published dump, not a live generator.
-
-- Corpora: **self** (this repo), **ripgrep** 14.1.1, **flask** 3.0.3 -- the
-  same three corpora `run-speed.sh` and `eval-bakeoff.py` already use.
-- The 100k-file scale corpus is **explicitly out of scope** for this bead. It
-  is tracked separately by `ast-sgrep-59g` ("Scale: 100k-file corpus,
-  sub-50ms ANN, tuned thresholds"), which owns building/acquiring that corpus
-  and its own speed/RSS budget. Do not conflate the two.
-- Two query classes per corpus: a **lexical literal** term (asgrep
-  `literal:` mode vs `rg`) and a **structural pattern** (asgrep `pattern:`
-  mode vs `ast-grep --pattern` vs `semgrep --pattern`), plus a **cold index
-  build** row for asgrep (the only tool of the four with a persistent index).
-
-## Why a new script instead of extending `run-speed.sh`
-
-**Status: `historical`.** Narrative about harnesses that are **not** in this
-tree. Do not copy these names into a reproduce block as if they shipped.
-
-`run-speed.sh` benchmarks asgrep against itself (cold index, incremental
-reindex, NL query, index size) and optionally races `rg` on one literal term.
-This bead needs three more competing binaries, per-tool version stamping,
-peak-RSS capture, and a different results layout built for a table
-generator. That is a different shape, not a superset, so it lives in its own
-script: `run-speed-headtohead.sh`. `run-speed.sh` is untouched and still
-works standalone; nothing here supersedes it.
-
-## Methodology
-
-- **Cold** (asgrep only): `hyperfine --warmup 1 --min-runs 3` with the index
-  directory removed in `--prepare` before every timed run (index build from
-  nothing). `rg`, `ast-grep`, and `semgrep` have no persistent index --
-  every one of their runs below **is** their cold/native mode; they are not
-  given a separate "warm" row because there is nothing to warm.
-- **Warm** (queries): index built once outside the timing loop, then
-  `hyperfine --warmup 3 --min-runs 10 --ignore-failure` races:
-  - lexical literal: `asgrep --index-path <idx> literal:<term> <root>` vs
-    `rg -n <term> <root>`
-  - structural: `asgrep --index-path <idx> pattern:<pattern> <root>` vs
-    `ast-grep --lang <lang> --pattern <pattern> <root>` vs
-    `semgrep --lang <lang> --pattern <pattern> <root> --json --quiet`
-- p50/p95 below are computed directly from each hyperfine run's raw `times`
-  samples by `speed-report.py` (not hyperfine's own mean/stddev), per spec.
-- **Peak RSS**: one representative run per tool per corpus, `/usr/bin/time
-  -l` on macOS (`maximum resident set size`, bytes) or `/usr/bin/time -v` on
-  Linux (`Maximum resident set size (kbytes)`, kilobytes). hyperfine has no
-  RSS mode, so this is measured out-of-band, once, not averaged.
-- Patterns are drawn from `eval-bakeoff.py`'s `STRUCT_PATTERNS` dict where an
-  entry exists (`request_started` for flask is `fl_signals`; `struct
-  RegexMatcherBuilder` for ripgrep is `rg_regex_builder`); `self` has no
-  entry in that dict (bake-off only covers foreign corpora) so a same-style
-  bare-identifier pattern (`SearchHit`) was chosen for parity.
-
-## Machine, versions, run conditions
-
-| field | value |
-|---|---|
-| machine | Apple M5 Max, 18 cores (arm64), 48 GiB, macOS 26.5, APFS SSD |
-| date (UTC) | 2026-07-10T06:37:07Z |
-| commit at run time | `330b22c` (this repo is under active concurrent development by other agent sessions on this shared machine; HEAD moved forward during the run -- see caveat below) |
-| build | `cargo build --profile release-perf -p ast-sgrep-cli` |
-| asgrep | 1.1.0-alpha |
-| rg | 15.1.0 (rev 48a6ad93f1) |
-| ast-grep | 0.44.1 |
-| semgrep | 1.168.0 |
-| hyperfine | 1.20.0 |
-
-Versions above were captured live from the actual binaries into
-`results/20260710T063707Z/speed-headtohead/env.txt` by the harness itself,
-not hand-typed.
-
-**Run conditions (honesty, per bead constraint):** this is a shared
-development machine. `pgrep -c cargo` reported 0 live cargo processes at the
-instant the harness started (recorded in `env.txt`), but this repo and
-other local repositories had concurrent `cargo test` / `cargo build` work
-throughout the benchmark window, and one of those sessions advanced this
-repo's `main` while the suite was running. The suite was **not** run on a
-fully idle machine -- treat single-run deltas smaller than roughly 20-30% as
-noise, consistent with the "+-30% run-to-run" wall-clock bound already
-documented in `BASELINES.md`. hyperfine's own warmup + min-runs already
-absorbs most of this; several rows below also carry hyperfine's own
-"statistical outliers detected" warning (visible in the raw JSON / terminal
-log), which is expected under these conditions and does not indicate a
-harness bug.
-
-## Reproduce
-
-**Status: `UNREPRODUCIBLE` for the generated tables below.** `speed-report.py`
-and `results/<UTC>/speed-headtohead` are not in this tree. Truncated
-"Run a single corpus" fragments were removed.
-
-To regenerate the **2026-08-05** self-corpus rows only:
-
-```bash
-cargo build --release -p ast-sgrep-cli
-./target/release/asgrep --json bench . --suite self --fixture self --iterations 5
-```
-
-## Results
-
-**Status: `historical` + `UNREPRODUCIBLE`.** Generated by absent `speed-report.py`.
-
-<!-- BEGIN GENERATED TABLE (python3 speed-report.py results/20260710T063707Z/speed-headtohead) -->
-
-### self (this repo, rust)
-
-#### cold index build (asgrep only)
-
-| command | n | p50 (ms) | p95 (ms) | mean (ms) | min (ms) | max (ms) |
-|---|---:|---:|---:|---:|---:|---:|
-| `asgrep index self` | 8 | 320.3 | 350.9 | 319.6 | 289.8 | 352.0 |
-
-#### lexical literal: `SearchHit`
-
-| command | n | p50 (ms) | p95 (ms) | mean (ms) | min (ms) | max (ms) |
-|---|---:|---:|---:|---:|---:|---:|
-| `asgrep literal:SearchHit` (warm index) | 230 | **10.6** | 12.5 | 10.7 | 9.0 | 16.9 |
-| `rg -n SearchHit` (cold scan) | 233 | 13.6 | 25.0 | 14.7 | 6.8 | 48.8 |
-
-asgrep wins here (1.28x at p50) -- the one lexical row where the index pays
-for itself on this machine.
-
-#### structural pattern: `SearchHit` (bare identifier, matches natively -- no ast-grep subprocess)
-
-| command | n | p50 (ms) | p95 (ms) | mean (ms) | min (ms) | max (ms) |
-|---|---:|---:|---:|---:|---:|---:|
-| `asgrep pattern:SearchHit` (warm index) | 10 | 461.0 | 477.8 | 460.3 | 439.0 | 481.8 |
-| `ast-grep --lang rust --pattern SearchHit` | 168 | **11.6** | 15.2 | 12.0 | 9.6 | 17.5 |
-| `semgrep --lang rust --pattern SearchHit --json --quiet` | 10 | 2086.8 | 2373.0 | 2140.1 | 2005.5 | 2498.3 |
-
-### ripgrep 14.1.1 (rust)
-
-#### cold index build (asgrep only)
-
-| command | n | p50 (ms) | p95 (ms) | mean (ms) | min (ms) | max (ms) |
-|---|---:|---:|---:|---:|---:|---:|
-| `asgrep index corpora/ripgrep` | 3 | 2639.4 | 2903.3 | 2500.1 | 1928.3 | 2932.6 |
-
-#### lexical literal: `WalkBuilder`
-
-| command | n | p50 (ms) | p95 (ms) | mean (ms) | min (ms) | max (ms) |
-|---|---:|---:|---:|---:|---:|---:|
-| `asgrep literal:WalkBuilder` (warm index) | 71 | 28.0 | 41.7 | 27.1 | 11.4 | 57.0 |
-| `rg -n WalkBuilder` (cold scan) | 104 | **7.9** | 20.6 | 10.1 | 0.0 | 28.1 |
-
-rg wins clearly here (~3.5x at p50) -- called out below as the honest loss.
-
-#### structural pattern: `struct RegexMatcherBuilder` (`rg_regex_builder` in `eval-bakeoff.py`)
-
-| command | n | p50 (ms) | p95 (ms) | mean (ms) | min (ms) | max (ms) |
-|---|---:|---:|---:|---:|---:|---:|
-| `asgrep pattern:'struct RegexMatcherBuilder'` (warm index) | 10 | 2119.3 | 2162.9 | 2090.7 | 1899.2 | 2166.4 |
-| `ast-grep --lang rust --pattern 'struct RegexMatcherBuilder'` | 70 | **34.4** | 48.3 | 35.9 | 22.4 | 61.9 |
-| `semgrep --lang rust --pattern 'struct RegexMatcherBuilder' --json --quiet` | 10 | 1582.1 | 1804.0 | 1600.8 | 1450.2 | 1835.2 |
-
-This is a historical pre-native-index row. The fixed 29-pattern rerun below
-supersedes it: `struct RegexMatcherBuilder` measures 5.9ms p50 through exact
-`pattern_nodes` equality. Current production pattern search never delegates to
-an external process.
-
-### flask 3.0.3 (python)
-
-#### cold index build (asgrep only)
-
-| command | n | p50 (ms) | p95 (ms) | mean (ms) | min (ms) | max (ms) |
-|---|---:|---:|---:|---:|---:|---:|
-| `asgrep index corpora/flask` | 10 | 345.3 | 711.4 | 408.7 | 269.8 | 909.7 |
-
-#### lexical literal: `request_started`
-
-| command | n | p50 (ms) | p95 (ms) | mean (ms) | min (ms) | max (ms) |
-|---|---:|---:|---:|---:|---:|---:|
-| `asgrep literal:request_started` (warm index) | 165 | 8.4 | 24.9 | 11.6 | 6.0 | 71.2 |
-| `rg -n request_started` (cold scan) | 287 | **6.1** | 11.4 | 6.7 | 4.3 | 40.6 |
-
-#### structural pattern: `request_started` (`fl_signals` in `eval-bakeoff.py`; bare identifier, matches natively)
-
-| command | n | p50 (ms) | p95 (ms) | mean (ms) | min (ms) | max (ms) |
-|---|---:|---:|---:|---:|---:|---:|
-| `asgrep pattern:request_started` (warm index) | 12 | 231.1 | 236.9 | 231.8 | 227.5 | 237.5 |
-| `ast-grep --lang python --pattern request_started` | 154 | **15.4** | 16.9 | 15.4 | 12.9 | 18.8 |
-| `semgrep --lang python --pattern request_started --json --quiet` | 10 | 1183.5 | 1502.7 | 1240.2 | 1146.1 | 1608.9 |
-
-### peak RSS (one representative run per tool per corpus, MiB)
-
-| label | peak RSS (MiB) |
-|---|---:|
-| self asgrep (lexical) | 16.0 |
-| self asgrep (structural) | 17.3 |
-| self ast-grep (structural) | 12.6 |
-| self rg (lexical) | 6.6 |
-| self semgrep (structural) | 216.2 |
-| ripgrep asgrep (lexical) | 22.4 |
-| ripgrep asgrep (structural) | 28.6 |
-| ripgrep ast-grep (structural) | 24.4 |
-| ripgrep rg (lexical) | 6.5 |
-| ripgrep semgrep (structural) | 231.6 |
-| flask asgrep (lexical) | 15.5 |
-| flask asgrep (structural) | 12.2 |
-| flask ast-grep (structural) | 12.5 |
-| flask rg (lexical) | 6.6 |
-| flask semgrep (structural) | 168.8 |
-
-<!-- END GENERATED TABLE -->
-
-Index size on disk (warm index, includes symbols/callers/imports + hashed
-embeddings): self 5.5 MB, ripgrep 18.8 MB, flask 6.0 MB
-(`results/20260710T063707Z/speed-headtohead/*_index_kb.txt`).
-
-Raw hyperfine JSON, `env.txt`, and all `*.rss.txt` sidecars for this run are
-committed nowhere (`benchmarks/results/` is gitignored) -- they live at
-`benchmarks/results/20260710T063707Z/speed-headtohead/` locally and are
-reproducible via the command above.
-
-## Losses (published honestly -- this repo does not hide them)
-
-1. **rg wins lexical literal search on 2 of 3 corpora.** ripgrep beats
-   asgrep's warm indexed literal search by ~3.5x p50 on the ripgrep corpus
-   (7.9ms vs 28.0ms) and ~1.4x on flask (6.1ms vs 8.4ms). asgrep only wins on
-   the self corpus (10.6ms vs 13.6ms), which is also the smallest corpus by
-   file count here. The index currently backs literal search with a `LIKE`
-   scan over a `lines` table (see `ParsedQuery::Literal` in
-   `crates/ast-sgrep-core/src/query.rs`), which does not scale as well as
-   ripgrep's SIMD byte-scanning as corpus size grows. This exact gap is
-   already tracked by **`ast-sgrep-6wl`** ("Warm lexical queries beat
-   ripgrep: index-accelerated literal/regex search" -- trigram/posting-list
-   plan), and this benchmark is fresh quantified evidence for it.
-
-2. **The historical structural loss above is resolved by the native index
-   path.** Exact declaration, kind, call, and bare-identifier signatures query
-   `pattern_nodes`; tree-sitter reparsing happens only on an index miss. The
-   fixed 29-pattern rerun below records 5.6-6.7ms declaration medians, including
-   5.9ms for `struct RegexMatcherBuilder`. Production search no longer shells
-   out. Unsupported nested rule syntax returns no hits and is documented in
-   `docs/structural-patterns.md` instead of adding process-startup latency.
-
-3. **semgrep is the slowest tool in absolute terms everywhere** (1.18s-2.5s
-   p50 per structural query), consistent with the ~1235ms mean already
-   published in `BASELINES.md`'s bake-off table. Expected: semgrep spends
-   its time on a general rule engine and Python-process startup, not raw
-   scan throughput. This is not a loss for asgrep -- asgrep beats semgrep by
-   two orders of magnitude on every structural row above -- but it is worth
-   stating plainly rather than implying semgrep is simply "bad": semgrep is
-   optimizing for a different job (arbitrary multi-rule static analysis).
-
-4. **The 100k-file scale corpus is out of scope here by design.** All
-   numbers above are on corpora with 82-917 source files. Extrapolating
-   these ratios to 100k files would be a guess, not a measurement; that
-   measurement is `ast-sgrep-59g`'s job, not this bead's.
-
-## Sanity check against `BASELINES.md`
-
-- self warm literal p50 here: **10.6ms**. `BASELINES.md`'s self NL-query p50
-  is 13.4ms (a different query mode -- hybrid NL vs plain literal -- so not
-  identical, but same low-tens-of-ms ballpark on the same corpus and
-  machine, which is the expected relationship: literal-only should be at or
-  below the cost of a full hybrid NL query).
-- self/ripgrep/flask cold-index means here (319.6ms / 2500.1ms / 408.7ms)
-  are the same order of magnitude as `BASELINES.md`'s cold-index table
-  (416ms / 3.91s / 335ms), with expected run-to-run/machine-state drift
-  under the noisy conditions noted above.
-- semgrep structural p50 here (1.18s-2.1s) matches the ~1235ms mean already
-  published for semgrep in `BASELINES.md`'s bake-off table.
-
-## Rules
-
-1. No speed number may be quoted without a reproduce command from this file.
-2. Rebaselining requires a fresh harness run and a commit that updates this
-   file together with the referenced `results/<timestamp>/` directory
-   contents being reproducible (the directory itself is gitignored and not
-   committed).
-3. `speed-report.py` regenerates the tables above from hyperfine JSON;
-   never hand-edit the numbers in this file.
-
-## CI
-
-`./.github/workflows/speed.yml` runs this harness on `ubuntu-latest` via
-`workflow_dispatch` only (manual trigger, not on push/PR -- this suite is
-too slow and too noisy on shared CI runners to gate merges on) and uploads
-`benchmarks/results/` as a build artifact.
-
-## Semgrep hand-pattern suite (`ast-sgrep-4gh`)
-
-This suite extracts all 29 `rg_*` and `fl_*` entries directly from
-`eval-bakeoff.py:STRUCT_PATTERNS`; the benchmark does not edit, translate, or
-drop patterns. Definition shorthands map to indexed `defs:NAME` queries with
-exact-symbol result normalization; the two bare identifiers use `pattern:`.
-Each command receives one warmup followed by five measured process invocations.
-The table reports the median; the aggregate is the sum of per-pattern medians.
-Index construction is outside query timing. Parity is a set diff of normalized
-corpus-relative `(file, declaration-line)` pairs. Semgrep Rust matches that
-begin on a `#[...]` attribute are canonicalized to the declaration line.
-
-Machine: `macOS-26.5-arm64-arm-64bit-Mach-O (arm64)`; commit `b5bdf8a`; asgrep `asgrep 1.1.0-alpha`; Semgrep `1.168.0`.
-
-### Aggregate
-
-| patterns | asgrep sum p50 | Semgrep sum p50 | speedup | matches (asgrep / Semgrep) | Semgrep-only normalized locations |
-|---:|---:|---:|---:|---:|---:|
-| 29 | 1520.6 ms | 31875.3 ms | **20.96x** | 51 / 19 | 0 |
-
-### Per-pattern medians and parity
-
-| pattern id | extracted pattern | asgrep p50 (ms) | Semgrep p50 (ms) | speedup | matches A/S | diff class |
-|---|---|---:|---:|---:|---:|---|
-| `rg_gitignore_impl` | `fn gitignore_matched` | 6.1 | 1077.9 | 177.59x | 0/0 | engine-limitation |
-| `rg_cli_parse` | `fn parse_low` | 6.2 | 1074.3 | 172.10x | 1/0 | engine-limitation |
-| `rg_walker` | `struct WalkBuilder` | 5.7 | 1143.8 | 200.71x | 1/1 | semantic-equivalent |
-| `rg_search_core` | `fn search_slice` | 6.5 | 1560.5 | 240.01x | 2/0 | engine-limitation |
-| `rg_regex_builder` | `struct RegexMatcherBuilder` | 5.9 | 1404.1 | 239.54x | 2/2 | semantic-equivalent |
-| `rg_std_printer` | `struct StandardBuilder` | 6.1 | 1170.4 | 191.51x | 1/1 | semantic-equivalent |
-| `rg_json_output` | `struct JSONBuilder` | 5.9 | 1106.1 | 187.72x | 1/1 | semantic-equivalent |
-| `rg_glob_compile` | `struct GlobBuilder` | 5.7 | 1127.4 | 197.64x | 1/1 | semantic-equivalent |
-| `rg_decompress` | `DecompressionMatcherBuilder` | 1135.1 | 1081.2 | 0.95x | 12/9 | engine-limitation |
-| `rg_file_types` | `struct TypesBuilder` | 5.7 | 1109.7 | 193.41x | 1/1 | semantic-equivalent |
-| `rg_main_entry` | `fn run` | 6.1 | 1046.2 | 172.45x | 6/0 | engine-limitation |
-| `rg_overrides` | `struct OverrideBuilder` | 5.9 | 1089.5 | 185.25x | 1/1 | semantic-equivalent |
-| `rg_mmap_search` | `fn open_mmap` | 5.7 | 1053.9 | 185.73x | 0/0 | engine-limitation |
-| `rg_multi_line` | `fn multi_line_with_matcher` | 5.7 | 1051.7 | 183.18x | 1/0 | engine-limitation |
-| `fl_routing_dispatch` | `def full_dispatch_request` | 5.7 | 1061.0 | 187.04x | 1/0 | engine-limitation |
-| `fl_blueprint` | `class Blueprint` | 6.2 | 1039.9 | 167.94x | 2/0 | engine-limitation |
-| `fl_session_cookie` | `class SecureCookieSessionInterface` | 5.9 | 1062.5 | 180.88x | 1/0 | engine-limitation |
-| `fl_templates` | `class DispatchingJinjaLoader` | 5.6 | 1056.2 | 189.39x | 1/0 | engine-limitation |
-| `fl_cli_run` | `class FlaskGroup` | 5.9 | 1054.3 | 179.98x | 1/0 | engine-limitation |
-| `fl_config_load` | `def from_pyfile` | 5.7 | 1043.1 | 181.64x | 1/0 | engine-limitation |
-| `fl_app_context` | `class AppContext` | 5.8 | 1049.9 | 180.87x | 1/0 | engine-limitation |
-| `fl_json_provider` | `class DefaultJSONProvider` | 5.8 | 1051.2 | 182.57x | 1/0 | engine-limitation |
-| `fl_signals` | `request_started` | 225.9 | 1053.8 | 4.66x | 6/2 | engine-limitation |
-| `fl_class_views` | `class MethodView` | 5.7 | 1034.8 | 181.42x | 1/0 | engine-limitation |
-| `fl_helpers` | `def get_flashed_messages` | 5.7 | 1043.8 | 181.68x | 1/0 | engine-limitation |
-| `fl_wrappers` | `class Request` | 6.0 | 1090.1 | 180.18x | 1/0 | engine-limitation |
-| `fl_sansio_app` | `class App` | 6.7 | 1042.6 | 155.68x | 1/0 | engine-limitation |
-| `fl_scaffold_url_rules` | `def setupmethod` | 5.7 | 1057.8 | 185.43x | 1/0 | engine-limitation |
-| `fl_json_tag` | `class TaggedJSONSerializer` | 5.9 | 1037.6 | 174.51x | 1/0 | engine-limitation |
-
-### Diffs and losses
-
-- **No Semgrep-only normalized location remains.** Accepted `struct` patterns
-  have identical normalized sets. The two accepted bare-identifier patterns are
-  strict asgrep supersets: Semgrep bare-expression matching excludes 3
-  `DecompressionMatcherBuilder` and 4 `request_started` identifier contexts.
-  These rows are classified as engine limitations, not hidden as parity.
-- **Semgrep rejects 20 of the 29 extracted shorthand patterns** (for example,
-  `fn parse_low` and `def full_dispatch_request`) with parse errors. Their
-  timings therefore measure Semgrep startup plus pattern rejection, not a
-  successful full-corpus scan. We preserve those inputs because translating
-  them would tamper with the eval-bakeoff pattern set. Every error string and
-  every normalized diff is committed in *(historical JSON; not in-tree)*.
-- The aggregate 20.96x result is specific to this unchanged hand-pattern set.
-  It is not a claim that asgrep is 20.96x faster than arbitrary Semgrep rules.
+| rustc | 1.98.0 |
+| tools | ripgrep 15.1.0, ast-grep 0.45.2, hyperfine 1.20.0 |
+| index | schema 14, hashed semantic-v2 dim 256; IVF sidecar not built at this size; 3,461 symbols, 6,302 chunks; `index.db` **104 MiB** |
+
+p95 is nearest-rank on hyperfine's raw samples: `idx = floor((n - 1) * 95 / 100)`.
+
+| Surface | n | p50 | p95 | comparator p95 | note |
+|---------|--:|----:|----:|-------------:|------|
+| cold index (`asgrep index .`) | 8 | 4.53 s | **4.58 s** | — | hashed semantic-v2; IVF sidecar not built |
+| warm `literal:SearchHit` | 15 | 18.7 ms | **19.0 ms** | rg 11.1 ms | ripgrep wins on this small tree |
+| warm `pattern:SearchHit` | 12 | 118 ms | **129 ms** | ast-grep 26.5 ms | ast-grep wins; latency-only, not match-set |
+| warm `semantic 'credential renewal'` | 12 | 19.1 ms | **20.3 ms** | — | indexed semantic channel |
+| warm NL `how does hybrid search work` | 12 | 18.5 ms | **18.9 ms** | — | unprefixed hybrid |
+
+This tree is smaller than the 2026-08-05 1,107-file snapshot (campaign docs
+and fuzz/conformance trees are gone). Do not treat the two dates as a
+same-corpus speedup or regression.
 
 ### Reproduce
 
 ```bash
 cargo build --profile release-perf -p ast-sgrep-cli
-semgrep --version  # measured: 1.168.0; install with uv tool install semgrep or pipx install semgrep
+WORKDIR=/tmp/asgrep-speed-corpus
+INDEX=/tmp/asgrep-speed.db
+rm -rf "$WORKDIR" && mkdir -p "$WORKDIR"
+git ls-files -z | rsync -a --files-from=- --from0 . "$WORKDIR"
+cd "$WORKDIR"
+
+hyperfine --warmup 1 --runs 8 \
+  --prepare "rm -f $INDEX $INDEX-wal $INDEX-shm" \
+  --export-json /tmp/asgrep-cold-index.json \
+  "$OLDPWD/target/release-perf/asgrep --json --index-path $INDEX index ."
+
+"$OLDPWD/target/release-perf/asgrep" --json --index-path "$INDEX" index .
+ASG="$OLDPWD/target/release-perf/asgrep --no-auto-index --index-path $INDEX"
+hyperfine --warmup 3 --runs 15 --export-json /tmp/asgrep-literal.json \
+  "$ASG 'literal:SearchHit' ." "rg -n SearchHit ."
+hyperfine --warmup 3 --runs 12 --export-json /tmp/asgrep-pattern.json \
+  "$ASG 'pattern:SearchHit' ." "ast-grep --lang rust --pattern SearchHit ."
+hyperfine --warmup 3 --runs 12 --export-json /tmp/asgrep-semantic.json \
+  "$ASG semantic 'credential renewal' ."
 ```
 
+The in-tree identity suites (`asgrep bench . --suite self` and
+`asgrep bench tests/fixtures/sample --suite default`) check hit identity.
+They are not this CLI-vs-scan table. High first-query CV is expected there
+because later iterations are a warm Searcher.
 
-## 100k-file cold-start overhead
+## 2026-08-05 archive (1,107-file 1.4.0 tree)
 
-Tracked by `ast-sgrep-r5s`; machine-readable source: *(historical machine-readable dump; not in-tree)*. This measures an existing 100k-file index, not index construction. Each row is the median of three fresh `asgrep bench` processes; each process records its first query and the mean of ten subsequent queries. The acceptance metric is the paired `first_search_ms - warm_search_ms` reported as `cold_overhead_ms`. Filesystem page cache was not dropped.
+**Status: `historical`.** Same machine class. Corpus and binary differ from
+the 2026-08-28 row. Kept so the old README numbers have a home.
 
-| open configuration | first search p50 (ms) | warm search p50 (ms) | paired cold overhead p50 (ms) | max observed overhead (ms) |
-|---|---:|---:|---:|---:|
-| SQLite defaults (`ASGREP_SQLITE_DEFAULTS=1`) | 105.930 | 107.448 | -7.897 | 9.752 |
-| production (256 MiB mmap, 16 MiB page cache) | 117.636 | 104.660 | **1.230** | 17.027 |
+| Surface | release/1.4.0 p95 | comparator p95 |
+|---------|------------------:|-------------:|
+| cold index | 2.26 s | — |
+| warm literal | 19.5 ms | rg 15.7 ms |
+| warm semantic NL | 19.6 ms | — |
+| structural pattern (quality path) | 33.1 ms | ast-grep 24.2 ms |
+| structural pattern (pre-fix path) | 987 ms | ast-grep 26.3 ms |
+| index size | 27 MiB | — |
 
-The production result passes the **<100 ms** cold-minus-warm target with 98.770 ms of headroom at p50. The mmap/cache configuration did **not** improve absolute first-search p50 in this noisy run (117.636 ms vs 105.930 ms with SQLite defaults); it is retained as an indexed-read throughput setting, not claimed as a cold-start win. The cold-overhead acceptance result is nevertheless unambiguous: every observed production process was below 18 ms. Negative baseline overhead is retained rather than clamped.
+The “31× structural” claim was quality-path vs pre-fix path on that tree,
+not asgrep vs ast-grep. Do not quote it as a current competitor win.
 
-Reproduce after generating `/tmp/scale-ann-r5s-20260711` and indexing it once with `--no-embed`:
+## Older generated dumps
 
-```bash
-ASGREP_SQLITE_DEFAULTS=1 target/release-perf/asgrep bench /tmp/scale-ann-r5s-20260711 --index-path /tmp/scale-ann-r5s-index-20260711 --skip-index --query process_request --iterations 11 --limit 1 --no-embed --json
-target/release-perf/asgrep bench /tmp/scale-ann-r5s-20260711 --index-path /tmp/scale-ann-r5s-index-20260711 --skip-index --query process_request --iterations 11 --limit 1 --no-embed --json
-```
-
-`ASGREP_SQLITE_DEFAULTS` disables only `mmap_size` and `cache_size` tuning for diagnostic comparison. Durability remains identical: existing WAL mode is reused without a write-class journal transition; new stores switch to WAL once; `synchronous=NORMAL` and `wal_autocheckpoint=1000` are unchanged. SQLite records WAL mode persistently and recovers it after abrupt process death. The focused `store::pragmas::tests::wal_mode_survives_connection_reopen` test verifies the persisted mode, committed data, and `PRAGMA integrity_check` after closing and reopening the database.
-
-## 2026-08-23 warm distinct-query levers (PR #33 branch)
-
-**Status: `reproducible-in-tree`.** Harness: `codemode-serve` over the repo's
-own index (`.asgrep/index.db`), 300 distinct single-term queries, per-request
-pipe round-trip timed client-side; binaries from
-`cargo build --profile release-perf -p ast-sgrep-cli` at commits 8db30768
-(base) and ebfaace3+ (levers). Raw logs and A/B binaries in `/tmp/asgrep-bench/`
-on the bench host; regenerate with the golden.py/decomp.py scripts committed to
-that host directory.
-
-| Surface | base p50 | lever p50 | note |
-|---------|---------:|----------:|------|
-| warm identical-repeat (response cache) | ~0.11 ms | ~0.11 ms | sub-1ms path, unchanged |
-| warm distinct single-term literal/hybrid | 3.8–5.4 ms | 2.7–2.9 ms | −28% p50, −19% p10 |
-| mixed 600-term batch throughput | 6.35 ms/call | 5.23 ms/call | −18% |
-| one-shot CLI wall (spawn floor) | 21.5 ms | unchanged | process spawn dominates |
-
-Levers: trigram ORDER BY materialization removed (TEMP B-TREE over full
-doclists up to 28k rows); lexical stage join-free with bounded identity
-batch-fetch. Correctness: 35-contract golden battery byte-identical except
-≥16-hit overflow subsets (same class as pre-existing budget cut).
-
-## 2026-08-23 warm-path cost decomposition (PR #33 branch)
-
-**Status: `reproducible-in-tree`.** Harness: `/tmp/asgrep-bench/floor_probe.py`
-(codemode-serve over the repo's own index; 60 distinct guaranteed-zero-posting
-queries vs the 299-term distinct bench battery; per-request client timing,
-warm-up excluded; interleaved rounds on an idle machine).
-
-| Surface | median | interpretation |
-|---------|-------:|----------------|
-| fixed pipeline floor (zero-posting miss queries) | ~0.156 ms | parse, stage dispatch, finishing, response encode — everything except candidate volume |
-| warm distinct single-term literal/hybrid | ~2.5–3.3 ms | volume-dependent cost dominates (~16x the floor) |
-
-Implication for the sub-1ms target: the response-cache repeat path (0.11 ms)
-and the zero-hit path (0.16 ms) prove the fixed overhead is already far below
-budget. Remaining cost scales with candidate volume; the largest attributed
-block is the trigram scan span (~25% of warm-path time), whose cost is flat in
-doclist size but grows with term length (FTS5 phrase intersection). See
-`docs/progress/perf-negative-results.md` (`trigram-scan-cost-attribution`) for
-the measured prototypes and the df-metadata retry predicate.
-
-## 2026-08-23 trigram df rarest-trigram MATCH (br-umh, PR #33 branch)
-
-**Status: `reproducible-in-tree`.** Harnesses: `/tmp/asgrep-bench/golden.py`
-(35-contract byte-identity battery, capture from base then verify lever),
-`single2.py` (300 distinct single-term queries through `codemode-serve`,
-repo-root cwd, warm-up excluded, per-request client timing, interleaved A/B),
-`load3.py` (mixed 600-term batch throughput, fresh process per 5000 calls).
-Binaries: `asgrep_base5` = clean HEAD `6c44dca3` release-perf build;
-`asgrep_v9` = lever at RARE_ENOUGH_DF=2048.
-
-| metric | base | lever | note |
-|--------|-----:|------:|------|
-| distinct-query p50 | 2.30–2.73 ms | 1.96–2.23 ms | ~21% p50 across 4 interleaved rounds |
-| distinct-query p10 | 0.81–0.89 ms | 0.73–0.75 ms | ~13% |
-| distinct-query p90 | 11.83–12.17 ms | 10.98–11.18 ms | ~8% |
-| mixed batch avg/call | 4.67 ms | 3.65 ms | −22%, 25699→32891 real calls / 120 s, 0 errors |
-| golden battery | — | 35/35 byte-identical | under-budget contracts unchanged |
-
-Threshold tuning (same harness): RARE_ENOUGH_DF=256 rarely engaged and netted
-**negative** (~+0.3 ms p50; the corpus's median trigram df is 85 but p75=441,
-p90=1332 sit above the gate); 4096 engaged everywhere and measured p50
-{2.02, 1.86, 1.86} vs base {2.46, 2.49, 2.28}. Shipped 2048: above this
-corpus's p90 df, below the worst-case single-scan bound that larger corpora
-could make painful. Correctness: df comes from an ephemeral temp fts5vocab
-table over the live index (no sidecar to drift); only needle-derived trigrams
-are ever candidates, so any scanned posting list is a superset of true matches
-and the Rust reverify keeps output exact — poisoned/stale dfs can change
-speed, never results (regression-proven: tests/core/trigram_shortcut.rs).
-
-## 2026-08-24 post-br-umh warm-path attribution + fixed-cost memoization probes (PR #33 branch)
-
-**Status: `reproducible-in-tree` (negative result).** Harnesses:
-`/tmp/asgrep-bench/flame_drive.py` (10 s `sample` of the codemode-serve worker
-while serving distinct queries) and `single2.py` interleaved A/B. Binaries:
-`asgrep_head` = clean HEAD `a160e30d`; `asgrep_vA` = memoization prototype.
-
-Attribution at HEAD (`flames_head.txt`, 7330 run-loop samples / 2679 served
-calls ≈ 2.74 ms/call): `literal_prefilter_pass` 45% (of which the LIKE caller
-scan inside `symbol_pass_for_files`'s prefilter stage is separately visible at
-35% — the two overlap in the tree), trigram scans ~16%, threshold COUNT probe
-~1%, finish/ranking <1%. The dominant single frame is the prefilter's
-unrestricted caller LIKE scan.
-
-| variant | p50 rounds | verdict |
-|---------|-----------|---------|
-| HEAD `a160e30d` | {2.22, 2.03, 2.09, 2.02} ms | baseline |
-| gen-keyed threshold-probe memoization + prefilter hit reuse | {2.54, 2.80, 2.43, 2.61} ms | **reverted: −0.3–0.6 ms regression** |
-
-Both prototypes are recorded with retry predicates in
-`docs/progress/perf-negative-results.md::warm-fixed-cost-memoization-probes`.
-The routing contract they relied on is pinned by
-`tests/core/literal_threshold_probe.rs`.
-
-## 2026-08-24 callers-FTS prototype + ORDER BY removal probe (PR #33 branch)
-
-**Status: `reproducible-in-tree` (negative results, both reverted).**
-Harnesses: `/tmp/asgrep-bench/{single2.py,load3.py,flame_drive.py}`; raw SQL
-microbenchmarks on an index copy. Binaries: `asgrep_head` = `17fbec27`;
-`asgrep_vB2` = callers-FTS lever.
-
-1. Flame re-attribution at HEAD: `literal_prefilter_pass` 45% of run loop,
-   `symbol_pass_for_files` 35% (caller LIKE + symbol LIKE), trigram scans
-   ~16%. An unrestricted caller-table LIKE scan measured 4.2 ms raw — but the
-   hybrid cascade always passes a file IN-list to that query (~62 us live).
-2. callers trigram FTS prototype: 41x faster in isolation (4.2 ms -> ~75 us),
-   output-equivalent on 30/30 corpus terms — yet end-to-end p50 {2.16, 2.01,
-   2.00, 2.10} vs base {1.98, 2.03, 2.06, 2.06} and throughput 27843 vs
-   29873 calls/120 s. The targeted frame was not hot in vivo.
-3. LITERAL_SQL ORDER BY removal: 11.5 ms -> sub-ms for sub-3-char terms raw,
-   BUT flips hit order for under-budget queries (fx-lang-py) because fusion
-   scores derive from candidate position over a saturated SQL window.
-   Violates the byte-identity gate; rejected.
-
-Both recorded with retry predicates in
-`docs/progress/perf-negative-results.md::callers-fts-trigram-index`.
-
-## 2026-08-24 pattern-query walk prune (PR #33 branch)
-
-**Status: `reproducible-in-tree`.** Harness: `/tmp/asgrep-bench/pattern_clean.py`
-(distinct braced declaration patterns through `codemode-serve` with explicit
-root, per-request client timing). Binaries: `asgrep_pr` = `80c08b38`;
-`asgrep_final2` = `96c95c89`.
-
-| surface | base | now | note |
-|---------|-----:|----:|------|
-| distinct structural pattern query (first touch) | ~1,730–1,870 ms | **~77–92 ms** | ~20x; walk pruned at gitignored dirs |
-| repeated pattern query (response cache) | ~0.11–0.19 ms | ~0.11–0.19 ms | unchanged |
-| warm distinct literal/hybrid p50 | ~1.9–2.1 ms | ~2.0 ms | unchanged |
-| golden battery | — | 35/35 byte-identical | |
-
-Root cause of the old 1.7s: WalkDir visited the entire tree (~164k entries
-including target/) and applied gitignore per-file afterwards. ast-grep's
-apparent 20ms on this box is the same prune strategy plus a parallel walker.
-
-CPU profile (`ps` lifetime + cputime deltas): idle serve ≈ 0.3% of one core;
-sustained 140 calls/s ≈ 12 µs CPU per literal call; worst single structural
-query ≈ 10 ms CPU ≈ 0.06% of machine capacity. Far below any 3–4% budget.
-
-## 2026-08-24 indexed-list native scan (PR #33 branch)
-
-**Status: `reproducible-in-tree`.** Harness:
-`/tmp/asgrep-bench/{pattern_clean.py,single2.py,load3.py}`. Base `80c08b38`
-vs lever `762df53f`.
-
-| surface | base | now |
-|---------|-----:|----:|
-| distinct structural pattern first-touch | 77–92 ms | **6.6–50 ms** |
-| warm distinct literal/hybrid p50 | ~2.0 ms | **1.84–1.99 ms** |
-| warm distinct p90 | ~11.4 ms | **~8.0 ms** |
-| mixed batch throughput | 26–30k/120 s | **31,757 real calls, 0 errors, 3.78 ms/call** |
-
-The native tree-sitter pass now reads the store's authoritative file list
-(same freshness contract as codemod planning) instead of walking the
-filesystem per query; the pruned walk remains as the empty-store fallback.
-
-Cross-tool standing (same machine/corpus): semgrep beaten 21–240x;
-ast-grep one-shot declarations beaten on indexed shapes and now matched-or-
-beaten on fresh braced patterns within a serve session; ripgrep beaten for
-all warm/repeat workloads; raw cold single-scan remains rg's home turf by
-architectural design (index vs scan trade), documented in Losses.
-
-## 2026-08-24 two-phase parallel pattern walk (PR #33 branch)
-
-**Status: `reproducible-in-tree`.** Oracle: serial-vs-parallel hit sets
-identical on 4 declaration patterns (253-hit struct set byte-equal in
-(file, start, end)). Harness: `/tmp/asgrep-bench/{pattern_clean.py,oracle_ab.py}`.
-
-| surface | pre-prune (80c08b38) | pruned serial | **parallel walk (`0dd47f55`)** |
-|---|---:|---:|---:|
-| distinct structural pattern first-touch | ~1,730 ms | ~80 ms | **~43 ms** |
-| warm distinct literal/hybrid p50 | ~2.0 ms | ~1.8 ms | **~1.6–1.7 ms** |
-| p90 | ~11.4 ms | — | **~7.5 ms** |
-
-Standing vs rivals (same machine/corpus): ast-grep one-shot structural
-20 ms; asgrep serve-session distinct-pattern 43 ms first-touch and
-single-digit ms thereafter, with response-cache repeats at 0.1 ms.
-
-## 2026-08-24 BFS parallel walk (PR #33 branch)
-
-**Status: `reproducible-in-tree`.** Harness: `/tmp/asgrep-bench/{pattern_clean.py,oracle_ab.py,clamp_sweep.py}`.
-Oracle: BFS-vs-serial hit sets identical on four declaration patterns.
-
-| walker variant | distinct pattern first-touch | burst CPU |
-|---|---:|---|
-| serial pruned walk (`80c08b38`) | ~1,730 ms | — |
-| depth-2 partitioned (`9524e08c`) | 43–48 ms | ≤3% of one core |
-| **BFS, 4-worker pool (`3bffdbe5`)** | **~35–42 ms** | ≤4 workers, sustained <1% machine |
-| BFS, 8 workers (`ASGREP_WALK_THREADS=8`) | 26–39 ms | ~44% of one core-equivalent |
-
-`ASGREP_WALK_THREADS` tunes the latency/CPU trade; default 4.
-Sustained mixed load unchanged: 31,515 real calls/120 s, 0 errors,
-p50 literal 1.65–1.72 ms. Depth-3 fixed frontier was also measured:
-correct but slower than both (57–62 ms) — serial phase growth (Amdahl);
-recorded under br-kcx with retry predicate.
+**Status: `historical` + `UNREPRODUCIBLE`.** 23k/100k GATE aggregates and
+foreign-corpus `speed-report.py` tables are summarized in
+[`head-to-head.md`](head-to-head.md). The generating scripts are not in
+this tree. Do not regenerate those rows from this checkout.
