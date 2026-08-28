@@ -488,6 +488,7 @@ fn codemod_dry_run_and_apply_use_the_real_indexed_fixture() {
         session.index_path.to_str().unwrap(),
         "--json",
         "codemod",
+        "--yes",
         "--no-embed",
         "--pattern",
         "legacy($ARG)",

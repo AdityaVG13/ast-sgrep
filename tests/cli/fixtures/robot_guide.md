@@ -2,7 +2,7 @@
 ## Agent triad (start here)
 1. `asgrep capabilities --json` — authoritative command/flag/env contract (derived from clap).
 2. `asgrep robot-docs guide` — this handbook.
-3. `asgrep doctor --robot-triage` — health + recovery commands using the effective root.
+3. `asgrep --robot-triage` (alias: `asgrep doctor --robot-triage`, `asgrep --robot-next`) — health + recovery in one call.
 ## Quick start
 1. `asgrep --json --format compact "natural language intent" .` — ranked hits with bounded snippets. Search is read-only; it does not auto-index.
 2. `asgrep index . --json` — build or refresh the index. Pass `--auto-index` on search only when you explicitly want search to write.
@@ -25,7 +25,7 @@ See `capabilities --json` → `commands` (complete clap catalog). Notable: `sear
 - Machine mode emits one JSON value on stdout and no duplicate stderr diagnostics.
 ## Index cancel / dry-run
 - `asgrep index --dry-run` / `asgrep reindex --dry-run` report planned work without mutating the index.
-- `asgrep codemod --pattern 'legacy($ARG)' --rewrite 'modern($ARG)' --dry-run .` emits a JSON edit plan without writing; omit `--dry-run` to apply all planned source files transactionally, followed by a separate transactional index refresh. If refresh fails, source edits remain applied and the command reports `asgrep index` as recovery.
+- `asgrep codemod --pattern 'legacy($ARG)' --rewrite 'modern($ARG)' --dry-run .` emits a JSON edit plan without writing. Apply with `--yes` (alias `--force`): `asgrep codemod --yes --pattern 'legacy($ARG)' --rewrite 'modern($ARG)' .` commits one source transaction, then a separate index refresh. If refresh fails, source edits remain applied and the command reports `asgrep index` as recovery.
 - Index writes are transactional; an interrupted uncommitted write is rolled back when SQLite recovers.
 ## Exit codes
 - 0 success · 1 usage · 2 index/search failure

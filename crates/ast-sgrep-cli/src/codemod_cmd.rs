@@ -1,6 +1,6 @@
 //! Indexed structural codemod command.
 
-use crate::cli_args::{Cli, CodemodCmd};
+use crate::cli_args::{usage_error, Cli, CodemodCmd};
 use crate::index_cmd::{ensure_existing_root, index_options};
 use crate::machine::print_machine_json;
 use anyhow::{bail, Context};
@@ -8,6 +8,11 @@ use ast_sgrep_core::codemod::{apply_codemod, plan_codemod};
 use ast_sgrep_core::Indexer;
 
 pub(crate) fn run_codemod(cli: &Cli, command: &CodemodCmd) -> anyhow::Result<()> {
+    if !command.dry_run && !cli.yes {
+        return Err(usage_error(
+            "refusing to apply a codemod without --yes. Plan first: asgrep codemod --dry-run --pattern 'legacy($ARG)' --rewrite 'modern($ARG)' .\nThen apply: asgrep codemod --yes --pattern 'legacy($ARG)' --rewrite 'modern($ARG)' .",
+        ));
+    }
     let root = ensure_existing_root(&command.root.root, cli)?;
     let root = root
         .canonicalize()

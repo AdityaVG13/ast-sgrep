@@ -68,6 +68,7 @@
     },
     {
       "about": "Plan or apply an indexed structural rewrite in process",
+      "example": "asgrep codemod --dry-run --pattern 'legacy($ARG)' --rewrite 'modern($ARG)' .",
       "flags": [
         "--ann-probes",
         "--ann-threshold",
@@ -88,6 +89,12 @@
         "--tantivy"
       ],
       "name": "codemod",
+      "safe_mutating": {
+        "apply": "asgrep codemod --yes --pattern '<pattern>' --rewrite '<rewrite>' <ROOT>",
+        "kind": "source_rewrite",
+        "note": "apply requires --yes (alias --force); --dry-run emits a JSON plan without writing source",
+        "prefer_first": "asgrep codemod --dry-run --pattern '<pattern>' --rewrite '<rewrite>' <ROOT>"
+      },
       "usage": "asgrep codemod"
     },
     {
@@ -341,7 +348,8 @@
     "--limit",
     "--no-auto-index",
     "--robot-help",
-    "--root"
+    "--root",
+    "--yes"
   ],
   "indexed_source": {
     "exact_text": "Use literal:<term> for exact substring presence in indexed languages.",
@@ -368,7 +376,7 @@
   "notes": {
     "default_search": "Bare QUERY without a subcommand runs hybrid search; the word 'search' is not a required verb — use the `search`/`find`/`query` subcommand only when you want an explicit search command.",
     "format_implies_json": true,
-    "safe_mutating": "index refreshes incrementally with transactional writes. reindex forces a full transactional rewrite -- prefer `asgrep reindex --dry-run <ROOT> --json` before a full reindex. codemod dry-run always emits a JSON edit plan; apply commits one source transaction before a separate incremental index transaction. A source-apply failure rolls back source files; an index-refresh failure leaves the source edits applied and reports `asgrep index` as recovery."
+    "safe_mutating": "index refreshes incrementally with transactional writes. reindex forces a full transactional rewrite -- prefer `asgrep reindex --dry-run <ROOT> --json` before a full reindex. codemod dry-run always emits a JSON edit plan; apply requires `--yes` (alias `--force`) and commits one source transaction before a separate incremental index transaction. A source-apply failure rolls back source files; an index-refresh failure leaves the source edits applied and reports `asgrep index` as recovery."
   },
   "ok": true,
   "output_limits": {

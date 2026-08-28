@@ -110,7 +110,7 @@ pub(crate) fn capabilities_json(_cli: &Cli) -> anyhow::Result<Value> {
         "notes": {
             "default_search": "Bare QUERY without a subcommand runs hybrid search; the word 'search' is not a required verb — use the `search`/`find`/`query` subcommand only when you want an explicit search command.",
             "format_implies_json": true,
-            "safe_mutating": "index refreshes incrementally with transactional writes. reindex forces a full transactional rewrite -- prefer `asgrep reindex --dry-run <ROOT> --json` before a full reindex. codemod dry-run always emits a JSON edit plan; apply commits one source transaction before a separate incremental index transaction. A source-apply failure rolls back source files; an index-refresh failure leaves the source edits applied and reports `asgrep index` as recovery."
+            "safe_mutating": "index refreshes incrementally with transactional writes. reindex forces a full transactional rewrite -- prefer `asgrep reindex --dry-run <ROOT> --json` before a full reindex. codemod dry-run always emits a JSON edit plan; apply requires `--yes` (alias `--force`) and commits one source transaction before a separate incremental index transaction. A source-apply failure rolls back source files; an index-refresh failure leaves the source edits applied and reports `asgrep index` as recovery."
         }
     }))
 }
@@ -198,6 +198,17 @@ fn clap_catalog(command: &clap::Command) -> (Vec<Value>, Vec<String>, Vec<String
                 "prefer_first": "asgrep index <ROOT> --json",
                 "note": "incremental refresh with transactional index writes"
             });
+        }
+        if name == "codemod" {
+            entry["safe_mutating"] = json!({
+                "kind": "source_rewrite",
+                "prefer_first": "asgrep codemod --dry-run --pattern '<pattern>' --rewrite '<rewrite>' <ROOT>",
+                "apply": "asgrep codemod --yes --pattern '<pattern>' --rewrite '<rewrite>' <ROOT>",
+                "note": "apply requires --yes (alias --force); --dry-run emits a JSON plan without writing source"
+            });
+            entry["example"] = json!(
+                r#"asgrep codemod --dry-run --pattern 'legacy($ARG)' --rewrite 'modern($ARG)' ."#
+            );
         }
         commands.push(entry);
     }
@@ -388,7 +399,7 @@ See `capabilities --json` → `commands` (complete clap catalog). Notable: `sear
 - Machine mode emits one JSON value on stdout and no duplicate stderr diagnostics.
 ## Index cancel / dry-run
 - `asgrep index --dry-run` / `asgrep reindex --dry-run` report planned work without mutating the index.
-- `asgrep codemod --pattern 'legacy($ARG)' --rewrite 'modern($ARG)' --dry-run .` emits a JSON edit plan without writing; omit `--dry-run` to apply all planned source files transactionally, followed by a separate transactional index refresh. If refresh fails, source edits remain applied and the command reports `asgrep index` as recovery.
+- `asgrep codemod --pattern 'legacy($ARG)' --rewrite 'modern($ARG)' --dry-run .` emits a JSON edit plan without writing. Apply with `--yes` (alias `--force`): `asgrep codemod --yes --pattern 'legacy($ARG)' --rewrite 'modern($ARG)' .` commits one source transaction, then a separate index refresh. If refresh fails, source edits remain applied and the command reports `asgrep index` as recovery.
 - Index writes are transactional; an interrupted uncommitted write is rolled back when SQLite recovers.
 ## Exit codes
 - 0 success · 1 usage · 2 index/search failure
@@ -735,7 +746,9 @@ pub(crate) fn augment_clap_usage_message(msg: &str, command: &str) -> String {
         msg.push_str(
             r#"Example: asgrep codemod --dry-run --pattern 'legacy($ARG)' --rewrite 'modern($ARG)' ."#,
         );
-        msg.push_str("\nTip: always plan with --dry-run first; then omit --dry-run to apply.");
+        msg.push_str(
+            "\nTip: always plan with --dry-run first; apply requires --yes (alias --force).",
+        );
     }
     msg
 }

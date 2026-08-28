@@ -134,6 +134,7 @@ fn rerun_after_mid_swap_crash_heals_instead_of_failing() {
             index_path.to_str().unwrap(),
             "--no-embed",
             "codemod",
+            "--yes",
             "--pattern",
             PATTERN,
             "--rewrite",

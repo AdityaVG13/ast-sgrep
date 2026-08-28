@@ -161,3 +161,39 @@ fn codemod_missing_args_names_dry_run_command() {
         "error must name the exact dry-run command: {stderr}"
     );
 }
+
+#[test]
+fn codemod_apply_without_yes_names_recovery_commands() {
+    let (code, stdout, stderr) = run(&[
+        "codemod",
+        "--pattern",
+        "legacy($ARG)",
+        "--rewrite",
+        "modern($ARG)",
+        ".",
+    ]);
+    assert_eq!(code, 1, "stdout={stdout} stderr={stderr}");
+    let blob = format!("{stdout}{stderr}");
+    assert!(blob.contains("without --yes"), "must refuse apply: {blob}");
+    assert!(
+        blob.contains("asgrep codemod --dry-run --pattern"),
+        "must name dry-run: {blob}"
+    );
+    assert!(
+        blob.contains("asgrep codemod --yes --pattern"),
+        "must name apply command: {blob}"
+    );
+}
+
+#[test]
+fn force_alias_is_accepted_as_yes() {
+    // --force must parse as --yes so clap does not reject a common agent spelling.
+    // The command still fails on missing pattern, which proves the flag was accepted.
+    let (code, stdout, stderr) = run(&["codemod", "--force", "--dry-run"]);
+    assert_eq!(code, 1, "stdout={stdout} stderr={stderr}");
+    let blob = format!("{stdout}{stderr}");
+    assert!(
+        !blob.contains("unexpected argument") && !blob.contains("unexpected arg"),
+        "alias --force must be accepted: {blob}"
+    );
+}

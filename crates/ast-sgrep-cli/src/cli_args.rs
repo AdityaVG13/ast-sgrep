@@ -274,6 +274,13 @@ pub(crate) struct Cli {
         help = "Emit machine JSON envelope on stdout"
     )]
     pub(crate) json: bool,
+    #[arg(
+        long,
+        alias = "force",
+        global = true,
+        help = "Confirm dangerous writes; required to apply a codemod (omit with --dry-run)"
+    )]
+    pub(crate) yes: bool,
     /// Print the agent handbook and exit
     #[arg(long, global = true, help = "Print robot-docs guide and exit")]
     pub(crate) robot_help: bool,
