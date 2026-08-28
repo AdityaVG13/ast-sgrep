@@ -561,6 +561,16 @@ pub(crate) fn rewrite_typos(
                 ));
                 continue;
             }
+            const JSON_ALIASES: &[&str] = &["machine", "output-json", "output_json"];
+            if JSON_ALIASES.contains(&folded.as_str())
+                || (folded == "format" && value.is_some_and(|v| v.eq_ignore_ascii_case("json")))
+            {
+                warnings.push(format!(
+                    "note: recovered `--{rest}` as `--json`. Next time: --json"
+                ));
+                out.push(std::ffi::OsString::from("--json"));
+                continue;
+            }
             if let Some(canonical) = closest_long_flag(&folded) {
                 if canonical != folded {
                     let rewritten = match value {
@@ -621,6 +631,9 @@ pub(crate) fn query_looks_like_subcommand_typo(query: &str) -> Option<&'static s
         ("capability", "capabilities"),
         ("robot_docs", "robot-docs"),
         ("robotdocs", "robot-docs"),
+        ("robot-doc", "robot-docs"),
+        ("docs", "robot-docs"),
+        ("handbook", "robot-docs"),
     ];
     if let Some((_, canonical)) = ALIASES.iter().find(|(alias, _)| *alias == lower) {
         return Some(*canonical);

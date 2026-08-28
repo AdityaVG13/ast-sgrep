@@ -267,7 +267,12 @@ pub(crate) struct Cli {
         help = "Max results (1..=1000; 0 remapped to default)"
     )]
     pub(crate) limit: Option<usize>,
-    #[arg(long, global = true, help = "Emit machine JSON envelope on stdout")]
+    #[arg(
+        short = 'j',
+        long,
+        global = true,
+        help = "Emit machine JSON envelope on stdout"
+    )]
     pub(crate) json: bool,
     /// Print the agent handbook and exit
     #[arg(long, global = true, help = "Print robot-docs guide and exit")]

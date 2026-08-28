@@ -90,6 +90,69 @@ fn json_stdout_is_standalone_for_jq() {
 }
 
 #[test]
+fn short_j_is_json() {
+    let (code, stdout, stderr) = run(&["-j", "capabilities"]);
+    assert_eq!(code, 0, "stderr={stderr}");
+    let value: Value = serde_json::from_str(&stdout).expect("json stdout");
+    assert_eq!(value["command"], "capabilities");
+}
+
+#[test]
+fn jason_flag_recovers_as_json() {
+    let (code, stdout, stderr) = run(&["--jason", "capabilities"]);
+    assert_eq!(code, 0, "stderr={stderr}");
+    let value: Value = serde_json::from_str(&stdout).expect("json stdout");
+    assert_eq!(value["command"], "capabilities");
+    assert!(
+        stderr.contains("recovered `--jason` as `--json`"),
+        "stderr={stderr}"
+    );
+}
+
+#[test]
+fn machine_and_format_json_recover_as_json() {
+    for flag in ["--machine", "--output-json", "--format=json"] {
+        let (code, stdout, stderr) = run(&[flag, "capabilities"]);
+        assert_eq!(code, 0, "flag={flag} stderr={stderr}");
+        let value: Value = serde_json::from_str(&stdout).expect("json stdout");
+        assert_eq!(value["command"], "capabilities");
+        assert!(
+            stderr.contains("recovered") && stderr.contains("`--json`"),
+            "flag={flag} stderr={stderr}"
+        );
+    }
+}
+
+#[test]
+fn dryrun_recovers_as_dry_run() {
+    let (code, stdout, stderr) = run(&["codemod", "--dryrun"]);
+    assert_eq!(code, 1, "stdout={stdout} stderr={stderr}");
+    assert!(
+        stderr.contains("recovered `--dryrun` as `--dry-run`"),
+        "stderr={stderr}"
+    );
+    assert!(
+        stdout.contains("asgrep codemod --dry-run --pattern")
+            || stderr.contains("asgrep codemod --dry-run --pattern"),
+        "teach the copy-paste command: stdout={stdout} stderr={stderr}"
+    );
+}
+
+#[test]
+fn docs_alias_recovers_as_robot_docs() {
+    let (code, stdout, stderr) = run(&["docs"]);
+    assert_eq!(code, 0, "stderr={stderr}");
+    assert!(
+        stdout.contains("asgrep — agent handbook") || stdout.contains("robot-docs"),
+        "stdout={stdout}"
+    );
+    assert!(
+        stderr.contains("recovered `docs` as `robot-docs`"),
+        "stderr={stderr}"
+    );
+}
+
+#[test]
 fn codemod_missing_args_names_dry_run_command() {
     let (code, stdout, stderr) = run(&["codemod"]);
     assert_eq!(code, 1, "stdout={stdout} stderr={stderr}");
