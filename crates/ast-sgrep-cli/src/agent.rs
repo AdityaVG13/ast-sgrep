@@ -139,6 +139,9 @@ fn clap_catalog(command: &clap::Command) -> (Vec<Value>, Vec<String>, Vec<String
         let flag = format!("--{long}");
         if arg.is_global_set() {
             global_flags.push(flag);
+            if let Some(short) = arg.get_short() {
+                global_flags.push(format!("-{short}"));
+            }
         } else if SEARCH_TUNING.iter().any(|s| *s == flag) {
             search_tuning_flags.push(flag);
         } else if matches!(

@@ -308,3 +308,41 @@ fn no_color_flag_is_accepted_in_ci() {
     let value: Value = serde_json::from_str(&stdout).expect("json stdout");
     assert_eq!(value["command"], "capabilities");
 }
+
+#[test]
+fn pins_common_agent_typos() {
+    let (code, stdout, stderr) = run(&["indx", "--help"]);
+    assert_eq!(code, 0, "stderr={stderr}");
+    assert!(
+        stderr.contains("recovered `indx` as `index`"),
+        "stderr={stderr}"
+    );
+    assert!(stdout.contains("asgrep index"), "stdout={stdout}");
+
+    let (code, stdout, stderr) = run(&["--jsn", "capabilities"]);
+    assert_eq!(code, 0, "stderr={stderr}");
+    assert!(
+        stderr.contains("recovered `--jsn` as `--json`"),
+        "stderr={stderr}"
+    );
+    let value: Value = serde_json::from_str(&stdout).expect("json");
+    assert_eq!(value["command"], "capabilities");
+    let flags = value["global_flags"].as_array().expect("global_flags");
+    assert!(
+        flags.iter().any(|f| f.as_str() == Some("-j")),
+        "capabilities must list -j: {flags:?}"
+    );
+
+    let (code, stdout, stderr) = run(&["--limmit", "3", "capabilities", "--json"]);
+    assert_eq!(code, 0, "stderr={stderr} stdout={stdout}");
+    assert!(
+        stderr.contains("recovered `--limmit` as `--limit`"),
+        "stderr={stderr}"
+    );
+
+    let (code, stdout, stderr) = run(&["--robot-diagnose"]);
+    assert!(code == 0 || code == 2, "stderr={stderr} stdout={stdout}");
+    assert!(stderr.contains("`--robot-triage`"), "stderr={stderr}");
+    let value: Value = serde_json::from_str(&stdout).expect("json");
+    assert_eq!(value["command"], "doctor");
+}
