@@ -407,12 +407,14 @@ impl IndexStore {
             "INSERT INTO pattern_nodes(file_id, signature, line_start, line_end, excerpt) VALUES(?1,?2,?3,?4,?5)",
             nodes,
             |st, n| {
+                // Lines table already holds source; storing full AST excerpts
+                // duplicated the corpus. Reconstruct at search time.
                 st.execute(params![
                     file_id,
                     n.signature,
                     n.line_start,
                     n.line_end,
-                    n.excerpt
+                    ""
                 ])?;
                 Ok(())
             },

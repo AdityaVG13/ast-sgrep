@@ -53,6 +53,9 @@ tempfile.workspace = true
 name = "cli_smoke"
 path = "../../tests/cli/cli_smoke.rs"
 [[test]]
+name = "search_agent_ops"
+path = "../../tests/cli/search_agent_ops.rs"
+[[test]]
 name = "codemod_crash_windows"
 path = "../../tests/cli/codemod_crash_windows.rs"
 [[test]]

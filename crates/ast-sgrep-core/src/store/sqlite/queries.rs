@@ -135,7 +135,8 @@ impl IndexStore {
             }
         }
         let at_least = super::super::sql::at_least_rows(&self.conn, "lines", threshold)?;
-        self.line_count_at_least.set(Some((gen, threshold, at_least)));
+        self.line_count_at_least
+            .set(Some((gen, threshold, at_least)));
         Ok(at_least)
     }
     pub fn all_indexed_lines(&self) -> Result<Vec<IndexedLineRow>> {
@@ -355,7 +356,13 @@ impl IndexStore {
         &self,
         ids: &[i64],
         mask: crate::semantic_chunk::FieldVectorMask,
-    ) -> Result<Vec<(i64, ast_sgrep_embed::SemanticChunkRow, crate::semantic_chunk::SemanticFieldVectors)>> {
+    ) -> Result<
+        Vec<(
+            i64,
+            ast_sgrep_embed::SemanticChunkRow,
+            crate::semantic_chunk::SemanticFieldVectors,
+        )>,
+    > {
         if ids.is_empty() {
             return Ok(Vec::new());
         }
@@ -735,6 +742,13 @@ impl IndexStore {
     }
     pub fn pattern_node_count(&self) -> Result<usize> {
         count_star(&self.conn, "pattern_nodes")
+    }
+    pub(crate) fn fill_pattern_excerpt(&self, row: &super::PatternNodeRow) -> Result<String> {
+        if row.excerpt.is_empty() {
+            self.indexed_excerpt_in_range(&row.path, row.line_start, row.line_end)
+        } else {
+            Ok(row.excerpt.clone())
+        }
     }
     pub fn pattern_nodes_matching(
         &self,

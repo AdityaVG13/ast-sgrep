@@ -64,7 +64,7 @@ pub(crate) fn ensure_fresh_index(
     cli: &Cli,
     file_count: usize,
 ) -> anyhow::Result<bool> {
-    if cli.no_auto_index {
+    if !cli.should_auto_index() {
         ensure_nonempty_index(root, file_count)?;
         return Ok(false);
     }
@@ -84,21 +84,29 @@ pub(crate) fn ensure_fresh_index(
 }
 
 pub(crate) fn open_indexed_store(root: &Path, cli: &Cli) -> anyhow::Result<IndexStore> {
-    let open = || {
-        let (_, index_path) = resolve_root_index(cli, root);
-        IndexStore::open_with_durability(
-            root,
-            index_path.as_deref(),
-            cli.durability.unwrap_or_default(),
-        )
-        .context("failed to open index")
-    };
-    let store = open()?;
-    if ensure_fresh_index(root, cli, store.status()?.file_count)? {
-        open()
-    } else {
-        Ok(store)
+    let root = ensure_existing_root(root, cli)?;
+    if cli.should_auto_index() {
+        let count = peek_indexed_file_count(&root, cli);
+        ensure_fresh_index(&root, cli, count)?;
     }
+    let store = open_readonly_store(&root, cli)?;
+    if !cli.should_auto_index() {
+        ensure_nonempty_index(&root, store.status()?.file_count)?;
+    }
+    Ok(store)
+}
+
+fn peek_indexed_file_count(root: &Path, cli: &Cli) -> usize {
+    open_readonly_store(root, cli)
+        .ok()
+        .and_then(|store| store.status().ok())
+        .map(|st| st.file_count)
+        .unwrap_or(0)
+}
+
+fn open_readonly_store(root: &Path, cli: &Cli) -> anyhow::Result<IndexStore> {
+    let (_, index_path) = resolve_root_index(cli, root);
+    IndexStore::open_readonly(root, index_path.as_deref()).context("failed to open index")
 }
 
 pub(crate) fn open_indexer(root: &Path, cli: &Cli) -> anyhow::Result<Indexer> {
@@ -468,8 +476,8 @@ fn print_json_or<T: serde::Serialize>(
 }
 
 pub(crate) fn print_status_command(cli: &Cli, root: &Path) -> anyhow::Result<()> {
-    let st = open_indexer(root, cli)?
-        .store()
+    let root = ensure_existing_root(root, cli)?;
+    let st = open_readonly_store(&root, cli)?
         .status()
         .context("failed to read status")?;
     print_json_or(cli.json, "status", &st, || print_status(&st))
@@ -477,9 +485,13 @@ pub(crate) fn print_status_command(cli: &Cli, root: &Path) -> anyhow::Result<()>
 
 pub(crate) fn open_searcher(root: &Path, cli: &Cli) -> anyhow::Result<ast_sgrep_core::Searcher> {
     let root = ensure_existing_root(root, cli)?;
+    if cli.should_auto_index() {
+        let count = peek_indexed_file_count(&root, cli);
+        ensure_fresh_index(&root, cli, count)?;
+    }
     let searcher = open_searcher_raw(&root, cli)?;
-    if ensure_fresh_index(&root, cli, searcher.store().status()?.file_count)? {
-        return open_searcher_raw(&root, cli);
+    if !cli.should_auto_index() {
+        ensure_nonempty_index(&root, searcher.store().status()?.file_count)?;
     }
     Ok(searcher)
 }

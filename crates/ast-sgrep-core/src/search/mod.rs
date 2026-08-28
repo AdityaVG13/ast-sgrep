@@ -160,7 +160,7 @@ impl Searcher {
             }
         }
         Ok(Self::with_store(
-            IndexStore::open(&options.root, options.index_path.as_deref())?,
+            IndexStore::open_readonly(&options.root, options.index_path.as_deref())?,
             options,
         ))
     }
@@ -265,8 +265,7 @@ impl Searcher {
         // Full SearchOptions identity (nyui).
         format!(
             "{kind}\0{query}\0{}\0fr={}",
-            self.options_identity,
-            self.use_field_rescoring
+            self.options_identity, self.use_field_rescoring
         )
     }
     /// Run one multi-pass search inside a single read snapshot and stamp the
@@ -856,12 +855,7 @@ impl Searcher {
                     "search",
                     "anchor_pass_for_files",
                 );
-                anchor_pass_for_files(
-                    &self.store,
-                    &self.options,
-                    &stage_query,
-                    &lexical_files,
-                )?
+                anchor_pass_for_files(&self.store, &self.options, &stage_query, &lexical_files)?
             });
         }
         let structural_files = structural
@@ -972,13 +966,14 @@ fn structural_symbol_hits(
             if !seen.insert((row.path.clone(), row.line_start, row.line_end)) {
                 continue;
             }
+            let excerpt = store.fill_pattern_excerpt(&row)?;
             hits.push(SearchHit::span(SpanHitInput {
                 kind: HitKind::Pattern,
                 file: row.path,
                 line_start: row.line_start,
                 line_end: row.line_end,
                 score: SCORE_PATTERN * 0.85,
-                excerpt: row.excerpt,
+                excerpt,
                 symbol: Some(symbol.to_owned()),
                 language: row.language,
             }));
@@ -1051,17 +1046,15 @@ fn structural_index_pass(
         if !seen.insert((row.path.clone(), row.line_start, row.line_end)) {
             continue;
         }
-        let term = sig_to_term
-            .get(&signature)
-            .cloned()
-            .unwrap_or(signature);
+        let term = sig_to_term.get(&signature).cloned().unwrap_or(signature);
+        let excerpt = store.fill_pattern_excerpt(&row)?;
         hits.push(SearchHit::span(SpanHitInput {
             kind: HitKind::Pattern,
             file: row.path,
             line_start: row.line_start,
             line_end: row.line_end,
             score: SCORE_PATTERN * 0.85,
-            excerpt: row.excerpt,
+            excerpt,
             symbol: Some(term),
             language: row.language,
         }));

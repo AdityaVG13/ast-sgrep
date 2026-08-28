@@ -177,11 +177,23 @@ pub fn worker_authenticate() -> bool {
 }
 #[cfg(unix)]
 pub fn worker_start() {
-    use nix::sys::signal;
+    use nix::sys::signal::{self, Signal};
+    use nix::unistd::{getpid, getppid};
     clear_internal_envs();
-    // Parent owns process-group setup via CommandExt::process_group (rzzp).
-    // Worker only stops for the duty-cycle handshake.
-    let _ = signal::raise(signal::Signal::SIGSTOP);
+    // If the supervisor is SIGKILL'd, Drop never runs. Exit when reparented
+    // so an aborted MCP search cannot keep a worker alive.
+    let supervisor = getppid();
+    let _ = std::thread::Builder::new()
+        .name("asgrep-parent-watch".into())
+        .spawn(move || loop {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            if getppid() != supervisor {
+                let _ = signal::kill(getpid(), Signal::SIGTERM);
+                std::process::exit(128 + signal_hook::consts::SIGTERM);
+            }
+        });
+    // Stay in the supervisor process group. Duty-cycle STOP/CONT target this pid.
+    let _ = signal::raise(Signal::SIGSTOP);
 }
 #[cfg(unix)]
 mod unix_impl {
@@ -278,40 +290,40 @@ mod unix_impl {
         cmd.stdin(std::process::Stdio::inherit());
         cmd.stdout(std::process::Stdio::inherit());
         cmd.stderr(std::process::Stdio::inherit());
-        // Single owner for process-group setup: child becomes its own PG leader at spawn (rzzp).
-        {
-            use std::os::unix::process::CommandExt;
-            cmd.process_group(0);
-        }
+        // Stay in the supervisor process group so a parent SIGTERM/SIGHUP
+        // reaches the worker with default terminate disposition. Duty-cycle
+        // STOP/CONT target the worker pid, not a private process group.
         let mut child = cmd.spawn().context("failed to spawn worker")?;
         // Pid::from_raw bridges std Child::id() into nix. Child ids are OS PIDs;
         // casting to i32 matches nix's Pid representation on supported unix targets (l115/732x).
         let child_pid = Pid::from_raw(child.id() as i32);
         let mut guard = ChildGuard::new(child_pid);
-        wait_for_child_stop(child_pid)?;
-        let pgid_neg = Pid::from_raw(-child_pid.as_raw());
+        wait_for_child_stop(child_pid, &sigs)?;
         loop {
             // Duty-cycle: SIGCONT for work window, SIGSTOP for sleep window (PR#9).
             if sigs.tstp.swap(false, Ordering::SeqCst) {
-                let _ = signal::kill(pgid_neg, Signal::SIGSTOP);
+                let _ = signal::kill(child_pid, Signal::SIGSTOP);
                 let _ = signal::raise(Signal::SIGSTOP);
-                let _ = signal::kill(pgid_neg, Signal::SIGCONT);
+                let _ = signal::kill(child_pid, Signal::SIGCONT);
             }
-            let _ = signal::kill(pgid_neg, Signal::SIGCONT);
+            let _ = signal::kill(child_pid, Signal::SIGCONT);
             if !sleep_checking(work_ms, &mut child, child_pid, &sigs)? {
                 guard.disarm();
                 return Ok(());
             }
-            let _ = signal::kill(pgid_neg, Signal::SIGSTOP);
+            let _ = signal::kill(child_pid, Signal::SIGSTOP);
             if !sleep_checking(sleep_ms, &mut child, child_pid, &sigs)? {
                 guard.disarm();
                 return Ok(());
             }
         }
     }
-    fn wait_for_child_stop(child_pid: Pid) -> anyhow::Result<()> {
+    fn wait_for_child_stop(child_pid: Pid, sigs: &SignalSet) -> anyhow::Result<()> {
         let deadline = Instant::now() + Duration::from_secs(10);
         loop {
+            if sigs.shutdown_any() {
+                exit_shutdown(child_pid, sigs);
+            }
             match wait::waitpid(
                 child_pid,
                 Some(WaitPidFlag::WNOHANG | WaitPidFlag::WUNTRACED),
@@ -335,10 +347,9 @@ mod unix_impl {
         }
     }
     pub(super) fn kill_and_reap(child_pid: Pid) {
-        let pgid_neg = Pid::from_raw(-child_pid.as_raw());
-        let _ = signal::kill(pgid_neg, Signal::SIGCONT);
-        let _ = signal::kill(pgid_neg, Signal::SIGTERM);
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let _ = signal::kill(child_pid, Signal::SIGCONT);
+        let _ = signal::kill(child_pid, Signal::SIGTERM);
+        let deadline = Instant::now() + Duration::from_millis(100);
         loop {
             if let Ok(WaitStatus::Exited(_, _) | WaitStatus::Signaled(_, _, _)) =
                 wait::waitpid(child_pid, Some(WaitPidFlag::WNOHANG))
@@ -346,7 +357,6 @@ mod unix_impl {
                 break;
             }
             if Instant::now() >= deadline {
-                let _ = signal::kill(pgid_neg, Signal::SIGKILL);
                 let _ = signal::kill(child_pid, Signal::SIGKILL);
                 if let Ok(WaitStatus::Exited(_, _) | WaitStatus::Signaled(_, _, _)) =
                     wait::waitpid(child_pid, Some(WaitPidFlag::WNOHANG))
@@ -356,21 +366,7 @@ mod unix_impl {
                 let _ = wait::waitpid(child_pid, None);
                 break;
             }
-            std::thread::sleep(Duration::from_millis(50));
-        }
-        let drain_end = Instant::now() + Duration::from_secs(2);
-        while Instant::now() < drain_end {
-            if signal::kill(pgid_neg, Signal::SIGTERM).is_err() {
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(50));
-            if Instant::now() >= drain_end {
-                break;
-            }
-            if signal::kill(pgid_neg, Signal::SIGKILL).is_err() {
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(50));
+            std::thread::sleep(Duration::from_millis(10));
         }
     }
     fn exit_shutdown(child_pid: Pid, sigs: &SignalSet) -> ! {

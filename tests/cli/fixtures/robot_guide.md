@@ -4,8 +4,8 @@
 2. `asgrep robot-docs guide` — this handbook.
 3. `asgrep doctor --robot-triage` — health + recovery commands using the effective root.
 ## Quick start
-1. `asgrep --json --format compact "natural language intent" .` — ranked hits with bounded snippets. First search indexes an empty checkout, and incrementally refreshes a non-empty index, automatically.
-2. `asgrep index . --json` — explicit refresh. Pass `--no-auto-index` on search to skip auto-index and refresh.
+1. `asgrep --json --format compact "natural language intent" .` — ranked hits with bounded snippets. Search is read-only; it does not auto-index.
+2. `asgrep index . --json` — build or refresh the index. Pass `--auto-index` on search only when you explicitly want search to write.
 ## Indexed source / freshness
 - Do not spawn `rg` on indexed source. Use `literal:<term>` for exact substring presence and unprefixed search for ranked code navigation.
 - For a long-running CLI session, run `asgrep watch <root>`. A pending batch starts after the debounce quiet period or after at most three debounce windows under continuous events; indexing time still depends on the project.
@@ -37,7 +37,7 @@ See `capabilities --json` → `environment`. Common: `ASGREP_INDEX_PATH`, `ASGRE
 - `ASGREP_DURABILITY=fast-unsafe` (or `--durability fast-unsafe`) opts into power-loss corruption risk during write batches. `asgrep doctor` / `status` surface it; MCP/Code Mode inherit the env.
 - MCP and Code Mode / NAPI jail tool `root` under the configured workspace (`escapes configured workspace`). Host duty remains: set `ASGREP_ROOT` / Session root intentionally; NAPI inherits Session (not a free root).
 ## Common mistakes
-- Empty index / stale freeze: pass `--no-auto-index` (or `ASGREP_NO_AUTO_INDEX=1`) if search must not index or refresh.
+- Empty index: run `asgrep index <root> --json`. Search does not auto-index; pass `--auto-index` only when search may write.
 - Missing ROOT is an operational error; it is never reported as an empty result.
 - Full rebuild: prefer `asgrep reindex --dry-run <root> --json` before `reindex`.
 - Output format is not `json`: use `--json` and optionally `--format compact` (not `--format json`).

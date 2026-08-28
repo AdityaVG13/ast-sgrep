@@ -12,7 +12,12 @@ This changelog follows [Keep a Changelog](https://keepachangelog.com/) conventio
 ### Fixed
 
 - `pi-ast-sgrep` no longer imports `node:sqlite` at load time, so Pi/OMP/ZMP can boot under Bun via `bun:sqlite`.
-- `asgrep search` indexes an empty checkout on first use, and incrementally refreshes a non-empty index, instead of returning stale or empty hits. Pass `--no-auto-index` to keep the old fail-closed empty-index error and skip refresh.
+- Search opens the index read-only and no longer auto-indexes. `--no-auto-index` is the search default; pass `--auto-index` to opt in. `asgrep index` / `reindex` / `watch` remain the write path.
+- SIGTERM/SIGHUP on the supervisor kills the worker within 100 ms (CONT then TERM then KILL) instead of waiting 5 s while holding a write lock.
+- Writers checkpoint WAL (`TRUNCATE`) on clean close and cap `journal_size_limit` at 64 MiB.
+- `asgrep version` prints `index_schema`. Doctor reports on-disk vs binary schema and the recovery command (`asgrep reindex` vs install a newer binary).
+- `--path` on search is a hidden alias of `--file-filter` so agents do not hard-fail.
+- Pattern-node excerpts are reconstructed from `lines` at search time instead of duplicating source text in `pattern_nodes`.
 - `--lang` aliases include every indexed source extension (`ts`, `h`, `hpp`, `py`, `rs`, …) so SQL filters match stored language ids.
 
 ### Changed

@@ -4,7 +4,7 @@ use super::sql::{optional_row, CLEAR_ALL_SQL, SCHEMA_DDL};
 use super::try_index_db_path;
 use crate::Result;
 use ast_sgrep_lang::PatternNode;
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OpenFlags};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::Arc;
@@ -14,7 +14,8 @@ use std::sync::Arc;
 // 13 = callers lower() expression indexes (gauntlet-r11: calls_matching full-scan fix).
 // 14 = pattern_nodes (file_id, signature) composite for cascade structural seeks.
 // Never reuse a SCHEMA_VERSION for two migrations.
-const SCHEMA_VERSION: i64 = 14;
+pub const INDEX_SCHEMA_VERSION: i64 = 14;
+const SCHEMA_VERSION: i64 = INDEX_SCHEMA_VERSION;
 const IMPORT_SELECT: &str =
     "SELECT f.path, f.language, i.module_path, i.line_no FROM imports i JOIN files f ON f.id = i.file_id";
 const SYM_LOC: &str = "SELECT f.path, s.name, f.language, s.line_start, s.line_end FROM symbols s JOIN files f ON f.id = s.file_id";
@@ -175,6 +176,7 @@ pub struct IndexStore {
     /// probe). Keyed on generation so an external writer is not a stale routing
     /// decision; `bump_index_data_version` also clears it.
     line_count_at_least: std::cell::Cell<Option<(i64, usize, bool)>>,
+    read_only: bool,
 }
 mod queries;
 mod writes;
@@ -189,13 +191,56 @@ impl IndexStore {
         index_path: Option<&Path>,
         durability: crate::store::Durability,
     ) -> Result<Self> {
+        Self::open_inner(root, index_path, durability, false)
+    }
+
+    /// Search/status/doctor: SQLITE_OPEN_READ_ONLY, no schema migration, no WAL.
+    pub fn open_readonly(root: &Path, index_path: Option<&Path>) -> Result<Self> {
+        Self::open_inner(root, index_path, crate::store::Durability::from_env(), true)
+    }
+
+    /// Peek `PRAGMA user_version` without creating or migrating the database.
+    pub fn peek_schema_version(root: &Path, index_path: Option<&Path>) -> Result<i64> {
         let db_path = try_index_db_path(root, index_path).map_err(|e| {
             crate::StoreError::Other(format!(
                 "failed to resolve index path for root {}: {e}",
                 root.display()
             ))
         })?;
-        if let Some(p) = db_path.parent() {
+        if !db_path.is_file() {
+            return Err(crate::StoreError::Other(format!(
+                "index does not exist at {} (root {}); run: asgrep index {} --json",
+                db_path.display(),
+                root.display(),
+                root.display()
+            )));
+        }
+        let conn = Connection::open_with_flags(&db_path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        conn.query_row("PRAGMA user_version", [], |r| r.get(0))
+            .map_err(Into::into)
+    }
+
+    fn open_inner(
+        root: &Path,
+        index_path: Option<&Path>,
+        durability: crate::store::Durability,
+        read_only: bool,
+    ) -> Result<Self> {
+        let db_path = try_index_db_path(root, index_path).map_err(|e| {
+            crate::StoreError::Other(format!(
+                "failed to resolve index path for root {}: {e}",
+                root.display()
+            ))
+        })?;
+        if read_only {
+            if !db_path.is_file() {
+                return Err(crate::StoreError::Other(format!(
+                    "index is empty for {}; run: asgrep index {} --json",
+                    root.display(),
+                    root.display()
+                )));
+            }
+        } else if let Some(p) = db_path.parent() {
             std::fs::create_dir_all(p).map_err(|e| {
                 crate::StoreError::Other(format!(
                     "failed to create index directory {} (root {}): {e}",
@@ -206,8 +251,16 @@ impl IndexStore {
         }
         // Preserve rusqlite's error code so explicit reindex can distinguish a
         // corrupt/non-database file from permission, locking, and IO failures.
-        let conn = Connection::open(&db_path)?;
-        configure_connection_with(&conn, durability)?;
+        let conn = if read_only {
+            Connection::open_with_flags(&db_path, OpenFlags::SQLITE_OPEN_READ_ONLY)?
+        } else {
+            Connection::open(&db_path)?
+        };
+        if read_only {
+            super::sql::configure_connection_readonly(&conn)?;
+        } else {
+            configure_connection_with(&conn, durability)?;
+        }
         let store = Self {
             conn,
             root: root.to_path_buf(),
@@ -221,6 +274,7 @@ impl IndexStore {
             durability,
             trigram_df: crate::store::trigram_df::TrigramDfCache::new(),
             line_count_at_least: std::cell::Cell::new(None),
+            read_only,
         };
         store.init_schema()?;
         init_cache_seq(&store.conn, &store.cache_seq)?;
@@ -231,9 +285,13 @@ impl IndexStore {
             .conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))?;
         if version > SCHEMA_VERSION {
-            return Err(crate::StoreError::Other(format!(
-                "index schema version {version} is newer than supported version {SCHEMA_VERSION}; refusing to modify it"
-            )));
+            return Err(crate::StoreError::schema_newer_than_binary(
+                version,
+                SCHEMA_VERSION,
+            ));
+        }
+        if self.read_only {
+            return self.init_schema_readonly(version);
         }
         if version >= SCHEMA_VERSION {
             // Probe core tables even when user_version is current (a639).
@@ -370,9 +428,44 @@ impl IndexStore {
         self.index_data_version()
     }
 
-    /// Schema version this database was built with (d3l5).
+    fn init_schema_readonly(&self, version: i64) -> Result<()> {
+        let core: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('files','lines','meta','symbols')",
+            [],
+            |r| r.get(0),
+        )?;
+        if core < 4 {
+            return Err(crate::StoreError::Other(format!(
+                "index is empty for {}; run: asgrep index {} --json",
+                self.root.display(),
+                self.root.display()
+            )));
+        }
+        let _ = version;
+        Ok(())
+    }
+
+    /// Schema version this binary writes (d3l5). On-disk value: `on_disk_schema_version`.
     pub fn schema_version(&self) -> i64 {
         SCHEMA_VERSION
+    }
+
+    pub fn on_disk_schema_version(&self) -> Result<i64> {
+        self.conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .map_err(Into::into)
+    }
+
+    pub fn is_read_only(&self) -> bool {
+        self.read_only
+    }
+
+    /// Checkpoint WAL into the main db. No-op for read-only connections.
+    pub fn checkpoint_wal(&self) -> Result<()> {
+        if self.read_only {
+            return Ok(());
+        }
+        super::sql::checkpoint_wal(&self.conn)
     }
 
     /// Persist SCIP defs/refs that match existing symbols/callers (kgvi.2).
@@ -983,5 +1076,13 @@ impl IndexStore {
         })?;
         let _ = self.conn.execute_batch("VACUUM");
         Ok(())
+    }
+}
+
+impl Drop for IndexStore {
+    fn drop(&mut self) {
+        if !self.read_only {
+            let _ = super::sql::checkpoint_wal(&self.conn);
+        }
     }
 }

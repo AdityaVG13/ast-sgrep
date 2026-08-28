@@ -113,11 +113,36 @@ fn run_json(args: &[&str]) -> (i32, Value, String, String) {
 }
 
 #[test]
-fn search_auto_indexes_an_empty_checkout() {
+fn search_does_not_auto_index_an_empty_checkout() {
     let root = TempDir::new().expect("root");
     fs::write(root.path().join("planted.rs"), "fn planted_symbol() {}\n").expect("source");
     let index = root.path().join("index.db");
     let (code, value, _stdout, stderr) = run_json(&[
+        "--json",
+        "--no-embed",
+        "--index-path",
+        index.to_str().unwrap(),
+        "search",
+        "planted_symbol",
+        root.path().to_str().unwrap(),
+    ]);
+    assert_eq!(code, 2, "stderr={stderr} value={value}");
+    assert!(stderr.is_empty(), "machine mode must stay silent: {stderr}");
+    assert_eq!(value["ok"], false);
+    let message = value["error"]["message"].as_str().unwrap_or("");
+    assert!(
+        message.contains("index is empty"),
+        "expected empty-index error, got {message}"
+    );
+}
+
+#[test]
+fn search_auto_index_opt_in_indexes_an_empty_checkout() {
+    let root = TempDir::new().expect("root");
+    fs::write(root.path().join("planted.rs"), "fn planted_symbol() {}\n").expect("source");
+    let index = root.path().join("index.db");
+    let (code, value, _stdout, stderr) = run_json(&[
+        "--auto-index",
         "--json",
         "--no-embed",
         "--index-path",
@@ -163,7 +188,7 @@ fn search_no_auto_index_fails_closed_when_empty() {
 }
 
 #[test]
-fn search_refreshes_stale_index_after_edit() {
+fn search_does_not_refresh_stale_index_after_edit() {
     let root = TempDir::new().expect("root");
     let planted = root.path().join("planted.rs");
     fs::write(&planted, "fn planted_symbol() {}\n").expect("source");
@@ -173,13 +198,10 @@ fn search_refreshes_stale_index_after_edit() {
         "--no-embed",
         "--index-path",
         index.to_str().unwrap(),
-        "search",
-        "planted_symbol",
+        "index",
         root.path().to_str().unwrap(),
     ]);
     assert_eq!(code, 0, "stderr={stderr} value={value}");
-    assert!(stderr.is_empty(), "machine mode must stay silent: {stderr}");
-    assert_eq!(value["ok"], true);
 
     fs::write(
         &planted,
@@ -200,22 +222,14 @@ fn search_refreshes_stale_index_after_edit() {
         "--index-path",
         index.to_str().unwrap(),
         "search",
-        "planted_after_edit",
+        "word:planted_after_edit",
         root.path().to_str().unwrap(),
     ]);
     assert_eq!(code, 0, "stderr={stderr} value={value}");
     assert!(stderr.is_empty(), "machine mode must stay silent: {stderr}");
     assert_eq!(value["ok"], true);
     let hits = value["hits"].as_array().expect("hits");
-    assert!(
-        hits.iter().any(|hit| {
-            hit["symbol"] == "planted_after_edit"
-                || hit["excerpt"]
-                    .as_str()
-                    .is_some_and(|excerpt| excerpt.contains("planted_after_edit"))
-        }),
-        "search must pick up the edit without a separate index; got {hits:?}"
-    );
+    assert!(hits.is_empty(), "search must not refresh; got {hits:?}");
 }
 
 #[test]
@@ -229,12 +243,10 @@ fn search_no_auto_index_skips_refresh_after_edit() {
         "--no-embed",
         "--index-path",
         index.to_str().unwrap(),
-        "search",
-        "planted_symbol",
+        "index",
         root.path().to_str().unwrap(),
     ]);
     assert_eq!(code, 0, "stderr={stderr} value={value}");
-    assert_eq!(value["ok"], true);
 
     fs::write(&planted, "fn planted_symbol() {}\nfn planted_frozen() {}\n").expect("edit");
     let later = std::time::SystemTime::now() + std::time::Duration::from_secs(2);
@@ -266,7 +278,7 @@ fn search_no_auto_index_skips_refresh_after_edit() {
 }
 
 #[test]
-fn chain_auto_indexes_an_empty_checkout() {
+fn chain_does_not_auto_index_an_empty_checkout() {
     let root = TempDir::new().expect("root");
     fs::write(
         root.path().join("planted.rs"),
@@ -283,10 +295,14 @@ fn chain_auto_indexes_an_empty_checkout() {
         "planted_symbol",
         root.path().to_str().unwrap(),
     ]);
-    assert_eq!(code, 0, "stderr={stderr} value={value}");
+    assert_eq!(code, 2, "stderr={stderr} value={value}");
     assert!(stderr.is_empty(), "machine mode must stay silent: {stderr}");
-    assert_eq!(value["ok"], true);
-    assert!(value["node_count"].as_u64().unwrap_or(0) > 0, "{value}");
+    assert_eq!(value["ok"], false);
+    let message = value["error"]["message"].as_str().unwrap_or("");
+    assert!(
+        message.contains("index is empty"),
+        "expected empty-index error, got {message}"
+    );
 }
 
 #[test]
@@ -555,8 +571,21 @@ fn search_file_filter_reuses_one_repository_index() {
     fs::create_dir_all(root.path().join("b")).unwrap();
     fs::write(root.path().join("a/one.rs"), "fn shared_symbol() {}\n").unwrap();
     fs::write(root.path().join("b/two.rs"), "fn shared_symbol() {}\n").unwrap();
-    fs::write(root.path().join("README.md"), "# untyped indexed document\n").unwrap();
+    fs::write(
+        root.path().join("README.md"),
+        "# untyped indexed document\n",
+    )
+    .unwrap();
     let index = root.path().join(".asgrep/index.db");
+    let (code, value, _stdout, stderr) = run_json(&[
+        "--json",
+        "--no-embed",
+        "--index-path",
+        index.to_str().unwrap(),
+        "index",
+        root.path().to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "index stderr={stderr} value={value}");
 
     let (code, value, _stdout, stderr) = run_json(&[
         "--json",
@@ -610,9 +639,7 @@ fn file_filter_is_rejected_by_non_search_commands() {
     ]);
     assert_eq!(code, 1, "stderr={stderr} value={value}");
     assert!(stderr.is_empty());
-    assert!(
-        value["error"]["message"]
-            .as_str()
-            .is_some_and(|message| message.contains("--file-filter applies only"))
-    );
+    assert!(value["error"]["message"]
+        .as_str()
+        .is_some_and(|message| message.contains("--file-filter applies only")));
 }

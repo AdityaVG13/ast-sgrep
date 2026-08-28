@@ -140,13 +140,14 @@ fn search_pattern_cached(
             if !seen.insert((row.path.clone(), row.line_start, row.line_end)) {
                 continue;
             }
+            let excerpt = store.fill_pattern_excerpt(&row)?;
             hits.push(SearchHit::span(SpanHitInput {
                 kind: HitKind::Pattern,
                 file: row.path,
                 line_start: row.line_start,
                 line_end: row.line_end,
                 score: SCORE_PATTERN,
-                excerpt: row.excerpt,
+                excerpt,
                 symbol: Some(pattern.to_string()),
                 language: row.language,
             }));

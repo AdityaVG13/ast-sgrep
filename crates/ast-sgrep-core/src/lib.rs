@@ -85,7 +85,8 @@ pub use search::{
 };
 pub use store::{
     bump_writer_generation, index_db_path, read_writer_generation, try_index_db_path,
-    writer_generation_path, Durability, IndexStatus, IndexStore, SymbolRow, WRITER_GENERATION_FILE,
+    writer_generation_path, Durability, IndexStatus, IndexStore, SymbolRow, INDEX_SCHEMA_VERSION,
+    WRITER_GENERATION_FILE,
 };
 #[derive(Debug, Error)]
 pub enum StoreError {
@@ -97,6 +98,20 @@ pub enum StoreError {
     Other(String),
 }
 impl StoreError {
+    pub fn schema_newer_than_binary(on_disk: i64, supported: i64) -> Self {
+        Self::Other(format!(
+            "index schema version {on_disk} is newer than supported version {supported}; install a newer asgrep binary (asgrep version --json → index_schema_version). This binary cannot read or modify that index."
+        ))
+    }
+
+    pub fn parse_schema_mismatch(message: &str) -> Option<(i64, i64)> {
+        // "index schema version X is newer than supported version Y"
+        let rest = message.strip_prefix("index schema version ")?;
+        let (disk, rest) = rest.split_once(" is newer than supported version ")?;
+        let supported = rest.split(';').next()?.split(',').next()?.trim();
+        Some((disk.parse().ok()?, supported.parse().ok()?))
+    }
+
     pub(crate) fn is_corrupt_database(&self) -> bool {
         matches!(
             self,

@@ -267,7 +267,7 @@ fn persist_per_field_vectors_on_index() {
         .index_content("tests/account_test.rs", content)
         .unwrap();
     let store = indexer.store();
-    assert_eq!(store.schema_version(), 12);
+    assert_eq!(store.schema_version(), ast_sgrep_core::INDEX_SCHEMA_VERSION);
     let fields = store.semantic_chunk_field_vectors().unwrap();
     assert!(
         !fields.is_empty(),

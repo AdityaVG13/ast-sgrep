@@ -1,7 +1,7 @@
-use crate::{index_options, Cli};
+use crate::Cli;
 use anyhow::Context;
 use ast_sgrep_core::semantic_ann::should_use_ann;
-use ast_sgrep_core::Indexer;
+use ast_sgrep_core::{IndexStore, StoreError, INDEX_SCHEMA_VERSION};
 use clap::{CommandFactory, Parser, Subcommand};
 use serde_json::{json, Value};
 use std::io::{self, IsTerminal};
@@ -67,7 +67,7 @@ pub(crate) fn capabilities_json(_cli: &Cli) -> anyhow::Result<Value> {
             "precedence": "conflicting --root and positional ROOT is a usage error; effective_root prefers --root when set",
             "bin_aliases": ["asgrep", "ast-sgrep"]
         },
-        "environment": ["ASGREP_LIMIT", "ASGREP_INDEX_PATH", "ASGREP_DURABILITY", "ASGREP_NO_EMBED", "ASGREP_NO_AUTO_INDEX", "ASGREP_NEURAL_EMBED", "ASGREP_NEURAL_FALLBACK", "ASGREP_SEMANTIC_ONLY", "ASGREP_TANTIVY", "ASGREP_ANN_THRESHOLD", "ASGREP_ANN_PROBES", "ASGREP_RERANK", "ASGREP_RERANK_TOP_K", "ASGREP_ALLOW_AST_GREP", "ASGREP_ALLOW_EXTERNAL_INDEX", "ASGREP_AST_GREP", "ASGREP_LEDGER_PATH", "ASGREP_USE_CACHE", "XDG_CACHE_HOME", "NO_COLOR", "CI"],
+        "environment": ["ASGREP_LIMIT", "ASGREP_INDEX_PATH", "ASGREP_DURABILITY", "ASGREP_NO_EMBED", "ASGREP_NO_AUTO_INDEX", "ASGREP_AUTO_INDEX", "ASGREP_NEURAL_EMBED", "ASGREP_NEURAL_FALLBACK", "ASGREP_SEMANTIC_ONLY", "ASGREP_TANTIVY", "ASGREP_ANN_THRESHOLD", "ASGREP_ANN_PROBES", "ASGREP_RERANK", "ASGREP_RERANK_TOP_K", "ASGREP_ALLOW_AST_GREP", "ASGREP_ALLOW_EXTERNAL_INDEX", "ASGREP_AST_GREP", "ASGREP_LEDGER_PATH", "ASGREP_USE_CACHE", "XDG_CACHE_HOME", "NO_COLOR", "CI"],
         "environment_bool_values": ["1", "0", "true", "false", "yes", "no", "on", "off"],
         "sibling_binaries": [
             {"name":"asgrep-mcp","purpose":"MCP stdio server","launch":"asgrep-mcp (stdio JSON-RPC)"},
@@ -80,7 +80,7 @@ pub(crate) fn capabilities_json(_cli: &Cli) -> anyhow::Result<Value> {
         "indexed_source": {
             "policy": "Do not spawn rg on indexed source.",
             "exact_text": "Use literal:<term> for exact substring presence in indexed languages.",
-            "freshness": "CLI: search incrementally refreshes unless --no-auto-index; run asgrep watch <ROOT> for long-lived sessions; Pi and Code Mode refresh before search with a 30-second default correctness lease; LSP applies document open/change/save/close before the next request.",
+            "freshness": "CLI: search is read-only (no auto-index/refresh) unless --auto-index; run asgrep index / reindex / watch to write; Pi and Code Mode refresh before search with a 30-second default correctness lease; LSP applies document open/change/save/close before the next request.",
             "outside_contract": "Use ripgrep only for logs and unindexed or unsupported files."
         },
         "aliases": ["ast-sgrep"],
@@ -228,20 +228,96 @@ fn doctor_triage_json(cli: &Cli, root: &Path) -> anyhow::Result<Value> {
     let root = crate::effective_root(cli, root);
     let mut issues = Vec::<Value>::new();
     let mut next = Vec::<String>::new();
+    let supported = INDEX_SCHEMA_VERSION;
     let status = if !root.is_dir() {
         issues.push(json!({"kind": "missing_root", "message": format!("project root does not exist or is not a directory: {}", root.display())}));
         None
     } else {
-        match Indexer::new(index_options(&root, cli)).context("failed to open index for doctor") {
-            Ok(idx) => match idx.store().status() {
-                Ok(status) => Some(status),
+        match IndexStore::peek_schema_version(&root, cli.index_path.as_deref()) {
+            Ok(on_disk) if on_disk > supported => {
+                issues.push(json!({
+                    "kind": "schema_mismatch",
+                    "on_disk": on_disk,
+                    "supported": supported,
+                    "message": format!(
+                        "index schema on disk is {on_disk}; this binary supports {supported}. Install a newer asgrep (asgrep version --json → index_schema_version)."
+                    )
+                }));
+                next.push("asgrep version --json".to_string());
+                None
+            }
+            Ok(on_disk) if on_disk < supported => {
+                issues.push(json!({
+                    "kind": "schema_mismatch",
+                    "on_disk": on_disk,
+                    "supported": supported,
+                    "message": format!(
+                        "index schema on disk is {on_disk}; this binary supports {supported}. Rebuild with: asgrep reindex {} --json",
+                        root.display()
+                    )
+                }));
+                next.push(format!("asgrep reindex {} --json", root.display()));
+                match IndexStore::open_readonly(&root, cli.index_path.as_deref()) {
+                    Ok(store) => match store.status() {
+                        Ok(status) => Some(status),
+                        Err(e) => {
+                            issues.push(json!({"kind": "status_read", "message": e.to_string()}));
+                            None
+                        }
+                    },
+                    Err(e) => {
+                        issues.push(json!({"kind": "index_open", "message": e.to_string()}));
+                        None
+                    }
+                }
+            }
+            Ok(_) => match IndexStore::open_readonly(&root, cli.index_path.as_deref())
+                .context("failed to open index for doctor")
+            {
+                Ok(store) => match store.status() {
+                    Ok(status) => Some(status),
+                    Err(e) => {
+                        issues.push(json!({"kind": "status_read", "message": e.to_string()}));
+                        None
+                    }
+                },
                 Err(e) => {
-                    issues.push(json!({"kind": "status_read", "message": e.to_string()}));
+                    let msg = format!("{e:#}");
+                    if let Some((on_disk, supported)) = StoreError::parse_schema_mismatch(&msg) {
+                        issues.push(json!({
+                            "kind": "schema_mismatch",
+                            "on_disk": on_disk,
+                            "supported": supported,
+                            "message": msg
+                        }));
+                        if on_disk > supported {
+                            next.push("asgrep version --json".to_string());
+                        } else {
+                            next.push(format!("asgrep reindex {} --json", root.display()));
+                        }
+                    } else {
+                        issues.push(json!({"kind": "index_open", "message": msg}));
+                    }
                     None
                 }
             },
             Err(e) => {
-                issues.push(json!({"kind": "index_open", "message": e.to_string()}));
+                let msg = e.to_string();
+                if let Some((on_disk, supported)) = StoreError::parse_schema_mismatch(&msg) {
+                    issues.push(json!({
+                        "kind": "schema_mismatch",
+                        "on_disk": on_disk,
+                        "supported": supported,
+                        "message": msg
+                    }));
+                    if on_disk > supported {
+                        next.push("asgrep version --json".to_string());
+                    } else {
+                        next.push(format!("asgrep reindex {} --json", root.display()));
+                    }
+                } else {
+                    issues.push(json!({"kind": "index_open", "message": msg}));
+                }
                 None
             }
         }
@@ -251,7 +327,11 @@ fn doctor_triage_json(cli: &Cli, root: &Path) -> anyhow::Result<Value> {
         next.push("unset ASGREP_DURABILITY  # or: asgrep --durability balanced …".to_string());
     }
     let root_display = root.display().to_string();
-    if status.is_none() {
+    if status.is_none()
+        && !next
+            .iter()
+            .any(|c| c.contains("reindex") || c.contains("version --json"))
+    {
         next.push(format!("asgrep index {root_display} --json"));
     } else if let Some(ref st) = status {
         if st.file_count == 0 {
@@ -287,8 +367,8 @@ pub(crate) fn robot_guide_markdown() -> &'static str {
 2. `asgrep robot-docs guide` — this handbook.
 3. `asgrep doctor --robot-triage` — health + recovery commands using the effective root.
 ## Quick start
-1. `asgrep --json --format compact "natural language intent" .` — ranked hits with bounded snippets. First search indexes an empty checkout, and incrementally refreshes a non-empty index, automatically.
-2. `asgrep index . --json` — explicit refresh. Pass `--no-auto-index` on search to skip auto-index and refresh.
+1. `asgrep --json --format compact "natural language intent" .` — ranked hits with bounded snippets. Search is read-only; it does not auto-index.
+2. `asgrep index . --json` — build or refresh the index. Pass `--auto-index` on search only when you explicitly want search to write.
 ## Indexed source / freshness
 - Do not spawn `rg` on indexed source. Use `literal:<term>` for exact substring presence and unprefixed search for ranked code navigation.
 - For a long-running CLI session, run `asgrep watch <root>`. A pending batch starts after the debounce quiet period or after at most three debounce windows under continuous events; indexing time still depends on the project.
@@ -320,7 +400,7 @@ See `capabilities --json` → `environment`. Common: `ASGREP_INDEX_PATH`, `ASGRE
 - `ASGREP_DURABILITY=fast-unsafe` (or `--durability fast-unsafe`) opts into power-loss corruption risk during write batches. `asgrep doctor` / `status` surface it; MCP/Code Mode inherit the env.
 - MCP and Code Mode / NAPI jail tool `root` under the configured workspace (`escapes configured workspace`). Host duty remains: set `ASGREP_ROOT` / Session root intentionally; NAPI inherits Session (not a free root).
 ## Common mistakes
-- Empty index / stale freeze: pass `--no-auto-index` (or `ASGREP_NO_AUTO_INDEX=1`) if search must not index or refresh.
+- Empty index: run `asgrep index <root> --json`. Search does not auto-index; pass `--auto-index` only when search may write.
 - Missing ROOT is an operational error; it is never reported as an empty result.
 - Full rebuild: prefer `asgrep reindex --dry-run <root> --json` before `reindex`.
 - Output format is not `json`: use `--json` and optionally `--format compact` (not `--format json`).

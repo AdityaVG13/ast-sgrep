@@ -615,7 +615,7 @@ pub fn load_or_build_semantic_ivf(
             // Search holds a read snapshot. Do not attempt a read-to-write
             // upgrade here: a concurrent index commit would make it fail with
             // SQLITE_BUSY_SNAPSHOT. The fingerprint remains authoritative.
-            if store.connection().is_autocommit() {
+            if !store.is_read_only() && store.connection().is_autocommit() {
                 store.set_meta("semantic_ivf_stale", "0")?;
             }
             let ivf = Arc::new(ivf);
@@ -627,8 +627,12 @@ pub fn load_or_build_semantic_ivf(
     }
     let flat = flatten_vectors_for_search(chunks, dim)?;
     let index = SemanticAnnIndex::build_from_flat(&flat, dim);
-    let published = save_semantic_ivf_with_publication(&ivf_path, fingerprint, dim, &flat, &index)?;
-    if store.connection().is_autocommit() {
+    let published = if store.is_read_only() {
+        false
+    } else {
+        save_semantic_ivf_with_publication(&ivf_path, fingerprint, dim, &flat, &index)?
+    };
+    if !store.is_read_only() && store.connection().is_autocommit() {
         store.set_meta("semantic_ivf_stale", if published { "0" } else { "1" })?;
     }
     let ivf = Arc::new(PersistedSemanticIvf::from_owned(

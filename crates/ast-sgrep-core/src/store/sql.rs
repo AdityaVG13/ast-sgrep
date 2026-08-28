@@ -399,16 +399,38 @@ pub fn configure_connection_with(
     conn: &Connection,
     durability: crate::store::Durability,
 ) -> Result<()> {
-    conn.busy_timeout(Duration::from_secs(5))?;
+    configure_connection_inner(conn, durability, false)
+}
+
+/// Read-only search/status/doctor: no journal_mode write, short busy timeout.
+pub fn configure_connection_readonly(conn: &Connection) -> Result<()> {
+    configure_connection_inner(conn, crate::store::Durability::default(), true)
+}
+
+fn configure_connection_inner(
+    conn: &Connection,
+    durability: crate::store::Durability,
+    read_only: bool,
+) -> Result<()> {
+    let busy = if read_only {
+        Duration::from_millis(250)
+    } else {
+        Duration::from_secs(5)
+    };
+    conn.busy_timeout(busy)?;
     conn.set_prepared_statement_cache_capacity(128);
-    let journal_mode: String = conn.query_row("PRAGMA journal_mode", [], |row| row.get(0))?;
-    if !journal_mode.eq_ignore_ascii_case("wal") {
-        let _: String = conn.query_row("PRAGMA journal_mode = WAL", [], |row| row.get(0))?;
+    if read_only {
+        conn.execute_batch("PRAGMA query_only = ON; PRAGMA foreign_keys = ON;")?;
+    } else {
+        let journal_mode: String = conn.query_row("PRAGMA journal_mode", [], |row| row.get(0))?;
+        if !journal_mode.eq_ignore_ascii_case("wal") {
+            let _: String = conn.query_row("PRAGMA journal_mode = WAL", [], |row| row.get(0))?;
+        }
+        conn.execute_batch(&format!(
+            "PRAGMA foreign_keys = ON; PRAGMA synchronous = {}; PRAGMA wal_autocheckpoint = 1000; PRAGMA journal_size_limit = 67108864;",
+            durability.steady_pragma()
+        ))?;
     }
-    conn.execute_batch(&format!(
-        "PRAGMA foreign_keys = ON; PRAGMA synchronous = {}; PRAGMA wal_autocheckpoint = 1000;",
-        durability.steady_pragma()
-    ))?;
     if std::env::var_os("ASGREP_SQLITE_DEFAULTS").is_none() {
         // br-perf-tail-cache: a serve session's p99/p100 is cold-page btree
         // I/O for each first-touch needle's trigram doclists. The self-corpus
@@ -418,6 +440,12 @@ pub fn configure_connection_with(
         // stays on so anything beyond the cache is still syscall-free.
         conn.execute_batch("PRAGMA mmap_size = 268435456; PRAGMA cache_size = -71680;")?;
     }
+    Ok(())
+}
+
+/// Truncate WAL into the main db. Writers call this on clean close.
+pub fn checkpoint_wal(conn: &Connection) -> Result<()> {
+    conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")?;
     Ok(())
 }
 pub fn integrity_check(conn: &Connection) -> Result<String> {

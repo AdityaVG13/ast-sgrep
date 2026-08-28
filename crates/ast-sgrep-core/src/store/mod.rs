@@ -12,7 +12,7 @@ pub(crate) use sqlite::CallEvidenceRow;
 pub(crate) use sqlite::FileIdentity;
 pub use sqlite::{
     CallerRow, ImportRow, IndexStore, IndexedLineRow, RefreshLinesInput, SymbolLocationRow,
-    SymbolRow, UpsertFileInput,
+    SymbolRow, UpsertFileInput, INDEX_SCHEMA_VERSION,
 };
 use std::path::{Path, PathBuf};
 pub use writer_generation::{

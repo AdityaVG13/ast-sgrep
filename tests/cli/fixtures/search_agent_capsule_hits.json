@@ -20,7 +20,7 @@
         "end": 11,
         "start": 8
       },
-      "margin": 0.0014232714172395522,
+      "margin": 0.0016636560326241667,
       "preview": "def process_request(input)",
       "ref": "src/app.rb#L8-L11",
       "score": 0.0693416181914331,
@@ -49,10 +49,10 @@
         "end": 10,
         "start": 8
       },
-      "margin": 0.013819986118455842,
+      "margin": 0.013579601503071227,
       "preview": "def process_request(input: str) -> str:",
       "ref": "src/main.py#L8-L10",
-      "score": 0.06791834677419355,
+      "score": 0.06767796215880893,
       "signal": "structural",
       "symbol": "process_request",
       "why": [

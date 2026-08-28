@@ -20,6 +20,7 @@ use machine::{
     print_machine_failure, print_machine_json, raw_command_name, raw_machine_output_requested,
     MACHINE_SCHEMA_VERSION,
 };
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 pub(crate) use cli_args::{usage_error, UsageError};
@@ -49,8 +50,50 @@ pub fn main() -> anyhow::Result<()> {
     }
 }
 
+fn rewrite_search_path_alias(raw: Vec<OsString>) -> Vec<OsString> {
+    let mut saw_search = false;
+    let mut saw_index = false;
+    for arg in raw.iter().skip(1) {
+        if arg == "--" {
+            break;
+        }
+        let Some(s) = arg.to_str() else {
+            continue;
+        };
+        match s {
+            "search" | "find" | "query" | "keyword" | "semantic" => saw_search = true,
+            "index" | "reindex" => saw_index = true,
+            _ => {}
+        }
+    }
+    if saw_index && !saw_search {
+        return raw;
+    }
+    let mut out = Vec::with_capacity(raw.len());
+    let mut passthrough = false;
+    for arg in raw {
+        if passthrough {
+            out.push(arg);
+            continue;
+        }
+        if arg == "--" {
+            passthrough = true;
+            out.push(arg);
+            continue;
+        }
+        match arg.to_str() {
+            Some("--path") => out.push(OsString::from("--file-filter")),
+            Some(s) if s.starts_with("--path=") => {
+                out.push(OsString::from(format!("--file-filter={}", &s[7..])));
+            }
+            _ => out.push(arg),
+        }
+    }
+    out
+}
+
 fn run_process() -> ! {
-    let raw_args: Vec<_> = std::env::args_os().collect();
+    let raw_args = rewrite_search_path_alias(std::env::args_os().collect());
     let cli = match Cli::try_parse_from(&raw_args) {
         Ok(cli) => cli,
         Err(error) => {
@@ -303,13 +346,20 @@ fn run_codemode_serve(cli: &Cli) -> anyhow::Result<()> {
 }
 
 fn run_version(cli: &Cli, args: &VersionArgs) -> anyhow::Result<()> {
+    let index_schema = ast_sgrep_core::INDEX_SCHEMA_VERSION;
     if cli.json || args.json {
         print_machine_json(
             "version",
-            serde_json::json!({"version": env!("CARGO_PKG_VERSION"), "machine_schema_version": MACHINE_SCHEMA_VERSION}),
+            serde_json::json!({
+                "version": env!("CARGO_PKG_VERSION"),
+                "index_schema_version": index_schema,
+                "machine_schema_version": MACHINE_SCHEMA_VERSION
+            }),
         )
     } else {
         println!("asgrep {}", env!("CARGO_PKG_VERSION"));
+        println!("index_schema {index_schema}");
+        println!("machine_schema {MACHINE_SCHEMA_VERSION}");
         Ok(())
     }
 }

@@ -151,3 +151,33 @@ fn default_durability_never_reaches_synchronous_off() {
         "default indexing must never run with synchronous=OFF"
     );
 }
+
+#[test]
+fn open_readonly_does_not_take_write_lock() {
+    let session = isolated_index_session();
+    let _writer = session.open_store();
+    drop(_writer);
+    let store =
+        ast_sgrep_core::IndexStore::open_readonly(&session.corpus_root, Some(&session.index_path))
+            .expect("readonly open");
+    assert!(store.is_read_only());
+    let busy_ms: i64 = store
+        .connection()
+        .query_row("PRAGMA busy_timeout", [], |row| row.get(0))
+        .expect("busy_timeout");
+    assert_eq!(busy_ms, 250);
+    let query_only: i64 = store
+        .connection()
+        .query_row("PRAGMA query_only", [], |row| row.get(0))
+        .expect("query_only");
+    assert_eq!(query_only, 1);
+    let err = store
+        .connection()
+        .execute("INSERT INTO meta(key, value) VALUES('x', 'y')", [])
+        .expect_err("readonly insert");
+    let msg = err.to_string().to_ascii_lowercase();
+    assert!(
+        msg.contains("readonly") || msg.contains("read-only") || msg.contains("query_only"),
+        "unexpected insert error: {err}"
+    );
+}

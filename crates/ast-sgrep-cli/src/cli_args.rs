@@ -301,9 +301,18 @@ pub(crate) struct Cli {
         env = "ASGREP_NO_AUTO_INDEX",
         action = clap::ArgAction::SetTrue,
         value_parser = clap::builder::BoolishValueParser::new(),
-        help = "Do not auto-index an empty checkout or refresh a stale index"
+        help = "Search default: do not auto-index or refresh (explicit; use --auto-index to opt in)"
     )]
     pub(crate) no_auto_index: bool,
+    #[arg(
+        long = "auto-index",
+        global = true,
+        env = "ASGREP_AUTO_INDEX",
+        action = clap::ArgAction::SetTrue,
+        value_parser = clap::builder::BoolishValueParser::new(),
+        help = "Opt in to indexing an empty checkout or refreshing a stale index on search"
+    )]
+    pub(crate) auto_index: bool,
     /// Search-tuning for bare (no-subcommand) search only — not inherited by capabilities/doctor (vdqo).
     #[command(flatten)]
     pub(crate) tuning: SearchTuning,
@@ -531,6 +540,10 @@ impl Cli {
 
     /// Merge parent (pre-subcommand) tuning with subcommand-scoped tuning (vdqo).
     /// Parent flags like `asgrep --format compact search ...` remain effective.
+    pub(crate) fn should_auto_index(&self) -> bool {
+        self.auto_index && !self.no_auto_index
+    }
+
     pub(crate) fn active_tuning(&self) -> SearchTuning {
         let mut t = self.tuning.clone();
         let overlay = match self.command.as_ref() {
