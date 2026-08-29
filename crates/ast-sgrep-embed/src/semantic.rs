@@ -84,6 +84,49 @@ const CONCEPT_GROUPS: &[(&[&str], &[&str])] = &[
         &["test", "spec", "mock", "fixture", "assert"],
         &["test", "spec", "mock", "fixture", "assert", "unittest"],
     ),
+    (
+        &["evict", "eviction", "prune", "purge"],
+        &["evict", "eviction", "prune", "purge", "cache", "stale"],
+    ),
+    (
+        &["redact", "redaction", "scrub", "mask"],
+        &["redact", "redaction", "scrub", "mask", "secret", "sanitize"],
+    ),
+    (
+        &["rank", "ranking", "fusion", "rrf", "critic"],
+        &[
+            "rank", "ranking", "fusion", "rrf", "reciprocal", "score", "critic",
+            "collision",
+        ],
+    ),
+    (
+        &["snapshot", "generation", "consistency"],
+        &["snapshot", "generation", "consistency", "revision", "stamp"],
+    ),
+    (
+        &["durability", "wal", "durable"],
+        &["durability", "wal", "durable", "write", "sync", "persist"],
+    ),
+    (
+        &["hybrid", "cascade"],
+        &["hybrid", "cascade", "search", "lexical", "semantic"],
+    ),
+    (
+        &["intern", "interning"],
+        &["intern", "interning", "path", "compact"],
+    ),
+    (
+        &["derive", "follow", "planner", "command"],
+        &["derive", "follow", "follow_up", "planner", "suggested", "next", "command"],
+    ),
+    (
+        &["remember", "reuse", "embedding", "embeddings"],
+        &["remember", "reuse", "embed", "embedding", "embeddings", "cache", "query", "vector"],
+    ),
+    (
+        &["reciprocal", "channel", "channels", "evidence"],
+        &["reciprocal", "rrf", "fusion", "channel", "channels", "evidence", "rank"],
+    ),
 ];
 pub fn tokenize(text: &str) -> Vec<String> {
     let mut out = HashSet::new();
@@ -245,5 +288,42 @@ mod tests {
         }
         let us = start.elapsed().as_secs_f64() * 1.0e6 / f64::from(N);
         eprintln!("embed_text mean {us:.1} us over {N} runs of {q:?}");
+    }
+
+    #[test]
+    fn eviction_expands_to_prune() {
+        let expanded = expand_concepts("eviction");
+        for token in ["prune", "cache", "stale"] {
+            assert!(expanded.contains(token), "missing {token} in {expanded:?}");
+        }
+    }
+
+    #[test]
+    fn redaction_expands_to_scrub() {
+        let expanded = expand_concepts("redaction");
+        for token in ["scrub", "secret", "sanitize"] {
+            assert!(expanded.contains(token), "missing {token} in {expanded:?}");
+        }
+    }
+
+    #[test]
+    fn hybrid_expands_to_search() {
+        let expanded = expand_concepts("how does hybrid search work");
+        assert!(expanded.contains("cascade") || expanded.contains("lexical"));
+    }
+
+    #[test]
+    fn follow_up_expands_to_planner() {
+        let expanded = expand_concepts("derive the next command to run from the best result");
+        assert!(
+            expanded.contains("planner") || expanded.contains("follow_up"),
+            "{expanded}"
+        );
+    }
+
+    #[test]
+    fn remember_embeddings_expands_to_cache() {
+        let expanded = expand_concepts("remember query embeddings between searches");
+        assert!(expanded.contains("cache"), "{expanded}");
     }
 }

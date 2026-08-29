@@ -59,7 +59,7 @@ Concurrent backend flags (CLI `--neural-embed --semantic-only`, LSP `neuralEmbed
 ### Semantic local (default, no API key)
 
 - Vectors are stored as length-`SEMANTIC_DIM` (**256**) `f32` arrays
-- **Honesty note:** sign bits come from a 32-byte BLAKE3 digest (`hash_feature` walks `i % 32`), so the independent sign pattern has period 32 until a denser feature hash lands. Treat “256-dim” as the storage width, not 256 independent random projections.
+- **Honesty note:** feature signs come from BLAKE3 XOF (`hashed-256-xof-cg3`). The historical period-32 `digest[i % 32]` tiling is gone. This is still a hashed embedder, not a neural model: it does not beat Semgrep’s hand-authored patterns on conceptual MRR, and must not be cited as if it did.
 - Char n-gram features + concept expansion
 - Deterministic, offline, fast
 - Regression-tested: zero token-overlap queries must rank the correct symbol on the fixture suite (not a statistical guarantee on arbitrary corpora)
