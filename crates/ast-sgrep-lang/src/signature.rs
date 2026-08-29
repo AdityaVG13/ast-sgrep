@@ -9,6 +9,23 @@ use crate::pattern::{classify_native, is_pattern_ident, DECL_PATTERN_PREFIXES};
 /// Shared with `classify_native` via [`DECL_PATTERN_PREFIXES`].
 pub use crate::pattern::DECL_PATTERN_PREFIXES as DECL_PREFIXES;
 
+/// True when `pattern_nodes` rows for these signatures are the same nodes the
+/// native matcher would return, so a tree-sitter re-walk cannot add hits.
+///
+/// Kind-only signatures over-match (`fn $NAME` → every function) and still
+/// need native confirmation. Ident, `decl:`, `call:`, and `call-name:`
+/// signatures are exact, so the indexed rows are the result.
+pub fn index_can_serve_pattern(pattern: &str, signatures: &[String]) -> bool {
+    if signatures.is_empty() || signatures.iter().any(|s| s.starts_with("kind:")) {
+        return false;
+    }
+    let pattern = pattern.trim();
+    is_pattern_ident(pattern)
+        || signatures.iter().all(|s| {
+            s.starts_with("decl:") || s.starts_with("call:") || s.starts_with("call-name:")
+        })
+}
+
 /// Map a structural pattern to the exact index signatures stored in `pattern_nodes`.
 ///
 /// Returns `None` when the pattern shape is not indexable (exotic / nested).
@@ -18,7 +35,11 @@ pub fn cached_pattern_signatures(pattern: &str) -> Option<Vec<String>> {
         return Some(vec![]);
     }
     if !pattern.contains('$') {
-        return Some(vec![pattern.to_string()]);
+        if is_pattern_ident(pattern) {
+            return Some(vec![pattern.to_string()]);
+        }
+        // `fn foo` / `struct Bar` fall through to decl: rows. A raw
+        // "fn foo" string is not stored as a pattern_nodes signature.
     }
     // Never let a broad cached signature bypass native validation. In
     // particular, malformed declaration tails must remain match-none.
@@ -186,4 +207,20 @@ fn is_pattern_path(value: &str) -> bool {
             .split(['.', ':'])
             .filter(|p| !p.is_empty())
             .all(is_pattern_ident)
+}
+
+#[cfg(test)]
+mod index_serve_tests {
+    use super::{cached_pattern_signatures, index_can_serve_pattern};
+
+    #[test]
+    fn ident_and_decl_are_index_complete_kind_is_not() {
+        let ident = cached_pattern_signatures("SearchHit").unwrap();
+        assert!(index_can_serve_pattern("SearchHit", &ident));
+        let decl = cached_pattern_signatures("fn greet_user").unwrap();
+        assert!(index_can_serve_pattern("fn greet_user", &decl));
+        let kind = cached_pattern_signatures("fn $NAME").unwrap();
+        assert!(!index_can_serve_pattern("fn $NAME", &kind));
+        assert!(!index_can_serve_pattern("fn $NAME() { $$$BODY }", &[]));
+    }
 }

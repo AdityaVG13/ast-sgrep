@@ -4,8 +4,8 @@ use crate::rank::SCORE_PATTERN;
 use crate::search::{HitKind, SearchHit, SpanHitInput};
 use crate::Result;
 use ast_sgrep_lang::{
-    cached_pattern_signatures, detect_language, match_pattern, needs_ast_grep_fallback,
-    required_pattern_literal,
+    cached_pattern_signatures, detect_language, index_can_serve_pattern, match_pattern,
+    needs_ast_grep_fallback, required_pattern_literal,
 };
 use rayon::prelude::*;
 use serde::Serialize;
@@ -70,6 +70,7 @@ pub fn search_pattern(
     store: &crate::store::IndexStore,
     root: &Path,
     lang_filter: Option<&str>,
+    limit: usize,
 ) -> Result<Vec<SearchHit>> {
     // Union index signatures with native tree-sitter matches (92nj).
     // Production does not spawn external ast-grep by default; native-only is the
@@ -80,7 +81,14 @@ pub fn search_pattern(
     let mut seen = std::collections::HashSet::new();
     if store.pattern_node_count()? > 0 {
         if let Some(signatures) = cached_pattern_signatures(pattern) {
-            for hit in search_pattern_cached(pattern, &signatures, store, lang_filter)? {
+            let indexed =
+                search_pattern_cached(pattern, &signatures, store, lang_filter, limit)?;
+            // Exact ident / decl / call signatures are complete in pattern_nodes.
+            // Re-walking the tree cannot add a hit the index missed.
+            if index_can_serve_pattern(pattern, &signatures) {
+                return Ok(indexed);
+            }
+            for hit in indexed {
                 if seen.insert((hit.file.clone(), hit.line_start, hit.line_end)) {
                     hits.push(hit);
                 }
@@ -132,11 +140,16 @@ fn search_pattern_cached(
     signatures: &[String],
     store: &crate::store::IndexStore,
     lang_filter: Option<&str>,
+    limit: usize,
 ) -> Result<Vec<SearchHit>> {
+    let cap = limit.max(1);
     let mut hits = Vec::new();
     let mut seen = std::collections::HashSet::new();
+    // Fetch a little extra per signature so a later signature that sorts
+    // earlier by path can still enter the keep-set, then truncate.
+    let per_sig = cap.saturating_mul(signatures.len().max(1));
     for signature in signatures {
-        for row in store.pattern_nodes_matching(signature, lang_filter)? {
+        for row in store.pattern_nodes_matching_limited(signature, lang_filter, per_sig)? {
             if !seen.insert((row.path.clone(), row.line_start, row.line_end)) {
                 continue;
             }
@@ -154,6 +167,7 @@ fn search_pattern_cached(
         }
     }
     hits.sort_by(|a, b| a.file.cmp(&b.file).then(a.line_start.cmp(&b.line_start)));
+    hits.truncate(cap);
     Ok(hits)
 }
 

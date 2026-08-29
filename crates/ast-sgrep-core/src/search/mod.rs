@@ -170,6 +170,7 @@ impl Searcher {
         options.lang_filter =
             ast_sgrep_lang::Language::canonical_filter(options.lang_filter.as_deref());
         let options_identity = options.cache_identity();
+        store.warm_line_corpus();
         Self {
             store,
             options,
@@ -629,6 +630,7 @@ impl Searcher {
                     &self.store,
                     &self.options.root,
                     self.options.lang_filter.as_deref(),
+                    self.options.limit,
                 )?,
                 QueryMode::Literal | QueryMode::Word => {
                     literal_pass(&self.store, &self.options, &parsed)?
@@ -701,6 +703,7 @@ impl Searcher {
                     &self.store,
                     &self.options.root,
                     self.options.lang_filter.as_deref(),
+                    options.limit,
                 ),
                 QueryMode::Literal | QueryMode::Word => literal_pass(&self.store, &options, parsed),
                 QueryMode::Regex => regex_pass(&self.store, &options, parsed),
@@ -867,15 +870,27 @@ impl Searcher {
             );
             anchor_pass_for_files(&self.store, &self.options, &stage_query, &lexical_files)?
         });
-        let structural_files = structural
-            .iter()
-            .map(|hit| hit.file.clone())
-            .collect::<HashSet<_>>();
         // Precision gate: embed only on structurally-confirmed files when
         // structural signals exist. When the structural stage is empty, the
         // lexical survivors ARE the candidate set — the semantic stage must
         // still run on them (ht1h.3 / parity: NL queries surface semantically
         // related symbols, and plain-content files stay findable).
+        if conceptual {
+            // Precision gating below keeps embed on structural files. Inject
+            // defs for expanded identifier tokens (`follow_up`, `planner`)
+            // so a leftover English term (`command`/`run`) cannot exclude
+            // the module the query actually named.
+            structural.extend(conceptual_concept_def_pass(
+                &self.store,
+                &self.options,
+                &parsed.raw,
+                &lexical_files,
+            )?);
+        }
+        let structural_files = structural
+            .iter()
+            .map(|hit| hit.file.clone())
+            .collect::<HashSet<_>>();
         let working_files = if structural_files.is_empty() {
             lexical_files
         } else {
@@ -917,6 +932,36 @@ impl Searcher {
         }
         Ok(hits)
     }
+}
+
+
+fn conceptual_concept_def_pass(
+    store: &IndexStore,
+    options: &SearchOptions,
+    query: &str,
+    allowed_files: &HashSet<String>,
+) -> Result<Vec<SearchHit>> {
+    let terms: Vec<String> = ast_sgrep_embed::tokenize(&ast_sgrep_embed::expand_concepts(query))
+        .into_iter()
+        .filter(|tok| {
+            tok.chars().count() >= 4
+                && (tok.contains('_')
+                    || tok == "planner"
+                    || tok == "fusion"
+                    || tok == "critic"
+                    || tok == "embed")
+        })
+        .collect();
+    if terms.is_empty() {
+        return Ok(Vec::new());
+    }
+    let parsed = ParsedQuery {
+        raw: query.to_string(),
+        mode: QueryMode::Hybrid,
+        target: None,
+        terms,
+    };
+    symbol_pass_for_files(store, options, &parsed, allowed_files)
 }
 
 const FANOUT_CALLER_SCALE: f64 = 0.35;
@@ -983,6 +1028,48 @@ fn conceptual_fanout_pass(
     Ok(hits)
 }
 
+
+fn cascade_stopword(term: &str) -> bool {
+    // English function words that match too many files and stall discovery
+    // on the first 3+ character token ("how does hybrid search work").
+    matches!(
+        term.to_ascii_lowercase().as_str(),
+        "how"
+            | "does"
+            | "the"
+            | "and"
+            | "for"
+            | "with"
+            | "from"
+            | "that"
+            | "this"
+            | "what"
+            | "where"
+            | "when"
+            | "why"
+            | "who"
+            | "are"
+            | "was"
+            | "were"
+            | "into"
+            | "about"
+            | "than"
+            | "then"
+            | "them"
+            | "they"
+            | "have"
+            | "has"
+            | "had"
+            | "but"
+            | "can"
+            | "could"
+            | "would"
+            | "should"
+            | "will"
+            | "also"
+    )
+}
+
 fn literal_prefilter_pass(
     store: &IndexStore,
     options: &SearchOptions,
@@ -994,26 +1081,41 @@ fn literal_prefilter_pass(
     let terms = parsed
         .terms
         .iter()
-        .filter(|term| term.chars().count() >= 3)
+        .filter(|term| term.chars().count() >= 3 && !cascade_stopword(term))
         .collect::<Vec<_>>();
     if terms.is_empty() {
         return Ok(Vec::new());
     }
-    // Keep caller order (user terms, then expansions). Stop at the first
-    // term that yields files so a later high-df concept token such as
-    // "update" cannot replace a precise earlier match.
-    // Ranking among the first 100 posting lines is a no-op: 100 lines
-    // contain at most 100 files, which is the cascade cap.
+    // Unique-query literal is RAM-cheap, so score every discovery term.
+    // Fill the working set from rarest postings first so a hapax in the
+    // wrong file ("renewal" only in README) cannot exclude the file that
+    // matches a more common sibling term ("credential" in auth.rs), while
+    // still reaching rare identifiers (`rrf`, `snapshot`) that first-hit-wins
+    // never saw behind English leftovers ("consistent", "across").
     let mut prefilter_options = options.clone();
     prefilter_options.case_insensitive = true;
     prefilter_options.limit = CASCADE_PREFILTER_FILE_LIMIT;
+    let mut scored: Vec<Vec<SearchHit>> = Vec::new();
     for term in terms {
         let hits = literal_pass(store, &prefilter_options, &ParsedQuery::literal(term))?;
         if !hits.is_empty() {
-            return Ok(hits);
+            scored.push(hits);
         }
     }
-    Ok(Vec::new())
+    scored.sort_by_key(|hits| hits.len());
+    let mut files = HashSet::new();
+    let mut out = Vec::new();
+    for hits in scored {
+        for hit in hits {
+            if files.insert(hit.file.clone()) {
+                out.push(hit);
+                if files.len() >= CASCADE_PREFILTER_FILE_LIMIT {
+                    return Ok(out);
+                }
+            }
+        }
+    }
+    Ok(out)
 }
 
 /// Boost hybrid recall with pre-indexed pattern_nodes (decls/calls extracted at index time).

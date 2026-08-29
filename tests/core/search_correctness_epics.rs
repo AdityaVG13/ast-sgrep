@@ -374,7 +374,13 @@ fn iva9_7_exotic_pattern_fail_closed_without_ast_grep() {
     std::env::set_var("ASGREP_DISABLE_AST_GREP", "1");
     // Multi-statement template: single-statement `{ $BODY }` is native since
     // ast-sgrep-yira, so it no longer exercises the fail-closed path.
-    let result = search_pattern("if ($COND) { $A; $B }", &store, temp.path(), None);
+    let result = search_pattern(
+        "if ($COND) { $A; $B }",
+        &store,
+        temp.path(),
+        None,
+        SearchOptions::default_limit(),
+    );
     match old {
         Some(v) => std::env::set_var("ASGREP_DISABLE_AST_GREP", v),
         None => std::env::remove_var("ASGREP_DISABLE_AST_GREP"),
@@ -393,7 +399,14 @@ fn iva9_7_classifiable_native_empty_is_match_none() {
     let temp = TempDir::new().unwrap();
     write_src(temp.path(), "a.rs", "fn alpha() {}\n");
     let store = IndexStore::open(temp.path(), None).unwrap();
-    let hits = search_pattern("fn missing_name($$$)", &store, temp.path(), None).unwrap();
+    let hits = search_pattern(
+        "fn missing_name($$$)",
+        &store,
+        temp.path(),
+        None,
+        SearchOptions::default_limit(),
+    )
+    .unwrap();
     assert!(hits.is_empty());
 }
 

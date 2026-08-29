@@ -99,3 +99,24 @@ fn hybrid_quoted_literal_intent_hits_phrase_line() {
         literal.hits
     );
 }
+
+#[test]
+fn ident_pattern_is_served_from_index() {
+    let session = indexed_rs(
+        "pub struct SearchHit { pub file: String }\nfn other() { let _ = SearchHit { file: String::new() }; }\n",
+    );
+    let searcher = session.searcher(SearchOptions {
+        use_embed: false,
+        limit: 32,
+        ..session.search_options()
+    });
+    let response = searcher.search("pattern:SearchHit").unwrap();
+    assert!(
+        response
+            .hits
+            .iter()
+            .any(|hit| hit.file.ends_with("mod.rs") && hit.line_start >= 1),
+        "ident pattern must hit indexed identifier nodes: {:?}",
+        response.hits
+    );
+}
