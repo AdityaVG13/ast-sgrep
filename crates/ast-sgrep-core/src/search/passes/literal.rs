@@ -19,11 +19,54 @@ pub fn literal_pass(
         Some(t) if !t.is_empty() => t,
         _ => return Ok(Vec::new()),
     };
+    if let Some(corpus) = store.line_corpus()? {
+        return scan_line_corpus(&corpus, store, options, parsed, needle);
+    }
     if store.indexed_line_count_at_least(BMH_LINE_THRESHOLD)? && needle.chars().count() >= 3 {
         literal_trigram(store, options, parsed, needle)
     } else {
         literal_sql(store, options, parsed, needle)
     }
+}
+
+fn scan_line_corpus(
+    corpus: &crate::store::line_corpus::LineCorpus,
+    store: &IndexStore,
+    options: &SearchOptions,
+    parsed: &ParsedQuery,
+    needle: &str,
+) -> Result<Vec<SearchHit>> {
+    let word_mode = parsed.mode == QueryMode::Word;
+    let cap = options.limit.max(100);
+    let lang = options.lang_filter.as_deref();
+    let needle_lower = options.case_insensitive.then(|| needle.to_lowercase());
+    let rows = if !options.case_insensitive {
+        corpus.scan_cs(
+            needle,
+            word_mode,
+            lang,
+            cap,
+            matches_lang,
+            |content, pos, len| is_word_boundary(content, pos, len),
+        )
+    } else {
+        corpus.scan_lines(lang, cap, matches_lang, |content| {
+            content_matches_literal(content, needle, needle_lower.as_deref(), word_mode)
+        })
+    };
+    let mut hits = Vec::with_capacity(rows.len());
+    for (rank, row) in rows.into_iter().enumerate() {
+        hits.push(asgrep_line_hit(
+            row.path.to_string(),
+            row.language.map(str::to_string),
+            row.line_no,
+            row.content.to_string(),
+            1.0 / (1.0 + rank as f64 * 0.01),
+        ));
+    }
+    hits.truncate(retained_limit(options));
+    attach_context(store, options, &mut hits)?;
+    Ok(hits)
 }
 
 fn literal_trigram(

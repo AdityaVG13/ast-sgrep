@@ -176,6 +176,9 @@ pub struct IndexStore {
     /// probe). Keyed on generation so an external writer is not a stale routing
     /// decision; `bump_index_data_version` also clears it.
     line_count_at_least: std::cell::Cell<Option<(i64, usize, bool)>>,
+    /// Packed indexed lines for unique-query literal. Cleared on generation bump.
+    line_corpus: std::cell::RefCell<Option<std::sync::Arc<crate::store::line_corpus::LineCorpus>>>,
+    line_corpus_disabled: std::cell::Cell<bool>,
     read_only: bool,
 }
 mod queries;
@@ -274,6 +277,8 @@ impl IndexStore {
             durability,
             trigram_df: crate::store::trigram_df::TrigramDfCache::new(),
             line_count_at_least: std::cell::Cell::new(None),
+            line_corpus: std::cell::RefCell::new(None),
+            line_corpus_disabled: std::cell::Cell::new(false),
             read_only,
         };
         store.init_schema()?;
@@ -398,6 +403,39 @@ impl IndexStore {
     /// Trigram document-frequency memo (br-umh rarest-trigram scan shortcut).
     pub(crate) fn trigram_df(&self) -> &crate::store::trigram_df::TrigramDfCache {
         &self.trigram_df
+    }
+    pub(crate) fn warm_line_corpus(&self) {
+        let _ = self.line_corpus();
+    }
+    pub(crate) fn line_corpus(
+        &self,
+    ) -> Result<Option<std::sync::Arc<crate::store::line_corpus::LineCorpus>>> {
+        if self.line_corpus_disabled.get() {
+            return Ok(None);
+        }
+        let index_v = self.index_data_version()?;
+        let Ok(pragma_v) = self
+            .conn
+            .query_row("PRAGMA data_version", [], |row| row.get::<_, i64>(0))
+        else {
+            return Ok(None);
+        };
+        if let Some(cached) = self.line_corpus.borrow().as_ref() {
+            if cached.index_data_version == index_v && cached.pragma_data_version == pragma_v {
+                return Ok(Some(std::sync::Arc::clone(cached)));
+            }
+        }
+        match crate::store::line_corpus::LineCorpus::load(&self.conn, index_v, pragma_v)? {
+            Some(arc) => {
+                *self.line_corpus.borrow_mut() = Some(std::sync::Arc::clone(&arc));
+                Ok(Some(arc))
+            }
+            None => {
+                self.line_corpus_disabled.set(true);
+                self.line_corpus.borrow_mut().take();
+                Ok(None)
+            }
+        }
     }
     pub fn set_meta(&self, key: &str, value: &str) -> Result<()> {
         self.conn.prepare_cached( "INSERT INTO meta(key, value) VALUES(?1, ?2) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
@@ -812,6 +850,8 @@ impl IndexStore {
             [],
         )?;
         self.line_count_at_least.set(None);
+        self.line_corpus.borrow_mut().take();
+        self.line_corpus_disabled.set(false);
         Ok(())
     }
     /// Monotonic counter bumped on every semantic_chunks mutation (insert or delete).

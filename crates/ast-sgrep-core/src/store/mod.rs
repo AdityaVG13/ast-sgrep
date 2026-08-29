@@ -2,6 +2,7 @@ mod embed_support;
 mod module_resolve;
 pub(crate) mod sql;
 mod sqlite;
+pub(crate) mod line_corpus;
 pub mod trigram_df;
 mod writer_generation;
 pub use sql::integrity_check;
