@@ -62,6 +62,16 @@ Query: "credential renewal"
         "hybrid search that understands intent
 ",
     );
+    write_src(
+        temp.path(),
+        "tests/core/cascade_planner.rs",
+        r#"
+#[test]
+fn hybrid_query_cascades_lexical_files_into_structural_and_semantic_stages() {
+    let _ = "how does hybrid search work";
+}
+"#,
+    );
     ast_sgrep_core::Indexer::new(IndexOptions {
         root: temp.path().to_path_buf(),
         force_reindex: true,
@@ -215,19 +225,61 @@ fn auth_refresh_identifier_ranks_the_definition() {
 }
 
 #[test]
-fn hybrid_nl_ranks_search_hybrid_definition() {
+fn hybrid_nl_ranks_implementation_above_tests() {
     let (_temp, searcher) = indexed_corpus();
     let response = searcher
         .search("how does hybrid search work")
         .expect("search");
-    let rank = rank_of(&response.hits, |hit| {
-        hit.file.ends_with("search.rs")
-            && (hit.symbol.as_deref() == Some("search_hybrid")
-                || hit.symbol.as_deref() == Some("Searcher"))
+    let preview = response
+        .hits
+        .iter()
+        .take(8)
+        .map(|h| format!("{:?} {} {:?}", h.kind, h.file, h.symbol))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        response.hits.is_empty(),
+        false,
+        "conceptual NL must return hits"
+    );
+    let first_is_test = response.hits[0].file.replace('\\', "/").split('/').any(|seg| {
+        seg.eq_ignore_ascii_case("tests") || seg.eq_ignore_ascii_case("test")
+    });
+    assert_eq!(
+        first_is_test,
+        false,
+        "conceptual NL must not lead with tests/, hits {preview:?}"
+    );
+    let impl_rank = rank_of(&response.hits, |hit| {
+        hit.file.ends_with("search.rs") && hit.symbol.as_deref() == Some("search_hybrid")
+    });
+    let test_rank = rank_of(&response.hits, |hit| {
+        hit.file.replace('\\', "/").split('/').any(|seg| {
+            seg.eq_ignore_ascii_case("tests") || seg.eq_ignore_ascii_case("test")
+        })
     });
     assert!(
-        rank.is_some_and(|r| r <= 8),
-        "search.rs definition should be in the top 8, got {rank:?} hits {:?}",
+        impl_rank.is_some_and(|r| r <= 8),
+        "search_hybrid should be in the top 8, got {impl_rank:?} hits {preview:?}"
+    );
+    if let Some(test_rank) = test_rank {
+        assert!(
+            impl_rank.expect("search_hybrid") < test_rank,
+            "search_hybrid (rank {:?}) must outrank tests/ (rank {test_rank}), hits {preview:?}",
+            impl_rank
+        );
+    }
+}
+
+#[test]
+fn defs_query_still_finds_test_function() {
+    let (_temp, searcher) = indexed_corpus();
+    let response = searcher
+        .search("defs:hybrid_query_cascades_lexical_files_into_structural_and_semantic_stages")
+        .expect("defs");
+    assert_eq!(
+        response.hits[0].symbol.as_deref(),
+        Some("hybrid_query_cascades_lexical_files_into_structural_and_semantic_stages"),
+        "identifier/defs queries must still rank the test definition first, hits {:?}",
         response
             .hits
             .iter()

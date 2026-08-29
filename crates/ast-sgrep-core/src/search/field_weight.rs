@@ -59,11 +59,14 @@ fn push_why(out: &mut Vec<String>, field: &str, score: Option<f32>) {
 pub fn field_weights(intent: QueryIntent) -> FieldWeights {
     match intent {
         QueryIntent::Conceptual => FieldWeights {
-            name: 0.0,
+            // Names are the conceptual mapping in code (`auth_refresh` for
+            // "credential renewal"). Zeroing name made field rescoring ignore
+            // the strongest hashed-embed signal on this path.
+            name: 0.85,
             docs: 1.0,
             body: 1.0,
-            graph: 0.0,
-            tests_examples: 1.0,
+            graph: 0.45,
+            tests_examples: 0.8,
         },
         QueryIntent::Symbol => FieldWeights {
             name: 1.0,
@@ -205,5 +208,17 @@ mod tests {
         let why = notes.why_terms();
         assert!(why.iter().any(|t| t.starts_with("embed_field:name=")), "{why:?}");
         assert!(why.iter().all(|t| t.starts_with("embed_field:name=")), "{why:?}");
+    }
+
+    #[test]
+    fn conceptual_intent_includes_name() {
+        let weights = field_weights(QueryIntent::Conceptual);
+        assert!(weights.name > 0.0, "conceptual name weight must participate");
+        assert!(weights.body > 0.0 && weights.docs > 0.0);
+        let query = [1.0, 0.0];
+        let (score, notes) = rescore_similarity(0.1, &query, &populated_fields(), QueryIntent::Conceptual);
+        let notes = notes.expect("conceptual queries expose weighted fields");
+        assert!(notes.name.is_some(), "{notes:?}");
+        assert!(score > 0.1, "name-inclusive mix should beat the dummy primary, got {score}");
     }
 }

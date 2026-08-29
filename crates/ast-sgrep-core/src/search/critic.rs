@@ -26,6 +26,9 @@
 //!    defs whose names share concept tokens with the query (`auth_refresh` for
 //!    "credential renewal"). Partial identifier matches (`refresh` inside a
 //!    longer test name) lose to the exact spelling.
+//! 6. **Implementation over tests on conceptual NL.** Relative `tests/` paths
+//!    (no leading slash) are demoted, and test-path scores are clamped below
+//!    the best non-test implementation. Identifier/`defs:` queries are unchanged.
 //!
 //! The critic adjusts scores and annotates hits before `finish_response`
 //! assigns margins and confidence, so downstream honesty fields reflect the
@@ -46,6 +49,15 @@ pub const COLLISION_PENALTY: f64 = 0.85;
 pub const COMPOUND_SYMBOL_PENALTY: f64 = 0.4;
 /// Score multiplier when the hit symbol matches the typed identifier exactly.
 pub const EXACT_IDENTIFIER_BOOST: f64 = 1.8;
+/// Score multiplier when the hit lives in the file named after the identifier
+/// (`semantic_ivf` → `semantic_ivf.rs`). Stronger than exact-symbol mentions
+/// in other files so the owning module stays in the keep-set.
+pub const FILE_STEM_BOOST: f64 = 2.4;
+/// Score multiplier when a conceptual hit's file stem is a query concept token
+/// (`fusion.rs` for "reciprocal rank fusion").
+pub const CONCEPT_FILE_STEM_BOOST: f64 = 1.55;
+/// Score multiplier when the hit matches ignoring case but the query used mixed case.
+pub const FOLDED_IDENTIFIER_PENALTY: f64 = 0.5;
 /// Score multiplier when a def only shares a fragment of the typed identifier.
 pub const PARTIAL_IDENTIFIER_PENALTY: f64 = 0.45;
 /// Score multiplier for unrelated defs that leaked in on an identifier query.
@@ -60,6 +72,8 @@ pub const GENERIC_ENTRYPOINT_PENALTY: f64 = 0.3;
 pub const CONCEPT_SYMBOL_BOOST: f64 = 1.4;
 /// Score multiplier for bench/measure/test helpers on conceptual NL.
 pub const INSTRUMENTATION_PENALTY: f64 = 0.55;
+/// Score multiplier for `tests/` paths on conceptual NL when code exists.
+pub const TEST_PATH_PENALTY: f64 = 0.2;
 
 /// Engine-derived critic annotation. Never trusted from the wire; JSON decode
 /// re-derives an empty set (same policy as `resolution`).
@@ -239,6 +253,24 @@ fn is_instrumentation_symbol(name: &str) -> bool {
         || folded.starts_with("bench_")
         || folded.starts_with("test_")
         || folded.starts_with("parity_")
+        || folded.contains("_expands_to_")
+        || folded.contains("_ranks_")
+}
+
+fn is_test_path(path: &str) -> bool {
+    let normalized = path.replace("\\", "/").to_ascii_lowercase();
+    // Relative corpus paths are `tests/core/foo.rs` (no leading slash). A
+    // `/tests/` substring check misses those and lets test defs outrank impls.
+    normalized.split('/').any(|seg| seg == "tests" || seg == "test")
+        || normalized.ends_with("_test.rs")
+        || normalized.ends_with("_tests.rs")
+}
+
+fn file_stem_eq(path: &str, ident: &str) -> bool {
+    let normalized = path.replace("\\", "/");
+    let file = normalized.rsplit('/').next().unwrap_or(normalized.as_str());
+    let stem = file.rsplit_once('.').map(|(s, _)| s).unwrap_or(file);
+    stem.eq_ignore_ascii_case(ident)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -257,11 +289,16 @@ fn identifier_match(query_ident: &str, symbol: &str) -> IdentifierMatch {
     if symbol.eq_ignore_ascii_case(query_ident) {
         return IdentifierMatch::Folded;
     }
+    let query_tokens = identifier_tokens(query_ident);
+    let symbol_tokens = identifier_tokens(symbol);
+    if !query_tokens.is_empty() && query_tokens == symbol_tokens {
+        // snake_case vs CamelCase of the same identifier (`semantic_ivf` /
+        // `SemanticIvf`), not a helper compound (`bench_searcher`).
+        return IdentifierMatch::Exact;
+    }
     if is_compound_of(query_ident, symbol) {
         return IdentifierMatch::Compound;
     }
-    let query_tokens = identifier_tokens(query_ident);
-    let symbol_tokens = identifier_tokens(symbol);
     if query_tokens.is_empty() {
         return IdentifierMatch::None;
     }
@@ -291,6 +328,26 @@ fn conceptual_symbol_affinity(parsed: &ParsedQuery, symbol: &str) -> usize {
         .into_iter()
         .filter(|token| expanded.contains(token))
         .count()
+}
+
+fn conceptual_file_stem_affinity(parsed: &ParsedQuery, path: &str) -> bool {
+    const GENERIC_STEMS: &[&str] = &[
+        "search", "semantic", "lexical", "index", "store", "query", "test",
+        "tests", "lib", "mod", "types", "util", "utils", "core", "main",
+        "error", "config", "session", "cli", "eval", "bench", "agent",
+    ];
+    let normalized = path.replace("\\", "/");
+    let file = normalized.rsplit('/').next().unwrap_or(normalized.as_str());
+    let stem = file.rsplit_once('.').map(|(s, _)| s).unwrap_or(file);
+    let stem = stem.to_ascii_lowercase();
+    if stem.len() < 4 || GENERIC_STEMS.contains(&stem.as_str()) {
+        return false;
+    }
+    let expanded: std::collections::HashSet<String> =
+        ast_sgrep_embed::tokenize(&ast_sgrep_embed::expand_concepts(&parsed.raw))
+            .into_iter()
+            .collect();
+    expanded.contains(&stem)
 }
 
 fn is_code_kind(kind: HitKind) -> bool {
@@ -377,27 +434,51 @@ pub(crate) fn apply_critic(parsed: &ParsedQuery, intent: QueryIntent, hits: &mut
                 }
             }
             if let Some(query_ident) = query_ident.as_deref() {
+                let stem_match = file_stem_eq(&hit.file, query_ident);
                 match identifier_match(query_ident, &symbol) {
                     IdentifierMatch::Exact => hit.score *= EXACT_IDENTIFIER_BOOST,
-                    IdentifierMatch::Folded => {}
+                    IdentifierMatch::Folded => {
+                        if query_ident.chars().any(|c| c.is_uppercase()) {
+                            hit.score *= FOLDED_IDENTIFIER_PENALTY;
+                            push_note(&mut hit, CriticNote::IdentifierCollision);
+                        }
+                    }
+                    IdentifierMatch::Compound if stem_match => {
+                        // `load_semantic_ivf` in `semantic_ivf.rs` is the
+                        // implementation, not a colliding helper.
+                    }
                     IdentifierMatch::Compound => {
                         hit.score *= COMPOUND_SYMBOL_PENALTY;
                         push_note(&mut hit, CriticNote::IdentifierCollision);
                     }
+                    IdentifierMatch::Partial if stem_match => {}
                     IdentifierMatch::Partial => {
                         hit.score *= PARTIAL_IDENTIFIER_PENALTY;
                         push_note(&mut hit, CriticNote::IdentifierCollision);
                     }
                     IdentifierMatch::None => {
-                        if hit.kind == HitKind::Def {
+                        if hit.kind == HitKind::Def && !stem_match {
                             hit.score *= UNRELATED_DEF_PENALTY;
                         }
                     }
                 }
             }
         }
+        if let Some(query_ident) = query_ident.as_deref() {
+            if file_stem_eq(&hit.file, query_ident) {
+                hit.score *= FILE_STEM_BOOST;
+            }
+        }
+        if let Some(symbol_name) = hit.symbol.as_deref() {
+            if is_instrumentation_symbol(symbol_name) {
+                hit.score *= INSTRUMENTATION_PENALTY;
+            }
+        }
         if has_code_evidence && hit.kind == HitKind::Asgrep && is_prose_path(&hit.file) {
             hit.score *= PROSE_PATH_PENALTY;
+        }
+        if conceptual && has_code_evidence && is_test_path(&hit.file) {
+            hit.score *= TEST_PATH_PENALTY;
         }
         if conceptual && has_code_evidence && hit.kind == HitKind::Asgrep {
             hit.score *= CONCEPTUAL_LEXICAL_PENALTY;
@@ -410,21 +491,51 @@ pub(crate) fn apply_critic(parsed: &ParsedQuery, intent: QueryIntent, hits: &mut
             {
                 hit.score *= GENERIC_ENTRYPOINT_PENALTY;
             }
-            if let Some(symbol_name) = hit.symbol.as_deref() {
-                let affinity = conceptual_symbol_affinity(parsed, symbol_name);
-                if affinity >= 2
-                    || (affinity >= 1 && matches!(hit.kind, HitKind::Def | HitKind::Embed))
-                {
-                    hit.score *= CONCEPT_SYMBOL_BOOST;
+            let test_path = is_test_path(&hit.file);
+            if !test_path {
+                if let Some(symbol_name) = hit.symbol.as_deref() {
+                    let affinity = conceptual_symbol_affinity(parsed, symbol_name);
+                    if affinity >= 2
+                        || (affinity >= 1 && matches!(hit.kind, HitKind::Def | HitKind::Embed))
+                    {
+                        hit.score *= CONCEPT_SYMBOL_BOOST;
+                    }
                 }
-                if is_instrumentation_symbol(symbol_name) {
-                    hit.score *= INSTRUMENTATION_PENALTY;
+                if conceptual_file_stem_affinity(parsed, &hit.file) {
+                    hit.score *= CONCEPT_FILE_STEM_BOOST;
                 }
             }
         }
         kept.push(hit);
     }
     *hits = kept;
+    if conceptual {
+        demote_test_paths_below_implementation(hits);
+    }
+}
+
+/// Conceptual NL ranks implementation over tests that restated the query.
+///
+/// A 0.2 path multiplier is not enough when a long test name dumps every
+/// concept token and enters fusion 10–20× above the impl. Clamp test-path
+/// scores strictly below the best non-test code hit.
+fn demote_test_paths_below_implementation(hits: &mut [SearchHit]) {
+    let best_impl = hits
+        .iter()
+        .filter(|hit| {
+            !is_test_path(&hit.file) && is_code_kind(hit.kind) && !is_prose_path(&hit.file)
+        })
+        .map(|hit| hit.score)
+        .max_by(|a, b| a.total_cmp(b));
+    let Some(best_impl) = best_impl else {
+        return;
+    };
+    let ceiling = best_impl * 0.5;
+    for hit in hits.iter_mut() {
+        if is_test_path(&hit.file) && hit.score >= best_impl {
+            hit.score = ceiling;
+        }
+    }
 }
 
 #[cfg(test)]
@@ -459,6 +570,19 @@ mod tests {
         let parsed = ParsedQuery::parse("Searcher");
         let mut hits = vec![
             hit(HitKind::Def, "src/bench.rs", Some("bench_searcher"), 0.09),
+            hit(HitKind::Def, "src/search.rs", Some("Searcher"), 0.04),
+        ];
+        apply_critic(&parsed, QueryIntent::Symbol, &mut hits);
+        hits.sort_by(|a, b| b.score.total_cmp(&a.score));
+        assert_eq!(hits[0].symbol.as_deref(), Some("Searcher"));
+        assert!(hits[1].critic.contains(&CriticNote::IdentifierCollision));
+    }
+
+    #[test]
+    fn exact_case_outranks_folded_homonym() {
+        let parsed = ParsedQuery::parse("Searcher");
+        let mut hits = vec![
+            hit(HitKind::Def, "tests/x.rs", Some("searcher"), 0.09),
             hit(HitKind::Def, "src/search.rs", Some("Searcher"), 0.04),
         ];
         apply_critic(&parsed, QueryIntent::Symbol, &mut hits);
@@ -514,5 +638,102 @@ mod tests {
         hits.sort_by(|a, b| b.score.total_cmp(&a.score));
         assert_eq!(hits[0].symbol.as_deref(), Some("auth_refresh"));
         assert!(hits[1].critic.contains(&CriticNote::IdentifierCollision));
+    }
+
+    #[test]
+    fn snake_and_camel_same_identifier_are_exact() {
+        assert!(matches!(
+            identifier_match("semantic_ivf", "SemanticIvf"),
+            IdentifierMatch::Exact
+        ));
+        assert!(matches!(
+            identifier_match("semantic_ivf", "load_semantic_ivf"),
+            IdentifierMatch::Compound
+        ));
+        assert!(matches!(
+            identifier_match("Searcher", "bench_searcher"),
+            IdentifierMatch::Compound
+        ));
+    }
+
+    #[test]
+    fn file_stem_outranks_measure_helper() {
+        let parsed = ParsedQuery::parse("semantic_ivf");
+        let mut hits = vec![
+            hit(
+                HitKind::Def,
+                "src/bench_suite.rs",
+                Some("measure_semantic_ivf_open_p99"),
+                0.09,
+            ),
+            hit(HitKind::Def, "src/semantic_ivf.rs", Some("load_semantic_ivf"), 0.04),
+        ];
+        apply_critic(&parsed, QueryIntent::Symbol, &mut hits);
+        hits.sort_by(|a, b| b.score.total_cmp(&a.score));
+        assert!(
+            hits[0].file.ends_with("semantic_ivf.rs"),
+            "expected module file first, got {:?}",
+            hits[0].file
+        );
+    }
+
+    #[test]
+    fn conceptual_impl_outranks_relative_tests_path_name_dump() {
+        // Live corpus paths are `tests/core/...` with no leading slash.
+        // A `/tests/` substring check misses them. The test name dumps the
+        // query so fusion can start 20× above the impl; TEST_PATH_PENALTY
+        // alone is not enough. Mutant: drop the clamp, or restore the
+        // `/tests/` substring check.
+        let parsed = ParsedQuery::parse("how does hybrid search work");
+        let mut hits = vec![
+            hit(
+                HitKind::Def,
+                "tests/core/cascade_planner.rs",
+                Some("hybrid_query_cascades_lexical_files_into_structural_and_semantic_stages"),
+                0.50,
+            ),
+            hit(
+                HitKind::Def,
+                "crates/ast-sgrep-core/src/search/mod.rs",
+                Some("search_hybrid"),
+                0.025,
+            ),
+        ];
+        apply_critic(&parsed, QueryIntent::Conceptual, &mut hits);
+        hits.sort_by(|a, b| b.score.total_cmp(&a.score));
+        assert_eq!(hits[0].symbol.as_deref(), Some("search_hybrid"));
+        assert!(
+            !is_test_path(&hits[0].file),
+            "conceptual NL must not lead with a test path, got {:?}",
+            hits[0].file
+        );
+    }
+
+    #[test]
+    fn symbol_intent_keeps_exact_test_definition() {
+        // Mutant: applying the conceptual tests/ clamp on Symbol intent.
+        let parsed = ParsedQuery::parse(
+            "hybrid_query_cascades_lexical_files_into_structural_and_semantic_stages",
+        );
+        let mut hits = vec![
+            hit(
+                HitKind::Def,
+                "tests/core/cascade_planner.rs",
+                Some("hybrid_query_cascades_lexical_files_into_structural_and_semantic_stages"),
+                0.09,
+            ),
+            hit(
+                HitKind::Def,
+                "crates/ast-sgrep-core/src/search/mod.rs",
+                Some("search_hybrid"),
+                0.04,
+            ),
+        ];
+        apply_critic(&parsed, QueryIntent::Symbol, &mut hits);
+        hits.sort_by(|a, b| b.score.total_cmp(&a.score));
+        assert_eq!(
+            hits[0].symbol.as_deref(),
+            Some("hybrid_query_cascades_lexical_files_into_structural_and_semantic_stages")
+        );
     }
 }
