@@ -7,7 +7,7 @@
       "query": "defs:dedup_hits",
       "k": 5,
       "relevant": [
-        { "file": "crates/ast-sgrep-core/src/search/types.rs", "symbol": "dedup_hits" }
+        { "file": "crates/ast-sgrep-core/src/search/fusion.rs", "symbol": "dedup_hits" }
       ]
     },
     {
@@ -23,7 +23,7 @@
       "query": "defs:begin_bulk_tx",
       "k": 5,
       "relevant": [
-        { "file": "crates/ast-sgrep-core/src/store/sqlite.rs", "symbol": "begin_bulk_tx" }
+        { "file": "crates/ast-sgrep-core/src/store/sqlite/mod.rs", "symbol": "begin_bulk_tx" }
       ]
     },
     {
@@ -31,7 +31,7 @@
       "query": "defs:index_generation",
       "k": 5,
       "relevant": [
-        { "file": "crates/ast-sgrep-core/src/store/sqlite.rs", "symbol": "index_generation" }
+        { "file": "crates/ast-sgrep-core/src/store/sqlite/mod.rs", "symbol": "index_generation" }
       ]
     },
     {
@@ -47,7 +47,7 @@
       "query": "literal:PRAGMA synchronous",
       "k": 20,
       "relevant": [
-        { "file": "crates/ast-sgrep-core/src/store/sqlite.rs" },
+        { "file": "crates/ast-sgrep-core/src/store/sqlite/mod.rs" },
         { "file": "crates/ast-sgrep-core/src/store/sql.rs" }
       ]
     },
@@ -64,7 +64,7 @@
       "query": "callers:integrity_check",
       "k": 20,
       "relevant": [
-        { "file": "crates/ast-sgrep-core/src/index.rs" }
+        { "file": "tests/core/store_pragmas.rs" }
       ]
     },
     {
@@ -82,7 +82,7 @@
       "k": 20,
       "relevant": [
         { "file": "crates/ast-sgrep-core/src/store/mod.rs" },
-        { "file": "crates/ast-sgrep-core/src/store/sqlite.rs" }
+        { "file": "crates/ast-sgrep-core/src/store/sqlite/mod.rs" }
       ]
     },
     {
@@ -131,7 +131,7 @@
       "query": "reciprocal rank fusion across evidence channels",
       "k": 20,
       "relevant": [
-        { "file": "crates/ast-sgrep-core/src/search/fusion.rs" }
+        { "file": "crates/ast-sgrep-core/src/fusion.rs" }
       ]
     },
     {
