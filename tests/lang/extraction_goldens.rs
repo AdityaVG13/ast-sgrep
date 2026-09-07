@@ -50,7 +50,7 @@ const CASES: &[LanguageConformanceCase] = &[
         ],
         imports: &["std::collections::HashMap"],
         calls: &[("process", "top_level_helper")],
-        patterns: &[("function $NAME($$$)", "top_level_helper")],
+        patterns: &[("top_level_helper($$$A)", "top_level_helper")],
         forbid: &["doc_only_rust"],
     },
     LanguageConformanceCase {
@@ -67,7 +67,7 @@ const CASES: &[LanguageConformanceCase] = &[
         ],
         imports: &["lib/widgets"],
         calls: &[("render", "formatWidget"), ("formatWidget", "trim")],
-        patterns: &[("function $NAME($$$)", "makeWidget")],
+        patterns: &[("makeWidget($$$A)", "makeWidget")],
         forbid: &["docOnlyTypeScript"],
     },
     LanguageConformanceCase {
@@ -81,7 +81,7 @@ const CASES: &[LanguageConformanceCase] = &[
         ],
         imports: &["./widgets.js"],
         calls: &[("render", "formatWidget"), ("formatWidget", "trim")],
-        patterns: &[("function $NAME($$$)", "makeWidget")],
+        patterns: &[("makeWidget($$$A)", "makeWidget")],
         forbid: &["docOnlyJavaScript"],
     },
     LanguageConformanceCase {
@@ -95,7 +95,7 @@ const CASES: &[LanguageConformanceCase] = &[
         ],
         imports: &["pathlib.Path"],
         calls: &[("render", "format_widget")],
-        patterns: &[("function $NAME($$$)", "make_widget")],
+        patterns: &[("make_widget($$$A)", "make_widget")],
         forbid: &["doc_only_python"],
     },
     LanguageConformanceCase {
@@ -109,7 +109,7 @@ const CASES: &[LanguageConformanceCase] = &[
         ],
         imports: &["fmt"],
         calls: &[("Render", "formatWidget")],
-        patterns: &[("function $NAME($$$)", "MakeWidget")],
+        patterns: &[("formatWidget($$$A)", "formatWidget")],
         forbid: &["docOnlyGo"],
     },
     LanguageConformanceCase {
@@ -123,7 +123,7 @@ const CASES: &[LanguageConformanceCase] = &[
         ],
         imports: &["java.util.List"],
         calls: &[("render", "formatWidget"), ("formatWidget", "trim")],
-        patterns: &[("function $NAME($$$)", "render")],
+        patterns: &[("formatWidget($$$A)", "formatWidget")],
         forbid: &["docOnlyJava"],
     },
     LanguageConformanceCase {
@@ -149,7 +149,7 @@ const CASES: &[LanguageConformanceCase] = &[
             ("Move", "Local"),
             ("Local", "Touch"),
         ],
-        patterns: &[("function $NAME($$$)", "Render"), ("Local($$$)", "Local")],
+        patterns: &[("Helper($$$A)", "Helper"), ("Local($$$)", "Local")],
         forbid: &["DocOnlyCSharp"],
     },
     LanguageConformanceCase {
@@ -169,8 +169,8 @@ const CASES: &[LanguageConformanceCase] = &[
             ("render", "make_widget"),
         ],
         patterns: &[
-            ("function $NAME($$$)", "make_widget"),
-            ("function $NAME($$$)", "create"),
+            ("make_widget($$$A)", "make_widget"),
+            ("format_widget($$$A)", "format_widget"),
         ],
         forbid: &["doc_only_ruby"],
     },
@@ -189,7 +189,7 @@ const CASES: &[LanguageConformanceCase] = &[
         imports: &["Foundation"],
         calls: &[("render", "formatWidget"), ("makeWidget", "GoldenWidget")],
         patterns: &[
-            ("function $NAME($$$)", "makeWidget"),
+            ("GoldenWidget($$$)", "GoldenWidget"),
             ("formatWidget($$$)", "formatWidget"),
         ],
         forbid: &[
@@ -211,7 +211,7 @@ const CASES: &[LanguageConformanceCase] = &[
         ],
         imports: &["<stdio.h>", "local.h"],
         calls: &[("render", "helper"), ("format_widget", "render")],
-        patterns: &[("function $NAME($$$)", "render")],
+        patterns: &[("render($$$A)", "render")],
         forbid: &["doc_only_c"],
     },
     LanguageConformanceCase {
@@ -231,10 +231,7 @@ const CASES: &[LanguageConformanceCase] = &[
             ("move", "touch"),
             ("make_widget", "render"),
         ],
-        patterns: &[
-            ("function $NAME($$$)", "make_widget"),
-            ("render($$$)", "render"),
-        ],
+        patterns: &[("helper($$$A)", "helper")],
         forbid: &["doc_only_cpp"],
     },
     LanguageConformanceCase {
@@ -255,7 +252,7 @@ const CASES: &[LanguageConformanceCase] = &[
             ("makeWidget", "GoldenWidget"),
         ],
         patterns: &[
-            ("function $NAME($$$)", "makeWidget"),
+            ("GoldenWidget($$$)", "GoldenWidget"),
             ("formatWidget($$$)", "formatWidget"),
         ],
         forbid: &["doc_only_kotlin"],
@@ -274,7 +271,7 @@ const CASES: &[LanguageConformanceCase] = &[
         imports: &["App\\Support\\Helper"],
         calls: &[("render", "format_widget"), ("format_widget", "trim")],
         patterns: &[
-            ("function $NAME($$$)", "make_widget"),
+            ("format_widget($$$A)", "format_widget"),
             ("format_widget($$$)", "format_widget"),
         ],
         forbid: &["doc_only_php"],

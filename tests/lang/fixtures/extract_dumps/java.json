@@ -93,13 +93,13 @@
       "excerpt": "labels.get(0)",
       "line_end": 13,
       "line_start": 13,
-      "signature": "call:get"
+      "signature": "call:labels.get"
     },
     {
       "excerpt": "name.trim()",
       "line_end": 17,
       "line_start": 17,
-      "signature": "call:trim"
+      "signature": "call:name.trim"
     },
     {
       "excerpt": "public class GoldenWidget {",

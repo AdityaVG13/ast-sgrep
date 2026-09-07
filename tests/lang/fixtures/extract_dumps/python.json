@@ -3,7 +3,7 @@
     {
       "byte_end": 472,
       "byte_start": 460,
-      "callee": "name",
+      "callee": "strip",
       "caller": "format_widget",
       "line": 16
     },

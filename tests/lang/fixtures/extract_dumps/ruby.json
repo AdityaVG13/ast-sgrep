@@ -50,6 +50,54 @@
       "signature": "GoldenWidget"
     },
     {
+      "excerpt": "format_widget(name)",
+      "line_end": 7,
+      "line_start": 7,
+      "signature": "call-name:format_widget"
+    },
+    {
+      "excerpt": "format_widget(make_widget(name))",
+      "line_end": 12,
+      "line_start": 12,
+      "signature": "call-name:format_widget"
+    },
+    {
+      "excerpt": "make_widget(name)",
+      "line_end": 12,
+      "line_start": 12,
+      "signature": "call-name:make_widget"
+    },
+    {
+      "excerpt": "require \"json\"",
+      "line_end": 2,
+      "line_start": 2,
+      "signature": "call-name:require"
+    },
+    {
+      "excerpt": "format_widget(name)",
+      "line_end": 7,
+      "line_start": 7,
+      "signature": "call:format_widget"
+    },
+    {
+      "excerpt": "format_widget(make_widget(name))",
+      "line_end": 12,
+      "line_start": 12,
+      "signature": "call:format_widget"
+    },
+    {
+      "excerpt": "make_widget(name)",
+      "line_end": 12,
+      "line_start": 12,
+      "signature": "call:make_widget"
+    },
+    {
+      "excerpt": "require \"json\"",
+      "line_end": 2,
+      "line_start": 2,
+      "signature": "call:require"
+    },
+    {
       "excerpt": "class GoldenWidget",
       "line_end": 14,
       "line_start": 4,

@@ -88,8 +88,15 @@ pub(crate) const IDENT_KINDS: &[&str] = &[
 ];
 
 /// Member / scoped expression kinds that chain identifiers.
+///
+/// Pass 22 (H-CONF-009): python's `attribute` is the member-chain kind for
+/// `obj.method`; without it the pattern matcher collapsed every dotted callee
+/// to its trailing identifier, so wildcard dotted patterns (`$O.$M($$$)`)
+/// were silently empty. Index `call:` rows already carried the full chain
+/// (they use the callee node's text), so only match-side paths were wrong.
 pub(crate) const MEMBER_EXPR_KINDS: &[&str] = &[
     "field_expression",
+    "field_access",
     "scoped_identifier",
     "scoped_type_identifier",
     "member_expression",
@@ -98,6 +105,7 @@ pub(crate) const MEMBER_EXPR_KINDS: &[&str] = &[
     "selector_expression",
     "qualified_identifier",
     "qualified_name",
+    "attribute",
 ];
 
 /// Comment / string trivia kinds skipped by pattern and call extraction.
@@ -166,6 +174,21 @@ pub(crate) fn last_identifier_in_chain(node: &Node, source: &str) -> Option<Stri
 
 pub(crate) fn is_in_comment_or_string(node: &Node) -> bool {
     let mut current = Some(*node);
+    while let Some(n) = current {
+        if is_comment_or_string_kind(n.kind()) {
+            return true;
+        }
+        current = n.parent();
+    }
+    false
+}
+
+/// PASS 65a (F64-4): like [`is_in_comment_or_string`], but judging only the
+/// ANCESTOR chain — a string node itself is not "inside" a string, so a
+/// string-rooted general-lane template can match the string node while every
+/// node nested under a comment/string ancestor stays skipped.
+pub(crate) fn is_inside_comment_or_string(node: &Node) -> bool {
+    let mut current = node.parent();
     while let Some(n) = current {
         if is_comment_or_string_kind(n.kind()) {
             return true;

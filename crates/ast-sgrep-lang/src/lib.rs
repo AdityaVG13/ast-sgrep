@@ -254,8 +254,8 @@ use langs::{
 };
 pub use pattern::{
     classify_native, declaration_prefix, match_literal_pattern, match_pattern,
-    needs_ast_grep_fallback, tree_sitter_language, BodyTemplate, NativeKind, PatternMatch,
-    DECL_KIND_PREFIXES, DECL_PATTERN_PREFIXES,
+    native_pattern_answerable, needs_ast_grep_fallback, tree_sitter_language, BodyTemplate,
+    NativeKind, PatternMatch, DECL_KIND_PREFIXES, DECL_PATTERN_PREFIXES,
 };
 pub use signature::{
     cached_pattern_signatures, candidate_kind_signatures, index_can_serve_pattern,

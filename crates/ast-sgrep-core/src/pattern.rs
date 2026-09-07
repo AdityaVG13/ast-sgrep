@@ -9,6 +9,7 @@ use ast_sgrep_lang::{
 };
 use rayon::prelude::*;
 use serde::Serialize;
+use std::borrow::Cow;
 use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -63,6 +64,11 @@ struct NativeSearchOutput {
     profile: PatternSearchProfile,
     total_elapsed_ns: u128,
     max_file_work_ns: u128,
+    /// PASS 60 (H-CONF-029): number of DISTINCT corpus languages (post
+    /// lang-filter) with NO native template for this pattern. Censused from
+    /// the path set BEFORE the byte prefilter runs, so prefiltered-away
+    /// files cannot hide unanswerability behind silent empty results.
+    unanswerable_corpus_languages: usize,
 }
 
 pub fn search_pattern(
@@ -75,58 +81,255 @@ pub fn search_pattern(
     // Union index signatures with native tree-sitter matches (92nj).
     // Production does not spawn external ast-grep by default; native-only is the
     // honest completeness path when the index is partial.
+    // H-CONF-032 (pass 63): strip a leading BOM BEFORE any lane sees the
+    // pattern, exactly as match_pattern's R3 strip does. The raw U+FEFF is
+    // not whitespace for `str::trim`, so without this strip it rides into
+    // `required_pattern_literal` (`\ufeffgreet`) and the byte prefilter drops
+    // every file that does not literally start with a BOM-prefixed callee —
+    // the index-served lane answered silent ok:true-0 where sg answers
+    // through the BOM (pass-62b face, BOM-led `greet($A)` python).
+    let pattern = pattern.trim().trim_start_matches('\u{feff}').trim();
+    // PASS 65 (LOW a): the H-CONF-032 strip runs BEFORE this guard, so a
+    // BOM-only pattern cannot ride past it as a non-empty string and then
+    // degrade to a silent ok:true-empty answer for the vacuous "" pattern.
+    // The codemod lane refuses the same input loudly at its ingress; search
+    // now refuses it in the same operational class as the structural-ingress
+    // rejection below (sg exits nonzero on an empty pattern too).
+    if pattern.is_empty() {
+        return Err(crate::StoreError::Other(
+            "pattern must not be empty".into(),
+        ));
+    }
     let canonical = ast_sgrep_lang::Language::canonical_filter(lang_filter);
     let lang_filter = canonical.as_deref();
+    // H-CONF-023 (pass 30): loud pattern-ingress. A `$`-pattern the native
+    // classifier rejects can never be answered natively; reject it BEFORE
+    // scanning instead of letting match_pattern's per-file empty results
+    // compose into a silent `ok:true` empty envelope. Classifier-accepted
+    // patterns never take this arm, so their zero-hit results stay ok:true.
+    if needs_ast_grep_fallback(pattern) {
+        return Err(structural_fallback_error(pattern));
+    }
+    // PASS 67c (H-CONF-036 / F26-0561): de-collide rest/single capture names
+    // (see rename_colliding_callee_rest). Runs AFTER the H-CONF-023 gate so a
+    // classifier-rejected spelling keeps its loud fail-closed class untouched,
+    // and BEFORE every lane below so the index-signature route, the candidate
+    // kind narrowing, the unanswerable-language census, and the native matcher
+    // all see one consistent spelling. The original spelling stays on the
+    // fail-closed backstop check. Hit `symbol` fields carry the de-collided
+    // spelling on the affected faces — the faces answered silent-empty before,
+    // so no previously-emitted symbol changes.
+    let match_spelling = rename_colliding_callee_rest(pattern);
     let mut hits = Vec::new();
     let mut seen = std::collections::HashSet::new();
+    let mut unanswerable_corpus_languages = 0usize;
     if store.pattern_node_count()? > 0 {
-        if let Some(signatures) = cached_pattern_signatures(pattern) {
+        if let Some(signatures) = cached_pattern_signatures(&match_spelling) {
             let indexed =
-                search_pattern_cached(pattern, &signatures, store, lang_filter, limit)?;
+                search_pattern_cached(&match_spelling, &signatures, store, lang_filter, limit)?;
             // Exact ident / decl / call signatures are complete in pattern_nodes.
             // Re-walking the tree cannot add a hit the index missed.
-            if index_can_serve_pattern(pattern, &signatures) {
+            if index_can_serve_pattern(&match_spelling, &signatures) {
                 return Ok(indexed);
             }
-            for hit in indexed {
-                if seen.insert((hit.file.clone(), hit.line_start, hit.line_end)) {
-                    hits.push(hit);
-                }
-            }
+            // EXP-005 (H-CONF-010, pass 14): kind-only signatures are inexact
+            // (every `function_definition` — any arity, any return type).
+            // Unioning those rows into the result set let a zero-param
+            // `def main():` match a one-param template. The native walk below
+            // decides every hit, and its candidate narrowing
+            // (`candidate_kind_signatures`) covers exactly the files that can
+            // hold a match, so inexact rows are dropped, never merged.
         }
     }
     // br-perf-candidates: narrow the native walk to files holding a node of
     // the pattern's kind when the exact shape is not indexable. Sound: files
     // without such a node cannot contain a match; the native matcher still
     // decides every hit on surviving files.
-    let candidate_paths = match ast_sgrep_lang::candidate_kind_signatures(pattern) {
+    let candidate_paths = match ast_sgrep_lang::candidate_kind_signatures(&match_spelling) {
         Some(kinds) if store.pattern_node_count()? > 0 => {
             Some(store.pattern_node_candidate_paths(&kinds, lang_filter)?)
         }
         _ => None,
     };
-    let native_accepted =
-        match search_pattern_native_profiled(pattern, root, lang_filter, true, candidate_paths) {
-            Ok(native) => {
-                for hit in native.hits {
-                    if seen.insert((hit.file.clone(), hit.line_start, hit.line_end)) {
-                        hits.push(hit);
-                    }
+    let native_accepted = match search_pattern_native_profiled(
+        &match_spelling,
+        root,
+        lang_filter,
+        true,
+        candidate_paths,
+    ) {
+        Ok(native) => {
+            for hit in native.hits {
+                if seen.insert((hit.file.clone(), hit.line_start, hit.line_end)) {
+                    hits.push(hit);
                 }
-                true
             }
-            Err(_) => false,
-        };
-    if native_accepted && hits.is_empty() && needs_ast_grep_fallback(pattern) {
-        // Fail-closed (iva9.7): exotic shapes never return silent empty when
-        // the structural fallback is disabled or unavailable.
-        if !external_ast_grep_allowed() || find_ast_grep_binary().is_none() {
-            return Err(crate::StoreError::Other(format!(
-                "pattern requires structural fallback but ast-grep is unavailable (fail-closed): {pattern}"
-            )));
+            unanswerable_corpus_languages = native.unanswerable_corpus_languages;
+            true
         }
+        Err(_) => false,
+    };
+    if native_accepted
+        && hits.is_empty()
+        && (unanswerable_corpus_languages > 0 || needs_ast_grep_fallback(pattern))
+    {
+        // Fail-closed (iva9.7; H-CONF-006 fixed in pass 14): a beyond-native
+        // shape NEVER returns a silent empty result. GA-24 (H-SURF-005, pass
+        // 19): the delegation result path was REMOVED, not pending — the
+        // external engine is bench-only (`bench_ast_grep`), so the gate-on
+        // state fails closed loudly too, permanently. H-CONF-023 (pass 30):
+        // the same rejection now happens at ingress above; this stays as a
+        // defense-in-depth backstop on the post-walk path. H-CONF-029 (pass
+        // 60): the backstop ALSO fires when the corpus holds languages with
+        // no native template for the pattern — per-file `Ok(empty)` there is
+        // unanswerability, not source robustness, and must stay loud (the
+        // 23 fuzz fail-open faces).
+        return Err(structural_fallback_error(pattern));
     }
     Ok(hits)
+}
+
+/// The structured fail-closed error for patterns the native classifier
+/// rejects (H-CONF-006 pass 14 / H-CONF-023 pass 30). The message names the
+/// permanent non-delegation decision (GA-24): external ast-grep is
+/// bench-only, so no gate state ever answers beyond-native patterns.
+fn structural_fallback_error(pattern: &str) -> crate::StoreError {
+    let state = if external_ast_grep_allowed() && find_ast_grep_binary().is_some() {
+        "external ast-grep is configured but is bench-only; search never delegates"
+    } else {
+        "structural fallback is disabled or unavailable"
+    };
+    crate::StoreError::Other(format!(
+        "pattern requires structural fallback ({state}; fail-closed): {pattern}"
+    ))
+}
+
+/// PASS 67c (H-CONF-036 / F26-0561): sg keeps `$$$Rest` (multi-capture) and
+/// `$Rest` (single capture) in DISTINCT capture slots even when they share a
+/// base name; the native chain matcher binds both through one map key, so a
+/// classifier-accepted pattern like `$O.out.$$$A($A)` cannot bind the
+/// property-name rest — every file answers match-none and the walk composes
+/// into a silent `ok:true` empty where sg 0.45.2 answers hits
+/// (`System.out.println(total)`). The chain lane otherwise implements sg's
+/// rest-binds-property semantics exactly (`a.b.$$$C($A)` / `$O.$$$M($A)` /
+/// `$O.$$$M.println($A)` probes agree hit-for-hit), so the fix renames ONLY
+/// the colliding callee-path rest occurrences to a fresh deterministic name.
+/// This is a deliberate behavior change, not a hit-set-preserving no-op:
+/// pre-fix the colliding rest bound through the SAME map key as the single
+/// capture, so the property text had to unify with the pattern's `$A`
+/// argument and colliding patterns answered match-none; post-fix the fresh
+/// name binds the rest sg's way and those faces answer hits. The preserved
+/// invariant is name-distinct ingress: non-colliding patterns are untouched,
+/// and every changed face moved from wrong-empty (or wrong unification) to
+/// the sg-agreed hit set. Scoped to whole dot-segment rests in the callee
+/// path (name/property slots); argument-slot rests keep their registered
+/// semantics (a `$$$A` reuse in a tail argument slot never unifies with the
+/// head rest in the subject, where sg unifies same-name rests — the
+/// H-CONF-020 trailing-name residual family), and `::`-path name slots are
+/// out of the probed scope and untouched.
+/// Determinism: the fresh-name loop is a pure function of the pattern string.
+fn rename_colliding_callee_rest(pattern: &str) -> Cow<'_, str> {
+    let Some(head_end) = pattern.find('(') else {
+        return Cow::Borrowed(pattern);
+    };
+    let (head, tail) = pattern.split_at(head_end);
+    let mut singles = std::collections::BTreeSet::new();
+    let mut rests = std::collections::BTreeSet::new();
+    scan_meta_names(pattern, &mut singles, &mut rests);
+    let mut renames: Vec<(&str, String)> = Vec::new();
+    let mut seen: Vec<&str> = Vec::new();
+    for segment in head.split('.') {
+        let Some(base) = segment.strip_prefix("$$$") else {
+            continue;
+        };
+        if base.is_empty() || !base.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+            continue;
+        }
+        if seen.contains(&base) {
+            continue;
+        }
+        seen.push(base);
+        if !singles.contains(base) {
+            continue;
+        }
+        let mut ordinal = 1usize;
+        // PASS 69E (r19 reconciliation): the fresh name MUST stay inside the
+        // canonical metavariable alphabet `[A-Z_][A-Z0-9_]*` (F26-0182,
+        // pass 69a). The original `_r` suffix carried a lowercase tail byte,
+        // so the de-collided spelling itself classified MixedCase and routed
+        // to NeverMatches — the collision faces went silent-empty again
+        // (caught by `hconf036_rest_name_collision_with_single_meta_answers_sg_hits`
+        // in the pass-69 battery). Uppercase suffix + ordinal digits keep the
+        // rename canonical under both the old and corrected grammars.
+        let mut fresh = format!("{base}_R");
+        while singles.contains(fresh.as_str()) || rests.contains(fresh.as_str()) {
+            ordinal += 1;
+            fresh = format!("{base}_R{ordinal}");
+        }
+        rests.insert(fresh.clone());
+        renames.push((base, fresh));
+    }
+    if renames.is_empty() {
+        return Cow::Borrowed(pattern);
+    }
+    let renamed_head = head
+        .split('.')
+        .map(|segment| match segment.strip_prefix("$$$") {
+            Some(base) => match renames.iter().find(|(name, _)| *name == base) {
+                Some((_, fresh)) => format!("$$${fresh}"),
+                None => segment.to_string(),
+            },
+            None => segment.to_string(),
+        })
+        .collect::<Vec<_>>()
+        .join(".");
+    let mut renamed = String::with_capacity(pattern.len() + 8);
+    renamed.push_str(&renamed_head);
+    renamed.push_str(tail);
+    Cow::Owned(renamed)
+}
+
+/// Every metavariable NAME in `pattern`, split by capture class: `$Name`
+/// (single) vs `$$$Name`+ (rest). `$$A` universal tokens are neither.
+fn scan_meta_names(
+    pattern: &str,
+    singles: &mut std::collections::BTreeSet<String>,
+    rests: &mut std::collections::BTreeSet<String>,
+) {
+    let chars: Vec<char> = pattern.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] != '$' {
+            i += 1;
+            continue;
+        }
+        let mut run = 0usize;
+        while i + run < chars.len() && chars[i + run] == '$' {
+            run += 1;
+        }
+        let name_start = i + run;
+        let mut name_end = name_start;
+        while name_end < chars.len()
+            && (chars[name_end].is_ascii_alphanumeric() || chars[name_end] == '_')
+        {
+            name_end += 1;
+        }
+        if name_end > name_start {
+            let name: String = chars[name_start..name_end].iter().collect();
+            match run {
+                1 => {
+                    singles.insert(name);
+                }
+                2 => {}
+                _ => {
+                    rests.insert(name);
+                }
+            }
+            i = name_end;
+        } else {
+            i = name_start.max(i + 1);
+        }
+    }
 }
 /// When set, skip external ast-grep entirely (iva9.7 fail-closed / no-subprocess mode).
 fn external_ast_grep_allowed() -> bool {
@@ -344,6 +547,44 @@ fn search_pattern_native_profiled(
         frontier = next;
     }
     let walk_ns = walk_started.elapsed().as_nanos();
+    // PASS 60 (H-CONF-029): census the corpus languages (post lang-filter)
+    // with NO native template for this pattern. Computed from the path set
+    // BEFORE the byte prefilter runs so prefiltered-away files cannot hide
+    // unanswerability behind a silent empty result. One unanswerable corpus
+    // language means a query over it can never be answered natively (sg
+    // rejects the same shape); the caller turns this into the loud
+    // fail-closed error when the query answers empty.
+    let unanswerable_corpus_languages = {
+        let mut unanswerable: Vec<ast_sgrep_lang::Language> = Vec::new();
+        for path in paths.iter() {
+            // PASS 65 (LOW d): extension-only detection misses content-only
+            // languages — an extension-less file carrying a shebang (`pybox`)
+            // was invisible to this census, so the unanswerable-language gate
+            // stayed silent exactly where the per-file skip below guaranteed
+            // a silent empty (H-CONF-029 class fail-open). When the path
+            // alone cannot classify, detect from a capped content read.
+            let mut lang = ast_sgrep_lang::detect_language(path, None);
+            if lang.is_none() {
+                if let Some(bytes) = read_pattern_bytes_capped(path) {
+                    if let Ok(content) = std::str::from_utf8(&bytes) {
+                        lang = ast_sgrep_lang::detect_language(path, Some(content));
+                    }
+                }
+            }
+            let Some(lang) = lang else {
+                continue;
+            };
+            if lang_filter.is_some_and(|filter| lang.as_str() != filter) {
+                continue;
+            }
+            if !unanswerable.contains(&lang)
+                && !ast_sgrep_lang::native_pattern_answerable(lang, pattern)
+            {
+                unanswerable.push(lang);
+            }
+        }
+        unanswerable.len()
+    };
     let required_literal = use_prefilter
         .then(|| required_pattern_literal(pattern))
         .flatten();
@@ -397,6 +638,25 @@ fn search_pattern_native_profiled(
                     ..NativeFileResult::default()
                 };
             }
+            // H-CONF-031 (pass 63): language-aware native walk. A file whose
+            // language has no native template for this pattern is SKIPPED —
+            // its non-matches are unanswerability, not evidence of absence —
+            // exactly the per-file semantics sg applies when a pattern fails
+            // its per-language pattern gate (no-lang `throw $A` skips the
+            // unparseable languages and answers 6 hits). The census above
+            // records the skip so the caller can fail closed when the WHOLE
+            // query answers empty (sg exits 8 on the same --lang-pinned
+            // inputs); without the skip, classifier-accepted shapes whose
+            // grammar cannot parse them still over-matched here
+            // (`function $A($B) { $$$C }` on python answered 2 phantom hits
+            // where sg exits 8).
+            if !ast_sgrep_lang::native_pattern_answerable(lang, pattern) {
+                return NativeFileResult {
+                    bytes_scanned,
+                    prefilter_ns: prefilter_started.elapsed().as_nanos(),
+                    ..NativeFileResult::default()
+                };
+            }
             let prefilter_ns = prefilter_started.elapsed().as_nanos();
             let parse_match_started = Instant::now();
             let rel = path
@@ -422,6 +682,7 @@ fn search_pattern_native_profiled(
             NativeFileResult {
                 hits,
                 bytes_scanned,
+                prefiltered: false,
                 parsed: true,
                 prefilter_ns,
                 parse_match_ns: parse_match_started.elapsed().as_nanos(),
@@ -491,6 +752,7 @@ fn search_pattern_native_profiled(
         profile,
         total_elapsed_ns: total_started.elapsed().as_nanos(),
         max_file_work_ns,
+        unanswerable_corpus_languages,
     })
 }
 
@@ -521,94 +783,16 @@ fn wait_child_deadline(child: &mut Child, deadline: Instant, require_success: bo
         }
     }
 }
-/// One row from opt-in `ast-grep run --json` (lbx1.9).
-/// `line_start` is 1-based, matching `SearchHit`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ExternalAstGrepMatch {
-    pub file: String,
-    pub line_start: u32,
-}
-
-/// Spawn allowed external `ast-grep` and parse `--json` matches.
-///
-/// `None` when the allow gate is off or the binary is unset/invalid (no PATH
-/// search). `Err` when the gate is on but spawn, timeout, or JSON parse fails.
-/// Does **not** feed `search_pattern` (`DISC-pattern-native-subset`).
-///
-/// `lang` maps to `ast-grep --lang` when set (required for reliable structural
-/// matches). `--json=compact` is required by ast-grep 0.45+.
-pub fn run_external_ast_grep(
-    pattern: &str,
-    root: &Path,
-    lang: Option<&str>,
-) -> Result<Option<Vec<ExternalAstGrepMatch>>> {
-    let Some(bin) = find_ast_grep_binary() else {
-        return Ok(None);
-    };
-    let root = root
-        .canonicalize()
-        .unwrap_or_else(|_| root.to_path_buf())
-        .to_string_lossy()
-        .into_owned();
-    let mut command = Command::new(&bin);
-    command.args(["run", "--pattern", pattern, "--json=compact"]);
-    if let Some(lang) = lang {
-        command.args(["--lang", lang]);
-    }
-    let mut child = command
-        .arg(&root)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|error| crate::StoreError::Other(format!("failed to spawn ast-grep: {error}")))?;
-    // ast-grep exits 1 on zero matches; still parse JSON stdout.
-    if wait_child_deadline(&mut child, Instant::now() + Duration::from_secs(30), false).is_none() {
-        return Err(crate::StoreError::Other("ast-grep run timed out".into()));
-    }
-    let output = child
-        .wait_with_output()
-        .map_err(|error| crate::StoreError::Other(format!("ast-grep wait failed: {error}")))?;
-    match parse_ast_grep_json(&output.stdout) {
-        Ok(parsed) => Ok(parsed),
-        Err(parse_error) if output.status.success() => Err(parse_error),
-        Err(parse_error) => Err(crate::StoreError::Other(format!(
-            "{parse_error}; stderr: {}",
-            String::from_utf8_lossy(&output.stderr)
-        ))),
-    }
-}
-
-fn parse_ast_grep_json(stdout: &[u8]) -> Result<Option<Vec<ExternalAstGrepMatch>>> {
-    let value: serde_json::Value = serde_json::from_slice(stdout).map_err(|error| {
-        crate::StoreError::Other(format!("ast-grep JSON parse failed: {error}"))
-    })?;
-    let rows = value.as_array().ok_or_else(|| {
-        crate::StoreError::Other("ast-grep --json did not return an array".into())
-    })?;
-    let mut matches = Vec::with_capacity(rows.len());
-    for row in rows {
-        let file = row
-            .get("file")
-            .or_else(|| row.get("path"))
-            .and_then(|value| value.as_str())
-            .unwrap_or("")
-            .to_string();
-        let line0 = row
-            .get("range")
-            .and_then(|range| range.get("start"))
-            .and_then(|start| start.get("line"))
-            .and_then(|line| line.as_u64())
-            .unwrap_or(0);
-        let line_start = u32::try_from(line0.saturating_add(1)).unwrap_or(u32::MAX);
-        matches.push(ExternalAstGrepMatch { file, line_start });
-    }
-    Ok(Some(matches))
-}
-
 /// Optional external `ast-grep` for **bench comparison only**.
 /// Disabled by default: never searches PATH or executes untrusted binaries
 /// (`ast-sgrep-j0x4` / `agent-security-rl1p.5`). Requires both
 /// `ASGREP_ALLOW_AST_GREP=1` and an absolute `ASGREP_AST_GREP` file path.
+///
+/// GA-24 (H-SURF-005, pass 19): the former `run_external_ast_grep` delegation
+/// result path was removed — zero callers, and delegating search hits to the
+/// reference binary would make differential parity circular and import
+/// unpinned version behavior into the trust boundary. Search never delegates;
+/// this gate serves the bench comparison lane only (`bench_ast_grep`).
 fn find_ast_grep_binary() -> Option<String> {
     if !crate::env_flag::env_flag("ASGREP_ALLOW_AST_GREP") {
         return None;
