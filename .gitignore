@@ -165,3 +165,4 @@ crates/**/.bench-history/
 # Local internal notes and prompts (not curated product docs)
 /docs/internal/
 
+.empryo
