@@ -197,8 +197,13 @@ fn accumulate(
         .push(rank);
 }
 fn hits_from_matches(matches: LineMatches) -> Vec<SearchHit> {
-    matches
-        .into_iter()
+    // PASS 56 (P48-R1): emit in (path, line_no) order. LineMatches is a
+    // randomly seeded HashMap, so `into_iter` made the lexical channel's hit
+    // order a per-process random value (the br-23f hazard at its source).
+    let mut rows: Vec<((String, u32), (Vec<usize>, Option<String>, String))> =
+        matches.into_iter().collect();
+    rows.sort_unstable_by(|left, right| left.0.cmp(&right.0));
+    rows.into_iter()
         .map(|((path, line_no), (ranks, language, content))| {
             asgrep_line_hit(path, language, line_no, content, score_lexical_rrf(&ranks))
         })
@@ -244,4 +249,40 @@ pub(crate) fn query_is_code_like(parsed: &ParsedQuery) -> bool {
             && trimmed.chars().any(|c| c.is_lowercase());
         has_underscore || has_path || camel || shouty
     })
+}
+
+#[cfg(test)]
+mod emission_order_tests {
+    use super::hits_from_matches;
+    use std::collections::HashMap;
+
+    /// PASS 56 (P48-R1): the lexical channel must emit hits in (path, line_no)
+    /// order. LineMatches is a randomly seeded HashMap, so an unsorted
+    /// `into_iter` re-rolls the emission order every call and every process.
+    #[test]
+    fn lexical_emission_is_key_sorted_every_call() {
+        let build = || {
+            let mut matches: HashMap<(String, u32), (Vec<usize>, Option<String>, String)> =
+                HashMap::new();
+            for i in 0..6 {
+                matches.insert(
+                    (format!("src/mod{i}.rs"), 7),
+                    (vec![i as usize], Some("rust".into()), "row".into()),
+                );
+            }
+            matches
+        };
+        let reference = hits_from_matches(build());
+        for run in 0..20 {
+            let hits = hits_from_matches(build());
+            let keys: Vec<(String, u32)> =
+                hits.iter().map(|hit| (hit.file.clone(), hit.line_start)).collect();
+            let mut sorted = keys.clone();
+            sorted.sort();
+            assert_eq!(keys, sorted, "run {run}: emission must be key-sorted");
+            let reference_keys: Vec<(String, u32)> =
+                reference.iter().map(|hit| (hit.file.clone(), hit.line_start)).collect();
+            assert_eq!(keys, reference_keys, "run {run}: emission must be stable");
+        }
+    }
 }

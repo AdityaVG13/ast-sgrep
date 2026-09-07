@@ -245,8 +245,18 @@ pub fn apply_weighted_rrf(hits: &mut Vec<SearchHit>, weights: &ChannelWeights) {
         }
     }
 
-    let mut fused = Vec::with_capacity(members_by_result.len());
-    for (key, mut members) in members_by_result {
+    // PASS 56 (P48-R1): emit fused rows in sorted key order. members_by_result
+    // is a randomly seeded HashMap; iterating it directly made the fused hit
+    // ORDER a per-process random value feeding every downstream consumer
+    // (route_hits, critic, finish). The byte-stability contract is
+    // "identical inputs + identical index → identical results", so the
+    // emission itself must be deterministic, not just order-normalized
+    // downstream (br-23f hardened the finish comparator, not this source).
+    let mut fused_keys: Vec<(&str, u32)> = members_by_result.keys().copied().collect();
+    fused_keys.sort_unstable();
+    let mut fused = Vec::with_capacity(fused_keys.len());
+    for key in fused_keys {
+        let mut members = members_by_result.remove(&key).expect("key from same map");
         members.sort_by(|left, right| {
             canonical_priority(hits[*left].kind)
                 .cmp(&canonical_priority(hits[*right].kind))
