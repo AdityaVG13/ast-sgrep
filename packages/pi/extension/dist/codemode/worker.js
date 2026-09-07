@@ -168,6 +168,7 @@ export async function startStickyWorker(options) {
     // Probe: empty End would close — instead send a tiny catalog call to verify protocol,
     // or just return and let first real call fail. Prefer lazy: no probe.
     return {
+        closed: () => closed || !child.stdin.writable,
         async call(tool, args, callOptions) {
             const msg = await writeWithControls({ type: "call", tool, args }, "codemode call", callOptions?.signal);
             if (msg.type === "error") {

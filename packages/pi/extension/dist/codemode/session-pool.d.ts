@@ -22,6 +22,7 @@ export type SessionPoolOptions = {
     limit?: number;
 };
 export type StickyStarter = (options: StickyWorkerOptions) => Promise<StickyWorker>;
+export declare function isClosedWorkerError(cause: unknown): boolean;
 export declare class NativeSessionPool {
     #private;
     constructor(startFn?: StickyStarter);

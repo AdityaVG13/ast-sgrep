@@ -269,3 +269,83 @@ test("missing backend surfaces BACKEND_UNAVAILABLE from asgrep ensureFresh path"
   assert.equal(out.details.ok, false);
   assert.equal((out.details.error as { code: string }).code, "BACKEND_UNAVAILABLE");
 });
+
+test("asgrep_search freshness timeout still searches", async () => {
+  const tools: Tool[] = [];
+  const calls: Call[] = [];
+  const pi = {
+    registerTool(tool: Tool) { tools.push(tool); },
+    on() {},
+  } as unknown as ExtensionAPI;
+  const runtime = {
+    async resolveRoot(context: { cwd: string }) { return context.cwd; },
+    async run(args: readonly string[], context: { cwd: string }, options: { signal?: AbortSignal }) {
+      calls.push({ args, context, options });
+      return { tool: "asgrep", schema_version: "1.0.0", ok: true, hits: [{ path: "src/train.py" }] };
+    },
+  };
+  const freshness = {
+    async ensureFresh() { throw new Error("codemode call timed out after 30000ms"); },
+    markAffectedPath() {},
+  };
+  registerAstSgrepTools(pi, runtime as never, freshness as never);
+  const search = tools.find((t) => t.name === "asgrep_search")!;
+  const out = await search.execute("c1", { query: "model training" }, new AbortController().signal, () => {}, { cwd: "/project" });
+  assert.equal(out.details.ok, true, JSON.stringify(out.details));
+  assert.ok(calls.some((call) => call.args.includes("model training") || call.args.some((arg) => String(arg).includes("model"))));
+});
+
+test("asgrep_search in:path indexes that directory instead of a full refresh", async () => {
+  const tools: Tool[] = [];
+  const calls: Call[] = [];
+  const pi = {
+    registerTool(tool: Tool) { tools.push(tool); },
+    on() {},
+  } as unknown as ExtensionAPI;
+  const runtime = {
+    async resolveRoot(context: { cwd: string }) { return context.cwd; },
+    async run(args: readonly string[], context: { cwd: string }, options: { signal?: AbortSignal }) {
+      calls.push({ args, context, options });
+      return {
+        tool: "asgrep",
+        schema_version: "1.0.0",
+        ok: true,
+        hits: [],
+        stats: { files_indexed: 1, files_skipped: 0, files_removed: 0, files_failed: 0, walk_errors: false },
+      };
+    },
+  };
+  const freshness = {
+    async ensureFresh() { throw new Error("ensureFresh must not run for in: queries"); },
+    markAffectedPath() {},
+  };
+  registerAstSgrepTools(pi, runtime as never, freshness as never);
+  const search = tools.find((t) => t.name === "asgrep_search")!;
+  const out = await search.execute("c1", { query: "in:ARCHANA-3/src model training" }, new AbortController().signal, () => {}, { cwd: "/project" });
+  assert.equal(out.details.ok, true, JSON.stringify(out.details));
+  assert.ok(
+    calls.some((call) => call.args.includes("index") && call.args.includes("--path") && call.args.includes("ARCHANA-3/src")),
+    `expected targeted index of ARCHANA-3/src, got ${JSON.stringify(calls)}`,
+  );
+});
+
+test("closed sticky-session errors are SESSION_CLOSED not UNEXPECTED_ERROR", async () => {
+  const tools: Tool[] = [];
+  const pi = {
+    registerTool(tool: Tool) { tools.push(tool); },
+    on() {},
+  } as unknown as ExtensionAPI;
+  const runtime = {
+    async resolveRoot(context: { cwd: string }) { return context.cwd; },
+    async run() { throw new Error("codemode-serve is closed"); },
+  };
+  const freshness = {
+    async ensureFresh() { throw new Error("codemode-serve is closed"); },
+    markAffectedPath() {},
+  };
+  registerAstSgrepTools(pi, runtime as never, freshness as never);
+  const search = tools.find((t) => t.name === "asgrep_search")!;
+  const out = await search.execute("c1", { query: "auth" }, new AbortController().signal, () => {}, { cwd: "/project" });
+  assert.equal(out.details.ok, false);
+  assert.equal((out.details.error as { code: string }).code, "SESSION_CLOSED");
+});

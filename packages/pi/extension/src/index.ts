@@ -11,6 +11,7 @@ import {
   asEnvelope,
   warmCodemodeSandbox,
   resetCodemodeSandboxForTests,
+  isClosedWorkerError,
   type StickyWorker,
 } from "./codemode/index.js";
 import { AstSgrepRuntime, FreshnessCoordinator, RuntimeError, type FreshnessRuntime, type MachineEnvelope, type RunOptions } from "./runtime.js";
@@ -117,9 +118,37 @@ function errorDetails(cause: unknown, signal?: AbortSignal): { code: string; mes
   if (signal?.aborted) {
     return { code: "CANCELLED", message: "cancelled", details: {} };
   }
-  return cause instanceof RuntimeError
-    ? { code: cause.code, message: cause.message, details: cause.details }
-    : { code: "UNEXPECTED_ERROR", message: cause instanceof Error ? cause.message : String(cause), details: {} };
+  if (cause instanceof RuntimeError) {
+    return { code: cause.code, message: cause.message, details: cause.details };
+  }
+  const message = cause instanceof Error ? cause.message : String(cause);
+  if (/timed out after \d+ms|timeout after \d+ms|exceeded \d+ms/i.test(message)) {
+    return { code: "TIMEOUT", message, details: {} };
+  }
+  if (isClosedWorkerError(cause)) {
+    return {
+      code: "SESSION_CLOSED",
+      message: "asgrep session closed; retry the search",
+      details: {},
+    };
+  }
+  return { code: "UNEXPECTED_ERROR", message, details: {} };
+}
+
+function isFreshnessTimeout(cause: unknown, userSignal?: AbortSignal): boolean {
+  if (userSignal?.aborted) return false;
+  if (cause instanceof RuntimeError && (cause.code === "TIMEOUT" || cause.code === "CANCELLED")) return true;
+  if (isClosedWorkerError(cause)) return true;
+  const message = cause instanceof Error ? cause.message : String(cause);
+  return /timed out after \d+ms|timeout after \d+ms|exceeded \d+ms/i.test(message);
+}
+
+/** Leading or mid-query `in:path` scope used to bound a fresh-directory index. */
+function extractInPath(query: string): string | undefined {
+  const match = /(?:^|\s)in:([^\s]+)/.exec(query);
+  const path = match?.[1];
+  if (!path || path.split(/[/\\]/u).includes("..")) return undefined;
+  return path;
 }
 
 function failure(command: string, cause: unknown, signal?: AbortSignal) {
@@ -277,6 +306,26 @@ export function registerAstSgrepTools(
     return runtime.run(args, context, options);
   };
 
+  const callSticky = async (
+    root: string,
+    tool: string,
+    args: Record<string, unknown>,
+    options: RunOptions = {},
+  ): Promise<MachineEnvelope | null> => {
+    const invoke = async (): Promise<MachineEnvelope | null> => {
+      const worker = await pool.acquire(root);
+      if (!worker) return null;
+      return worker.call(tool, args, options.signal ? { signal: options.signal } : {});
+    };
+    try {
+      return await invoke();
+    } catch (cause) {
+      if (options.signal?.aborted || !isClosedWorkerError(cause)) throw cause;
+      await pool.invalidate(root);
+      return invoke();
+    }
+  };
+
   const nativeCall = async (
     tool: string,
     args: Record<string, unknown>,
@@ -285,10 +334,8 @@ export function registerAstSgrepTools(
   ): Promise<MachineEnvelope> => {
     ensurePool();
     const root = await resolveRoot(context.cwd);
-    const worker = await pool.acquire(root);
-    if (worker) {
-      return asEnvelope(await worker.call(tool, args, options.signal ? { signal: options.signal } : {}));
-    }
+    const sticky = await callSticky(root, tool, args, options);
+    if (sticky) return asEnvelope(sticky);
     // Cold CLI only when a real binary resolves -- never remap missing natives to BINARY_RESOLUTION_FAILED.
     return runCli(argvFor(tool, args), context, options);
   };
@@ -390,7 +437,14 @@ export function registerAstSgrepTools(
           : timeoutSignal;
         const options = { signal: operationSignal };
         ensurePool();
-        const root = await freshness.ensureFresh(warmRuntime, { cwd: ctx.cwd }, options);
+        let root: string;
+        try {
+          root = await freshness.ensureFresh(warmRuntime, { cwd: ctx.cwd }, options);
+        } catch (cause) {
+          if (!isFreshnessTimeout(cause, signal)) throw cause;
+          root = await resolveRoot(ctx.cwd);
+          await pool.invalidate(root).catch(() => undefined);
+        }
         const env = runtime.nativeEnv?.() ?? { NO_COLOR: "1" };
         let binary: string | null = null;
         try {
@@ -480,7 +534,7 @@ export function registerAstSgrepTools(
           },
         };
       } catch (cause) {
-        return failure("codemode", cause);
+        return failure("codemode", cause, signal);
       }
     },
   });
@@ -506,11 +560,28 @@ export function registerAstSgrepTools(
       report(onUpdate, "search", "started");
       try {
         ensurePool();
-        const root = await freshness.ensureFresh(warmRuntime, { cwd: ctx.cwd }, options);
-        const sticky = await pool.acquire(root);
-        const response = sticky
-          ? await sticky.call(...searchToolCall(params), options)
-          : await runCli(searchArgs(params), { cwd: ctx.cwd }, options);
+        const scopedPath = extractInPath(params.query);
+        let root: string;
+        if (scopedPath) {
+          root = await resolveRoot(ctx.cwd);
+          try {
+            await nativeCall("index_repo", { paths: [scopedPath] }, { cwd: ctx.cwd }, options);
+          } catch (cause) {
+            if (!isFreshnessTimeout(cause, signal)) throw cause;
+            await pool.invalidate(root).catch(() => undefined);
+          }
+        } else {
+          try {
+            root = await freshness.ensureFresh(warmRuntime, { cwd: ctx.cwd }, options);
+          } catch (cause) {
+            if (!isFreshnessTimeout(cause, signal)) throw cause;
+            root = await resolveRoot(ctx.cwd);
+            await pool.invalidate(root).catch(() => undefined);
+          }
+        }
+        const [tool, args] = searchToolCall(params);
+        const sticky = await callSticky(root, tool, args, options);
+        const response = sticky ?? await runCli(searchArgs(params), { cwd: ctx.cwd }, options);
         report(onUpdate, "search", "completed");
         return success("search", response, {
           query: params.query,
@@ -519,7 +590,7 @@ export function registerAstSgrepTools(
           backend: pool.backend(),
         });
       } catch (cause) {
-        return failure("search", cause);
+        return failure("search", cause, signal);
       }
     },
   });

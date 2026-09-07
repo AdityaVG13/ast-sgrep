@@ -43,6 +43,8 @@ export type StickyWorker = {
     options?: { signal?: AbortSignal },
   ): Promise<BatchResult>;
   end(): Promise<void>;
+  /** True after timeout/crash/end. Missing means "assume live". */
+  closed?: () => boolean;
 };
 
 export type BatchCapableHost = ConnectorHost & {

@@ -123,6 +123,59 @@ test("aborting an in-flight pool call unblocks the next caller", async () => {
   await pool.shutdown();
 });
 
+test("acquire restarts a closed sticky worker", async () => {
+  let log: string[] = [];
+  let starts = 0;
+  let pool = new NativeSessionPool(async () => {
+    starts += 1;
+    let closed = false;
+    return {
+      closed: () => closed,
+      async call(tool) {
+        if (closed) throw new Error("codemode-serve is closed");
+        log.push(`call:${tool}`);
+        return { tool: "asgrep", schema_version: "1.0.0", ok: true, hits: [] } as MachineEnvelope;
+      },
+      async batch() {
+        return { results: [] };
+      },
+      async end() {
+        closed = true;
+        log.push("end");
+      },
+    };
+  });
+  pool.configure({ binary: "/fake/asgrep" });
+  const first = await pool.acquire("/p");
+  await first!.end();
+  await pool.call("/p", "search", { query: "x" });
+  assert.equal(starts, 2);
+  assert.ok(log.includes("call:search"));
+  await pool.shutdown();
+});
+
+test("call retries once after codemode-serve is closed", async () => {
+  let starts = 0;
+  const pool = new NativeSessionPool(async () => {
+    starts += 1;
+    return {
+      async call() {
+        if (starts === 1) throw new Error("codemode-serve is closed");
+        return { tool: "asgrep", schema_version: "1.0.0", ok: true, hits: [] } as MachineEnvelope;
+      },
+      async batch() {
+        return { results: [] };
+      },
+      async end() {},
+    };
+  });
+  pool.configure({ binary: "/fake/asgrep" });
+  const result = await pool.call("/p", "search", { query: "x" });
+  assert.equal(result.ok, true);
+  assert.equal(starts, 2);
+  await pool.shutdown();
+});
+
 test("invalidate drops worker so next acquire restarts", async () => {
   const log: string[] = [];
   let starts = 0;

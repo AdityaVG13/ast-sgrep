@@ -26,6 +26,13 @@ function isBusyError(cause) {
     const message = cause instanceof Error ? cause.message : String(cause);
     return /session is busy/i.test(message);
 }
+export function isClosedWorkerError(cause) {
+    const message = cause instanceof Error ? cause.message : String(cause);
+    return /codemode-serve is closed|native session is closed/i.test(message);
+}
+function workerIsClosed(worker) {
+    return worker.closed?.() === true;
+}
 function inProcessWorker(session) {
     let tail = Promise.resolve();
     let closed = false;
@@ -55,6 +62,7 @@ function inProcessWorker(session) {
         });
     };
     return {
+        closed: () => closed,
         call(tool, args, options) {
             if (options?.signal?.aborted)
                 return Promise.reject(abortError());
@@ -114,8 +122,11 @@ export class NativeSessionPool {
         if (this.#shutdownPromise)
             return null;
         const existing = this.#entries.get(root);
-        if (existing)
-            return existing.worker;
+        if (existing) {
+            if (!workerIsClosed(existing.worker))
+                return existing.worker;
+            await this.invalidate(root);
+        }
         const inFlight = this.#starting.get(root);
         if (inFlight)
             return inFlight;
@@ -132,10 +143,21 @@ export class NativeSessionPool {
     async call(root, tool, args = {}, options) {
         if (options?.signal?.aborted)
             throw abortError();
-        const worker = await this.acquire(root);
-        if (!worker)
-            throw new Error("native Code Mode backend unavailable");
-        return worker.call(tool, args, options);
+        try {
+            const worker = await this.acquire(root);
+            if (!worker)
+                throw new Error("native Code Mode backend unavailable");
+            return await worker.call(tool, args, options);
+        }
+        catch (cause) {
+            if (options?.signal?.aborted || !isClosedWorkerError(cause))
+                throw cause;
+            await this.invalidate(root);
+            const retry = await this.acquire(root);
+            if (!retry)
+                throw cause;
+            return retry.call(tool, args, options);
+        }
     }
     async invalidate(root) {
         this.#generations.set(root, this.#generationFor(root) + 1);

@@ -14,5 +14,5 @@ export { runCodemode, normalizeCode, warmCodemodeSandbox, resetCodemodeSandboxFo
 export { CODEMODE_TYPES_FOR_MODEL, CODEMODE_HOST_METHODS, type SearchArgs, type FindArgs, type ReadArgs, type EditArgs, type ChainArgs, type CodemodeHostMethod } from "./types.js";
 export { createCodemodeDispatcher, runNativeBatch, argvFor, asEnvelope, type DispatchStats, type BatchCapableHost, type StickyWorker, type BatchResult, } from "./dispatch.js";
 export { startStickyWorker, runBatchViaStdin } from "./worker.js";
-export { NativeSessionPool, sharedNativePool } from "./session-pool.js";
+export { NativeSessionPool, sharedNativePool, isClosedWorkerError } from "./session-pool.js";
 export { loadCodemodeNative, nativeAvailable, resetNativeCache, type CodemodeNativeBinding, type NativeSession, } from "./native.js";
