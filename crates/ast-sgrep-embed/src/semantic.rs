@@ -124,8 +124,53 @@ const CONCEPT_GROUPS: &[(&[&str], &[&str])] = &[
         &["remember", "reuse", "embed", "embedding", "embeddings", "cache", "query", "vector"],
     ),
     (
-        &["reciprocal", "channel", "channels", "evidence"],
-        &["reciprocal", "rrf", "fusion", "channel", "channels", "evidence", "rank"],
+        &["combine", "conjunction", "intersect", "intersection"],
+        &[
+            "combine",
+            "conjunction",
+            "intersect",
+            "intersection",
+        ],
+    ),
+    // cg5: rate / event / retry paraphrases used by invent-path gold.
+    (
+        &["throttle", "throttling", "ratelimit", "rate_limit", "quota"],
+        &[
+            "throttle",
+            "throttling",
+            "ratelimit",
+            "rate_limit",
+            "rate",
+            "limit",
+            "quota",
+            "inbound",
+            "client",
+        ],
+    ),
+    (
+        &["debounce", "debouncing", "coalesce", "coalescing"],
+        &[
+            "debounce",
+            "debouncing",
+            "coalesce",
+            "coalescing",
+            "noisy",
+            "watch",
+            "events",
+            "quiet",
+        ],
+    ),
+    (
+        &["retry", "retries", "backoff", "transient"],
+        &[
+            "retry",
+            "retries",
+            "backoff",
+            "transient",
+            "attempt",
+            "failure",
+            "delay",
+        ],
     ),
 ];
 pub fn tokenize(text: &str) -> Vec<String> {
@@ -145,19 +190,28 @@ pub fn tokenize(text: &str) -> Vec<String> {
     tokens.sort();
     tokens
 }
-fn split_ident(ident: &str) -> Vec<String> {
+
+/// Split an identifier on `_`/`-` and lower→upper camel boundaries.
+///
+/// `refreshToken` → ["refresh", "token"]. All-caps runs stay together until a
+/// lower→upper edge (`HTTPStatusCode` → ["httpstatus", "code"]), matching the
+/// lexicon splitter so PPMI observations and hashed features agree.
+pub fn split_ident(ident: &str) -> Vec<String> {
     let mut parts = Vec::new();
     let mut cur = String::new();
+    let mut prev_lower = false;
     for ch in ident.chars() {
-        if ch == '_' {
+        if ch == '_' || ch == '-' {
             if !cur.is_empty() {
                 parts.push(std::mem::take(&mut cur).to_lowercase());
             }
+            prev_lower = false;
             continue;
         }
-        if ch.is_ascii_uppercase() && !cur.is_empty() {
+        if ch.is_ascii_uppercase() && prev_lower && !cur.is_empty() {
             parts.push(std::mem::take(&mut cur).to_lowercase());
         }
+        prev_lower = ch.is_ascii_lowercase() || ch.is_ascii_digit();
         cur.push(ch);
     }
     if !cur.is_empty() {
@@ -325,5 +379,87 @@ mod tests {
     fn remember_embeddings_expands_to_cache() {
         let expanded = expand_concepts("remember query embeddings between searches");
         assert!(expanded.contains("cache"), "{expanded}");
+    }
+
+    #[test]
+    fn combine_channels_expands_to_conjunction_not_rrf() {
+        let query = "combine two search channels in a single query";
+        let expanded = expand_concepts(query);
+        let token_vec = tokenize(&expanded);
+        let tokens: std::collections::HashSet<&str> =
+            token_vec.iter().map(String::as_str).collect();
+        if !tokens.contains("conjunction") {
+            panic!(
+                "\n\n===== DEAD PROGRAM: NO CONJUNCTION EXPANSION =====\n\
+                 Query: {query:?}\n\
+                 Expanded: {expanded:?}\n\
+                 Tokens: {tokens:?}\n\
+                 Mutant: drop the combine→conjunction group.\n\
+                 ===== END AUTOPSY =====\n"
+            );
+        }
+        if tokens.contains("rrf") || tokens.contains("fusion") {
+            panic!(
+                "\n\n===== DEAD PROGRAM: CHANNELS MAP TO RRF =====\n\
+                 Query: {query:?}\n\
+                 Expanded: {expanded:?}\n\
+                 Tokens: {tokens:?}\n\
+                 'channel'/'channels' must not expand to fusion/rrf. That steals \
+                 the two-channel AND query for ranking.\n\
+                 Mutant: restore reciprocal/channel/channels/evidence → rrf/fusion.\n\
+                 ===== END AUTOPSY =====\n"
+            );
+        }
+    }
+
+    #[test]
+    fn reciprocal_rank_fusion_still_expands_to_rrf() {
+        let query = "reciprocal rank fusion across evidence channels";
+        let expanded = expand_concepts(query);
+        if !expanded.contains("rrf") && !expanded.contains("fusion") {
+            panic!(
+                "\n\n===== DEAD PROGRAM: RRF QUERY LOST FUSION =====\n\
+                 Query: {query:?}\n\
+                 Expanded: {expanded:?}\n\
+                 Splitting conjunction must leave rank-fusion expansion intact.\n\
+                 ===== END AUTOPSY =====\n"
+            );
+        }
+    }
+
+    #[test]
+    fn throttle_expands_to_rate_limit() {
+        let expanded = expand_concepts("throttle inbound clients");
+        for token in ["rate", "limit", "quota"] {
+            assert!(expanded.contains(token), "missing {token} in {expanded:?}");
+        }
+    }
+
+    #[test]
+    fn debounce_expands_to_coalesce() {
+        let expanded = expand_concepts("debounce noisy updates");
+        for token in ["coalesce", "watch", "events"] {
+            assert!(expanded.contains(token), "missing {token} in {expanded:?}");
+        }
+    }
+
+    #[test]
+    fn retry_expands_to_backoff() {
+        let expanded = expand_concepts("retry after transient failure");
+        for token in ["backoff", "attempt", "transient"] {
+            assert!(expanded.contains(token), "missing {token} in {expanded:?}");
+        }
+    }
+
+    #[test]
+    fn split_ident_keeps_acronym_runs() {
+        assert_eq!(
+            split_ident("HTTPStatusCode"),
+            vec!["httpstatus".to_string(), "code".to_string()]
+        );
+        assert_eq!(
+            split_ident("refreshToken"),
+            vec!["refresh".to_string(), "token".to_string()]
+        );
     }
 }

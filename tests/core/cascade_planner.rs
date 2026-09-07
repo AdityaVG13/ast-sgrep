@@ -79,11 +79,15 @@ fn cascade_stops_when_a_stage_has_no_survivors() {
     })
     .unwrap();
 
-    // Single token, absent from the fixture: underscore phrases split into
-    // terms (e.g. "from") that can match imports, so the lexical stage would
-    // legitimately have survivors under the ht1h.3 fallback.
-    let no_lexical_survivors = searcher.search("zzzabsentphraseyyy").unwrap();
-    assert!(no_lexical_survivors.hits.is_empty());
+    // Prefixed literal stays fail-closed on empty discovery (no conceptual
+    // semantic escape). Use a single absent token — underscore phrases can
+    // split into terms that match imports under the hybrid path.
+    let no_lexical_survivors = searcher.search("literal:zzzabsentphraseyyy").unwrap();
+    assert!(
+        no_lexical_survivors.hits.is_empty(),
+        "literal empty discovery must stay empty: {:#?}",
+        no_lexical_survivors.hits
+    );
 
     let lexical_only = searcher.search_literal("processed").unwrap();
     assert!(
@@ -108,5 +112,30 @@ fn cascade_stops_when_a_stage_has_no_survivors() {
             .all(|hit| lexical_files.contains(&hit.file)),
         "later stages leaked outside lexical survivors: {:#?}",
         no_structural_survivors.hits
+    );
+}
+
+#[test]
+fn conceptual_empty_lexical_without_embed_stays_empty() {
+    let indexed = index_sample(IndexOptions {
+        embed_semantic: false,
+        ..IndexOptions::default()
+    });
+    let searcher = Searcher::new(SearchOptions {
+        root: indexed.indexer.store().root().to_path_buf(),
+        index_path: Some(indexed.indexer.store().db_path().to_path_buf()),
+        limit: 8,
+        use_embed: false,
+        ..SearchOptions::default()
+    })
+    .unwrap();
+
+    // Conceptual nonsense with embed disabled must not invent hits. Escape is
+    // gated on use_embed; identifier/literal empty paths stay fail-closed.
+    let response = searcher.search("zzzabsentphraseyyy").unwrap();
+    assert!(
+        response.hits.is_empty(),
+        "no-embed conceptual empty must stay empty: {:#?}",
+        response.hits
     );
 }

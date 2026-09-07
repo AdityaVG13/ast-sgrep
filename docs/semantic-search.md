@@ -31,6 +31,9 @@ Before embedding, chunks are expanded with **code-domain concept groups**, synon
 | Refresh / renewal | refresh, renew, rotate, update |
 | Validation / sanitization | validate, sanitize, check, verify |
 | Persistence / storage | persist, store, save, cache |
+| Throttle / rate limit | throttle, rate_limit, quota, inbound |
+| Debounce / coalesce | debounce, coalesce, noisy, watch |
+| Retry / backoff | retry, backoff, transient, attempt |
 
 Expansion is applied in the offline **semantic local** embedder (char n-grams + concept tokens). In-process neural still indexes the enriched chunk text; the model supplies the similarity geometry.
 
@@ -59,7 +62,7 @@ Concurrent backend flags (CLI `--neural-embed --semantic-only`, LSP `neuralEmbed
 ### Semantic local (default, no API key)
 
 - Vectors are stored as length-`SEMANTIC_DIM` (**256**) `f32` arrays
-- **Honesty note:** feature signs come from BLAKE3 XOF (`hashed-256-xof-cg3`). The historical period-32 `digest[i % 32]` tiling is gone. This is still a hashed embedder, not a neural model: it does not beat Semgrep’s hand-authored patterns on conceptual MRR, and must not be cited as if it did.
+- **Honesty note:** feature signs come from BLAKE3 XOF (`hashed-256-xof-cg5`). The historical period-32 `digest[i % 32]` tiling is gone. `-cg5` adds throttle/debounce/retry concept groups on top of cg4. This is still a hashed embedder, not a neural model: it does not beat Semgrep’s hand-authored patterns on conceptual MRR, and must not be cited as if it did. Reindex after upgrading past cg4 (`asgrep reindex`).
 - Char n-gram features + concept expansion
 - Deterministic, offline, fast
 - Regression-tested: zero token-overlap queries must rank the correct symbol on the fixture suite (not a statistical guarantee on arbitrary corpora)

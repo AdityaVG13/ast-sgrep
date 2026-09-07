@@ -1,0 +1,42 @@
+{
+  "corpus": "invent-path-conceptual",
+  "notes": "Zero-overlap / paraphrase queries for the offline hashed invent-path (concept groups + cascade). Targets omit query prose. Noise README restates the queries so code-over-docs ranking is exercised.",
+  "queries": [
+    {
+      "name": "credential-renewal",
+      "query": "credential renewal",
+      "k": 5,
+      "relevant": [{ "file": "auth.rs", "symbol": "auth_refresh" }]
+    },
+    {
+      "name": "sanitize-input",
+      "query": "sanitize user input",
+      "k": 5,
+      "relevant": [{ "file": "validate.rs", "symbol": "validate_input" }]
+    },
+    {
+      "name": "durable-session-write",
+      "query": "durable session write",
+      "k": 5,
+      "relevant": [{ "file": "persist.rs", "symbol": "persist_session" }]
+    },
+    {
+      "name": "throttle-inbound",
+      "query": "throttle inbound clients",
+      "k": 5,
+      "relevant": [{ "file": "throttle.rs", "symbol": "rate_limit_client" }]
+    },
+    {
+      "name": "debounce-noisy",
+      "query": "debounce noisy updates",
+      "k": 5,
+      "relevant": [{ "file": "debounce.rs", "symbol": "coalesce_watch_events" }]
+    },
+    {
+      "name": "retry-transient",
+      "query": "retry after transient failure",
+      "k": 5,
+      "relevant": [{ "file": "retry.rs", "symbol": "backoff_attempt" }]
+    }
+  ]
+}

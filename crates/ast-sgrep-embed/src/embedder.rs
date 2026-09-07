@@ -47,9 +47,9 @@ impl Default for HashedEmbedder {
         Self {
             inner: SemanticLocalEmbedding,
             // `-xof` marks full-rank feature hashing (not period-32 blake3 tiling).
-            // `-cg3` is the concept-group vocabulary (eviction/redaction/ranking/
-            // follow-up/query-embed cache).
-            model_id: format!("hashed-{SEMANTIC_DIM}-xof-cg3"),
+            // `-cg5` adds throttle/debounce/retry invent-path groups on top of cg4
+            // (eviction/redaction/ranking/follow-up/cache/conjunction).
+            model_id: format!("hashed-{SEMANTIC_DIM}-xof-cg5"),
         }
     }
 }

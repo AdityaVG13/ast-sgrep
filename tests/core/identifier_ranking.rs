@@ -1,6 +1,5 @@
 //! Exact identifiers rank the definition; conceptual queries prefer code over docs.
 use ast_sgrep_core::query::ParsedQuery;
-use ast_sgrep_core::search::HitKind;
 use ast_sgrep_core::{IndexOptions, SearchOptions, Searcher};
 use std::fs;
 use tempfile::TempDir;
@@ -50,6 +49,33 @@ fn main() {
     );
     write_src(
         temp.path(),
+        "src/throttle.rs",
+        r#"
+pub fn rate_limit_client(client_id: &str) -> bool {
+    !client_id.is_empty()
+}
+"#,
+    );
+    write_src(
+        temp.path(),
+        "src/debounce.rs",
+        r#"
+pub fn coalesce_watch_events(pending: usize) -> bool {
+    pending > 0
+}
+"#,
+    );
+    write_src(
+        temp.path(),
+        "src/retry.rs",
+        r#"
+pub fn backoff_attempt(attempt: u32) -> u64 {
+    1u64 << attempt.min(16)
+}
+"#,
+    );
+    write_src(
+        temp.path(),
         "README.md",
         r#"
 Query: "credential renewal"
@@ -61,6 +87,42 @@ Query: "credential renewal"
         "CHANGELOG.md",
         "hybrid search that understands intent
 ",
+    );
+    write_src(
+        temp.path(),
+        "src/search/conjunction.rs",
+        r#"
+//! Two-channel conjunction: intersect two prefixed channels in one query.
+pub fn combine(left: &str, right: &str) -> bool {
+    !left.is_empty() && !right.is_empty()
+}
+"#,
+    );
+    write_src(
+        temp.path(),
+        "src/fusion.rs",
+        r#"
+pub fn channel_sensitivity() {}
+pub fn learn_fusion_weights() {}
+pub struct FusionChannel;
+"#,
+    );
+    write_src(
+        temp.path(),
+        "src/eval.rs",
+        r#"
+pub fn print_single() {}
+pub fn single_json() {}
+pub fn run_single() {}
+"#,
+    );
+    write_src(
+        temp.path(),
+        "src/search/field_weight.rs",
+        r#"
+pub fn combine_field_scores() {}
+pub fn field_weights() {}
+"#,
     );
     write_src(
         temp.path(),
@@ -105,186 +167,271 @@ fn identifier_spelling_keeps_user_case() {
     assert_eq!(defs.identifier_spelling(), Some("Searcher"));
 }
 
+fn autopsy(hits: &[ast_sgrep_core::SearchHit]) -> String {
+    if hits.is_empty() {
+        return "    <no hits — the engine returned nothing>".into();
+    }
+    hits.iter()
+        .enumerate()
+        .map(|(i, h)| {
+            format!(
+                "    #{:<2} score={:.4} kind={:?} symbol={:?} file={}",
+                i + 1,
+                h.score,
+                h.kind,
+                h.symbol,
+                h.file
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn require_first(
+    query: &str,
+    hits: &[ast_sgrep_core::SearchHit],
+    file_suffix: &str,
+    symbol: &str,
+    contract: &str,
+) {
+    let board = autopsy(hits);
+    let Some(first) = hits.first() else {
+        panic!(
+            "\n\n===== DEAD PROGRAM: ZERO HITS =====\n\
+             Query: {query:?}\n\
+             Contract: {contract}\n\
+             Required #1: {symbol} in *{file_suffix}\n\
+             The engine produced an empty list. This is not a ranking miss; \
+             search did not run as a program.\n\
+             ===== END AUTOPSY =====\n"
+        );
+    };
+    let file_ok = first.file.replace('\\', "/").ends_with(file_suffix);
+    let symbol_ok = first.symbol.as_deref() == Some(symbol);
+    if file_ok && symbol_ok {
+        return;
+    }
+    panic!(
+        "\n\n===== THIS IS NOT A SEARCH ENGINE =====\n\
+         Query: {query:?}\n\
+         Contract: {contract}\n\
+         Required #1: {symbol} in *{file_suffix}\n\
+         Actual   #1: {:?} {} {:?}\n\
+         If this ranking looks 'close enough', it is not. First is first.\n\n\
+         FULL SCOREBOARD:\n{board}\n\
+         ===== END AUTOPSY =====\n",
+        first.kind, first.file, first.symbol
+    );
+}
+
 #[test]
 fn searcher_query_ranks_the_type_not_helpers() {
     let (_temp, searcher) = indexed_corpus();
-    let response = searcher.search("Searcher").expect("search");
-    let rank = rank_of(&response.hits, |hit| {
-        hit.kind == HitKind::Def && hit.symbol.as_deref() == Some("Searcher")
-    });
-    assert!(
-        rank.is_some_and(|r| r <= 5),
-        "struct Searcher should be in the top 5, got rank {rank:?} hits {:?}",
-        response
-            .hits
-            .iter()
-            .take(8)
-            .map(|h| format!("{:?} {:?}", h.kind, h.symbol))
-            .collect::<Vec<_>>()
+    let query = "Searcher";
+    let response = searcher.search(query).expect("search");
+    require_first(
+        query,
+        &response.hits,
+        "search.rs",
+        "Searcher",
+        "typed identifier Searcher is the type, not bench_searcher/open_searcher/searcher helpers. Rank 2 is a dead program.",
     );
-    assert!(
-        response.query_expansions.is_empty(),
-        "identifier queries must not advertise co-occurrence expansion: {:?}",
-        response.query_expansions
-    );
+    if !response.query_expansions.is_empty() {
+        panic!(
+            "\n\n===== DEAD PROGRAM: IDENTIFIER QUERY EXPANDED =====\n\
+             Query: {query:?}\n\
+             Expansions: {:?}\n\
+             FULL SCOREBOARD:\n{}\n\
+             ===== END AUTOPSY =====\n",
+            response.query_expansions,
+            autopsy(&response.hits)
+        );
+    }
 }
 
 #[test]
 fn defs_searcher_ranks_exact_case_first() {
     let (_temp, searcher) = indexed_corpus();
-    let response = searcher.search("defs:Searcher").expect("defs");
-    assert_eq!(
-        response.hits.is_empty(),
-        false,
-        "defs:Searcher must return hits"
-    );
-    assert_eq!(
-        response.hits[0].symbol.as_deref(),
-        Some("Searcher"),
-        "exact-case type must beat lowercase searcher helpers, hits {:?}",
-        response
-            .hits
-            .iter()
-            .map(|h| h.symbol.clone())
-            .collect::<Vec<_>>()
+    let query = "defs:Searcher";
+    let response = searcher.search(query).expect("defs");
+    require_first(
+        query,
+        &response.hits,
+        "search.rs",
+        "Searcher",
+        "defs:Searcher must be the type definition first. Lowercase searcher helpers at #1 means the program does not understand case.",
     );
 }
 
 #[test]
 fn credential_renewal_ranks_code_not_readme() {
     let (_temp, searcher) = indexed_corpus();
-    let response = searcher.search("credential renewal").expect("search");
-    let code_rank = rank_of(&response.hits, |hit| {
-        hit.symbol.as_deref() == Some("auth_refresh")
-            && matches!(hit.kind, HitKind::Def | HitKind::Embed | HitKind::Pattern)
-    });
-    let readme_first = response
-        .hits
-        .first()
-        .is_some_and(|hit| hit.file.ends_with("README.md"));
-    assert_eq!(
-        readme_first,
-        false,
-        "README must not eat the credential-renewal demo, hits {:?}",
-        response
-            .hits
-            .iter()
-            .take(8)
-            .map(|h| format!("{:?} {} {:?}", h.kind, h.file, h.symbol))
-            .collect::<Vec<_>>()
-    );
-    assert!(
-        code_rank.is_some_and(|r| r <= 3),
-        "auth_refresh should be in the top 3, got {code_rank:?} hits {:?}",
-        response
-            .hits
-            .iter()
-            .take(8)
-            .map(|h| format!("{:?} {} {:?}", h.kind, h.file, h.symbol))
-            .collect::<Vec<_>>()
-    );
-    let first_is_main = response.hits.first().is_some_and(|hit| {
-        hit.caller.as_deref() == Some("main") || hit.symbol.as_deref() == Some("main")
-    });
-    assert_eq!(
-        first_is_main,
-        false,
-        "entrypoint callers must not outrank auth_refresh, hits {:?}",
-        response
-            .hits
-            .iter()
-            .take(8)
-            .map(|h| format!(
-                "{:?} {} {:?} caller={:?}",
-                h.kind, h.file, h.symbol, h.caller
-            ))
-            .collect::<Vec<_>>()
+    let query = "credential renewal";
+    let response = searcher.search(query).expect("search");
+    require_first(
+        query,
+        &response.hits,
+        "auth.rs",
+        "auth_refresh",
+        "conceptual NL must rank auth_refresh first. README, changelog, or main at #1 means this is not a program.",
     );
 }
 
 #[test]
 fn auth_refresh_identifier_ranks_the_definition() {
     let (_temp, searcher) = indexed_corpus();
-    let response = searcher.search("auth_refresh").expect("search");
-    assert_eq!(
-        response.hits.is_empty(),
-        false,
-        "auth_refresh must return hits"
-    );
-    assert_eq!(
-        response.hits[0].symbol.as_deref(),
-        Some("auth_refresh"),
-        "exact identifier must beat substring refresh helpers, hits {:?}",
-        response
-            .hits
-            .iter()
-            .take(8)
-            .map(|h| format!("{:?} {} {:?}", h.kind, h.file, h.symbol))
-            .collect::<Vec<_>>()
+    let query = "auth_refresh";
+    let response = searcher.search(query).expect("search");
+    require_first(
+        query,
+        &response.hits,
+        "auth.rs",
+        "auth_refresh",
+        "exact identifier must be the definition first. A substring helper at #1 is a dead program.",
     );
 }
 
 #[test]
 fn hybrid_nl_ranks_implementation_above_tests() {
     let (_temp, searcher) = indexed_corpus();
-    let response = searcher
-        .search("how does hybrid search work")
-        .expect("search");
-    let preview = response
-        .hits
-        .iter()
-        .take(8)
-        .map(|h| format!("{:?} {} {:?}", h.kind, h.file, h.symbol))
-        .collect::<Vec<_>>();
-    assert_eq!(
-        response.hits.is_empty(),
-        false,
-        "conceptual NL must return hits"
+    let query = "how does hybrid search work";
+    let response = searcher.search(query).expect("search");
+    require_first(
+        query,
+        &response.hits,
+        "search.rs",
+        "search_hybrid",
+        "conceptual NL must rank the hybrid implementation first, not a tests/ name-dump",
     );
-    let first_is_test = response.hits[0].file.replace('\\', "/").split('/').any(|seg| {
-        seg.eq_ignore_ascii_case("tests") || seg.eq_ignore_ascii_case("test")
-    });
-    assert_eq!(
-        first_is_test,
-        false,
-        "conceptual NL must not lead with tests/, hits {preview:?}"
-    );
-    let impl_rank = rank_of(&response.hits, |hit| {
-        hit.file.ends_with("search.rs") && hit.symbol.as_deref() == Some("search_hybrid")
-    });
     let test_rank = rank_of(&response.hits, |hit| {
-        hit.file.replace('\\', "/").split('/').any(|seg| {
-            seg.eq_ignore_ascii_case("tests") || seg.eq_ignore_ascii_case("test")
-        })
+        hit.file
+            .replace('\\', "/")
+            .split('/')
+            .any(|seg| seg.eq_ignore_ascii_case("tests") || seg.eq_ignore_ascii_case("test"))
     });
-    assert!(
-        impl_rank.is_some_and(|r| r <= 8),
-        "search_hybrid should be in the top 8, got {impl_rank:?} hits {preview:?}"
-    );
     if let Some(test_rank) = test_rank {
-        assert!(
-            impl_rank.expect("search_hybrid") < test_rank,
-            "search_hybrid (rank {:?}) must outrank tests/ (rank {test_rank}), hits {preview:?}",
-            impl_rank
-        );
+        if test_rank == 1 {
+            panic!(
+                "\n\n===== DEAD PROGRAM: TEST FILE IS #1 =====\n\
+                 Query: {query:?}\n\
+                 FULL SCOREBOARD:\n{}\n\
+                 ===== END AUTOPSY =====\n",
+                autopsy(&response.hits)
+            );
+        }
     }
 }
 
 #[test]
 fn defs_query_still_finds_test_function() {
     let (_temp, searcher) = indexed_corpus();
-    let response = searcher
-        .search("defs:hybrid_query_cascades_lexical_files_into_structural_and_semantic_stages")
-        .expect("defs");
-    assert_eq!(
-        response.hits[0].symbol.as_deref(),
-        Some("hybrid_query_cascades_lexical_files_into_structural_and_semantic_stages"),
-        "identifier/defs queries must still rank the test definition first, hits {:?}",
-        response
-            .hits
-            .iter()
-            .take(8)
-            .map(|h| format!("{:?} {} {:?}", h.kind, h.file, h.symbol))
-            .collect::<Vec<_>>()
+    let query = "defs:hybrid_query_cascades_lexical_files_into_structural_and_semantic_stages";
+    let response = searcher.search(query).expect("defs");
+    require_first(
+        query,
+        &response.hits,
+        "cascade_planner.rs",
+        "hybrid_query_cascades_lexical_files_into_structural_and_semantic_stages",
+        "identifier/defs queries must still rank the test definition first. The conceptual tests/ clamp must not fire here.",
+    );
+}
+
+#[test]
+fn combine_channels_ranks_conjunction_combine_first() {
+    let (_temp, searcher) = indexed_corpus();
+    let query = "combine two search channels in a single query";
+    let response = searcher.search(query).expect("search");
+    require_first(
+        query,
+        &response.hits,
+        "conjunction.rs",
+        "combine",
+        "two-channel AND lives in conjunction.rs::combine. fusion.rs, eval.rs, and combine_field_scores at #1 means this is not a program.",
+    );
+    let fusion_rank = rank_of(&response.hits, |hit| {
+        hit.file.replace('\\', "/").ends_with("fusion.rs")
+    });
+    let eval_rank = rank_of(&response.hits, |hit| {
+        hit.file.replace('\\', "/").ends_with("eval.rs")
+    });
+    let field_rank = rank_of(&response.hits, |hit| {
+        hit.file.replace('\\', "/").ends_with("field_weight.rs")
+            || hit.symbol.as_deref() == Some("combine_field_scores")
+    });
+    if fusion_rank == Some(1) || eval_rank == Some(1) || field_rank == Some(1) {
+        panic!(
+            "\n\n===== DEAD PROGRAM: WRONG PRODUCT SURFACE IS #1 =====\n\
+             Query: {query:?}\n\
+             fusion.rs rank={fusion_rank:?} eval.rs rank={eval_rank:?} field_weight.rs rank={field_rank:?}\n\
+             FULL SCOREBOARD:\n{}\n\
+             ===== END AUTOPSY =====\n",
+            autopsy(&response.hits)
+        );
+    }
+}
+
+#[test]
+fn reciprocal_rank_fusion_still_ranks_fusion_module() {
+    let (_temp, searcher) = indexed_corpus();
+    let query = "reciprocal rank fusion across evidence channels";
+    let response = searcher.search(query).expect("search");
+    let board = autopsy(&response.hits);
+    let Some(first) = response.hits.first() else {
+        panic!(
+            "\n\n===== DEAD PROGRAM: ZERO HITS =====\nQuery: {query:?}\n===== END AUTOPSY =====\n"
+        );
+    };
+    let file = first.file.replace('\\', "/");
+    if !file.ends_with("fusion.rs") {
+        panic!(
+            "\n\n===== THIS IS NOT A SEARCH ENGINE =====\n\
+             Query: {query:?}\n\
+             Contract: RRF ranks fusion.rs first. Conjunction expansion must not steal this query.\n\
+             Actual #1: {:?} {} {:?}\n\nFULL SCOREBOARD:\n{board}\n\
+             ===== END AUTOPSY =====\n",
+            first.kind, first.file, first.symbol
+        );
+    }
+}
+
+#[test]
+fn throttle_inbound_ranks_rate_limit_client() {
+    let (_temp, searcher) = indexed_corpus();
+    let query = "throttle inbound clients";
+    let response = searcher.search(query).expect("search");
+    require_first(
+        query,
+        &response.hits,
+        "throttle.rs",
+        "rate_limit_client",
+        "cg5 invent-path: throttle paraphrase must rank rate_limit_client first.",
+    );
+}
+
+#[test]
+fn debounce_noisy_ranks_coalesce_watch_events() {
+    let (_temp, searcher) = indexed_corpus();
+    let query = "debounce noisy updates";
+    let response = searcher.search(query).expect("search");
+    require_first(
+        query,
+        &response.hits,
+        "debounce.rs",
+        "coalesce_watch_events",
+        "cg5 invent-path: debounce paraphrase must rank coalesce_watch_events first.",
+    );
+}
+
+#[test]
+fn retry_transient_ranks_backoff_attempt() {
+    let (_temp, searcher) = indexed_corpus();
+    let query = "retry after transient failure";
+    let response = searcher.search(query).expect("search");
+    require_first(
+        query,
+        &response.hits,
+        "retry.rs",
+        "backoff_attempt",
+        "cg5 invent-path: retry paraphrase must rank backoff_attempt first.",
     );
 }

@@ -44,51 +44,28 @@ const DO_NOT_EXPAND: &[&str] = &[
 
 /// Split an identifier into lowercase subtokens: `refresh_token` and
 /// `refreshToken` both yield ["refresh", "token"].
+///
+/// Uses the shared invent-path splitter (`ast_sgrep_embed::split_ident`) so
+/// PPMI observations and hashed features agree on camelCase / acronym edges.
 pub fn subtokens(identifier: &str) -> Vec<String> {
-    fn finish(
-        out: &mut Vec<String>,
-        current: &mut String,
-        current_chars: &mut usize,
-        overflowed: &mut bool,
-    ) {
-        if !*overflowed
-            && *current_chars >= 3
-            && !STOP_TERMS.contains(&current.as_str())
-            && out.len() < MAX_PROSE_TERMS
-        {
-            out.push(std::mem::take(current));
-        } else {
-            current.clear();
-        }
-        *current_chars = 0;
-        *overflowed = false;
-    }
-
     let mut out = Vec::new();
-    let mut current = String::new();
-    let mut current_chars = 0usize;
-    let mut overflowed = false;
-    let mut previous_lower = false;
-    for ch in identifier.chars() {
-        if ch == '_' || ch == '-' || ch == ':' || ch == '.' || ch.is_whitespace() {
-            finish(&mut out, &mut current, &mut current_chars, &mut overflowed);
-            previous_lower = false;
+    for segment in identifier.split(|c: char| {
+        c == ':' || c == '.' || c.is_whitespace()
+    }) {
+        if segment.is_empty() {
             continue;
         }
-        if ch.is_uppercase() && previous_lower && !current.is_empty() {
-            finish(&mut out, &mut current, &mut current_chars, &mut overflowed);
-        }
-        previous_lower = ch.is_lowercase() || ch.is_numeric();
-        for lowercase in ch.to_lowercase() {
-            if current_chars < MAX_TERM_CHARS {
-                current.push(lowercase);
-            } else {
-                overflowed = true;
+        for part in ast_sgrep_embed::split_ident(segment) {
+            if part.chars().count() >= 3
+                && part.chars().count() <= MAX_TERM_CHARS
+                && !STOP_TERMS.contains(&part.as_str())
+                && out.len() < MAX_PROSE_TERMS
+                && !out.contains(&part)
+            {
+                out.push(part);
             }
-            current_chars = current_chars.saturating_add(1);
         }
     }
-    finish(&mut out, &mut current, &mut current_chars, &mut overflowed);
     out
 }
 

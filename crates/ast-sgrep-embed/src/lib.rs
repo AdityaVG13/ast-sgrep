@@ -23,7 +23,9 @@ pub use neural::{
 };
 #[cfg(feature = "rerank")]
 pub use rerank::{rerank, RerankScore};
-pub use semantic::{expand_concepts, tokenize, SemanticLocalEmbedding, SEMANTIC_DIM};
+pub use semantic::{
+    expand_concepts, split_ident, tokenize, SemanticLocalEmbedding, SEMANTIC_DIM,
+};
 pub trait EmbeddingProvider: Send + Sync {
     fn embed_text(&self, text: &str) -> Vec<f32>;
     fn similarity(&self, a: &[f32], b: &[f32]) -> f32;

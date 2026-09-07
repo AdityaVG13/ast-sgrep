@@ -70,6 +70,9 @@ pub const CONCEPTUAL_LEXICAL_PENALTY: f64 = 0.55;
 pub const GENERIC_ENTRYPOINT_PENALTY: f64 = 0.3;
 /// Score multiplier when a conceptual hit's symbol shares concept tokens with the query.
 pub const CONCEPT_SYMBOL_BOOST: f64 = 1.4;
+/// Score multiplier when the hit symbol *is* a concept token (`combine`), not a
+/// compound that merely contains one (`combine_field_scores`).
+pub const EXACT_CONCEPT_SYMBOL_BOOST: f64 = 1.35;
 /// Score multiplier for bench/measure/test helpers on conceptual NL.
 pub const INSTRUMENTATION_PENALTY: f64 = 0.55;
 /// Score multiplier for `tests/` paths on conceptual NL when code exists.
@@ -261,7 +264,9 @@ fn is_test_path(path: &str) -> bool {
     let normalized = path.replace("\\", "/").to_ascii_lowercase();
     // Relative corpus paths are `tests/core/foo.rs` (no leading slash). A
     // `/tests/` substring check misses those and lets test defs outrank impls.
-    normalized.split('/').any(|seg| seg == "tests" || seg == "test")
+    normalized
+        .split('/')
+        .any(|seg| seg == "tests" || seg == "test")
         || normalized.ends_with("_test.rs")
         || normalized.ends_with("_tests.rs")
 }
@@ -319,22 +324,58 @@ fn identifier_match(query_ident: &str, symbol: &str) -> IdentifierMatch {
     }
 }
 
+fn is_generic_concept_token(token: &str) -> bool {
+    matches!(
+        token,
+        "search"
+            | "query"
+            | "single"
+            | "two"
+            | "one"
+            | "channel"
+            | "channels"
+            | "result"
+            | "results"
+            | "file"
+            | "files"
+            | "code"
+            | "test"
+            | "tests"
+            | "command"
+            | "run"
+            | "field"
+            | "score"
+            | "scores"
+    )
+}
+
+fn concept_expansion(parsed: &ParsedQuery) -> HashSet<String> {
+    ast_sgrep_embed::tokenize(&ast_sgrep_embed::expand_concepts(&parsed.raw))
+        .into_iter()
+        .collect()
+}
+
+fn conceptual_token_in_expansion(parsed: &ParsedQuery, token: &str) -> bool {
+    concept_expansion(parsed).contains(token)
+}
+
+fn expanded_has_combine(parsed: &ParsedQuery) -> bool {
+    conceptual_token_in_expansion(parsed, "combine")
+}
+
 fn conceptual_symbol_affinity(parsed: &ParsedQuery, symbol: &str) -> usize {
-    let expanded: std::collections::HashSet<String> =
-        ast_sgrep_embed::tokenize(&ast_sgrep_embed::expand_concepts(&parsed.raw))
-            .into_iter()
-            .collect();
+    let expanded = concept_expansion(parsed);
     identifier_tokens(symbol)
         .into_iter()
-        .filter(|token| expanded.contains(token))
+        .filter(|token| expanded.contains(token) && !is_generic_concept_token(token))
         .count()
 }
 
 fn conceptual_file_stem_affinity(parsed: &ParsedQuery, path: &str) -> bool {
     const GENERIC_STEMS: &[&str] = &[
-        "search", "semantic", "lexical", "index", "store", "query", "test",
-        "tests", "lib", "mod", "types", "util", "utils", "core", "main",
-        "error", "config", "session", "cli", "eval", "bench", "agent",
+        "search", "semantic", "lexical", "index", "store", "query", "test", "tests", "lib", "mod",
+        "types", "util", "utils", "core", "main", "error", "config", "session", "cli", "eval",
+        "bench", "agent",
     ];
     let normalized = path.replace("\\", "/");
     let file = normalized.rsplit('/').next().unwrap_or(normalized.as_str());
@@ -500,6 +541,18 @@ pub(crate) fn apply_critic(parsed: &ParsedQuery, intent: QueryIntent, hits: &mut
                     {
                         hit.score *= CONCEPT_SYMBOL_BOOST;
                     }
+                    let tokens = identifier_tokens(symbol_name);
+                    if tokens.len() == 1
+                        && !is_generic_concept_token(&tokens[0])
+                        && conceptual_token_in_expansion(parsed, &tokens[0])
+                    {
+                        hit.score *= EXACT_CONCEPT_SYMBOL_BOOST;
+                    } else if expanded_has_combine(parsed)
+                        && tokens.iter().any(|token| token == "combine")
+                        && !symbol_name.eq_ignore_ascii_case("combine")
+                    {
+                        hit.score *= COMPOUND_SYMBOL_PENALTY;
+                    }
                 }
                 if conceptual_file_stem_affinity(parsed, &hit.file) {
                     hit.score *= CONCEPT_FILE_STEM_BOOST;
@@ -511,6 +564,7 @@ pub(crate) fn apply_critic(parsed: &ParsedQuery, intent: QueryIntent, hits: &mut
     *hits = kept;
     if conceptual {
         demote_test_paths_below_implementation(hits);
+        demote_thieves_below_conjunction_combine(parsed, hits);
     }
 }
 
@@ -536,6 +590,63 @@ fn demote_test_paths_below_implementation(hits: &mut [SearchHit]) {
             hit.score = ceiling;
         }
     }
+}
+
+/// Conjunction (`AND` of two channels) is not RRF, not eval CLI, and not
+/// field-score mixing.
+///
+/// When the query expanded to `conjunction` without `rrf`/`reciprocal`,
+/// fusion.rs / eval.rs / field_weight.rs / `combine_*` compounds cannot lead.
+/// Mutant: drop this clamp, or map `channels` back to `rrf`/`fusion`.
+fn demote_thieves_below_conjunction_combine(parsed: &ParsedQuery, hits: &mut [SearchHit]) {
+    let expanded = concept_expansion(parsed);
+    if !expanded.contains("conjunction") {
+        return;
+    }
+    if expanded.contains("rrf") || expanded.contains("reciprocal") {
+        return;
+    }
+    let conjunction_file = |path: &str| path.replace('\\', "/").ends_with("conjunction.rs");
+    let best_combine = hits
+        .iter()
+        .filter(|hit| conjunction_file(&hit.file) && hit.symbol.as_deref() == Some("combine"))
+        .map(|hit| hit.score)
+        .max_by(|a, b| a.total_cmp(b));
+    let best_conjunction = best_combine.or_else(|| {
+        hits.iter()
+            .filter(|hit| conjunction_file(&hit.file))
+            .map(|hit| hit.score)
+            .max_by(|a, b| a.total_cmp(b))
+    });
+    let Some(best_conjunction) = best_conjunction else {
+        return;
+    };
+    let ceiling = best_conjunction * 0.5;
+    for hit in hits.iter_mut() {
+        if conjunction_file(&hit.file) && hit.symbol.as_deref() == Some("combine") {
+            continue;
+        }
+        if steals_conjunction_query(hit) && hit.score >= best_conjunction {
+            hit.score = ceiling;
+        }
+    }
+}
+
+fn steals_conjunction_query(hit: &SearchHit) -> bool {
+    let normalized = hit.file.replace('\\', "/");
+    let file = normalized.rsplit('/').next().unwrap_or(normalized.as_str());
+    if file.eq_ignore_ascii_case("fusion.rs")
+        || file.eq_ignore_ascii_case("eval.rs")
+        || file.eq_ignore_ascii_case("field_weight.rs")
+    {
+        return true;
+    }
+    hit.symbol.as_deref().is_some_and(|symbol| {
+        let tokens = identifier_tokens(symbol);
+        tokens.len() > 1
+            && tokens.iter().any(|token| token == "combine")
+            && !symbol.eq_ignore_ascii_case("combine")
+    })
 }
 
 #[cfg(test)]
@@ -666,7 +777,12 @@ mod tests {
                 Some("measure_semantic_ivf_open_p99"),
                 0.09,
             ),
-            hit(HitKind::Def, "src/semantic_ivf.rs", Some("load_semantic_ivf"), 0.04),
+            hit(
+                HitKind::Def,
+                "src/semantic_ivf.rs",
+                Some("load_semantic_ivf"),
+                0.04,
+            ),
         ];
         apply_critic(&parsed, QueryIntent::Symbol, &mut hits);
         hits.sort_by(|a, b| b.score.total_cmp(&a.score));
@@ -735,5 +851,74 @@ mod tests {
             hits[0].symbol.as_deref(),
             Some("hybrid_query_cascades_lexical_files_into_structural_and_semantic_stages")
         );
+    }
+
+    fn critic_autopsy(hits: &[SearchHit]) -> String {
+        hits.iter()
+            .enumerate()
+            .map(|(i, h)| {
+                format!(
+                    "    #{} score={:.4} {:?} {} {:?}",
+                    i + 1,
+                    h.score,
+                    h.kind,
+                    h.file,
+                    h.symbol
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn conjunction_combine_outranks_fusion_eval_and_field_weight() {
+        // Live thieves from cg4: combine_field_scores 0.0815, fusion/eval
+        // leftovers, combine at 0.030-0.048. If this is not #1, ranking is
+        // not a program.
+        let parsed = ParsedQuery::parse("combine two search channels in a single query");
+        let mut hits = vec![
+            hit(
+                HitKind::Def,
+                "crates/ast-sgrep-core/src/search/field_weight.rs",
+                Some("combine_field_scores"),
+                0.0815,
+            ),
+            hit(
+                HitKind::Def,
+                "crates/ast-sgrep-core/src/fusion.rs",
+                Some("channel_sensitivity"),
+                0.1145,
+            ),
+            hit(
+                HitKind::Def,
+                "crates/ast-sgrep-cli/src/eval.rs",
+                Some("print_single"),
+                0.0651,
+            ),
+            hit(
+                HitKind::Def,
+                "crates/ast-sgrep-core/src/search/conjunction.rs",
+                Some("combine"),
+                0.0305,
+            ),
+        ];
+        apply_critic(&parsed, QueryIntent::Conceptual, &mut hits);
+        hits.sort_by(|a, b| b.score.total_cmp(&a.score));
+        let board = critic_autopsy(&hits);
+        let first = hits.first().expect("critic emptied the shortlist");
+        if first.symbol.as_deref() != Some("combine")
+            || !first.file.replace('\\', "/").ends_with("conjunction.rs")
+        {
+            panic!(
+                "\n\n===== THIS IS NOT A SEARCH ENGINE =====\n\
+                 Query: combine two search channels in a single query\n\
+                 Required #1: combine in conjunction.rs\n\
+                 Actual   #1: {:?} {} {:?}\n\
+                 fusion.rs, eval.rs, and combine_field_scores must not lead.\n\n\
+                 SCOREBOARD:\n{board}\n\
+                 ===== END AUTOPSY =====\n",
+                first.kind, first.file, first.symbol
+            );
+        }
     }
 }

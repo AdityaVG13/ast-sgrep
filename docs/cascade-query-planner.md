@@ -4,7 +4,7 @@ Unprefixed `Searcher::search` queries use one constraint cascade. Conceptual que
 
 1. **Literal/trigram prefilter.** Case-insensitive terms of **three or more characters** select at most 100 candidate files. One- and two-character tokens are ignored here: they cannot use the trigram index and would otherwise run a full-table `LIKE`/`GLOB` scan. For conceptual queries, repository-learned related terms and the offline concept groups (for example `credential` → `auth` / `token`) may widen this candidate-file work. Discovery stops at the first term that yields files. Large indexes use the trigram table; smaller indexes use bounded indexed-line matching. Returned lexical evidence and final lexical scoring still use the original query. Prefixed `literal:` / `word:` modes still search short needles.
 2. **Structural match.** Identifier and structural queries evaluate indexed AST signatures (`pattern_nodes`) plus defs, callers, and graph anchors inside the candidate files. Conceptual NL skips that whole structural stage (generic AST tokens such as `query` / `graph` crowded the shortlist; name-LIKE scans were millisecond-scale). It keeps lexical + embed evidence, then optional fan-out from semantic survivors.
-3. **Working-file set + semantic rerank.** When structural survivors exist, they become the working set. When the structural stage is **empty**, the cascade **continues** on the lexical survivors (ht1h.3 / INV-CASCADE-STRUCT-EMPTY): plain-content files stay findable and optional semantic ranking runs on those lexical files. Semantic retrieval cannot widen beyond that working set.
+3. **Working-file set + semantic rerank.** When structural survivors exist, they become the working set. When the structural stage is **empty**, the cascade **continues** on the lexical survivors (ht1h.3 / INV-CASCADE-STRUCT-EMPTY): plain-content files stay findable and optional semantic ranking runs on those lexical files. When discovery already found files, semantic cannot widen beyond that working set. When conceptual discovery finds **no** files and embed is on, hybrid takes the invent-path escape (unconstrained semantic + fan-out) instead of returning empty.
 
 For conceptual queries, the top semantic survivors provide at most four distinct parent symbols for deterministic expansion. Indexed caller, graph, and pattern channels each contribute at most 16 hits per symbol. The original natural-language prose is never interpreted as an AST pattern.
 
@@ -14,10 +14,12 @@ The final result gate receives lexical, structural, and semantic evidence from t
 
 | Stage empty | Hybrid behavior |
 |-------------|-----------------|
-| **Lexical** | Cascade stops — no hybrid hits. Semantic similarity is not an unconstrained repository-wide fallback. |
+| **Lexical** (identifier / literal intent) | Cascade stops — no hybrid hits. |
+| **Lexical** (conceptual intent, embed on) | **Invent-path escape:** run unconstrained semantic (same machinery as `asgrep semantic`), then conceptual fan-out. Still no neural download and no daemon. |
+| **Lexical** (conceptual intent, embed off) | Cascade stops — empty. |
 | **Structural** | Cascade **continues** on lexical survivors (+ optional embed on those files). |
 
-Use `asgrep semantic "<query>"` or `Searcher::search_semantic` when repository-wide semantic discovery is intended. Prefixed `literal:`, `regex:`, `pattern:`, `defs:`, `callers:`, and `imports:` modes continue to execute their dedicated retrieval path directly.
+When discovery already found files, semantic still cannot widen beyond the working-file set. The escape only fires when conceptual discovery is empty. Prefixed `literal:`, `regex:`, `pattern:`, `defs:`, `callers:`, and `imports:` modes continue to execute their dedicated retrieval path directly.
 
 > **Historical note:** Earlier drafts of this doc claimed empty structural stopped the cascade. That mismatched `search_hybrid` and `cascade_planner` tests (C1 / INV-CASCADE-STRUCT-EMPTY). Current text matches code.
 
@@ -49,4 +51,4 @@ entry is a safe executable `asgrep` command.
 - Semantic vector ranking receives only chunks from the working-file set (structural survivors, or lexical survivors when structural is empty).
 - Conceptual fan-out is bounded to four semantic symbols and 16 in-process results per deterministic channel and symbol.
 - Candidate order is deterministic because final ordering and deduplication remain centralized in `finish_response`.
-- Empty **lexical** short-circuits without running later work; empty **structural** does not.
+- Empty **lexical** short-circuits for identifier/literal intents; conceptual + embed uses the invent-path semantic escape. Empty **structural** continues on lexical survivors.

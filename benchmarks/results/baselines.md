@@ -90,6 +90,23 @@ ASGREP_BENCH_RATCHET=0 cargo run -q -p ast-sgrep-cli --bin asgrep -- \
   benchmarks/fixtures/native_semantic --ab no-repository-vocabulary
 ```
 
+## Invent-path conceptual gold (`invent_path`)
+
+**Status: `reproducible-in-tree` measurement spine.** Offline hashed concept
+groups (`hashed-256-xof-cg5`) — no neural download, no daemon. Six zero-overlap
+/ paraphrase queries over `benchmarks/fixtures/invent_path`. Record rows here
+after each invent-path change; do not quote empty placeholders as certified.
+
+```bash
+ASGREP_BENCH_RATCHET=0 cargo run -q -p ast-sgrep-cli --bin asgrep -- \
+  --json eval --gold benchmarks/gold/invent_path.json \
+  benchmarks/fixtures/invent_path
+```
+
+| fingerprint id | config | MRR | nDCG | Recall@1 | Recall@5 | notes |
+|----------------|--------|----:|-----:|---------:|---------:|-------|
+| `invent-path-cg5-8d74cfdd` | default hybrid, hashed-256-xof-cg5, repo vocab on | 1.000 | 1.000 | 1.000 | 1.000 | 6/6 rank-1 on invent_path gold; small purpose-built fixture, not a release certificate |
+
 ## 7d5x.4 A/B — multi-field rescoring vs concat vector (self @ d18725e)
 
 **Status: `reproducible-in-tree` (A/B delta rows, not canonical quality
