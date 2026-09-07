@@ -76,7 +76,7 @@ Verify: run ./target/release/asgrep index . then search for defs: of a symbol in
 | See why a hit ranked | A deterministic post-fusion **critic** boosts multi-channel agreement, penalizes identifier-fragment collisions, and writes `critic:` notes into agent JSON `why`. |
 | Drill without guessing prefixes | `follow_up_queries` / `suggested_next` are derived from the actual top hit (kind, symbol, missing evidence, margin). Settled hits get an empty list. |
 | Overlay SCIP facts | `asgrep index . --scip path/to/index.json` (JSON SCIP only). Missing or malformed input degrades; it never fails the index. Matching graph edges upgrade to `ScipExact`. |
-| Trace a directed call path | `asgrep call-path SOURCE SINK .` -- call graph only, not value flow, with resolution-tier evidence. |
+| Trace a directed call path | `asgrep call-path SOURCE SINK .` -- call graph only, not value flow, with resolution-tier evidence. Reports at most one shortest path (a deterministic function of the index: SCIP-exact evidence first, then file path, line, callee name); it is an edge sampler, not an enumerator -- use `callers:` / `callees:` search for full edge evidence. A hop is `precise` only when it resolves to a unique same-file definition (or compiler/import evidence), so same-named symbols in different languages never serialize as exact edges. |
 | Dry-run an indexed rewrite | `asgrep codemod --pattern 'legacy($ARG)' --rewrite 'modern($ARG)' --dry-run .` then omit `--dry-run` to apply transactionally. |
 | Keep Pi results on the model path | One-shot tools and Code Mode put bounded hits in `content`, not only display-only `details`. Native search runs off the Node event loop. |
 

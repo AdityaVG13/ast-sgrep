@@ -155,7 +155,7 @@ Machine-oriented catalog: `asgrep capabilities --json` (clap-derived; preferred 
 | `asgrep status [ROOT]` | Index statistics |
 | `asgrep semantic "QUERY" [ROOT]` | Semantic-only search |
 | `asgrep chain "QUERY" [ROOT]` | Relationship / neighborhood expansion |
-| `asgrep call-path SOURCE SINK [ROOT]` | Bounded directed call path with resolution evidence; not value flow |
+| `asgrep call-path SOURCE SINK [ROOT]` | Bounded directed call path with resolution evidence; not value flow. Reports at most one shortest path (deterministic tie-break: SCIP-exact first, then file path, line, callee); full edge evidence lives in `callers:` / `callees:` search. Cross-language same-name hops stay imprecise (`precise:false`) unless resolved to a same-file definition |
 | `asgrep codemod --pattern P --rewrite R [ROOT]` | Indexed native rewrite; `--dry-run` emits a JSON plan without writing |
 | `asgrep bench [ROOT]` | Search latency benchmark (`--query`, `--iterations`, `--suite`, `--fixture`, `--queries-file`, `--skip-index`) |
 | `asgrep watch [ROOT]` | Incremental reindex on save (`--debounce-ms`) |
