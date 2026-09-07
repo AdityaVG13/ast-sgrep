@@ -177,7 +177,7 @@ fn search_results_carry_structured_content_matching_the_declared_schema() {
     let listed = rpc(json!({"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}));
     for tool in listed["result"]["tools"].as_array().unwrap() {
         let name = tool["name"].as_str().unwrap();
-        if name.ends_with("_search") || name == "code_search" {
+        if name.ends_with("_search") || name == "code_search" || name == "search" {
             let schema = &tool["outputSchema"];
             assert_eq!(
                 schema["type"], "object",
@@ -222,6 +222,7 @@ fn tools_list_exposes_search_and_index_tools() {
     assert_eq!(
         names,
         vec![
+            "search",
             "keyword_search",
             "ast_search",
             "semantic_search",
@@ -253,11 +254,13 @@ fn hierarchical_searches_return_snippets_and_ids_without_auto_fusion() {
 
     // kxmc: compact envelope. Hits are positional tuples
     // [id, kind, signal, symbol, snippet]; `p` maps path id to project path.
-    for (name, query, expected_kind) in [
-        ("keyword_search", "target_symbol", "x"),
-        ("ast_search", "fn $NAME() { $$$BODY }", "p"),
-        ("semantic_search", "target symbol", "e"),
-        ("code_search", "target_symbol", "x"),
+    // Fused `search` may surface defs (`d`) ahead of plain lexical (`x`).
+    for (name, query, expected_kinds) in [
+        ("search", "target_symbol", &["d", "x", "e", "c", "a", "g"][..]),
+        ("keyword_search", "target_symbol", &["x"][..]),
+        ("ast_search", "fn $NAME() { $$$BODY }", &["p"][..]),
+        ("semantic_search", "target symbol", &["e"][..]),
+        ("code_search", "target_symbol", &["x"][..]),
     ] {
         let response = rpc_at(
             json!({"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":name,"arguments":{"query":query,"limit":8}}}),
@@ -271,7 +274,11 @@ fn hierarchical_searches_return_snippets_and_ids_without_auto_fusion() {
         for hit in hits {
             let tuple = hit.as_array().expect("hit is a positional tuple");
             assert_eq!(tuple.len(), 5, "{name}: {hit:#}");
-            assert_eq!(tuple[1], expected_kind, "{name}: {hit:#}");
+            let kind = tuple[1].as_str().unwrap_or("");
+            assert!(
+                expected_kinds.contains(&kind),
+                "{name}: kind {kind:?} not in {expected_kinds:?}: {hit:#}"
+            );
             assert!(tuple[2].is_string(), "{name}: signal");
             assert!(tuple[4].is_string(), "{name}: snippet");
             // Every id resolves to a real path through the `p` table.

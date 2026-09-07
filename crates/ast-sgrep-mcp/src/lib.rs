@@ -71,12 +71,33 @@ const ELIDED_SNIPPET: &str = "~";
 
 #[derive(Clone, Copy)]
 enum AgentSearchMode {
+    /// Fused hybrid (CLI `Searcher::search`) — default agent path.
+    Hybrid,
     Keyword,
     Ast,
     Semantic,
 }
 
-/// Wire JSON for keyword / ast / semantic search tools (`deny_unknown_fields`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum PreviewMode {
+    None,
+    #[default]
+    Short,
+    Full,
+}
+
+impl PreviewMode {
+    fn parse(raw: &str) -> anyhow::Result<Self> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "none" => Ok(Self::None),
+            "short" => Ok(Self::Short),
+            "full" => Ok(Self::Full),
+            other => anyhow::bail!("preview must be none|short|full (got {other})"),
+        }
+    }
+}
+
+/// Wire JSON for search tools (`deny_unknown_fields`).
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct AgentSearchWire {
@@ -89,6 +110,12 @@ struct AgentSearchWire {
     resend_seen: Option<bool>,
     #[serde(default)]
     budget_tokens: Option<u64>,
+    #[serde(default)]
+    file_filter: Option<String>,
+    #[serde(default)]
+    lang: Option<String>,
+    #[serde(default)]
+    preview: Option<String>,
 }
 
 /// Trusted agent-search args after MCP tools/call boundary parse.
@@ -98,6 +125,9 @@ struct AgentSearchArgs {
     limit: usize,
     resend_seen: bool,
     budget_tokens: Option<usize>,
+    file_filter: Option<String>,
+    lang: Option<String>,
+    preview: PreviewMode,
 }
 
 /// Wire JSON for `code_read`.
@@ -158,6 +188,8 @@ struct SearcherKey {
     use_embed: bool,
     use_neural_embed: bool,
     use_semantic_only: bool,
+    file_filter: Option<String>,
+    lang_filter: Option<String>,
 }
 
 #[derive(Default)]
@@ -223,7 +255,10 @@ impl McpServer {
             "root": {"type": "string", "description": "Project root (defaults to ASGREP_ROOT or cwd)"},
             "limit": {"type": "integer", "minimum": 1, "maximum": MAX_AGENT_LIMIT},
             "resend_seen": {"type": "boolean", "description": "Send snippets already returned this session instead of the ~ marker. Set true only if you do not keep earlier results."},
-            "budget_tokens": {"type": "integer", "minimum": 1, "maximum": MAX_BUDGET_TOKENS, "description": "Whole-response token budget. Each hit gains a trailing detail level (metadata|signature|block|full) and omitted source is marked with a gap marker."}
+            "budget_tokens": {"type": "integer", "minimum": 1, "maximum": MAX_BUDGET_TOKENS, "description": "Whole-response token budget. Each hit gains a trailing detail level (metadata|signature|block|full) and omitted source is marked with a gap marker."},
+            "file_filter": {"type": "string", "description": "Repository-relative glob restricting hits (e.g. src/**/*.rs)"},
+            "lang": {"type": "string", "description": "Language filter: stored id or extension (rs, ts, py, …)"},
+            "preview": {"type": "string", "enum": ["none", "short", "full"], "description": "Snippet size: none (ids only), short (default compact), full (larger excerpts)"}
         });
         // r2lu: a declared outputSchema lets a client parse results without
         // reverse-engineering the compact envelope from prose.
@@ -275,6 +310,7 @@ impl McpServer {
         );
         let describe = |summary: &str| format!("{summary}{COMPACT_CONTRACT}");
         json!({"tools": [
+            search_tool("search", &describe("Fused hybrid search (lexical + structural + semantic, same as CLI asgrep). Prefer this for workspace-grounded questions when the wording or location is unknown."), search_properties.clone()),
             search_tool("keyword_search", &describe("Lexical-only search (FTS/trigram). Does not fuse AST or semantic channels."), search_properties.clone()),
             search_tool("ast_search", &describe("Native AST/pattern search (pattern: semantics). No external ast-grep process."), search_properties.clone()),
             search_tool("semantic_search", &describe("Embedding-only search. Requires a non-empty index with semantic chunks."), search_properties.clone()),
@@ -307,6 +343,10 @@ impl McpServer {
             anyhow::bail!(ast_sgrep_core::INDEX_CANCELLED);
         }
         match name {
+            "search" => {
+                let parsed = self.parse_agent_search(args)?;
+                self.tool_agent_search(parsed, AgentSearchMode::Hybrid)
+            }
             // keyword_search and deprecated code_search share Keyword mode (compat alias).
             "keyword_search" | "code_search" => {
                 let parsed = self.parse_agent_search(args)?;
@@ -393,12 +433,39 @@ impl McpServer {
                 MAX_BUDGET_TOKENS,
             )?),
         };
+        let file_filter = match wire.file_filter {
+            None => None,
+            Some(raw) => {
+                let trimmed = raw.trim();
+                anyhow::ensure!(!trimmed.is_empty(), "file_filter must be non-empty");
+                anyhow::ensure!(
+                    trimmed.chars().count() <= ast_sgrep_core::MAX_QUERY_CHARS,
+                    "file_filter is too long"
+                );
+                Some(trimmed.to_owned())
+            }
+        };
+        let lang = match wire.lang {
+            None => None,
+            Some(raw) => {
+                let trimmed = raw.trim();
+                anyhow::ensure!(!trimmed.is_empty(), "lang must be non-empty");
+                Some(trimmed.to_owned())
+            }
+        };
+        let preview = match wire.preview {
+            None => PreviewMode::Short,
+            Some(raw) => PreviewMode::parse(&raw)?,
+        };
         Ok(AgentSearchArgs {
             query: query.to_owned(),
             root: self.resolve_root(wire.root)?,
             limit,
             resend_seen: wire.resend_seen.unwrap_or(false),
             budget_tokens,
+            file_filter,
+            lang,
+            preview,
         })
     }
 
@@ -480,7 +547,13 @@ impl McpServer {
         Ok(canonical)
     }
 
-    fn searcher_key(&self, root: PathBuf, limit: usize) -> SearcherKey {
+    fn searcher_key(
+        &self,
+        root: PathBuf,
+        limit: usize,
+        file_filter: Option<String>,
+        lang_filter: Option<String>,
+    ) -> SearcherKey {
         SearcherKey {
             root,
             index_path: self.index_path.clone(),
@@ -488,10 +561,18 @@ impl McpServer {
             use_embed: self.use_embed,
             use_neural_embed: self.use_neural_embed,
             use_semantic_only: self.use_semantic_only,
+            file_filter,
+            lang_filter,
         }
     }
 
-    fn search_options(&self, root: PathBuf, limit: usize) -> SearchOptions {
+    fn search_options(
+        &self,
+        root: PathBuf,
+        limit: usize,
+        file_filter: Option<String>,
+        lang_filter: Option<String>,
+    ) -> SearchOptions {
         SearchOptions {
             root,
             index_path: self.index_path.clone(),
@@ -499,6 +580,8 @@ impl McpServer {
             use_embed: self.use_embed,
             use_neural_embed: self.use_neural_embed,
             use_semantic_only: self.use_semantic_only,
+            file_filter,
+            lang_filter,
             ..SearchOptions::default()
         }
     }
@@ -558,9 +641,20 @@ impl McpServer {
         }
     }
 
-    fn searcher_for(&self, root: PathBuf, limit: usize) -> anyhow::Result<(Searcher, u64)> {
+    fn searcher_for(
+        &self,
+        root: PathBuf,
+        limit: usize,
+        file_filter: Option<String>,
+        lang_filter: Option<String>,
+    ) -> anyhow::Result<(Searcher, u64)> {
         self.sync_writer_generation();
-        let key = self.searcher_key(root.clone(), limit);
+        let key = self.searcher_key(
+            root.clone(),
+            limit,
+            file_filter.clone(),
+            lang_filter.clone(),
+        );
         // Poison fails closed: invalidate and rebuild rather than reuse tainted state.
         let mut guard = Self::lock_or_recover(&self.searcher_cache, |cache| {
             cache.generation = cache.generation.wrapping_add(1);
@@ -571,7 +665,12 @@ impl McpServer {
             Some((cached_key, _)) => cached_key != &key,
         };
         if need_new {
-            let searcher = Searcher::new(self.search_options(root.clone(), limit))?;
+            let searcher = Searcher::new(self.search_options(
+                root.clone(),
+                limit,
+                file_filter,
+                lang_filter,
+            ))?;
             guard.writer_generation =
                 ast_sgrep_core::read_writer_generation(&root, self.index_path.as_deref());
             guard.entry = Some((key, searcher));
@@ -585,8 +684,16 @@ impl McpServer {
         Ok((searcher, generation))
     }
 
-    fn restore_searcher(&self, root: PathBuf, limit: usize, generation: u64, searcher: Searcher) {
-        let key = self.searcher_key(root, limit);
+    fn restore_searcher(
+        &self,
+        root: PathBuf,
+        limit: usize,
+        file_filter: Option<String>,
+        lang_filter: Option<String>,
+        generation: u64,
+        searcher: Searcher,
+    ) {
+        let key = self.searcher_key(root, limit, file_filter, lang_filter);
         let mut guard = Self::lock_or_recover(&self.searcher_cache, |cache| {
             cache.generation = cache.generation.wrapping_add(1);
             cache.entry = None;
@@ -607,8 +714,16 @@ impl McpServer {
             limit,
             resend_seen,
             budget_tokens,
+            file_filter,
+            lang,
+            preview,
         } = args;
-        let (searcher, generation) = match self.searcher_for(root.clone(), limit) {
+        let (searcher, generation) = match self.searcher_for(
+            root.clone(),
+            limit,
+            file_filter.clone(),
+            lang.clone(),
+        ) {
             Ok(pair) => pair,
             Err(error) if error.to_string().contains("index is empty") => {
                 let miss = to_compact_miss_json(&query, &self.diagnose_miss(&root, mode));
@@ -618,19 +733,39 @@ impl McpServer {
         };
         if matches!(mode, AgentSearchMode::Semantic) {
             if let Some(msg) = self
-                .search_options(root.clone(), limit)
+                .search_options(
+                    root.clone(),
+                    limit,
+                    file_filter.clone(),
+                    lang.clone(),
+                )
                 .unavailable_non_hashed_embed()
             {
-                self.restore_searcher(root, limit, generation, searcher);
+                self.restore_searcher(
+                    root,
+                    limit,
+                    file_filter,
+                    lang,
+                    generation,
+                    searcher,
+                );
                 anyhow::bail!(msg);
             }
         }
         let response = match mode {
+            AgentSearchMode::Hybrid => searcher.search(&query),
             AgentSearchMode::Keyword => searcher.search_lexical(&query),
             AgentSearchMode::Ast => searcher.search(&format!("pattern: {query}")),
             AgentSearchMode::Semantic => searcher.search_semantic(&query),
         };
-        self.restore_searcher(root.clone(), limit, generation, searcher);
+        self.restore_searcher(
+            root.clone(),
+            limit,
+            file_filter,
+            lang,
+            generation,
+            searcher,
+        );
         let response = response?;
         // 6a3i: a miss is the cheapest response we can send, and the one where
         // a vague answer costs the most in speculative agent retries.
@@ -638,26 +773,10 @@ impl McpServer {
             let miss = to_compact_miss_json(&query, &self.diagnose_miss(&root, mode));
             return Ok(serde_json::to_string(&miss)?);
         }
-        // kxmc: compact key-free envelope, minified. Object keys and pretty
-        // whitespace were the bulk of the old AgentCapsule payload, and the
-        // full path was emitted twice per hit (`file` plus `ref`).
-        let mut envelope = match budget_tokens {
-            Some(max_tokens) => to_budgeted_compact_json(
-                &response,
-                OutputBudget {
-                    max_tokens,
-                    default_detail: DetailLevel::Full,
-                },
-            ),
-            None => format_response_with_budget(
-                &response,
-                OutputFormat::Compact,
-                0,
-                CompactBudget::default(),
-            ),
-        };
+        // kxmc: compact key-free envelope, minified.
+        let mut envelope = render_compact_envelope(&response, preview, budget_tokens);
         self.remember_compact_paths(&envelope);
-        if !resend_seen {
+        if !resend_seen && preview != PreviewMode::None {
             self.elide_seen_snippets(&mut envelope);
         }
         Ok(serde_json::to_string(&envelope)?)
@@ -716,6 +835,7 @@ impl McpServer {
             .and_then(|indexer| indexer.store().status().ok())
             .map(|status| status.file_count);
         let channel = match mode {
+            AgentSearchMode::Hybrid => "hybrid",
             AgentSearchMode::Keyword => "lexical",
             AgentSearchMode::Ast => "structural",
             AgentSearchMode::Semantic => "semantic",
@@ -863,6 +983,64 @@ impl McpServer {
         self.invalidate_searcher_cache();
         Self::lock_or_recover(&self.path_registry, |registry| registry.clear()).clear();
         Self::lock_or_recover(&self.emitted_snippets, |seen| seen.clear()).clear();
+    }
+}
+
+fn render_compact_envelope(
+    response: &ast_sgrep_core::SearchResponse,
+    preview: PreviewMode,
+    budget_tokens: Option<usize>,
+) -> Value {
+    match preview {
+        PreviewMode::None => {
+            let mut env = format_response_with_budget(
+                response,
+                OutputFormat::Compact,
+                0,
+                CompactBudget {
+                    per_result_tokens: 0,
+                    response_tokens: 0,
+                },
+            );
+            blank_compact_snippets(&mut env);
+            env
+        }
+        PreviewMode::Short => match budget_tokens {
+            Some(max_tokens) => to_budgeted_compact_json(
+                response,
+                OutputBudget {
+                    max_tokens,
+                    default_detail: DetailLevel::Block,
+                },
+            ),
+            None => format_response_with_budget(
+                response,
+                OutputFormat::Compact,
+                0,
+                CompactBudget::default(),
+            ),
+        },
+        PreviewMode::Full => to_budgeted_compact_json(
+            response,
+            OutputBudget {
+                max_tokens: budget_tokens.unwrap_or(8_192),
+                default_detail: DetailLevel::Full,
+            },
+        ),
+    }
+}
+
+fn blank_compact_snippets(envelope: &mut Value) {
+    let Some(hits) = envelope.get_mut("h").and_then(Value::as_array_mut) else {
+        return;
+    };
+    for hit in hits {
+        let Some(row) = hit.as_array_mut() else {
+            continue;
+        };
+        if row.len() > 4 {
+            row[4] = Value::String(String::new());
+        }
     }
 }
 

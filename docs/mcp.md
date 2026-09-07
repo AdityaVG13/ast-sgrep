@@ -21,14 +21,23 @@ cargo install --path crates/ast-sgrep-mcp
 # ./target/release/asgrep-mcp
 ```
 
+Config-only agent wiring (stdio MCP, **no daemon**):
+
+```bash
+# asgrep-mcp must be on PATH (or set ASGREP_MCP_BIN)
+asgrep install --target cursor --yes
+asgrep install --target claude --target codex --target opencode --yes
+asgrep install --target all --yes
+```
+
 ## Cursor / Claude Desktop
 
-Add the server to your client's MCP config:
+Or add the server by hand:
 
 ```json
 {
   "mcpServers": {
-    "ast-sgrep": {
+    "asgrep": {
       "command": "asgrep-mcp",
       "env": {
         "ASGREP_ROOT": "/path/to/your/repo",
@@ -51,15 +60,21 @@ Environment variables:
 
 ## Tools
 
+### `search` (preferred)
+
+Fused hybrid retrieval — same cascade as CLI `asgrep` (lexical + structural + semantic, critic, follow-ups). Use this for workspace-grounded questions when wording or location is unknown.
+
+Accepts `query`, optional `root`, `limit`, `file_filter`, `lang`, `preview` (`none|short|full`), `resend_seen`, and `budget_tokens`. Returns the compact envelope with stable node IDs for `code_read`.
+
 ### `keyword_search`, `ast_search`, `semantic_search`
 
-Three nonfused retrieval channels. Each accepts `query`, optional `root`, and optional `limit`, and returns abbreviated one-line previews plus stable `file#Lstart-Lend` node IDs. The agent chooses the granularity; MCP never auto-fuses channels.
+Explicit single-channel tools when you already know the route. Each accepts the same optional scope/preview fields as `search`.
 
 - `keyword_search`: indexed lexical evidence only.
 - `ast_search`: AST pattern evidence only.
 - `semantic_search`: embedding evidence only.
 
-`code_search` remains a deprecated compatibility alias for `keyword_search`; it no longer auto-fuses channels.
+`code_search` remains a deprecated compatibility alias for `keyword_search`.
 
 ### `code_read`
 

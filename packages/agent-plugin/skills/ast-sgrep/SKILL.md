@@ -13,7 +13,8 @@ Use the host's exact-text search for literal strings, log messages, filenames, o
 
 ## MCP tools
 
-- `keyword_search`: lexical retrieval for names, identifiers, and intent-bearing words.
+- `search`: **preferred** fused hybrid (lexical + structural + semantic), same as CLI `asgrep`.
+- `keyword_search`: lexical-only channel for names and known identifiers.
 - `ast_search`: structural pattern matching.
 - `semantic_search`: embedding-only intent retrieval; requires semantic chunks.
 - `code_read`: expand compact result IDs into bounded source excerpts.
@@ -21,16 +22,17 @@ Use the host's exact-text search for literal strings, log messages, filenames, o
 - `index_repo`: build or incrementally reconcile the index; use `force: true` only for an incompatible or corrupt index.
 - `code_search`: deprecated compatibility alias for `keyword_search`; do not use in new workflows.
 
-Start with small limits and zero excerpts. Request excerpts only after you know the region you need.
+Optional on search tools: `file_filter`, `lang`, `preview` (`none|short|full`).
+
+Start with small limits and `preview: "short"`. Use `code_read` only for IDs worth expanding.
 
 ## Retrieval choices
 
-- Use `keyword_search` first for names, known symbols, and natural-language concepts with likely code vocabulary.
+- Use `search` for workspace-grounded questions when wording or location is unknown.
+- Use `keyword_search` when you already know an exact name or identifier.
 - Use `ast_search` for syntax shapes. Supply the pattern itself, not shell syntax.
-- Use `semantic_search` to broaden intent retrieval when lexical search is insufficient.
+- Use `semantic_search` only when you explicitly want embed-only ranking.
 - Use `code_read` only for the compact IDs worth expanding.
-
-Prefer keyword search over broad semantic search when you know the symbol.
 
 ## Safe workflow
 
