@@ -56,11 +56,20 @@ path = "../../tests/cli/agent_ergonomics.rs"
 name = "cli_smoke"
 path = "../../tests/cli/cli_smoke.rs"
 [[test]]
+name = "multi_pattern_ingress"
+path = "../../tests/cli/multi_pattern_ingress.rs"
+[[test]]
+name = "files_with_matches"
+path = "../../tests/cli/files_with_matches.rs"
+[[test]]
 name = "search_agent_ops"
 path = "../../tests/cli/search_agent_ops.rs"
 [[test]]
 name = "codemod_crash_windows"
 path = "../../tests/cli/codemod_crash_windows.rs"
+[[test]]
+name = "bench_history_integrity"
+path = "../../tests/cli/bench_history_integrity.rs"
 [[test]]
 name = "machine_contracts"
 path = "../../tests/cli/machine_contracts.rs"
@@ -73,3 +82,6 @@ path = "../../tests/cli/watch_incremental.rs"
 [[test]]
 name = "watch_daemon_e2e"
 path = "../../tests/cli/watch_daemon_e2e.rs"
+[[test]]
+name = "cpu_limit_orphan_reap"
+path = "../../tests/cli/cpu_limit_orphan_reap.rs"

@@ -166,7 +166,36 @@ pub(crate) struct SearchTuning {
         help = "Whole-response token budget; picks per-result detail (compact format)"
     )]
     pub(crate) budget_tokens: Option<usize>,
+    #[arg(
+        long,
+        value_name = "MODE",
+        value_parser = parse_preview_mode,
+        help = "Snippet size for machine output: none|short|full (default short for compact/agent)"
+    )]
+    pub(crate) preview: Option<PreviewMode>,
+    /// F-SG-RUN-FILES-WITH-MATCHES (pass 31): boolean-listing output mode.
+    /// Text output prints matching paths (sorted, deduped, one per line) instead
+    /// of hit rows; --json envelopes add a top-level `files` array with the same
+    /// set. Zero matches stays exit 0 (ok:true, empty) per the exit contract.
+    #[arg(
+        long,
+        action = clap::ArgAction::SetTrue,
+        value_parser = clap::builder::BoolishValueParser::new(),
+        help = "Print matching file paths (sorted, deduped) instead of hits; --json adds a `files` array"
+    )]
+    pub(crate) files_with_matches: bool,
 }
+
+/// Snippet size for machine-readable search output.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum PreviewMode {
+    None,
+    #[default]
+    Short,
+    Full,
+}
+
+
 
 #[derive(Args, Clone, Debug)]
 pub(crate) struct IndexCmd {
@@ -229,8 +258,35 @@ pub(crate) struct CodemodCmd {
     pub(crate) dry_run: bool,
 }
 
+/// Search-subcommand arguments: one QUERY positional OR N `--pattern` flags
+/// (EXP-013 multi-pattern ingress). The two forms are mutually exclusive and
+/// enforced at dispatch; clap keeps QUERY optional only when --pattern is
+/// present.
 #[derive(Args, Clone, Debug)]
 pub(crate) struct QueryCmd {
+    /// Search query string
+    #[arg(
+        value_name = "QUERY",
+        required_unless_present = "pattern",
+        help = "Search query string (omit when batching --pattern flags)"
+    )]
+    pub(crate) query: Option<String>,
+    #[command(flatten)]
+    pub(crate) root: RootArg,
+    #[command(flatten)]
+    pub(crate) tuning: SearchTuning,
+    #[arg(
+        long,
+        value_name = "PATTERN",
+        action = clap::ArgAction::Append,
+        help = "Structural search pattern; repeat to batch N patterns into ONE envelope (one index open; --limit applies per pattern; hits are tagged with their pattern). Batch usage: asgrep search --pattern P1 --pattern P2 --root ROOT (a positional after --pattern is the QUERY slot and stays mutually exclusive)"
+    )]
+    pub(crate) pattern: Vec<String>,
+}
+
+/// Keyword/semantic subcommand arguments: single query, no batch surface.
+#[derive(Args, Clone, Debug)]
+pub(crate) struct LexicalQueryCmd {
     #[command(flatten)]
     pub(crate) query: QueryRootArg,
     #[command(flatten)]
@@ -387,10 +443,10 @@ pub(crate) enum Commands {
     },
     /// Run lexical-only search
     #[command(about = "Lexical-only (FTS/trigram) search")]
-    Keyword(QueryCmd),
+    Keyword(LexicalQueryCmd),
     /// Run embedding-only search
     #[command(about = "Embedding-only semantic search")]
-    Semantic(QueryCmd),
+    Semantic(LexicalQueryCmd),
     /// Expand a bounded symbol/caller/import graph
     #[command(about = "Expand a bounded symbol/caller/import graph")]
     Chain(QueryRootArg),
@@ -427,6 +483,9 @@ pub(crate) enum Commands {
     /// Sticky NDJSON Code Mode worker (one warm Searcher for a whole program).
     #[command(about = "Sticky NDJSON Code Mode worker")]
     CodemodeServe,
+    /// Write stdio MCP config for supported agents (no daemon).
+    #[command(about = "Write stdio MCP config for supported agents (no daemon)")]
+    Install(crate::install::InstallArgs),
 }
 
 #[derive(Parser)]
@@ -472,6 +531,17 @@ fn parse_durability(raw: &str) -> Result<ast_sgrep_core::Durability, String> {
 /// renderer allocate without limit.
 fn parse_budget_tokens(raw: &str) -> Result<usize, String> {
     parse_bounded_usize(raw, MAX_RESPONSE_SNIPPET_TOKENS, "--budget-tokens")
+}
+
+fn parse_preview_mode(raw: &str) -> Result<PreviewMode, String> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "none" => Ok(PreviewMode::None),
+        "short" => Ok(PreviewMode::Short),
+        "full" => Ok(PreviewMode::Full),
+        other => Err(format!(
+            "invalid --preview '{other}' (expected none|short|full)"
+        )),
+    }
 }
 
 fn parse_output_limit(raw: &str) -> Result<usize, String> {
@@ -562,9 +632,8 @@ impl Cli {
             Some(Commands::Index(c)) => Some(&c.tuning),
             Some(Commands::Reindex(c)) => Some(&c.tuning),
             Some(Commands::Codemod(c)) => Some(&c.tuning),
-            Some(Commands::Search(c) | Commands::Keyword(c) | Commands::Semantic(c)) => {
-                Some(&c.tuning)
-            }
+            Some(Commands::Search(c)) => Some(&c.tuning),
+            Some(Commands::Keyword(c) | Commands::Semantic(c)) => Some(&c.tuning),
             Some(Commands::Bench { tuning, .. }) => Some(tuning),
             _ => None,
         };
@@ -601,6 +670,10 @@ impl Cli {
             if o.budget_tokens.is_some() {
                 t.budget_tokens = o.budget_tokens;
             }
+            if o.preview.is_some() {
+                t.preview.clone_from(&o.preview);
+            }
+            t.files_with_matches |= o.files_with_matches;
         }
         t
     }
@@ -635,6 +708,7 @@ impl Cli {
             Some(Commands::Doctor { .. }) => "doctor",
             Some(Commands::Eval(_)) => "eval",
             Some(Commands::CodemodeBatch { .. }) => "codemode-batch",
+            Some(Commands::Install(_)) => "install",
             Some(Commands::CodemodeServe) => "codemode-serve",
         }
     }

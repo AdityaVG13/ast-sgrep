@@ -167,9 +167,24 @@ fn update_bench_history(
     let path = std::env::var_os("ASGREP_BENCH_HISTORY_PATH")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(BENCH_HISTORY_PATH));
+    // PASS 56 (keep-gate integrity): a corrupt history file is the human's
+    // evidence. Fail loudly naming the file — never silently reset the
+    // baseline (a reset launders whatever regression or corruption produced
+    // the parse error into a fresh baseline) and never auto-delete it.
+    // PASS 56 (keep-gate integrity): a corrupt history file is the human's
+    // evidence. Fail loudly naming the file — never silently reset the
+    // baseline (a reset launders whatever regression or corruption produced
+    // the parse error into a fresh baseline) and never auto-delete it.
     let mut root = if path.exists() {
-        serde_json::from_str(&std::fs::read_to_string(&path).unwrap_or_default())
-            .unwrap_or_else(|_| serde_json::json!({"schema_version": "1", "entries": {}}))
+        let raw = std::fs::read_to_string(&path)
+            .with_context(|| format!("failed to read bench history file {}", path.display()))?;
+        serde_json::from_str(&raw).map_err(|error| {
+            anyhow::anyhow!(
+                "bench history file {} is corrupt ({error}); fix or remove it \
+                 manually — refusing to reset keep-gate history",
+                path.display()
+            )
+        })?
     } else {
         serde_json::json!({"schema_version": "1", "entries": {}})
     };

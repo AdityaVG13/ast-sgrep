@@ -30,7 +30,12 @@ Contracts:
   - stdin/stdout/stderr are inherited; exit code is propagated.
   - On termination signal: always exit 128+signal.
   - After direct child exits: TERM process group, grace wait, KILL
-    survivors in a loop until ESRCH.\n  - A payload with its own duty limiter receives multiplicative capacity;\n    rustc-capped is for compiler/build payloads, not production asgrep.
+    survivors in a loop until ESRCH.
+    - SIGKILL safety net: a detached reaper grandchild watches the
+    supervisor pid and killpg's the payload session if the supervisor
+    dies without reaping (payloads can never be orphaned under PPID 1).
+    - A payload with its own duty limiter receives multiplicative capacity;
+    rustc-capped is for compiler/build payloads, not production asgrep.
 """
 
 import argparse
@@ -43,6 +48,75 @@ import time
 _pending_signal = 0
 _child_exit_status = None  # saved when _sleep_check reaps the child
 _child_pgid = 0             # set in parent after fork; used by TSTP handler
+
+# -- orphan reaper -----------------------------------------------------------
+# If this wrapper is SIGKILL'd (or dies without reaping), the payload is
+# reparented to launchd (PPID 1) with no limiter running. A detached reaper
+# grandchild watches the supervisor pid and kills the payload's process
+# group the moment the supervisor disappears. This closes the reap hole
+# that left orphaned CPU saturators burning under PPID 1.
+
+_REAPER_POLL_S = 0.05       # 50 ms supervisor-liveness poll
+_REAPER_GRACE_S = 0.5       # TERM-to-KILL grace
+
+
+def _spawn_orphan_reaper(supervisor_pid, payload_pgid):
+    """Fork a detached reaper that killpg's *payload_pgid* when the
+    supervisor dies. Best-effort: fork failure just skips the safety net.
+
+    Called in the parent after the payload fork; the payload calls
+    setsid() making its pid == its pgid, which is what we pass in.
+    """
+    try:
+        if os.fork() > 0:
+            return
+    except OSError:
+        return
+    # Grandchild: fork again and exit so the reaper is never our zombie,
+    # then detach into its own session.
+    try:
+        if os.fork() > 0:
+            os._exit(0)
+    except OSError:
+        os._exit(0)
+    try:
+        os.setsid()
+    except OSError:
+        pass
+    deadline = time.monotonic() + 86400  # 24 h hard ceiling
+    # Wait for the payload to setsid() so its pgid exists before we probe it
+    # (reaper may run before the child reaches setsid). 5 s is generous.
+    setup_deadline = time.monotonic() + 5
+    while time.monotonic() < setup_deadline:
+        try:
+            os.killpg(payload_pgid, 0)
+            break
+        except OSError:
+            try:
+                os.kill(supervisor_pid, 0)
+            except OSError:
+                os._exit(0)  # supervisor died before payload setup
+            time.sleep(_REAPER_POLL_S)
+    while time.monotonic() < deadline:
+        try:
+            os.kill(supervisor_pid, 0)
+        except OSError:
+            break  # supervisor gone -> reap the payload group
+        try:
+            os.killpg(payload_pgid, 0)
+        except OSError:
+            os._exit(0)  # payload group already empty, nothing to reap
+        time.sleep(_REAPER_POLL_S)
+    try:
+        os.killpg(payload_pgid, signal.SIGTERM)
+    except OSError:
+        os._exit(0)
+    time.sleep(_REAPER_GRACE_S)
+    try:
+        os.killpg(payload_pgid, signal.SIGKILL)
+    except OSError:
+        pass
+    os._exit(0)
 
 
 # -- safe signal handlers --------------------------------------------------
@@ -252,6 +326,11 @@ def main():
 
     # -- parent: publish child pgid for TSTP handler -------------------
     _child_pgid = pid
+
+    # -- orphan reaper: if we are SIGKILL'd, the detached reaper kills the
+    # payload's process group (child called setsid -> pid == pgid) instead of
+    # leaving it orphaned under launchd.
+    _spawn_orphan_reaper(os.getpid(), pid)
 
     # -- parent: bootstrap handshake -----------------------------------
     try:

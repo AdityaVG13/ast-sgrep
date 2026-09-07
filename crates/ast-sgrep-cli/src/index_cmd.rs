@@ -491,7 +491,10 @@ pub(crate) fn open_searcher(root: &Path, cli: &Cli) -> anyhow::Result<ast_sgrep_
         ensure_fresh_index(&root, cli, count)?;
     }
     let searcher = open_searcher_raw(&root, cli)?;
-    if !cli.should_auto_index() {
+    // H-CONF-033: a foreign-root index was swapped for the empty in-memory
+    // stand-in; the walk answers instead. That stand-in must not trip the
+    // --no-auto-index non-empty gate (it is deliberately empty).
+    if !cli.should_auto_index() && !searcher.store_is_inert() {
         ensure_nonempty_index(&root, searcher.store().status()?.file_count)?;
     }
     Ok(searcher)

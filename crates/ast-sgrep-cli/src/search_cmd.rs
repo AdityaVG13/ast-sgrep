@@ -100,6 +100,12 @@ pub(crate) fn run_keyword_search(root: &Path, cli: &Cli, query: &str) -> anyhow:
         .search_lexical(query)
         .context("keyword search failed")?;
     if !cli.search_machine_output() {
+        if cli.active_tuning().files_with_matches {
+            for path in files_from_hits(&response) {
+                write_stdout_line(&path)?;
+            }
+            return Ok(());
+        }
         for hit in &response.hits {
             write_stdout_line(&format_hit_line(hit))?;
         }
@@ -117,6 +123,18 @@ fn uses_semantic_channel(cli: &Cli, semantic: bool) -> bool {
     semantic || cli.active_tuning().semantic_only
 }
 
+/// F-SG-RUN-FILES-WITH-MATCHES (pass 31): the boolean-listing result set —
+/// matching paths, sorted and deduped (a file with N hits is listed once).
+/// The sg-parity lane compares PATH-SET equality vs `sg run
+/// --files-with-matches`; no perf claim (hits are still computed, this only
+/// reshapes output).
+fn files_from_hits(response: &SearchResponse) -> Vec<String> {
+    let mut files: Vec<String> = response.hits.iter().map(|h| h.file.clone()).collect();
+    files.sort();
+    files.dedup();
+    files
+}
+
 pub(crate) fn run_search(
     root: &Path,
     cli: &Cli,
@@ -132,6 +150,12 @@ pub(crate) fn run_search(
     let response =
         do_search_with_cli(&open_searcher(root, cli)?, query, semantic, cli).context(ctx)?;
     if !cli.search_machine_output() {
+        if cli.active_tuning().files_with_matches {
+            for path in files_from_hits(&response) {
+                write_stdout_line(&path)?;
+            }
+            return Ok(());
+        }
         for hit in &response.hits {
             write_stdout_line(&format_hit_line(hit))?;
         }
@@ -152,39 +176,68 @@ pub(crate) fn run_search(
     )
 }
 
+/// EXP-013 (GA-21, pass 29): multi-pattern ingress — N `--pattern` flags, ONE
+/// process (one index open, one supervisor floor), ONE envelope. Each pattern
+/// runs the exact single-pattern path (`Searcher::search` on its `pattern:`
+/// token), so per-pattern hit sets are identical to N sequential invocations;
+/// hits are grouped by pattern in flag order and tagged via `SearchHit::symbol`
+/// (grouped hits). `--limit` applies per pattern. Fail-closed (H-CONF-006
+/// rule): a pattern the single invocation would reject rejects the whole
+/// batch — no partial envelope.
+pub(crate) fn run_multi_pattern_search(
+    root: &Path,
+    cli: &Cli,
+    patterns: &[String],
+) -> anyhow::Result<()> {
+    let searcher = open_searcher(root, cli)?;
+    let response = searcher
+        .search_multi_pattern(patterns)
+        .context("multi-pattern search failed")?;
+    if !cli.search_machine_output() {
+        if cli.active_tuning().files_with_matches {
+            for path in files_from_hits(&response) {
+                write_stdout_line(&path)?;
+            }
+            return Ok(());
+        }
+        for hit in &response.hits {
+            write_stdout_line(&format_hit_line(hit))?;
+        }
+        return Ok(());
+    }
+    let format = resolve_output_format(
+        cli.active_tuning().format.as_deref(),
+        ast_sgrep_plugins::OutputFormat::Native,
+    )?;
+    print_search_response("search", &response, format, cli)
+}
+
 fn print_search_response(
     command: &str,
     response: &ast_sgrep_core::SearchResponse,
     format: ast_sgrep_plugins::OutputFormat,
     cli: &Cli,
 ) -> anyhow::Result<()> {
-    // 6a3i: compact mode answers a miss with a diagnostic envelope instead of
-    // an empty result set the caller has to interpret.
     let tuning = cli.active_tuning();
-    let value = if format == ast_sgrep_plugins::OutputFormat::Compact && response.hits.is_empty() {
-        ast_sgrep_plugins::to_compact_miss_json(&response.query, &miss_context(command, cli))
-    } else if let (ast_sgrep_plugins::OutputFormat::Compact, Some(max_tokens)) =
-        (format, tuning.budget_tokens)
-    {
-        // m38g: budget mode picks per-result detail under one response ceiling.
-        ast_sgrep_plugins::to_budgeted_compact_json(
-            response,
-            ast_sgrep_plugins::OutputBudget {
-                max_tokens,
-                default_detail: ast_sgrep_plugins::DetailLevel::Full,
-            },
-        )
-    } else {
-        ast_sgrep_plugins::format_response_with_budget(
-            response,
-            format,
-            cli.active_tuning().excerpt_lines,
-            ast_sgrep_plugins::CompactBudget {
-                per_result_tokens: cli.active_tuning().snippet_tokens,
-                response_tokens: cli.active_tuning().response_snippet_tokens,
-            },
-        )
-    };
+    let preview = tuning.preview.unwrap_or_default();
+    let mut value = render_search_json(command, response, format, preview, cli);
+    // F-SG-RUN-FILES-WITH-MATCHES (pass 31): machine envelopes carry the same
+    // sorted/deduped path set as a top-level `files` array (P3 decision: paths
+    // ARRAY, additive — hits and per-format schemas untouched; the field only
+    // appears when the flag is passed).
+    if tuning.files_with_matches {
+        if let Some(object) = value.as_object_mut() {
+            object.insert(
+                "files".into(),
+                serde_json::Value::Array(
+                    files_from_hits(response)
+                        .into_iter()
+                        .map(serde_json::Value::String)
+                        .collect(),
+                ),
+            );
+        }
+    }
     print_machine_json_with_style(
         command,
         value,
@@ -192,6 +245,114 @@ fn print_search_response(
         true,
         0,
     )
+}
+
+fn render_search_json(
+    command: &str,
+    response: &ast_sgrep_core::SearchResponse,
+    format: ast_sgrep_plugins::OutputFormat,
+    preview: crate::cli_args::PreviewMode,
+    cli: &Cli,
+) -> serde_json::Value {
+    use ast_sgrep_plugins::{
+        format_response_with_budget, to_budgeted_compact_json, to_compact_miss_json, CompactBudget,
+        DetailLevel, OutputBudget, OutputFormat,
+    };
+    use crate::cli_args::PreviewMode;
+
+    let tuning = cli.active_tuning();
+
+    // Compact miss envelope is cheaper than an empty hit list for agents.
+    if format == OutputFormat::Compact && response.hits.is_empty() {
+        return to_compact_miss_json(&response.query, &miss_context(command, cli));
+    }
+
+    // Explicit token budget wins over preview defaults for compact output.
+    if format == OutputFormat::Compact {
+        if let Some(max_tokens) = tuning.budget_tokens {
+            let detail = match preview {
+                PreviewMode::Full => DetailLevel::Full,
+                _ => DetailLevel::Block,
+            };
+            return to_budgeted_compact_json(
+                response,
+                OutputBudget {
+                    max_tokens,
+                    default_detail: detail,
+                },
+            );
+        }
+        return match preview {
+            PreviewMode::None => {
+                let mut env = format_response_with_budget(
+                    response,
+                    OutputFormat::Compact,
+                    0,
+                    CompactBudget {
+                        per_result_tokens: 0,
+                        response_tokens: 0,
+                    },
+                );
+                blank_compact_snippets(&mut env);
+                env
+            }
+            PreviewMode::Short => format_response_with_budget(
+                response,
+                OutputFormat::Compact,
+                0,
+                CompactBudget {
+                    per_result_tokens: tuning.snippet_tokens,
+                    response_tokens: tuning.response_snippet_tokens,
+                },
+            ),
+            PreviewMode::Full => to_budgeted_compact_json(
+                response,
+                OutputBudget {
+                    max_tokens: 8_192,
+                    default_detail: DetailLevel::Full,
+                },
+            ),
+        };
+    }
+
+    let (excerpt, budget) = match preview {
+        PreviewMode::None => (
+            0,
+            CompactBudget {
+                per_result_tokens: 0,
+                response_tokens: 0,
+            },
+        ),
+        PreviewMode::Short => (
+            tuning.excerpt_lines,
+            CompactBudget {
+                per_result_tokens: tuning.snippet_tokens,
+                response_tokens: tuning.response_snippet_tokens,
+            },
+        ),
+        PreviewMode::Full => (
+            tuning.excerpt_lines.max(3),
+            CompactBudget {
+                per_result_tokens: tuning.snippet_tokens.max(256),
+                response_tokens: tuning.response_snippet_tokens.max(2_048),
+            },
+        ),
+    };
+    format_response_with_budget(response, format, excerpt, budget)
+}
+
+fn blank_compact_snippets(envelope: &mut serde_json::Value) {
+    let Some(hits) = envelope.get_mut("h").and_then(|v| v.as_array_mut()) else {
+        return;
+    };
+    for hit in hits {
+        let Some(row) = hit.as_array_mut() else {
+            continue;
+        };
+        if let Some(snippet) = row.get_mut(4) {
+            *snippet = serde_json::Value::String(String::new());
+        }
+    }
 }
 
 /// Describe a zero-hit CLI search: which channel ran, and what scoped it (6a3i).

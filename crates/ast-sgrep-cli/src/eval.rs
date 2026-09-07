@@ -446,6 +446,10 @@ pub(crate) fn run_eval(cli: &Cli, args: &EvalArgs) -> anyhow::Result<()> {
     let mut indexer = Indexer::new(idx_opts).context("failed to open index for eval")?;
     indexer.index_all().context("indexing failed for eval")?;
     let degraded_channels = crate::index_cmd::ingest_scip(&indexer, args.scip.as_deref())?;
+    // GA-23 (H-SURF-006, pass 15): fail closed when the corpus indexes to an
+    // empty index — NL-002 law, as search and chain already do. An ok:true
+    // envelope of all-zero MRR/recall would fabricate a quality measurement.
+    crate::index_cmd::ensure_nonempty_index(&root, indexer.store().status()?.file_count)?;
     drop(indexer);
     let scip = ScipEvalState {
         requested: args.scip.is_some(),

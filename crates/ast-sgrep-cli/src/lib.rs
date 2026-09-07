@@ -6,6 +6,7 @@ mod cli_args;
 mod codemod_cmd;
 mod eval;
 mod index_cmd;
+mod install;
 mod keep_gate;
 mod machine;
 mod search_cmd;
@@ -181,6 +182,18 @@ fn run_cli(cli: &Cli) -> anyhow::Result<()> {
             "--file-filter applies only to search, keyword, or semantic commands",
         ));
     }
+    // H-CONF-003 (pass 14): an unknown --lang label must fail closed as a
+    // usage error instead of lowercasing into a silent filter-to-nothing
+    // (the reference exits 2 on unknown languages). Language::parse accepts
+    // every stored id, indexed extension, and alias (py, rs, ts, hpp, Title
+    // Case, golang, c#, c++).
+    if let Some(raw) = cli.lang.as_deref() {
+        if ast_sgrep_core::Language::parse(raw).is_none() {
+            return Err(usage_error(format!(
+                "unknown --lang '{raw}' (expected a stored id, file extension, or alias such as py, rs, ts, hpp)"
+            )));
+        }
+    }
     match cli.command.as_ref() {
         Some(c) => run_command(cli, c),
         None => run_default_search(cli),
@@ -209,7 +222,19 @@ fn run_command(cli: &Cli, command: &Commands) -> anyhow::Result<()> {
             run_full_index("reindex", &c.root.root, cli, true, c.scip.as_deref())
         }
         Commands::Codemod(c) => codemod_cmd::run_codemod(cli, c),
-        Commands::Search(q) => search_cmd::run_search(&q.query.root, cli, &q.query.query, false),
+        Commands::Search(q) => {
+            if q.pattern.is_empty() {
+                let query = q.query.as_deref().unwrap_or_default();
+                search_cmd::run_search(&q.root.root, cli, query, false)
+            } else if q.query.as_deref().is_some_and(|s| !s.is_empty()) {
+                Err(usage_error(
+                    "pass either a QUERY positional or --pattern flags, not both \
+                     (batch usage: asgrep search --pattern P1 --pattern P2 --root ROOT)",
+                ))
+            } else {
+                search_cmd::run_multi_pattern_search(&q.root.root, cli, &q.pattern)
+            }
+        }
         Commands::Bench {
             root,
             query,
@@ -241,6 +266,7 @@ fn run_command(cli: &Cli, command: &Commands) -> anyhow::Result<()> {
         Commands::Eval(args) => eval::run_eval(cli, args),
         Commands::CodemodeBatch { requests } => run_codemode_batch(cli, requests),
         Commands::CodemodeServe => run_codemode_serve(cli),
+        Commands::Install(args) => install::run_install(args),
     }
 }
 

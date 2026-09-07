@@ -1414,3 +1414,275 @@ fn eval_reports_real_graph_precision_by_resolution_tier() {
         Value::Null
     );
 }
+
+// GA-23 (H-SURF-006, pass 15): `eval --gold` must fail closed when the corpus
+// indexes to an empty index. An ok:true envelope of all-zero MRR/recall is a
+// fabricated quality measurement, and NL-002 already makes search and chain
+// exit 2 on the same condition. A missing root already fails closed with an
+// operational indexer error; this pins the empty-corpus sibling.
+#[test]
+fn eval_gold_fails_closed_on_empty_index() {
+    let bin = asgrep_bin();
+    let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let gold = repo.join("benchmarks/gold/graph_precision.json");
+    let empty = TempDir::new().expect("tempdir");
+    let temp = TempDir::new().expect("tempdir");
+    let index = temp.path().join("index.db");
+    let output = run(
+        &bin,
+        &[
+            "--json",
+            "--no-embed",
+            "--index-path",
+            index.to_str().expect("index path utf8"),
+            "eval",
+            "--gold",
+            gold.to_str().expect("gold path utf8"),
+            empty.path().to_str().expect("root utf8"),
+        ],
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "eval over an empty index must exit 2, got stdout: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert!(
+        output.stderr.is_empty(),
+        "unexpected diagnostic: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let envelope = parse_stdout(&output);
+    assert_eq!(envelope["ok"], false);
+    assert_eq!(envelope["exit_code"], 2);
+    assert_eq!(envelope["error"]["kind"], "operational");
+    assert!(envelope["error"]["message"]
+        .as_str()
+        .expect("message")
+        .contains("index is empty"));
+}
+
+// EXP-002 (H-CONF-003, pass 14): an unknown --lang label must fail closed as
+// a usage-class error (exit 1, structured envelope), never silently filter to
+// an empty ok:true result. Legal aliases (py, rs, ts, hpp) must stay accepted.
+#[test]
+fn unknown_lang_is_a_usage_error_not_silent_empty() {
+    let bin = asgrep_bin();
+    let temp = TempDir::new().expect("tempdir");
+    let root = temp.path().to_str().expect("root utf8");
+    let output = run(
+        &bin,
+        &[
+            "--json",
+            "--lang",
+            "klingon",
+            "search",
+            "pattern:greet",
+            root,
+        ],
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "unknown --lang must exit as usage: stderr={} stdout={}",
+        String::from_utf8_lossy(&output.stderr),
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert!(output.stderr.is_empty());
+    let value = parse_stdout(&output);
+    assert_eq!(value["error"]["kind"], "usage", "{value}");
+    assert!(
+        value["error"]["message"]
+            .as_str()
+            .expect("usage message")
+            .contains("klingon"),
+        "{value}"
+    );
+    // A legal alias must not be rejected as a usage error (over-strict guard).
+    let alias = run(
+        &bin,
+        &["--json", "--lang", "py", "search", "pattern:greet", root],
+    );
+    assert_ne!(
+        alias.status.code(),
+        Some(1),
+        "legal alias py must not become a usage error: {}",
+        String::from_utf8_lossy(&alias.stdout)
+    );
+}
+
+// EXP-004 (H-CONF-006, pass 14): gate-on (ASGREP_ALLOW_AST_GREP=1 with a
+// configured ast-grep) must NOT convert a beyond-native pattern into a silent
+// ok:true empty result — search never delegates, so the gate fails closed
+// loudly in every state. GA-24 (H-SURF-005, pass 19): the delegation API was
+// REMOVED (bench-only external engine), and the fail-closed message must state
+// that permanent decision, not imply a pending wire-up.
+#[test]
+fn gate_on_beyond_native_fails_closed_not_silent_empty() {
+    let reference = std::env::var("ASGREP_TEST_AST_GREP")
+        .unwrap_or_else(|_| "/opt/homebrew/bin/ast-grep".to_string());
+    assert!(
+        Path::new(&reference).is_file(),
+        "gate-on canary needs a reference ast-grep binary at {reference}"
+    );
+    let bin = asgrep_bin();
+    let temp = TempDir::new().expect("tempdir");
+    std::fs::write(
+        temp.path().join("calc.rs"),
+        "fn main() {\n    let result = 1 + 2;\n}\n",
+    )
+    .unwrap();
+    let root = temp.path().to_str().expect("root utf8");
+    let index = temp.path().join("idx.db");
+    let index = index.to_str().expect("index utf8");
+    let build = Command::new(&bin)
+        .args(["--index-path", index, "index", "--no-embed", root])
+        .env("NO_COLOR", "1")
+        .output()
+        .unwrap();
+    assert!(build.status.success(), "{}", String::from_utf8_lossy(&build.stderr));
+
+    let output = Command::new(&bin)
+        .args([
+            "--json",
+            "--index-path",
+            index,
+            "--no-embed",
+            "--no-auto-index",
+            "search",
+            "pattern:let $A = $B",
+            "--lang",
+            "rust",
+            root,
+        ])
+        .env("NO_COLOR", "1")
+        .env("ASGREP_ALLOW_AST_GREP", "1")
+        .env("ASGREP_AST_GREP", &reference)
+        .output()
+        .expect("gate-on search");
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "gate-on beyond-native must fail closed, got exit ok:true empty before the fix: stdout={}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert!(output.stderr.is_empty());
+    let value = parse_stdout(&output);
+    assert_eq!(value["ok"], false, "{value}");
+    assert_eq!(value["error"]["kind"], "operational", "{value}");
+    assert!(
+        value["error"]["message"]
+            .as_str()
+            .expect("error message")
+            .contains("fail-closed"),
+        "{value}"
+    );
+    // GA-24 (pass 19): the message must state the permanent non-delegation
+    // decision (external ast-grep is bench-only), never "not wired" language
+    // that implies a future delegation path.
+    let message = value["error"]["message"].as_str().expect("error message");
+    assert!(
+        message.contains("never delegates") && message.contains("bench-only"),
+        "gate-on fail-closed message must state the GA-24 bench-only decision: {message}"
+    );
+}
+
+/// H-CONF-023 (pass 30): pattern-ingress rejection must be LOUD at the
+/// envelope boundary. `RETURN $A` carries a metavariable but no structural
+/// syntax: sg fails pattern parse (exit 8) while the pre-fix subject printed
+/// a successful empty envelope (ok:true, exit 0) — a fail-open. The P4
+/// contract face: exit 2 + `{ok:false, error{kind:"operational"}}` (the same
+/// structured envelope class as every other fail-closed boundary).
+#[test]
+fn pattern_ingress_rejection_envelope_is_loud_fail_closed() {
+    let bin = asgrep_bin();
+    let temp = TempDir::new().expect("tempdir");
+    std::fs::write(temp.path().join("calc.rs"), "fn main() {}\n").unwrap();
+    let root = temp.path().to_str().expect("root utf8");
+    let index = temp.path().join("idx.db");
+    let index = index.to_str().expect("index utf8");
+    let build = Command::new(&bin)
+        .args(["--index-path", index, "index", "--no-embed", root])
+        .env("NO_COLOR", "1")
+        .output()
+        .unwrap();
+    assert!(build.status.success(), "{}", String::from_utf8_lossy(&build.stderr));
+
+    let output = Command::new(&bin)
+        .args([
+            "--json",
+            "--index-path",
+            index,
+            "--no-embed",
+            "--no-auto-index",
+            "search",
+            "pattern:RETURN $A",
+            "--lang",
+            "python",
+            root,
+        ])
+        .env("NO_COLOR", "1")
+        .output()
+        .expect("ingress-rejection search");
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "classification-rejected pattern must exit 2, not 0-empty: stdout={}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert!(output.stderr.is_empty());
+    let value = parse_stdout(&output);
+    assert_eq!(value["ok"], false, "{value}");
+    assert_eq!(value["error"]["kind"], "operational", "{value}");
+    let message = value["error"]["message"].as_str().expect("error message");
+    assert!(
+        message.contains("fail-closed") && message.contains("RETURN $A"),
+        "rejection message must name the pattern and state fail-closed: {message}"
+    );
+}
+
+/// The other side of the H-CONF-023 line: a classifier-ACCEPTED pattern that
+/// genuinely matches nothing stays a clean success-with-zero-hits envelope
+/// (ok:true, exit 0, hits == []) — never a rejection.
+#[test]
+fn pattern_valid_but_zero_hits_envelope_stays_success() {
+    let bin = asgrep_bin();
+    let temp = TempDir::new().expect("tempdir");
+    std::fs::write(temp.path().join("calc.rs"), "fn main() {}\n").unwrap();
+    let root = temp.path().to_str().expect("root utf8");
+    let index = temp.path().join("idx.db");
+    let index = index.to_str().expect("index utf8");
+    let build = Command::new(&bin)
+        .args(["--index-path", index, "index", "--no-embed", root])
+        .env("NO_COLOR", "1")
+        .output()
+        .unwrap();
+    assert!(build.status.success(), "{}", String::from_utf8_lossy(&build.stderr));
+
+    let output = Command::new(&bin)
+        .args([
+            "--json",
+            "--index-path",
+            index,
+            "--no-embed",
+            "--no-auto-index",
+            "search",
+            "pattern:if $COND { $BODY }",
+            "--lang",
+            "rust",
+            root,
+        ])
+        .env("NO_COLOR", "1")
+        .output()
+        .expect("valid-empty search");
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "valid-but-empty pattern must stay a success: stdout={}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let value = parse_stdout(&output);
+    assert_eq!(value["ok"], true, "{value}");
+    let hits = value["hits"].as_array().expect("hits array");
+    assert!(hits.is_empty(), "no if statements in corpus: {value}");
+}

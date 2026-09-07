@@ -548,6 +548,7 @@ fn codemod_apply_refuses_parent_symlink_swap() {
     let plan = plan_codemod(
         &session.root,
         Some(&session.index_path),
+        None,
         "legacy($ARG)",
         "modern($ARG)",
     )
@@ -643,4 +644,189 @@ fn file_filter_is_rejected_by_non_search_commands() {
     assert!(value["error"]["message"]
         .as_str()
         .is_some_and(|message| message.contains("--file-filter applies only")));
+}
+
+// EXP-001 (H-CONF-011, pass 14): `codemod --lang <L>` must restrict the edit
+// plan to that language exactly like `search --lang` does.
+#[test]
+fn codemod_dry_run_honors_lang_filter() {
+    let bin = asgrep_bin();
+    let temp = TempDir::new().expect("tempdir");
+    let root = temp.path();
+    fs::write(
+        root.join("mod.py"),
+        "def greet(name):\n    msg = \"hi \" + name\n    return msg\n\n\ndef shout(text):\n    return text.upper()\n",
+    )
+    .unwrap();
+    fs::create_dir_all(root.join("web")).unwrap();
+    fs::write(
+        root.join("web/util.ts"),
+        "export function load(url: string): string {\n  return url;\n}\n",
+    )
+    .unwrap();
+    let index = root.join("idx.db");
+    let index = index.to_str().unwrap();
+    let root_arg = root.to_str().unwrap();
+    let build = Command::new(&bin)
+        .args(["--index-path", index, "index", "--no-embed", root_arg])
+        .env("NO_COLOR", "1")
+        .output()
+        .unwrap();
+    assert!(build.status.success(), "{}", String::from_utf8_lossy(&build.stderr));
+
+    let out = Command::new(&bin)
+        .args([
+            "--json",
+            "--index-path",
+            index,
+            "codemod",
+            "--pattern",
+            "def $A($B): $$$C",
+            "--rewrite",
+            "def $A($B):",
+            "--lang",
+            "py",
+            "--dry-run",
+            root_arg,
+        ])
+        .env("NO_COLOR", "1")
+        .output()
+        .unwrap();
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let plan: Value = serde_json::from_slice(&out.stdout).unwrap();
+    let paths: Vec<&str> = plan["plan"]["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|file| file["path"].as_str().unwrap())
+        .collect();
+    assert!(
+        !paths.is_empty(),
+        "python defs must be planned: {plan}"
+    );
+    assert!(
+        paths.iter().all(|path| path.ends_with(".py")),
+        "codemod --lang py must not plan cross-language edits: {paths:?}"
+    );
+}
+
+// EXP-003 (H-CONF-008, pass 14): a `$$$` body metavariable used in a rewrite
+// template must bind (python suite body), not error as unbound.
+#[test]
+fn codemod_rewrite_binds_suite_body_metavariable() {
+    let bin = asgrep_bin();
+    let temp = TempDir::new().expect("tempdir");
+    let root = temp.path();
+    fs::write(
+        root.join("mod.py"),
+        "def greet(name):\n    msg = \"hi \" + name\n    return msg\n",
+    )
+    .unwrap();
+    let index = root.join("idx.db");
+    let index = index.to_str().unwrap();
+    let root_arg = root.to_str().unwrap();
+    let build = Command::new(&bin)
+        .args(["--index-path", index, "index", "--no-embed", root_arg])
+        .env("NO_COLOR", "1")
+        .output()
+        .unwrap();
+    assert!(build.status.success(), "{}", String::from_utf8_lossy(&build.stderr));
+
+    let out = Command::new(&bin)
+        .args([
+            "--json",
+            "--index-path",
+            index,
+            "codemod",
+            "--pattern",
+            "def $A($B): $$$C",
+            "--rewrite",
+            "def $A($B): $$$C",
+            "--lang",
+            "py",
+            "--dry-run",
+            root_arg,
+        ])
+        .env("NO_COLOR", "1")
+        .output()
+        .unwrap();
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "identity body rewrite must succeed (unbound $C error is the registered gap): {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let envelope: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(envelope["ok"], true, "{envelope}");
+    let edits: Vec<&Value> = envelope["plan"]["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|file| file["edits"].as_array().unwrap())
+        .collect();
+    assert!(
+        !edits.is_empty(),
+        "identity rewrite still plans an edit because the body flattens: {envelope}"
+    );
+}
+
+// EXP-011 (H-CONF-015, pass 14): a relative ASGREP_INDEX_PATH must resolve
+// against ONE base (the cwd) for both `index` and `search`.
+#[test]
+fn relative_index_path_resolves_against_cwd_for_both_subcommands() {
+    let bin = asgrep_bin();
+    let temp = TempDir::new().expect("tempdir");
+    let cwd = temp.path().join("run");
+    let corpus = cwd.join("corpus");
+    fs::create_dir_all(&corpus).unwrap();
+    fs::write(corpus.join("mod.rs"), "fn greet_user() {}\n").unwrap();
+    let index_env = Command::new(&bin)
+        .args(["--json", "index", "--no-embed", "corpus"])
+        .env("NO_COLOR", "1")
+        .env("ASGREP_INDEX_PATH", "rel.idx.db")
+        .current_dir(&cwd)
+        .output()
+        .unwrap();
+    assert_eq!(
+        index_env.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&index_env.stderr)
+    );
+    assert!(
+        cwd.join("rel.idx.db").is_file(),
+        "index subcommand must resolve the relative index path against the cwd"
+    );
+    let out = Command::new(&bin)
+        .args([
+            "--json",
+            "--no-embed",
+            "--no-auto-index",
+            "search",
+            "pattern:greet_user",
+            "corpus",
+        ])
+        .env("NO_COLOR", "1")
+        .env("ASGREP_INDEX_PATH", "rel.idx.db")
+        .current_dir(&cwd)
+        .output()
+        .unwrap();
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "search must resolve the relative index path against the same cwd base: {} stdout={}",
+        String::from_utf8_lossy(&out.stderr),
+        String::from_utf8_lossy(&out.stdout)
+    );
+    let value: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(value["ok"], true);
+    assert!(
+        !value["hits"].as_array().expect("hits array").is_empty(),
+        "indexed hit must be found via the cwd-relative index"
+    );
 }
