@@ -3,8 +3,8 @@
 use anyhow::{anyhow, Context};
 use ast_sgrep_core::chain::{expand_chain, ChainConfig};
 use ast_sgrep_core::{
-    canonicalize_affected_path, EmbedBackend, IndexOptions, Indexer, SearchOptions, Searcher,
-    MAX_EXCERPT_LINES, MAX_INCREMENTAL_PATHS,
+    canonicalize_affected_path, expand_incremental_path_list, EmbedBackend, IndexOptions, Indexer,
+    SearchOptions, Searcher, MAX_EXCERPT_LINES, MAX_INCREMENTAL_PATHS,
 };
 use ast_sgrep_plugins::{format_response_with, OutputFormat};
 use serde_json::{json, Value};
@@ -527,5 +527,5 @@ fn incremental_paths(args: &Value, root: &Path) -> anyhow::Result<Option<Vec<Pat
             paths.push(canonical);
         }
     }
-    Ok(Some(paths))
+    Ok(Some(expand_incremental_path_list(paths, MAX_INCREMENTAL_PATHS)))
 }

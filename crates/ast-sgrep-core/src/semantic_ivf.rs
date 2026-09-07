@@ -28,12 +28,31 @@ pub fn semantic_ivf_path(index_db: &Path) -> std::path::PathBuf {
 }
 
 pub fn invalidate_semantic_ivf(index_db: &Path) -> Result<()> {
+    // PASS 65 (r15 finding 1): an in-memory store has NO filesystem surface.
+    // `Path::new(":memory:").parent()` is `Some("")`, so the historical path
+    // resolution degenerated to a CWD-relative `semantic.ivf` and the
+    // legacy user_version migration deleted whatever file sat in the
+    // process's working directory — recorded data loss. `:memory:` (and any
+    // URI-form memory target) is a no-op here.
+    if is_in_memory_db(index_db) {
+        return Ok(());
+    }
     let path = semantic_ivf_path(index_db);
     match fs::remove_file(path) {
         Ok(()) => Ok(()),
         Err(error) if benign_invalidation_error(&error) => Ok(()),
         Err(error) => Err(error.into()),
     }
+}
+
+/// True for SQLite in-memory database targets (`:memory:` and the
+/// `file::memory:` / `file:...?mode=memory` URI forms). Such a path can
+/// never name a sidecar's directory, so invalidation is a no-op.
+fn is_in_memory_db(index_db: &Path) -> bool {
+    let text = index_db.to_string_lossy();
+    text == ":memory:"
+        || text.starts_with("file:")
+        && (text.contains("mode=memory") || text.contains("::memory:"))
 }
 
 fn benign_invalidation_error(error: &std::io::Error) -> bool {

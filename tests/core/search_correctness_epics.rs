@@ -76,12 +76,14 @@ fn cbnw_asgrep_ceiling_is_single_list_rrf() {
         mode: QueryMode::Hybrid,
         target: None,
         terms: vec!["alpha".into()],
+        path_scope: None,
     };
     let parsed_many = ParsedQuery {
         raw: "alpha beta gamma".into(),
         mode: QueryMode::Hybrid,
         target: None,
         terms: vec!["alpha".into(), "beta".into(), "gamma".into()],
+        path_scope: None,
     };
     ast_sgrep_core::intent::route_hits(&parsed_one, &mut one);
     ast_sgrep_core::intent::route_hits(&parsed_many, &mut many);
@@ -223,6 +225,67 @@ fn iva9_2_invalid_file_filter_errors_via_searcher() {
     assert!(
         err.contains("invalid file_filter"),
         "expected invalid file_filter error, got {err}"
+    );
+}
+
+#[test]
+fn in_path_scope_strips_from_terms_and_filters_hits() {
+    let parsed = ParsedQuery::parse("in:ARCHANA-3/src model_training_render_main");
+    assert_eq!(parsed.path_scope.as_deref(), Some("ARCHANA-3/src"));
+    assert!(
+        !parsed.terms.iter().any(|term| term.contains("archana")),
+        "in: path must not become search terms: {:?}",
+        parsed.terms
+    );
+    assert!(parsed
+        .terms
+        .iter()
+        .any(|term| term.contains("model_training_render_main") || term == "model"));
+
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    write_src(
+        root,
+        "ARCHANA-3/src/train.py",
+        "def model_training_render_main():\n    return 1\n",
+    );
+    write_src(
+        root,
+        "other/noise.py",
+        "def model_training_render_main():\n    return 2\n",
+    );
+    let index_path = root.join("index.db");
+    let mut indexer = Indexer::new(IndexOptions {
+        root: root.to_path_buf(),
+        index_path: Some(index_path.clone()),
+        force_reindex: true,
+        embed_semantic: false,
+        ..IndexOptions::default()
+    })
+    .unwrap();
+    indexer.index_all().unwrap();
+    let searcher = Searcher::new(SearchOptions {
+        root: root.to_path_buf(),
+        index_path: Some(index_path),
+        use_embed: false,
+        limit: 16,
+        ..SearchOptions::default()
+    })
+    .unwrap();
+    let resp = searcher
+        .search("in:ARCHANA-3/src word:model_training_render_main")
+        .unwrap();
+    assert!(
+        !resp.hits.is_empty(),
+        "scoped query must still hit the in: directory: {:#?}",
+        resp.hits
+    );
+    assert!(
+        resp.hits
+            .iter()
+            .all(|hit| hit.file.starts_with("ARCHANA-3/src")),
+        "in: must drop hits outside the scoped directory: {:#?}",
+        resp.hits
     );
 }
 

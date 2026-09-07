@@ -69,15 +69,23 @@ fn schema_upgrade_invalidates_legacy_semantic_layouts() {
     assert_eq!(migrated.get_meta("embed_backend").unwrap(), None);
     assert_eq!(migrated.get_meta("embed_model").unwrap(), None);
     assert_eq!(migrated.get_meta("embed_dim").unwrap(), None);
+    // Legacy identity is rewritten twice on a sub-10 store: the schema-10
+    // semantic re-render wraps, and the schema-15 re-key invalidation
+    // (F74c-1) sits inside it. Both markers must be present and the original
+    // hash must survive as the suffix.
     assert_eq!(
         migrated.file_hash("legacy.rs").unwrap().as_deref(),
-        Some("semantic-layout-v3:original-hash")
+        Some("semantic-layout-v3:schema15-rekey:original-hash")
     );
     let version: i64 = migrated
         .connection()
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(version, 12, "migration must land on the current schema");
+    assert_eq!(
+        version,
+        ast_sgrep_core::INDEX_SCHEMA_VERSION,
+        "migration must land on the current schema"
+    );
 }
 
 #[test]
@@ -121,7 +129,7 @@ fn schema_6_main_indexes_still_get_semantic_wipe_at_7() {
         .connection()
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(version, 12);
+    assert_eq!(version, ast_sgrep_core::INDEX_SCHEMA_VERSION);
 }
 
 #[test]
@@ -159,7 +167,7 @@ fn migration_fixture(name: &str) -> PathBuf {
         .join(name)
 }
 
-/// ghiw.4: checked-in user_version=5 DB migrates to current schema (12).
+/// ghiw.4: checked-in user_version=5 DB migrates to the current schema.
 #[test]
 fn committed_schema5_sqlite_migrates_to_current_schema() {
     let temp = TempDir::new().unwrap();
@@ -171,7 +179,11 @@ fn committed_schema5_sqlite_migrates_to_current_schema() {
         .connection()
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(version, 12, "migration must land on SCHEMA_VERSION=12");
+    assert_eq!(
+        version,
+        ast_sgrep_core::INDEX_SCHEMA_VERSION,
+        "migration must land on the current schema"
+    );
 }
 
 /// ghiw.4: newer-than-supported user_version fails closed (no panic).
@@ -219,7 +231,7 @@ fn schema_9_invalidates_legacy_semantic_state() {
         .connection()
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(version, 12);
+    assert_eq!(version, ast_sgrep_core::INDEX_SCHEMA_VERSION);
     let count: i64 = migrated
         .connection()
         .query_row("SELECT COUNT(*) FROM semantic_chunks", [], |row| row.get(0))
@@ -229,7 +241,8 @@ fn schema_9_invalidates_legacy_semantic_state() {
         .connection()
         .query_row("SELECT content_hash FROM files", [], |row| row.get(0))
         .unwrap();
-    assert_eq!(content_hash, "semantic-layout-v3:keep-me");
+    // Schema-10 re-render wraps the schema-15 re-key invalidation (F74c-1).
+    assert_eq!(content_hash, "semantic-layout-v3:schema15-rekey:keep-me");
     let cols: Vec<String> = {
         let mut stmt = migrated
             .connection()

@@ -59,13 +59,14 @@ pub mod fts {
             .join(" OR ")
     }
 }
+pub use ast_sgrep_lang::Language;
 pub use fusion::{
     analyze_weight_sensitivity, learn_fusion_weights, ChannelRanks, FusionCandidate, FusionChannel,
     FusionExample, LearnedFusionModel, WeightSensitivity,
 };
 pub use index::{
-    canonicalize_affected_path, indexed_rel_path, EmbedBackend, FileIndexStats, IndexOptions,
-    IndexStats, Indexer, INDEX_CANCELLED, MAX_INCREMENTAL_PATHS,
+    canonicalize_affected_path, expand_incremental_path_list, indexed_rel_path, EmbedBackend,
+    FileIndexStats, IndexOptions, IndexStats, Indexer, INDEX_CANCELLED, MAX_INCREMENTAL_PATHS,
 };
 pub use io_bounds::{read_text_capped, MAX_INDEX_FILE_BYTES};
 pub use limits::{
@@ -76,8 +77,8 @@ pub use limits::{
 pub mod lexicon;
 pub mod resolution;
 pub mod scip;
-pub use pattern::{run_external_ast_grep, search_pattern, ExternalAstGrepMatch};
-pub use query::{ParsedQuery, QueryMode};
+pub use pattern::search_pattern;
+pub use query::{path_scope_glob, ParsedQuery, QueryMode};
 pub use search::{
     follow_ups_for_hit, format_hit_line, hit_why, margin_is_decisive, plan_suggested_next,
     CriticNote, EmbedFieldScores, HitKind, HitSignal, SearchHit, SearchOptions, SearchResponse,

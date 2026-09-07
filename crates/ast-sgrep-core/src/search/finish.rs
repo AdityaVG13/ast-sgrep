@@ -168,6 +168,12 @@ fn finish_response_inner(
             crate::StoreError::Other(format!("invalid file_filter glob '{filter}': {e}"))
         })?;
         hits.retain(|h| re.is_match(&h.file));
+    } else if let Some(scope) = parsed.path_scope.as_deref() {
+        let glob = crate::query::path_scope_glob(scope);
+        let re = super::compile_glob(&glob).map_err(|e| {
+            crate::StoreError::Other(format!("invalid in: path scope '{scope}': {e}"))
+        })?;
+        hits.retain(|h| re.is_match(&h.file));
     }
     assign_signal_margins(&mut hits);
     // Confidence is independent of ranking order but must run after margins

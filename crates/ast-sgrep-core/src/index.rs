@@ -20,6 +20,13 @@ use walkdir::WalkDir;
 /// Stable error text when cooperative index cancel fires (Pi/NAPI abort).
 pub const INDEX_CANCELLED: &str = "operation cancelled";
 
+/// Meta key certifying which root produced the stored row identities
+/// (GA-12 / H-CONF-016). The bulk index writes it atomically with the row
+/// updates; the mtime fast path trusts stored mtimes only while it equals
+/// the root being indexed, so cross-root reuse of one db decides skips on
+/// the content hash alone.
+const INDEX_MTIME_IDENTITY_ROOT: &str = "mtime_identity_root";
+
 fn cancelled_error() -> crate::StoreError {
     crate::StoreError::Other(INDEX_CANCELLED.into())
 }
@@ -41,6 +48,67 @@ pub use crate::index_watch::canonicalize_affected_path;
 
 /// Maximum exact paths accepted by one incremental update request.
 pub const MAX_INCREMENTAL_PATHS: usize = 1_024;
+
+/// Expand directory targets into contained indexable files for explicit
+/// `index_repo` / `--path` requests. Watch events must keep calling
+/// `update_paths` directly so a directory chmod does not re-walk the tree.
+pub fn expand_incremental_path_list(paths: Vec<PathBuf>, max: usize) -> Vec<PathBuf> {
+    let max = max.min(MAX_INCREMENTAL_PATHS);
+    let mut out = Vec::new();
+    let mut seen = HashSet::new();
+    for path in paths {
+        if out.len() >= max {
+            break;
+        }
+        if path.is_dir() {
+            for file in walk_indexable_files(&path, max.saturating_sub(out.len())) {
+                if seen.insert(file.clone()) {
+                    out.push(file);
+                    if out.len() >= max {
+                        break;
+                    }
+                }
+            }
+        } else if seen.insert(path.clone()) {
+            out.push(path);
+        }
+    }
+    out
+}
+
+fn walk_indexable_files(dir: &Path, max: usize) -> Vec<PathBuf> {
+    let mut files = Vec::new();
+    if max == 0 {
+        return files;
+    }
+    for entry in WalkDir::new(dir)
+        .follow_links(false)
+        .into_iter()
+        .filter_entry(|entry| {
+            if entry.file_type().is_dir() {
+                !should_skip_dir(entry.path())
+            } else {
+                true
+            }
+        })
+    {
+        let Ok(entry) = entry else {
+            continue;
+        };
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        let path = entry.path();
+        if should_skip_file(path) {
+            continue;
+        }
+        files.push(path.to_path_buf());
+        if files.len() >= max {
+            break;
+        }
+    }
+    files
+}
 
 /// Indexed relative paths must be valid UTF-8. Lossy conversion is forbidden:
 /// two distinct non-UTF8 `OsStr` paths must not collide into one DB key.
@@ -345,6 +413,16 @@ impl Indexer {
         let perf_run_id = perf_run.id();
         self.ignore.clear();
         self.check_cancel()?;
+        // GA-12 (H-CONF-016): the mtime fast path applies only when the
+        // stored row identities were last produced from THIS root. See
+        // prepare_file for the cross-root content-purity rationale. The
+        // gate is re-committed inside the bulk tx below, atomically with
+        // the row updates it certifies.
+        let current_root_key = self.options.root.display().to_string();
+        let mtime_identity_ok = self
+            .store
+            .get_meta(INDEX_MTIME_IDENTITY_ROOT)?
+            .is_some_and(|stored| stored == current_root_key);
         let (candidates, mut stats, prepared, semantic_rewrite_required) = {
             let _span = crate::perf_profile::Span::start(
                 "index_walk_parse",
@@ -381,6 +459,7 @@ impl Indexer {
                             options,
                             root_dir,
                             semantic_identity_ok,
+                            mtime_identity_ok,
                             perf_run_id,
                         )
                     })
@@ -427,7 +506,13 @@ impl Indexer {
                     prepared,
                     &mut stats,
                     &mut semantic_ivf_dirty,
-                )
+                )?;
+                // Certify the mtime fast path for THIS root only after the
+                // row updates it describes committed. Rolling back the tx
+                // keeps the old gate, so the next run re-hashes (safe
+                // direction: extra work, never a wrong skip).
+                self.store
+                    .set_meta(INDEX_MTIME_IDENTITY_ROOT, &current_root_key)
             })();
             self.store.apply_bulk_write_result(write_result)?;
         }
@@ -660,12 +745,41 @@ impl Indexer {
         self.check_cancel()?;
         let file_count = self.store.status()?.file_count;
         if crate::tantivy_index::should_use_tantivy(file_count, self.options.use_tantivy) {
-            self.rebuild_tantivy_sidecar()?;
+            self.rebuild_tantivy_sidecar_if_fresh_skipping()?;
         }
         if self.options.embed_semantic && semantic_ivf_dirty {
             self.rebuild_semantic_ivf_sidecar()?;
         }
         Ok(())
+    }
+    /// Skip the lexical sidecar rebuild when the on-disk sidecar provably
+    /// reflects the current index generation (pass-17 H-PERF-002 lever).
+    ///
+    /// Every mutating index transaction (upsert, remove, clear) bumps
+    /// `index_data_version` inside the same transaction as its rows, and the
+    /// sidecar records the generation it was built from. The search side
+    /// already trusts exactly this equality (`search/passes/lexical.rs`
+    /// serves from the sidecar when `is_fresh(index_data_version)` holds and
+    /// falls back to SQL FTS otherwise), so a refresh whose walk changed
+    /// nothing — generation unmoved, sidecar current — can skip the
+    /// FTS5-from-lines rewrite with no observable difference. When the
+    /// equality fails (any mutation, a crashed mid-rebuild, a deleted or
+    /// empty sidecar file), the unconditional rebuild runs exactly as before.
+    fn rebuild_tantivy_sidecar_if_fresh_skipping(&self) -> Result<()> {
+        let sidecar_path = crate::tantivy_index::sidecar_path(
+            &self.options.root,
+            self.options.index_path.as_deref(),
+        );
+        if sidecar_path.exists() {
+            let sidecar = crate::tantivy_index::TantivySidecar::open_for_index(
+                &self.options.root,
+                self.options.index_path.as_deref(),
+            )?;
+            if sidecar.is_fresh(self.store.index_data_version()?)? {
+                return Ok(());
+            }
+        }
+        self.rebuild_tantivy_sidecar()
     }
     fn rebuild_semantic_ivf_sidecar(&self) -> Result<()> {
         let stats = self.store.semantic_chunk_stats(None)?;

@@ -13,8 +13,13 @@ use std::sync::Arc;
 // 11 = scip_facts overlay (kgvi.2). 12 = tests/examples semantic vector.
 // 13 = callers lower() expression indexes (gauntlet-r11: calls_matching full-scan fix).
 // 14 = pattern_nodes (file_id, signature) composite for cascade structural seeks.
-// Never reuse a SCHEMA_VERSION for two migrations.
-pub const INDEX_SCHEMA_VERSION: i64 = 14;
+// 15 = F74c-1: the pass-73 php `::` call-signature re-key (`call:bar` →
+//      `call:Foo::bar`) shipped on 14 without a bump; 15 discards pre-rekey
+//      `pattern_nodes` signature rows and forces re-extraction (those rows are
+//      served AUTHORITATIVELY for exact `call:` patterns, so a pre-rekey index
+//      kept resurrecting the F72a-1 wrong answers under the default search
+//      path). Never reuse a SCHEMA_VERSION for two migrations.
+pub const INDEX_SCHEMA_VERSION: i64 = 15;
 const SCHEMA_VERSION: i64 = INDEX_SCHEMA_VERSION;
 const IMPORT_SELECT: &str =
     "SELECT f.path, f.language, i.module_path, i.line_no FROM imports i JOIN files f ON f.id = i.file_id";
@@ -202,6 +207,42 @@ impl IndexStore {
         Self::open_inner(root, index_path, crate::store::Durability::from_env(), true)
     }
 
+    /// H-CONF-033 (pass 63): an EMPTY in-memory store standing in for an
+    /// index bound to a different project root. Same schema, zero rows, so
+    /// every serving lane (pattern signatures, candidate narrowing, literal
+    /// line corpus, embeddings) degrades through its existing empty-index
+    /// gates and the native walk alone answers from the query root — the
+    /// foreign tree's rows can never be mixed into results. Nothing is
+    /// persisted; `:memory:` has no sidecar surface, and since pass 65 the
+    /// version-0 legacy migration's semantic-IVF invalidation is an explicit
+    /// no-op for in-memory targets instead of degenerating to a
+    /// CWD-relative `semantic.ivf` deletion (r15 finding 1, data loss).
+    pub fn open_in_memory(root: &Path) -> Result<Self> {
+        let conn = Connection::open_in_memory()?;
+        let durability = crate::store::Durability::from_env();
+        configure_connection_with(&conn, durability)?;
+        let store = Self {
+            conn,
+            root: root.to_path_buf(),
+            db_path: std::path::PathBuf::from(":memory:"),
+            file_tx_depth: std::cell::Cell::new(0),
+            file_tx_owns: std::cell::Cell::new(false),
+            file_tx_poisoned: std::cell::Cell::new(false),
+            bulk_tx_active: std::cell::Cell::new(false),
+            bulk_tx_owns: std::cell::Cell::new(false),
+            cache_seq: std::cell::Cell::new(0),
+            durability,
+            trigram_df: crate::store::trigram_df::TrigramDfCache::new(),
+            line_count_at_least: std::cell::Cell::new(None),
+            line_corpus: std::cell::RefCell::new(None),
+            line_corpus_disabled: std::cell::Cell::new(false),
+            read_only: false,
+        };
+        store.init_schema()?;
+        init_cache_seq(&store.conn, &store.cache_seq)?;
+        Ok(store)
+    }
+
     /// Peek `PRAGMA user_version` without creating or migrating the database.
     pub fn peek_schema_version(root: &Path, index_path: Option<&Path>) -> Result<i64> {
         let db_path = try_index_db_path(root, index_path).map_err(|e| {
@@ -331,6 +372,44 @@ impl IndexStore {
                 // IF NOT EXISTS, but only a version bump guarantees the DDL
                 // re-runs on stores that never re-open through a rebuild.
             }
+            if version < 15 {
+                // F74c-1 (r25 pass 75b): the pass-73 php `::` re-key changed
+                // the meaning of `call:` signature rows without bumping the
+                // schema version, so a pre-rekey index still holds `call:bar`
+                // rows the current binary would serve AUTHORITATIVELY for
+                // `bar($$$A)` patterns. Signature rows have no row-level
+                // migration path (their semantics are binary-defined), so
+                // discard them and defeat both unchanged-file fast paths —
+                // the content-hash prefix defeats the hash fast path and
+                // dropping `mtime_identity_root` defeats the mtime fast path
+                // (same mechanism as the schema-10 semantic re-render) — so
+                // the next indexing pass re-extracts every file under the
+                // current keying. Read-only opens cannot migrate; they refuse
+                // loudly in `init_schema_readonly` instead.
+                //
+                // F76c-1 (r26 pass 77a): the hash prefix + mtime wipe defeat
+                // only TWO of the THREE skip layers. The per-file structure
+                // fingerprints (`body:<rel>` written by
+                // `commit_prepared_files`, `struct:<rel>` written by
+                // `upsert_file_material`) route a fingerprint-unchanged file
+                // to `refresh_lines_only`, which rewrites the PLAIN content
+                // hash WITHOUT reparsing — so a surviving fingerprint
+                // re-legitimizes the hash on the very next pass and
+                // `pattern_nodes` stays permanently empty (the loud gate's
+                // own `asgrep reindex` remedy never rebuilt the rows; ident/
+                // decl search silently answered `[]` and the codemod
+                // H-CONF-023 gate flipped to a silent ok:true zero-edit).
+                // Discard both fingerprints here (same mechanism as the
+                // schema-7/10 blocks) so the next pass takes the full
+                // extract+upsert path and rebuilds the rows.
+                self.conn.execute_batch(
+                    "DELETE FROM pattern_nodes;
+                     DELETE FROM meta WHERE key = 'mtime_identity_root';
+                     DELETE FROM meta WHERE key LIKE 'body:%' OR key LIKE 'struct:%';
+                     UPDATE files SET content_hash = 'schema15-rekey:' || content_hash
+                       WHERE content_hash NOT LIKE 'schema15-rekey:%';",
+                )?;
+            }
             if version < 3 {
                 self.conn.execute_batch(
                     "INSERT INTO lines_trigram(rowid, content) SELECT rowid, content FROM lines;",
@@ -404,9 +483,6 @@ impl IndexStore {
     pub(crate) fn trigram_df(&self) -> &crate::store::trigram_df::TrigramDfCache {
         &self.trigram_df
     }
-    pub(crate) fn warm_line_corpus(&self) {
-        let _ = self.line_corpus();
-    }
     pub(crate) fn line_corpus(
         &self,
     ) -> Result<Option<std::sync::Arc<crate::store::line_corpus::LineCorpus>>> {
@@ -467,6 +543,20 @@ impl IndexStore {
     }
 
     fn init_schema_readonly(&self, version: i64) -> Result<()> {
+        if version < SCHEMA_VERSION {
+            // F74c-1 (r25 pass 75b): a below-current stamp means the on-disk
+            // signature rows may predate a row-semantic migration (14→15: the
+            // pass-73 php `::` call re-key). A read-only open cannot migrate,
+            // and the exact `call:`/`decl:` lane serves rows AUTHORITATIVELY,
+            // so refuse with a rebuild instruction instead of silently
+            // answering from stale-keyed rows. A writable open (asgrep index /
+            // reindex) migrates in place; doctor's peek reports the same
+            // mismatch with the same recovery.
+            return Err(crate::StoreError::Other(format!(
+                "index schema version {version} is older than supported version {SCHEMA_VERSION}; its call-signature rows predate a semantic re-key and must not be served as authoritative. Rebuild with: asgrep reindex {} --json",
+                self.root.display()
+            )));
+        }
         let core: i64 = self.conn.query_row(
             "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('files','lines','meta','symbols')",
             [],
@@ -479,7 +569,6 @@ impl IndexStore {
                 self.root.display()
             )));
         }
-        let _ = version;
         Ok(())
     }
 

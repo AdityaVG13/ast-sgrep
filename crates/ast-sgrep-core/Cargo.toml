@@ -62,6 +62,9 @@ path = "../../tests/core/cascade_planner.rs"
 name = "chain_case"
 path = "../../tests/core/chain_case.rs"
 [[test]]
+name = "dedup_identity"
+path = "../../tests/core/dedup_identity.rs"
+[[test]]
 name = "code_prose_fields"
 path = "../../tests/core/code_prose_fields.rs"
 [[test]]
@@ -91,6 +94,9 @@ path = "../../tests/core/freshness_identity.rs"
 [[test]]
 name = "identifier_ranking"
 path = "../../tests/core/identifier_ranking.rs"
+[[test]]
+name = "index_schema_rekey_freshness"
+path = "../../tests/core/index_schema_rekey_freshness.rs"
 [[test]]
 name = "graph_oracle"
 path = "../../tests/core/graph_oracle.rs"
@@ -172,3 +178,6 @@ path = "../../tests/core/store_pragmas.rs"
 [[test]]
 name = "trigram_shortcut"
 path = "../../tests/core/trigram_shortcut.rs"
+[[test]]
+name = "store_inert_memory"
+path = "../../tests/core/store_inert_memory.rs"

@@ -94,23 +94,32 @@ pub fn index_db_path(root: &Path, index_path: Option<&Path>) -> PathBuf {
     try_index_db_path(root, index_path).unwrap_or_else(|_| root.join(INDEX_DIR).join(INDEX_DB))
 }
 
+/// H-CONF-015 (pass 14): a relative explicit index path (flag or
+/// `ASGREP_INDEX_PATH`) resolves against the process CWD for EVERY
+/// subcommand. `search` used to join it against the search root while
+/// `index` joined it against its root argument, so one invocation could see
+/// two different databases. Unknown-but-relative with no cwd is an error
+/// (fail closed), never a silent root-relative guess.
+fn resolve_explicit_index_path(path: &Path) -> crate::Result<PathBuf> {
+    if path.is_absolute() {
+        return Ok(path.to_path_buf());
+    }
+    let cwd = std::env::current_dir().map_err(|error| {
+        crate::StoreError::Other(format!(
+            "relative index path {} cannot be resolved (current directory unavailable): {error}",
+            path.display()
+        ))
+    })?;
+    Ok(cwd.join(path))
+}
+
 pub fn try_index_db_path(root: &Path, index_path: Option<&Path>) -> crate::Result<PathBuf> {
     if let Some(path) = index_path {
-        let path = if path.is_absolute() {
-            path.to_path_buf()
-        } else {
-            root.join(path)
-        };
-        return Ok(as_db_path(path));
+        return Ok(as_db_path(resolve_explicit_index_path(path)?));
     }
     if let Ok(env_path) = std::env::var("ASGREP_INDEX_PATH") {
-        let path = PathBuf::from(env_path);
-        let path = if path.is_absolute() {
-            path
-        } else {
-            root.join(path)
-        };
-        return Ok(as_db_path(path));
+        let resolved = resolve_explicit_index_path(Path::new(&env_path))?;
+        return Ok(as_db_path(resolved));
     }
     let local = root.join(INDEX_DIR).join(INDEX_DB);
     if local.exists() {

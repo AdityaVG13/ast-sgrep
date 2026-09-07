@@ -140,6 +140,38 @@ fn index_repo_updates_only_known_changed_and_deleted_paths() {
 }
 
 #[test]
+fn index_repo_expands_directory_paths_into_contained_files() {
+    let root = TempDir::new().expect("root");
+    let index = TempDir::new().expect("index");
+    let nested = root.path().join("ARCHANA-3/src");
+    fs::create_dir_all(&nested).expect("dir");
+    fs::write(
+        nested.join("train.py"),
+        "def model_training_render_main():\n    return 1\n",
+    )
+    .expect("write scoped");
+    fs::write(
+        root.path().join("noise.py"),
+        "def model_training_render_main():\n    return 2\n",
+    )
+    .expect("write noise");
+    let mut session = CodeModeSession::new(SessionConfig {
+        root: root.path().to_path_buf(),
+        index_path: Some(index.path().join("index.db")),
+        use_embed: false,
+        ..SessionConfig::default()
+    });
+    let updated = session
+        .call("index_repo", json!({"paths": ["ARCHANA-3/src"]}))
+        .expect("targeted directory");
+    assert_eq!(updated["targeted"], true);
+    assert_eq!(
+        updated["stats"]["files_indexed"], 1,
+        "directory path must expand to contained files, not no-op: {updated}"
+    );
+}
+
+#[test]
 fn index_repo_rejects_targeted_paths_outside_root() {
     let root = TempDir::new().expect("root");
     let outside = TempDir::new().expect("outside");

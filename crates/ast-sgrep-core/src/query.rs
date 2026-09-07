@@ -4,6 +4,8 @@ pub struct ParsedQuery {
     pub mode: QueryMode,
     pub target: Option<String>,
     pub terms: Vec<String>,
+    /// Directory or glob from an `in:path` token. Applied as a file filter.
+    pub path_scope: Option<String>,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum QueryMode {
@@ -19,6 +21,13 @@ pub enum QueryMode {
 impl ParsedQuery {
     pub fn parse(input: &str) -> Self {
         let trimmed = input.trim();
+        let (without_scope, path_scope) = split_in_path_scope(trimmed);
+        let mut parsed = Self::parse_mode(without_scope.trim());
+        parsed.path_scope = path_scope;
+        parsed
+    }
+
+    fn parse_mode(trimmed: &str) -> Self {
         for (prefix, mode) in [
             ("callers:", QueryMode::Callers),
             ("defs:", QueryMode::Defs),
@@ -31,6 +40,7 @@ impl ParsedQuery {
                     mode,
                     target: Some(target.clone()),
                     terms: tokenize_for_scoring(&target),
+                    path_scope: None,
                 };
             }
         }
@@ -41,6 +51,7 @@ impl ParsedQuery {
                 mode: QueryMode::Pattern,
                 target: Some(t.clone()),
                 terms: vec![t],
+                path_scope: None,
             };
         }
         for (prefix, mode) in [
@@ -62,6 +73,7 @@ impl ParsedQuery {
                     mode,
                     target: Some(target),
                     terms,
+                    path_scope: None,
                 };
             }
         }
@@ -70,6 +82,7 @@ impl ParsedQuery {
             mode: QueryMode::Hybrid,
             target: None,
             terms: tokenize_for_scoring(trimmed),
+            path_scope: None,
         }
     }
     /// Build a mode-specific query. `raw` is the trimmed payload (no synthetic
@@ -87,6 +100,7 @@ impl ParsedQuery {
             mode,
             target: Some(trimmed.to_string()),
             terms,
+            path_scope: None,
         }
     }
     pub fn literal(query: &str) -> Self {
@@ -189,4 +203,34 @@ fn tokenize_words(input: &str, drop_stopwords: bool) -> Vec<String> {
 }
 fn looks_like_symbol(term: &str) -> bool {
     term.contains('_') || term.len() > 3
+}
+
+fn split_in_path_scope(input: &str) -> (String, Option<String>) {
+    let mut scope = None;
+    let mut rest = Vec::new();
+    for token in input.split_whitespace() {
+        if let Some(path) = token.strip_prefix("in:") {
+            if path.is_empty() || path.split(['/', '\\']).any(|seg| seg == "..") {
+                continue;
+            }
+            if scope.is_none() {
+                scope = Some(path.to_string());
+            }
+            continue;
+        }
+        rest.push(token);
+    }
+    (rest.join(" "), scope)
+}
+
+/// Turn an `in:path` token into a file_filter glob (`src` → `src/**`).
+pub fn path_scope_glob(scope: &str) -> String {
+    if scope.contains('*') || scope.contains('?') {
+        return scope.to_string();
+    }
+    if scope.ends_with('/') {
+        format!("{scope}**")
+    } else {
+        format!("{scope}/**")
+    }
 }

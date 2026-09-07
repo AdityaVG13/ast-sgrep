@@ -84,6 +84,12 @@ struct ResponseCache {
 const RESPONSE_CACHE_CAP: usize = 128;
 pub struct Searcher {
     store: IndexStore,
+    /// H-CONF-033: true when `store` is the empty in-memory stand-in swapped
+    /// in for an index bound to a different project root (the store answers
+    /// nothing; the native walk decides). The CLI `--no-auto-index`
+    /// non-empty-index gate skips this stand-in — it exists precisely so a
+    /// passive foreign db degrades to walk-only instead of erroring.
+    inert: bool,
     options: SearchOptions,
     use_field_rescoring: bool,
     /// When false, skip snapshot_stamp + query_expansions. Code Mode capsules
@@ -159,10 +165,36 @@ impl Searcher {
                 )));
             }
         }
-        Ok(Self::with_store(
-            IndexStore::open_readonly(&options.root, options.index_path.as_deref())?,
-            options,
-        ))
+        // H-CONF-033 (pass 63): read-side root binding. `Indexer` stamps the
+        // canonical indexed root into `meta.root` and cross-root REINDEX is
+        // the designed prune-replace (GA-12 / mtime_identity_root), so the
+        // last-indexed root owns the db. Answering a query rooted elsewhere
+        // against those rows silently returns wrong-tree paths, languages,
+        // and line corpus (both false-empty and phantom hits — the pass-62b
+        // corruption). The foreign db is therefore swapped for an EMPTY
+        // in-memory store: zero serving, zero candidate narrowing, the native
+        // walk decides every hit from the query root alone. (First cut
+        // refused the search outright; the single-root oracle lane proved
+        // that over-refuses — 13/75 cases where the walk answers correctly
+        // against a passive db — so the guard degrades to inert instead.)
+        // A fresh db with no binding keeps today's behavior.
+        let mut store = IndexStore::open_readonly(&options.root, options.index_path.as_deref())?;
+        let foreign_root = match store.get_meta("root")? {
+            Some(bound) => {
+                let bound = bound.trim_end_matches('/');
+                let here = options.root.display().to_string();
+                let here = here.trim_end_matches('/');
+                bound != here
+            }
+            None => false,
+        };
+        let inert = foreign_root;
+        if foreign_root {
+            store = IndexStore::open_in_memory(&options.root)?;
+        }
+        let mut searcher = Self::with_store(store, options);
+        searcher.inert = inert;
+        Ok(searcher)
     }
     pub fn with_store(store: IndexStore, mut options: SearchOptions) -> Self {
         // Bind SQL `f.language = ?` to Language::as_str so `--lang ts` matches
@@ -170,9 +202,32 @@ impl Searcher {
         options.lang_filter =
             ast_sgrep_lang::Language::canonical_filter(options.lang_filter.as_deref());
         let options_identity = options.cache_identity();
-        store.warm_line_corpus();
+        // PASS 65 (INFO adjudication, pass-64c F7 residual): the read-side
+        // root-binding predicate is bound HERE, not only in `new` — a direct
+        // `with_store` caller can no longer hand a foreign-root db to a
+        // searcher that would serve it as its own. Same rule as `new`
+        // (H-CONF-033): a db stamped for another root starts inert; `new`
+        // additionally swaps in the empty in-memory store before this runs.
+        let foreign_root = match store.get_meta("root") {
+            Ok(Some(bound)) => {
+                let bound = bound.trim_end_matches('/');
+                let here = options.root.display().to_string();
+                let here = here.trim_end_matches('/');
+                bound != here
+            }
+            // Fresh/unreadable bindings keep the historical behavior.
+            _ => false,
+        };
+        // Line corpus loads LAZILY: its only consumer is `literal_pass`
+        // (`store.line_corpus()?`), which version-checks and caches on first
+        // use. An eager warm here materialized the whole `lines ⋈ files` table
+        // on EVERY search (pattern/regex/callers never touch it) — the
+        // DB-proportional ~0.61 ms/MB worker user-CPU block measured in the
+        // gauntlet EXP-008 sweep (pass-25 corrected mechanism; pass-37
+        // profile: `warm_line_corpus` subtree = 46% of a W01 worker capture).
         Self {
             store,
+            inert: foreign_root,
             options,
             use_field_rescoring: true,
             stamp_response: true,
@@ -196,6 +251,11 @@ impl Searcher {
     }
     pub fn store(&self) -> &IndexStore {
         &self.store
+    }
+    /// H-CONF-033: `store` is the empty in-memory stand-in for a foreign-root
+    /// index (nothing serves; the walk decides). See the `inert` field.
+    pub fn store_is_inert(&self) -> bool {
+        self.inert
     }
     pub fn options(&self) -> &SearchOptions {
         &self.options
@@ -676,6 +736,44 @@ impl Searcher {
             }
         })
     }
+    /// EXP-013 (GA-21): multi-pattern ingress. Runs each pattern through the
+    /// EXACT single-pattern ingress (`Searcher::search` on `pattern:<text>`),
+    /// amortizing the per-process fixed cost (index open + supervisor floor,
+    /// phase-13: ~19-23 ms per invocation) across N patterns, then merges the
+    /// finished responses into ONE envelope: hits are grouped by pattern in
+    /// argument order (per-pattern identity is `SearchHit::symbol`), byte/read
+    /// estimates are summed, and `query` is the space-joined `pattern:` token
+    /// list (D-03 multi-token shape). `limit` stays per-pattern — the merged
+    /// hit count can reach N x limit, which is exactly what N sequential
+    /// invocations return. All-or-nothing on per-pattern errors (fail-closed):
+    /// a pattern the single invocation would reject rejects the whole batch.
+    pub fn search_multi_pattern(&self, patterns: &[String]) -> Result<SearchResponse> {
+        let mut merged: Option<SearchResponse> = None;
+        for raw in patterns {
+            // One optional `pattern:` token per value is tolerated (D-03 shape).
+            let token = raw.strip_prefix("pattern:").unwrap_or(raw);
+            let response = self.search(&format!("pattern:{token}"))?;
+            match &mut merged {
+                None => merged = Some(response),
+                Some(acc) => {
+                    acc.hits.extend(response.hits);
+                    acc.read_bytes_estimate = acc
+                        .read_bytes_estimate
+                        .saturating_add(response.read_bytes_estimate);
+                    acc.returned_excerpt_bytes = acc
+                        .returned_excerpt_bytes
+                        .saturating_add(response.returned_excerpt_bytes);
+                    acc.prevented_read_bytes = acc
+                        .prevented_read_bytes
+                        .saturating_add(response.prevented_read_bytes);
+                    acc.query.push(' ');
+                    acc.query.push_str("pattern:");
+                    acc.query.push_str(token.trim());
+                }
+            }
+        }
+        merged.ok_or_else(|| crate::StoreError::Other("no patterns supplied".into()))
+    }
     /// Raw hits for one side of a conjunction (P0 channel-conjunction).
     /// Dispatches exactly like `search` does for the same prefix; the
     /// semantic channel runs the embedding-only pass.
@@ -820,7 +918,38 @@ impl Searcher {
             .iter()
             .map(|hit| hit.file.clone())
             .collect::<HashSet<_>>();
+        // Invent-path escape: conceptual NL with no lexical foothold still runs
+        // unconstrained semantic (same path as `search_semantic`), then fan-out.
+        // Identifier / literal intents stay fail-closed on empty discovery.
         if lexical_files.is_empty() {
+            if intent == crate::intent::QueryIntent::Conceptual && self.options.use_embed {
+                let mut hits = {
+                    let _span = crate::perf_profile::Span::start(
+                        "hybrid_conceptual_semantic_escape",
+                        "search",
+                        "run_embed_pass",
+                    );
+                    run_embed_pass(
+                        &self.store,
+                        &self.options,
+                        semantic_query,
+                        &self.semantic_cache,
+                        self.use_field_rescoring,
+                    )?
+                };
+                let _span = crate::perf_profile::Span::start(
+                    "hybrid_conceptual_fanout_escape",
+                    "search",
+                    "conceptual_fanout_pass",
+                );
+                hits.extend(conceptual_fanout_pass(
+                    &self.store,
+                    &self.options,
+                    &parsed.raw,
+                    &hits,
+                )?);
+                return Ok(hits);
+            }
             return Ok(Vec::new());
         }
 
@@ -949,7 +1078,9 @@ fn conceptual_concept_def_pass(
                     || tok == "planner"
                     || tok == "fusion"
                     || tok == "critic"
-                    || tok == "embed")
+                    || tok == "embed"
+                    || tok == "conjunction"
+                    || tok == "combine")
         })
         .collect();
     if terms.is_empty() {
@@ -960,6 +1091,7 @@ fn conceptual_concept_def_pass(
         mode: QueryMode::Hybrid,
         target: None,
         terms,
+        path_scope: None,
     };
     symbol_pass_for_files(store, options, &parsed, allowed_files)
 }

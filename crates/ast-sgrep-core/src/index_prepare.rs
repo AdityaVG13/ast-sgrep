@@ -145,9 +145,18 @@ pub(crate) fn prepare_file(
     options: &IndexOptions,
     root_dir: &crate::io_bounds::RootDir,
     semantic_identity_ok: bool,
+    mtime_identity_ok: bool,
     perf_run_id: Option<u64>,
 ) -> PrepareOutcome {
-    if !options.force_reindex && semantic_identity_ok {
+    // GA-12 (H-CONF-016): the mtime fast path is only sound when the stored
+    // identity was produced from a file at the SAME root as this walk. A
+    // shared db reused across roots stores one row per rel path; trusting
+    // mtime agreement from a different root silently skipped changed content
+    // (same mtime, different bytes) and served the other root's stale text.
+    // Cross-root runs fall through to read + hash, so the skip decision is
+    // content-hash-pure wherever it could be ambiguous. Within one root the
+    // identity is unambiguous and keeps make-style mtime semantics.
+    if !options.force_reindex && semantic_identity_ok && mtime_identity_ok {
         if let (Some(stored), Some((secs, nanos))) = (stored, walk_mtime) {
             if stored.mtime_secs == secs && stored.mtime_nanos == nanos {
                 return PrepareOutcome::Unchanged;
