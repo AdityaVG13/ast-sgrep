@@ -86,6 +86,7 @@
     "read_bytes_estimate",
     "returned_excerpt_bytes",
     "schema_version",
+    "suggested_next",
     "tool"
   ],
   "compact": [

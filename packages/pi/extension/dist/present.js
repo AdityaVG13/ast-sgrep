@@ -1,9 +1,10 @@
 /** Neat asgrep tool chrome for the Pi TUI and the model-visible content. */
-export const ASGREP_PROMPT_SNIPPET = "Search this repo by intent, symbol, callers, defs, pattern, or chain (in-process asgrep; use without being asked)";
+export const ASGREP_PROMPT_SNIPPET = "Search this repo by intent, symbol, callers, defs, or pattern (asgrep; use without being asked)";
 export const ASGREP_PROMPT_GUIDELINES = [
-    "For any code lookup (find a function, callers, defs, intent, structural pattern, or imports), call asgrep or asgrep_search immediately. Do not wait for the user to mention ast-sgrep.",
-    "Prefer the asgrep Code Mode tool when you need more than one lookup, filtering, or parallel work. Write JavaScript that calls asgrep.search / find / read / edit and return a small shaped value. Independent lookups: Promise.all.",
+    "For any code lookup (find a function, callers, defs, intent, or structural pattern), call asgrep immediately. Do not wait for the user to mention ast-sgrep.",
+    "Prefer the asgrep Code Mode tool. Write JavaScript: asgrep.search(\"query\"), asgrep.defs(\"Symbol\"), asgrep.callers(\"Symbol\"), asgrep.read({ refs }). Independent lookups: Promise.all. Return a small shaped value.",
     "Use grep only for exact log strings, filenames, or config keys. asgrep.edit does unique string replace plus targeted reindex; oldText must match exactly once.",
+    "If a search returns 0 hits, use suggested_next or retry with asgrep.find, asgrep.defs, or asgrep.search(query, { in: \"src\" }).",
 ];
 function paint(theme, role, text, bold = false) {
     const body = bold && theme ? theme.bold(text) : text;
@@ -61,6 +62,20 @@ export function formatSearchResult(response, meta, theme) {
         const label = hitLabel(hit);
         return paint(theme, "toolOutput", label ? `  ${loc}  ${label}` : `  ${loc}`);
     });
+    if (hits.length === 0) {
+        rows.push(paint(theme, "muted", "  0 hits"));
+        const next = Array.isArray(response.suggested_next)
+            ? response.suggested_next.filter((item) => typeof item === "string")
+            : [];
+        if (next.length > 0) {
+            for (const query of next.slice(0, 4)) {
+                rows.push(paint(theme, "toolOutput", `  try  ${query}`));
+            }
+        }
+        else {
+            rows.push(paint(theme, "toolOutput", "  try  asgrep.find(query) or asgrep.defs(symbol) or asgrep.search(query, { in: \"src\" })"));
+        }
+    }
     if (hits.length > 24) {
         rows.push(paint(theme, "muted", `  … ${hits.length - 24} more`));
     }
@@ -221,6 +236,9 @@ export function formatCodemodeResult(value, meta = {}, theme) {
     if (meta.wallMs !== undefined)
         bits.push(`${meta.wallMs}ms`);
     const title = header(theme, "codemode", bits);
+    if (value === undefined) {
+        return `${title}\n${paint(theme, "muted", "  (no return statement; add `return` to send a value to the model)")}`;
+    }
     if (value && typeof value === "object" && !Array.isArray(value)) {
         const rows = Object.entries(value).slice(0, 16).map(([key, entry]) => paint(theme, "toolOutput", `  ${key}: ${compactValue(entry)}`));
         return [title, ...rows].join("\n");

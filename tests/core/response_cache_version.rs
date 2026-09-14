@@ -48,6 +48,33 @@ fn same_connection_write_invalidates_cached_response() {
 }
 
 #[test]
+fn stamp_off_still_populates_and_reuses_the_response_cache() {
+    let temp = TempDir::new().unwrap();
+    let store = IndexStore::open(temp.path(), None).unwrap();
+    let options = SearchOptions {
+        root: temp.path().to_path_buf(),
+        index_path: Some(store.db_path().to_path_buf()),
+        use_embed: false,
+        ..SearchOptions::default()
+    };
+    let searcher = Searcher::with_store(store, options).with_response_stamp(false);
+    upsert(searcher.store(), "alpha sentinel", "alpha-hash");
+    assert_eq!(searcher.cached_response_count(), 0);
+    assert!(!searcher.search("alpha").unwrap().hits.is_empty());
+    let occupied = searcher.cached_response_count();
+    assert!(
+        occupied >= 1,
+        "Code Mode stamp-off must still cache finished responses"
+    );
+    assert!(!searcher.search("alpha").unwrap().hits.is_empty());
+    assert_eq!(
+        searcher.cached_response_count(),
+        occupied,
+        "repeat search must reuse the cached entry"
+    );
+}
+
+#[test]
 fn external_connection_write_invalidates_cached_response() {
     let temp = TempDir::new().unwrap();
     let reader = IndexStore::open(temp.path(), None).unwrap();

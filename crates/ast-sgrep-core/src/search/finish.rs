@@ -131,7 +131,7 @@ pub(crate) fn finish_response_checked(
     hits: Vec<SearchHit>,
     dedup: bool,
 ) -> Result<SearchResponse> {
-    finish_response_checked_lazy(parsed, options, hits, dedup, None, false)
+    finish_response_checked_lazy(parsed, options, hits, dedup, None, false, false)
 }
 
 /// br-perf-lazy-excerpts: variant that defers per-hit excerpt SQL out of the
@@ -147,9 +147,17 @@ pub(crate) fn finish_response_checked_lazy(
     dedup: bool,
     lazy_excerpt_store: Option<&crate::store::IndexStore>,
     mut lazy_excerpts_pending: bool,
+    skip_fs_byte_estimates: bool,
 ) -> Result<SearchResponse> {
     let _ = &mut lazy_excerpts_pending;
-    finish_response_inner(parsed, options, hits, dedup, lazy_excerpt_store)
+    finish_response_inner(
+        parsed,
+        options,
+        hits,
+        dedup,
+        lazy_excerpt_store,
+        skip_fs_byte_estimates,
+    )
 }
 
 fn finish_response_inner(
@@ -158,6 +166,7 @@ fn finish_response_inner(
     mut hits: Vec<SearchHit>,
     dedup: bool,
     lazy_excerpt_store: Option<&crate::store::IndexStore>,
+    skip_fs_byte_estimates: bool,
 ) -> Result<SearchResponse> {
     if dedup {
         hits = dedup_hits(hits);
@@ -274,7 +283,12 @@ fn finish_response_inner(
         hits = enforce_result_gates(hits, parsed.mode, options.limit);
     }
     let (read_bytes_estimate, returned_excerpt_bytes, prevented_read_bytes) =
-        super::estimate_prevented_reads(&options.root, &hits);
+        if skip_fs_byte_estimates {
+            let returned = hits.iter().map(|h| h.excerpt.len() as u64).sum();
+            (0, returned, 0)
+        } else {
+            super::estimate_prevented_reads(&options.root, &hits)
+        };
     let response = SearchResponse {
         query: parsed.raw.clone(),
         limit: options.limit,

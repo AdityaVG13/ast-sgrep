@@ -1,0 +1,11 @@
+tier3 8/8 — live re-verified 2026-09-13 by battery 147E at the official
+binaries (ast-sgrep 8b860557f880ec04 / asgrep 36b27cecc3a1ee10, oracle
+ast-grep 0.45.2 9585263377c1fc98): 8 passed / 0 failed, exit 0, envelope
+hashes per case recorded there. Authoritative receipts:
+  gauntlet workspace reports/verify_tier3_pass49.txt (pass-49 run of record)
+  gauntlet workspace reports/phase147e-battery.md (today's re-verification)
+  gauntlet workspace reports/parity_score_pass147e.json (scored lane 8/8)
+This file was the disclosed 0-byte wrong-cwd stray from pass-44 (see
+FINAL_GAUNTLET_REPORT.md §I); filled 2026-09-13 to resolve bead
+br-t3-battery-provenance-gap-2tv — re-verify leg satisfied, receipt now
+non-empty at both paths. Nothing was deleted.

@@ -337,7 +337,10 @@ export function argvFor(tool: string, args: Record<string, unknown>): string[] {
   }
 
   const excerpt = num(args.excerpt_lines ?? args.excerptLines, 0);
-  const capsule = ["--json", "--format", "agent-capsule", "--limit", String(limit), "--excerpt-lines", String(excerpt)];
+  const capsule = withLang(
+    ["--json", "--format", "agent-capsule", "--limit", String(limit), "--excerpt-lines", String(excerpt)],
+    args,
+  );
   if (spec.form === "semantic") {
     return ["semantic", argStr(args, "query"), ".", ...capsule];
   }
@@ -356,6 +359,11 @@ export function argvFor(tool: string, args: Record<string, unknown>): string[] {
   const raw = argStr(args, spec.key);
   const token = spec.prefix ? `${spec.prefix}:${raw}` : raw;
   return [...capsule, token, "."];
+}
+
+function withLang(argv: string[], args: Record<string, unknown>): string[] {
+  const lang = typeof args.lang === "string" ? args.lang.trim() : "";
+  return lang ? ["--lang", lang, ...argv] : argv;
 }
 
 function num(value: unknown, fallback: number): number {

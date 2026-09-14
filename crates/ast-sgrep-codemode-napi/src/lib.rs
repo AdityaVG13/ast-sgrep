@@ -383,11 +383,30 @@ impl Session {
 
     /// Bounded metadata or symbol lookup on the JS thread.
     ///
-    /// Search, index, semantic, and chain stay on [`Self::call`] so they cannot
-    /// stall Node's event loop. Returns "session is busy" when a worker-pool
-    /// task already holds the session so the JS host can fall back to `call`.
+    /// Search cache hits may also run here so sticky repeats skip libuv.
+    /// Unique search, index, semantic, and chain stay on [`Self::call`].
+    /// Returns "session is busy" when a worker-pool task already holds the
+    /// session so the JS host can fall back to `call`.
     #[napi]
     pub fn call_now(&self, tool: String, args: Option<Value>) -> Result<Value> {
+        let args = args.unwrap_or(Value::Object(Default::default()));
+        if tool == "search" {
+            let mut session = self
+                .inner
+                .try_lock()
+                .map_err(|_| Error::from_reason("session is busy"))?;
+            let Some(value) = session.take_cached_search(&args).map_err(map_err)? else {
+                // Unique search stays on `call()` / libuv. Return null so the
+                // JS host can fall through without throwing (V8 exception tax
+                // on every unique Pi search).
+                return Ok(Value::Null);
+            };
+            self.call_count.store(
+                session.call_count().min(u32::MAX as usize) as u32,
+                Ordering::Relaxed,
+            );
+            return Ok(value);
+        }
         if !is_fast_lookup(&tool) {
             return Err(Error::from_reason(
                 "callNow is only for bounded metadata/symbol lookups; use call() for search/index/semantic/chain",
@@ -397,7 +416,7 @@ impl Session {
             .inner
             .try_lock()
             .map_err(|_| Error::from_reason("session is busy"))?;
-        let result = session.call(&tool, args.unwrap_or(Value::Object(Default::default())));
+        let result = session.call(&tool, args);
         self.call_count.store(
             session.call_count().min(u32::MAX as usize) as u32,
             Ordering::Relaxed,

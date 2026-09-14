@@ -172,3 +172,14 @@ Pi release validation does not run automatically on pull requests, pushes to `ma
 Before the first external publication, a human must verify package-name ownership and approve the protected publishing environment. A partial npm publication is recovered by releasing a new immutable version, never by overwriting a published version.
 
 Maintainers: see [RELEASING.md](RELEASING.md) and the machine-readable [release contract](../packages/pi/release-contract.json).
+
+### Optional workspace change events
+
+The extension consumes the advisory host event `workspace:changed` with
+`{version:1,cwd,paths}`. `cwd` and every path must be absolute; `paths:null`
+requests conservative root invalidation after unknown external mutations.
+Any extension can publish this convention after committing files. The listener
+marks state dirty synchronously and the next query performs the existing refresh;
+it neither parses tool programs nor identifies a specific producer package.
+Filesystem watching and native write/edit hooks remain available independently.
+This is not a durable event stream or a guarantee about unreported external writes.

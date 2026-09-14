@@ -160,6 +160,25 @@ impl TrigramDfCache {
         }
         pick_shortcut(&ranked)
     }
+
+    /// Smallest trigram document frequency for `needle`, if the vocab lookup
+    /// succeeded. `None` means uncertain (non-ASCII, short, or vocab miss) —
+    /// callers must keep the term rather than treat it as common.
+    pub(crate) fn min_df(&self, store: &IndexStore, needle: &str) -> Option<i64> {
+        let _ = self.scan_shortcut(store, needle);
+        if !needle.is_ascii() {
+            return None;
+        }
+        let needle_lower = needle.to_lowercase();
+        let trigrams = distinct_trigrams(&needle_lower)?;
+        let state = self.inner.lock().ok()?;
+        trigrams
+            .iter()
+            .map(|tri| state.cache.entries.get(*tri).copied())
+            .collect::<Option<Vec<i64>>>()?
+            .into_iter()
+            .min()
+    }
 }
 
 /// Pick 1–2 rarest trigrams whose smallest df is rare enough to shortcut.

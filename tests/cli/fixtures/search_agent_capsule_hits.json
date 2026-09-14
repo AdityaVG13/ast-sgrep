@@ -72,5 +72,10 @@
   "read_bytes_estimate": 781,
   "returned_excerpt_bytes": 65,
   "schema_version": "1.0.0",
+  "suggested_next": [
+    "asgrep 'callers:process_request'",
+    "asgrep semantic 'process_request'",
+    "asgrep --json --format agent 'process_request'"
+  ],
   "tool": "asgrep"
 }

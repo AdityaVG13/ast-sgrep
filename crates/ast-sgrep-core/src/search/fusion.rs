@@ -14,6 +14,14 @@ struct DedupKey {
     symbol: u32,
     caller: u32,
     callee: u32,
+    // PASS 131 (130A-F4): the matched-node byte span joins the key. The
+    // dedup's rationale is collapsing the SAME node surfaced by several
+    // channels — two hits with equal (file, lines, span). Two INDEPENDENT
+    // same-line hits (`q(1); q(2);` under `q($A)`) carry different spans
+    // and are distinct sg rows. Span-less rows (`None`) keep the exact
+    // pre-131 keying (the index lane has no byte columns — registered
+    // residual, CNR §45).
+    byte_span: Option<(usize, usize)>,
 }
 
 struct Interner {
@@ -59,6 +67,7 @@ pub fn dedup_hits(hits: Vec<SearchHit>) -> Vec<SearchHit> {
             symbol: intern.intern_opt(hit.symbol.as_deref()),
             caller: intern.intern_opt(hit.caller.as_deref()),
             callee: intern.intern_opt(hit.callee.as_deref()),
+            byte_span: hit.byte_span,
         };
         if let Some(&index) = positions.get(&key) {
             merge_channel_evidence(&mut best[index], hit);

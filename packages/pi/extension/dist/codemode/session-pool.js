@@ -26,6 +26,11 @@ function isBusyError(cause) {
     const message = cause instanceof Error ? cause.message : String(cause);
     return /session is busy/i.test(message);
 }
+/** Unique search must not run on the JS thread; cache hits may. */
+export function isUncachedSearchError(cause) {
+    const message = cause instanceof Error ? cause.message : String(cause);
+    return /use call\(\) for search/i.test(message);
+}
 export function isClosedWorkerError(cause) {
     const message = cause instanceof Error ? cause.message : String(cause);
     return /codemode-serve is closed|native session is closed/i.test(message);
@@ -67,13 +72,20 @@ function inProcessWorker(session) {
             if (options?.signal?.aborted)
                 return Promise.reject(abortError());
             const sync = session.callNow;
-            if (inflight === 0 && !closed && sync && FAST_LOOKUP.has(tool)) {
+            if (inflight === 0 && !closed && sync && (FAST_LOOKUP.has(tool) || tool === "search")) {
                 try {
-                    return Promise.resolve(asEnvelope(sync.call(session, tool, args ?? {}), tool));
+                    const value = sync.call(session, tool, args ?? {});
+                    if (!(tool === "search" && value == null)) {
+                        return Promise.resolve(asEnvelope(value, tool));
+                    }
                 }
                 catch (cause) {
-                    if (!isBusyError(cause))
+                    if (tool === "search" && isUncachedSearchError(cause)) {
+                        // Older native addons threw on unique search.
+                    }
+                    else if (!isBusyError(cause)) {
                         return Promise.reject(cause);
+                    }
                 }
             }
             return enqueue(async () => asEnvelope(await session.call(tool, args, options?.signal), tool), options?.signal);

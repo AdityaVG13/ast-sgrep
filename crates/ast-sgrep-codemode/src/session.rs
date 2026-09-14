@@ -4,11 +4,11 @@ use anyhow::{anyhow, Context};
 use ast_sgrep_core::chain::{expand_chain, ChainConfig};
 use ast_sgrep_core::{
     canonicalize_affected_path, expand_incremental_path_list, EmbedBackend, IndexOptions, Indexer,
-    SearchOptions, Searcher, MAX_EXCERPT_LINES, MAX_INCREMENTAL_PATHS,
+    Language, SearchOptions, Searcher, MAX_EXCERPT_LINES, MAX_INCREMENTAL_PATHS,
 };
 use ast_sgrep_plugins::{format_response_with, OutputFormat};
 use serde_json::{json, Value};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::AtomicBool;
@@ -60,9 +60,14 @@ struct SearcherKey {
 }
 
 /// Stateful façade: warm `Searcher`, budgets, and tool dispatch.
+const RENDER_CACHE_CAP: usize = 64;
+
 pub struct CodeModeSession {
     config: SessionConfig,
     searcher_cache: Mutex<Option<(SearcherKey, Searcher)>>,
+    /// Formatted capsule/agent JSON for identical search args on a warm Searcher.
+    /// Cleared whenever the Searcher is dropped (index write or writer stamp).
+    render_cache: Mutex<HashMap<String, Value>>,
     /// Soft budget: number of index-touching tool calls this session.
     calls: usize,
     pub max_calls: usize,
@@ -83,11 +88,29 @@ fn interactive_index_threads() -> usize {
         })
 }
 
+/// Pin a relative Code Mode `index_path` under the session workspace root.
+/// Absolute paths stay as given so tests and Pi can keep the index in a temp dir.
+fn resolve_session_index_path(root: &Path, path: PathBuf) -> PathBuf {
+    if path.is_absolute() {
+        return path;
+    }
+    let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    root.join(path)
+}
+
 impl CodeModeSession {
     pub fn new(config: SessionConfig) -> Self {
+        let mut config = config;
+        if let Some(path) = config.index_path.take() {
+            // CLI relative indexes resolve against process cwd. A Code Mode
+            // session must pin them under the workspace root so Pi cannot
+            // write `custom-index/` into whatever directory the agent started in.
+            config.index_path = Some(resolve_session_index_path(&config.root, path));
+        }
         Self {
             config,
             searcher_cache: Mutex::new(None),
+            render_cache: Mutex::new(HashMap::new()),
             calls: 0,
             max_calls: 64,
             cancel: None,
@@ -114,11 +137,13 @@ impl CodeModeSession {
     pub fn call(&mut self, name: &str, args: Value) -> Result<Value, CallError> {
         self.bump_call()?;
         let value = call_tool(self, name, args)?;
-        let bytes = encoded_json_len(&value)?;
-        if bytes > MAX_CALL_RESPONSE_BYTES {
-            return Err(CallError::Other(anyhow!(
-                "codemode response exceeds {MAX_CALL_RESPONSE_BYTES} bytes"
-            )));
+        if json_size_bound(&value) > MAX_CALL_RESPONSE_BYTES {
+            let bytes = encoded_json_len(&value)?;
+            if bytes > MAX_CALL_RESPONSE_BYTES {
+                return Err(CallError::Other(anyhow!(
+                    "codemode response exceeds {MAX_CALL_RESPONSE_BYTES} bytes"
+                )));
+            }
         }
         Ok(value)
     }
@@ -141,23 +166,13 @@ impl CodeModeSession {
         if let Ok(mut guard) = self.searcher_cache.lock() {
             *guard = None;
         }
+        self.clear_render_cache();
     }
 
-    /// Drop warm Searcher when an external writer bumped the on-disk stamp
-    /// for the cached Searcher's root (not the session workspace).
-    fn sync_writer_generation(&self) -> anyhow::Result<()> {
-        let mut guard = self
-            .searcher_cache
-            .lock()
-            .map_err(|_| anyhow!("searcher cache lock poisoned"))?;
-        if let Some((key, _)) = guard.as_ref() {
-            let current =
-                ast_sgrep_core::read_writer_generation(&key.root, key.index_path.as_deref());
-            if key.writer_generation != current {
-                *guard = None;
-            }
+    fn clear_render_cache(&self) {
+        if let Ok(mut guard) = self.render_cache.lock() {
+            guard.clear();
         }
-        Ok(())
     }
 
     fn root_arg(&self, args: &Value) -> anyhow::Result<PathBuf> {
@@ -209,7 +224,7 @@ impl CodeModeSession {
     where
         F: FnOnce(&Searcher) -> anyhow::Result<T>,
     {
-        let guard = self.searcher_for(root, needed_limit)?;
+        let guard = self.searcher_for(root, needed_limit, None)?;
         let searcher = &guard.as_ref().expect("searcher_for populates cache").1;
         f(searcher)
     }
@@ -218,9 +233,12 @@ impl CodeModeSession {
         &self,
         root: PathBuf,
         needed_limit: usize,
+        writer_generation: Option<u64>,
     ) -> anyhow::Result<std::sync::MutexGuard<'_, Option<(SearcherKey, Searcher)>>> {
-        self.sync_writer_generation()?;
         let needed = needed_limit.clamp(1, 500);
+        let writer_generation = writer_generation.unwrap_or_else(|| {
+            ast_sgrep_core::read_writer_generation(&root, self.config.index_path.as_deref())
+        });
         let mut guard = self
             .searcher_cache
             .lock()
@@ -232,17 +250,17 @@ impl CodeModeSession {
                     && key.index_path == self.config.index_path
                     && key.use_embed == self.config.use_embed
                     && key.open_limit >= needed
-                    && key.writer_generation
-                        == ast_sgrep_core::read_writer_generation(
-                            &key.root,
-                            key.index_path.as_deref(),
-                        )
+                    && key.writer_generation == writer_generation
         );
         if !reuse {
+            if let Some((_, old)) = guard.take() {
+                old.release_read_snapshot();
+            }
+            self.clear_render_cache();
             // Open at least as wide as config + this call so later smaller calls reuse.
             let open_limit = needed.max(self.config.limit).clamp(1, 500);
-            let writer_generation =
-                ast_sgrep_core::read_writer_generation(&root, self.config.index_path.as_deref());
+            // Stamps stay off (capsules discard them). Response LRU stays on:
+            // sticky Pi sessions repeat needles.
             let searcher = Searcher::new(SearchOptions {
                 root: root.clone(),
                 index_path: self.config.index_path.clone(),
@@ -251,6 +269,8 @@ impl CodeModeSession {
                 ..SearchOptions::default()
             })?
             .with_response_stamp(false);
+            let _ = searcher.hold_read_snapshot();
+            let _ = searcher.warm_search_path();
             *guard = Some((
                 SearcherKey {
                     root,
@@ -266,11 +286,15 @@ impl CodeModeSession {
     }
 
     pub(crate) fn search(&mut self, args: &Value) -> anyhow::Result<Value> {
-        let query = args
+        let raw_query = args
             .get("query")
             .and_then(|v| v.as_str())
-            .context("query is required")?;
-        ast_sgrep_core::validate_query_len(query).map_err(|e| anyhow::anyhow!(e))?;
+            .context(
+                "query is required. Call asgrep.search(\"text\") or asgrep.search({ query: \"text\" })",
+            )?;
+        let query = scoped_search_query(args, raw_query);
+        ast_sgrep_core::validate_query_len(&query).map_err(|e| anyhow::anyhow!(e))?;
+        let lang_filter = optional_lang(args)?;
         let limit = args
             .get("limit")
             .and_then(|v| v.as_u64())
@@ -289,20 +313,40 @@ impl CodeModeSession {
             .min(MAX_EXCERPT_LINES);
         let format = self.resolve_format(args);
         let root = self.root_arg(args)?;
-        let guard = self.searcher_for(root, limit)?;
+        let writer_generation =
+            ast_sgrep_core::read_writer_generation(&root, self.config.index_path.as_deref());
+        self.drop_searcher_if_writer_changed(writer_generation);
+        let render_key = search_render_key(
+            &query,
+            limit,
+            format,
+            excerpt_lines,
+            semantic_only,
+            lang_filter.as_deref(),
+        );
+        if let Some(cached) = self.cached_render(&render_key) {
+            return Ok(cached);
+        }
+        let guard = self.searcher_for(root, limit, Some(writer_generation))?;
         let searcher = &guard.as_ref().expect("searcher_for populates cache").1;
         let mut response = if semantic_only {
-            searcher.search_semantic(query)?
+            searcher.search_semantic(&query)?
         } else {
-            searcher.search(query)?
+            searcher.search(&query)?
         };
+        if let Some(lang) = lang_filter.as_deref() {
+            response.hits.retain(|hit| hit.language.as_deref() == Some(lang));
+        }
         // Searcher may be wider than this call's limit (warm-cache reuse).
         if response.hits.len() > limit {
             response.hits.truncate(limit);
             response.limit = limit;
         }
         ensure_render_input_bounded(&response, format, excerpt_lines)?;
-        Ok(format_response_with(&response, format, excerpt_lines))
+        let value = format_response_with(&response, format, excerpt_lines);
+        drop(guard);
+        self.store_render(render_key, value.clone());
+        Ok(value)
     }
 
     pub(crate) fn chain(&mut self, args: &Value) -> anyhow::Result<Value> {
@@ -330,7 +374,7 @@ impl CodeModeSession {
             .unwrap_or(20)
             .clamp(1, 50);
         let root = self.root_arg(args)?;
-        let guard = self.searcher_for(root, self.config.limit)?;
+        let guard = self.searcher_for(root, self.config.limit, None)?;
         let searcher = &guard.as_ref().expect("searcher_for populates cache").1;
         let config = ChainConfig {
             max_depth,
@@ -340,6 +384,96 @@ impl CodeModeSession {
         };
         let response = expand_chain(searcher.store(), query, &config)?;
         Ok(serde_json::to_value(response)?)
+    }
+
+    fn cached_render(&self, key: &str) -> Option<Value> {
+        self.render_cache
+            .lock()
+            .ok()
+            .and_then(|guard| guard.get(key).cloned())
+    }
+
+    fn drop_searcher_if_writer_changed(&self, current: u64) {
+        let Ok(mut guard) = self.searcher_cache.lock() else {
+            return;
+        };
+        let stale = matches!(
+            guard.as_ref(),
+            Some((key, _)) if key.writer_generation != current
+        );
+        if stale {
+            if let Some((_, old)) = guard.take() {
+                old.release_read_snapshot();
+            }
+            drop(guard);
+            self.clear_render_cache();
+        }
+    }
+
+    /// Return a previously rendered search capsule without running retrieval.
+    ///
+    /// Used by NAPI `callNow` so sticky repeats skip the libuv hop. Unique
+    /// queries return `None` and must use `call()`.
+    pub fn peek_cached_search(&self, args: &Value) -> Option<Value> {
+        let raw_query = args.get("query").and_then(|v| v.as_str())?;
+        let query = scoped_search_query(args, raw_query);
+        ast_sgrep_core::validate_query_len(&query).ok()?;
+        let lang_filter = optional_lang(args).ok()?;
+        let limit = args
+            .get("limit")
+            .and_then(|v| v.as_u64())
+            .map(|n| n as usize)
+            .unwrap_or(self.config.limit)
+            .clamp(1, 500);
+        let semantic_only = args
+            .get("semantic_only")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let excerpt_lines = args
+            .get("excerpt_lines")
+            .and_then(|v| v.as_u64())
+            .map(|n| n as usize)
+            .unwrap_or(0)
+            .min(MAX_EXCERPT_LINES);
+        let format = self.resolve_format(args);
+        let root = self.root_arg(args).ok()?;
+        let current =
+            ast_sgrep_core::read_writer_generation(&root, self.config.index_path.as_deref());
+        {
+            let guard = self.searcher_cache.lock().ok()?;
+            match guard.as_ref() {
+                Some((key, _)) if key.writer_generation == current => {}
+                _ => return None,
+            }
+        }
+        let render_key = search_render_key(
+            &query,
+            limit,
+            format,
+            excerpt_lines,
+            semantic_only,
+            lang_filter.as_deref(),
+        );
+        self.cached_render(&render_key)
+    }
+
+    /// Cache hit path for NAPI `callNow`: bump the session budget like `call`.
+    pub fn take_cached_search(&mut self, args: &Value) -> Result<Option<Value>, crate::tools::CallError> {
+        let Some(value) = self.peek_cached_search(args) else {
+            return Ok(None);
+        };
+        self.bump_call()?;
+        Ok(Some(value))
+    }
+
+    fn store_render(&self, key: String, value: Value) {
+        let Ok(mut guard) = self.render_cache.lock() else {
+            return;
+        };
+        if guard.len() >= RENDER_CACHE_CAP && !guard.contains_key(&key) {
+            guard.clear();
+        }
+        guard.insert(key, value);
     }
 
     pub(crate) fn index_status(&mut self, args: &Value) -> anyhow::Result<Value> {
@@ -427,6 +561,61 @@ pub(crate) fn encoded_len(value: &impl serde::Serialize) -> Result<usize, serde_
 
 pub(crate) fn encoded_json_len(value: &Value) -> Result<usize, serde_json::Error> {
     encoded_len(value)
+}
+
+/// Conservative JSON wire-size upper bound (every string byte as `\u00XX`).
+/// Exact `encoded_json_len` runs only when this bound exceeds the session cap.
+fn json_size_bound(value: &Value) -> usize {
+    match value {
+        Value::Null => 4,
+        Value::Bool(true) => 4,
+        Value::Bool(false) => 5,
+        Value::Number(n) => n.to_string().len(),
+        Value::String(s) => 2usize.saturating_add(s.len().saturating_mul(6)),
+        Value::Array(items) => {
+            let inner: usize = items.iter().map(json_size_bound).sum();
+            2usize
+                .saturating_add(inner)
+                .saturating_add(items.len().saturating_sub(1))
+        }
+        Value::Object(map) => {
+            let inner: usize = map
+                .iter()
+                .map(|(k, v)| {
+                    2usize
+                        .saturating_add(k.len().saturating_mul(6))
+                        .saturating_add(1)
+                        .saturating_add(json_size_bound(v))
+                })
+                .sum();
+            2usize
+                .saturating_add(inner)
+                .saturating_add(map.len().saturating_sub(1))
+        }
+    }
+}
+
+fn search_render_key(
+    query: &str,
+    limit: usize,
+    format: OutputFormat,
+    excerpt_lines: usize,
+    semantic_only: bool,
+    lang: Option<&str>,
+) -> String {
+    let fmt = match format {
+        OutputFormat::Native => "n",
+        OutputFormat::GitHub => "gh",
+        OutputFormat::GitLab => "gl",
+        OutputFormat::Agent => "a",
+        OutputFormat::AgentCapsule => "c",
+        OutputFormat::Compact => "k",
+    };
+    format!(
+        "{query}\0{limit}\0{fmt}\0{excerpt_lines}\0{}\0{}",
+        u8::from(semantic_only),
+        lang.unwrap_or("")
+    )
 }
 
 fn ensure_render_input_bounded(
@@ -528,4 +717,38 @@ fn incremental_paths(args: &Value, root: &Path) -> anyhow::Result<Option<Vec<Pat
         }
     }
     Ok(Some(expand_incremental_path_list(paths, MAX_INCREMENTAL_PATHS)))
+}
+
+fn scoped_search_query(args: &Value, query: &str) -> String {
+    let scope = ["in", "file_filter", "fileFilter"]
+        .into_iter()
+        .find_map(|key| args.get(key).and_then(Value::as_str))
+        .map(str::trim)
+        .filter(|path| {
+            !path.is_empty() && !path.split(['/', '\\']).any(|segment| segment == "..")
+        });
+    match scope {
+        Some(path) if !query.split_whitespace().any(|token| token.starts_with("in:")) => {
+            format!("in:{path} {query}")
+        }
+        _ => query.to_string(),
+    }
+}
+
+fn optional_lang(args: &Value) -> anyhow::Result<Option<String>> {
+    let Some(raw) = args
+        .get("lang")
+        .or_else(|| args.get("lang_filter"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok(None);
+    };
+    let Some(language) = Language::parse(raw) else {
+        return Err(anyhow!(
+            "unknown lang '{raw}' (expected a stored id or extension such as rs, ts, py)"
+        ));
+    };
+    Ok(Some(language.as_str().to_string()))
 }

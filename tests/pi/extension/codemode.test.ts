@@ -8,12 +8,62 @@ import { createAsgrepConnector } from "../../../packages/pi/extension/src/codemo
 import { createCodemodeDispatcher, argvFor, asEnvelope } from "../../../packages/pi/extension/src/codemode/dispatch.js";
 import { normalizeCode, resetCodemodeSandboxForTests, runCodemode, warmCodemodeSandbox } from "../../../packages/pi/extension/src/codemode/runner.js";
 import { runBatchViaStdin, startStickyWorker } from "../../../packages/pi/extension/src/codemode/worker.js";
+import { applyQueryScope, packGuestCall, resolveHostMethod, unknownMethodError } from "../../../packages/pi/extension/src/codemode/guest-api.js";
 import type { MachineEnvelope } from "../../../packages/pi/extension/src/runtime.js";
 
 test("normalizeCode wraps bare bodies and strips fences", () => {
   assert.match(normalizeCode("return 1"), /async \(\) =>/);
   assert.match(normalizeCode("```js\nreturn 2\n```"), /return 2/);
   assert.match(normalizeCode("async () => 3"), /^\(async \(\) => 3\)\(\)$/);
+  assert.equal(normalizeCode("() => 3"), "(async () => 3)()");
+  assert.match(normalizeCode('await asgrep.search("auth")'), /return await asgrep.search\("auth"\)/);
+});
+
+test("packGuestCall and aliases make the first call shape work", () => {
+  assert.deepEqual(packGuestCall("search", ["auth", { limit: 8, in: "src" }]), {
+    query: "auth",
+    limit: 8,
+    in: "src",
+  });
+  assert.deepEqual(packGuestCall("defs", ["Foo"]), { symbol: "Foo" });
+  assert.equal(applyQueryScope("auth", { in: "src" }), "in:src auth");
+  assert.equal(resolveHostMethod("define"), "defs");
+  assert.equal(resolveHostMethod("index_status"), "indexStatus");
+  assert.match(unknownMethodError("searc"), /Did you mean search/);
+});
+
+test("positional search, defs, and method aliases reach the host", async () => {
+  const argv: string[][] = [];
+  const host = {
+    async run(args: readonly string[]): Promise<MachineEnvelope> {
+      argv.push([...args]);
+      return { tool: "asgrep", schema_version: "1.0.0", ok: true, hits: [{ symbol: "S" }] };
+    },
+  };
+  const bundle = createAsgrepConnector(host, { cwd: "/p" });
+  const outcome = await runCodemode(
+    `return {
+      seed: await asgrep.search("auth", { in: "src", limit: 4 }),
+      defs: await asgrep.defs("Foo"),
+      aliased: await asgrep.define("Foo"),
+    }`,
+    bundle.asgrep,
+  );
+  assert.equal(outcome.ok, true, outcome.ok ? undefined : outcome.error);
+  const flat = argv.flat().join(" ");
+  assert.match(flat, /in:src auth/);
+  assert.match(flat, /defs:Foo/);
+});
+
+test("unknown method names a close match", async () => {
+  const bundle = createAsgrepConnector({
+    async run(): Promise<MachineEnvelope> {
+      return { tool: "asgrep", schema_version: "1.0.0", ok: true, hits: [] };
+    },
+  }, { cwd: "/p" });
+  const outcome = await runCodemode(`return asgrep.searc("auth")`, bundle.asgrep);
+  assert.equal(outcome.ok, false);
+  if (!outcome.ok) assert.match(outcome.error, /Did you mean search/);
 });
 
 test("Promise.all overlaps host calls (Amdahl parallel fraction)", async () => {
@@ -477,10 +527,11 @@ test("runner does not expose ambient Node authority", async () => {
     "return typeof require",
     "return typeof ArrayBuffer",
     "return typeof WebAssembly",
+    "return typeof asgrep.constructor",
     "return globalThis.constructor.constructor('return process')()",
   ]) {
     const outcome = await runCodemode(code, bundle.asgrep);
-    if (code.includes("constructor")) {
+    if (code.includes("constructor.constructor")) {
       assert.equal(outcome.ok, false, `constructor escape unexpectedly succeeded: ${JSON.stringify(outcome)}`);
     } else {
       assert.equal(outcome.ok, true, outcome.ok ? undefined : outcome.error);
@@ -720,6 +771,9 @@ test("argvFor emits typed-equivalent CLI for spawn fallback", () => {
   ]);
   assert.deepEqual(argvFor("find", { query: "blast:src/auth.ts", limit: 4 }), [
     "--json", "--format", "agent-capsule", "--limit", "4", "--excerpt-lines", "0", "imports:src/auth.ts", ".",
+  ]);
+  assert.deepEqual(argvFor("search", { query: "auth", lang: "rs", limit: 8 }), [
+    "--lang", "rs", "--json", "--format", "agent-capsule", "--limit", "8", "--excerpt-lines", "0", "auth", ".",
   ]);
   assert.throws(() => argvFor("read", { path: "a.ts" }), /no direct CLI fallback/);
   assert.throws(() => argvFor("edit", { path: "a.ts", oldText: "a", newText: "b" }), /no direct CLI fallback/);

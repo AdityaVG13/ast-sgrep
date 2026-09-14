@@ -206,21 +206,48 @@ fn looks_like_symbol(term: &str) -> bool {
 }
 
 fn split_in_path_scope(input: &str) -> (String, Option<String>) {
+    // PASS 147 (146E-F1 TRUE ROOT): the scope split LOCATES `in:` tokens by
+    // whitespace word but must splice the REMAINING RAW BYTES. The old
+    // `split_whitespace().join(" ")` collapsed the query's interior layout,
+    // so a `pattern:` query carrying an interior line break
+    // (`pattern:return \n$A`) reached the pattern lane as the sg-ACCEPTED
+    // single-line spelling `return $A` and over-served rows sg 0.45.2
+    // refuses to parse (rc8 "Multiple AST nodes are detected"; the oracle
+    // grid /tmp/phase147R pins the py/js/go newline-seam cells). Byte
+    // fidelity is the sg-exact contract on every mode prefix: sg parses the
+    // RAW pattern text, so the ingress must never rewrite it. `in:`
+    // extraction keeps the registered path-scope semantics (first valid
+    // token wins; empty/`..` tokens are dropped without scoping).
     let mut scope = None;
-    let mut rest = Vec::new();
-    for token in input.split_whitespace() {
-        if let Some(path) = token.strip_prefix("in:") {
-            if path.is_empty() || path.split(['/', '\\']).any(|seg| seg == "..") {
-                continue;
-            }
-            if scope.is_none() {
+    let mut out = String::with_capacity(input.len());
+    let mut copy_from = 0usize;
+    let mut cursor = 0usize;
+    while cursor < input.len() {
+        let tail = &input[cursor..];
+        let lead_ws = tail.len() - tail.trim_start().len();
+        let start = cursor + lead_ws;
+        if start >= input.len() {
+            break;
+        }
+        let token_len = input[start..].split_whitespace().next().map_or(0, str::len);
+        let end = start + token_len;
+        if let Some(path) = input[start..end].strip_prefix("in:") {
+            // Drop the token together with the separator run that led to it,
+            // so the spliced payload never gains a doubled separator where an
+            // `in:` sat between payload words.
+            out.push_str(&input[copy_from..start]);
+            copy_from = end;
+            if !path.is_empty()
+                && !path.split(['/', '\\']).any(|seg| seg == "..")
+                && scope.is_none()
+            {
                 scope = Some(path.to_string());
             }
-            continue;
         }
-        rest.push(token);
+        cursor = end;
     }
-    (rest.join(" "), scope)
+    out.push_str(&input[copy_from..]);
+    (out.trim().to_string(), scope)
 }
 
 /// Turn an `in:path` token into a file_filter glob (`src` → `src/**`).

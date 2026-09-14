@@ -1,4 +1,5 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { isAbsolute } from "node:path";
 import { Type } from "typebox";
 import {
   createAsgrepConnector,
@@ -9,6 +10,7 @@ import {
   NativeSessionPool,
   argvFor,
   asEnvelope,
+  applyQueryScope,
   warmCodemodeSandbox,
   resetCodemodeSandboxForTests,
   isClosedWorkerError,
@@ -33,7 +35,7 @@ import {
 const DEFAULT_LIMIT = 8;
 const MAX_LIMIT = 100;
 const MAX_EXCERPT_LINES = 100;
-const MAX_CONTENT_CHARS = 1_200;
+const MAX_CONTENT_CHARS = 8_000;
 
 const searchParameters = Type.Object({
   query: Type.String({ minLength: 1, maxLength: 4_096, description: "Natural-language query, symbol, or structural pattern" }),
@@ -51,6 +53,9 @@ const searchParameters = Type.Object({
   ], { default: "natural", description: "Search strategy (CLI-aligned modes)" })),
   limit: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_LIMIT, default: DEFAULT_LIMIT })),
   excerptLines: Type.Optional(Type.Integer({ minimum: 0, maximum: MAX_EXCERPT_LINES, default: 0, description: "Opt in to excerpt body lines" })),
+  in: Type.Optional(Type.String({ minLength: 1, maxLength: 512, description: "Directory or glob to bound the search (in:path)" })),
+  lang: Type.Optional(Type.String({ minLength: 1, maxLength: 32, description: "Language id or extension (rs, ts, py)" })),
+  fileFilter: Type.Optional(Type.String({ minLength: 1, maxLength: 512, description: "Repository-relative glob; alias of in" })),
 }, { additionalProperties: false });
 
 const indexParameters = Type.Object({
@@ -63,8 +68,9 @@ const codemodeParameters = Type.Object({
   code: Type.String({
     minLength: 1,
     maxLength: 32_000,
-    description: "JavaScript async body that calls asgrep.* methods. Prefer Promise.all for independent lookups. Return only the shaped final value.",
+    description: "JavaScript: async () => { ... } or a bare body with return. Call asgrep.search(\"query\"), asgrep.defs(\"Symbol\"). Prefer Promise.all. Return only the shaped final value.",
   }),
+  timeoutMs: Type.Optional(Type.Integer({ minimum: 1_000, maximum: 120_000, description: "Hard timeout in ms (default 30000)" })),
 }, { additionalProperties: false });
 
 type RuntimeLike = {
@@ -79,6 +85,7 @@ type RuntimeLike = {
   watchExternalChanges?: boolean;
 };
 type FreshnessLike = Pick<FreshnessCoordinator, "ensureFresh" | "markAffectedPath"> & {
+  markRootDirty?(root: string): void;
   shutdown?(): void;
 };
 type ToolContext = { cwd: string };
@@ -175,13 +182,36 @@ function queryForMode(query: string, mode: SearchMode): string {
   return query;
 }
 
-function searchArgs(params: { query: string; mode?: SearchMode; limit?: number; excerptLines?: number }): string[] {
+function searchArgs(params: {
+  query: string;
+  mode?: SearchMode;
+  limit?: number;
+  excerptLines?: number;
+  in?: string;
+  lang?: string;
+  fileFilter?: string;
+}): string[] {
   const mode = params.mode ?? "natural";
-  const query = queryForMode(params.query, mode);
-  const output = ["--json", "--format", "agent-capsule", "--limit", String(params.limit ?? DEFAULT_LIMIT), "--excerpt-lines", String(params.excerptLines ?? 0)];
+  const query = queryForMode(scopedSearchQuery(params), mode);
+  const output = withSearchLang(
+    ["--json", "--format", "agent-capsule", "--limit", String(params.limit ?? DEFAULT_LIMIT), "--excerpt-lines", String(params.excerptLines ?? 0)],
+    params.lang,
+  );
   return mode === "chain" || mode === "semantic"
     ? [mode, query, ".", ...output]
     : [...output, query, "."];
+}
+
+function scopedSearchQuery(params: { query: string; in?: string; fileFilter?: string }): string {
+  return applyQueryScope(params.query, {
+    ...(typeof params.in === "string" ? { in: params.in } : {}),
+    ...(typeof params.fileFilter === "string" ? { fileFilter: params.fileFilter } : {}),
+  }) ?? params.query;
+}
+
+function withSearchLang(argv: string[], lang: string | undefined): string[] {
+  const trimmed = lang?.trim();
+  return trimmed ? ["--lang", trimmed, ...argv] : argv;
 }
 
 async function execute(
@@ -363,6 +393,21 @@ export function registerAstSgrepTools(
     };
   }
 
+  let stopWorkspaceEvents: (() => void) | undefined;
+  function watchWorkspaceChanges(): void {
+    stopWorkspaceEvents ??= pi.events?.on("workspace:changed", (data: unknown) => {
+      if (!data || typeof data !== "object") return;
+      const event = data as { version?: unknown; cwd?: unknown; paths?: unknown };
+      if (event.version !== 1 || typeof event.cwd !== "string" || !isAbsolute(event.cwd)) return;
+      if (event.paths === null) {
+        freshness.markRootDirty?.(event.cwd);
+      } else if (Array.isArray(event.paths) && event.paths.every(p => typeof p === "string" && isAbsolute(p))) {
+        for (const file of event.paths) freshness.markAffectedPath(file, event.cwd);
+      }
+    });
+  }
+  watchWorkspaceChanges();
+
   pi.on("tool_result", (event, ctx) => {
     if (event.isError) return;
     if (event.toolName !== "write" && event.toolName !== "edit") return;
@@ -370,6 +415,7 @@ export function registerAstSgrepTools(
     if (typeof path === "string") freshness.markAffectedPath(path, ctx.cwd);
   });
   pi.on("session_start", (_event, ctx) => {
+    watchWorkspaceChanges();
     // Warm the in-process Searcher at session start so the first asgrep
     // search does not pay NAPI/SQLite open on the user's first lookup.
     void (async () => {
@@ -383,6 +429,8 @@ export function registerAstSgrepTools(
     })();
   });
   pi.on("session_shutdown", () => {
+    stopWorkspaceEvents?.();
+    stopWorkspaceEvents = undefined;
     freshness.shutdown?.();
     void pool.shutdown();
     void resetCodemodeSandboxForTests();
@@ -397,18 +445,18 @@ export function registerAstSgrepTools(
     promptGuidelines: [...ASGREP_PROMPT_GUIDELINES],
     description: [
       "Primary code-search tool for this project. Call it whenever you need to find, trace, or understand code — do not wait for the user to mention asgrep.",
-      "Write JavaScript that calls asgrep.search, asgrep.find, asgrep.read, and asgrep.edit. Compose with await / Promise.all, filter in code, return only the shaped final value.",
+      "Write JavaScript that calls asgrep.search, asgrep.defs, asgrep.callers, asgrep.read, and asgrep.edit. Positional args work: search(\"auth\"), defs(\"Foo\"). Compose with await / Promise.all, filter in code, return only the shaped final value.",
       "Runs in-process (native addon) with a warm Searcher for the Pi session.",
       "",
       CODEMODE_TYPES_FOR_MODEL,
       "",
       "Example:",
       "async () => {",
-      "  const seed = await asgrep.search({ query: 'auth refresh', limit: 5 });",
+      "  const seed = await asgrep.search('auth refresh', { limit: 5 });",
       "  const hit = seed.hits?.[0];",
-      "  if (!hit) return { seed };",
+      "  if (!hit?.symbol) return { seed, next: seed.suggested_next };",
       "  const [defs, window] = await Promise.all([",
-      "    asgrep.find({ query: 'defs:' + hit.symbol, limit: 5 }),",
+      "    asgrep.defs(hit.symbol, { limit: 5 }),",
       "    asgrep.read({ refs: [hit.ref] }),",
       "  ]);",
       "  return { symbol: hit.symbol, defs: defs.hits, window };",
@@ -429,7 +477,9 @@ export function registerAstSgrepTools(
     async execute(_toolCallId, params, signal, onUpdate, ctx) {
       report(onUpdate, "codemode", "started");
       try {
-        const timeoutMs = runtime.config?.timeoutMs ?? 30_000;
+        const timeoutMs = typeof params.timeoutMs === "number"
+          ? params.timeoutMs
+          : runtime.config?.timeoutMs ?? 30_000;
         const deadline = Date.now() + timeoutMs;
         const timeoutSignal = AbortSignal.timeout(timeoutMs);
         const operationSignal = signal
@@ -560,7 +610,9 @@ export function registerAstSgrepTools(
       report(onUpdate, "search", "started");
       try {
         ensurePool();
-        const scopedPath = extractInPath(params.query);
+        const scopedPath = (typeof params.in === "string" ? params.in : undefined)
+          ?? (typeof params.fileFilter === "string" ? params.fileFilter : undefined)
+          ?? extractInPath(params.query);
         let root: string;
         if (scopedPath) {
           root = await resolveRoot(ctx.cwd);
@@ -683,23 +735,27 @@ function searchToolCall(params: {
   mode?: SearchMode;
   limit?: number;
   excerptLines?: number;
+  in?: string;
+  lang?: string;
+  fileFilter?: string;
 }): [string, Record<string, unknown>] {
   const mode: SearchMode = params.mode ?? "natural";
   const limit = params.limit ?? DEFAULT_LIMIT;
   const excerpt_lines = params.excerptLines ?? 0;
+  const query = scopedSearchQuery(params);
   const spec = SEARCH_CALL_SPEC[mode];
+  const lang = typeof params.lang === "string" ? params.lang.trim() : "";
   if (spec.tool === "semantic") {
-    return ["semantic", { query: params.query, limit, excerpt_lines, format: "capsule" }];
+    return ["semantic", { query, limit, excerpt_lines, format: "capsule", ...(lang ? { lang } : {}) }];
   }
   if (spec.tool === "chain") {
-    return ["chain", { query: params.query, limit, top_n: 20 }];
+    return ["chain", { query, limit, top_n: 20 }];
   }
   if (spec.tool === "search") {
-    const query = spec.prefix ? `${spec.prefix}: ${params.query}` : params.query;
-    return ["search", { query, limit, excerpt_lines, format: "capsule" }];
+    const prefixed = spec.prefix ? `${spec.prefix}: ${query}` : query;
+    return ["search", { query: prefixed, limit, excerpt_lines, format: "capsule", ...(lang ? { lang } : {}) }];
   }
-  // defs / callers / imports
-  return [spec.tool, { [spec.key]: params.query, limit, excerpt_lines }];
+  return [spec.tool, { [spec.key]: params.query, limit, excerpt_lines, ...(lang ? { lang } : {}) }];
 }
 
 const COMMANDS = [

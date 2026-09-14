@@ -4,6 +4,11 @@ export type SearchArgs = {
     limit?: number;
     excerptLines?: number;
     format?: "capsule" | "agent";
+    /** Directory or glob; injected as an `in:` query token. */
+    in?: string;
+    fileFilter?: string;
+    file_filter?: string;
+    lang?: string;
 };
 export type FindArgs = SearchArgs;
 export type ReadArgs = {
@@ -30,8 +35,8 @@ export type ChainArgs = {
     limit?: number;
     excerptLines?: number;
 };
-/** Host methods the program may invoke. Primary four first; the rest stay for tests and catalog tools. */
-export declare const CODEMODE_HOST_METHODS: readonly ["search", "find", "read", "edit", "semantic", "chain", "defs", "callers", "imports", "indexStatus", "indexRepo", "catalogSearch", "catalogDescribe"];
+/** Host methods the program may invoke. Primary lookup methods first. */
+export declare const CODEMODE_HOST_METHODS: readonly ["search", "find", "read", "edit", "semantic", "chain", "defs", "callers", "imports", "indexStatus", "indexRepo", "doctor", "catalogSearch", "catalogDescribe"];
 export type CodemodeHostMethod = (typeof CODEMODE_HOST_METHODS)[number];
 /**
  * Compact TypeScript declarations for the `asgrep` tool description.

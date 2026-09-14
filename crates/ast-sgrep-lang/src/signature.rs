@@ -15,8 +15,75 @@ pub use crate::pattern::DECL_PATTERN_PREFIXES as DECL_PREFIXES;
 /// result while the native statement-template lane answers sg's hits
 /// (`break` -l javascript probes exit 0 with the break_statement hit). They
 /// must fall through to the native walk.
+///
+/// PASS 132 (F-131E-2): `debugger` joins the class. The bare (`;`-less)
+/// spelling is `is_pattern_ident`-admitted, so `index_can_serve_pattern`
+/// early-returned the empty ident rows as "ident-exact" on the CLI
+/// `--pattern` lane while sg 0.45.2 answers the js/ts debugger_statement
+/// n1 (oracle dbg_{js,ts}_bare faces) — the library's f131d kinds arm was
+/// reachable only below the early return. The `;`-ful spelling was never
+/// ident-shaped and kept walking.
+///
+/// PASS 133 (F-132E class sweep): the remaining bare drop faces join the
+/// escape — `import` (js/ts/py), `use` (rs), `fallthrough`/`goto` (go),
+/// `redo`/`retry` (rb), `pass`/`global`/`del`/`assert` (py). All are
+/// `is_pattern_ident`-admitted with NO `pattern_nodes` rows (keyword
+/// tokens are never identifier rows), so the ident-exact early-return
+/// answered silent `ok:true []` where sg 0.45.2 answers the statement
+/// family (52-cell grid /tmp/phase133/live/grid.json: every face sg n1,
+/// py `assert` n2; subject n0). Escaped to the walk, most of them are
+/// answered sg-exactly by the literal lane's keyword-token leaf (the same
+/// bytes sg reports) — mutants M-133b/M-133c2 kill the escape and the
+/// f133b/f133c pins fail. Two shapes needed MORE than the escape, both in
+/// `match_bare_statement_kind`: the `return` family (a STATEMENT_HEAD
+/// keyword, so the general lane intercepts and under-answers arg-ful
+/// forms without a kinds arm) and rb `break` (ruby names the node
+/// `break`; the pre-existing arm's statement/expression kinds exist
+/// nowhere in tree-sitter-ruby and short-circuited sg's hit away). For
+/// grammars outside an arm's scope the literal lane keeps serving
+/// genuine identifier faces (the pass-132 rs `debugger` zero-drift
+/// doctrine).
 const STATEMENT_KEYWORDS: &[&str] = &[
-    "return", "raise", "yield", "throw", "await", "break", "continue", "next", "last",
+    "return", "raise", "yield", "throw", "await", "break", "continue", "next", "last", "debugger",
+    "import", "pass", "global", "del", "assert", "use", "fallthrough", "goto", "redo", "retry",
+    // PASS 135 (134B-F1): go's bare `defer`/`go` are STATEMENT_HEAD_KEYWORDS
+    // whose statement faces sg 0.45.2 answers (grids G_go_defer/G_go_go:
+    // sg n2 vs subject n0) — the ident-serve trap silenced them exactly like
+    // bare `debugger` pre-132. Because both spellings are STATEMENT_HEADS,
+    // the escape alone was NOT enough: the walk's general-lane intercept
+    // silently answered nothing for them AND swallowed the genuine
+    // identifier faces of the same spellings in every other grammar
+    // (fresh Z-grid 2026-09-11: js/ts/py/java/c/rb/kt `go` sg n2 vs subject
+    // n0). `match_bare_statement_kind` now routes the un-armed escaped
+    // heads to the literal/identifier lanes (the F66a-8 doctrine); mutant
+    // M-135e (removed from this list) re-silences every face, M-135d
+    // (carve deleted) re-drops the ident faces.
+    // PASS 136 (F-136 grid sibling): js bare `delete` — the keyword token is
+    // never a `pattern_nodes` identifier row, so the ident-exact serve
+    // answered silent ok:true-0 where sg 0.45.2 answers the
+    // delete_expression family n1 per site (grid /tmp/phase136 sgprobe:
+    // `delete o.k;` sg n1). Un-armed, the walk's literal lane serves the
+    // keyword-token leaf at line parity (the 133 doctrine). The escape
+    // cannot OVER-answer in the keyword grammars; in grammars where the
+    // token is an ordinary identifier (ruby/php/go/c for `delete`) the
+    // walk's literal lane RE-SERVES those identifier rows at sg parity —
+    // the same literal-lane reserve that keeps the pass-132 rs `debugger`
+    // ident face zero-drift (the 136-era "keyword in every indexed grammar"
+    // safety wording was wrong of record; corrected PASS 137, 137B-F5a).
+    // PASS 137 (137B-F4 + 137A-F2 bare cells): the csharp statement-keyword
+    // faces join the same escape genus — bare `lock`/`using`/`var`/
+    // `fixed`/`checked`/`unchecked`/`unsafe` are keyword TOKENS in csharp
+    // (js `var`, go `var`, cpp `using`, rs `unsafe` likewise), so the
+    // ident-exact serve answered silent ok:true-0 where sg 0.45.2 answers
+    // the keyword-token rows per site (grid137 A-lane: cs bare
+    // fixed/checked/unchecked/unsafe/lock/using sg n1, `var` sg n2, subject
+    // n0 everywhere; js/go bare `var` sg n2, cpp `using` n1, rs `unsafe` n1
+    // — all subject n0). Un-armed, the walk's literal lane serves the
+    // keyword-token leaf AND every genuine identifier face of the same
+    // spelling in other grammars at sg parity (grid137: py/rs/rb
+    // `var`/`lock`/`checked` identifier faces n==n; the f132 rs-debugger
+    // zero-drift doctrine).
+    "defer", "go", "delete", "lock", "using", "var", "fixed", "checked", "unchecked", "unsafe",
 ];
 
 /// True when `pattern_nodes` rows for these signatures are the same nodes the
@@ -178,11 +245,59 @@ pub fn required_pattern_literal(pattern: &str) -> Option<String> {
     // `Some($A)` once the general lane served such shapes — every file would
     // have been prefiltered away). Metavariable-bearing segments are dropped;
     // the longest clean segment is the literal.
+    // PASS 81 (FB-80a-06 root cause): each segment is TRIMMED before the
+    // pick. The callee split keeps interior layout, so the admitted
+    // multiline chain `$O.out\n.$M($A)` previously selected the segment
+    // `"out\n"` (and its collapsed-ingress twin `$O.out .$M($A)` the
+    // segment `"out "`) — whitespace-carrying literals no matching file's
+    // `out.` bytes can contain, so the memchr prefilter skipped every file
+    // and the (already green) matcher never ran: silent [] search, 0-edit
+    // codemod plans. Trimmed segments stay sound — the matched property
+    // link bytes are literal — and a segment that is ONLY layout leaves no
+    // literal: `None` means both consumers (core/pattern.rs, codemod.rs)
+    // scan the file instead of filtering it.
+    // PASS 113B (CNR §39.9 residual 1): a trailing `?` is the `?.`
+    // CONNECTOR MARKER, not file content — sg 0.45.2 treats it as connector
+    // syntax only (`a?.b($X)` answers the trivia-bearing `a /*c*/ ?.b(1)`
+    // whose bytes never contain contiguous `a?`; first-hand grid: the
+    // marker is required as a matcher distinction — `a?.b($X)` refuses
+    // `a.b(1)`, `a?.($X)` refuses `a(1)` — but is never matchable text in
+    // isolation). The raw segment `"a?"` dropped every sg-answering
+    // commented-`?.` file at the prefilter. Trim it per segment before the
+    // pick; a shorter literal is the over-broad (sound) direction.
     callee
         .split(['.', ':'])
+        .map(|segment| {
+            let mut segment = segment.trim();
+            while let Some(stripped) = segment.strip_suffix('?') {
+                segment = stripped.trim_end();
+            }
+            segment
+        })
         .filter(|segment| !segment.is_empty() && !segment.contains('$'))
         .max_by_key(|segment| segment.len())
-        .map(str::to_string)
+        // PASS 146 (145B-F1, oracle grid /tmp/phase146R cases k1/k2/k6/k7 +
+        // v1-v8): a segment may carry INTERIOR layout (`namespace A { f` —
+        // the callee of `namespace A { f(); $B }`), and layout is invisible
+        // to the structural matcher: sg binds the pretty-printed namespace
+        // body whose bytes never contain the single-space run, so the
+        // whitespace-carrying literal silently prefiltered sg-answering
+        // files away (same unsoundness genus as the FB-80a-06 edge-trim).
+        // A segment with interior whitespace degrades to its longest
+        // whitespace-free TOKEN — still a required byte run of any match,
+        // over-broad in the sound direction. A token-only segment never
+        // needs this fallback.
+        .map(|segment| {
+            if segment.chars().any(char::is_whitespace) {
+                segment
+                    .split_whitespace()
+                    .max_by_key(|token| token.len())
+                    .map(str::to_string)
+            } else {
+                Some(segment.to_string())
+            }
+        })
+        .flatten()
 }
 
 /// Longest concrete code token of a `$`-less pattern, with comment regions

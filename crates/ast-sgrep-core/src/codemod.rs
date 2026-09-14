@@ -84,11 +84,35 @@ pub fn plan_codemod(
     pattern: &str,
     rewrite: &str,
 ) -> anyhow::Result<CodemodPlan> {
+    // FB-80a-04 (pass 80a, r31): the search lane's query grammar strips ONE
+    // optional leading `pattern:` token (ParsedQuery::parse_mode, and the
+    // multi-pattern ingress tolerates the same spelling per value); the
+    // codemod lane never did, so `--pattern='pattern:echo "a b";'` handed
+    // the raw prefixed text to the matcher as literal pattern code,
+    // match-None'd, and silently planned zero edits on exactly the faces
+    // search serves — the prefix even carried `$`-bearing spellings past the
+    // classifier gate below and past the emptiness refusal (`pattern:`).
+    // Normalize the ingress so both lanes see one pattern spelling; the
+    // emptiness check and the `$`-gate keep judging the stripped spelling.
+    // 82c-2 (pass 82c, r33): the strip ORDER must match the search lane's —
+    // search strips the prefix FIRST (parse_mode) and the BOM later
+    // (search_pattern's H-CONF-032 strip). With the BOM strip running first,
+    // a BOM AFTER the prefix token (`pattern:<BOM>`) was neither BOM-stripped
+    // (no longer leading) nor caught by the emptiness check (U+FEFF is not
+    // `str` whitespace): codemod silently planned a zero-edit codemod on the
+    // exact string where search refuses loudly. Prefix first, then BOM, then
+    // trim, so every ingress spelling lands in the same loud/silent class in
+    // both lanes.
+    let pattern = pattern.trim();
+    let pattern = pattern
+        .strip_prefix("pattern:")
+        .map(str::trim)
+        .unwrap_or(pattern);
     // H-CONF-032 (pass 63) + PASS 65 (LOW a): the BOM strip runs BEFORE the
     // empty check — the raw U+FEFF is not whitespace, so a BOM-only pattern
     // previously slipped the guard, survived as an empty string, and
     // planned a nonsense zero-edit codemod instead of refusing loudly.
-    let pattern = pattern.trim().trim_start_matches('\u{feff}').trim();
+    let pattern = pattern.trim_start_matches('\u{feff}').trim();
     if pattern.is_empty() {
         bail!("codemod pattern must not be empty");
     }
@@ -143,7 +167,20 @@ pub fn plan_codemod(
         );
     }
 
-    let required_literal = required_pattern_literal(pattern);
+    // FB-97B-2 (pass 98): the prefilter literal must not be computed on raw
+    // bytes when the pattern carries an expando char — `µNAME + 1` yielded
+    // the needle "NAME", a byte the meta reading (`$NAME + 1` — what
+    // `match_pattern` answers after normalizing) does NOT require, so
+    // µ-free files were silently dropped from the plan while the search lane
+    // answered them (subject codemod planned b.rs only; sg rewrites 6 sites
+    // across a/b/c.rs — matrix m3d). Guard with the same containment check
+    // the two search lanes use (index lane + byte prefilter): over-broad
+    // matches only disable the fast prefilter, never results.
+    let required_literal = if crate::pattern::pattern_may_carry_expando_meta(pattern) {
+        None
+    } else {
+        required_pattern_literal(pattern)
+    };
     let lang_filter = Language::canonical_filter(lang_filter);
     let mut files = Vec::new();
     let mut read_only_refused = Vec::new();
@@ -880,11 +917,13 @@ fn interpolate_rewrite(template: &str, matched: &PatternMatch) -> anyhow::Result
             // F76-3 (pass 77E): `$$NAME` in a rewrite template is a capture
             // reference whose bound text itself begins with a literal `$`
             // (sg's rewrite output substitutes the capture whenever a name
-            // follows the `$$`); the `$$`→`$` escape survives only when NO
-            // name follows. Keys are the stripped names (single namespace,
-            // F74a-3), so `$$A` reads the same key the single-`$A` template
-            // reference reads — emitting the name as literal text corrupted
-            // sources on apply.
+            // follows the `$$`). Keys are the stripped names (single
+            // namespace, F74a-3), so `$$A` reads the same key the single-`$A`
+            // template reference reads — emitting the name as literal text
+            // corrupted sources on apply.
+            // F78-3 (pass 79): when NO name follows, sg keeps the `$$`
+            // verbatim — there is no `$$`→`$` escape reduction (probed
+            // spellings: end of template, space, punctuation).
             let mut name_end = index + 2;
             while name_end < bytes.len()
                 && (bytes[name_end].is_ascii_alphanumeric() || bytes[name_end] == b'_')
@@ -901,7 +940,7 @@ fn interpolate_rewrite(template: &str, matched: &PatternMatch) -> anyhow::Result
                 index = name_end;
                 continue;
             }
-            output.push('$');
+            output.push_str("$$");
             index += 2;
             continue;
         }

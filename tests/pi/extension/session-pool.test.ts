@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { NativeSessionPool } from "../../../packages/pi/extension/src/codemode/session-pool.js";
+import { isUncachedSearchError, NativeSessionPool } from "../../../packages/pi/extension/src/codemode/session-pool.js";
 import type { StickyWorker } from "../../../packages/pi/extension/src/codemode/dispatch.js";
 import type { MachineEnvelope } from "../../../packages/pi/extension/src/runtime.js";
 
@@ -236,4 +236,13 @@ test("shutdown prevents an in-flight start from repopulating the pool", async ()
   assert.ok(await pool.acquire("/project"));
   assert.equal(starts, 2);
   await pool.shutdown();
+});
+
+test("uncached unique search is deferred off the JS thread", () => {
+  assert.equal(
+    isUncachedSearchError(new Error("callNow is only for bounded metadata/symbol lookups; use call() for search/index/semantic/chain")),
+    true,
+  );
+  assert.equal(isUncachedSearchError(new Error("session is busy")), false);
+  assert.equal(isUncachedSearchError(new Error("native session is closed")), false);
 });

@@ -16,12 +16,24 @@
           "minimum": 0,
           "type": "integer"
         },
+        "file_filter": {
+          "description": "Alias of in",
+          "type": "string"
+        },
         "format": {
           "default": "capsule",
           "enum": [
             "agent",
             "capsule"
           ],
+          "type": "string"
+        },
+        "in": {
+          "description": "Directory or glob bound (injected as in:path)",
+          "type": "string"
+        },
+        "lang": {
+          "description": "Language id or extension (rs, ts, py)",
           "type": "string"
         },
         "limit": {

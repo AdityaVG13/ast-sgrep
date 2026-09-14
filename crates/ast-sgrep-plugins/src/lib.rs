@@ -156,11 +156,14 @@ pub fn to_agent_capsule_json(response: &SearchResponse, excerpt_lines: usize) ->
         })
         .map(|e| e.len() as u64)
         .sum();
+    let suggested = plan_suggested_next(response);
     serde_json::json!({
         "provider": "ast-sgrep", "mode": "capsule", "query": response.query, "limit": response.limit,
         "hit_count": hits.len(), "read_bytes_estimate": response.read_bytes_estimate,
         "returned_excerpt_bytes": returned, "prevented_read_bytes": response.prevented_read_bytes,
-        "expand_hint": "re-run with --excerpt-lines N for bodies, or read each ref span with your file reader (path + line window)", "hits": hits,
+        "expand_hint": "re-run with --excerpt-lines N for bodies, or read each ref span with your file reader (path + line window)",
+        "suggested_next": suggested,
+        "hits": hits,
     })
 }
 /// Compact envelope whose per-result detail is chosen under a token budget

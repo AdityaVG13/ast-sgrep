@@ -955,3 +955,451 @@ fn rewrite_template_two_dollar_name_substitutes_the_capture_like_sg() {
         "sg binds the FULL $$weird text as the capture; $$A template replays it verbatim"
     );
 }
+
+/// F78-3 (pass 79): `$$` with NO capture name following must stay literal
+/// `$$` in the planned rewrite. sg 0.45.2's applied diff keeps `$$` verbatim
+/// in every no-name spelling (end of template, space+digit, punctuation —
+/// probed via `sg run --rewrite <tpl> -U`); there is no `$$`→`$` escape
+/// reduction. Pre-fix the escape arm emitted a single `$`, so `wrap($$)`
+/// planned `wrap($)` where sg applies `wrap($$)` — silent rewrite-text
+/// divergence on apply. Over-correction guard: `$$NAME` still substitutes
+/// the capture. The unbound-name loud faces are unchanged (§23.1):
+/// `$$$A` bound only as a single capture and the 4-dollar `$$$$A` spelling
+/// both refuse loudly where sg silently substitutes empty (registered
+/// fail-loud posture, disclosed for the register rider).
+#[test]
+fn rewrite_template_two_dollar_without_name_stays_literal_like_sg() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path().join("fixture");
+    fs::create_dir_all(&root).unwrap();
+    fs::write(root.join("a.ts"), "const x = g(1);\nconst y = g(5);\n").unwrap();
+
+    let index_path = temp.path().join("index.db");
+    let status = std::process::Command::new(env!("CARGO_BIN_EXE_asgrep"))
+        .args([
+            "--index-path",
+            index_path.to_str().unwrap(),
+            "index",
+            "--no-embed",
+            root.to_str().unwrap(),
+        ])
+        .status()
+        .expect("run asgrep index");
+    assert!(status.success(), "indexing must succeed");
+
+    // sg applied-text parity: every no-name `$$` spelling survives verbatim.
+    for (template, expected) in [
+        ("wrap($$)", "wrap($$)"),
+        ("wrap($$ 1)", "wrap($$ 1)"),
+        ("wrap($$(x))", "wrap($$(x))"),
+        ("wrap($$-)", "wrap($$-)"),
+    ] {
+        let plan = plan_codemod(&root, Some(&index_path), None, "g($A)", template)
+            .unwrap_or_else(|error| panic!("template {template} must plan: {error:#}"));
+        let planned: Vec<String> = plan
+            .files
+            .iter()
+            .flat_map(|file| file.edits.iter().map(|edit| edit.after.clone()))
+            .collect();
+        assert_eq!(
+            planned,
+            vec![expected.to_string(), expected.to_string()],
+            "`$$` with no name following must stay literal `$$` like sg (template {template})"
+        );
+    }
+
+    // Over-correction guard: `$$` followed by a name still substitutes.
+    let plan = plan_codemod(&root, Some(&index_path), None, "g($A)", "wrap($$A)").unwrap();
+    let planned: Vec<String> = plan
+        .files
+        .iter()
+        .flat_map(|file| file.edits.iter().map(|edit| edit.after.clone()))
+        .collect();
+    assert_eq!(
+        planned,
+        vec!["wrap(1)".to_string(), "wrap(5)".to_string()],
+        "$$NAME capture substitution must survive the no-name literal fix"
+    );
+
+    // §23.1 unbound-name loud faces are unchanged (sg substitutes empty
+    // silently; the subject refuses loudly — registered fail-loud class).
+    let result = plan_codemod(&root, Some(&index_path), None, "g($A)", "wrap($$$A)");
+    let error = format!("{:#}", result.unwrap_err());
+    assert!(
+        error.contains("unbound"),
+        "3-dollar template reference bound only as a single capture must bail loudly: {error}"
+    );
+    let result = plan_codemod(&root, Some(&index_path), None, "g($A)", "wrap($$$$A)");
+    let error = format!("{:#}", result.unwrap_err());
+    assert!(
+        error.contains("invalid metavariable"),
+        "4-dollar template spelling must bail loudly: {error}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// FB-80a-04 (pass 80a, r31) — `pattern:`-prefixed codemod ingress parity.
+// ---------------------------------------------------------------------------
+
+/// Two-language fixture holding the FB-80a-04 literal faces (php echo
+/// statement, php string-concat assignment, js literal-bearing call, js
+/// meta-call control), indexed once.
+fn indexed_literal_faces_fixture() -> (TempDir, std::path::PathBuf, std::path::PathBuf) {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path().join("fixture");
+    let src = root.join("src");
+    fs::create_dir_all(&src).unwrap();
+    fs::write(
+        src.join("p.php"),
+        "<?php\necho \"a b\";\n$s = \"m\" . \"n\";\necho $msg;\nhelper($v);\n",
+    )
+    .unwrap();
+    fs::write(
+        src.join("j.js"),
+        "console.log(\"x y\");\nconsole.log(\"x y\", extra);\nconst c = \"a\" + \"b\";\ng(1);\n",
+    )
+    .unwrap();
+    let index_path = temp.path().join("index.db");
+    let status = std::process::Command::new(env!("CARGO_BIN_EXE_asgrep"))
+        .args([
+            "--index-path",
+            index_path.to_str().unwrap(),
+            "index",
+            "--no-embed",
+            root.to_str().unwrap(),
+        ])
+        .status()
+        .expect("run asgrep index");
+    assert!(status.success(), "indexing must succeed");
+    (temp, root, index_path)
+}
+
+/// FB-80a-04: the codemod lane must strip the same ONE optional leading
+/// `pattern:` ingress token the search lane strips (ParsedQuery::parse_mode /
+/// the multi-pattern ingress), so a `--pattern='pattern:echo "a b";'` plan
+/// serves the same sg-parity edits the stripped spelling plans. Pre-fix the
+/// raw prefixed text went to the matcher as literal pattern code,
+/// match-None'd, and silently planned zero edits on every face search
+/// answers — including `$`-bearing faces the prefix carried past the
+/// structural-classifier gate. Faces are sg 0.45.2 applied-text parity:
+/// `sg run -U` rewrites `echo "a b";`→`XRAY;`, `$s = "m" . "n";`→`XRAY;`,
+/// `console.log("x y");`→`XRAY;`, and `g($A)`→`XRAY;` inside `g(1);`.
+#[test]
+fn codemod_strips_pattern_ingress_prefix_and_plans_sg_parity_edits() {
+    let (_temp, root, index_path) = indexed_literal_faces_fixture();
+
+    // The named finding face.
+    let prefixed = plan_codemod(
+        &root,
+        Some(&index_path),
+        Some("php"),
+        "pattern:echo \"a b\";",
+        "XRAY;",
+    )
+    .expect("prefixed literal ingress must plan the search-served edit");
+    assert_eq!(
+        prefixed.edit_count, 1,
+        "a face search serves must plan its edit, not a silent zero"
+    );
+    assert_eq!(prefixed.files[0].path, "src/p.php");
+    assert_eq!(
+        prefixed.files[0].edits[0].before,
+        "echo \"a b\";",
+        "the edit span must be the sg-matched statement"
+    );
+    assert_eq!(prefixed.files[0].edits[0].after, "XRAY;");
+    assert_eq!(
+        prefixed.pattern, "echo \"a b\";",
+        "the plan must record the stripped pattern actually matched"
+    );
+
+    // Grammar parity: prefixed and stripped ingress plan the SAME plan.
+    let stripped =
+        plan_codemod(&root, Some(&index_path), Some("php"), "echo \"a b\";", "XRAY;").unwrap();
+    let spans = |plan: &ast_sgrep_core::codemod::CodemodPlan| {
+        plan.files
+            .iter()
+            .flat_map(|file| file.edits.iter())
+            .map(|edit| {
+                (
+                    edit.path.clone(),
+                    edit.byte_start,
+                    edit.byte_end,
+                    edit.before.clone(),
+                    edit.after.clone(),
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(spans(&prefixed), spans(&stripped));
+
+    // Cell family: concat assignment (php), literal-bearing call (js), and
+    // the meta-call face whose prefixed spelling previously rode past the
+    // `$`-gate into a silent zero (js `g($A)`, search-served {j.js:4}).
+    for (lang, pattern, before) in [
+        ("php", "pattern:$s = \"m\" . \"n\";", "$s = \"m\" . \"n\";"),
+        ("js", "pattern:console.log(\"x y\");", "console.log(\"x y\");"),
+        ("js", "pattern:g($A)", "g(1)"),
+    ] {
+        let plan = plan_codemod(&root, Some(&index_path), Some(lang), pattern, "XRAY;")
+            .unwrap_or_else(|error| panic!("prefixed {pattern} must plan: {error:#}"));
+        assert_eq!(
+            plan.edit_count, 1,
+            "prefixed {pattern} must plan its search-served edit"
+        );
+        assert_eq!(plan.files[0].edits[0].before, before, "face {pattern}");
+        assert_eq!(plan.files[0].edits[0].after, "XRAY;", "face {pattern}");
+    }
+}
+
+/// FB-80a-04 CLI face (the registered repro): `asgrep codemod --dry-run
+/// --pattern='pattern:echo "a b";'` must plan the single edit the same
+/// prefixed search query answers (search==codemod), never the silent
+/// ok:true zero-edit plan the red-team round captured.
+#[test]
+fn codemod_cli_prefixed_literal_pattern_plans_the_search_served_edit() {
+    let (_temp, root, index_path) = indexed_literal_faces_fixture();
+
+    // Search parity witness through the same prefixed ingress.
+    let search = std::process::Command::new(env!("CARGO_BIN_EXE_asgrep"))
+        .args([
+            "--index-path",
+            index_path.to_str().unwrap(),
+            "--no-embed",
+            "search",
+            "--json",
+            "--pattern=pattern:echo \"a b\";",
+            "--lang",
+            "php",
+            "--root",
+            root.to_str().unwrap(),
+        ])
+        .output()
+        .expect("run asgrep search");
+    assert!(search.status.success(), "search must succeed");
+    let search_json: serde_json::Value = serde_json::from_slice(&search.stdout).unwrap();
+    assert_eq!(
+        search_json["hits"].as_array().map(Vec::len),
+        Some(1),
+        "search must serve the literal face: {search_json}"
+    );
+
+    let dry = std::process::Command::new(env!("CARGO_BIN_EXE_asgrep"))
+        .args([
+            "--index-path",
+            index_path.to_str().unwrap(),
+            "--no-embed",
+            "codemod",
+            "--dry-run",
+            "--json",
+            "--pattern=pattern:echo \"a b\";",
+            "--rewrite=XRAY;",
+            "--lang",
+            "php",
+            root.to_str().unwrap(),
+        ])
+        .output()
+        .expect("run asgrep codemod --dry-run");
+    assert!(
+        dry.status.success(),
+        "dry-run must succeed: {}",
+        String::from_utf8_lossy(&dry.stderr)
+    );
+    let dry: serde_json::Value = serde_json::from_slice(&dry.stdout).unwrap();
+    assert_eq!(
+        dry["plan"]["edit_count"].as_u64(),
+        Some(1),
+        "codemod must plan the edit search serves, not a silent zero: {dry}"
+    );
+    assert_eq!(dry["plan"]["files"][0]["edits"][0]["before"], "echo \"a b\";");
+    assert_eq!(dry["plan"]["files"][0]["edits"][0]["after"], "XRAY;");
+}
+
+/// The prefix strip is ingress NORMALIZATION, not a posture change: a
+/// pattern the structural classifier rejects stays LOUD under the prefixed
+/// spelling (the stripped spelling is what classifies, and it refuses), and
+/// a vacuous `pattern:` ingress hits the same loud emptiness refusal as
+/// `""`. A fix that silenced either class would trade the FB-80a-04 silent
+/// zero for a worse silent zero.
+#[test]
+fn codemod_prefixed_ingress_keeps_unsupported_and_empty_patterns_loud() {
+    let (_temp, root, index_path) = indexed_literal_faces_fixture();
+
+    // `echo $A;` and `helper($A);` are loud on both ingress spellings today
+    // (registered php unsupported-shape class); `console.log("x y", $A);` is
+    // search-SERVED but matcher-refused — the loud capability refusal that
+    // must NOT quietly become a zero-edit plan through either spelling.
+    for pattern in ["console.log(\"x y\", $A);", "helper($A);", "echo $A;"] {
+        let prefixed = format!("pattern:{pattern}");
+        for spelling in [prefixed.as_str(), pattern] {
+            let error = plan_codemod(&root, Some(&index_path), None, spelling, "XRAY;")
+                .err()
+                .unwrap_or_else(|| panic!("{spelling} must stay loud, not plan silently"));
+            let text = format!("{error:#}");
+            assert!(
+                text.contains("not supported by the in-process structural matcher"),
+                "{spelling} must refuse loudly naming the limitation: {text}"
+            );
+        }
+    }
+
+    let error = plan_codemod(&root, Some(&index_path), None, "pattern:", "XRAY;")
+        .err()
+        .expect("a vacuous pattern: ingress must refuse loudly");
+    let text = format!("{error:#}");
+    assert!(
+        text.contains("must not be empty"),
+        "vacuous pattern: ingress must hit the loud emptiness refusal: {text}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 82c-2 (pass 82c, r33) — `pattern:`+BOM ingress-order parity with search.
+// ---------------------------------------------------------------------------
+
+/// 82c-2: the ingress normalizations must run in the SAME order the search
+/// lane runs them — search strips the `pattern:` prefix FIRST
+/// (ParsedQuery::parse_mode) and the BOM later (search_pattern's H-CONF-032
+/// strip). With codemod's BOM strip running first, a BOM AFTER the prefix
+/// token (`pattern:<BOM>`) was neither BOM-stripped (no longer leading) nor
+/// caught by the emptiness check (U+FEFF is not `str` whitespace): codemod
+/// shipped a silent ok:true zero-edit plan on the exact string where search
+/// refuses loudly ("pattern must not be empty"), and `pattern:<BOM>echo …`
+/// carried the BOM into the envelope spelling instead of normalizing to the
+/// pattern search actually matches.
+#[test]
+fn codemod_prefixed_bom_ingress_normalizes_in_search_lane_order() {
+    let (_temp, root, index_path) = indexed_literal_faces_fixture();
+
+    // The named finding face: a vacuous `pattern:<BOM>` must reach the same
+    // loud emptiness refusal the identical search string hits.
+    let error = plan_codemod(&root, Some(&index_path), None, "pattern:\u{feff}", "XRAY;")
+        .err()
+        .expect("a vacuous pattern:<BOM> ingress must refuse loudly like search");
+    let text = format!("{error:#}");
+    assert!(
+        text.contains("must not be empty"),
+        "pattern:<BOM> must hit the loud emptiness refusal: {text}"
+    );
+
+    // Parity face: the BOM after the prefix token is stripped, so the
+    // prefixed ingress plans byte-identically to the stripped spelling
+    // (search answers the same string through the BOM strip) and the
+    // envelope records the normalized pattern, not a BOM-led residual.
+    let bom_prefixed = plan_codemod(
+        &root,
+        Some(&index_path),
+        Some("php"),
+        "pattern:\u{feff}echo \"a b\";",
+        "XRAY;",
+    )
+    .expect("pattern:<BOM>echo… must normalize to the stripped pattern and plan");
+    assert_eq!(
+        bom_prefixed.pattern, "echo \"a b\";",
+        "the BOM after the prefix token must be stripped like search"
+    );
+    let stripped = plan_codemod(
+        &root,
+        Some(&index_path),
+        Some("php"),
+        "echo \"a b\";",
+        "XRAY;",
+    )
+    .unwrap();
+    assert_eq!(
+        bom_prefixed.edit_count, stripped.edit_count,
+        "BOM-prefixed ingress must plan the same edits as the stripped spelling"
+    );
+    let spans = |plan: &ast_sgrep_core::codemod::CodemodPlan| {
+        plan.files
+            .iter()
+            .flat_map(|file| file.edits.iter())
+            .map(|edit| {
+                (
+                    edit.path.clone(),
+                    edit.byte_start,
+                    edit.byte_end,
+                    edit.before.clone(),
+                    edit.after.clone(),
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        spans(&bom_prefixed),
+        spans(&stripped),
+        "BOM-prefixed ingress must plan byte-identical edits to the stripped spelling"
+    );
+}
+
+/// RED (FB-97B-2, pass98): the codemod prefilter computed
+/// `required_pattern_literal` on RAW bytes with no expando awareness — the
+/// needle "NAME" for `µNAME + 1` dropped every µ-free file (a.rs / c.rs)
+/// where `match_pattern` normalizes the expando spelling and ANSWERS the meta
+/// reading (subject search = sg = 6 sites across 3 files, probe matrix
+/// artifacts/conformance/pass98/matrix/m3d_codemod.jsonl). A rewrite tool
+/// silently planned a strict subset of sg's rewrite sites with ok:true. The
+/// fix guards the prefilter with the same expando containment check the
+/// search lanes use, so the plan must cover EVERY file sg rewrites; the
+/// $-twin keeps its registered loud bail ("not supported by the in-process
+/// structural matcher").
+#[test]
+fn codemod_plans_all_sg_sites_for_expando_meta_pattern() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path().join("fixture");
+    fs::create_dir_all(&root).unwrap();
+    // Byte-identical to the pass98 c98_cmod fixture (m3d probe corpus).
+    fs::write(
+        root.join("a.rs"),
+        "fn a() {\n    z + 1;\n    y + 1;\n}\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("b.rs"),
+        "static NAME: &str = \"n\";\nfn b() {\n    NAME + 1;\n    x + 1;\n    q + 1;\n}\n",
+    )
+    .unwrap();
+    fs::write(root.join("c.rs"), "fn c() {\n    zz + 1;\n}\n").unwrap();
+    let index_path = temp.path().join("index.db");
+    let status = std::process::Command::new(env!("CARGO_BIN_EXE_asgrep"))
+        .args([
+            "--index-path",
+            index_path.to_str().unwrap(),
+            "index",
+            "--no-embed",
+            root.to_str().unwrap(),
+        ])
+        .status()
+        .expect("run asgrep index");
+    assert!(status.success(), "indexing must succeed");
+
+    // sg 0.45.2 rewrites 6 sites across a.rs(2,3) / b.rs(3,4,5) / c.rs(2) for
+    // `µNAME + 1` (m3d oracle set); the subject search answers the same 6. The
+    // plan must cover the same file set — never a strict subset.
+    let plan = plan_codemod(&root, Some(&index_path), None, "µNAME + 1", "R($NAME)")
+        .expect("expando-spelled meta pattern must plan, not refuse");
+    let mut files: Vec<&str> = plan.files.iter().map(|f| f.path.as_str()).collect();
+    files.sort_unstable();
+    assert_eq!(
+        files,
+        vec!["a.rs", "b.rs", "c.rs"],
+        "µNAME + 1: sg rewrites sites in all three files (m3d oracle set) — \
+         the raw-byte NAME prefilter must not drop µ-free files"
+    );
+    assert_eq!(
+        plan.edit_count, 6,
+        "µNAME + 1: sg rewrites exactly 6 sites (m3d oracle set)"
+    );
+
+    // The $-twin keeps its registered codemod-loud class (97B evidence):
+    // `pattern is not supported by the in-process structural matcher`.
+    let twin = plan_codemod(&root, Some(&index_path), None, "$NAME + 1", "R($NAME)");
+    let err = twin.expect_err(
+        "$NAME + 1: the registered $-twin class is codemod-LOUD — must stay loud",
+    );
+    let text = format!("{err:#}");
+    assert!(
+        text.contains("not supported by the in-process structural matcher"),
+        "$NAME + 1 refusal must keep its registered message: {text}"
+    );
+}

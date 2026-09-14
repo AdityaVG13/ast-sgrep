@@ -108,6 +108,14 @@ test("search result content names the call and lists hits", async () => {
   assert.equal(typeof result.details.activationMs, "number");
 });
 
+test("asgrep_search injects in: into the query and keeps doctor off the tool list", async () => {
+  const f = fixture();
+  await invoke(f.byName("asgrep_search"), { query: "auth", in: "src", lang: "rs" });
+  assert.ok(f.calls.some((call) => call.args.includes("in:src auth")));
+  assert.ok(f.calls.some((call) => call.args.includes("--lang") && call.args.includes("rs")));
+  assert.equal(f.tools.some((tool) => tool.name === "asgrep_doctor"), false);
+});
+
 test("maps every query mode and bounded output option to argv arrays", async () => {
   const cases: Array<[string, string[]]> = [
     ["natural", ["--json", "--format", "agent-capsule", "--limit", "25", "--excerpt-lines", "3", "needle", "."]],
@@ -348,4 +356,34 @@ test("closed sticky-session errors are SESSION_CLOSED not UNEXPECTED_ERROR", asy
   const out = await search.execute("c1", { query: "auth" }, new AbortController().signal, () => {}, { cwd: "/project" });
   assert.equal(out.details.ok, false);
   assert.equal((out.details.error as { code: string }).code, "SESSION_CLOSED");
+});
+
+test("generic workspace events invalidate paths or roots without naming a producer", () => {
+  const listeners = new Map<string, (event: unknown) => void>();
+  const changed: unknown[] = [];
+  const pi = {
+    registerTool() {}, on() {},
+    events: { on(name: string, listener: (event: unknown) => void) {
+      listeners.set(name, listener);
+      return () => listeners.delete(name);
+    } },
+  } as unknown as ExtensionAPI;
+  const runtime = {
+    async resolveRoot(context: { cwd: string }) { return context.cwd; },
+    async run(): Promise<MachineEnvelope> { throw Error("notification must not run an index"); },
+  };
+  registerAstSgrepTools(pi, runtime, {
+    async ensureFresh() { return "/project"; },
+    markAffectedPath(file, cwd) { changed.push([file, cwd]); },
+    markRootDirty(root) { changed.push(root); },
+  });
+  const notify = listeners.get("workspace:changed");
+  assert.ok(notify);
+  notify({ version: 1, cwd: "/project", paths: ["/project/a.ts"] });
+  notify({ version: 1, cwd: "/project", paths: null });
+  notify({ version: 2, cwd: "/project", paths: ["/project/no.ts"] });
+  notify({ version: 1, cwd: "/project", paths: [null] });
+  notify({ version: 1, cwd: "relative", paths: null });
+  notify(null);
+  assert.deepEqual(changed, [["/project/a.ts", "/project"], "/project"]);
 });

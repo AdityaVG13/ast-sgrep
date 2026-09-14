@@ -4,6 +4,7 @@ use ast_sgrep_core::{IndexOptions, Indexer};
 use ast_sgrep_testkit::sample_root;
 use serde_json::json;
 use std::fs;
+use std::time::Instant;
 use tempfile::TempDir;
 
 fn indexed_session() -> (TempDir, CodeModeSession) {
@@ -27,6 +28,58 @@ fn indexed_session() -> (TempDir, CodeModeSession) {
         ..SessionConfig::default()
     });
     (temp, session)
+}
+
+fn indexed_embed_session() -> (TempDir, CodeModeSession) {
+    let temp = TempDir::new().expect("tempdir");
+    let index_path = temp.path().join("index.db");
+    let root = sample_root();
+    let mut indexer = Indexer::new(IndexOptions {
+        root: root.clone(),
+        index_path: Some(index_path.clone()),
+        embed_semantic: true,
+        ..IndexOptions::default()
+    })
+    .expect("indexer");
+    indexer.index_all().expect("index");
+
+    let session = CodeModeSession::new(SessionConfig {
+        root,
+        index_path: Some(index_path),
+        limit: 8,
+        use_embed: true,
+        ..SessionConfig::default()
+    });
+    (temp, session)
+}
+
+#[test]
+fn relative_index_path_resolves_against_session_root() {
+    let root = TempDir::new().expect("root");
+    fs::write(root.path().join("lib.rs"), "pub fn relative_index() {}\n").expect("src");
+    let mut session = CodeModeSession::new(SessionConfig {
+        root: root.path().to_path_buf(),
+        index_path: Some(std::path::PathBuf::from("custom-index")),
+        limit: 8,
+        use_embed: false,
+        ..SessionConfig::default()
+    });
+    session
+        .call("index_repo", json!({ "force": false }))
+        .expect("index");
+    let status = session.call("index_status", json!({})).expect("status");
+    let expected = root
+        .path()
+        .canonicalize()
+        .expect("canonicalize session root")
+        .join("custom-index")
+        .join("index.db");
+    let actual = status["index_path"].as_str().expect("index_path");
+    assert_eq!(
+        std::path::Path::new(actual),
+        expected.as_path(),
+        "{status}"
+    );
 }
 
 #[test]
@@ -362,5 +415,191 @@ fn edit_rejects_non_unique_old_text() {
         err.to_string().contains("exactly once"),
         "{err}"
     );
+}
+
+#[test]
+fn defs_accepts_query_as_symbol_alias() {
+    let (_tmp, mut session) = indexed_session();
+    let out = session
+        .call("defs", json!({"query": "auth_refresh", "limit": 5}))
+        .expect("defs via query");
+    assert!(
+        out["hit_count"].as_u64().unwrap_or(0) >= 1 || out["hits"].as_array().is_some(),
+        "{out}"
+    );
+}
+
+#[test]
+fn define_alias_dispatches_to_defs() {
+    let (_tmp, mut session) = indexed_session();
+    let out = session
+        .call("define", json!({"symbol": "auth_refresh", "limit": 5}))
+        .expect("define alias");
+    assert!(out["hits"].as_array().is_some(), "{out}");
+}
+
+#[test]
+fn repeated_search_is_identical_on_the_sticky_session() {
+    let (_tmp, mut session) = indexed_session();
+    let first = session
+        .call("search", json!({"query": "auth", "limit": 5}))
+        .expect("first");
+    let second = session
+        .call("search", json!({"query": "auth", "limit": 5}))
+        .expect("second");
+    assert_eq!(first["hits"], second["hits"], "{first} vs {second}");
+    assert_eq!(first["hit_count"], second["hit_count"]);
+}
+
+#[test]
+fn sticky_session_repeat_is_faster_than_unique_search() {
+    let (_tmp, mut session) = indexed_session();
+    session
+        .call("search", json!({"query": "auth", "limit": 5}))
+        .expect("warmup");
+
+    const N: usize = 24;
+    let mut unique_ns = Vec::with_capacity(N);
+    for i in 0..N {
+        let query = format!("auth needle-{i}");
+        let t0 = Instant::now();
+        session
+            .call("search", json!({"query": query, "limit": 5}))
+            .expect("unique");
+        unique_ns.push(t0.elapsed().as_nanos() as u64);
+    }
+
+    let mut repeat_ns = Vec::with_capacity(N);
+    for _ in 0..N {
+        let t0 = Instant::now();
+        session
+            .call("search", json!({"query": "auth", "limit": 5}))
+            .expect("repeat");
+        repeat_ns.push(t0.elapsed().as_nanos() as u64);
+    }
+
+    unique_ns.sort_unstable();
+    repeat_ns.sort_unstable();
+    let unique_p50 = unique_ns[N / 2];
+    let unique_p100 = *unique_ns.last().unwrap();
+    let repeat_p50 = repeat_ns[N / 2];
+    let repeat_p100 = *repeat_ns.last().unwrap();
+    eprintln!(
+        "codemode sticky search n={N} unique p50={:.3}ms p100={:.3}ms repeat p50={:.3}ms p100={:.3}ms",
+        unique_p50 as f64 / 1e6,
+        unique_p100 as f64 / 1e6,
+        repeat_p50 as f64 / 1e6,
+        repeat_p100 as f64 / 1e6
+    );
+    if unique_p50 > 50_000 {
+        assert!(
+            repeat_p50 < unique_p50,
+            "repeat p50 {repeat_p50}ns must beat unique p50 {unique_p50}ns"
+        );
+    }
+}
+
+#[test]
+fn sticky_embed_hybrid_unique_search_latency() {
+    let (_tmp, mut session) = indexed_embed_session();
+    session
+        .call(
+            "search",
+            json!({"query": "warmup probe token", "limit": 8}),
+        )
+        .expect("warmup");
+
+    let queries = [
+        "how does auth refresh work",
+        "credential renewal",
+        "sanitize user input",
+        "process inbound request",
+        "token refresh flow",
+        "validate the session cookie",
+        "store durable credentials",
+        "rank hybrid search results",
+        "debounce noisy file events",
+        "retry after a timeout",
+        "combine two search channels",
+        "remember query embeddings",
+    ];
+    let mut unique_ns = Vec::with_capacity(queries.len());
+    for q in queries {
+        let t0 = Instant::now();
+        session
+            .call("search", json!({"query": q, "limit": 8}))
+            .expect("unique hybrid");
+        let ns = t0.elapsed().as_nanos() as u64;
+        eprintln!("codemode sticky embed-hybrid unique {q:?} {:.3}ms", ns as f64 / 1e6);
+        unique_ns.push(ns);
+    }
+    unique_ns.sort_unstable();
+    let n = unique_ns.len();
+    let p50 = unique_ns[n / 2];
+    let p100 = *unique_ns.last().unwrap();
+    eprintln!(
+        "codemode sticky embed-hybrid unique n={n} p50={:.3}ms p100={:.3}ms",
+        p50 as f64 / 1e6,
+        p100 as f64 / 1e6
+    );
+    let t0 = Instant::now();
+    session
+        .call(
+            "search",
+            json!({"query": "how does auth refresh work", "limit": 8}),
+        )
+        .expect("repeat hybrid");
+    eprintln!(
+        "codemode sticky embed-hybrid repeat {:.3}ms",
+        t0.elapsed().as_secs_f64() * 1000.0
+    );
+}
+
+#[test]
+fn peek_cached_search_hits_after_first_call() {
+    let (_tmp, mut session) = indexed_session();
+    let args = json!({"query": "auth", "limit": 5});
+    assert!(
+        session.peek_cached_search(&args).is_none(),
+        "unique search must not pretend to be cached"
+    );
+    let first = session.call("search", args.clone()).expect("search");
+    let peeked = session
+        .peek_cached_search(&args)
+        .expect("sticky repeat must hit the render cache");
+    assert_eq!(peeked["hits"], first["hits"], "{peeked} vs {first}");
+}
+
+#[test]
+fn search_injects_in_and_fail_closes_unknown_lang() {
+    let (_tmp, mut session) = indexed_session();
+    let scoped = session
+        .call(
+            "search",
+            json!({"query": "auth", "in": "no_such_dir", "limit": 8}),
+        )
+        .expect("scoped search");
+    assert_eq!(
+        scoped["hits"].as_array().map(Vec::len).unwrap_or(0),
+        0,
+        "{scoped}"
+    );
+    let err = session
+        .call("search", json!({"query": "auth", "lang": "notalang"}))
+        .expect_err("unknown lang");
+    assert!(
+        err.to_string().contains("unknown lang"),
+        "{err}"
+    );
+}
+
+#[test]
+fn unknown_tool_suggests_a_close_name() {
+    let (_tmp, mut session) = indexed_session();
+    let err = session
+        .call("searc", json!({"query": "auth"}))
+        .expect_err("typo");
+    let message = err.to_string();
+    assert!(message.contains("Did you mean search"), "{message}");
 }
 

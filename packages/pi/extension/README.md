@@ -57,7 +57,7 @@ Pi can make one `asgrep` call like this:
 
 ```json
 {
-  "code": "async () => {\n  const seed = await asgrep.search({ query: 'where are access tokens refreshed?', limit: 5 });\n  const hit = seed.hits?.[0];\n  if (!hit) return { seed };\n  const [defs, window] = await Promise.all([\n    asgrep.find({ query: 'defs:' + hit.symbol, limit: 5 }),\n    asgrep.read({ refs: [hit.ref] }),\n  ]);\n  return { symbol: hit.symbol, defs: defs.hits, window };\n}"
+  "code": "async () => {\n  const seed = await asgrep.search('where are access tokens refreshed?', { limit: 5 });\n  const hit = seed.hits?.[0];\n  if (!hit) return { seed, next: seed.suggested_next };\n  const [defs, window] = await Promise.all([\n    asgrep.defs(hit.symbol, { limit: 5 }),\n    asgrep.read({ refs: [hit.ref] }),\n  ]);\n  return { symbol: hit.symbol, defs: defs.hits, window };\n}"
 }
 ```
 
@@ -65,16 +65,19 @@ This workflow narrows the first result, runs independent follow-up searches toge
 
 ### Code Mode API
 
-The Code Mode program receives these asynchronous methods on `asgrep`:
+The Code Mode program receives these asynchronous methods on `asgrep`. Positional arguments work; object forms remain valid.
 
 | Method | Use |
 |---|---|
-| `asgrep.search({ query, limit?, excerptLines? })` | Hybrid search: intent, symbol, or prefixed `defs:` / `callers:` / `pattern:` query. |
-| `asgrep.find({ query, limit?, excerptLines? })` | Lexical / identifier lookup (`word:`). Prefixed queries pass through. |
+| `asgrep.search("query", { limit?, in?, lang? })` | Hybrid search: intent, symbol, or prefixed `defs:` / `callers:` / `pattern:` query. Bound a tree with `in`. |
+| `asgrep.find("token")` | Lexical / identifier lookup (`word:`). Prefixed queries pass through. |
+| `asgrep.defs("Symbol")` | Jump to definitions. |
+| `asgrep.callers("Symbol")` | Reverse-walk callers. |
 | `asgrep.read({ path, start, end }` or `{ refs }`) | Batched line windows from the index. Prefer one call with `refs`. |
-| `asgrep.edit({ path, oldText, newText }` or `{ edits }`) | Unique string replace jailed to the project root, then targeted reindex. |
+| `asgrep.edit(path, oldText, newText)` | Unique string replace jailed to the project root, then targeted reindex. |
+| `asgrep.indexStatus()` / `asgrep.doctor()` | Index health without a fifth outer Pi tool. |
 
-Use `Promise.all` for independent calls. Filter, map, sort, and slice intermediate values in JavaScript. Return only the evidence needed for the next reasoning step.
+Use `Promise.all` for independent calls. Filter, map, sort, and slice intermediate values in JavaScript. Return only the evidence needed for the next reasoning step. A search with 0 hits includes `suggested_next`.
 
 Code Mode runs **in-process** in a restricted `node:vm` context (no Worker sandbox, no OS jail). `asgrep` and `console` are built inside the context; the host only exposes a JSON bridge and a log sink so host `Function` cannot leak. Return shapes are declared on `asgrep.*` (muscle memory). `find({ query: "blast:Symbol" })` reverse-walks callers; `blast:path/to/file.ts` uses imports. Same trust boundary as Pi `bash`. Prefer Code Mode **or** MCP for a client, never both.
 

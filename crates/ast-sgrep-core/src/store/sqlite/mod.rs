@@ -181,6 +181,9 @@ pub struct IndexStore {
     /// probe). Keyed on generation so an external writer is not a stale routing
     /// decision; `bump_index_data_version` also clears it.
     line_count_at_least: std::cell::Cell<Option<(i64, usize, bool)>>,
+    /// `index_data_version` meta: unique hybrid called this once per df probe
+    /// (several times per conceptual query). Same invalidation as line corpus.
+    index_data_version_memo: std::cell::Cell<Option<i64>>,
     /// Packed indexed lines for unique-query literal. Cleared on generation bump.
     line_corpus: std::cell::RefCell<Option<std::sync::Arc<crate::store::line_corpus::LineCorpus>>>,
     line_corpus_disabled: std::cell::Cell<bool>,
@@ -234,6 +237,7 @@ impl IndexStore {
             durability,
             trigram_df: crate::store::trigram_df::TrigramDfCache::new(),
             line_count_at_least: std::cell::Cell::new(None),
+            index_data_version_memo: std::cell::Cell::new(None),
             line_corpus: std::cell::RefCell::new(None),
             line_corpus_disabled: std::cell::Cell::new(false),
             read_only: false,
@@ -318,6 +322,7 @@ impl IndexStore {
             durability,
             trigram_df: crate::store::trigram_df::TrigramDfCache::new(),
             line_count_at_least: std::cell::Cell::new(None),
+            index_data_version_memo: std::cell::Cell::new(None),
             line_corpus: std::cell::RefCell::new(None),
             line_corpus_disabled: std::cell::Cell::new(false),
             read_only,
@@ -891,10 +896,15 @@ impl IndexStore {
     }
 
     pub fn index_data_version(&self) -> Result<i64> {
-        Ok(self
+        if let Some(cached) = self.index_data_version_memo.get() {
+            return Ok(cached);
+        }
+        let version = self
             .get_meta("index_data_version")?
             .and_then(|value| value.parse().ok())
-            .unwrap_or(0))
+            .unwrap_or(0);
+        self.index_data_version_memo.set(Some(version));
+        Ok(version)
     }
 
     /// Indexed-content and lexicon generations used by long-lived search caches.
@@ -938,6 +948,7 @@ impl IndexStore {
             "INSERT INTO meta(key, value) VALUES('index_data_version', '1')              ON CONFLICT(key) DO UPDATE SET value =              CAST(COALESCE(meta.value, '0') AS INTEGER) + 1",
             [],
         )?;
+        self.index_data_version_memo.set(None);
         self.line_count_at_least.set(None);
         self.line_corpus.borrow_mut().take();
         self.line_corpus_disabled.set(false);

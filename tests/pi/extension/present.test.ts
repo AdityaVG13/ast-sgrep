@@ -26,6 +26,25 @@ test("search result chrome lists file:line and symbol instead of a JSON blob", (
   assert.doesNotMatch(text, /\{"hits"/);
 });
 
+test("empty search results include a recovery hint", () => {
+  const withNext = formatSearchResult(
+    { hits: [], suggested_next: ["asgrep 'callers:Foo'"] },
+    { command: "search", query: "Foo", mode: "natural" },
+  );
+  assert.match(withNext, /0 hits/);
+  assert.match(withNext, /try {2}asgrep 'callers:Foo'/);
+  const withoutNext = formatSearchResult(
+    { hits: [] },
+    { command: "search", query: "Foo", mode: "natural" },
+  );
+  assert.match(withoutNext, /asgrep\.find\(query\)/);
+});
+
+test("undefined Code Mode result tells the model to return", () => {
+  const text = formatCodemodeResult(undefined, { wallMs: 1, backend: "napi" });
+  assert.match(text, /no return statement/);
+});
+
 test("index, status, and codemode calls stay one line", () => {
   assert.equal(formatIndexCall(false), "asgrep  ·  index");
   assert.equal(formatIndexCall(true), "asgrep  ·  reindex");

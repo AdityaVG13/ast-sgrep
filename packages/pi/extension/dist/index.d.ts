@@ -28,6 +28,7 @@ type RuntimeLike = {
     watchExternalChanges?: boolean;
 };
 type FreshnessLike = Pick<FreshnessCoordinator, "ensureFresh" | "markAffectedPath"> & {
+    markRootDirty?(root: string): void;
     shutdown?(): void;
 };
 export declare function registerAstSgrepTools(pi: ExtensionAPI, runtime?: RuntimeLike, freshness?: FreshnessLike): void;

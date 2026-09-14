@@ -183,3 +183,53 @@ fn lexical_sidecar_falls_back_when_source_generation_changes() {
     let response = searcher.search_lexical("beta").unwrap();
     assert!(response.hits.iter().any(|hit| hit.excerpt.contains("beta")));
 }
+
+/// The git_head probe-once cache served a stale HEAD for the whole Searcher
+/// lifetime: a branch switch (or same-branch commit) after the first stamp
+/// kept reporting the old head in every later response. The stamp-level memo
+/// (`cached_stamp_parts`) already documents git_head as deliberately
+/// uncached because `.git/HEAD` can move without any index write; the
+/// per-Searcher probe-once cache contradicted that intent. Two capped file
+/// reads per stamp are cheap; the value must be fresh.
+#[test]
+fn git_head_stamp_tracks_branch_switch_within_one_searcher() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    let heads = root.join(".git").join("refs").join("heads");
+    std::fs::create_dir_all(&heads).unwrap();
+    std::fs::write(root.join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
+    std::fs::write(
+        heads.join("main"),
+        "1111111111111111111111111111111111111111\n",
+    )
+    .unwrap();
+    std::fs::write(root.join("alpha_token.rs"), "fn alpha_token() {}\n").unwrap();
+    pass17_indexer(root).index_all().unwrap();
+
+    let searcher = pass17_searcher(root);
+    let first = searcher.search("alpha_token").unwrap();
+    assert_eq!(
+        first.snapshot.git_head.as_deref(),
+        Some("1111111111111111111111111111111111111111"),
+        "first stamp must resolve the ref-form HEAD"
+    );
+
+    // Branch switch + commit land AFTER the first stamp. An index write bumps
+    // the generation so the generation-keyed response cache cannot serve the
+    // first response wholesale — the stamp path itself must re-execute, and
+    // the probe-once git_head memo was precisely what then went stale.
+    std::fs::write(root.join(".git/HEAD"), "ref: refs/heads/feature\n").unwrap();
+    std::fs::write(
+        heads.join("feature"),
+        "2222222222222222222222222222222222222222\n",
+    )
+    .unwrap();
+    std::fs::write(root.join("alpha_token.rs"), "fn alpha_token() -> u32 { 1 }\n").unwrap();
+    pass17_indexer(root).index_all().unwrap();
+    let second = searcher.search("alpha_token").unwrap();
+    assert_eq!(
+        second.snapshot.git_head.as_deref(),
+        Some("2222222222222222222222222222222222222222"),
+        "stale probe-once cache served the old branch head"
+    );
+}

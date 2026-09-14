@@ -49,7 +49,10 @@ pub fn tool_catalog() -> Vec<ToolDef> {
                     "limit": {"type": "integer", "minimum": 1, "maximum": 500},
                     "format": {"type": "string", "enum": ["agent", "capsule"], "default": "capsule"},
                     "excerpt_lines": {"type": "integer", "minimum": 0, "description": "Inline up to N excerpt lines in capsule mode"},
-                    "semantic_only": {"type": "boolean", "default": false}
+                    "semantic_only": {"type": "boolean", "default": false},
+                    "in": {"type": "string", "description": "Directory or glob bound (injected as in:path)"},
+                    "file_filter": {"type": "string", "description": "Alias of in"},
+                    "lang": {"type": "string", "description": "Language id or extension (rs, ts, py)"}
                 },
                 "required": ["query"],
                 "additionalProperties": false

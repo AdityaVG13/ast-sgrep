@@ -14,13 +14,14 @@ pub use field_weight::EmbedFieldScores;
 pub use finish::finish_response;
 pub(crate) use finish::finish_response_checked;
 pub use fusion::dedup_hits;
-use passes::embed::{run_embed_pass, SemanticCache};
+use passes::embed::{run_embed_pass_cached, SemanticCache};
 use passes::lexical::lexical_pass;
+use passes::bmh::asgrep_line_hit;
 use passes::literal::literal_pass;
 use passes::regex::regex_pass;
 use passes::symbol::{
     anchor_pass, anchor_pass_for_files, search_callers, search_defs, search_imports, symbol_pass,
-    symbol_pass_for_files,
+    symbol_pass_for_files_warmed, WarmedSymbolTable,
 };
 pub use planner::{follow_ups_for_hit, margin_is_decisive, plan_suggested_next};
 use std::collections::{HashMap, HashSet};
@@ -34,10 +35,16 @@ pub use types::{
     SearchOptions, SearchResponse, SnapshotStamp, SpanHitInput,
 };
 const CASCADE_PREFILTER_FILE_LIMIT: usize = 100;
+/// One cascade term must not spend the whole 100-file budget. `index` otherwise
+/// fills CLI helpers before `durability` can add `store/mod.rs`.
+const CASCADE_PER_TERM_FILE_LIMIT: usize = 32;
+/// Concept extras (`embed` after user `embeddings`) keep slots after common
+/// user tokens have already matched files.
+const CASCADE_EXTRA_FILE_RESERVE: usize = 32;
 /// Cap on reported query expansions (ufk7).
 const MAX_QUERY_EXPANSIONS: usize = 5;
-const NL_FANOUT_SYMBOL_LIMIT: usize = 4;
-const NL_FANOUT_HITS_PER_CHANNEL: usize = 16;
+const NL_FANOUT_SYMBOL_LIMIT: usize = 2;
+const NL_FANOUT_HITS_PER_CHANNEL: usize = 4;
 
 /// On mutex poison, clear cached state before continuing so a panicked
 /// computation cannot leave a half-written entry visible (sxjc).
@@ -96,6 +103,10 @@ pub struct Searcher {
     /// discard both; unique-hybrid p50 paid git/HEAD + lexicon expand + extra
     /// meta reads for JSON fields the model never sees.
     stamp_response: bool,
+    /// Generation-keyed LRU of finished responses. Independent of
+    /// [`Self::stamp_response`]: Pi Code Mode repeats needles on a sticky
+    /// Searcher, so cache hits must stay available when stamps are off.
+    cache_responses: bool,
     semantic_cache: Arc<Mutex<Option<SemanticCache>>>,
     lexicon_cache: Mutex<Option<(i64, crate::lexicon::Lexicon)>>,
     response_cache: Mutex<ResponseCache>,
@@ -104,9 +115,19 @@ pub struct Searcher {
     stamp_cache: Mutex<Option<(IndexGeneration, i64, Option<String>)>>,
     /// S1: drained degraded notes from the latest memoized manifest probe.
     stamp_degraded: Mutex<Vec<DegradedChannel>>,
-    /// `.git/HEAD` is independent of index generation. Probe once per Searcher;
-    /// index writes reopen via writer_generation.
-    git_head_cache: Mutex<Option<Option<String>>>,
+    /// When true, this Searcher owns a long-lived `BEGIN DEFERRED` so sticky
+    /// unique searches skip per-query BEGIN/COMMIT. Writers bump
+    /// `writer_generation` and Code Mode drops the Searcher.
+    read_snapshot_held: Mutex<bool>,
+    /// Snapshot-held `index_gen` is immutable for the Searcher lifetime:
+    /// Code Mode does not write on this connection, and other writers are
+    /// invisible until the snapshot is released. Unique hybrid was paying
+    /// PRAGMA + `search_data_versions` twice per query for a value warmup
+    /// already observed.
+    index_gen_memo: Mutex<Option<IndexGeneration>>,
+    /// Warmed def rows for snapshot unique hybrid. Filled by
+    /// [`Self::warm_search_path`]; CLI unique keeps the SQL LIKE fallback.
+    symbol_table: Mutex<Option<WarmedSymbolTable>>,
     /// `SearchOptions::cache_identity()` is identical for the Searcher
     /// lifetime (options are frozen in `with_store`).
     options_identity: String,
@@ -231,6 +252,7 @@ impl Searcher {
             options,
             use_field_rescoring: true,
             stamp_response: true,
+            cache_responses: true,
             semantic_cache: Arc::new(Mutex::new(None)),
             lexicon_cache: Mutex::new(None),
             response_cache: Mutex::new(ResponseCache {
@@ -245,7 +267,9 @@ impl Searcher {
             }),
             stamp_cache: Mutex::new(None),
             stamp_degraded: Mutex::new(Vec::new()),
-            git_head_cache: Mutex::new(None),
+            read_snapshot_held: Mutex::new(false),
+            index_gen_memo: Mutex::new(None),
+            symbol_table: Mutex::new(None),
             options_identity,
         }
     }
@@ -271,19 +295,101 @@ impl Searcher {
         self.stamp_response = enabled;
         self
     }
+    pub fn with_response_cache(mut self, enabled: bool) -> Self {
+        self.cache_responses = enabled;
+        lock_response_cache(&self.response_cache).enabled = enabled;
+        self
+    }
+    /// Pin RAM line corpus, trigram df vocab, and semantic vectors so the
+    /// first unique sticky search is not the session-open tax.
+    pub fn warm_search_path(&self) -> Result<()> {
+        let _ = self.store.line_corpus()?;
+        let _ = self.store.trigram_df().min_df(&self.store, "aaa");
+        if let Ok(table) = WarmedSymbolTable::load(&self.store) {
+            *lock_clear_on_poison(&self.symbol_table, |slot| *slot = None) = Some(table);
+        }
+        if self.options.use_embed {
+            let parsed = ParsedQuery::parse("warm");
+            let _ = run_embed_pass_cached(
+                &self.store,
+                &self.options,
+                &parsed,
+                &self.semantic_cache,
+                self.snapshot_is_held(),
+                self.use_field_rescoring,
+            )?;
+        }
+        let _ = self.index_gen();
+        Ok(())
+    }
+    /// Pin one read snapshot for the Searcher lifetime (Pi sticky unique path).
+    pub fn hold_read_snapshot(&self) -> Result<()> {
+        let mut held = lock_clear_on_poison(&self.read_snapshot_held, |h| *h = false);
+        if *held {
+            return Ok(());
+        }
+        let conn = self.store.connection();
+        if !conn.is_autocommit() {
+            return Ok(());
+        }
+        conn.execute_batch("BEGIN DEFERRED").map_err(|e| {
+            crate::StoreError::Other(format!("failed to pin read snapshot: {e}"))
+        })?;
+        *held = true;
+        *lock_clear_on_poison(&self.index_gen_memo, |memo| *memo = None) = None;
+        Ok(())
+    }
+    /// Release a snapshot taken by [`Self::hold_read_snapshot`].
+    pub fn release_read_snapshot(&self) {
+        let mut held = lock_clear_on_poison(&self.read_snapshot_held, |h| *h = false);
+        if !*held {
+            return;
+        }
+        *held = false;
+        *lock_clear_on_poison(&self.index_gen_memo, |memo| *memo = None) = None;
+        let conn = self.store.connection();
+        if conn.is_autocommit() {
+            return;
+        }
+        if conn.execute_batch("COMMIT").is_err() {
+            let _ = conn.execute_batch("ROLLBACK");
+        }
+    }
+    /// Occupancy of the generation-keyed response LRU (Pi/session diagnostics).
+    pub fn cached_response_count(&self) -> usize {
+        lock_response_cache(&self.response_cache).map.len()
+    }
+    fn snapshot_is_held(&self) -> bool {
+        *lock_clear_on_poison(&self.read_snapshot_held, |_| {})
+    }
+
     fn index_gen(&self) -> Option<IndexGeneration> {
+        if self.snapshot_is_held() {
+            let memo = lock_clear_on_poison(&self.index_gen_memo, |slot| *slot = None);
+            if let Some(gen) = *memo {
+                return Some(gen);
+            }
+        }
         // PRAGMA failure disables caching rather than pinning gen=0 (hdwh).
+        // `data_version` only moves for *other* connections; same-connection
+        // writes are visible via `search_data_versions` (index/lexicon meta).
+        // A held read snapshot freezes both, so later unique searches reuse
+        // the first probe (Pi sticky path).
         let external = self
             .store
             .connection()
             .query_row("PRAGMA data_version", [], |row| row.get::<_, i64>(0))
             .ok()?;
         let (local, lexicon) = self.store.search_data_versions().ok()?;
-        Some(IndexGeneration {
+        let gen = IndexGeneration {
             external,
             local,
             lexicon,
-        })
+        };
+        if self.snapshot_is_held() {
+            *lock_clear_on_poison(&self.index_gen_memo, |slot| *slot = None) = Some(gen);
+        }
+        Some(gen)
     }
     /// gauntlet-r5 (S1): generation-keyed memo for the expensive, purely
     /// generation-derived parts of `snapshot_stamp`. The chunk-stats scan
@@ -515,7 +621,10 @@ impl Searcher {
         {
             return Ok(None);
         }
-        let (_, lexicon_generation) = self.store.search_data_versions()?;
+        let lexicon_generation = match self.index_gen() {
+            Some(gen) => gen.lexicon,
+            None => self.store.search_data_versions()?.1,
+        };
         let terms = crate::lexicon::prose_terms(&parsed.raw);
         let associations = self.repository_associations(&terms, lexicon_generation);
         let mut expanded = parsed.clone();
@@ -561,14 +670,10 @@ impl Searcher {
             schema_version: self.store.schema_version(),
             worktree_revision,
             git_head: {
-                let mut guard = lock_clear_on_poison(&self.git_head_cache, |v| *v = None);
-                if let Some(cached) = guard.as_ref() {
-                    cached.clone()
-                } else {
-                    let value = read_git_head(&self.options.root);
-                    *guard = Some(value.clone());
-                    value
-                }
+                // Uncached by design: `.git/HEAD` (and the ref file it names)
+                // can move without any index write, and a probe-once memo
+                // reported a stale branch head for the Searcher lifetime.
+                read_git_head(&self.options.root)
             },
             semantic_manifest,
             degraded_channels,
@@ -593,9 +698,7 @@ impl Searcher {
         query: &str,
         compute: impl FnOnce() -> Result<SearchResponse>,
     ) -> Result<SearchResponse> {
-        if !self.stamp_response {
-            // Unique Code Mode never repeats a key; skip PRAGMA/gen probes
-            // that cannot admit a hit.
+        if !self.cache_responses {
             return self.fenced(compute);
         }
         let Some(gen) = self.index_gen() else {
@@ -732,6 +835,7 @@ impl Searcher {
                     true,
                     Some(&self.store),
                     true,
+                    !self.stamp_response,
                 )
             }
         })
@@ -811,11 +915,12 @@ impl Searcher {
             conjunction::ChannelQuery::Semantic(query) => {
                 let parsed = ParsedQuery::parse(query);
                 let expanded = self.repository_expanded_query(&parsed)?;
-                run_embed_pass(
+                run_embed_pass_cached(
                     &self.store,
                     &options,
                     expanded.as_ref().unwrap_or(&parsed),
                     &self.semantic_cache,
+                    self.snapshot_is_held(),
                     self.use_field_rescoring,
                 )
             }
@@ -830,11 +935,12 @@ impl Searcher {
             finish_response_checked(
                 &parsed,
                 &self.options,
-                run_embed_pass(
+                run_embed_pass_cached(
                     &self.store,
                     &self.options,
                     expanded.as_ref().unwrap_or(&parsed),
                     &self.semantic_cache,
+                    self.snapshot_is_held(),
                     self.use_field_rescoring,
                 )?,
                 false,
@@ -889,17 +995,27 @@ impl Searcher {
             self.repository_expanded_query(parsed)?
         };
         let semantic_query = expanded.as_ref().unwrap_or(parsed);
-        // Candidate discovery: original 3+ char terms, then repository
-        // associations, then offline concept-group tokens (credential ->
-        // auth/token/...). 1-2 char tokens stay out of the prefilter.
-        let mut discovery = semantic_query.clone();
+        // Candidate discovery: original 3+ char terms, then a few concept
+        // extras for zero-overlap paraphrases (throttle -> rate/limit).
+        // Lexicon-expanded semantic terms stay on the embed path; stuffing
+        // them into literal_prefilter was unique-hybrid p100 on NL queries.
+        let mut discovery = if intent == crate::intent::QueryIntent::Conceptual {
+            parsed.clone()
+        } else {
+            semantic_query.clone()
+        };
+        let user_discovery: HashSet<String> = discovery.terms.iter().cloned().collect();
         if intent == crate::intent::QueryIntent::Conceptual {
             let mut extra = 0usize;
             for tok in ast_sgrep_embed::tokenize(&ast_sgrep_embed::expand_concepts(&parsed.raw)) {
-                if extra >= 8 {
+                if extra >= 3 {
                     break;
                 }
-                if tok.chars().count() >= 3 && !discovery.terms.contains(&tok) {
+                if tok.chars().count() >= 3
+                    && !cascade_stopword(&tok)
+                    && !critic::is_generic_concept_token(&tok)
+                    && !discovery.terms.contains(&tok)
+                {
                     discovery.terms.push(tok);
                     extra += 1;
                 }
@@ -911,7 +1027,17 @@ impl Searcher {
                 "search",
                 "literal_prefilter_pass",
             );
-            literal_prefilter_pass(&self.store, &self.options, &discovery)?
+            literal_prefilter_pass(
+                &self.store,
+                &self.options,
+                &discovery,
+                intent == crate::intent::QueryIntent::Conceptual,
+                if intent == crate::intent::QueryIntent::Conceptual {
+                    Some(&user_discovery)
+                } else {
+                    None
+                },
+            )?
         };
         let mut lexical = lexical;
         let lexical_files = lexical
@@ -929,11 +1055,12 @@ impl Searcher {
                         "search",
                         "run_embed_pass",
                     );
-                    run_embed_pass(
+                    run_embed_pass_cached(
                         &self.store,
                         &self.options,
                         semantic_query,
                         &self.semantic_cache,
+                        self.snapshot_is_held(),
                         self.use_field_rescoring,
                     )?
                 };
@@ -955,15 +1082,23 @@ impl Searcher {
 
         // Structural stages keep the user's 3+ char terms (not concept
         // extras). 1-2 char tokens would LIKE '%0%' across symbols/callers.
-        let mut stage_query = parsed.clone();
-        stage_query.terms.retain(|term| term.chars().count() >= 3);
-
         // Conceptual NL skips pattern-node matching on generic tokens
         // (`query`, `graph`, `render`) which owned the unique-hybrid p99
         // shortlist. Defs/callers still run so "how does hybrid search work"
         // can rank `search_hybrid` instead of the query string in a bench
         // fixture. Empty structural falls through to lexical + embed (ht1h.3).
         let conceptual = intent == crate::intent::QueryIntent::Conceptual;
+        let mut stage_query = parsed.clone();
+        stage_query.terms.retain(|term| {
+            term.chars().count() >= 3 && !(conceptual && critic::is_generic_concept_token(term))
+        });
+        if conceptual {
+            for tok in conceptual_def_terms(&parsed.raw) {
+                if !stage_query.terms.contains(&tok) {
+                    stage_query.terms.push(tok);
+                }
+            }
+        }
         let ast_matches = if conceptual {
             Vec::new()
         } else {
@@ -981,7 +1116,15 @@ impl Searcher {
                 "search",
                 "symbol_pass_for_files",
             );
-            symbol_pass_for_files(&self.store, &self.options, &stage_query, &lexical_files)?
+            let warmed = lock_clear_on_poison(&self.symbol_table, |slot| *slot = None).clone();
+            symbol_pass_for_files_warmed(
+                &self.store,
+                &self.options,
+                &stage_query,
+                &lexical_files,
+                !conceptual,
+                warmed.as_ref(),
+            )?
         });
         // Identifier queries must retrieve the exact definition even when the
         // 100-file lexical cascade is full of substring coincidences.
@@ -991,30 +1134,15 @@ impl Searcher {
                 structural.extend(search_defs(&self.store, &self.options, &def_query)?);
             }
         }
-        structural.extend({
-            let _span = crate::perf_profile::Span::start(
-                "hybrid_anchor_pass",
-                "search",
-                "anchor_pass_for_files",
-            );
-            anchor_pass_for_files(&self.store, &self.options, &stage_query, &lexical_files)?
-        });
-        // Precision gate: embed only on structurally-confirmed files when
-        // structural signals exist. When the structural stage is empty, the
-        // lexical survivors ARE the candidate set — the semantic stage must
-        // still run on them (ht1h.3 / parity: NL queries surface semantically
-        // related symbols, and plain-content files stay findable).
-        if conceptual {
-            // Precision gating below keeps embed on structural files. Inject
-            // defs for expanded identifier tokens (`follow_up`, `planner`)
-            // so a leftover English term (`command`/`run`) cannot exclude
-            // the module the query actually named.
-            structural.extend(conceptual_concept_def_pass(
-                &self.store,
-                &self.options,
-                &parsed.raw,
-                &lexical_files,
-            )?);
+        if !conceptual {
+            structural.extend({
+                let _span = crate::perf_profile::Span::start(
+                    "hybrid_anchor_pass",
+                    "search",
+                    "anchor_pass_for_files",
+                );
+                anchor_pass_for_files(&self.store, &self.options, &stage_query, &lexical_files)?
+            });
         }
         let structural_files = structural
             .iter()
@@ -1036,15 +1164,20 @@ impl Searcher {
                     "search",
                     "embed_pass_for_files_with_rescoring",
                 );
-                passes::embed::embed_pass_for_files_with_rescoring(
+                let trust_snapshot = self.snapshot_is_held();
+                passes::embed::embed_pass_for_files_cached(
                     &self.store,
                     &self.options,
                     semantic_query,
                     &working_files,
+                    Some(&self.semantic_cache),
+                    trust_snapshot,
                     self.use_field_rescoring,
                 )?
             };
-            if intent == crate::intent::QueryIntent::Conceptual {
+            if intent == crate::intent::QueryIntent::Conceptual
+                && !hits.iter().any(|hit| hit.kind == HitKind::Def && hit.symbol.is_some())
+            {
                 let _span = crate::perf_profile::Span::start(
                     "hybrid_conceptual_fanout",
                     "search",
@@ -1063,40 +1196,33 @@ impl Searcher {
     }
 }
 
+impl Drop for Searcher {
+    fn drop(&mut self) {
+        self.release_read_snapshot();
+    }
+}
 
-fn conceptual_concept_def_pass(
-    store: &IndexStore,
-    options: &SearchOptions,
-    query: &str,
-    allowed_files: &HashSet<String>,
-) -> Result<Vec<SearchHit>> {
-    let terms: Vec<String> = ast_sgrep_embed::tokenize(&ast_sgrep_embed::expand_concepts(query))
+fn conceptual_def_terms(query: &str) -> Vec<String> {
+    // Snake_case from expansion can name a def (`intern_paths`). Other tokens
+    // must appear in the user query: dumping a whole CONCEPT_GROUPS list into
+    // symbol LIKE was unique-hybrid p100 (auth NL) and a rarity cap on that
+    // dump ranked auth_refresh for "durable session write".
+    let user: HashSet<String> = ast_sgrep_embed::tokenize(query).into_iter().collect();
+    let mut terms: Vec<String> = ast_sgrep_embed::tokenize(&ast_sgrep_embed::expand_concepts(query))
         .into_iter()
         .filter(|tok| {
             tok.chars().count() >= 4
+                && !critic::is_generic_concept_token(tok)
                 && (tok.contains('_')
-                    || tok == "planner"
-                    || tok == "fusion"
-                    || tok == "critic"
-                    || tok == "embed"
-                    || tok == "conjunction"
-                    || tok == "combine")
+                    || user.contains(tok)
+                    || user.iter().any(|u| u.contains(tok.as_str())))
         })
         .collect();
-    if terms.is_empty() {
-        return Ok(Vec::new());
-    }
-    let parsed = ParsedQuery {
-        raw: query.to_string(),
-        mode: QueryMode::Hybrid,
-        target: None,
-        terms,
-        path_scope: None,
-    };
-    symbol_pass_for_files(store, options, &parsed, allowed_files)
+    terms.sort();
+    terms.dedup();
+    terms.truncate(8);
+    terms
 }
-
-const FANOUT_CALLER_SCALE: f64 = 0.35;
 
 fn conceptual_fanout_pass(
     store: &IndexStore,
@@ -1126,10 +1252,14 @@ fn conceptual_fanout_pass(
             .count();
         ranked.push((affinity, symbol));
     }
-    if ranked.iter().any(|(affinity, _)| *affinity > 0) {
-        ranked.retain(|(affinity, _)| *affinity > 0);
-        ranked.sort_by(|left, right| right.0.cmp(&left.0).then_with(|| left.1.cmp(right.1)));
+    if !ranked.iter().any(|(affinity, _)| *affinity > 0) {
+        // Zero-affinity defs (auth_refresh for "combine two search channels"
+        // on a tiny fixture) were unique-hybrid p100: two extra search_defs
+        // SQL round-trips that cannot help ranking.
+        return Ok(Vec::new());
     }
+    ranked.retain(|(affinity, _)| *affinity > 0);
+    ranked.sort_by(|left, right| right.0.cmp(&left.0).then_with(|| left.1.cmp(right.1)));
     let symbols = ranked
         .into_iter()
         .map(|(_, symbol)| symbol)
@@ -1140,22 +1270,6 @@ fn conceptual_fanout_pass(
     for symbol in symbols {
         let def_query = ParsedQuery::parse(&format!("defs:{symbol}"));
         hits.extend(search_defs(store, &fanout_options, &def_query)?);
-        let caller_query = ParsedQuery::parse(&format!("callers:{symbol}"));
-        let mut caller_count = 0;
-        for mut hit in search_callers(store, &fanout_options, &caller_query)? {
-            if hit.kind != HitKind::Caller {
-                continue;
-            }
-            if caller_count >= NL_FANOUT_HITS_PER_CHANNEL {
-                continue;
-            }
-            if critic::is_generic_entrypoint(hit.caller.as_deref().unwrap_or("")) {
-                hit.score *= 0.25;
-            }
-            hit.score *= FANOUT_CALLER_SCALE;
-            hits.push(hit);
-            caller_count += 1;
-        }
     }
     Ok(hits)
 }
@@ -1206,48 +1320,136 @@ fn literal_prefilter_pass(
     store: &IndexStore,
     options: &SearchOptions,
     parsed: &ParsedQuery,
+    drop_common: bool,
+    user_first: Option<&HashSet<String>>,
 ) -> Result<Vec<SearchHit>> {
     // Trigram MATCH needs 3 chars. Shorter needles use literal_sql LIKE/GLOB
     // with ORDER BY over the whole `lines` table — ~22 ms on a 54k-file
     // corpus for a digit like "0". Cascade file discovery does not need them.
-    let terms = parsed
+    let mut terms = parsed
         .terms
         .iter()
-        .filter(|term| term.chars().count() >= 3 && !cascade_stopword(term))
+        .filter(|term| {
+            term.chars().count() >= 3
+                && !cascade_stopword(term)
+                && !(drop_common && critic::is_generic_concept_token(term))
+        })
         .collect::<Vec<_>>();
+    if drop_common {
+        // High-df English (encode/payload/search) owned unique-hybrid p90:
+        // each term still ran a full literal_pass. Rare siblings keep the
+        // cascade; all-common conceptual queries go empty so semantic escape
+        // can run (sub-1ms IVF) instead of a 100-file junk shortlist.
+        const CASCADE_COMMON_DF: i64 = 2048;
+        let rare: Vec<_> = terms
+            .iter()
+            .copied()
+            .filter(|term| match store.trigram_df().min_df(store, term) {
+                Some(df) if df > CASCADE_COMMON_DF => false,
+                _ => true,
+            })
+            .collect();
+        if rare.is_empty() {
+            return Ok(Vec::new());
+        }
+        terms = rare;
+    }
     if terms.is_empty() {
         return Ok(Vec::new());
     }
-    // Unique-query literal is RAM-cheap, so score every discovery term.
-    // Fill the working set from rarest postings first so a hapax in the
-    // wrong file ("renewal" only in README) cannot exclude the file that
-    // matches a more common sibling term ("credential" in auth.rs), while
-    // still reaching rare identifiers (`rrf`, `snapshot`) that first-hit-wins
-    // never saw behind English leftovers ("consistent", "across").
-    let mut prefilter_options = options.clone();
-    prefilter_options.case_insensitive = true;
-    prefilter_options.limit = CASCADE_PREFILTER_FILE_LIMIT;
-    let mut scored: Vec<Vec<SearchHit>> = Vec::new();
-    for term in terms {
-        let hits = literal_pass(store, &prefilter_options, &ParsedQuery::literal(term))?;
-        if !hits.is_empty() {
-            scored.push(hits);
-        }
-    }
-    scored.sort_by_key(|hits| hits.len());
+    // Rarest-trigram-df first, then stop at the file cap. Scanning every
+    // leftover English term and *then* merging is equivalent for the 100
+    // files kept, and it was the unique-hybrid p90: common terms still paid
+    // a full literal_pass after the shortlist was already full.
+    terms.sort_by(|left, right| {
+        let left_extra = user_first.is_some_and(|user| !user.contains(*left));
+        let right_extra = user_first.is_some_and(|user| !user.contains(*right));
+        left_extra
+            .cmp(&right_extra)
+            .then_with(|| {
+                discovery_df(store, left).cmp(&discovery_df(store, right))
+            })
+            .then_with(|| left.cmp(right))
+    });
+    let corpus = store.line_corpus()?;
+    let file_cap = match corpus.as_ref() {
+        Some(corpus) => CASCADE_PREFILTER_FILE_LIMIT.min(corpus.file_count().max(1)),
+        None => CASCADE_PREFILTER_FILE_LIMIT,
+    };
     let mut files = HashSet::new();
     let mut out = Vec::new();
-    for hits in scored {
+    let extra_reserve = if user_first.is_some() && file_cap > CASCADE_PER_TERM_FILE_LIMIT {
+        CASCADE_EXTRA_FILE_RESERVE
+            .min(file_cap / 4)
+            .min(file_cap.saturating_sub(CASCADE_PER_TERM_FILE_LIMIT))
+    } else {
+        0
+    };
+    let user_budget = file_cap.saturating_sub(extra_reserve);
+    if let Some(corpus) = corpus.as_ref() {
+        for term in terms.iter().copied().filter(|term| term.is_ascii()) {
+            let extra = user_first.is_some_and(|user| !user.contains(term));
+            let budget = if extra { file_cap } else { user_budget };
+            let remaining = budget.saturating_sub(files.len());
+            if remaining == 0 {
+                continue;
+            }
+            // After a rare foothold, common leftovers only add junk files and
+            // memchr the rest of the packed corpus. Invent-path extras stay
+            // rare (df well under this on the mini fixture).
+            const CASCADE_FOOTHOLD_DF: i64 = 128;
+            // Missing df sorts last, but must still scan: invent-path "session"
+            // after a README "durable" foothold has no trigram row.
+            if !files.is_empty()
+                && !extra
+                && store
+                    .trigram_df()
+                    .min_df(store, term)
+                    .is_some_and(|df| df > CASCADE_FOOTHOLD_DF)
+            {
+                continue;
+            }
+            let term_cap = remaining.min(CASCADE_PER_TERM_FILE_LIMIT);
+            for row in corpus.scan_distinct_files_cs(term, term_cap, &files) {
+                if files.insert(row.path.to_string()) {
+                    out.push(asgrep_line_hit(
+                        row.path.to_string(),
+                        row.language.map(str::to_string),
+                        row.line_no,
+                        row.content.to_string(),
+                        1.0,
+                    ));
+                    if files.len() >= file_cap {
+                        break;
+                    }
+                }
+            }
+        }
+        if files.len() >= file_cap || terms.iter().all(|term| term.is_ascii()) {
+            return Ok(out);
+        }
+    }
+    let mut prefilter_options = options.clone();
+    prefilter_options.case_insensitive = true;
+    prefilter_options.limit = file_cap;
+    for term in terms {
+        let hits = literal_pass(store, &prefilter_options, &ParsedQuery::literal(term))?;
         for hit in hits {
             if files.insert(hit.file.clone()) {
                 out.push(hit);
-                if files.len() >= CASCADE_PREFILTER_FILE_LIMIT {
+                if files.len() >= file_cap {
                     return Ok(out);
                 }
             }
         }
     }
     Ok(out)
+}
+
+fn discovery_df(store: &IndexStore, term: &str) -> i64 {
+    // Missing df must sort LAST (common), never first. unwrap_or(0) made
+    // unknown terms look rarest and fill the 100-file cap before "durability".
+    store.trigram_df().min_df(store, term).unwrap_or(i64::MAX)
 }
 
 /// Boost hybrid recall with pre-indexed pattern_nodes (decls/calls extracted at index time).
@@ -1292,6 +1494,7 @@ fn structural_index_pass(
             excerpt,
             symbol: Some(term),
             language: row.language,
+            byte_span: None,
         }));
     }
     Ok(hits)

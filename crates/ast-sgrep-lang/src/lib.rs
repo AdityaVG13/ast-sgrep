@@ -253,9 +253,10 @@ use langs::{
     PhpParser, PythonParser, RubyParser, RustParser, SwiftParser, TypeScriptParser,
 };
 pub use pattern::{
-    classify_native, declaration_prefix, match_literal_pattern, match_pattern,
-    native_pattern_answerable, needs_ast_grep_fallback, tree_sitter_language, BodyTemplate,
-    NativeKind, PatternMatch, DECL_KIND_PREFIXES, DECL_PATTERN_PREFIXES,
+    classify_native, declaration_prefix, is_universal_root_pattern, literal_trailing_comment_lane,
+    match_literal_pattern, match_pattern, native_pattern_answerable, needs_ast_grep_fallback,
+    pattern_is_keyword_literal_root, php_comment_transparent_operand_lane, tree_sitter_language,
+    BodyTemplate, NativeKind, PatternMatch, DECL_KIND_PREFIXES, DECL_PATTERN_PREFIXES,
 };
 pub use signature::{
     cached_pattern_signatures, candidate_kind_signatures, index_can_serve_pattern,

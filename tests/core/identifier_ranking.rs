@@ -1,7 +1,9 @@
 //! Exact identifiers rank the definition; conceptual queries prefer code over docs.
 use ast_sgrep_core::query::ParsedQuery;
 use ast_sgrep_core::{IndexOptions, SearchOptions, Searcher};
+use serde::Deserialize;
 use std::fs;
+use std::path::Path;
 use tempfile::TempDir;
 
 fn write_src(root: &std::path::Path, rel: &str, body: &str) {
@@ -105,6 +107,16 @@ pub fn combine(left: &str, right: &str) -> bool {
 pub fn channel_sensitivity() {}
 pub fn learn_fusion_weights() {}
 pub struct FusionChannel;
+"#,
+    );
+    write_src(
+        temp.path(),
+        "src/plugins.rs",
+        r#"
+/// Compact output interned paths for agent envelopes.
+pub fn intern_paths(path: &str) -> &str {
+    path
+}
 "#,
     );
     write_src(
@@ -433,5 +445,192 @@ fn retry_transient_ranks_backoff_attempt() {
         "retry.rs",
         "backoff_attempt",
         "cg5 invent-path: retry paraphrase must rank backoff_attempt first.",
+    );
+}
+
+#[test]
+fn snapshot_unique_keeps_concept_def_first() {
+    let (temp, _searcher) = indexed_corpus();
+    let searcher = Searcher::new(SearchOptions {
+        root: temp.path().to_path_buf(),
+        limit: 12,
+        use_embed: true,
+        ..SearchOptions::default()
+    })
+    .expect("searcher");
+    searcher.hold_read_snapshot().expect("hold snapshot");
+    searcher.warm_search_path().expect("warm");
+    for (query, file, symbol) in [
+        ("credential renewal", "auth.rs", "auth_refresh"),
+        ("throttle inbound clients", "throttle.rs", "rate_limit_client"),
+        ("debounce noisy updates", "debounce.rs", "coalesce_watch_events"),
+        ("retry after transient failure", "retry.rs", "backoff_attempt"),
+    ] {
+        let response = searcher.search(query).expect("search");
+        require_first(
+            query,
+            &response.hits,
+            file,
+            symbol,
+            "Pi unique hybrid on a held warmed snapshot must keep the concept def first.",
+        );
+    }
+}
+
+#[test]
+fn compact_output_path_interning_ranks_intern_paths() {
+    let (_temp, searcher) = indexed_corpus();
+    let query = "compact output path interning";
+    let response = searcher.search(query).expect("search");
+    require_first(
+        query,
+        &response.hits,
+        "plugins.rs",
+        "intern_paths",
+        "conceptual NL must retrieve intern_paths without a hardcoded concept-def allowlist.",
+    );
+}
+
+#[derive(Deserialize)]
+struct InventPathGold {
+    queries: Vec<InventPathQuery>,
+}
+
+#[derive(Deserialize)]
+struct InventPathQuery {
+    name: String,
+    query: String,
+    k: usize,
+    relevant: Vec<InventPathRelevant>,
+}
+
+#[derive(Deserialize)]
+struct InventPathRelevant {
+    file: String,
+    symbol: Option<String>,
+}
+
+#[test]
+fn invent_path_gold_has_no_loss() {
+    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let root = manifest.join("../../benchmarks/fixtures/invent_path");
+    let gold_path = manifest.join("../../benchmarks/gold/invent_path.json");
+    let gold: InventPathGold = serde_json::from_str(
+        &fs::read_to_string(&gold_path).unwrap_or_else(|e| panic!("read {}: {e}", gold_path.display())),
+    )
+    .expect("parse invent_path gold");
+    ast_sgrep_core::Indexer::new(IndexOptions {
+        root: root.clone(),
+        force_reindex: true,
+        embed_semantic: true,
+        ..IndexOptions::default()
+    })
+    .expect("indexer")
+    .index_all()
+    .expect("index");
+    let searcher = Searcher::new(SearchOptions {
+        root,
+        limit: 20,
+        use_embed: true,
+        ..SearchOptions::default()
+    })
+    .expect("searcher")
+    .with_response_stamp(false);
+    searcher.hold_read_snapshot().expect("hold snapshot");
+    searcher.warm_search_path().expect("warm");
+
+    let mut misses = Vec::new();
+    for case in &gold.queries {
+        let response = searcher.search(&case.query).expect("search");
+        let hits = &response.hits;
+        let found = case.relevant.iter().all(|rel| {
+            hits.iter().take(case.k).any(|hit| {
+                hit.file.replace('\\', "/").ends_with(&rel.file)
+                    && rel
+                        .symbol
+                        .as_ref()
+                        .is_none_or(|s| hit.symbol.as_deref() == Some(s.as_str()))
+            })
+        });
+        if !found {
+            misses.push(format!(
+                "{} {:?}\n{}",
+                case.name,
+                case.query,
+                autopsy(hits)
+            ));
+        }
+    }
+    assert!(
+        misses.is_empty(),
+        "invent-path gold loss ({} of {}):\n{}",
+        misses.len(),
+        gold.queries.len(),
+        misses.join("\n\n")
+    );
+}
+
+#[test]
+#[ignore = "indexes this repo; run explicitly for self-gold no-loss"]
+fn self_gold_has_no_loss() {
+    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let root = manifest.join("../..");
+    let gold_path = manifest.join("../../benchmarks/gold/self.json");
+    let gold: InventPathGold = serde_json::from_str(
+        &fs::read_to_string(&gold_path).unwrap_or_else(|e| panic!("read {}: {e}", gold_path.display())),
+    )
+    .expect("parse self gold");
+    let temp = TempDir::new().unwrap();
+    let index_path = temp.path().join("index.db");
+    ast_sgrep_core::Indexer::new(IndexOptions {
+        root: root.clone(),
+        index_path: Some(index_path.clone()),
+        force_reindex: true,
+        embed_semantic: true,
+        ..IndexOptions::default()
+    })
+    .expect("indexer")
+    .index_all()
+    .expect("index");
+    let searcher = Searcher::new(SearchOptions {
+        root,
+        index_path: Some(index_path),
+        limit: 20,
+        use_embed: true,
+        ..SearchOptions::default()
+    })
+    .expect("searcher")
+    .with_response_stamp(false);
+    searcher.hold_read_snapshot().expect("hold snapshot");
+    searcher.warm_search_path().expect("warm");
+
+    let mut misses = Vec::new();
+    for case in &gold.queries {
+        let response = searcher.search(&case.query).expect("search");
+        let hits = &response.hits;
+        let found = case.relevant.iter().all(|rel| {
+            hits.iter().take(case.k).any(|hit| {
+                hit.file.replace('\\', "/").ends_with(&rel.file)
+                    && rel
+                        .symbol
+                        .as_ref()
+                        .is_none_or(|s| hit.symbol.as_deref() == Some(s.as_str()))
+            })
+        });
+        if !found {
+            misses.push(format!(
+                "{} {:?}\n{}",
+                case.name,
+                case.query,
+                autopsy(hits)
+            ));
+        }
+    }
+    assert!(
+        misses.is_empty(),
+        "self gold loss ({} of {}):\n{}",
+        misses.len(),
+        gold.queries.len(),
+        misses.join("\n\n")
     );
 }

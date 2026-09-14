@@ -9,10 +9,10 @@ import {
   loadCodemodeNative,
   resetNativeCache,
   nativeAvailable,
-} from "../../../packages/pi/extension/src/codemode/native.js";
-import { NativeSessionPool } from "../../../packages/pi/extension/src/codemode/session-pool.js";
-import { createAsgrepConnector } from "../../../packages/pi/extension/src/codemode/connector.js";
-import { runCodemode } from "../../../packages/pi/extension/src/codemode/runner.js";
+} from "../../../packages/pi/extension/dist/codemode/native.js";
+import { NativeSessionPool } from "../../../packages/pi/extension/dist/codemode/session-pool.js";
+import { createAsgrepConnector } from "../../../packages/pi/extension/dist/codemode/connector.js";
+import { runCodemode } from "../../../packages/pi/extension/dist/codemode/runner.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const sample = realpathSync(join(here, "../../../tests/fixtures/sample"));
@@ -27,10 +27,13 @@ function requireNative() {
   return binding;
 }
 
-async function indexedNative(binding: NonNullable<ReturnType<typeof requireNative>>): Promise<{ dir: string; indexPath: string }> {
+async function indexedNative(
+  binding: NonNullable<ReturnType<typeof requireNative>>,
+  useEmbed = false,
+): Promise<{ dir: string; indexPath: string }> {
   const dir = await mkdtemp(join(tmpdir(), "asgrep-napi-index-"));
   const indexPath = join(dir, "index.db");
-  const session = new binding.Session({ root: sample, indexPath, useEmbed: false, limit: 8 });
+  const session = new binding.Session({ root: sample, indexPath, useEmbed, limit: 8 });
   await session.call("index_repo", { force: false });
   return { dir, indexPath };
 }
@@ -230,14 +233,19 @@ test("only bounded warm lookups use callNow and pool search stays async", async 
   t.after(() => rm(indexed.dir, { recursive: true, force: true }));
   const session = new binding.Session({ root: sample, indexPath: indexed.indexPath, useEmbed: false, limit: 8 });
   assert.equal(typeof session.callNow, "function", "bounded warm lookups need Session.callNow");
-  assert.throws(
-    () => session.callNow!("search", { query: "token", limit: 2, format: "capsule" }),
-    /metadata\/symbol|callNow/i,
+  assert.equal(
+    session.callNow!("search", { query: "token", limit: 2, format: "capsule" }),
+    null,
+    "unique search must not run on the JS thread",
   );
   const status = session.callNow!("index_status", {}) as Record<string, unknown>;
   assert.equal(typeof status, "object");
   const defs = session.callNow!("defs", { symbol: "auth_refresh", limit: 2 }) as Record<string, unknown>;
   assert.ok(Array.isArray(defs.hits));
+
+  await session.call("search", { query: "token", limit: 2, format: "capsule" });
+  const cached = session.callNow!("search", { query: "token", limit: 2, format: "capsule" }) as Record<string, unknown>;
+  assert.ok(Array.isArray(cached.hits), "sticky search cache hits may use callNow");
 
   const pool = new NativeSessionPool();
   pool.configure({ useEmbed: false, indexPath: indexed.indexPath });
@@ -285,5 +293,54 @@ test("Code Mode Promise.all stays in-process (no spawn)", async (t) => {
   assert.ok((outcome.result as { n: number }).n >= 1);
   assert.ok(bundle.stats().stickyCalls >= 2);
   assert.equal(bundle.stats().parallelSpawnCalls, 0);
+  await pool.shutdown();
+});
+
+test("Pi-visible unique embed-hybrid search latency", async (t) => {
+  const binding = requireNative();
+  if (!binding) {
+    t.skip("native addon not built (npm run build:native)");
+    return;
+  }
+  const indexed = await indexedNative(binding, true);
+  t.after(() => rm(indexed.dir, { recursive: true, force: true }));
+  const pool = new NativeSessionPool();
+  pool.configure({ useEmbed: true, indexPath: indexed.indexPath, limit: 8 });
+  const worker = await pool.acquire(sample);
+  assert.ok(worker);
+  await worker!.call("search", { query: "warmup probe token", limit: 8, format: "capsule" });
+
+  const queries = [
+    "how does auth refresh work",
+    "credential renewal",
+    "sanitize user input",
+    "process inbound request",
+    "token refresh flow",
+    "validate the session cookie",
+    "store durable credentials",
+    "rank hybrid search results",
+    "debounce noisy file events",
+    "retry after a timeout",
+    "combine two search channels",
+    "remember query embeddings",
+  ];
+  const uniqueNs: number[] = [];
+  for (const query of queries) {
+    const t0 = process.hrtime.bigint();
+    const envelope = await worker!.call("search", { query, limit: 8, format: "capsule" });
+    const ns = Number(process.hrtime.bigint() - t0);
+    uniqueNs.push(ns);
+    assert.equal(envelope.ok, true, envelope.ok ? undefined : String(envelope));
+    console.error(`pi napi unique ${JSON.stringify(query)} ${(ns / 1e6).toFixed(3)}ms`);
+  }
+  uniqueNs.sort((a, b) => a - b);
+  const p50 = uniqueNs[Math.floor(uniqueNs.length / 2)] ?? 0;
+  const p100 = uniqueNs[uniqueNs.length - 1] ?? 0;
+  console.error(
+    `pi napi unique n=${uniqueNs.length} p50=${(p50 / 1e6).toFixed(3)}ms p100=${(p100 / 1e6).toFixed(3)}ms`,
+  );
+  const r0 = process.hrtime.bigint();
+  await worker!.call("search", { query: "how does auth refresh work", limit: 8, format: "capsule" });
+  console.error(`pi napi repeat ${((Number(process.hrtime.bigint() - r0)) / 1e6).toFixed(3)}ms`);
   await pool.shutdown();
 });

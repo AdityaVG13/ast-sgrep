@@ -82,6 +82,9 @@ export type AsgrepConnector = {
     }, options?: {
         signal?: AbortSignal;
     }): Promise<MachineEnvelope>;
+    doctor(options?: {
+        signal?: AbortSignal;
+    }): Promise<MachineEnvelope>;
 };
 export type ConnectorBundle = {
     asgrep: AsgrepConnector;

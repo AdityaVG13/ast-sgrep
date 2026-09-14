@@ -34,6 +34,7 @@ pub(crate) fn asgrep_line_hit(
         excerpt,
         symbol: None,
         language,
+        byte_span: None,
     })
 }
 pub(crate) fn attach_context(

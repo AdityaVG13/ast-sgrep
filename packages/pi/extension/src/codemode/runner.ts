@@ -1,7 +1,10 @@
 import vm from "node:vm";
 import type { AsgrepConnector } from "./connector.js";
 import type { DispatchStats } from "./dispatch.js";
+import { coerceHostArgs, normalizeCode, packGuestCall, resolveHostMethod, timeoutHint, unknownMethodError } from "./guest-api.js";
 import { CODEMODE_HOST_METHODS, type CodemodeHostMethod } from "./types.js";
+
+export { normalizeCode };
 
 /** Closed sum: success|failure — `ok:true` with `error` (or `ok:false` without) is unrepresentable. */
 export type CodemodeRunSuccess = {
@@ -142,14 +145,26 @@ function bootstrapSource(): string {
       if (!response.ok) throw new Error(response.error || ("asgrep." + method + " failed"));
       return response.value;
     };
-    const api = Object.create(null);
-    for (const method of ${JSON.stringify([...CODEMODE_HOST_METHODS])}) {
-      Object.defineProperty(api, method, {
-        enumerable: true,
-        value: (args = {}) => invoke(method, args),
-      });
-    }
-    Object.freeze(api);
+    const known = ${JSON.stringify([...CODEMODE_HOST_METHODS])};
+    const blocked = new Set(["then", "constructor", "prototype", "__proto__"]);
+    const call = (method) => (...guestArgs) => invoke(method, { __guestArgs: guestArgs });
+    const api = new Proxy(Object.create(null), {
+      get(_target, prop) {
+        if (typeof prop !== "string" || blocked.has(prop)) return undefined;
+        return call(prop);
+      },
+      has(_target, prop) {
+        return typeof prop === "string" && !blocked.has(prop);
+      },
+      ownKeys() { return known.slice(); },
+      getOwnPropertyDescriptor(_target, prop) {
+        if (typeof prop !== "string" || blocked.has(prop)) return undefined;
+        return { enumerable: known.includes(prop), configurable: true, value: call(prop) };
+      },
+      set() { return false; },
+      defineProperty() { return false; },
+      deleteProperty() { return false; },
+    });
 
     const formatLog = (value) => {
       if (typeof value === "string") return value.slice(0, ${MAX_LOG_LINE_CHARS});
@@ -193,18 +208,6 @@ const serializeScript = new vm.Script("globalThis.__asgrepSerializeResult()", {
   filename: "asgrep-codemode-result.js",
 });
 
-/** Strip markdown fences and normalize to an async IIFE expression. */
-export function normalizeCode(raw: string): string {
-  let code = raw.trim();
-  if (code.startsWith("```")) {
-    code = code.replace(/^```(?:javascript|js|typescript|ts)?\s*/i, "").replace(/\s*```$/, "").trim();
-  }
-  if (/^async\s*\(/.test(code) || /^async\s+function\b/.test(code)) {
-    return `(${code.endsWith(";") ? code.slice(0, -1) : code})()`;
-  }
-  return `(async () => {\n${code}\n})()`;
-}
-
 type HostFn = (
   args: Record<string, unknown>,
   options?: { signal?: AbortSignal },
@@ -226,6 +229,7 @@ function bindHostMethods(asgrep: AsgrepConnector): Record<HostMethod, HostFn> {
     imports: wrap(asgrep.imports.bind(asgrep)),
     indexStatus: (_args, options) => asgrep.indexStatus(options),
     indexRepo: wrap(asgrep.indexRepo.bind(asgrep)),
+    doctor: (_args, options) => asgrep.doctor(options),
     catalogSearch: wrap(asgrep.catalogSearch.bind(asgrep)),
     catalogDescribe: wrap(asgrep.catalogDescribe.bind(asgrep)),
   };
@@ -284,11 +288,18 @@ export async function runCodemode(
       if (payload.length > MAX_BRIDGE_REQUEST_CHARS) {
         throw new Error(`codemode call arguments exceed ${MAX_BRIDGE_REQUEST_CHARS} characters`);
       }
-      if (!Object.hasOwn(hostMethods, method)) {
-        throw new Error(`unknown asgrep method: ${method}`);
+      const resolved = resolveHostMethod(method);
+      if (!resolved || !Object.hasOwn(hostMethods, resolved)) {
+        throw new Error(unknownMethodError(method));
       }
-      const input = JSON.parse(payload) as Record<string, unknown>;
-      const value = await hostMethods[method as HostMethod](input, { signal: runController.signal });
+      const parsed = JSON.parse(payload) as Record<string, unknown>;
+      const packed = Array.isArray(parsed.__guestArgs)
+        ? packGuestCall(resolved, parsed.__guestArgs)
+        : parsed;
+      const input = coerceHostArgs(resolved, packed);
+      const invokeHost = hostMethods[resolved];
+      if (!invokeHost) throw new Error(unknownMethodError(method));
+      const value = await invokeHost(input, { signal: runController.signal });
       return JSON.stringify({ ok: true, value });
     } catch (cause) {
       return JSON.stringify({
@@ -369,7 +380,7 @@ export async function runCodemode(
     const result = serialized === undefined ? undefined : JSON.parse(serialized) as unknown;
     return resultOk(result, logs, code, wall0, options.stats);
   } catch (cause) {
-    return resultErr(safeErrorMessage(cause).slice(0, MAX_ERROR_CHARS), logs, code, wall0, options.stats);
+    return resultErr(timeoutHint(safeErrorMessage(cause)).slice(0, MAX_ERROR_CHARS), logs, code, wall0, options.stats);
   } finally {
     if (timer) clearTimeout(timer);
     options.signal?.removeEventListener("abort", onAbort);

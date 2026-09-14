@@ -1,4 +1,5 @@
 import type { MachineEnvelope } from "../runtime.js";
+import { coerceHostArgs } from "./guest-api.js";
 import type { ChainArgs, EditArgs, FindArgs, ReadArgs, SearchArgs } from "./types.js";
 import {
   createCodemodeDispatcher,
@@ -48,6 +49,7 @@ export type AsgrepConnector = {
   /** Progressive discovery (like deferred tools) — list/filter available asgrep tools. */
   catalogSearch(input: { query: string }, options?: { signal?: AbortSignal }): Promise<MachineEnvelope>;
   catalogDescribe(input: { name: string }, options?: { signal?: AbortSignal }): Promise<MachineEnvelope>;
+  doctor(options?: { signal?: AbortSignal }): Promise<MachineEnvelope>;
 };
 
 export type ConnectorBundle = {
@@ -93,22 +95,22 @@ export function createAsgrepConnector(
   const call = (tool: string, args: Record<string, unknown>, signal?: AbortSignal) =>
     dispatcher.host.call(tool, args, context, callOptions(signal));
 
+  const searchPayload = (method: "search" | "find" | "semantic", input: SearchArgs): Record<string, unknown> => {
+    const scoped = coerceHostArgs(method, { ...input } as Record<string, unknown>);
+    const payload: Record<string, unknown> = {
+      query: scoped.query,
+      limit: clampLimit(input.limit),
+      excerpt_lines: clampExcerpt(input.excerptLines),
+      format: input.format === "agent" ? "agent" : "capsule",
+    };
+    if (typeof scoped.lang === "string" && scoped.lang.trim()) payload.lang = scoped.lang.trim();
+    return payload;
+  };
+
   // Bound function properties (not methods) so vm call sites cannot lose `this`.
   const asgrep: AsgrepConnector = {
-    search: (input, callOptions) =>
-      call("search", {
-        query: input.query,
-        limit: clampLimit(input.limit),
-        excerpt_lines: clampExcerpt(input.excerptLines),
-        format: input.format === "agent" ? "agent" : "capsule",
-      }, callOptions?.signal),
-    find: (input, callOptions) =>
-      call("find", {
-        query: input.query,
-        limit: clampLimit(input.limit),
-        excerpt_lines: clampExcerpt(input.excerptLines),
-        format: input.format === "agent" ? "agent" : "capsule",
-      }, callOptions?.signal),
+    search: (input, callOptions) => call("search", searchPayload("search", input), callOptions?.signal),
+    find: (input, callOptions) => call("find", searchPayload("find", input), callOptions?.signal),
     read: (input, callOptions) =>
       call("read", {
         ...(typeof input.path === "string" ? { path: input.path } : {}),
@@ -127,30 +129,29 @@ export function createAsgrepConnector(
         ...(input.edits !== undefined ? { edits: input.edits } : {}),
       }, callOptions?.signal),
     semantic: (input, callOptions) =>
-      call("semantic", {
-        query: input.query,
-        limit: clampLimit(input.limit),
-        excerpt_lines: clampExcerpt(input.excerptLines),
-        format: input.format === "agent" ? "agent" : "capsule",
-      }, callOptions?.signal),
+      call("semantic", searchPayload("semantic", input), callOptions?.signal),
     chain: (input, callOptions) =>
       call("chain", {
         query: input.query,
         limit: clampLimit(input.limit),
         top_n: 20,
       }, callOptions?.signal),
-    defs: (input, callOptions) =>
-      call("defs", {
-        symbol: input.symbol,
+    defs: (input, callOptions) => {
+      const scoped = coerceHostArgs("defs", { ...input } as Record<string, unknown>);
+      return call("defs", {
+        symbol: scoped.symbol,
         limit: clampLimit(input.limit),
         excerpt_lines: clampExcerpt(input.excerptLines),
-      }, callOptions?.signal),
-    callers: (input, callOptions) =>
-      call("callers", {
-        symbol: input.symbol,
+      }, callOptions?.signal);
+    },
+    callers: (input, callOptions) => {
+      const scoped = coerceHostArgs("callers", { ...input } as Record<string, unknown>);
+      return call("callers", {
+        symbol: scoped.symbol,
         limit: clampLimit(input.limit),
         excerpt_lines: clampExcerpt(input.excerptLines),
-      }, callOptions?.signal),
+      }, callOptions?.signal);
+    },
     imports: (input, callOptions) =>
       call("imports", {
         module: input.module,
@@ -161,6 +162,7 @@ export function createAsgrepConnector(
     indexRepo: (input = {}, callOptions) => call("index_repo", { force: input.force === true }, callOptions?.signal),
     catalogSearch: (input, callOptions) => call("catalog_search", { query: input.query }, callOptions?.signal),
     catalogDescribe: (input, callOptions) => call("catalog_describe", { name: input.name }, callOptions?.signal),
+    doctor: (callOptions) => host.run(["doctor", ".", "--json"], context, callOptions),
   };
 
   return {

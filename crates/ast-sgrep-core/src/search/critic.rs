@@ -70,6 +70,13 @@ pub const CONCEPTUAL_LEXICAL_PENALTY: f64 = 0.55;
 pub const GENERIC_ENTRYPOINT_PENALTY: f64 = 0.3;
 /// Score multiplier when a conceptual hit's symbol shares concept tokens with the query.
 pub const CONCEPT_SYMBOL_BOOST: f64 = 1.4;
+/// Extra multiplier when two or more identifier tokens match the expansion.
+/// Concat-only Pi unique embed otherwise ties a helper (`fetch_token`) above
+/// the concept def (`auth_refresh`) for "credential renewal".
+pub const MULTI_CONCEPT_SYMBOL_BOOST: f64 = 1.25;
+/// Offset `TYPE_SYMBOL_WEIGHT` (0.65) so a concept type (`SnapshotStamp`) can
+/// beat snake_case helpers that share one token (`snapshot_is_held`).
+pub const CONCEPT_TYPE_DEF_BOOST: f64 = 1.7;
 /// Score multiplier when the hit symbol *is* a concept token (`combine`), not a
 /// compound that merely contains one (`combine_field_scores`).
 pub const EXACT_CONCEPT_SYMBOL_BOOST: f64 = 1.35;
@@ -204,6 +211,13 @@ pub(crate) fn identifier_tokens(symbol: &str) -> Vec<String> {
     tokens
 }
 
+fn looks_like_type_ident(symbol: &str) -> bool {
+    let mut chars = symbol.chars();
+    matches!(chars.next(), Some(c) if c.is_ascii_uppercase())
+        && !symbol.contains('_')
+        && !symbol.starts_with('#')
+}
+
 fn is_prose_path(path: &str) -> bool {
     let normalized = path.replace("\\", "/").to_ascii_lowercase();
     let file = normalized.rsplit('/').next().unwrap_or(normalized.as_str());
@@ -239,7 +253,10 @@ fn is_compound_of(query_ident: &str, symbol: &str) -> bool {
 }
 
 const GENERIC_ENTRYPOINTS: &[&str] = &[
-    "main", "__main__", "<module>", "start", "run", "init", "test", "tests", "setup", "teardown",
+    // `"<module>"` callers fold to `module` before the table probe, so the
+    // table must carry the folded form or py/js module-level callers are
+    // never penalized (H-AUDIT-52-6).
+    "main", "__main__", "module", "start", "run", "init", "test", "tests", "setup", "teardown",
 ];
 
 pub(crate) fn is_generic_entrypoint(name: &str) -> bool {
@@ -324,7 +341,7 @@ fn identifier_match(query_ident: &str, symbol: &str) -> IdentifierMatch {
     }
 }
 
-fn is_generic_concept_token(token: &str) -> bool {
+pub(crate) fn is_generic_concept_token(token: &str) -> bool {
     matches!(
         token,
         "search"
@@ -346,6 +363,22 @@ fn is_generic_concept_token(token: &str) -> bool {
             | "field"
             | "score"
             | "scores"
+            | "output"
+            | "input"
+            | "work"
+            | "does"
+            | "make"
+            | "used"
+            | "using"
+            | "best"
+            | "next"
+            | "from"
+            | "into"
+            |         "path"
+            | "paths"
+            | "index"
+            | "write"
+            | "profile"
     )
 }
 
@@ -355,23 +388,14 @@ fn concept_expansion(parsed: &ParsedQuery) -> HashSet<String> {
         .collect()
 }
 
-fn conceptual_token_in_expansion(parsed: &ParsedQuery, token: &str) -> bool {
-    concept_expansion(parsed).contains(token)
-}
-
-fn expanded_has_combine(parsed: &ParsedQuery) -> bool {
-    conceptual_token_in_expansion(parsed, "combine")
-}
-
-fn conceptual_symbol_affinity(parsed: &ParsedQuery, symbol: &str) -> usize {
-    let expanded = concept_expansion(parsed);
+fn conceptual_symbol_affinity(expanded: &HashSet<String>, symbol: &str) -> usize {
     identifier_tokens(symbol)
         .into_iter()
         .filter(|token| expanded.contains(token) && !is_generic_concept_token(token))
         .count()
 }
 
-fn conceptual_file_stem_affinity(parsed: &ParsedQuery, path: &str) -> bool {
+fn conceptual_file_stem_affinity(expanded: &HashSet<String>, path: &str) -> bool {
     const GENERIC_STEMS: &[&str] = &[
         "search", "semantic", "lexical", "index", "store", "query", "test", "tests", "lib", "mod",
         "types", "util", "utils", "core", "main", "error", "config", "session", "cli", "eval",
@@ -381,13 +405,12 @@ fn conceptual_file_stem_affinity(parsed: &ParsedQuery, path: &str) -> bool {
     let file = normalized.rsplit('/').next().unwrap_or(normalized.as_str());
     let stem = file.rsplit_once('.').map(|(s, _)| s).unwrap_or(file);
     let stem = stem.to_ascii_lowercase();
-    if stem.len() < 4 || GENERIC_STEMS.contains(&stem.as_str()) {
+    if stem.len() < 4 {
         return false;
     }
-    let expanded: std::collections::HashSet<String> =
-        ast_sgrep_embed::tokenize(&ast_sgrep_embed::expand_concepts(&parsed.raw))
-            .into_iter()
-            .collect();
+    if GENERIC_STEMS.contains(&stem.as_str()) && !expanded.contains(&stem) {
+        return false;
+    }
     expanded.contains(&stem)
 }
 
@@ -447,6 +470,7 @@ pub(crate) fn apply_critic(parsed: &ParsedQuery, intent: QueryIntent, hits: &mut
         .iter()
         .any(|hit| is_code_kind(hit.kind) && !is_prose_path(&hit.file));
     let conceptual = intent == QueryIntent::Conceptual;
+    let expanded = conceptual.then(|| concept_expansion(parsed));
     let mut kept = Vec::with_capacity(hits.len());
     for (index, mut hit) in hits.drain(..).enumerate() {
         if uncorroborated.contains(&index) {
@@ -524,7 +548,7 @@ pub(crate) fn apply_critic(parsed: &ParsedQuery, intent: QueryIntent, hits: &mut
         if conceptual && has_code_evidence && hit.kind == HitKind::Asgrep {
             hit.score *= CONCEPTUAL_LEXICAL_PENALTY;
         }
-        if conceptual {
+        if let Some(expanded) = expanded.as_ref() {
             let caller = hit.caller.as_deref().unwrap_or("");
             let symbol_name = hit.symbol.as_deref().unwrap_or("");
             if matches!(hit.kind, HitKind::Caller | HitKind::Graph)
@@ -535,26 +559,32 @@ pub(crate) fn apply_critic(parsed: &ParsedQuery, intent: QueryIntent, hits: &mut
             let test_path = is_test_path(&hit.file);
             if !test_path {
                 if let Some(symbol_name) = hit.symbol.as_deref() {
-                    let affinity = conceptual_symbol_affinity(parsed, symbol_name);
+                    let affinity = conceptual_symbol_affinity(expanded, symbol_name);
                     if affinity >= 2
                         || (affinity >= 1 && matches!(hit.kind, HitKind::Def | HitKind::Embed))
                     {
                         hit.score *= CONCEPT_SYMBOL_BOOST;
                     }
+                    if affinity >= 2 {
+                        hit.score *= MULTI_CONCEPT_SYMBOL_BOOST;
+                        if looks_like_type_ident(symbol_name) {
+                            hit.score *= CONCEPT_TYPE_DEF_BOOST;
+                        }
+                    }
                     let tokens = identifier_tokens(symbol_name);
                     if tokens.len() == 1
                         && !is_generic_concept_token(&tokens[0])
-                        && conceptual_token_in_expansion(parsed, &tokens[0])
+                        && expanded.contains(&tokens[0])
                     {
                         hit.score *= EXACT_CONCEPT_SYMBOL_BOOST;
-                    } else if expanded_has_combine(parsed)
+                    } else if expanded.contains("combine")
                         && tokens.iter().any(|token| token == "combine")
                         && !symbol_name.eq_ignore_ascii_case("combine")
                     {
                         hit.score *= COMPOUND_SYMBOL_PENALTY;
                     }
                 }
-                if conceptual_file_stem_affinity(parsed, &hit.file) {
+                if conceptual_file_stem_affinity(expanded, &hit.file) {
                     hit.score *= CONCEPT_FILE_STEM_BOOST;
                 }
             }
@@ -562,9 +592,9 @@ pub(crate) fn apply_critic(parsed: &ParsedQuery, intent: QueryIntent, hits: &mut
         kept.push(hit);
     }
     *hits = kept;
-    if conceptual {
+    if let Some(expanded) = expanded.as_ref() {
         demote_test_paths_below_implementation(hits);
-        demote_thieves_below_conjunction_combine(parsed, hits);
+        demote_thieves_below_conjunction_combine(expanded, hits);
     }
 }
 
@@ -598,8 +628,7 @@ fn demote_test_paths_below_implementation(hits: &mut [SearchHit]) {
 /// When the query expanded to `conjunction` without `rrf`/`reciprocal`,
 /// fusion.rs / eval.rs / field_weight.rs / `combine_*` compounds cannot lead.
 /// Mutant: drop this clamp, or map `channels` back to `rrf`/`fusion`.
-fn demote_thieves_below_conjunction_combine(parsed: &ParsedQuery, hits: &mut [SearchHit]) {
-    let expanded = concept_expansion(parsed);
+fn demote_thieves_below_conjunction_combine(expanded: &HashSet<String>, hits: &mut [SearchHit]) {
     if !expanded.contains("conjunction") {
         return;
     }
@@ -673,6 +702,7 @@ mod tests {
             embed_fields: None,
             critic: Vec::new(),
             excerpt: String::new(),
+            byte_span: None,
         }
     }
 

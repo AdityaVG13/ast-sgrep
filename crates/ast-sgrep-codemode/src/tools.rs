@@ -29,20 +29,20 @@ impl ToolName {
     pub fn parse(name: &str) -> Option<Self> {
         Some(match name {
             "search" | "code_search" => Self::Search,
-            "find" => Self::Find,
+            "find" | "grep" | "keyword" => Self::Find,
             "read" | "code_read" => Self::Read,
             "edit" | "code_edit" => Self::Edit,
             "semantic" => Self::Semantic,
             "chain" => Self::Chain,
-            "defs" => Self::Defs,
-            "callers" => Self::Callers,
+            "defs" | "define" | "definition" | "definitions" => Self::Defs,
+            "callers" | "references" => Self::Callers,
             "imports" => Self::Imports,
-            "index_status" => Self::IndexStatus,
-            "index_repo" => Self::IndexRepo,
+            "index_status" | "indexStatus" => Self::IndexStatus,
+            "index_repo" | "indexRepo" => Self::IndexRepo,
             "filter_hits" => Self::FilterHits,
             "select" => Self::Select,
-            "catalog_search" => Self::CatalogSearch,
-            "catalog_describe" => Self::CatalogDescribe,
+            "catalog_search" | "catalogSearch" => Self::CatalogSearch,
+            "catalog_describe" | "catalogDescribe" => Self::CatalogDescribe,
             _ => return None,
         })
     }
@@ -70,7 +70,7 @@ impl ToolName {
 
 #[derive(Debug, Error)]
 pub enum CallError {
-    #[error("unknown tool: {0}")]
+    #[error("{0}")]
     UnknownTool(String),
     #[error("{0}")]
     InvalidArgs(String),
@@ -90,7 +90,7 @@ pub fn call_tool(
     name: &str,
     args: Value,
 ) -> Result<Value, CallError> {
-    let tool = ToolName::parse(name).ok_or_else(|| CallError::UnknownTool(name.to_string()))?;
+    let tool = ToolName::parse(name).ok_or_else(|| unknown_tool(name))?;
     match tool {
         ToolName::Search => session.search(&args).map_err(CallError::from),
         ToolName::Find => session.find(&args).map_err(CallError::from),
@@ -105,7 +105,7 @@ pub fn call_tool(
         }
         ToolName::Chain => session.chain(&args).map_err(CallError::from),
         ToolName::Defs => {
-            let symbol = require_str(&args, "symbol")?;
+            let symbol = require_symbol(&args)?;
             let mut a = args.clone();
             if let Some(obj) = a.as_object_mut() {
                 obj.insert("query".into(), json!(format!("defs:{symbol}")));
@@ -113,7 +113,7 @@ pub fn call_tool(
             session.search(&a).map_err(CallError::from)
         }
         ToolName::Callers => {
-            let symbol = require_str(&args, "symbol")?;
+            let symbol = require_symbol(&args)?;
             let mut a = args.clone();
             if let Some(obj) = a.as_object_mut() {
                 obj.insert("query".into(), json!(format!("callers:{symbol}")));
@@ -151,10 +151,112 @@ pub fn call_tool(
     }
 }
 
+fn require_symbol<'a>(args: &'a Value) -> Result<&'a str, CallError> {
+    args.get("symbol")
+        .and_then(|v| v.as_str())
+        .or_else(|| args.get("query").and_then(|v| v.as_str()))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            CallError::InvalidArgs(
+                "symbol is required. Call asgrep.defs(\"Name\") or asgrep.defs({ symbol: \"Name\" })"
+                    .into(),
+            )
+        })
+}
+
 fn require_str<'a>(args: &'a Value, key: &str) -> Result<&'a str, CallError> {
     args.get(key)
         .and_then(|v| v.as_str())
-        .ok_or_else(|| CallError::InvalidArgs(format!("{key} is required")))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| match key {
+            "module" => CallError::InvalidArgs(
+                "module is required. Call asgrep.imports(\"os\") or asgrep.imports({ module: \"os\" })"
+                    .into(),
+            ),
+            "query" => CallError::InvalidArgs(
+                "query is required. Call asgrep.search(\"text\") or asgrep.search({ query: \"text\" })"
+                    .into(),
+            ),
+            "name" => CallError::InvalidArgs(
+                "name is required. Call asgrep.catalogDescribe(\"search\")".into(),
+            ),
+            _ => CallError::InvalidArgs(format!("{key} is required")),
+        })
+}
+
+const KNOWN_TOOLS: &[&str] = &[
+    "search",
+    "find",
+    "read",
+    "edit",
+    "semantic",
+    "chain",
+    "defs",
+    "callers",
+    "imports",
+    "index_status",
+    "index_repo",
+    "filter_hits",
+    "select",
+    "catalog_search",
+    "catalog_describe",
+];
+
+fn edit_distance(a: &str, b: &str) -> usize {
+    let a_chars: Vec<char> = a.chars().collect();
+    let b_chars: Vec<char> = b.chars().collect();
+    let rows = a_chars.len() + 1;
+    let cols = b_chars.len() + 1;
+    let mut prev = vec![0; cols];
+    let mut cur = vec![0; cols];
+    for (j, cell) in prev.iter_mut().enumerate() {
+        *cell = j;
+    }
+    for i in 1..rows {
+        cur[0] = i;
+        for j in 1..cols {
+            let cost = usize::from(a_chars[i - 1] != b_chars[j - 1]);
+            cur[j] = (prev[j] + 1).min(cur[j - 1] + 1).min(prev[j - 1] + cost);
+        }
+        prev.copy_from_slice(&cur);
+    }
+    prev[b_chars.len()]
+}
+
+fn suggest_tool(name: &str) -> Option<&'static str> {
+    let needle = name.to_ascii_lowercase();
+    if needle.is_empty() {
+        return None;
+    }
+    let max_distance = (needle.len() / 3).max(1);
+    let mut best: Option<(&'static str, usize)> = None;
+    for candidate in KNOWN_TOOLS {
+        let lower = candidate.to_ascii_lowercase();
+        let distance = if lower.contains(&needle) || needle.contains(&lower) {
+            1.min(edit_distance(&needle, &lower))
+        } else {
+            edit_distance(&needle, &lower)
+        };
+        if distance > max_distance {
+            continue;
+        }
+        match best {
+            Some((_, best_distance)) if distance >= best_distance => {}
+            _ => best = Some((*candidate, distance)),
+        }
+    }
+    best.map(|(name, _)| name)
+}
+
+fn unknown_tool(name: &str) -> CallError {
+    let extra = suggest_tool(name)
+        .map(|hint| format!(" Did you mean {hint}?"))
+        .unwrap_or_default();
+    CallError::UnknownTool(format!(
+        "unknown tool: {name}.{extra} Use search, find, defs, callers, read, edit."
+    ))
 }
 
 fn hit_array(value: &Value) -> Result<Vec<Value>, CallError> {

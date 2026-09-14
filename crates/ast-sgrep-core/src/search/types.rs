@@ -98,6 +98,18 @@ pub struct SearchHit {
     pub critic: Vec<super::critic::CriticNote>,
     #[serde(serialize_with = "serialize_excerpt")]
     pub excerpt: String,
+    /// PASS 131 (130A-F4): in-process byte span of the matched node, when
+    /// the producing lane knows it (the native pattern walk). Routing-
+    /// internal only — the same-line dedup key (fusion `DedupKey`)
+    /// distinguishes two INDEPENDENT same-line hits (different spans) from
+    /// the same node found twice (equal spans). PASS 132 (F-131E-1): the
+    /// span NEVER serializes — the pass-131 `skip_serializing_if` attribute
+    /// was conditional and leaked `"byte_span"` onto every native-walk hit
+    /// row of the `search --json` wire, flipping the frozen golden
+    /// T1-SEARCH-PATTERN-ENVELOPE. `skip_serializing` is unconditional; the
+    /// wire deserializer (`SearchHitWire`) never reads the field.
+    #[serde(skip_serializing)]
+    pub byte_span: Option<(usize, usize)>,
 }
 #[derive(serde::Deserialize)]
 struct SearchHitWire {
@@ -157,6 +169,7 @@ impl<'de> serde::Deserialize<'de> for SearchHit {
             embed_fields: None,
             critic: Vec::new(),
             excerpt: bound_excerpt(wire.excerpt),
+            byte_span: None,
         })
     }
 }
@@ -170,6 +183,9 @@ pub struct SpanHitInput {
     pub excerpt: String,
     pub symbol: Option<String>,
     pub language: Option<String>,
+    /// PASS 131 (130A-F4): the producing lane's matched-node byte span
+    /// (`None` everywhere except the native pattern walk).
+    pub byte_span: Option<(usize, usize)>,
 }
 impl SearchHit {
     fn base(
@@ -198,12 +214,14 @@ impl SearchHit {
             embed_fields: None,
             critic: Vec::new(),
             excerpt: bound_excerpt(excerpt),
+            byte_span: None,
         }
     }
     pub fn span(input: SpanHitInput) -> Self {
         Self {
             symbol: input.symbol,
             language: input.language,
+            byte_span: input.byte_span,
             ..Self::base(
                 input.kind,
                 input.file,

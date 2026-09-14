@@ -22,6 +22,8 @@ export type SessionPoolOptions = {
     limit?: number;
 };
 export type StickyStarter = (options: StickyWorkerOptions) => Promise<StickyWorker>;
+/** Unique search must not run on the JS thread; cache hits may. */
+export declare function isUncachedSearchError(cause: unknown): boolean;
 export declare function isClosedWorkerError(cause: unknown): boolean;
 export declare class NativeSessionPool {
     #private;

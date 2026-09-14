@@ -1,5 +1,7 @@
 import type { AsgrepConnector } from "./connector.js";
 import type { DispatchStats } from "./dispatch.js";
+import { normalizeCode } from "./guest-api.js";
+export { normalizeCode };
 /** Closed sum: success|failure — `ok:true` with `error` (or `ok:false` without) is unrepresentable. */
 export type CodemodeRunSuccess = {
     ok: true;
@@ -19,8 +21,6 @@ export type CodemodeRunFailure = {
     wallMs: number;
 };
 export type CodemodeRunResult = CodemodeRunSuccess | CodemodeRunFailure;
-/** Strip markdown fences and normalize to an async IIFE expression. */
-export declare function normalizeCode(raw: string): string;
 /** No-op: programs run in-process. Kept so session_start / tests stay stable. */
 export declare function warmCodemodeSandbox(): Promise<void>;
 /** No-op: there is no sticky Worker isolate to drop. */

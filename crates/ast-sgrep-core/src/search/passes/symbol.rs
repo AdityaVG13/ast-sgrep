@@ -10,6 +10,7 @@ use crate::store::sql::{caller_terms_filter, like_terms_filter, query_limit_map}
 use crate::store::IndexStore;
 use crate::Result;
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 const SYMBOL_SQL_LIMIT: usize = 500;
 const CALLER_SQL_LIMIT: usize = 500;
 const MODE_SQL_LIMIT: usize = 200;
@@ -27,6 +28,102 @@ const CALLER_SELECT: &str = "SELECT f.path, f.language, c.caller, c.callee, c.li
 type CallerQueryRow = (String, Option<String>, String, String, u32);
 type CallerFilter = fn(&[String], Option<&str>) -> (String, Vec<String>);
 type SymbolSpanRow = (String, Option<String>, String, String, u32, u32);
+
+/// Snapshot-held unique hybrid: one SQL load of defs, then RAM substring match.
+#[derive(Clone)]
+pub(crate) struct WarmedSymbolTable {
+    rows: Arc<Vec<SymbolSpanRow>>,
+    names_lower: Arc<Vec<String>>,
+    by_file: Arc<HashMap<String, Vec<usize>>>,
+}
+
+impl WarmedSymbolTable {
+    pub(crate) fn load(store: &IndexStore) -> Result<Self> {
+        const WARMED_SYMBOL_CAP: usize = 262_144;
+        let rows = query_symbol_spans(store, "", Vec::new(), WARMED_SYMBOL_CAP)?;
+        let mut names_lower = Vec::with_capacity(rows.len());
+        let mut by_file: HashMap<String, Vec<usize>> = HashMap::new();
+        for (i, row) in rows.iter().enumerate() {
+            names_lower.push(row.2.to_lowercase());
+            by_file.entry(row.0.clone()).or_default().push(i);
+        }
+        Ok(Self {
+            rows: Arc::new(rows),
+            names_lower: Arc::new(names_lower),
+            by_file: Arc::new(by_file),
+        })
+    }
+
+    fn matches_for_files(
+        &self,
+        options: &SearchOptions,
+        terms: &[String],
+        allowed_files: &HashSet<String>,
+        limit: usize,
+    ) -> Vec<SymbolSpanRow> {
+        let terms_lower: Vec<String> = terms.iter().map(|t| t.to_lowercase()).collect();
+        let mut matched = Vec::new();
+        for path in allowed_files {
+            let Some(idxs) = self.by_file.get(path) else {
+                continue;
+            };
+            for &i in idxs {
+                let row = &self.rows[i];
+                if !matches_lang(row.1.as_deref(), options.lang_filter.as_deref()) {
+                    continue;
+                }
+                let name = &self.names_lower[i];
+                if terms_lower.iter().any(|term| name.contains(term.as_str())) {
+                    matched.push(row.clone());
+                }
+            }
+        }
+        matched.sort_by(|left, right| {
+            kind_rank(left.3.as_str())
+                .cmp(&kind_rank(right.3.as_str()))
+                .then_with(|| left.0.cmp(&right.0))
+                .then_with(|| left.4.cmp(&right.4))
+                .then_with(|| left.2.cmp(&right.2))
+        });
+        // Functions otherwise spend the 32-row budget before enums/structs
+        // (`Durability`, `SnapshotStamp`) that conceptual gold names.
+        let other_keep = ((limit / 2).max(4)).min(limit);
+        let mut fns = Vec::new();
+        let mut types = Vec::new();
+        let mut others = Vec::new();
+        for row in matched {
+            if matches!(row.3.as_str(), "function" | "method") {
+                fns.push(row);
+            } else if is_type_symbol_kind(&row.3) {
+                types.push(row);
+            } else {
+                others.push(row);
+            }
+        }
+        types.truncate(other_keep);
+        let leftover = other_keep.saturating_sub(types.len());
+        others.truncate(leftover);
+        fns.truncate(limit.saturating_sub(types.len() + others.len()));
+        fns.append(&mut types);
+        fns.append(&mut others);
+        fns
+    }
+}
+
+fn kind_rank(kind: &str) -> u8 {
+    match kind {
+        "function" | "method" => 0,
+        "type" | "enum" | "class" | "interface" | "struct" => 1,
+        _ => 2,
+    }
+}
+
+fn is_type_symbol_kind(kind: &str) -> bool {
+    matches!(
+        kind,
+        "type" | "enum" | "class" | "interface" | "struct"
+    )
+}
 enum CallerMatchMode {
     Hybrid,
     CalleeOnly,
@@ -212,7 +309,9 @@ fn caller_rows_to_hits_resolved_opts(
 }
 
 fn retain_scored_hits(hits: &mut Vec<SearchHit>, options: &SearchOptions) {
-    let limit = retained_limit(options);
+    // Keep a scoring pool above `options.limit`. TYPE_SYMBOL_WEIGHT (0.65)
+    // otherwise truncates concept types (`SnapshotStamp`) before the critic.
+    let limit = retained_limit(options).max(32);
     hits.sort_unstable_by(|left, right| {
         right
             .score
@@ -352,6 +451,7 @@ fn symbol_span_rows_to_hits_opts(
             excerpt: String::new(),
             symbol: Some(name),
             language,
+            byte_span: None,
         }));
     }
     retain_scored_hits(&mut hits, options);
@@ -402,6 +502,25 @@ pub fn symbol_pass_for_files(
     options: &SearchOptions,
     parsed: &ParsedQuery,
     allowed_files: &HashSet<String>,
+    include_callers: bool,
+) -> Result<Vec<SearchHit>> {
+    symbol_pass_for_files_warmed(
+        store,
+        options,
+        parsed,
+        allowed_files,
+        include_callers,
+        None,
+    )
+}
+
+pub(crate) fn symbol_pass_for_files_warmed(
+    store: &IndexStore,
+    options: &SearchOptions,
+    parsed: &ParsedQuery,
+    allowed_files: &HashSet<String>,
+    include_callers: bool,
+    warmed: Option<&WarmedSymbolTable>,
 ) -> Result<Vec<SearchHit>> {
     if parsed.terms.is_empty() || allowed_files.is_empty() {
         return Ok(Vec::new());
@@ -410,10 +529,14 @@ pub fn symbol_pass_for_files(
     // finish keeps `limit` hits. 32-64 rows is enough to score defs/callers
     // inside the 100-file cascade without a 1-5 ms SQLite LIKE walk.
     let sql_limit = retained_limit(options).max(32).min(SYMBOL_SQL_LIMIT);
-    let (mut where_clause, mut bind) =
-        like_terms_filter("s.name", &parsed.terms, options.lang_filter.as_deref());
-    restrict_to_files(&mut where_clause, &mut bind, Some(allowed_files));
-    let rows = query_symbol_spans(store, &where_clause, bind, sql_limit)?;
+    let rows = if let Some(table) = warmed {
+        table.matches_for_files(options, &parsed.terms, allowed_files, sql_limit)
+    } else {
+        let (mut where_clause, mut bind) =
+            like_terms_filter("s.name", &parsed.terms, options.lang_filter.as_deref());
+        restrict_to_files(&mut where_clause, &mut bind, Some(allowed_files));
+        query_symbol_spans(store, &where_clause, bind, sql_limit)?
+    };
     let mut hits = symbol_span_rows_to_hits_opts(
         store,
         rows,
@@ -423,22 +546,24 @@ pub fn symbol_pass_for_files(
         |name| score_def(&parsed.terms, name),
         false,
     )?;
-    hits.extend(caller_rows_to_hits_opts(
-        store,
-        query_caller_rows(
+    if include_callers {
+        hits.extend(caller_rows_to_hits_opts(
             store,
-            caller_terms_filter,
-            &parsed.terms,
-            options.lang_filter.as_deref(),
-            Some(allowed_files),
-            sql_limit,
-        )?,
-        options,
-        parsed,
-        CallerMatchMode::Hybrid,
-        None,
-        false,
-    )?);
+            query_caller_rows(
+                store,
+                caller_terms_filter,
+                &parsed.terms,
+                options.lang_filter.as_deref(),
+                Some(allowed_files),
+                sql_limit,
+            )?,
+            options,
+            parsed,
+            CallerMatchMode::Hybrid,
+            None,
+            false,
+        )?);
+    }
     Ok(hits)
 }
 

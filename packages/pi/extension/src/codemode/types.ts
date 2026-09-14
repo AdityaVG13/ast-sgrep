@@ -5,6 +5,11 @@ export type SearchArgs = {
   limit?: number;
   excerptLines?: number;
   format?: "capsule" | "agent";
+  /** Directory or glob; injected as an `in:` query token. */
+  in?: string;
+  fileFilter?: string;
+  file_filter?: string;
+  lang?: string;
 };
 
 export type FindArgs = SearchArgs;
@@ -32,7 +37,7 @@ export type ChainArgs = {
   excerptLines?: number;
 };
 
-/** Host methods the program may invoke. Primary four first; the rest stay for tests and catalog tools. */
+/** Host methods the program may invoke. Primary lookup methods first. */
 export const CODEMODE_HOST_METHODS = [
   "search",
   "find",
@@ -45,6 +50,7 @@ export const CODEMODE_HOST_METHODS = [
   "imports",
   "indexStatus",
   "indexRepo",
+  "doctor",
   "catalogSearch",
   "catalogDescribe",
 ] as const;
@@ -58,14 +64,17 @@ export type CodemodeHostMethod = (typeof CODEMODE_HOST_METHODS)[number];
  * defs:/callers:/imports:/pattern:/blast: go through find or search prefixes.
  */
 export const CODEMODE_TYPES_FOR_MODEL = `
-type Hit = { file: string; symbol?: string; kind?: string; score?: number; line?: number; ref?: string; excerpt?: string };
-type Hits = { ok: boolean; hits: Hit[] };
+type Hit = { file: string; symbol?: string; kind?: string; score?: number; line?: number; ref?: string };
+type Hits = { ok: boolean; hits: Hit[]; suggested_next?: string[] };
 type Window = { path: string; ref: string; start: number; end: number; truncated: boolean; text: string };
 declare const asgrep: {
-  search(input: { query: string; limit?: number; excerptLines?: number }): Promise<Hits>;
-  find(input: { query: string; limit?: number; excerptLines?: number }): Promise<Hits>;
+  search(query: string | { query: string; limit?: number; in?: string; lang?: string; excerptLines?: number }): Promise<Hits>;
+  find(query: string | { query: string; limit?: number }): Promise<Hits>;
+  defs(symbol: string | { symbol: string; limit?: number }): Promise<Hits>;
+  callers(symbol: string | { symbol: string; limit?: number }): Promise<Hits>;
   read(input: { path?: string; start?: number; end?: number; ref?: string; refs?: unknown[]; contextLines?: number }): Promise<{ ok: boolean; count: number; windows: Window[] }>;
-  edit(input: { path?: string; oldText?: string; newText?: string; edits?: Array<{ path: string; oldText: string; newText: string }> }): Promise<{ ok: boolean; changed: number; edits: Array<{ path: string; changed: boolean }> }>;
+  edit(path: string | { path?: string; oldText?: string; newText?: string; edits?: Array<{ path: string; oldText: string; newText: string }> }, oldText?: string, newText?: string): Promise<{ ok: boolean; changed: number }>;
+  indexStatus(): Promise<{ ok: boolean }>;
 };
-/** Promise.all independent calls. Stage1 find (lexical/blast:); Stage2 search/read survivors. edit unique replace. */
+/** Positional args work: search("auth"), defs("Foo"). Promise.all independent calls. 0 hits include suggested_next. Return a small value. */
 `.trim();
