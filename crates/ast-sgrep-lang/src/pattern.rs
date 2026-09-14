@@ -979,6 +979,11 @@ fn sg_expando_char(lang: Language) -> Option<char> {
         Language::CSharp | Language::Go | Language::Kotlin | Language::Php
         | Language::Python | Language::Ruby | Language::Rust | Language::Swift => Some('µ'),
         Language::Java | Language::JavaScript | Language::TypeScript => None,
+        // Dart identifiers may contain `$` (and strings interpolate `$var`),
+        // so it joins the µ-expando group; MoonBit has no `$` syntax at all,
+        // so `$` stays the raw metavariable sigil (the Java/JS/TS group).
+        Language::Dart => Some('µ'),
+        Language::MoonBit => None,
     }
 }
 
@@ -1737,6 +1742,8 @@ pub fn tree_sitter_language(lang: Language) -> tree_sitter::Language {
         Language::Cpp => tree_sitter_cpp::LANGUAGE.into(),
         Language::Kotlin => tree_sitter_kotlin_ng::LANGUAGE.into(),
         Language::Php => tree_sitter_php::LANGUAGE_PHP.into(),
+        Language::Dart => tree_sitter_dart::LANGUAGE.into(),
+        Language::MoonBit => tree_sitter_moonbit::LANGUAGE.into(),
     }
 }
 
@@ -13151,6 +13158,14 @@ fn argument_container<'a>(node: &Node<'a>, fields: &[&str]) -> Option<Node<'a>> 
     {
         return Some(container);
     }
+    // Fieldless grammars (MoonBit apply/dot-apply calls) expose the container
+    // as a direct named child whose kind equals the field name.
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if fields.contains(&child.kind()) {
+            return Some(child);
+        }
+    }
     let mut cursor = node.walk();
     let named: Vec<Node<'a>> = node.named_children(&mut cursor).collect();
     // EXP-005 (H-CONF-010): Swift/Kotlin declarations carry no `parameters`
@@ -15145,6 +15160,7 @@ fn member_receiver<'a>(node: &Node<'a>) -> Option<Node<'a>> {
 }
 
 /// If-node kinds matched by `NativeKind::If` across the 13 indexed languages.
+/// If-node kinds matched by `NativeKind::If` across the 15 indexed languages.
 /// Modifier (`x if y` in Ruby) and ternary forms are deliberately excluded.
 const IF_KINDS: &[&str] = &["if_statement", "if_expression", "if"];
 
@@ -15157,6 +15173,7 @@ const BLOCK_KINDS: &[&str] = &[
     "body_statement",
     "statements",
     "then",
+    "block_expression",
 ];
 
 /// Wrapper kinds that never hold statements directly; descend into their
@@ -16387,6 +16404,11 @@ fn general_expression_context(lang: Language) -> Option<(&'static str, &'static 
         Language::Python | Language::TypeScript | Language::JavaScript | Language::Php => {
             return None
         }
+        // Dart statements live only in function bodies and demand the `;`
+        // terminator (the java/csharp shape); MoonBit blocks accept a
+        // trailing expression without a terminator (the go/swift shape).
+        Language::Dart => ("void __asgrep_ctx() { ", "; }"),
+        Language::MoonBit => ("fn __asgrep_ctx() { ", " }"),
     })
 }
 
@@ -18543,12 +18565,16 @@ fn call_field_node<'a>(node: &Node<'a>) -> Option<Node<'a>> {
         .into_iter()
         .find_map(|f| node.child_by_field_name(f))
         // Swift/Kotlin call_expression has no function/name fields; callee is the
-        // first named child. Safe for other langs: C# uses `invocation_expression`,
-        // and field-bearing grammars hit find_map first.
+        // first named child. MoonBit apply/dot-apply calls are fieldless too. Safe
+        // for other langs: C# uses `invocation_expression`, and field-bearing
+        // grammars hit find_map first.
         .or_else(|| {
-            (node.kind() == "call_expression")
-                .then(|| node.named_child(0))
-                .flatten()
+            matches!(
+                node.kind(),
+                "call_expression" | "apply_expression" | "dot_apply_expression"
+            )
+            .then(|| node.named_child(0))
+            .flatten()
         })
         // Pass 15 (H-CONF-018): ruby's call kind is `call` with the callee in
         // the `method` field, so neither probe above ever fired — every ruby
@@ -18669,6 +18695,25 @@ fn ts_typeargs_junction_refused(
 }
 
 fn call_target_path(node: &Node, source: &str) -> Option<Vec<String>> {
+    // MoonBit dot-apply calls: callee path is the object chain plus the
+    // trailing accessor (`obj.method()` → `[obj, method]`).
+    if node.kind() == "dot_apply_expression" {
+        let mut segs = Vec::new();
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            if child.kind() == "arguments" {
+                break;
+            }
+            if let Some(accessor) = crate::extract::dot_accessor_text(&child, source) {
+                segs.push(accessor.to_string());
+                continue;
+            }
+            if let Some(mut path) = path_from_node(&child, source) {
+                segs.append(&mut path);
+            }
+        }
+        return (!segs.is_empty()).then_some(segs);
+    }
     call_callee(node, source).map(|(segs, _)| segs)
 }
 
@@ -18802,6 +18847,20 @@ fn faithful_path_from_node(node: &Node, source: &str) -> Option<Vec<String>> {
 const KEYWORD_RECEIVER_KINDS: &[&str] = &["self", "this", "self_expression", "this_expression"];
 
 fn path_from_node(node: &Node, source: &str) -> Option<Vec<String>> {
+    if let Some(accessor) = crate::extract::dot_accessor_text(node, source) {
+        return Some(vec![accessor.to_string()]);
+    }
+    // MoonBit `Type::method` — segments are the type name and the method.
+    if node.kind() == "method_expression" {
+        let mut segs = Vec::new();
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            if let Some(mut p) = path_from_node(&child, source) {
+                segs.append(&mut p);
+            }
+        }
+        return (!segs.is_empty()).then_some(segs);
+    }
     if is_ident_kind(node.kind()) || KEYWORD_RECEIVER_KINDS.contains(&node.kind()) {
         return node_text(node, source).map(|t| vec![t.to_string()]);
     }
@@ -19678,12 +19737,20 @@ pub const DECL_KIND_PREFIXES: &[(&str, &str)] = &[
     ("trait_item", "interface"),
     ("interface_declaration", "interface"),
     ("protocol_declaration", "interface"),
+    ("mixin_declaration", "interface"),
+    ("trait_definition", "interface"),
     ("enum_item", "enum"),
     ("enum_declaration", "enum"),
     ("enum_specifier", "enum"),
+    ("enum_definition", "enum"),
+    ("type_definition", "type"),
+    ("local_function_declaration", "function"),
+    ("impl_definition", "function"),
 ];
 
 // e2hc/difu.5: invocation_expression is the C# tree-sitter grammar's call node.
+// MoonBit calls are `apply_expression` (bare) / `dot_apply_expression` (`.m(...)`);
+// the callee is the first named child in both.
 const CALL_KINDS: &[&str] = &[
     "call_expression",
     "call",
@@ -19693,6 +19760,8 @@ const CALL_KINDS: &[&str] = &[
     "member_call_expression",
     "nullsafe_member_call_expression",
     "scoped_call_expression",
+    "apply_expression",
+    "dot_apply_expression",
 ];
 
 fn is_call_kind(kind: &str) -> bool {
@@ -19704,6 +19773,15 @@ fn is_call_kind(kind: &str) -> bool {
 /// their text is reassembled from the resolved segments; every other grammar
 /// keeps the callee node's exact source bytes.
 fn call_target<'a>(node: &Node<'a>, source: &'a str) -> Option<Cow<'a, str>> {
+    // MoonBit dot-apply calls carry the callee in a trailing accessor token.
+    if node.kind() == "dot_apply_expression" {
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            if let Some(text) = crate::extract::dot_accessor_text(&child, source) {
+                return Some(Cow::Borrowed(text));
+            }
+        }
+    }
     // PASS 73 (F72a-1): php static-call rows key on the exact source callee
     // bytes (`Foo::bar`), NOT the trailing name. The old `call:bar` key made
     // `bar($$$A)` index-serve every `Foo::bar(1)` line (silent over-match vs

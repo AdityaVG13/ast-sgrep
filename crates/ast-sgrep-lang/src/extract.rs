@@ -88,7 +88,16 @@ pub(crate) const IDENT_KINDS: &[&str] = &[
     "constant",
     "name",
     "namespace_identifier",
+    "lowercase_identifier",
+    "uppercase_identifier",
 ];
+
+pub(crate) fn dot_accessor_text<'a>(node: &Node, source: &'a str) -> Option<&'a str> {
+    if !node.kind().starts_with("dot_") {
+        return None;
+    }
+    node_text(node, source)?.strip_prefix('.')
+}
 
 /// Member / scoped expression kinds that chain identifiers.
 ///
@@ -109,6 +118,9 @@ pub(crate) const MEMBER_EXPR_KINDS: &[&str] = &[
     "qualified_identifier",
     "qualified_name",
     "attribute",
+    "null_aware_member_expression",
+    "access_expression",
+    "constructor_expression"
 ];
 
 /// Comment / string trivia kinds skipped by pattern and call extraction.
@@ -125,6 +137,10 @@ pub(crate) const COMMENT_OR_STRING_KINDS: &[&str] = &[
     "template_string",
     "interpreted_string_literal",
     "quoted_string_literal",
+    "documentation_block_comment",
+    "multiline_string_literal",
+    "bytes_literal",
+    "regex_literal",
 ];
 
 /// String-like kinds used when resolving import path literals.
@@ -150,7 +166,30 @@ fn is_comment_or_string_kind(kind: &str) -> bool {
     COMMENT_OR_STRING_KINDS.contains(&kind)
 }
 
+/// Last identifier text under `node` in child order. Unlike
+/// [`last_identifier_in_chain`] (first-found wins), this keeps scanning so
+/// MoonBit `Type::method` positional names resolve to the method.
+pub(crate) fn last_identifier_under(node: &Node, source: &str) -> Option<String> {
+    if let Some(text) = dot_accessor_text(node, source) {
+        return Some(text.to_string());
+    }
+    if is_ident_kind(node.kind()) {
+        return node_text(node, source).map(str::to_string);
+    }
+    let mut cursor = node.walk();
+    let mut last = None;
+    for child in node.children(&mut cursor) {
+        if let Some(name) = last_identifier_under(&child, source) {
+            last = Some(name);
+        }
+    }
+    last
+}
+
 pub(crate) fn last_identifier_in_chain(node: &Node, source: &str) -> Option<String> {
+    if let Some(text) = dot_accessor_text(node, source) {
+        return Some(text.to_string());
+    }
     if is_ident_kind(node.kind()) {
         return node_text(node, source).map(str::to_string);
     }
@@ -257,6 +296,7 @@ pub(crate) enum KindRule {
     CallFirstNamed,
     /// Call via field; if callee text ∈ import_names, import string under args field.
     CallOrImport(&'static str, &'static [&'static str], &'static str),
+    CallDotAccessor,
     /// Import = identifiers under node joined by separator.
     ImportJoin(&'static str),
     /// Import = quoted string from child field.
@@ -276,6 +316,17 @@ pub(crate) enum KindRule {
     MethodInDeclarator(&'static [&'static str]),
     /// Symbol kind from anonymous keyword / modifier token text (Kotlin class forms).
     SymByKeywords(&'static [(&'static str, SymbolKind)], SymbolKind),
+    /// Named symbol whose name is nested under a signature chain (Dart
+    /// `method_declaration` → `method_signature` → `function_signature` → `name`).
+    SymSignature(SymbolKind),
+    /// Like [`KindRule::SymSignature`], but Method when inside any of `parents`.
+    MethodInSignature(&'static [&'static str]),
+    /// Named symbol whose name is the last identifier under the direct child of
+    /// `child_kind` (MoonBit positional names, e.g. `function_identifier`).
+    SymChild(&'static str, SymbolKind),
+    /// One import per direct child of `child_kind` holding a quoted string under
+    /// `field` (MoonBit `import_declaration` → `import_item` → `path`).
+    ImportItems(&'static str, &'static str),
 }
 
 /// Apply the first matching kind rule. Returns true if a rule fired.
@@ -432,7 +483,81 @@ fn apply_kind_rule(ext: &mut Extractor, node: &Node, source: &str, rule: KindRul
             let sk = keyword_symbol_kind(node, source, cases, default);
             add_named_symbol(ext, node, source, sk);
         }
+        KindRule::SymSignature(sk) => {
+            if let Some(name) = signature_name(node, source) {
+                ext.add_symbol(node, source, &name, sk);
+            }
+        }
+        KindRule::MethodInSignature(parents) => {
+            let sk = if is_inside_any(node, parents) {
+                SymbolKind::Method
+            } else {
+                SymbolKind::Function
+            };
+            if let Some(name) = signature_name(node, source) {
+                ext.add_symbol(node, source, &name, sk);
+            }
+        }
+        KindRule::SymChild(child_kind, sk) => {
+            let mut cursor = node.walk();
+            for child in node.children(&mut cursor) {
+                if child.kind() == child_kind {
+                    if let Some(name) = last_identifier_under(&child, source) {
+                        ext.add_symbol(node, source, &name, sk);
+                    }
+                    return;
+                }
+            }
+        }
+        KindRule::CallDotAccessor => {
+            let mut cursor = node.walk();
+            for child in node.children(&mut cursor) {
+                if child.kind().starts_with("dot_") {
+                    ext.add_call(node, source, &child);
+                    return;
+                }
+            }
+        }
+        KindRule::ImportItems(child_kind, field) => {
+            let mut cursor = node.walk();
+            for child in node.children(&mut cursor) {
+                if child.kind() != child_kind {
+                    continue;
+                }
+                if let Some(path_node) = field_child(&child, field) {
+                    if let Some(path) = node_text(&path_node, source) {
+                        ext.add_import(node, source, trim_string_literal(path));
+                    }
+                }
+            }
+        }
     }
+}
+
+/// Resolve a declaration name nested under signature wrappers (Dart).
+///
+/// Dart declarations carry the `name` field on an inner signature node
+/// (`function_signature` / `getter_signature` / `constructor_signature`), while
+/// `local_function_declaration` has no fields at all. Walk named children
+/// depth-first and return the first `name` field, skipping bodies so a
+/// declaration's own signature wins over nested declarations.
+fn signature_name(node: &Node, source: &str) -> Option<String> {
+    if let Some(name) = field_name_text(node, source) {
+        return Some(name);
+    }
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if matches!(child.kind(), "metadata" | "annotation") {
+            continue;
+        }
+        if child.kind() == "function_body" || child.kind() == "block" {
+            continue;
+        }
+        if let Some(name) = signature_name(&child, source) {
+            return Some(name);
+        }
+    }
+    None
 }
 
 /// Resolve a C/C++-style name from `name` or nested `declarator` fields.
@@ -553,6 +678,8 @@ const ENCLOSING_NAMED_FN_KINDS: &[&str] = &[
     "local_function_statement",
     "constructor_declaration",
     "protocol_function_declaration",
+    // Dart local functions carry the name under an inner function_signature.
+    "local_function_declaration",
 ];
 const ENCLOSING_ARROW_FN_KINDS: &[&str] = &["arrow_function", "function_expression"];
 
@@ -564,13 +691,37 @@ pub(crate) fn enclosing_symbol_name(node: &Node, source: &str) -> Option<String>
             if let Some(name) = field_name_text(&n, source) {
                 return Some(name);
             }
-        } else if kind == "function_definition" {
-            // C/C++ definitions store the name under nested declarators.
-            if let Some(name) = field_name_text(&n, source) {
+            // Dart nests the name under signature wrappers.
+            if let Some(name) = signature_name(&n, source) {
                 return Some(name);
             }
-            if let Some(name) = declarator_name(&n, source) {
+        } else if matches!(kind, "function_definition" | "impl_definition") {
+            // MoonBit definitions name positionally via `function_identifier`;
+            // C/C++ `function_definition` nests under `declarator` chains.
+            let mut cursor = n.walk();
+            let moonbit = n
+                .children(&mut cursor)
+                .any(|child| child.kind() == "function_identifier");
+            if moonbit {
+                let mut cursor = n.walk();
+                for child in n.children(&mut cursor) {
+                    if child.kind() == "function_identifier" {
+                        if let Some(name) = last_identifier_under(&child, source) {
+                            return Some(name);
+                        }
+                    }
+                }
+            } else if let Some(name) = declarator_name(&n, source) {
                 return Some(name);
+            }
+        } else if kind == "named_lambda_expression" {
+            let mut cursor = n.walk();
+            for child in n.children(&mut cursor) {
+                if child.kind() == "lowercase_identifier" {
+                    if let Some(name) = last_identifier_under(&child, source) {
+                        return Some(name);
+                    }
+                }
             }
         } else if ENCLOSING_ARROW_FN_KINDS.contains(&kind) {
             if let Some(name) = field_name_text(&n, source) {
@@ -628,7 +779,14 @@ impl Extractor {
         if is_in_comment_or_string(node) {
             return;
         }
-        let Some(callee) = last_identifier_in_chain(callee_node, source) else {
+        // MoonBit `Type::method(...)` calls: the callee is the trailing
+        // identifier, not the type name the first-found scan would return.
+        let Some(callee) = (if callee_node.kind() == "method_expression" {
+            last_identifier_under(callee_node, source)
+        } else {
+            last_identifier_in_chain(callee_node, source)
+        })
+        else {
             return;
         };
         self.calls.push(CallSite {

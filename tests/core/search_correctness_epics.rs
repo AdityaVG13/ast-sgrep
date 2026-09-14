@@ -420,6 +420,9 @@ fn alias_source(ext: &str, needle: &str) -> String {
         }
         "kt" | "kts" => format!("val {needle} = 1\n"),
         "php" => format!("<?php function {needle}() {{}}\n"),
+        "dart" => format!("int {needle} = 1;\n"),
+        "mbt" => format!("fn {needle}() -> Unit {{}}\n"),
+        "mbti" => format!("pub fn {needle}() -> Int\n"),
         other => panic!("missing snippet for extension {other}"),
     }
 }

@@ -1,6 +1,6 @@
 # ast-sgrep for VS Code
 
-This extension connects VS Code to the `asgrep-lsp` language server for indexed structural search and code navigation in Rust, TypeScript (including TSX), JavaScript (including JSX), Python, Go, Java, C#, Ruby, Swift, C, C++, Kotlin, and PHP workspaces — the same set as `ast-sgrep-lang` `Language::all()`.
+This extension connects VS Code to the `asgrep-lsp` language server for indexed structural search and code navigation in Rust, TypeScript (including TSX), JavaScript (including JSX), Python, Go, Java, C#, Ruby, Swift, C, C++, Kotlin, Dart, PHP and MoonBit workspaces — the same set as `ast-sgrep-lang` `Language::all()`.
 
 ## Prerequisites
 

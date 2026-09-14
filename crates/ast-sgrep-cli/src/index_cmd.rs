@@ -377,6 +377,8 @@ pub(crate) fn run_index_dry_run(command: &str, root: &Path, cli: &Cli) -> anyhow
                         | "cs"
                         | "rb"
                         | "php"
+                        | "dart"
+                        | "mbt"
                 ) {
                     *files += 1;
                 } else {

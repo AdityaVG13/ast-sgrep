@@ -60,6 +60,25 @@ pub(crate) const FUNCTION_QUERY_TABLE: &[(&[Language], &[&str])] = &[
             "(local_function_statement name: (identifier) @name) @match",
         ],
     ),
+    // Dart nests `name` under signature wrappers; queries must follow the
+    // method_declaration → method_signature → *signature → name chain.
+    (
+        &[Language::Dart],
+        &[
+            "(function_declaration (function_signature name: (identifier) @name)) @match",
+            "(method_declaration (method_signature (function_signature name: (identifier) @name)) @match)",
+            "(method_declaration (method_signature (constructor_signature name: (identifier) @name)) @match)",
+            "(local_function_declaration (function_signature name: (identifier) @name)) @match",
+        ],
+    ),
+    // MoonBit names are positional; function_identifier ends in the method name.
+    (
+        &[Language::MoonBit],
+        &[
+            "(function_definition (function_identifier [(lowercase_identifier) (uppercase_identifier)] @name)) @match",
+            "(impl_definition (function_identifier [(lowercase_identifier) (uppercase_identifier)] @name)) @match",
+        ],
+    ),
     (
         &[Language::JavaScript, Language::TypeScript],
         &[
@@ -344,5 +363,37 @@ pub(crate) const CLASS_QUERY_TABLE: &[(&[Language], &str, &[&str])] = &[
             "(interface_declaration name: (name) @name) @match",
             "(enum_declaration name: (name) @name) @match",
         ],
+    ),
+    // Dart
+    (
+        &[Language::Dart],
+        "class",
+        &["(class_declaration name: (identifier) @name) @match"],
+    ),
+    (
+        &[Language::Dart],
+        "interface",
+        &["(mixin_declaration name: (identifier) @name) @match"],
+    ),
+    (
+        &[Language::Dart],
+        "type",
+        &[
+            "(class_declaration name: (identifier) @name) @match",
+            "(mixin_declaration name: (identifier) @name) @match",
+            "(extension_declaration name: (identifier) @name) @match",
+            "(extension_type_declaration name: (identifier) @name) @match",
+        ],
+    ),
+    // MoonBit — positional names sit directly under the definition node.
+    (
+        &[Language::MoonBit],
+        "type",
+        &["(type_definition (identifier) @name) @match"],
+    ),
+    (
+        &[Language::MoonBit],
+        "struct",
+        &["(struct_definition (identifier) @name) @match"],
     ),
 ];

@@ -1,0 +1,407 @@
+{
+  "calls": [
+    {
+      "byte_end": 512,
+      "byte_start": 501,
+      "callee": "trim",
+      "caller": "formatWidget",
+      "line": 24
+    },
+    {
+      "byte_end": 460,
+      "byte_start": 446,
+      "callee": "GoldenWidget",
+      "caller": "makeWidget",
+      "line": 21
+    },
+    {
+      "byte_end": 325,
+      "byte_start": 307,
+      "callee": "formatWidget",
+      "caller": "render",
+      "line": 13
+    }
+  ],
+  "imports": [
+    {
+      "line": 2,
+      "module_path": "dart:async"
+    }
+  ],
+  "pattern_nodes": [
+    {
+      "excerpt": "GoldenRenderable",
+      "line_end": 4,
+      "line_start": 4,
+      "signature": "GoldenRenderable"
+    },
+    {
+      "excerpt": "GoldenRenderable",
+      "line_end": 8,
+      "line_start": 8,
+      "signature": "GoldenRenderable"
+    },
+    {
+      "excerpt": "GoldenState",
+      "line_end": 18,
+      "line_start": 18,
+      "signature": "GoldenState"
+    },
+    {
+      "excerpt": "GoldenWidget",
+      "line_end": 8,
+      "line_start": 8,
+      "signature": "GoldenWidget"
+    },
+    {
+      "excerpt": "GoldenWidget",
+      "line_end": 10,
+      "line_start": 10,
+      "signature": "GoldenWidget"
+    },
+    {
+      "excerpt": "GoldenWidget",
+      "line_end": 20,
+      "line_start": 20,
+      "signature": "GoldenWidget"
+    },
+    {
+      "excerpt": "GoldenWidget",
+      "line_end": 21,
+      "line_start": 21,
+      "signature": "GoldenWidget"
+    },
+    {
+      "excerpt": "String",
+      "line_end": 5,
+      "line_start": 5,
+      "signature": "String"
+    },
+    {
+      "excerpt": "String",
+      "line_end": 13,
+      "line_start": 13,
+      "signature": "String"
+    },
+    {
+      "excerpt": "String",
+      "line_end": 15,
+      "line_start": 15,
+      "signature": "String"
+    },
+    {
+      "excerpt": "String",
+      "line_end": 20,
+      "line_start": 20,
+      "signature": "String"
+    },
+    {
+      "excerpt": "String",
+      "line_end": 24,
+      "line_start": 24,
+      "signature": "String"
+    },
+    {
+      "excerpt": "GoldenWidget()",
+      "line_end": 21,
+      "line_start": 21,
+      "signature": "call-name:GoldenWidget"
+    },
+    {
+      "excerpt": "formatWidget(name)",
+      "line_end": 13,
+      "line_start": 13,
+      "signature": "call-name:formatWidget"
+    },
+    {
+      "excerpt": "name.trim()",
+      "line_end": 24,
+      "line_start": 24,
+      "signature": "call-name:trim"
+    },
+    {
+      "excerpt": "GoldenWidget()",
+      "line_end": 21,
+      "line_start": 21,
+      "signature": "call:GoldenWidget"
+    },
+    {
+      "excerpt": "formatWidget(name)",
+      "line_end": 13,
+      "line_start": 13,
+      "signature": "call:formatWidget"
+    },
+    {
+      "excerpt": "name.trim()",
+      "line_end": 24,
+      "line_start": 24,
+      "signature": "call:name.trim"
+    },
+    {
+      "excerpt": "abstract class GoldenRenderable {\n  String render(String name);\n}",
+      "line_end": 6,
+      "line_start": 4,
+      "signature": "class GoldenRenderable"
+    },
+    {
+      "excerpt": "class GoldenWidget implements GoldenRenderable {",
+      "line_end": 16,
+      "line_start": 8,
+      "signature": "class GoldenWidget"
+    },
+    {
+      "excerpt": "abstract class GoldenRenderable {\n  String render(String name);\n}",
+      "line_end": 6,
+      "line_start": 4,
+      "signature": "decl:class:GoldenRenderable"
+    },
+    {
+      "excerpt": "class GoldenWidget implements GoldenRenderable {",
+      "line_end": 16,
+      "line_start": 8,
+      "signature": "decl:class:GoldenWidget"
+    },
+    {
+      "excerpt": "enum GoldenState { ready, spent }",
+      "line_end": 18,
+      "line_start": 18,
+      "signature": "decl:enum:GoldenState"
+    },
+    {
+      "excerpt": "enum GoldenState { ready, spent }",
+      "line_end": 18,
+      "line_start": 18,
+      "signature": "enum GoldenState"
+    },
+    {
+      "excerpt": "formatWidget",
+      "line_end": 13,
+      "line_start": 13,
+      "signature": "formatWidget"
+    },
+    {
+      "excerpt": "formatWidget",
+      "line_end": 24,
+      "line_start": 24,
+      "signature": "formatWidget"
+    },
+    {
+      "excerpt": "formatWidget(name)",
+      "line_end": 13,
+      "line_start": 13,
+      "signature": "kind:call_expression"
+    },
+    {
+      "excerpt": "GoldenWidget()",
+      "line_end": 21,
+      "line_start": 21,
+      "signature": "kind:call_expression"
+    },
+    {
+      "excerpt": "name.trim()",
+      "line_end": 24,
+      "line_start": 24,
+      "signature": "kind:call_expression"
+    },
+    {
+      "excerpt": "class",
+      "line_end": 4,
+      "line_start": 4,
+      "signature": "kind:class"
+    },
+    {
+      "excerpt": "class",
+      "line_end": 8,
+      "line_start": 8,
+      "signature": "kind:class"
+    },
+    {
+      "excerpt": "abstract class GoldenRenderable {\n  String render(String name);\n}",
+      "line_end": 6,
+      "line_start": 4,
+      "signature": "kind:class_declaration"
+    },
+    {
+      "excerpt": "class GoldenWidget implements GoldenRenderable {",
+      "line_end": 16,
+      "line_start": 8,
+      "signature": "kind:class_declaration"
+    },
+    {
+      "excerpt": "enum GoldenState { ready, spent }",
+      "line_end": 18,
+      "line_start": 18,
+      "signature": "kind:enum_declaration"
+    },
+    {
+      "excerpt": "GoldenWidget makeWidget(String name) {\n  return GoldenWidget();\n}",
+      "line_end": 22,
+      "line_start": 20,
+      "signature": "kind:function_declaration"
+    },
+    {
+      "excerpt": "String formatWidget(String name) => name.trim();",
+      "line_end": 24,
+      "line_start": 24,
+      "signature": "kind:function_declaration"
+    },
+    {
+      "excerpt": "@override\n  String render(String name) => formatWidget(name);",
+      "line_end": 13,
+      "line_start": 12,
+      "signature": "kind:method_declaration"
+    },
+    {
+      "excerpt": "String get label => 'widget';",
+      "line_end": 15,
+      "line_start": 15,
+      "signature": "kind:method_declaration"
+    },
+    {
+      "excerpt": "label",
+      "line_end": 15,
+      "line_start": 15,
+      "signature": "label"
+    },
+    {
+      "excerpt": "makeWidget",
+      "line_end": 20,
+      "line_start": 20,
+      "signature": "makeWidget"
+    },
+    {
+      "excerpt": "name",
+      "line_end": 5,
+      "line_start": 5,
+      "signature": "name"
+    },
+    {
+      "excerpt": "name",
+      "line_end": 13,
+      "line_start": 13,
+      "signature": "name"
+    },
+    {
+      "excerpt": "name",
+      "line_end": 20,
+      "line_start": 20,
+      "signature": "name"
+    },
+    {
+      "excerpt": "name",
+      "line_end": 24,
+      "line_start": 24,
+      "signature": "name"
+    },
+    {
+      "excerpt": "override",
+      "line_end": 12,
+      "line_start": 12,
+      "signature": "override"
+    },
+    {
+      "excerpt": "ready",
+      "line_end": 18,
+      "line_start": 18,
+      "signature": "ready"
+    },
+    {
+      "excerpt": "render",
+      "line_end": 5,
+      "line_start": 5,
+      "signature": "render"
+    },
+    {
+      "excerpt": "render",
+      "line_end": 13,
+      "line_start": 13,
+      "signature": "render"
+    },
+    {
+      "excerpt": "spent",
+      "line_end": 18,
+      "line_start": 18,
+      "signature": "spent"
+    },
+    {
+      "excerpt": "trim",
+      "line_end": 24,
+      "line_start": 24,
+      "signature": "trim"
+    }
+  ],
+  "symbols": [
+    {
+      "byte_end": 153,
+      "byte_start": 88,
+      "kind": "class",
+      "line_end": 6,
+      "line_start": 4,
+      "name": "GoldenRenderable"
+    },
+    {
+      "byte_end": 396,
+      "byte_start": 363,
+      "kind": "enum",
+      "line_end": 18,
+      "line_start": 18,
+      "name": "GoldenState"
+    },
+    {
+      "byte_end": 361,
+      "byte_start": 155,
+      "kind": "class",
+      "line_end": 16,
+      "line_start": 8,
+      "name": "GoldenWidget"
+    },
+    {
+      "byte_end": 260,
+      "byte_start": 246,
+      "kind": "method",
+      "line_end": 10,
+      "line_start": 10,
+      "name": "GoldenWidget"
+    },
+    {
+      "byte_end": 513,
+      "byte_start": 465,
+      "kind": "function",
+      "line_end": 24,
+      "line_start": 24,
+      "name": "formatWidget"
+    },
+    {
+      "byte_end": 359,
+      "byte_start": 330,
+      "kind": "method",
+      "line_end": 15,
+      "line_start": 15,
+      "name": "label"
+    },
+    {
+      "byte_end": 463,
+      "byte_start": 398,
+      "kind": "function",
+      "line_end": 22,
+      "line_start": 20,
+      "name": "makeWidget"
+    },
+    {
+      "byte_end": 150,
+      "byte_start": 124,
+      "kind": "method",
+      "line_end": 5,
+      "line_start": 5,
+      "name": "render"
+    },
+    {
+      "byte_end": 326,
+      "byte_start": 265,
+      "kind": "method",
+      "line_end": 13,
+      "line_start": 12,
+      "name": "render"
+    }
+  ]
+}

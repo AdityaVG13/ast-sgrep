@@ -171,6 +171,12 @@
       "signature": "kind:struct_specifier"
     },
     {
+      "excerpt": "typedef struct GoldenWidget GoldenAlias;",
+      "line_end": 14,
+      "line_start": 14,
+      "signature": "kind:type_definition"
+    },
+    {
       "excerpt": "name",
       "line_end": 17,
       "line_start": 17,

@@ -389,7 +389,8 @@ fn comment_markers_for(language: Option<&str>) -> &'static [&'static str] {
         Some("python") | Some("ruby") => &["#"],
         Some("php") => &["#", "//", "/**", "/*", "*/", "*"],
         Some("rust") | Some("typescript") | Some("javascript") | Some("java") | Some("go")
-        | Some("csharp") | Some("c") | Some("cpp") | Some("kotlin") | Some("swift") => {
+        | Some("csharp") | Some("c") | Some("cpp") | Some("kotlin") | Some("swift")
+        | Some("dart") | Some("moonbit") => {
             &["///", "//!", "//", "/**", "/*", "*/", "*"]
         }
         // Unknown: C-style only — never bare `#`.

@@ -9,6 +9,12 @@ This changelog follows [Keep a Changelog](https://keepachangelog.com/) conventio
 
 ## Unreleased
 
+### Added
+
+- Dart language support: `tree-sitter-dart` parser, `.dart` indexing, symbol/call/import extraction (classes, enums, mixins, extensions, methods, getters/setters, constructors, top-level functions), and native structural patterns (`fn`-decls via `function`-shaped queries, `class`/`interface`/`type` decls, calls, if-templates).
+- MoonBit language support: `tree-sitter-moonbit` parser, `.mbt` indexing, extraction of functions (`fn`), trait impl methods (`impl ... with fn`), structs, tuple structs, enums, external enums, types, error types, and traits, plus `import`-statement paths and `apply`/dot-apply call edges. `Type::method` definitions resolve to the method name.
+- `type $NAME` structural patterns now also match C `typedef`s (`type_definition` shares its node kind with MoonBit `type` declarations).
+
 ### Fixed
 
 - `pi-ast-sgrep` no longer imports `node:sqlite` at load time, so Pi/OMP/ZMP can boot under Bun via `bun:sqlite`.
