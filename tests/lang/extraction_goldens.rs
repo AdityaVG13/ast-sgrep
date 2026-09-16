@@ -299,6 +299,8 @@ const CASES: &[LanguageConformanceCase] = &[
         ],
         patterns: &[
             ("function $NAME($$$)", "makeWidget"),
+            ("function makeWidget($$$)", "makeWidget"),
+            ("function label($$$)", "label"),
             ("formatWidget($$$)", "formatWidget"),
         ],
         forbid: &["doc_only_dart"],
@@ -326,6 +328,11 @@ const CASES: &[LanguageConformanceCase] = &[
         ],
         patterns: &[
             ("fn $NAME($$$)", "make_widget"),
+            ("fn decorate($$$)", "decorate"),
+            ("fn render($$$)", "render"),
+            ("interface $NAME", "GoldenRenderable"),
+            ("struct $NAME", "GoldenWidget"),
+            ("type $NAME", "GoldenAlias"),
             ("format_widget($$$)", "format_widget"),
         ],
         forbid: &["doc_only_moonbit"],

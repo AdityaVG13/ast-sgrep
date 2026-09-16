@@ -240,7 +240,55 @@
       "excerpt": "name.trim()",
       "line_end": 33,
       "line_start": 33,
-      "signature": "call:trim"
+      "signature": "call:name.trim"
+    },
+    {
+      "excerpt": "enum GoldenState {\n  Ready\n  Spent(String)\n}",
+      "line_end": 17,
+      "line_start": 14,
+      "signature": "decl:enum:GoldenState"
+    },
+    {
+      "excerpt": "fn decorate(s : String) -> String {\n    s\n  }",
+      "line_end": 32,
+      "line_start": 30,
+      "signature": "decl:fn:decorate"
+    },
+    {
+      "excerpt": "fn format_widget(name : String) -> String {\n  fn decorate(s : String) -> String {\n    s\n  }\n  decorate(name.trim())\n}",
+      "line_end": 34,
+      "line_start": 29,
+      "signature": "decl:fn:format_widget"
+    },
+    {
+      "excerpt": "fn make_widget(name : String) -> GoldenWidget {\n  let req = @core.HttpRequest(Post, \"/users\")\n  let greeting = \"widget\"\n  format_widget(greeting + name)\n}",
+      "line_end": 27,
+      "line_start": 23,
+      "signature": "decl:fn:make_widget"
+    },
+    {
+      "excerpt": "fn GoldenWidget::render(self : Self, name : String) -> String {\n  format_widget(name)\n}",
+      "line_end": 21,
+      "line_start": 19,
+      "signature": "decl:fn:render"
+    },
+    {
+      "excerpt": "trait GoldenRenderable {\n  render(self : Self, name : String) -> String\n}",
+      "line_end": 6,
+      "line_start": 4,
+      "signature": "decl:interface:GoldenRenderable"
+    },
+    {
+      "excerpt": "struct GoldenWidget {\n  name : String\n}",
+      "line_end": 10,
+      "line_start": 8,
+      "signature": "decl:struct:GoldenWidget"
+    },
+    {
+      "excerpt": "type GoldenAlias = String",
+      "line_end": 12,
+      "line_start": 12,
+      "signature": "decl:type:GoldenAlias"
     },
     {
       "excerpt": "decorate",
@@ -253,6 +301,36 @@
       "line_end": 33,
       "line_start": 33,
       "signature": "decorate"
+    },
+    {
+      "excerpt": "enum GoldenState {\n  Ready\n  Spent(String)\n}",
+      "line_end": 17,
+      "line_start": 14,
+      "signature": "enum GoldenState"
+    },
+    {
+      "excerpt": "fn decorate(s : String) -> String {\n    s\n  }",
+      "line_end": 32,
+      "line_start": 30,
+      "signature": "fn decorate"
+    },
+    {
+      "excerpt": "fn format_widget(name : String) -> String {\n  fn decorate(s : String) -> String {\n    s\n  }\n  decorate(name.trim())\n}",
+      "line_end": 34,
+      "line_start": 29,
+      "signature": "fn format_widget"
+    },
+    {
+      "excerpt": "fn make_widget(name : String) -> GoldenWidget {\n  let req = @core.HttpRequest(Post, \"/users\")\n  let greeting = \"widget\"\n  format_widget(greeting + name)\n}",
+      "line_end": 27,
+      "line_start": 23,
+      "signature": "fn make_widget"
+    },
+    {
+      "excerpt": "fn GoldenWidget::render(self : Self, name : String) -> String {\n  format_widget(name)\n}",
+      "line_end": 21,
+      "line_start": 19,
+      "signature": "fn render"
     },
     {
       "excerpt": "format_widget",
@@ -289,6 +367,12 @@
       "line_end": 26,
       "line_start": 26,
       "signature": "greeting"
+    },
+    {
+      "excerpt": "trait GoldenRenderable {\n  render(self : Self, name : String) -> String\n}",
+      "line_end": 6,
+      "line_start": 4,
+      "signature": "interface GoldenRenderable"
     },
     {
       "excerpt": "format_widget(name)",
@@ -349,6 +433,12 @@
       "line_end": 34,
       "line_start": 29,
       "signature": "kind:function_definition"
+    },
+    {
+      "excerpt": "fn decorate(s : String) -> String {\n    s\n  }",
+      "line_end": 32,
+      "line_start": 30,
+      "signature": "kind:named_lambda_expression"
     },
     {
       "excerpt": "struct GoldenWidget {\n  name : String\n}",
@@ -463,6 +553,18 @@
       "line_end": 19,
       "line_start": 19,
       "signature": "self"
+    },
+    {
+      "excerpt": "struct GoldenWidget {\n  name : String\n}",
+      "line_end": 10,
+      "line_start": 8,
+      "signature": "struct GoldenWidget"
+    },
+    {
+      "excerpt": "type GoldenAlias = String",
+      "line_end": 12,
+      "line_start": 12,
+      "signature": "type GoldenAlias"
     }
   ],
   "symbols": [

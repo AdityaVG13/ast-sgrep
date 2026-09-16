@@ -66,17 +66,26 @@ pub(crate) const FUNCTION_QUERY_TABLE: &[(&[Language], &[&str])] = &[
         &[Language::Dart],
         &[
             "(function_declaration (function_signature name: (identifier) @name)) @match",
+            "(external_function_declaration (function_signature name: (identifier) @name)) @match",
             "(method_declaration (method_signature (function_signature name: (identifier) @name)) @match)",
             "(method_declaration (method_signature (constructor_signature name: (identifier) @name)) @match)",
+            "(method_declaration (method_signature (getter_signature name: (identifier) @name)) @match)",
+            "(method_declaration (method_signature (setter_signature name: (identifier) @name)) @match)",
             "(local_function_declaration (function_signature name: (identifier) @name)) @match",
+            "(getter_declaration (getter_signature name: (identifier) @name)) @match",
+            "(setter_declaration (setter_signature name: (identifier) @name)) @match",
+            "(declaration (constructor_signature name: (identifier) @name)) @match",
         ],
     ),
-    // MoonBit names are positional; function_identifier ends in the method name.
+    // MoonBit names are positional. Function/method names are
+    // `lowercase_identifier`; capturing uppercase would bind `fn Type::method`
+    // to the type name and make `fn Type` a false hit.
     (
         &[Language::MoonBit],
         &[
-            "(function_definition (function_identifier [(lowercase_identifier) (uppercase_identifier)] @name)) @match",
-            "(impl_definition (function_identifier [(lowercase_identifier) (uppercase_identifier)] @name)) @match",
+            "(function_definition (function_identifier (lowercase_identifier) @name)) @match",
+            "(impl_definition (function_identifier (lowercase_identifier) @name)) @match",
+            "(named_lambda_expression (lowercase_identifier) @name) @match",
         ],
     ),
     (
@@ -383,6 +392,7 @@ pub(crate) const CLASS_QUERY_TABLE: &[(&[Language], &str, &[&str])] = &[
             "(mixin_declaration name: (identifier) @name) @match",
             "(extension_declaration name: (identifier) @name) @match",
             "(extension_type_declaration name: (identifier) @name) @match",
+            "(enum_declaration name: (identifier) @name) @match",
         ],
     ),
     // MoonBit — positional names sit directly under the definition node.
@@ -394,6 +404,14 @@ pub(crate) const CLASS_QUERY_TABLE: &[(&[Language], &str, &[&str])] = &[
     (
         &[Language::MoonBit],
         "struct",
-        &["(struct_definition (identifier) @name) @match"],
+        &[
+            "(struct_definition (identifier) @name) @match",
+            "(tuple_struct_definition (identifier) @name) @match",
+        ],
+    ),
+    (
+        &[Language::MoonBit],
+        "interface",
+        &["(trait_definition (identifier) @name) @match"],
     ),
 ];

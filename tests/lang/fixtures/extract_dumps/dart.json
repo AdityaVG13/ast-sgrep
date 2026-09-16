@@ -168,6 +168,30 @@
       "signature": "decl:enum:GoldenState"
     },
     {
+      "excerpt": "String formatWidget(String name) => name.trim();",
+      "line_end": 24,
+      "line_start": 24,
+      "signature": "decl:function:formatWidget"
+    },
+    {
+      "excerpt": "String get label => 'widget';",
+      "line_end": 15,
+      "line_start": 15,
+      "signature": "decl:function:label"
+    },
+    {
+      "excerpt": "GoldenWidget makeWidget(String name) {\n  return GoldenWidget();\n}",
+      "line_end": 22,
+      "line_start": 20,
+      "signature": "decl:function:makeWidget"
+    },
+    {
+      "excerpt": "@override\n  String render(String name) => formatWidget(name);",
+      "line_end": 13,
+      "line_start": 12,
+      "signature": "decl:function:render"
+    },
+    {
       "excerpt": "enum GoldenState { ready, spent }",
       "line_end": 18,
       "line_start": 18,
@@ -184,6 +208,30 @@
       "line_end": 24,
       "line_start": 24,
       "signature": "formatWidget"
+    },
+    {
+      "excerpt": "String formatWidget(String name) => name.trim();",
+      "line_end": 24,
+      "line_start": 24,
+      "signature": "function formatWidget"
+    },
+    {
+      "excerpt": "String get label => 'widget';",
+      "line_end": 15,
+      "line_start": 15,
+      "signature": "function label"
+    },
+    {
+      "excerpt": "GoldenWidget makeWidget(String name) {\n  return GoldenWidget();\n}",
+      "line_end": 22,
+      "line_start": 20,
+      "signature": "function makeWidget"
+    },
+    {
+      "excerpt": "@override\n  String render(String name) => formatWidget(name);",
+      "line_end": 13,
+      "line_start": 12,
+      "signature": "function render"
     },
     {
       "excerpt": "formatWidget(name)",

@@ -545,7 +545,7 @@ fn apply_kind_rule(ext: &mut Extractor, node: &Node, source: &str, rule: KindRul
 /// `local_function_declaration` has no fields at all. Walk named children
 /// depth-first and return the first `name` field, skipping bodies so a
 /// declaration's own signature wins over nested declarations.
-fn signature_name(node: &Node, source: &str) -> Option<String> {
+pub(crate) fn signature_name(node: &Node, source: &str) -> Option<String> {
     if let Some(name) = field_name_text(node, source) {
         return Some(name);
     }

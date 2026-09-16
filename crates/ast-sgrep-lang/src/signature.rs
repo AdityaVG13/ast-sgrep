@@ -401,6 +401,7 @@ const CACHED_DECL_KIND_TABLE: &[(&str, &[&str])] = &[
             // indexed `fn $NAME` search (H-CONF-012). Over-broad is sound.
             "function_definition",
             "impl_definition",
+            "named_lambda_expression",
         ],
     ),
     (
@@ -423,6 +424,11 @@ const CACHED_DECL_KIND_TABLE: &[(&str, &[&str])] = &[
             "singleton_method",
             "local_function_statement",
             "local_function_declaration",
+            "getter_declaration",
+            "setter_declaration",
+            "external_function_declaration",
+            "external_getter_declaration",
+            "external_setter_declaration",
         ],
     ),
     ("func ", &["function_declaration"]),
@@ -454,6 +460,16 @@ const CACHED_DECL_KIND_TABLE: &[(&str, &[&str])] = &[
             "protocol_declaration",
             "mixin_declaration",
             "trait_definition",
+        ],
+    ),
+    (
+        "type ",
+        &[
+            "type_item",
+            "type_definition",
+            "type_alias_declaration",
+            "extension_declaration",
+            "extension_type_declaration",
         ],
     ),
 ];

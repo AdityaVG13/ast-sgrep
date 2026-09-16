@@ -105,6 +105,12 @@
       "signature": "decl:struct:GoldenWidget"
     },
     {
+      "excerpt": "typedef struct GoldenWidget GoldenAlias;",
+      "line_end": 14,
+      "line_start": 14,
+      "signature": "decl:type:GoldenAlias"
+    },
+    {
       "excerpt": "enum GoldenState {\n    Ready,\n    Spent\n}",
       "line_end": 12,
       "line_start": 9,
@@ -229,6 +235,12 @@
       "line_end": 14,
       "line_start": 14,
       "signature": "struct GoldenWidget"
+    },
+    {
+      "excerpt": "typedef struct GoldenWidget GoldenAlias;",
+      "line_end": 14,
+      "line_start": 14,
+      "signature": "type GoldenAlias"
     },
     {
       "excerpt": "x",

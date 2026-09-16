@@ -19653,10 +19653,7 @@ fn record_node_signatures(
     }
     if let Some(prefix) = declaration_prefix(node, source) {
         push_pattern_node(*node, source, &format!("kind:{}", node.kind()), out, seen);
-        if let Some(name) = node
-            .child_by_field_name("name")
-            .and_then(|n| node_text(&n, source))
-        {
+        if let Some(name) = declaration_index_name(node, source) {
             push_pattern_node(*node, source, &format!("{prefix} {name}"), out, seen);
             push_pattern_node(*node, source, &format!("decl:{prefix}:{name}"), out, seen);
         }
@@ -19683,9 +19680,70 @@ pub fn declaration_prefix(node: &Node, source: &str) -> Option<&'static str> {
     if kind == "class_declaration" {
         return class_declaration_prefix(node, source);
     }
+    // MoonBit `fn` / `fn Type::method` reuse C/Python's `function_definition`
+    // kind. The table maps that kind to `def`; a `function_identifier` child
+    // is the MoonBit spelling, whose indexed rows must be `decl:fn:`.
+    if kind == "function_definition" {
+        let mut cursor = node.walk();
+        if node
+            .named_children(&mut cursor)
+            .any(|child| child.kind() == "function_identifier")
+        {
+            return Some("fn");
+        }
+        return Some("def");
+    }
     DECL_KIND_PREFIXES
         .iter()
         .find_map(|&(node_kind, prefix)| (node_kind == kind).then_some(prefix))
+}
+
+/// Declaration name for `decl:{prefix}:{name}` rows.
+///
+/// Field `name` covers most grammars. Dart nests the name under a signature
+/// wrapper; C typedefs keep it on `declarator`; MoonBit names are the first
+/// positional identifier-like child (`function_identifier` last-wins so
+/// `Type::method` stores the method). Do not walk bodies — that would pick
+/// an identifier from the function/struct body instead of the declarator.
+fn declaration_index_name(node: &Node, source: &str) -> Option<String> {
+    if let Some(text) = node
+        .child_by_field_name("name")
+        .and_then(|n| node_text(&n, source))
+    {
+        return Some(text.to_string());
+    }
+    const DART_NESTED_NAME: &[&str] = &[
+        "function_declaration",
+        "external_function_declaration",
+        "local_function_declaration",
+        "getter_declaration",
+        "setter_declaration",
+        "external_getter_declaration",
+        "external_setter_declaration",
+        "method_declaration",
+    ];
+    if DART_NESTED_NAME.contains(&node.kind()) {
+        return crate::extract::signature_name(node, source);
+    }
+    if node.kind() == "type_definition" {
+        if let Some(name) = crate::extract::declarator_name(node, source) {
+            return Some(name);
+        }
+    }
+    const POSITIONAL_NAME_CHILDREN: &[&str] = &[
+        "function_identifier",
+        "identifier",
+        "lowercase_identifier",
+        "uppercase_identifier",
+        "type_identifier",
+    ];
+    let mut cursor = node.walk();
+    for child in node.named_children(&mut cursor) {
+        if POSITIONAL_NAME_CHILDREN.contains(&child.kind()) {
+            return crate::extract::last_identifier_under(&child, source);
+        }
+    }
+    None
 }
 
 fn class_declaration_prefix(node: &Node, source: &str) -> Option<&'static str> {
@@ -19721,6 +19779,14 @@ pub const DECL_KIND_PREFIXES: &[(&str, &str)] = &[
     ("method", "function"),
     ("singleton_method", "function"),
     ("local_function_statement", "function"),
+    ("local_function_declaration", "function"),
+    ("getter_declaration", "function"),
+    ("setter_declaration", "function"),
+    ("external_function_declaration", "function"),
+    ("external_getter_declaration", "function"),
+    ("external_setter_declaration", "function"),
+    ("named_lambda_expression", "fn"),
+    ("impl_definition", "fn"),
     ("class_definition", "class"),
     ("class", "class"),
     ("record_declaration", "class"),
@@ -19734,9 +19800,11 @@ pub const DECL_KIND_PREFIXES: &[(&str, &str)] = &[
     ("enum_declaration", "enum"),
     ("enum_specifier", "enum"),
     ("enum_definition", "enum"),
+    ("extenum_definition", "enum"),
+    ("error_type_definition", "enum"),
     ("type_definition", "type"),
-    ("local_function_declaration", "function"),
-    ("impl_definition", "function"),
+    ("extension_declaration", "type"),
+    ("extension_type_declaration", "type"),
 ];
 
 // e2hc/difu.5: invocation_expression is the C# tree-sitter grammar's call node.
@@ -19764,14 +19832,12 @@ fn is_call_kind(kind: &str) -> bool {
 /// their text is reassembled from the resolved segments; every other grammar
 /// keeps the callee node's exact source bytes.
 fn call_target<'a>(node: &Node<'a>, source: &'a str) -> Option<Cow<'a, str>> {
-    // MoonBit dot-apply calls carry the callee in a trailing accessor token.
+    // MoonBit `obj.method()` is fieldless: the trailing accessor is only the
+    // method, so a trailing-name `call:trim` row made `trim($$$)` index-serve
+    // member calls (PASS 73 over-match) and left `name.trim($$$)` with no
+    // `call:name.trim` row (silent miss). Join the same path the matcher uses.
     if node.kind() == "dot_apply_expression" {
-        let mut cursor = node.walk();
-        for child in node.children(&mut cursor) {
-            if let Some(text) = crate::extract::dot_accessor_text(&child, source) {
-                return Some(Cow::Borrowed(text));
-            }
-        }
+        return call_target_path(node, source).map(|segs| Cow::Owned(segs.join(".")));
     }
     // PASS 73 (F72a-1): php static-call rows key on the exact source callee
     // bytes (`Foo::bar`), NOT the trailing name. The old `call:bar` key made
