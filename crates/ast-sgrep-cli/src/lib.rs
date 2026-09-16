@@ -9,6 +9,7 @@ mod index_cmd;
 mod install;
 mod keep_gate;
 mod machine;
+mod outline_cmd;
 mod search_cmd;
 pub mod supervisor;
 mod watch;
@@ -215,6 +216,7 @@ fn run_command(cli: &Cli, command: &Commands) -> anyhow::Result<()> {
             run_full_index("index", &c.root.root, cli, false, c.scip.as_deref())
         }
         Commands::Status(r) => print_status_command(cli, &r.root),
+        Commands::Outline(o) => outline_cmd::run_outline(cli, &o.root.root, &o.path),
         Commands::Reindex(c) => {
             if c.dry_run {
                 return run_index_dry_run("reindex", &c.root.root, cli);

@@ -85,3 +85,6 @@ path = "../../tests/cli/watch_daemon_e2e.rs"
 [[test]]
 name = "cpu_limit_orphan_reap"
 path = "../../tests/cli/cpu_limit_orphan_reap.rs"
+[[test]]
+name = "outline_cmd"
+path = "../../tests/cli/outline_cmd.rs"

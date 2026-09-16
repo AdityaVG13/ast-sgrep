@@ -15,6 +15,15 @@ pub(crate) const MAX_SNIPPET_TOKENS: usize = 4_096;
 pub(crate) const MAX_RESPONSE_SNIPPET_TOKENS: usize = 65_536;
 
 #[derive(Args, Clone, Debug)]
+pub(crate) struct OutlineArgs {
+    /// File to outline (relative to root, or absolute inside root).
+    /// Required positionals precede the optional ROOT positional (clap order).
+    pub(crate) path: PathBuf,
+    #[command(flatten)]
+    pub(crate) root: RootArg,
+}
+
+#[derive(Args, Clone, Debug)]
 pub(crate) struct RootArg {
     /// Project root (canonical form). Prefer this over --root when both would conflict.
     #[arg(default_value = ".", help = "Project root directory")]
@@ -400,6 +409,9 @@ pub(crate) enum Commands {
     /// Show index and embedding status
     #[command(about = "Show index and embedding status")]
     Status(RootArg),
+    /// List a file's indexed symbols (structure outline)
+    #[command(about = "List a file's indexed symbols (structure outline)")]
+    Outline(OutlineArgs),
     /// Force a full transactional rebuild
     #[command(about = "Force a full transactional rebuild")]
     Reindex(ReindexCmd),
@@ -693,6 +705,7 @@ impl Cli {
             None => "search",
             Some(Commands::Index(_)) => "index",
             Some(Commands::Status(_)) => "status",
+            Some(Commands::Outline(_)) => "outline",
             Some(Commands::Reindex(_)) => "reindex",
             Some(Commands::Codemod(_)) => "codemod",
             Some(Commands::Search(_)) => "search",

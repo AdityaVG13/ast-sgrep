@@ -105,7 +105,7 @@ fn peek_indexed_file_count(root: &Path, cli: &Cli) -> usize {
         .unwrap_or(0)
 }
 
-fn open_readonly_store(root: &Path, cli: &Cli) -> anyhow::Result<IndexStore> {
+pub(crate) fn open_readonly_store(root: &Path, cli: &Cli) -> anyhow::Result<IndexStore> {
     let (_, index_path) = resolve_root_index(cli, root);
     IndexStore::open_readonly(root, index_path.as_deref()).context("failed to open index")
 }
