@@ -18,7 +18,10 @@ pub(crate) fn parse_and_extract_for(
     let tree = parse_tree(lang_key, language, source)?;
     let mut result = extract(&tree, source);
     if result.pattern_nodes.is_empty() {
-        result.pattern_nodes = crate::pattern::collect_pattern_nodes(tree.root_node(), source);
+        let (pattern_nodes, depth_truncated) =
+            crate::pattern::collect_pattern_nodes(tree.root_node(), source);
+        result.pattern_nodes = pattern_nodes;
+        result.depth_truncated |= depth_truncated;
     }
     Ok(result)
 }
@@ -605,6 +608,7 @@ impl Extractor {
             calls: self.calls,
             imports: self.imports,
             pattern_nodes: vec![],
+            depth_truncated: false,
         }
     }
 

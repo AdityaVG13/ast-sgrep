@@ -634,3 +634,119 @@ fn self_gold_has_no_loss() {
         misses.join("\n\n")
     );
 }
+
+/// H-AUDIT-52-6 e2e cell (br-uhf): rule 5 (`GENERIC_ENTRYPOINT_PENALTY`) may
+/// only fire when the query expansions lane is active, and it targets
+/// Caller/Graph hits — so a py/js module-level caller (`<module>`, the common
+/// shape per `extract.rs`) must rank below a fn caller of the same callee
+/// under a conceptual NL query. If conceptual queries stop surfacing caller
+/// hits entirely, rule 5 is dead code and this cell must fail.
+fn indexed_module_caller_corpus() -> (TempDir, Searcher) {
+    let temp = TempDir::new().unwrap();
+    write_src(
+        temp.path(),
+        "src/orders.py",
+        r#"
+def validate_order(order_id):
+    return order_id is not None
+
+
+validate_order("a-1")
+"#,
+    );
+    write_src(
+        temp.path(),
+        "src/pipeline.py",
+        r#"
+def run_pipeline(batch):
+    for order_id in batch:
+        validate_order(order_id)
+"#,
+    );
+    write_src(
+        temp.path(),
+        "src/notify.js",
+        r#"
+function validate_order(orderId) {
+  return orderId != null;
+}
+
+validate_order("a-1");
+"#,
+    );
+    write_src(
+        temp.path(),
+        "src/flow.js",
+        r#"
+function run_flow(batch) {
+  for (const id of batch) {
+    validate_order(id);
+  }
+}
+"#,
+    );
+    ast_sgrep_core::Indexer::new(IndexOptions {
+        root: temp.path().to_path_buf(),
+        force_reindex: true,
+        ..IndexOptions::default()
+    })
+    .expect("indexer")
+    .index_all()
+    .expect("index");
+    let searcher = Searcher::new(SearchOptions {
+        root: temp.path().to_path_buf(),
+        limit: 12,
+        use_embed: true,
+        ..SearchOptions::default()
+    })
+    .expect("searcher");
+    (temp, searcher)
+}
+
+fn caller_rank(
+    hits: &[ast_sgrep_core::SearchHit],
+    file_suffix: &str,
+    caller: &str,
+) -> Option<usize> {
+    rank_of(hits, |hit| {
+        hit.kind == ast_sgrep_core::HitKind::Caller
+            && hit.file.replace('\\', "/").ends_with(file_suffix)
+            && hit.caller.as_deref() == Some(caller)
+    })
+}
+
+#[test]
+fn module_caller_ranks_below_fn_caller_on_conceptual_nl() {
+    let (_temp, searcher) = indexed_module_caller_corpus();
+    let query = "how do I validate an order";
+    let response = searcher.search(query).expect("search");
+    let cases = [
+        ("src/orders.py", "<module>", "src/pipeline.py", "run_pipeline", "py"),
+        ("src/notify.js", "<module>", "src/flow.js", "run_flow", "js"),
+    ];
+    let mut failures = Vec::new();
+    for (module_file, module_caller, fn_file, fn_caller, lang) in cases {
+        let module_rank = caller_rank(&response.hits, module_file, module_caller);
+        let fn_rank = caller_rank(&response.hits, fn_file, fn_caller);
+        let (Some(module_rank), Some(fn_rank)) = (module_rank, fn_rank) else {
+            failures.push(format!(
+                "{lang}: caller hits missing under conceptual NL (module={module_rank:?} fn={fn_rank:?}) — rule 5 unreachable\n{}",
+                autopsy(&response.hits)
+            ));
+            continue;
+        };
+        if module_rank <= fn_rank {
+            failures.push(format!(
+                "{lang}: <module> caller ranked #{module_rank}, must rank BELOW the fn caller at #{fn_rank}\n{}",
+                autopsy(&response.hits)
+            ));
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "H-AUDIT-52-6 e2e violations ({} of {}):\n{}",
+        failures.len(),
+        cases.len(),
+        failures.join("\n\n")
+    );
+}

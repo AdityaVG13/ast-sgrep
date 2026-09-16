@@ -30,6 +30,7 @@ fn base<'a>(
         callers: &[],
         imports: &[],
         pattern_nodes: &[],
+        depth_truncated: false,
         semantic_chunks: chunks,
         embed_semantic: true,
         embed_backend: ast_sgrep_embed::EmbedPreference::Semantic,

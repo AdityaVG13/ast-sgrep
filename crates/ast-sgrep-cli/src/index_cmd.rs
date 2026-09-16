@@ -428,6 +428,17 @@ pub(crate) fn print_index_stats(stats: &IndexStats) {
         stats.callers_extracted,
         stats.imports_extracted
     );
+    if stats.files_depth_truncated > 0 {
+        // H-CONF-024: flagged files' ident/call/kind rows are incomplete;
+        // those shapes fall back to the native walk (never a silent miss).
+        // Decl rows are budget-exempt (SEP15-3), so decl-exact templates stay
+        // cache-served. The machine JSON carries the count as
+        // files_depth_truncated.
+        println!(
+            "Depth budget truncated {} file(s); non-declaration pattern rows are incomplete — decl templates stay cache-served, other shapes walk natively",
+            stats.files_depth_truncated
+        );
+    }
     if stats.walk_errors {
         eprintln!("Warning: directory walk errors left the index unpruned; stale paths may remain until a clean reindex");
     }

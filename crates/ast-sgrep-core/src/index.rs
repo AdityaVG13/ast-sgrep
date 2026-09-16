@@ -281,6 +281,10 @@ pub struct IndexStats {
     pub symbols_extracted: usize,
     pub callers_extracted: usize,
     pub imports_extracted: usize,
+    /// Files whose extraction walk hit the depth budget (H-CONF-024). Their
+    /// index rows are incomplete; the cached pattern lane refuses to serve
+    /// them and falls back to the native walk.
+    pub files_depth_truncated: usize,
 }
 impl IndexStats {
     /// True when the walk wrote or deleted at least one file row.
@@ -577,6 +581,7 @@ impl Indexer {
                 }
                 PrepareOutcome::Ready(prep) => {
                     seen_paths.insert(rel_str.clone());
+                    let depth_truncated = prep.depth_truncated;
                     self.store.upsert_file(UpsertFileInput {
                         rel_path: rel_str,
                         language: prep.language.as_deref(),
@@ -589,6 +594,7 @@ impl Indexer {
                         callers: &prep.callers,
                         imports: &prep.imports,
                         pattern_nodes: &prep.pattern_nodes,
+                        depth_truncated,
                         semantic_chunks: &prep.semantic_chunks,
                         embed_semantic: self.options.embed_semantic,
                         embed_backend: self.options.embed_backend.to_preference(),
@@ -598,6 +604,9 @@ impl Indexer {
                     self.store
                         .set_meta(&format!("body:{rel_str}"), &prep.body_hash)?;
                     stats.files_indexed += 1;
+                    if depth_truncated {
+                        stats.files_depth_truncated += 1;
+                    }
                     stats.symbols_extracted += prep.symbols.len();
                     stats.callers_extracted += prep.callers.len();
                     stats.imports_extracted += prep.imports.len();
@@ -1123,7 +1132,7 @@ impl Indexer {
                 }
             }
         }
-        let (symbols, callers, imports, pattern_nodes) =
+        let (symbols, callers, imports, pattern_nodes, depth_truncated) =
             self.extract_rows(rel_path, content, language)?;
         let material = materialize_upsert(
             content,
@@ -1150,6 +1159,7 @@ impl Indexer {
                 callers: &callers,
                 imports: &imports,
                 pattern_nodes: &pattern_nodes,
+                depth_truncated,
                 semantic_chunks: &material.semantic_chunks,
                 embed_semantic: self.options.embed_semantic,
                 embed_backend: self.options.embed_backend.to_preference(),
@@ -1240,7 +1250,7 @@ impl Indexer {
         language: Option<Language>,
     ) -> Result<ExtractedRows> {
         let Some(lang) = language else {
-            return Ok((vec![], vec![], vec![], vec![]));
+            return Ok((vec![], vec![], vec![], vec![], false));
         };
         let extraction = self.parsers.parse(lang, content).map_err(|e| {
             crate::StoreError::Other(format!(

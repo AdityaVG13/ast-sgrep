@@ -14,6 +14,7 @@ pub(crate) type ExtractedRows = (
     Vec<CallerRow>,
     Vec<ImportRow>,
     Vec<ast_sgrep_lang::PatternNode>,
+    bool,
 );
 
 pub(crate) struct PreparedFile {
@@ -28,6 +29,7 @@ pub(crate) struct PreparedFile {
     pub(crate) callers: Vec<CallerRow>,
     pub(crate) imports: Vec<ImportRow>,
     pub(crate) pattern_nodes: Vec<ast_sgrep_lang::PatternNode>,
+    pub(crate) depth_truncated: bool,
     pub(crate) semantic_chunks: Vec<crate::semantic_chunk::SemanticChunkInput>,
 }
 
@@ -199,7 +201,7 @@ pub(crate) fn prepare_file(
     if !options.force_reindex && current_hash == Some(hash.as_str()) && semantic_identity_ok {
         return PrepareOutcome::Unchanged;
     }
-    let (symbols, callers, imports, pattern_nodes) = match language {
+    let (symbols, callers, imports, pattern_nodes, depth_truncated) = match language {
         Some(lang) => {
             // One ParserRegistry per rayon worker — building all language parsers
             // on every file was pure fixed cost on the hot index path.
@@ -216,7 +218,7 @@ pub(crate) fn prepare_file(
                 }
             }
         }
-        None => (vec![], vec![], vec![], vec![]),
+        None => (vec![], vec![], vec![], vec![], false),
     };
     let material = materialize_upsert(
         &content,
@@ -239,6 +241,7 @@ pub(crate) fn prepare_file(
         callers,
         imports,
         pattern_nodes,
+        depth_truncated,
         semantic_chunks: material.semantic_chunks,
     })
 }
@@ -277,6 +280,7 @@ pub(crate) fn rows_from_extraction(extraction: &ExtractionResult) -> ExtractedRo
             })
             .collect(),
         extraction.pattern_nodes.clone(),
+        extraction.depth_truncated,
     )
 }
 

@@ -58,9 +58,21 @@ impl IndexStore {
             emb.cache_hits.len(),
             emb.chunks.len().saturating_sub(emb.cache_hits.len()),
         );
+        let semantic_mutation = !input.semantic_chunks.is_empty() || input.embed_semantic;
         self.with_file_tx(|| {
             let id = self.upsert_file_inner(input, &emb.chunks, &struct_key, &struct_fp)?;
             self.persist_embed_cache_side_effects(&emb, cache_hits, cache_misses)?;
+            // SEP15-2 (store_delete contract): a semantic mutation must
+            // invalidate the on-disk IVF sidecar BEFORE commit — a reader that
+            // reloads the ANN after this transaction would otherwise answer
+            // from embeddings of the previous content. Removal is fs-level and
+            // safe across rollback (missing sidecar only forces a rebuild);
+            // the indexer rebuilds it after the wave
+            // (rebuild_semantic_ivf_sidecar). Structure-unchanged refreshes
+            // (refresh_lines_only above) keep their chunks and skip this.
+            if semantic_mutation {
+                crate::semantic_ivf::invalidate_semantic_ivf(&self.db_path)?;
+            }
             Ok(id)
         })
     }
@@ -154,6 +166,7 @@ impl IndexStore {
             input.mtime_secs,
             input.mtime_nanos,
             input.content_hash,
+            input.depth_truncated,
         )?;
         self.insert_lines(file_id, input.lines)?;
         self.set_meta(&format!("eol:{}", input.rel_path), input.eol)?;
@@ -182,16 +195,17 @@ impl IndexStore {
         mtime_secs: i64,
         mtime_nanos: u32,
         hash: &str,
+        depth_truncated: bool,
     ) -> Result<i64> {
         if let Some(id) = self.file_id(path)? {
             delete_file_children(&self.conn, id)?;
             self.conn.prepare_cached(
-                "UPDATE files SET language=?1, mtime_secs=?2, mtime_nanos=?3, content_hash=?4 WHERE id=?5",
-            )?.execute(params![lang, mtime_secs, mtime_nanos, hash, id])?;
+                "UPDATE files SET language=?1, mtime_secs=?2, mtime_nanos=?3, content_hash=?4, depth_truncated=?5 WHERE id=?6",
+            )?.execute(params![lang, mtime_secs, mtime_nanos, hash, depth_truncated, id])?;
             return Ok(id);
         }
-        self.conn.prepare_cached( "INSERT INTO files(path, language, mtime_secs, mtime_nanos, content_hash) VALUES(?1,?2,?3,?4,?5)",
-        )?.execute(params![path, lang, mtime_secs, mtime_nanos, hash])?;
+        self.conn.prepare_cached( "INSERT INTO files(path, language, mtime_secs, mtime_nanos, content_hash, depth_truncated) VALUES(?1,?2,?3,?4,?5,?6)",
+        )?.execute(params![path, lang, mtime_secs, mtime_nanos, hash, depth_truncated])?;
         Ok(self.conn.last_insert_rowid())
     }
     /// Prepare a cached INSERT and bind each row. SQL text must remain byte-identical.

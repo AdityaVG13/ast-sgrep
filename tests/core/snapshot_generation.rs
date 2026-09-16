@@ -1,5 +1,5 @@
 //! d3l5: a SearchResponse may carry evidence from exactly one index generation.
-use ast_sgrep_core::{IndexOptions, Indexer, SearchOptions, Searcher};
+use ast_sgrep_core::{IndexOptions, IndexStore, Indexer, SearchOptions, Searcher};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
@@ -35,6 +35,22 @@ fn searcher_at(root: &std::path::Path) -> Searcher {
         ..SearchOptions::default()
     })
     .expect("searcher")
+}
+
+/// Read the generation meta straight through a store's SQL connection,
+/// bypassing the per-connection `index_data_version` memo: the mechanism under
+/// test is the deferred-transaction fence, not accessor caching. (A memoized
+/// `index_generation()` would make the "still pinned" assertion below pass even
+/// if the snapshot leaked a concurrent commit.)
+fn generation(store: &IndexStore) -> i64 {
+    store
+        .connection()
+        .query_row(
+            "SELECT CAST(value AS INTEGER) FROM meta WHERE key = 'index_data_version'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("read generation meta")
 }
 
 #[test]
@@ -172,8 +188,6 @@ fn concurrent_reindex_never_yields_a_mixed_generation_response() {
 /// single-generation guarantee real rather than merely asserted.
 #[test]
 fn deferred_read_snapshot_hides_a_concurrent_commit() {
-    use ast_sgrep_core::IndexStore;
-
     let temp = tempfile::tempdir().unwrap();
     corpus(temp.path(), 2);
     index_at(temp.path());
@@ -186,7 +200,7 @@ fn deferred_read_snapshot_hides_a_concurrent_commit() {
         .connection()
         .execute_batch("BEGIN DEFERRED")
         .expect("begin deferred");
-    let pinned = reader.index_generation().expect("pinned generation");
+    let pinned = generation(&reader);
 
     // Commit real work on the other connection.
     writer
@@ -200,14 +214,14 @@ fn deferred_read_snapshot_hides_a_concurrent_commit() {
              CAST(COALESCE(meta.value, '0') AS INTEGER) + 1",
         )
         .expect("bump generation");
-    let advanced = writer.index_generation().expect("writer generation");
+    let advanced = generation(&writer);
     assert!(
         advanced > pinned,
         "writer must advance ({pinned} -> {advanced})"
     );
 
     // The reader is still pinned to its snapshot.
-    let still = reader.index_generation().expect("reader generation");
+    let still = generation(&reader);
     assert_eq!(
         still, pinned,
         "deferred read snapshot leaked a concurrent commit ({pinned} -> {still})"
@@ -222,8 +236,9 @@ fn deferred_read_snapshot_hides_a_concurrent_commit() {
 
     // After releasing the snapshot the reader catches up.
     assert_eq!(
-        reader.index_generation().expect("post-commit generation"),
-        advanced
+        generation(&reader),
+        advanced,
+        "the released reader must observe the concurrent commit"
     );
 }
 
@@ -233,11 +248,16 @@ fn snapshot_setup_failure_does_not_leave_a_read_transaction_open() {
     corpus(temp.path(), 1);
     index_at(temp.path());
     let searcher = searcher_at(temp.path());
-    searcher
-        .store()
-        .connection()
-        .execute_batch("DROP TABLE meta")
-        .expect("break generation lookup");
+    // The searcher's store is opened read-only by design (the search side never
+    // writes), so break the schema through a separate writable handle; the
+    // searcher must still observe the committed DROP at its next query.
+    {
+        let writer = IndexStore::open(temp.path(), None).expect("writable handle");
+        writer
+            .connection()
+            .execute_batch("DROP TABLE meta")
+            .expect("break generation lookup");
+    }
 
     let error = searcher
         .search("target_symbol_0")
@@ -300,16 +320,21 @@ fn stale_semantic_sidecar_is_reported_as_a_degraded_channel() {
         healthy.snapshot
     );
 
-    // Advance the generation without rebuilding the sidecar.
-    searcher
-        .store()
-        .connection()
-        .execute_batch(
-            "INSERT INTO meta(key, value) VALUES('index_data_version', '1')
-             ON CONFLICT(key) DO UPDATE SET value =
-             CAST(COALESCE(meta.value, '0') AS INTEGER) + 1",
-        )
-        .expect("bump generation");
+    // Advance the generation without rebuilding the sidecar. The searcher's
+    // store is read-only by design; a separate writable handle performs the
+    // bump, and the fresh Searcher below must observe the advanced generation
+    // against the now-stale sidecar manifest.
+    {
+        let writer = IndexStore::open(temp.path(), None).expect("writable bump handle");
+        writer
+            .connection()
+            .execute_batch(
+                "INSERT INTO meta(key, value) VALUES('index_data_version', '1')
+                 ON CONFLICT(key) DO UPDATE SET value =
+                 CAST(COALESCE(meta.value, '0') AS INTEGER) + 1",
+            )
+            .expect("bump generation");
+    }
 
     let stale = Searcher::new(SearchOptions {
         root: temp.path().to_path_buf(),

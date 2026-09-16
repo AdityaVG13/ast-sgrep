@@ -743,6 +743,42 @@ impl IndexStore {
     pub fn pattern_node_count(&self) -> Result<usize> {
         count_star(&self.conn, "pattern_nodes")
     }
+    /// SEP15-1: does any indexed symbol carry this exact name? Ground-truth
+    /// check for single-term hybrid queries that `classify` reads as
+    /// Conceptual but that name a real identifier in this repository.
+    pub fn has_symbol_named(&self, name: &str) -> Result<bool> {
+        let found: Option<i64> = self
+            .conn
+            .query_row(
+                "SELECT 1 FROM symbols WHERE name = ?1 LIMIT 1",
+                params![name],
+                |r| r.get(0),
+            )
+            .map(Some)
+            .or_else(|e| match e {
+                rusqlite::Error::QueryReturnedNoRows => Ok(None),
+                other => Err(other),
+            })?;
+        Ok(found.is_some())
+    }
+    /// H-CONF-024: does the index hold any file whose extraction walk hit the
+    /// depth budget (optionally scoped to one language)? Such files' index
+    /// rows are incomplete, so the cached pattern lane must not serve them as
+    /// authoritative and falls back to the native walk instead.
+    pub fn has_depth_truncated_files(&self, lang: Option<&str>) -> Result<bool> {
+        let sql = "SELECT 1 FROM files WHERE depth_truncated = 1 \
+                   AND (?1 IS NULL OR language = ?1) \
+                   LIMIT 1";
+        let found: Option<i64> = self
+            .conn
+            .query_row(sql, params![lang], |r| r.get(0))
+            .map(Some)
+            .or_else(|e| match e {
+                rusqlite::Error::QueryReturnedNoRows => Ok(None),
+                other => Err(other),
+            })?;
+        Ok(found.is_some())
+    }
     pub(crate) fn fill_pattern_excerpt(&self, row: &super::PatternNodeRow) -> Result<String> {
         if row.excerpt.is_empty() {
             self.indexed_excerpt_in_range(&row.path, row.line_start, row.line_end)

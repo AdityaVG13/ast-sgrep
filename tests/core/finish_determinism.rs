@@ -31,6 +31,7 @@ fn tied_hit(symbol: &str, line_end: u32) -> SearchHit {
         embed_fields: None,
         critic: Vec::new(),
         excerpt: "run_pipeline(); refresh_token();".into(),
+        byte_span: None,
     }
 }
 
@@ -99,6 +100,7 @@ fn channel_hit(file: &str, line: u32, kind: HitKind) -> SearchHit {
         embed_fields: None,
         critic: Vec::new(),
         excerpt: "run_pipeline(); refresh_token();".into(),
+        byte_span: None,
     }
 }
 

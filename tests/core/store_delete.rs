@@ -15,6 +15,7 @@ fn base<'a>(path: &'a str, lines: &'a [(u32, String)], hash: &'a str) -> UpsertF
         callers: &[],
         imports: &[],
         pattern_nodes: &[],
+        depth_truncated: false,
         semantic_chunks: &[],
         embed_semantic: false,
         embed_backend: ast_sgrep_embed::EmbedPreference::Auto,
@@ -303,14 +304,17 @@ fn same_span_body_edit_refreshes_semantic_chunks() {
         build_semantic_chunks_with_patterns(&symbols, &callers, &[], &lines_v2, Some("python"));
     assert!(!chunks_v1.is_empty() && !chunks_v2.is_empty());
     assert_ne!(chunks_v1[0].excerpt, chunks_v2[0].excerpt);
+    // The cached lane queries decl rows (`decl:fn:compute`), which is the
+    // signature the real extractor stores for `fn compute` declarations —
+    // the bare spelling is only a display row.
     let pat_v1 = [PatternNode {
-        signature: "fn compute".into(),
+        signature: "decl:fn:compute".into(),
         line_start: 1,
         line_end: 3,
         excerpt: "return ALPHA_TOKEN_111".into(),
     }];
     let pat_v2 = [PatternNode {
-        signature: "fn compute".into(),
+        signature: "decl:fn:compute".into(),
         line_start: 1,
         line_end: 3,
         excerpt: "return BETA_TOKEN_222".into(),
@@ -341,14 +345,41 @@ fn same_span_body_edit_refreshes_semantic_chunks() {
     assert!(!rows_v2[0].4.contains("ALPHA_TOKEN_111"));
     assert_ne!(text_v1, rows_v2[0].4);
     assert_ne!(vec_v1, rows_v2[0].5);
-    let excerpt: String = store
-        .connection()
-        .query_row("SELECT excerpt FROM pattern_nodes LIMIT 1", [], |r| {
-            r.get(0)
-        })
-        .unwrap();
+    // SEP15-2: the excerpt COLUMN is deliberately stored empty (writes.rs —
+    // full AST excerpts would duplicate the lines table; both serving lanes
+    // reconstruct from lines at search time via fill_pattern_excerpt). The
+    // refresh contract is therefore observable on the serving path: after the
+    // same-span body edit the pattern lane must surface the v2 body text and
+    // never the stale v1 text.
+    let searcher = ast_sgrep_core::Searcher::new(ast_sgrep_core::SearchOptions {
+        root: temp.path().to_path_buf(),
+        index_path: Some(store.db_path().to_path_buf()),
+        limit: 8,
+        ..ast_sgrep_core::SearchOptions::default()
+    })
+    .unwrap();
+    let response = searcher.search("pattern:fn compute").unwrap();
     assert!(
-        excerpt.contains("BETA_TOKEN_222"),
-        "pattern excerpt must refresh: {excerpt}"
+        !response.hits.is_empty(),
+        "pattern:fn compute must resolve from the index"
+    );
+    assert!(
+        response
+            .hits
+            .iter()
+            .any(|hit| hit.excerpt.contains("BETA_TOKEN_222")),
+        "pattern excerpt must refresh: {:?}",
+        response
+            .hits
+            .iter()
+            .map(|hit| hit.excerpt.clone())
+            .collect::<Vec<_>>()
+    );
+    assert!(
+        response
+            .hits
+            .iter()
+            .all(|hit| !hit.excerpt.contains("ALPHA_TOKEN_111")),
+        "stale v1 excerpt must not survive the edit"
     );
 }

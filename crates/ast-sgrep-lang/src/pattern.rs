@@ -4694,7 +4694,7 @@ fn is_single_metavariable(s: &str) -> bool {
 
 /// Identifier token check shared with index signature builders.
 #[inline]
-pub(crate) fn is_pattern_ident(s: &str) -> bool {
+pub fn is_pattern_ident(s: &str) -> bool {
     let mut chars = s.chars();
     chars.next().is_some_and(|c| c == '_' || c.is_alphabetic())
         && chars.all(|c| c == '_' || c.is_alphanumeric())
@@ -19535,11 +19535,20 @@ fn has_trailing_comma(node: &Node) -> bool {
     kinds.last() == Some(&",")
 }
 
-pub(crate) fn collect_pattern_nodes(root: Node, source: &str) -> Vec<PatternNode> {
+/// Deepest AST the extraction walk descends into. Pathological nesting
+/// (`let x = ((((…1…))))`) made the walk superquadratic — 2.3 s at depth 500,
+/// >90 s at depth 10000 (CNR H-CONF-024) — while real code stays far below
+/// this bound. Subtrees beyond the cap are skipped and reported through
+/// `ExtractionResult::depth_truncated` so the cached pattern lane can
+/// refuse to serve those files as complete instead of failing open.
+pub const MAX_EXTRACTION_DEPTH: usize = 256;
+
+pub(crate) fn collect_pattern_nodes(root: Node, source: &str) -> (Vec<PatternNode>, bool) {
     let mut out = Vec::new();
     let mut seen = std::collections::HashSet::new();
-    collect_node_signatures(root, source, &mut out, &mut seen);
-    out
+    let mut depth_truncated = false;
+    collect_node_signatures(root, source, &mut out, &mut seen, 0, &mut depth_truncated);
+    (out, depth_truncated)
 }
 
 fn collect_node_signatures(
@@ -19547,13 +19556,39 @@ fn collect_node_signatures(
     source: &str,
     out: &mut Vec<PatternNode>,
     seen: &mut std::collections::HashSet<(String, u32)>,
+    depth: usize,
+    depth_truncated: &mut bool,
 ) {
-    if !is_in_comment_or_string(&node) {
-        record_node_signatures(&node, source, out, seen);
+    if depth > MAX_EXTRACTION_DEPTH {
+        *depth_truncated = true;
+        // SEP15-3 (R-SEPT14E-2): decl rows stay budget-exempt — a node past
+        // the depth bound still records its own declaration row (prefix +
+        // name are direct-child reads) and recursion CONTINUES, so decl-exact
+        // cached lanes are complete even for files that breached the budget.
+        // ident/call rows past the budget stay unrecorded (incomplete by
+        // contract: those shapes keep the walk/refusal paths under
+        // truncation). Cost note (P-SEPT14E-2): the continued traversal pays
+        // the same registered O(nodes×depth) class the native walk pays; it
+        // only lands on files deeper than MAX_EXTRACTION_DEPTH.
+        if declaration_prefix(&node, source).is_some() {
+            record_node_signatures(&node, source, out, seen);
+        }
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            collect_node_signatures(child, source, out, seen, depth + 1, depth_truncated);
+        }
+        return;
     }
+    if is_in_comment_or_string(&node) {
+        // B1 (Sept 14 wave): comment/string subtrees hold no extractable
+        // signatures. Recursing into them only burns depth budget and can
+        // false-flag a file whose real code is shallow, so prune here.
+        return;
+    }
+    record_node_signatures(&node, source, out, seen);
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
-        collect_node_signatures(child, source, out, seen);
+        collect_node_signatures(child, source, out, seen, depth + 1, depth_truncated);
     }
 }
 

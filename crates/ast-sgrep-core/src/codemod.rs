@@ -320,6 +320,23 @@ pub fn plan_codemod(
                     // reconciled against bytes, so keep the loud refusal.
                     None => true,
                 };
+                // F4 (Sept 14 wave, H-CONF-024): depth-truncated files in scope
+                // make the index non-authoritative — search answers via the
+                // native walk while this planner saw no edit spans, so a quiet
+                // zero-edit plan would contradict search. Refuse loudly. A
+                // re-index does NOT clear the flag (the budget re-truncates the
+                // same files), hence the verify-then-raise advice.
+                if store.has_depth_truncated_files(lang_filter.as_deref())?
+                    && literal_still_in_tree
+                {
+                    bail!(
+                        "codemod cannot plan edits for pattern {pattern:?}: the index \
+                         holds depth-truncated file(s) in scope, so the zero-edit \
+                         plan is not trustworthy; run `search` to confirm hits, then \
+                         rewrite with a literal or metavariable template, or raise \
+                         the extraction depth budget and re-index"
+                    );
+                }
                 if index_serves_any && literal_still_in_tree {
                     bail!(
                         "codemod cannot plan edits for pattern {pattern:?}: search \

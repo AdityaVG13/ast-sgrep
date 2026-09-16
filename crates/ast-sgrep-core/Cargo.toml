@@ -98,6 +98,9 @@ path = "../../tests/core/identifier_ranking.rs"
 name = "index_schema_rekey_freshness"
 path = "../../tests/core/index_schema_rekey_freshness.rs"
 [[test]]
+name = "extraction_depth_budget"
+path = "../../tests/core/extraction_depth_budget.rs"
+[[test]]
 name = "graph_oracle"
 path = "../../tests/core/graph_oracle.rs"
 [[test]]

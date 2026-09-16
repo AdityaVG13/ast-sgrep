@@ -32,6 +32,7 @@ fn base<'a>(
         callers: &[],
         imports: &[],
         pattern_nodes: &[],
+        depth_truncated: false,
         semantic_chunks: &[],
         embed_semantic: false,
         embed_backend: ast_sgrep_embed::EmbedPreference::Auto,
@@ -67,6 +68,7 @@ fn cbnw_asgrep_ceiling_is_single_list_rrf() {
         resolution: None,
         embed_fields: None,
         critic: Vec::new(),
+        byte_span: None,
         excerpt: "alpha beta gamma".into(),
     };
     let mut one = vec![hit.clone()];

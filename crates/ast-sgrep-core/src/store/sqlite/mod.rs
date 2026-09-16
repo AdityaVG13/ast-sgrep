@@ -19,7 +19,13 @@ use std::sync::Arc;
 //      served AUTHORITATIVELY for exact `call:` patterns, so a pre-rekey index
 //      kept resurrecting the F72a-1 wrong answers under the default search
 //      path). Never reuse a SCHEMA_VERSION for two migrations.
-pub const INDEX_SCHEMA_VERSION: i64 = 15;
+// 16 = br-g7j (H-CONF-024): additive `files.depth_truncated` flag from the
+//      extraction depth budget. No fast-path defeat: rows written before 16
+//      came from an unbounded (complete) walk, so DEFAULT 0 is truthful, and
+//      unchanged files keep their complete rows. Changed/NEW files carry the
+//      flag from the budgeted extraction; the cached pattern lane refuses to
+//      serve flagged files as authoritative and walks them natively.
+pub const INDEX_SCHEMA_VERSION: i64 = 16;
 const SCHEMA_VERSION: i64 = INDEX_SCHEMA_VERSION;
 const IMPORT_SELECT: &str =
     "SELECT f.path, f.language, i.module_path, i.line_no FROM imports i JOIN files f ON f.id = i.file_id";
@@ -54,8 +60,24 @@ fn sql_usize_from_byte_offset(row: &rusqlite::Row<'_>, idx: usize) -> rusqlite::
     usize::try_from(raw).map_err(|_| rusqlite::Error::IntegralValueOutOfRange(idx, raw))
 }
 
-fn ensure_semantic_field_vector_columns(conn: &Connection) -> Result<()> {
-    let mut stmt = conn.prepare("PRAGMA table_info(semantic_chunks)")?;
+/// Add `files.depth_truncated` when missing (idempotent: fresh dbs already
+/// have it via SCHEMA_DDL; pre-16 dbs get the DEFAULT-0 column here).
+fn ensure_depth_truncated_column(conn: &Connection) -> Result<()> {
+    let existing: Vec<String> = {
+        let mut stmt = conn.prepare("PRAGMA table_info(files)")?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()?
+    };
+    if !existing.iter().any(|name| name == "depth_truncated") {
+        conn.execute(
+            "ALTER TABLE files ADD COLUMN depth_truncated INTEGER NOT NULL DEFAULT 0",
+            [],
+        )?;
+    }
+    Ok(())
+}
+
+fn ensure_semantic_field_vector_columns(conn: &Connection) -> Result<()> {    let mut stmt = conn.prepare("PRAGMA table_info(semantic_chunks)")?;
     let existing = stmt
         .query_map([], |row| row.get::<_, String>(1))?
         .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -148,6 +170,10 @@ pub struct UpsertFileInput<'a> {
     pub callers: &'a [CallerRow],
     pub imports: &'a [ImportRow],
     pub pattern_nodes: &'a [PatternNode],
+    /// H-CONF-024: extraction hit the depth budget; rows for this file are
+    /// incomplete and the cached pattern lane must not serve them as
+    /// authoritative.
+    pub depth_truncated: bool,
     pub semantic_chunks: &'a [crate::semantic_chunk::SemanticChunkInput],
     pub embed_semantic: bool,
     pub embed_backend: ast_sgrep_embed::EmbedPreference,
@@ -415,6 +441,16 @@ impl IndexStore {
                        WHERE content_hash NOT LIKE 'schema15-rekey:%';",
                 )?;
             }
+            if version < 16 {
+                // br-g7j (H-CONF-024): the extraction depth budget needs a
+                // per-file truncation flag. Purely additive — pre-16 rows were
+                // produced by the unbounded (complete) walk, so DEFAULT 0 is
+                // truthful and no unchanged-file fast path needs defeating;
+                // only re-extracted files can ever carry the flag. Guarded:
+                // fresh (version-0) dbs just ran SCHEMA_DDL, which already
+                // created the column.
+                ensure_depth_truncated_column(&self.conn)?;
+            }
             if version < 3 {
                 self.conn.execute_batch(
                     "INSERT INTO lines_trigram(rowid, content) SELECT rowid, content FROM lines;",
@@ -550,15 +586,16 @@ impl IndexStore {
     fn init_schema_readonly(&self, version: i64) -> Result<()> {
         if version < SCHEMA_VERSION {
             // F74c-1 (r25 pass 75b): a below-current stamp means the on-disk
-            // signature rows may predate a row-semantic migration (14→15: the
-            // pass-73 php `::` call re-key). A read-only open cannot migrate,
-            // and the exact `call:`/`decl:` lane serves rows AUTHORITATIVELY,
-            // so refuse with a rebuild instruction instead of silently
-            // answering from stale-keyed rows. A writable open (asgrep index /
-            // reindex) migrates in place; doctor's peek reports the same
-            // mismatch with the same recovery.
+            // rows may predate a schema migration (14→15: the pass-73 php `::`
+            // call re-key; 15→16: the additive per-file depth-truncation flag
+            // the cached-lane refusal keys on). A read-only open cannot
+            // migrate, and the exact `call:`/`decl:` lane serves rows
+            // AUTHORITATIVELY, so refuse with a rebuild instruction instead of
+            // silently answering from stale rows. A writable open (asgrep
+            // index / reindex) migrates in place; doctor's peek reports the
+            // same mismatch with the same recovery.
             return Err(crate::StoreError::Other(format!(
-                "index schema version {version} is older than supported version {SCHEMA_VERSION}; its call-signature rows predate a semantic re-key and must not be served as authoritative. Rebuild with: asgrep reindex {} --json",
+                "index schema version {version} is older than supported version {SCHEMA_VERSION}; its rows predate a schema migration and must not be served as authoritative. Rebuild with: asgrep reindex {} --json",
                 self.root.display()
             )));
         }

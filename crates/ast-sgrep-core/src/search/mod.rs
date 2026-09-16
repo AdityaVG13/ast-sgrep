@@ -984,7 +984,24 @@ impl Searcher {
         })
     }
     fn search_hybrid(&self, parsed: &ParsedQuery) -> Result<Vec<SearchHit>> {
-        let intent = crate::intent::classify(parsed);
+        let mut intent = crate::intent::classify(parsed);
+        // SEP15-1 (chain seed contract; resolve_module regression): a
+        // single-term query whose term names an indexed symbol exactly is an
+        // identifier query even when classify() reads Conceptual — bare
+        // dictionary words ("run", "test", "search") live in the
+        // generic-concept vocabulary and every conceptual stage strips them,
+        // collapsing hybrid to embed-only with the def channel never
+        // consulted. Chain seeding then finds zero entries and emits zero
+        // edges (`chain_imports_edge_resolves_for_typescript`). The symbol
+        // table is ground truth; NL queries are multi-token and never take
+        // this upgrade, so the unique-hybrid p99 NL class is untouched.
+        if let (crate::intent::QueryIntent::Conceptual, [term]) =
+            (intent, parsed.terms.as_slice())
+        {
+            if term.chars().count() >= 3 && self.store.has_symbol_named(term)? {
+                intent = crate::intent::QueryIntent::Symbol;
+            }
+        }
         // Constraint cascade: each stage receives only files that survived the prior stage.
         let expanded = {
             let _span = crate::perf_profile::Span::start(
@@ -1117,12 +1134,15 @@ impl Searcher {
                 "symbol_pass_for_files",
             );
             let warmed = lock_clear_on_poison(&self.symbol_table, |slot| *slot = None).clone();
+            // Callers stay in the conceptual pool: rule 5 (critic) penalizes
+            // `<module>`/`main` caller hits there, which requires them to
+            // reach fusion at all (H-AUDIT-52-6 e2e cell, br-uhf).
             symbol_pass_for_files_warmed(
                 &self.store,
                 &self.options,
                 &stage_query,
                 &lexical_files,
-                !conceptual,
+                true,
                 warmed.as_ref(),
             )?
         });

@@ -193,6 +193,11 @@ pub struct ExtractionResult {
     pub calls: Vec<CallSite>,
     pub imports: Vec<ImportSite>,
     pub pattern_nodes: Vec<PatternNode>,
+    /// True when the extraction walk hit [`crate::pattern::MAX_EXTRACTION_DEPTH`]
+    /// and skipped subtrees beyond it. The cached pattern lane must treat this
+    /// file's index rows as incomplete (H-CONF-024: a bare cap alone fails
+    /// open because `index_can_serve_pattern` trusts index completeness).
+    pub depth_truncated: bool,
 }
 pub fn detect_language(path: &Path, content: Option<&str>) -> Option<Language> {
     if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
@@ -254,7 +259,8 @@ use langs::{
 };
 pub use pattern::{
     classify_native, declaration_prefix, is_universal_root_pattern, literal_trailing_comment_lane,
-    match_literal_pattern, match_pattern, native_pattern_answerable, needs_ast_grep_fallback,
+    is_pattern_ident, match_literal_pattern, match_pattern, native_pattern_answerable,
+    needs_ast_grep_fallback,
     pattern_is_keyword_literal_root, php_comment_transparent_operand_lane, tree_sitter_language,
     BodyTemplate, NativeKind, PatternMatch, DECL_KIND_PREFIXES, DECL_PATTERN_PREFIXES,
 };

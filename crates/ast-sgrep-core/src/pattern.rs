@@ -170,20 +170,45 @@ pub fn search_pattern(
     // paren gate are matcher decisions, never index rows.
     let comment_scan = scan_pattern_comment_syntax(pattern);
     let comment_free = !(comment_scan.line || comment_scan.block || comment_scan.hash);
-    if store.pattern_node_count()? > 0
-        && comment_free
-        && !match_spelling.contains("$$$")
-        && !pattern_may_carry_expando_meta(pattern)
-        // PASS 122 (F3, f122c): keyword-literal roots (`null`/`true`/`false`,
-        // py `None`/`True`/`False`, `this`/`super`) have NO pattern_nodes
-        // identifier rows, so the "ident-exact" index serve below composed a
-        // silent empty where sg answers the keyword leaf node (oracle grid
-        // /tmp/phase122/f3). Route the class to the native walk, which
-        // answers sg-exactly; every other ident signature keeps the
-        // index-served lane.
-        && !ast_sgrep_lang::pattern_is_keyword_literal_root(&match_spelling)
-    {
-        if let Some(signatures) = cached_pattern_signatures(&match_spelling) {
+    // H-CONF-024 (br-g7j): depth-budget-truncated files hold incomplete
+    // pattern_nodes rows, so the "index is complete" premise below is false
+    // whenever one is in scope. Skip the exact-serve early-return AND the
+    // candidate narrowing: both would silently drop the truncated files'
+    // hits; the native walk answers them (27 ms at depth-10000, pass 30).
+    let has_pattern_rows = store.pattern_node_count()? > 0;
+    let depth_truncated_in_scope =
+        has_pattern_rows && store.has_depth_truncated_files(lang_filter)?;
+    if let Some(signatures) = cached_pattern_signatures(&match_spelling) {
+        // SEP15-3 (R-SEPT14E-2): decl signatures are budget-exempt at
+        // extraction (a beyond-budget node still records its own decl row;
+        // only recursion stops), so a pattern whose signatures are ALL decl:
+        // has COMPLETE rows even with depth-truncated files in scope — serve
+        // the cached lane instead of refusing. This branch is hoisted ABOVE
+        // the truncation skip: it exists precisely for the truncated scope.
+        // call:/kind:/ident rows stay incomplete past the budget and keep
+        // the walk/refusal paths below. Comment placement remains a matcher
+        // decision (FB-104B-1), so comment-carrying spellings stay excluded.
+        let decl_exact =
+            !signatures.is_empty() && signatures.iter().all(|s| s.starts_with("decl:"));
+        if depth_truncated_in_scope && comment_free && decl_exact {
+            let indexed =
+                search_pattern_cached(&match_spelling, &signatures, store, lang_filter, limit)?;
+            return Ok(indexed);
+        }
+        if has_pattern_rows
+            && !depth_truncated_in_scope
+            && comment_free
+            && !match_spelling.contains("$$$")
+            && !pattern_may_carry_expando_meta(pattern)
+            // PASS 122 (F3, f122c): keyword-literal roots (`null`/`true`/`false`,
+            // py `None`/`True`/`False`, `this`/`super`) have NO pattern_nodes
+            // identifier rows, so the "ident-exact" index serve below composed a
+            // silent empty where sg answers the keyword leaf node (oracle grid
+            // /tmp/phase122/f3). Route the class to the native walk, which
+            // answers sg-exactly; every other ident signature keeps the
+            // index-served lane.
+            && !ast_sgrep_lang::pattern_is_keyword_literal_root(&match_spelling)
+        {
             let indexed =
                 search_pattern_cached(&match_spelling, &signatures, store, lang_filter, limit)?;
             // Exact ident / decl / call signatures are complete in pattern_nodes.
@@ -205,7 +230,8 @@ pub fn search_pattern(
     // without such a node cannot contain a match; the native matcher still
     // decides every hit on surviving files.
     let candidate_paths = match ast_sgrep_lang::candidate_kind_signatures(&match_spelling) {
-        Some(kinds) if store.pattern_node_count()? > 0 => {
+        Some(kinds) if has_pattern_rows && !depth_truncated_in_scope =>
+        {
             Some(store.pattern_node_candidate_paths(&kinds, lang_filter)?)
         }
         _ => None,
@@ -257,6 +283,34 @@ pub fn search_pattern(
         // unanswerability, not source robustness, and must stay loud (the
         // 23 fuzz fail-open faces).
         return Err(structural_fallback_error(pattern));
+    }
+    // H-CONF-024/B7-F2 post-walk honesty check (Sept 14 wave): with a
+    // depth-truncated file in scope the cached lane must not serve, so the
+    // walk is the only answerer. When THAT answers empty for a shape whose
+    // signature rows demonstrably exist in untruncated files, the lanes
+    // disagree — the walk did not decide a shape the tree provably contains
+    // (partial templates parse but match nothing natively) — refuse loudly
+    // instead of composing ok:true-empty. Rows absent = possibly genuinely
+    // absent, so walk-empty stays an honest answer there (residual:
+    // occurrences entirely inside truncated files are unanswerable by any
+    // lane tonight; registered in the conformance ledger).
+    if depth_truncated_in_scope && hits.is_empty() {
+        if let Some(signatures) = cached_pattern_signatures(&match_spelling) {
+            if index_can_serve_pattern(&match_spelling, &signatures) {
+                let indexed =
+                    search_pattern_cached(&match_spelling, &signatures, store, lang_filter, limit)?;
+                if !indexed.is_empty() {
+                    return Err(crate::StoreError::Other(format!(
+                        "pattern {match_spelling:?} cannot be answered completely: \
+                         depth-truncated file(s) in scope make the cached lane \
+                         non-authoritative, and the native walk returned no hits \
+                         for this cache-servable shape whose rows exist. Search \
+                         the identifier form (pattern:<name>) or raise the \
+                         extraction depth budget and re-index"
+                    )));
+                }
+            }
+        }
     }
     Ok(hits)
 }
@@ -542,6 +596,35 @@ fn read_pattern_bytes_capped(path: &Path) -> Option<Vec<u8>> {
     }
 }
 
+/// File admission for the native pattern walk (BFS `expand_dir`).
+///
+/// [`crate::gitignore::should_skip_file`] answers `unwrap_or(true)` for an
+/// extension-less path — the indexer's admission contract. The pattern walk
+/// must NOT inherit that arm: both the unanswerable-language census and the
+/// per-file route classify by CONTENT (`detect_language(path,
+/// Some(content))` shebang arm), so an extension-less shebang carrier
+/// (`pybox`) dropped here never reaches either — the census's capped content
+/// read was dead code for exactly the files it names, and a rust-spelled
+/// template over a python-by-content corpus composed a silent `ok:true`-empty
+/// instead of the registered census-loud refusal (H-CONF-029 fail-open;
+/// `f64_census_counts_content_detected_languages_for_unanswerable_gate`).
+/// Extension-less files therefore ride to the walk: one capped read of cost,
+/// and files whose content names no language still answer nothing per-file.
+/// Dotfiles and non-indexable EXTENSIONS keep the registered skip.
+fn pattern_walk_admits(path: &Path) -> bool {
+    if path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|n| n.starts_with('.'))
+    {
+        return false;
+    }
+    match path.extension().and_then(|e| e.to_str()) {
+        Some(_) => !should_skip_file(path),
+        None => true,
+    }
+}
+
 /// Expand one directory for the BFS walker: returns its directly-held files
 /// (gitignore-filtered) and pruned child directories. `dir` is the dir being
 /// expanded; `root` anchors gitignore rel-path computation.
@@ -562,7 +645,7 @@ fn expand_dir(
         };
         let path = entry.path();
         if ft.is_symlink() || ft.is_file() {
-            if should_skip_file(&path) {
+            if !pattern_walk_admits(&path) {
                 continue;
             }
             let Ok(rel) = path.strip_prefix(root) else {

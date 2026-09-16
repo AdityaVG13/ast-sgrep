@@ -32,6 +32,7 @@ fn base<'a>(
         callers,
         imports: &[],
         pattern_nodes: &[],
+        depth_truncated: false,
         semantic_chunks: &[],
         embed_semantic: false,
         embed_backend: ast_sgrep_embed::EmbedPreference::Auto,
