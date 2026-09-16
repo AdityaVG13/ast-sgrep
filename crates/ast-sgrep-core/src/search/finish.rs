@@ -178,7 +178,13 @@ fn finish_response_inner(
         })?;
         hits.retain(|h| re.is_match(&h.file));
     } else if let Some(scope) = parsed.path_scope.as_deref() {
-        let glob = crate::query::path_scope_glob(scope);
+        // FB-80a-08: a file-resolved scope filters by exact rel path —
+        // the historic `scope/**` expansion can never match a file.
+        let glob = if parsed.path_scope_exact {
+            scope.to_string()
+        } else {
+            crate::query::path_scope_glob(scope)
+        };
         let re = super::compile_glob(&glob).map_err(|e| {
             crate::StoreError::Other(format!("invalid in: path scope '{scope}': {e}"))
         })?;

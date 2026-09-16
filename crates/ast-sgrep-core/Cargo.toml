@@ -128,6 +128,9 @@ path = "../../tests/core/parity.rs"
 name = "pattern_prefilter"
 path = "../../tests/core/pattern_prefilter.rs"
 [[test]]
+name = "path_scope_ingress"
+path = "../../tests/core/path_scope_ingress.rs"
+[[test]]
 name = "pattern_routing"
 path = "../../tests/core/pattern_routing.rs"
 [[test]]

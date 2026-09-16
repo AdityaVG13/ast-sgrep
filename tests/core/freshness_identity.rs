@@ -234,3 +234,25 @@ fn git_head_stamp_tracks_branch_switch_within_one_searcher() {
         "stale probe-once cache served the old branch head"
     );
 }
+
+/// 80c (owner-ruled 2026-09-15): the `index_data_version` memo must not serve
+/// a stale value after ANOTHER connection (a concurrent CLI reindex) commits a
+/// bump. Same-connection writes already invalidate via `bump_index_data_
+/// version`; the cross-process window is the registered 80c risk.
+#[test]
+fn index_data_version_memo_sees_cross_connection_bumps() {
+    let root = tempfile::TempDir::new().unwrap();
+    let store = IndexStore::open(root.path(), None).unwrap();
+    let before = store.index_data_version().unwrap();
+
+    // A separate indexer process/connection writes and bumps the version.
+    std::fs::write(root.path().join("fresh.rs"), "fn fresh_marker() {}\n").unwrap();
+    pass17_indexer(root.path()).index_all().unwrap();
+
+    let after = store.index_data_version().unwrap();
+    assert_eq!(
+        after,
+        before + 1,
+        "memo must re-read after another connection commits; stale-fresh forever is the 80c defect"
+    );
+}

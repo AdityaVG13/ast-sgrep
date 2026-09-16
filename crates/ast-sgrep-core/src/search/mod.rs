@@ -783,7 +783,8 @@ impl Searcher {
                 let response_query = conjunction::response_query(query_str, &conj);
                 return finish_response_checked(&response_query, &self.options, hits, true);
             }
-            let parsed = ParsedQuery::parse(query_str);
+            let mut parsed = ParsedQuery::parse(query_str);
+            resolve_path_scope(&self.options.root, &mut parsed)?;
             let hits = match parsed.mode {
                 QueryMode::Callers => search_callers(&self.store, &self.options, &parsed)?,
                 QueryMode::Defs => search_defs(&self.store, &self.options, &parsed)?,
@@ -930,7 +931,8 @@ impl Searcher {
         validate_query_arg(query_str)?;
         let _perf_run = crate::perf_profile::Run::start("search_semantic");
         self.cached("sem", query_str, || {
-            let parsed = ParsedQuery::parse(query_str);
+            let mut parsed = ParsedQuery::parse(query_str);
+            resolve_path_scope(&self.options.root, &mut parsed)?;
             let expanded = self.repository_expanded_query(&parsed)?;
             finish_response_checked(
                 &parsed,
@@ -1631,6 +1633,36 @@ fn append_ledger_entry(path: &Path, response: &SearchResponse) -> std::io::Resul
         .open(path)?
         .write_all(&line)
 }
+/// FB-80a-07/08 (owner ruling 2026-09-15): resolve an `in:` scope against the
+/// index root BEFORE any walk. A parse-time scope error refuses loudly (the
+/// historic silent drop ran the query unscoped); a scope that exists on disk
+/// as a FILE pins the exact file (`path_scope_exact`), a directory keeps the
+/// `dir/**` glob, and a path matching nothing under the root refuses with a
+/// diagnostic instead of answering silent-empty. Wildcard scopes bypass disk
+/// resolution (their glob is the filter, existence of individual matches is
+/// the walk's own business).
+fn resolve_path_scope(root: &std::path::Path, parsed: &mut ParsedQuery) -> Result<()> {
+    if let Some(err) = parsed.path_scope_error.as_deref() {
+        return Err(crate::StoreError::Other(err.to_string()));
+    }
+    let Some(scope) = parsed.path_scope.as_deref() else {
+        return Ok(());
+    };
+    if scope.contains('*') || scope.contains('?') {
+        return Ok(());
+    }
+    let target = root.join(scope);
+    if target.is_file() {
+        parsed.path_scope_exact = true;
+    } else if !target.is_dir() {
+        return Err(crate::StoreError::Other(format!(
+            "in: scope '{scope}' matches no file or directory under {}",
+            root.display()
+        )));
+    }
+    Ok(())
+}
+
 fn compile_glob(pattern: &str) -> std::result::Result<regex::Regex, String> {
     if pattern.is_empty() {
         return Err("file_filter must be non-empty".into());

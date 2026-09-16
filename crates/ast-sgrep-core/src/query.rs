@@ -6,6 +6,15 @@ pub struct ParsedQuery {
     pub terms: Vec<String>,
     /// Directory or glob from an `in:path` token. Applied as a file filter.
     pub path_scope: Option<String>,
+    /// FB-80a-07 (owner ruling 2026-09-15): set when an `in:` token was
+    /// present but unresolvable at parse time — bare `in:`, a `..` segment,
+    /// an absolute path, or a duplicate token. Search must refuse loudly;
+    /// the historic silent drop silently ran the query UNSCOPED.
+    pub path_scope_error: Option<String>,
+    /// FB-80a-08: set by the Searcher when the scope resolves to a FILE
+    /// under the index root — finish filters by exact rel-path equality
+    /// instead of the impossible `file/**` glob.
+    pub path_scope_exact: bool,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum QueryMode {
@@ -21,9 +30,11 @@ pub enum QueryMode {
 impl ParsedQuery {
     pub fn parse(input: &str) -> Self {
         let trimmed = input.trim();
-        let (without_scope, path_scope) = split_in_path_scope(trimmed);
+        let (without_scope, path_scope, path_scope_error) =
+            split_in_path_scope(trimmed);
         let mut parsed = Self::parse_mode(without_scope.trim());
         parsed.path_scope = path_scope;
+        parsed.path_scope_error = path_scope_error;
         parsed
     }
 
@@ -41,6 +52,8 @@ impl ParsedQuery {
                     target: Some(target.clone()),
                     terms: tokenize_for_scoring(&target),
                     path_scope: None,
+                    path_scope_error: None,
+                    path_scope_exact: false,
                 };
             }
         }
@@ -52,6 +65,8 @@ impl ParsedQuery {
                 target: Some(t.clone()),
                 terms: vec![t],
                 path_scope: None,
+                path_scope_error: None,
+                path_scope_exact: false,
             };
         }
         for (prefix, mode) in [
@@ -74,6 +89,8 @@ impl ParsedQuery {
                     target: Some(target),
                     terms,
                     path_scope: None,
+                    path_scope_error: None,
+                    path_scope_exact: false,
                 };
             }
         }
@@ -83,6 +100,8 @@ impl ParsedQuery {
             target: None,
             terms: tokenize_for_scoring(trimmed),
             path_scope: None,
+            path_scope_error: None,
+            path_scope_exact: false,
         }
     }
     /// Build a mode-specific query. `raw` is the trimmed payload (no synthetic
@@ -101,6 +120,8 @@ impl ParsedQuery {
             target: Some(trimmed.to_string()),
             terms,
             path_scope: None,
+            path_scope_error: None,
+            path_scope_exact: false,
         }
     }
     pub fn literal(query: &str) -> Self {
@@ -205,7 +226,7 @@ fn looks_like_symbol(term: &str) -> bool {
     term.contains('_') || term.len() > 3
 }
 
-fn split_in_path_scope(input: &str) -> (String, Option<String>) {
+fn split_in_path_scope(input: &str) -> (String, Option<String>, Option<String>) {
     // PASS 147 (146E-F1 TRUE ROOT): the scope split LOCATES `in:` tokens by
     // whitespace word but must splice the REMAINING RAW BYTES. The old
     // `split_whitespace().join(" ")` collapsed the query's interior layout,
@@ -215,13 +236,22 @@ fn split_in_path_scope(input: &str) -> (String, Option<String>) {
     // refuses to parse (rc8 "Multiple AST nodes are detected"; the oracle
     // grid /tmp/phase147R pins the py/js/go newline-seam cells). Byte
     // fidelity is the sg-exact contract on every mode prefix: sg parses the
-    // RAW pattern text, so the ingress must never rewrite it. `in:`
-    // extraction keeps the registered path-scope semantics (first valid
-    // token wins; empty/`..` tokens are dropped without scoping).
+    // RAW pattern text, so the ingress must never rewrite it.
+    //
+    // FB-80a-07/08/09 (owner ruling 2026-09-15): an `in:` token is honored
+    // only (a) at a whitespace word start AND (b) outside double quotes —
+    // an odd `"` count before the token means it sits inside a quoted
+    // literal and stays pattern text (single-quoted literals remain a
+    // documented boundary). Honored tokens that are bare, carry a `..`
+    // segment, are absolute, or duplicate an earlier token set
+    // `path_scope_error` for the serve lane to refuse loudly; the historic
+    // silent drop ran the query UNSCOPED (fail-open).
     let mut scope = None;
+    let mut scope_error = None;
     let mut out = String::with_capacity(input.len());
     let mut copy_from = 0usize;
     let mut cursor = 0usize;
+    let mut quotes_scanned = 0usize;
     while cursor < input.len() {
         let tail = &input[cursor..];
         let lead_ws = tail.len() - tail.trim_start().len();
@@ -231,23 +261,40 @@ fn split_in_path_scope(input: &str) -> (String, Option<String>) {
         }
         let token_len = input[start..].split_whitespace().next().map_or(0, str::len);
         let end = start + token_len;
+        let inside_quotes = quotes_scanned % 2 == 1;
+        quotes_scanned += input[start..end].matches('"').count();
         if let Some(path) = input[start..end].strip_prefix("in:") {
-            // Drop the token together with the separator run that led to it,
-            // so the spliced payload never gains a doubled separator where an
-            // `in:` sat between payload words.
-            out.push_str(&input[copy_from..start]);
-            copy_from = end;
-            if !path.is_empty()
-                && !path.split(['/', '\\']).any(|seg| seg == "..")
-                && scope.is_none()
-            {
-                scope = Some(path.to_string());
+            if !inside_quotes {
+                // Drop the token together with the separator run that led to
+                // it, so the spliced payload never gains a doubled separator
+                // where an `in:` sat between payload words.
+                out.push_str(&input[copy_from..start]);
+                copy_from = end;
+                let escape = path.split(['/', '\\']).any(|seg| seg == "..");
+                if path.is_empty() {
+                    scope_error = Some("in: token has no path; scope queries look like `in:src`".into());
+                } else if escape {
+                    scope_error = Some(format!(
+                        "in: scope '{path}' escapes the index root: '..' segments are not allowed"
+                    ));
+                } else if std::path::Path::new(path).is_absolute() {
+                    scope_error = Some(format!(
+                        "in: scope '{path}' is absolute; scopes are relative to the index root"
+                    ));
+                } else if scope.is_some() {
+                    scope_error = Some(format!(
+                        "multiple in: scopes (first: '{}'); keep exactly one",
+                        scope.as_deref().unwrap_or_default()
+                    ));
+                } else {
+                    scope = Some(path.to_string());
+                }
             }
         }
         cursor = end;
     }
     out.push_str(&input[copy_from..]);
-    (out.trim().to_string(), scope)
+    (out.trim().to_string(), scope, scope_error)
 }
 
 /// Turn an `in:path` token into a file_filter glob (`src` → `src/**`).

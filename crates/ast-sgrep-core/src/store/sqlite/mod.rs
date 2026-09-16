@@ -209,7 +209,11 @@ pub struct IndexStore {
     line_count_at_least: std::cell::Cell<Option<(i64, usize, bool)>>,
     /// `index_data_version` meta: unique hybrid called this once per df probe
     /// (several times per conceptual query). Same invalidation as line corpus.
-    index_data_version_memo: std::cell::Cell<Option<i64>>,
+    /// 80c: memo of the `index_data_version` meta row, keyed on SQLite's
+    /// `PRAGMA data_version` so a commit from ANOTHER connection (a
+    /// concurrent CLI reindex) invalidates it. Keyed on nothing, a
+    /// long-lived process served stale-fresh forever.
+    index_data_version_memo: std::cell::Cell<(i64, Option<i64>)>,
     /// Packed indexed lines for unique-query literal. Cleared on generation bump.
     line_corpus: std::cell::RefCell<Option<std::sync::Arc<crate::store::line_corpus::LineCorpus>>>,
     line_corpus_disabled: std::cell::Cell<bool>,
@@ -263,7 +267,7 @@ impl IndexStore {
             durability,
             trigram_df: crate::store::trigram_df::TrigramDfCache::new(),
             line_count_at_least: std::cell::Cell::new(None),
-            index_data_version_memo: std::cell::Cell::new(None),
+            index_data_version_memo: std::cell::Cell::new((0, None)),
             line_corpus: std::cell::RefCell::new(None),
             line_corpus_disabled: std::cell::Cell::new(false),
             read_only: false,
@@ -348,7 +352,7 @@ impl IndexStore {
             durability,
             trigram_df: crate::store::trigram_df::TrigramDfCache::new(),
             line_count_at_least: std::cell::Cell::new(None),
-            index_data_version_memo: std::cell::Cell::new(None),
+            index_data_version_memo: std::cell::Cell::new((0, None)),
             line_corpus: std::cell::RefCell::new(None),
             line_corpus_disabled: std::cell::Cell::new(false),
             read_only,
@@ -933,14 +937,22 @@ impl IndexStore {
     }
 
     pub fn index_data_version(&self) -> Result<i64> {
-        if let Some(cached) = self.index_data_version_memo.get() {
-            return Ok(cached);
+        // PRAGMA data_version bumps when a DIFFERENT connection commits;
+        // same-connection writes already invalidate via bump_index_data_version.
+        let foreign_stamp: i64 = self
+            .conn
+            .query_row("PRAGMA data_version", [], |row| row.get(0))?;
+        let (cached_stamp, cached) = self.index_data_version_memo.get();
+        if cached_stamp == foreign_stamp {
+            if let Some(version) = cached {
+                return Ok(version);
+            }
         }
         let version = self
             .get_meta("index_data_version")?
             .and_then(|value| value.parse().ok())
             .unwrap_or(0);
-        self.index_data_version_memo.set(Some(version));
+        self.index_data_version_memo.set((foreign_stamp, Some(version)));
         Ok(version)
     }
 
@@ -985,7 +997,7 @@ impl IndexStore {
             "INSERT INTO meta(key, value) VALUES('index_data_version', '1')              ON CONFLICT(key) DO UPDATE SET value =              CAST(COALESCE(meta.value, '0') AS INTEGER) + 1",
             [],
         )?;
-        self.index_data_version_memo.set(None);
+        self.index_data_version_memo.set((0, None));
         self.line_count_at_least.set(None);
         self.line_corpus.borrow_mut().take();
         self.line_corpus_disabled.set(false);
