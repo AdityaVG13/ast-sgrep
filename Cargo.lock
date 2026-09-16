@@ -2989,8 +2989,7 @@ checksum = "009994f150cc0cd50ff54917d5bc8bffe8cad10ca10d81c34da2ec421ae61782"
 [[package]]
 name = "tree-sitter-moonbit"
 version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "decbca7af597f38d9ffdeac7b9937ba0c9aa1b9dab6efea0fae8ccd8fa3c6bcf"
+source = "git+https://github.com/moonbitlang/tree-sitter-moonbit?rev=b63ce9169bcd831157f3b79ef8ff9219d305f9d0#b63ce9169bcd831157f3b79ef8ff9219d305f9d0"
 dependencies = [
  "cc",
  "tree-sitter-language",

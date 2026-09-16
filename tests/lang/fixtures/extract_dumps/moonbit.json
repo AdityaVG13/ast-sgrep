@@ -351,6 +351,12 @@
       "signature": "kind:function_definition"
     },
     {
+      "excerpt": "struct GoldenWidget {\n  name : String\n}",
+      "line_end": 10,
+      "line_start": 8,
+      "signature": "kind:struct_definition"
+    },
+    {
       "excerpt": "trait GoldenRenderable {\n  render(self : Self, name : String) -> String\n}",
       "line_end": 6,
       "line_start": 4,

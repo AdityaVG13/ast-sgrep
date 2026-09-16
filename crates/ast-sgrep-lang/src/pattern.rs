@@ -18850,17 +18850,6 @@ fn path_from_node(node: &Node, source: &str) -> Option<Vec<String>> {
     if let Some(accessor) = crate::extract::dot_accessor_text(node, source) {
         return Some(vec![accessor.to_string()]);
     }
-    // MoonBit `Type::method` — segments are the type name and the method.
-    if node.kind() == "method_expression" {
-        let mut segs = Vec::new();
-        let mut cursor = node.walk();
-        for child in node.children(&mut cursor) {
-            if let Some(mut p) = path_from_node(&child, source) {
-                segs.append(&mut p);
-            }
-        }
-        return (!segs.is_empty()).then_some(segs);
-    }
     if is_ident_kind(node.kind()) || KEYWORD_RECEIVER_KINDS.contains(&node.kind()) {
         return node_text(node, source).map(|t| vec![t.to_string()]);
     }
@@ -19722,6 +19711,8 @@ pub const DECL_KIND_PREFIXES: &[(&str, &str)] = &[
     ("struct_item", "struct"),
     ("struct_declaration", "struct"),
     ("struct_specifier", "struct"),
+    ("struct_definition", "struct"),
+    ("tuple_struct_definition", "struct"),
     ("function_definition", "def"),
     ("function_declaration", "function"),
     ("protocol_function_declaration", "function"),

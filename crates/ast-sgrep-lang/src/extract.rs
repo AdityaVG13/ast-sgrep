@@ -120,7 +120,11 @@ pub(crate) const MEMBER_EXPR_KINDS: &[&str] = &[
     "attribute",
     "null_aware_member_expression",
     "access_expression",
-    "constructor_expression"
+    // MoonBit `Type::method` — last-wins like other member chains.
+    // Not `constructor_expression`: Swift already uses that kind for
+    // `Type(args)`, and treating it as a member chain turns `Foo(bar)`
+    // into path `Foo.bar`.
+    "method_expression",
 ];
 
 /// Comment / string trivia kinds skipped by pattern and call extraction.
@@ -779,14 +783,7 @@ impl Extractor {
         if is_in_comment_or_string(node) {
             return;
         }
-        // MoonBit `Type::method(...)` calls: the callee is the trailing
-        // identifier, not the type name the first-found scan would return.
-        let Some(callee) = (if callee_node.kind() == "method_expression" {
-            last_identifier_under(callee_node, source)
-        } else {
-            last_identifier_in_chain(callee_node, source)
-        })
-        else {
+        let Some(callee) = last_identifier_in_chain(callee_node, source) else {
             return;
         };
         self.calls.push(CallSite {

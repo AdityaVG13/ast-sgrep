@@ -392,7 +392,17 @@ pub fn structural_term_signatures(term: &str) -> [String; 6] {
 /// turned native-claim patterns into silent empty results. Over-broad entries
 /// are always sound — the native tree-sitter matcher still decides every hit.
 const CACHED_DECL_KIND_TABLE: &[(&str, &[&str])] = &[
-    ("fn ", &["function_item"]),
+    (
+        "fn ",
+        &[
+            "function_item",
+            // MoonBit `fn` / `impl ... with fn` share C/Python's
+            // `function_definition` kind; omitting them here silently empties
+            // indexed `fn $NAME` search (H-CONF-012). Over-broad is sound.
+            "function_definition",
+            "impl_definition",
+        ],
+    ),
     (
         "def ",
         &[
@@ -412,6 +422,7 @@ const CACHED_DECL_KIND_TABLE: &[(&str, &[&str])] = &[
             "method",
             "singleton_method",
             "local_function_statement",
+            "local_function_declaration",
         ],
     ),
     ("func ", &["function_declaration"]),
@@ -427,7 +438,13 @@ const CACHED_DECL_KIND_TABLE: &[(&str, &[&str])] = &[
     ),
     (
         "struct ",
-        &["struct_item", "struct_declaration", "struct_specifier"],
+        &[
+            "struct_item",
+            "struct_declaration",
+            "struct_specifier",
+            "struct_definition",
+            "tuple_struct_definition",
+        ],
     ),
     (
         "interface ",
@@ -435,6 +452,8 @@ const CACHED_DECL_KIND_TABLE: &[(&str, &[&str])] = &[
             "trait_item",
             "interface_declaration",
             "protocol_declaration",
+            "mixin_declaration",
+            "trait_definition",
         ],
     ),
 ];

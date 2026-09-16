@@ -32,7 +32,7 @@ tree-sitter-swift = "0.7"
 tree-sitter-kotlin-ng = "1.1"
 tree-sitter-php = "0.24"
 tree-sitter-dart = "0.2.0"
-tree-sitter-moonbit = "0.1.0"
+tree-sitter-moonbit = { git = "https://github.com/moonbitlang/tree-sitter-moonbit", rev = "b63ce9169bcd831157f3b79ef8ff9219d305f9d0" }
 
 [dev-dependencies]
 ast-sgrep-testkit = { path = "../ast-sgrep-testkit" }
@@ -45,3 +45,6 @@ path = "../../tests/lang/extraction_goldens.rs"
 [[test]]
 name = "pattern"
 path = "../../tests/lang/pattern.rs"
+[[test]]
+name = "candidate_kind_table"
+path = "../../tests/lang/candidate_kind_table.rs"
