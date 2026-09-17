@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 import { accessSync, constants, existsSync, readFileSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
-import { fileURLToPath } from "node:url";
 import { dirname, join, resolve } from "node:path";
 
 const VERSION = "2.0.0";
@@ -175,54 +174,20 @@ export function resolveBinary(options = {}) {
   const fs = options.fs ?? { accessSync, existsSync, readFileSync, statSync };
   if (override) return validateExecutable(resolve(override), fs, platform !== "win32");
 
-  try {
-    const host = resolveHost(options);
-    const executablePath = join(host.packageDir, host.executableName);
-    validateExecutable(executablePath, host.fs, platform !== "win32");
-    assertPackageFileChecksum(
-      host.fs,
-      executablePath,
-      host.checksumPath,
-      host.executableName,
-      host.packageName,
-      "ASGREP_EXECUTABLE_MISSING",
-      "Cannot read native executable: ",
-      "Native executable checksum mismatch at "
-    );
-    return executablePath;
-  } catch (cause) {
-    if (!isOptionalHostMiss(cause)) throw cause;
-    // No platform package — the only trusted fallback is a workspace build
-    // (target/{release,debug}) found by walking ancestors of THIS module.
-    // PATH is deliberately not consulted: an unverified on-PATH binary is a
-    // supply-chain vector (see npm-native-packages security test).
-    if (options.devTree !== false) {
-      const dev = devTreeBinary(fs, platform);
-      if (dev) return dev;
-    }
-    throw cause;
-  }
-}
-
-/** Walk ancestors of this module for a workspace target/{release,debug} build. */
-function devTreeBinary(fs, platform) {
-  const exe = platform === "win32" ? "asgrep.exe" : "asgrep";
-  let dir = dirname(fileURLToPath(import.meta.url));
-  for (let depth = 0; depth < 8; depth += 1) {
-    for (const profile of ["release", "debug"]) {
-      const candidate = join(dir, "target", profile, exe);
-      try {
-        if (fs.existsSync(candidate)) {
-          validateExecutable(candidate, fs, platform !== "win32");
-          return candidate;
-        }
-      } catch { /* keep walking */ }
-    }
-    const parent = dirname(dir);
-    if (parent === dir) break;
-    dir = parent;
-  }
-  return null;
+  const host = resolveHost(options);
+  const executablePath = join(host.packageDir, host.executableName);
+  validateExecutable(executablePath, host.fs, platform !== "win32");
+  assertPackageFileChecksum(
+    host.fs,
+    executablePath,
+    host.checksumPath,
+    host.executableName,
+    host.packageName,
+    "ASGREP_EXECUTABLE_MISSING",
+    "Cannot read native executable: ",
+    "Native executable checksum mismatch at "
+  );
+  return executablePath;
 }
 
 /** Resolve the in-process Code Mode NAPI addon from the platform package, or null if absent. */

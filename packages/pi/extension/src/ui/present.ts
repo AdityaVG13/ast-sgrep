@@ -270,7 +270,10 @@ export function truncateToWidth(text: string, maxWidth: number, ellipsis = "..."
     width += cell.width;
     index += cell.length;
   }
-  return `${kept}${ellipsis}`;
+  // The cut can land inside a painted span — its closing SGR is past the
+  // budget, so the ellipsis and everything after would inherit the open color.
+  // Close it explicitly; harmless when the kept spans were already balanced.
+  return kept + (kept.includes("\u001b[") ? "\u001b[0m" : "") + ellipsis;
 }
 
 function compactValue(value: unknown): string {

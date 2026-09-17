@@ -102,8 +102,8 @@ test("reports representative unsupported tuples and omitted packages", () => {
     { platform: "linux", arch: "x64", libc: "musl" },
     { platform: "win32", arch: "arm64" },
     { platform: "darwin", arch: "riscv64" }
-  ]) expectCode("ASGREP_UNSUPPORTED_PLATFORM", () => resolveBinary({ ...tuple, env: {}, devTree: false }));
-  expectCode("ASGREP_PLATFORM_PACKAGE_MISSING", () => resolveBinary({ platform: "linux", arch: "x64", libc: "glibc", env: {}, devTree: false, requireResolve() { throw new Error("omitted"); } }), /@ast-sgrep\/linux-x64-gnu/u);
+  ]) expectCode("ASGREP_UNSUPPORTED_PLATFORM", () => resolveBinary({ ...tuple, env: {} }));
+  expectCode("ASGREP_PLATFORM_PACKAGE_MISSING", () => resolveBinary({ platform: "linux", arch: "x64", libc: "glibc", env: {}, requireResolve() { throw new Error("omitted"); } }), /@ast-sgrep\/linux-x64-gnu/u);
 });
 
 test("committed target, contract, package, and checksum metadata do not drift", () => {
@@ -174,7 +174,6 @@ test("does not execute an unverified PATH binary when the platform package is mi
         platform: "darwin",
         arch: "arm64",
         env: { PATH: binDir },
-        devTree: false,
         requireResolve() { throw new Error("omitted"); },
       }),
     );

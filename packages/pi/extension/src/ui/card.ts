@@ -45,6 +45,7 @@ export type CardModel = {
 
 const TOOL_COL = 12;
 const DUR_COL = 7;
+const MAX_CARD_WIDTH = 100;
 
 /** Rounded frame glyphs — pi themes may provide theme.boxRound; default ASCII-art set. */
 const BOX = { tl: "\u256d", tr: "\u256e", bl: "\u2570", br: "\u256f", h: "\u2500", v: "\u2502" };
@@ -74,8 +75,36 @@ function frameBar(theme: PresentTheme | undefined, box: BoxGlyphs, border: (t: s
   return border(leftRaw) + shown + border(box.h.repeat(fill)) + border(right);
 }
 
+/** ANSI-aware cut to `width` display columns on the same scale as frameW
+ * (stripped code-point count). Unlike truncateToWidth this never leaves an
+ * unclosed SGR color behind: a cut inside a painted span appends \x1b[0m
+ * before the ellipsis so the row cannot bleed color into the right border. */
 function clamp(text: string, width: number): string {
-  return truncateToWidth(text, Math.max(1, width));
+  const limit = Math.max(1, width);
+  if (frameW(text) <= limit) return text;
+  const budget = Math.max(1, limit - 1); // room for the ellipsis
+  const ansi = /\u001b\[[0-9;]*m/gu;
+  const stops: Array<[number, number]> = [];
+  for (let match = ansi.exec(text); match !== null; match = ansi.exec(text)) {
+    stops.push([match.index, match.index + match[0].length]);
+  }
+  let kept = "";
+  let visible = 0;
+  let index = 0;
+  let stopIndex = 0;
+  while (index < text.length && visible < budget) {
+    if (stopIndex < stops.length && index === stops[stopIndex]![0]) {
+      const [, end] = stops[stopIndex]!;
+      kept += text.slice(index, end);
+      index = end;
+      stopIndex += 1;
+      continue;
+    }
+    kept += text[index];
+    visible += 1;
+    index += 1;
+  }
+  return kept + (stops.length > 0 ? "\u001b[0m" : "") + "\u2026";
 }
 
 function fitPath(text: string, budget: number): string {
@@ -136,7 +165,9 @@ export class AsgrepCard {
     const model = this.model;
     if (!model || width <= 0) return [];
     if (this.cache?.width === width) return this.cache.lines;
-    const lines = framedLines(theme, model, Math.max(8, width));
+    // Pi hands us the full terminal width — a hollow frame at 200+ cols is a
+    // wall of empty border. Cap at a readable card width; pi pads the rest.
+    const lines = framedLines(theme, model, Math.min(Math.max(8, width), MAX_CARD_WIDTH));
     this.cache = { width, lines };
     return lines;
   }
