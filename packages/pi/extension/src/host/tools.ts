@@ -27,9 +27,15 @@ import type { FreshnessRuntime } from "../runtime/freshness.js";
 import {
   ASGREP_PROMPT_GUIDELINES,
   ASGREP_PROMPT_SNIPPET,
+  formatCodemodeCall,
   formatCodemodeResult,
+  formatIndexCall,
+  formatSearchCall,
+  formatStatusCall,
+  presentText,
+  type PresentTheme,
 } from "../ui/present.js";
-import { EMPTY_CALL, renderAsgrepResult } from "../ui/card.js";
+import { renderAsgrepResult } from "../ui/card.js";
 import {
   bounded,
   errorDetails,
@@ -363,8 +369,8 @@ export function registerAstSgrepTools(
       "}",
     ].join("\n"),
     parameters: codemodeParameters,
-    renderCall() {
-      return EMPTY_CALL;
+    renderCall(args, theme, context) {
+      return presentText(formatCodemodeCall(args.code, theme as PresentTheme), context.lastComponent);
     },
     renderResult(result, options, theme, context) {
       return renderAsgrepResult(result, options, theme, context);
@@ -494,8 +500,8 @@ export function registerAstSgrepTools(
     promptSnippet: "One-shot asgrep search (natural, defs, callers, pattern, chain, semantic)",
     description: "One-shot search. Prefer asgrep for anything multi-step, parallel, or filtered. Call this on your own whenever a single lookup is enough.",
     parameters: searchParameters,
-    renderCall() {
-      return EMPTY_CALL;
+    renderCall(args, theme, context) {
+      return presentText(formatSearchCall(args, theme as PresentTheme), context.lastComponent);
     },
     renderResult(result, options, theme, context) {
       return renderAsgrepResult(result, options, theme, context);
@@ -549,8 +555,8 @@ export function registerAstSgrepTools(
     promptSnippet: "Build or rebuild the asgrep index",
     description: "Build or rebuild the index. Prefer asgrep.indexRepo inside asgrep.",
     parameters: indexParameters,
-    renderCall() {
-      return EMPTY_CALL;
+    renderCall(args, theme, context) {
+      return presentText(formatIndexCall(args.force === true, theme as PresentTheme), context.lastComponent);
     },
     renderResult(result, options, theme, context) {
       return renderAsgrepResult(result, options, theme, context);
@@ -580,8 +586,8 @@ export function registerAstSgrepTools(
     promptSnippet: "asgrep index and backend status",
     description: "Index/runtime status. Prefer asgrep.indexStatus inside asgrep.",
     parameters: statusParameters,
-    renderCall() {
-      return EMPTY_CALL;
+    renderCall(_args, theme, context) {
+      return presentText(formatStatusCall(theme as PresentTheme), context.lastComponent);
     },
     renderResult(result, options, theme, context) {
       return renderAsgrepResult(result, options, theme, context);

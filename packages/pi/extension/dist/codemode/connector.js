@@ -58,12 +58,20 @@ export function createAsgrepConnector(host, context, options = {}) {
             ...(input.contextLines !== undefined ? { context_lines: input.contextLines } : {}),
             ...(input.maxChars !== undefined ? { max_chars: input.maxChars } : {}),
         }, callOptions?.signal),
-        edit: (input, callOptions) => call("edit", {
-            ...(typeof input.path === "string" ? { path: input.path } : {}),
-            ...(typeof input.oldText === "string" ? { oldText: input.oldText } : {}),
-            ...(typeof input.newText === "string" ? { newText: input.newText } : {}),
-            ...(input.edits !== undefined ? { edits: input.edits } : {}),
-        }, callOptions?.signal),
+        edit: (input, callOptions) => {
+            // Multi-edit wire contract: every entry carries its own path; the
+            // top-level path is the default for entries that omit it.
+            const edits = input.edits?.map((entry) => ({
+                ...(typeof input.path === "string" ? { path: input.path } : {}),
+                ...entry,
+            }));
+            return call("edit", {
+                ...(typeof input.path === "string" ? { path: input.path } : {}),
+                ...(typeof input.oldText === "string" ? { oldText: input.oldText } : {}),
+                ...(typeof input.newText === "string" ? { newText: input.newText } : {}),
+                ...(edits !== undefined ? { edits } : {}),
+            }, callOptions?.signal);
+        },
         semantic: (input, callOptions) => call("semantic", searchPayload("semantic", input), callOptions?.signal),
         chain: (input, callOptions) => call("chain", {
             query: input.query,

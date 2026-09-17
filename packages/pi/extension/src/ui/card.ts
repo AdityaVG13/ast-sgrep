@@ -198,11 +198,22 @@ export function cardModel(result: ResultLike, options: RenderOptions): CardModel
   }
   const response = details.response as EnvelopeLike | undefined;
   if (command === "status" || command === "index" || command === "reindex") {
-    const state = typeof response?.status === "string" ? response.status : typeof response?.index_status === "string" ? response.index_status : undefined;
+    const state = typeof response?.status === "string" ? response.status
+      : typeof response?.index_status === "string" ? response.index_status
+      : response?.ok === true ? "ok" : undefined;
     if (state) title.push(state);
     const counts = response?.counts;
     if (counts && typeof counts === "object") {
       title.push(Object.entries(counts as Record<string, unknown>).slice(0, 4).map(([k, v]) => k + "=" + String(v)).join(" "));
+    } else if (response) {
+      // Flat status envelope: file_count/symbol_count/caller_count + embed info.
+      const flat: string[] = [];
+      for (const k of ["file_count", "symbol_count", "caller_count"]) {
+        const v = (response as Record<string, unknown>)[k];
+        if (typeof v === "number" || typeof v === "bigint") flat.push(k.replace(/_count$/, "s") + "=" + String(v));
+      }
+      if (typeof response.embed_backend === "string") flat.push(response.embed_backend);
+      if (flat.length > 0) title.push(flat.join(" "));
     }
   }
   const ms = typeof details.wallMs === "number" ? details.wallMs : typeof details.activationMs === "number" ? details.activationMs : undefined;

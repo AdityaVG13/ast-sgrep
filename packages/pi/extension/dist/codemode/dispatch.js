@@ -8,7 +8,10 @@ import { mkdtemp, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 function callTarget(args) {
-    const value = args.query ?? args.symbol ?? args.module ?? args.path ?? args.name ?? "";
+    const refs = args.refs ?? args.ref;
+    const value = args.query ?? args.symbol ?? args.module ?? args.path ?? args.name
+        ?? (Array.isArray(refs) ? refs.map((r) => typeof r === "string" ? r : r?.path ?? "").filter(Boolean).join(", ")
+            : typeof refs === "string" ? refs : "");
     const text = String(value).replace(/\s+/g, " ").trim();
     return text.length > 60 ? text.slice(0, 59) + "…" : text;
 }

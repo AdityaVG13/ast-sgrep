@@ -161,7 +161,7 @@ function looksLikeBareExpression(code) {
     const trimmed = code.trim().replace(/;\s*$/u, "");
     if (!trimmed || /\breturn\b/.test(trimmed))
         return false;
-    if (/^(?:const|let|var|function|class|if|for|while|switch|try|async|import|export)\b/u.test(trimmed))
+    if (/^(?:const|let|var|function|class|if|for|while|switch|try|async|import|export|throw|do|break|continue|debugger|yield|with|else|case|default)\b/u.test(trimmed))
         return false;
     if (/;\s*\S/u.test(trimmed))
         return false;

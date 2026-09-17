@@ -31,6 +31,24 @@ export function isUncachedSearchError(cause) {
     const message = cause instanceof Error ? cause.message : String(cause);
     return /use call\(\) for search/i.test(message);
 }
+/** NAPI can surface SQLite u64 counters as BigInt (writer_generation exceeds
+ * 2^53). BigInt breaks JSON.stringify downstream (pi serializes result
+ * details) — normalize to Number at the boundary. Precision past 2^53 is
+ * display-only here; equality comparisons still hold since both sides
+ * convert the same integer identically. */
+function normalizeNativeValue(value) {
+    if (typeof value === "bigint")
+        return Number(value);
+    if (Array.isArray(value))
+        return value.map(normalizeNativeValue);
+    if (value && typeof value === "object") {
+        const out = {};
+        for (const [key, entry] of Object.entries(value))
+            out[key] = normalizeNativeValue(entry);
+        return out;
+    }
+    return value;
+}
 export function isClosedWorkerError(cause) {
     const message = cause instanceof Error ? cause.message : String(cause);
     return /codemode-serve is closed|native session is closed/i.test(message);
@@ -76,7 +94,7 @@ function inProcessWorker(session) {
                 try {
                     const value = sync.call(session, tool, args ?? {});
                     if (!(tool === "search" && value == null)) {
-                        return Promise.resolve(asEnvelope(value, tool));
+                        return Promise.resolve(asEnvelope(normalizeNativeValue(value), tool));
                     }
                 }
                 catch (cause) {
@@ -88,13 +106,13 @@ function inProcessWorker(session) {
                     }
                 }
             }
-            return enqueue(async () => asEnvelope(await session.call(tool, args, options?.signal), tool), options?.signal);
+            return enqueue(async () => asEnvelope(normalizeNativeValue(await session.call(tool, args, options?.signal)), tool), options?.signal);
         },
         batch(calls, options) {
             return enqueue(async () => {
                 const response = await session.batch(calls, options?.signal);
                 const result = {
-                    results: response.results,
+                    results: normalizeNativeValue(response.results),
                     all_ok: response.allOk,
                     wall_ms: response.wallMs,
                     mode: response.mode,
