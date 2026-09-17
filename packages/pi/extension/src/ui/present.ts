@@ -39,12 +39,12 @@ export const ASGREP_PROMPT_GUIDELINES = [
   "If a search returns 0 hits, use suggested_next or retry with asgrep.find, asgrep.defs, or asgrep.search(query, { in: \"src\" }).",
 ] as const;
 
-function paint(theme: PresentTheme | undefined, role: string, text: string, bold = false): string {
+export function paint(theme: PresentTheme | undefined, role: string, text: string, bold = false): string {
   const body = bold && theme ? theme.bold(text) : text;
   return theme ? theme.fg(role, body) : body;
 }
 
-function hitLocation(hit: HitLike): string {
+export function hitLocation(hit: HitLike): string {
   const file = String(hit.file ?? hit.path ?? "");
   const line = hit.start_line ?? hit.line ?? hit.lines;
   if (typeof line === "number") return `${file}:${line}`;
@@ -53,14 +53,14 @@ function hitLocation(hit: HitLike): string {
   return file || "?";
 }
 
-function hitLabel(hit: HitLike): string {
+export function hitLabel(hit: HitLike): string {
   const symbol = typeof hit.symbol === "string" ? hit.symbol : "";
   const kind = typeof hit.kind === "string" ? hit.kind : "";
   const preview = typeof hit.preview === "string" ? hit.preview.replace(/\s+/g, " ").trim() : "";
   return [symbol, kind, preview && preview.length < 80 ? preview : ""].filter(Boolean).join("  ");
 }
 
-function header(theme: PresentTheme | undefined, verb: string, bits: Array<string | null | undefined>): string {
+export function header(theme: PresentTheme | undefined, verb: string, bits: Array<string | null | undefined>): string {
   return [paint(theme, "toolTitle", "asgrep", true), paint(theme, "accent", verb), ...bits.filter((bit): bit is string => Boolean(bit))].join("  ·  ");
 }
 

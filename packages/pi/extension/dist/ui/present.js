@@ -6,11 +6,11 @@ export const ASGREP_PROMPT_GUIDELINES = [
     "Use grep only for exact log strings, filenames, or config keys. asgrep.edit does unique string replace plus targeted reindex; oldText must match exactly once.",
     "If a search returns 0 hits, use suggested_next or retry with asgrep.find, asgrep.defs, or asgrep.search(query, { in: \"src\" }).",
 ];
-function paint(theme, role, text, bold = false) {
+export function paint(theme, role, text, bold = false) {
     const body = bold && theme ? theme.bold(text) : text;
     return theme ? theme.fg(role, body) : body;
 }
-function hitLocation(hit) {
+export function hitLocation(hit) {
     const file = String(hit.file ?? hit.path ?? "");
     const line = hit.start_line ?? hit.line ?? hit.lines;
     if (typeof line === "number")
@@ -21,13 +21,13 @@ function hitLocation(hit) {
         return hit.ref;
     return file || "?";
 }
-function hitLabel(hit) {
+export function hitLabel(hit) {
     const symbol = typeof hit.symbol === "string" ? hit.symbol : "";
     const kind = typeof hit.kind === "string" ? hit.kind : "";
     const preview = typeof hit.preview === "string" ? hit.preview.replace(/\s+/g, " ").trim() : "";
     return [symbol, kind, preview && preview.length < 80 ? preview : ""].filter(Boolean).join("  ");
 }
-function header(theme, verb, bits) {
+export function header(theme, verb, bits) {
     return [paint(theme, "toolTitle", "asgrep", true), paint(theme, "accent", verb), ...bits.filter((bit) => Boolean(bit))].join("  ·  ");
 }
 export function formatSearchCall(params, theme) {

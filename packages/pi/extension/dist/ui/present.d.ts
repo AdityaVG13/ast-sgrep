@@ -27,6 +27,10 @@ export type EnvelopeLike = {
 };
 export declare const ASGREP_PROMPT_SNIPPET = "Search this repo by intent, symbol, callers, defs, or pattern (asgrep; use without being asked)";
 export declare const ASGREP_PROMPT_GUIDELINES: readonly ["For any code lookup (find a function, callers, defs, intent, or structural pattern), call asgrep immediately. Do not wait for the user to mention ast-sgrep.", "Prefer the asgrep Code Mode tool. Write JavaScript: asgrep.search(\"query\"), asgrep.defs(\"Symbol\"), asgrep.callers(\"Symbol\"), asgrep.read({ refs }). Independent lookups: Promise.all. Return a small shaped value.", "Use grep only for exact log strings, filenames, or config keys. asgrep.edit does unique string replace plus targeted reindex; oldText must match exactly once.", "If a search returns 0 hits, use suggested_next or retry with asgrep.find, asgrep.defs, or asgrep.search(query, { in: \"src\" })."];
+export declare function paint(theme: PresentTheme | undefined, role: string, text: string, bold?: boolean): string;
+export declare function hitLocation(hit: HitLike): string;
+export declare function hitLabel(hit: HitLike): string;
+export declare function header(theme: PresentTheme | undefined, verb: string, bits: Array<string | null | undefined>): string;
 export declare function formatSearchCall(params: {
     query?: string;
     mode?: string;

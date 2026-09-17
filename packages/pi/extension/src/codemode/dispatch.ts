@@ -28,10 +28,18 @@ export type DispatchStats = {
 /** One settled host call: which lane carried it and how long it took. */
 export type DispatchCall = {
   tool: string;
+  /** Short display target: query/symbol/module/path, whichever the call used. */
+  target: string;
   lane: "sticky" | "batch" | "spawn" | "serial";
   ok: boolean;
   ms: number;
 };
+
+function callTarget(args: Record<string, unknown>): string {
+  const value = args.query ?? args.symbol ?? args.module ?? args.path ?? args.name ?? "";
+  const text = String(value).replace(/\s+/g, " ").trim();
+  return text.length > 60 ? text.slice(0, 59) + "…" : text;
+}
 
 export type BatchResult = {
   results: Array<{ id: string; ok: boolean; value?: unknown; error?: string }>;
@@ -116,7 +124,7 @@ export function createCodemodeDispatcher(host: BatchCapableHost): {
   const TRACE_CAP = 128;
   const recordCall = (item: Pending, ok: boolean): void => {
     if (calls.length >= TRACE_CAP) return;
-    calls.push({ tool: item.tool, lane: item.lane, ok, ms: Date.now() - item.startedAt });
+    calls.push({ tool: item.tool, target: callTarget(item.args), lane: item.lane, ok, ms: Date.now() - item.startedAt });
   };
   // Mutations never batch and never overlap each other: edit/index_repo run on
   // a serial tail so Promise.all([edit, edit]) cannot interleave writes, and a

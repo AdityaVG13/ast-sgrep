@@ -27,14 +27,9 @@ import type { FreshnessRuntime } from "../runtime/freshness.js";
 import {
   ASGREP_PROMPT_GUIDELINES,
   ASGREP_PROMPT_SNIPPET,
-  formatCodemodeCall,
   formatCodemodeResult,
-  formatIndexCall,
-  formatSearchCall,
-  formatStatusCall,
-  presentText,
-  type PresentTheme,
 } from "../ui/present.js";
+import { EMPTY_CALL, renderAsgrepResult } from "../ui/card.js";
 import {
   bounded,
   errorDetails,
@@ -368,16 +363,11 @@ export function registerAstSgrepTools(
       "}",
     ].join("\n"),
     parameters: codemodeParameters,
-    renderCall(args, theme, context) {
-      return presentText(formatCodemodeCall(args.code, theme as PresentTheme), context.lastComponent);
+    renderCall() {
+      return EMPTY_CALL;
     },
     renderResult(result, options, theme, context) {
-      const text = result.content[0]?.type === "text" ? result.content[0].text : "";
-      const lines = text.split("\n");
-      const max = options.expanded ? lines.length : 16;
-      const shown = lines.slice(0, max).join("\n");
-      const rest = lines.length > max ? `\n… ${lines.length - max} more` : "";
-      return presentText(shown + rest, context.lastComponent);
+      return renderAsgrepResult(result, options, theme, context);
     },
     async execute(_toolCallId, params, signal, onUpdate, ctx) {
       report(onUpdate, "codemode", "started");
@@ -504,12 +494,11 @@ export function registerAstSgrepTools(
     promptSnippet: "One-shot asgrep search (natural, defs, callers, pattern, chain, semantic)",
     description: "One-shot search. Prefer asgrep for anything multi-step, parallel, or filtered. Call this on your own whenever a single lookup is enough.",
     parameters: searchParameters,
-    renderCall(args, theme, context) {
-      return presentText(formatSearchCall(args, theme as PresentTheme), context.lastComponent);
+    renderCall() {
+      return EMPTY_CALL;
     },
-    renderResult(result, _options, _theme, context) {
-      const text = result.content[0]?.type === "text" ? result.content[0].text : "";
-      return presentText(text, context.lastComponent);
+    renderResult(result, options, theme, context) {
+      return renderAsgrepResult(result, options, theme, context);
     },
     async execute(_toolCallId, params, signal, onUpdate, ctx) {
       const options = signal ? { signal } : {};
@@ -560,12 +549,11 @@ export function registerAstSgrepTools(
     promptSnippet: "Build or rebuild the asgrep index",
     description: "Build or rebuild the index. Prefer asgrep.indexRepo inside asgrep.",
     parameters: indexParameters,
-    renderCall(args, theme, context) {
-      return presentText(formatIndexCall(args.force === true, theme as PresentTheme), context.lastComponent);
+    renderCall() {
+      return EMPTY_CALL;
     },
-    renderResult(result, _options, _theme, context) {
-      const text = result.content[0]?.type === "text" ? result.content[0].text : "";
-      return presentText(text, context.lastComponent);
+    renderResult(result, options, theme, context) {
+      return renderAsgrepResult(result, options, theme, context);
     },
     async execute(_toolCallId, params, signal, onUpdate, ctx) {
       const force = params.force === true;
@@ -592,12 +580,11 @@ export function registerAstSgrepTools(
     promptSnippet: "asgrep index and backend status",
     description: "Index/runtime status. Prefer asgrep.indexStatus inside asgrep.",
     parameters: statusParameters,
-    renderCall(_args, theme, context) {
-      return presentText(formatStatusCall(theme as PresentTheme), context.lastComponent);
+    renderCall() {
+      return EMPTY_CALL;
     },
-    renderResult(result, _options, _theme, context) {
-      const text = result.content[0]?.type === "text" ? result.content[0].text : "";
-      return presentText(text, context.lastComponent);
+    renderResult(result, options, theme, context) {
+      return renderAsgrepResult(result, options, theme, context);
     },
     async execute(_toolCallId, _params, signal, onUpdate, ctx) {
       report(onUpdate, "status", "started");

@@ -7,6 +7,11 @@
 import { mkdtemp, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+function callTarget(args) {
+    const value = args.query ?? args.symbol ?? args.module ?? args.path ?? args.name ?? "";
+    const text = String(value).replace(/\s+/g, " ").trim();
+    return text.length > 60 ? text.slice(0, 59) + "…" : text;
+}
 const MAX_WAVE = 32;
 const MUTATING_TOOLS = new Set(["index_repo", "edit"]);
 const abortError = () => Object.assign(new Error("codemode aborted"), { name: "AbortError" });
@@ -37,7 +42,7 @@ export function createCodemodeDispatcher(host) {
     const recordCall = (item, ok) => {
         if (calls.length >= TRACE_CAP)
             return;
-        calls.push({ tool: item.tool, lane: item.lane, ok, ms: Date.now() - item.startedAt });
+        calls.push({ tool: item.tool, target: callTarget(item.args), lane: item.lane, ok, ms: Date.now() - item.startedAt });
     };
     // Mutations never batch and never overlap each other: edit/index_repo run on
     // a serial tail so Promise.all([edit, edit]) cannot interleave writes, and a

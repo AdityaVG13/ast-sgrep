@@ -21,6 +21,8 @@ export type DispatchStats = {
 /** One settled host call: which lane carried it and how long it took. */
 export type DispatchCall = {
     tool: string;
+    /** Short display target: query/symbol/module/path, whichever the call used. */
+    target: string;
     lane: "sticky" | "batch" | "spawn" | "serial";
     ok: boolean;
     ms: number;
