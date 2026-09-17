@@ -3,6 +3,7 @@
     "callers_extracted",
     "command",
     "exit_code",
+    "files_depth_truncated",
     "files_failed",
     "files_indexed",
     "files_removed",
@@ -50,6 +51,7 @@
     "schema_version",
     "status",
     "suggested_commands",
+    "supervision",
     "tool"
   ],
   "agent": [
@@ -111,7 +113,6 @@
     "ok",
     "prevented_read_bytes",
     "query",
-    "query_expansions",
     "read_bytes_estimate",
     "returned_excerpt_bytes",
     "schema_version",

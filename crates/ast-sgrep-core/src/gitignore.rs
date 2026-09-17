@@ -6,8 +6,8 @@ use std::rc::Rc;
 pub const DEFAULT_SKIP_DIR_NAMES: &[&str] = &[".git", ".asgrep"];
 pub const INDEXABLE_EXTENSIONS: &[&str] = &[
     "rs", "ts", "tsx", "js", "jsx", "mjs", "cjs", "py", "pyi", "go", "java", "cs", "rb", "swift",
-    "c", "h", "cpp", "cc", "cxx", "hpp", "hxx", "hh", "ipp", "kt", "kts", "php", "toml", "md",
-    "txt", "json", "yaml", "yml",
+    "c", "h", "cpp", "cc", "cxx", "hpp", "hxx", "hh", "ipp", "kt", "kts", "php", "dart", "mbt",
+    "mbti", "toml", "md", "txt", "json", "yaml", "yml",
 ];
 pub fn should_skip_dir(path: &Path) -> bool {
     path.file_name()

@@ -43,8 +43,10 @@ const CASCADE_PER_TERM_FILE_LIMIT: usize = 32;
 const CASCADE_EXTRA_FILE_RESERVE: usize = 32;
 /// Cap on reported query expansions (ufk7).
 const MAX_QUERY_EXPANSIONS: usize = 5;
-const NL_FANOUT_SYMBOL_LIMIT: usize = 2;
-const NL_FANOUT_HITS_PER_CHANNEL: usize = 4;
+const NL_FANOUT_SYMBOL_LIMIT: usize = 4;
+const NL_FANOUT_HITS_PER_CHANNEL: usize = 16;
+/// Caller-leg fan-out hits rank below defs in fusion (Sep-7 recorded shape).
+const FANOUT_CALLER_SCALE: f64 = 0.35;
 
 /// On mutex poison, clear cached state before continuing so a panicked
 /// computation cannot leave a half-written entry visible (sxjc).
@@ -853,6 +855,14 @@ impl Searcher {
     /// invocations return. All-or-nothing on per-pattern errors (fail-closed):
     /// a pattern the single invocation would reject rejects the whole batch.
     pub fn search_multi_pattern(&self, patterns: &[String]) -> Result<SearchResponse> {
+        // EXP018 negative result: a concurrent fan-out (scoped threads, one
+        // `Searcher` per worker, merge in pattern order) measured 1.02x SLOWER
+        // than this sequential loop on the registered 3-pattern batch cell
+        // (312.4/312.8 ms vs 306.7/307.6 ms, both hyperfine arm orders) with a
+        // byte-identical envelope. Each per-pattern pipeline already
+        // saturates the global file-match pool, so the fan-out only adds
+        // pool contention plus N extra index opens. Recorded as
+        // `multi-pattern-concurrent-fanout` in PERF_NEGATIVE_RESULTS.md.
         let mut merged: Option<SearchResponse> = None;
         for raw in patterns {
             // One optional `pattern:` token per value is tolerated (D-03 shape).
@@ -1019,13 +1029,34 @@ impl Searcher {
         // Lexicon-expanded semantic terms stay on the embed path; stuffing
         // them into literal_prefilter was unique-hybrid p100 on NL queries.
         let mut discovery = if intent == crate::intent::QueryIntent::Conceptual {
-            parsed.clone()
+            let mut discovery = parsed.clone();
+            // Repository-learned vocabulary must reach the lexical prefilter:
+            // for a conceptual query it is the only channel that admits a
+            // file whose content matches just the learned identifier term
+            // (repository_vocabulary_closes_a_real_cli_lexical_gap). Borrowing
+            // the top-ranked associations keeps the bound that motivated
+            // dropping them wholesale (a full lexicon dump here was
+            // unique-hybrid p100 on NL queries), and the prefilter's df
+            // guards still skip common borrows once a rare foothold exists.
+            if let Some(expanded) = expanded.as_ref() {
+                let mut borrowed = 0usize;
+                for term in expanded.terms.iter() {
+                    if borrowed >= 3 {
+                        break;
+                    }
+                    if term.chars().count() >= 3 && !discovery.terms.contains(term) {
+                        discovery.terms.push(term.clone());
+                        borrowed += 1;
+                    }
+                }
+            }
+            discovery
         } else {
             semantic_query.clone()
         };
         let user_discovery: HashSet<String> = discovery.terms.iter().cloned().collect();
         if intent == crate::intent::QueryIntent::Conceptual {
-            let mut extra = 0usize;
+            let mut extra = discovery.terms.len().saturating_sub(parsed.terms.len());
             for tok in ast_sgrep_embed::tokenize(&ast_sgrep_embed::expand_concepts(&parsed.raw)) {
                 if extra >= 3 {
                     break;
@@ -1197,9 +1228,11 @@ impl Searcher {
                     self.use_field_rescoring,
                 )?
             };
-            if intent == crate::intent::QueryIntent::Conceptual
-                && !hits.iter().any(|hit| hit.kind == HitKind::Def && hit.symbol.is_some())
-            {
+            // Fan-out is unconditional for conceptual queries: it is the sole
+            // source of caller/graph/pattern contributor evidence, so skipping
+            // it when a def hit exists silently strips call-site provenance
+            // from the ranked response (cli_smoke conceptual_query_fans_out).
+            if intent == crate::intent::QueryIntent::Conceptual {
                 let _span = crate::perf_profile::Span::start(
                     "hybrid_conceptual_fanout",
                     "search",
@@ -1292,6 +1325,73 @@ fn conceptual_fanout_pass(
     for symbol in symbols {
         let def_query = ParsedQuery::parse(&format!("defs:{symbol}"));
         hits.extend(search_defs(store, &fanout_options, &def_query)?);
+        // Caller/graph leg: the pinned conceptual contract (cli_smoke
+        // conceptual_query_fans_out) requires call-site contributors — a
+        // callee name is unreachable by term match from prose, so this
+        // affinity-driven leg is the only source of that evidence. The
+        // callers query materializes the direct Caller row and its Graph
+        // edge side by side; both must survive so fusion can list the full
+        // contributor set on the merged same-line hit.
+        let caller_query = ParsedQuery::parse(&format!("callers:{symbol}"));
+        let mut caller_count = 0usize;
+        let mut graph_count = 0usize;
+        for mut hit in search_callers(store, &fanout_options, &caller_query)? {
+            let count = match hit.kind {
+                HitKind::Caller => &mut caller_count,
+                HitKind::Graph => &mut graph_count,
+                _ => continue,
+            };
+            if *count >= NL_FANOUT_HITS_PER_CHANNEL {
+                continue;
+            }
+            if critic::is_generic_entrypoint(hit.caller.as_deref().unwrap_or("")) {
+                hit.score *= 0.25;
+            }
+            hit.score *= FANOUT_CALLER_SCALE;
+            hits.push(hit);
+            *count += 1;
+        }
+        hits.extend(pattern_hits_for_symbol(
+            store,
+            options.lang_filter.as_deref(),
+            &symbol,
+        )?);
+    }
+    Ok(hits)
+}
+
+/// Indexed pattern nodes matching the fan-out symbol's structural signatures —
+/// the `pattern` contributor leg of the conceptual fan-out (bounded per
+/// channel; deduped by location).
+fn pattern_hits_for_symbol(
+    store: &IndexStore,
+    lang_filter: Option<&str>,
+    symbol: &str,
+) -> Result<Vec<SearchHit>> {
+    let mut hits = Vec::new();
+    let mut seen = HashSet::new();
+    for signature in ast_sgrep_lang::structural_term_signatures(symbol) {
+        let remaining = NL_FANOUT_HITS_PER_CHANNEL.saturating_sub(hits.len());
+        if remaining == 0 {
+            break;
+        }
+        for row in store.pattern_nodes_matching_limited(&signature, lang_filter, remaining)? {
+            if !seen.insert((row.path.clone(), row.line_start, row.line_end)) {
+                continue;
+            }
+            let excerpt = store.fill_pattern_excerpt(&row)?;
+            hits.push(SearchHit::span(SpanHitInput {
+                kind: HitKind::Pattern,
+                file: row.path,
+                line_start: row.line_start,
+                line_end: row.line_end,
+                score: crate::rank::SCORE_PATTERN * 0.85,
+                excerpt,
+                symbol: Some(symbol.to_owned()),
+                language: row.language,
+                byte_span: None,
+            }));
+        }
     }
     Ok(hits)
 }

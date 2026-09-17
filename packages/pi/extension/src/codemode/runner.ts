@@ -40,6 +40,14 @@ const MAX_RESULT_JSON_CHARS = 1_000_000;
 const RESULT_SERIALIZE_TIMEOUT_MS = 1_000;
 const MAX_TIMER_MS = 2_147_483_647;
 
+/** NAPI u64/i64 fields cross as BigInt; keep safe ints numeric, exact-string the rest. */
+const jsonSafe = (_key: string, item: unknown): unknown =>
+  typeof item === "bigint"
+    ? item >= -9007199254740991n && item <= 9007199254740991n
+      ? Number(item)
+      : item.toString()
+    : item;
+
 type HostMethod = CodemodeHostMethod;
 
 const BLOCKED_GLOBALS = [
@@ -300,7 +308,7 @@ export async function runCodemode(
       const invokeHost = hostMethods[resolved];
       if (!invokeHost) throw new Error(unknownMethodError(method));
       const value = await invokeHost(input, { signal: runController.signal });
-      return JSON.stringify({ ok: true, value });
+      return JSON.stringify({ ok: true, value }, jsonSafe);
     } catch (cause) {
       return JSON.stringify({
         ok: false,

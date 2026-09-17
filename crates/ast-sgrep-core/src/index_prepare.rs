@@ -91,7 +91,9 @@ fn is_trailing_trivia_line(line: &str, language: Option<Language>) -> bool {
             | Language::C
             | Language::Cpp
             | Language::Kotlin
-            | Language::Php,
+            | Language::Php
+            | Language::Dart
+            | Language::MoonBit,
         ) => C_FAMILY_PREFIXES,
         None => return false,
     };

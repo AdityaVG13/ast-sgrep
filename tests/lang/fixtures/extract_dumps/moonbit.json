@@ -1,0 +1,636 @@
+{
+  "calls": [
+    {
+      "byte_end": 701,
+      "byte_start": 678,
+      "callee": "format_widget",
+      "caller": "<module>",
+      "line": 37
+    },
+    {
+      "byte_end": 656,
+      "byte_start": 635,
+      "callee": "decorate",
+      "caller": "format_widget",
+      "line": 33
+    },
+    {
+      "byte_end": 655,
+      "byte_start": 644,
+      "callee": "trim",
+      "caller": "format_widget",
+      "line": 33
+    },
+    {
+      "byte_end": 478,
+      "byte_start": 445,
+      "callee": "HttpRequest",
+      "caller": "make_widget",
+      "line": 24
+    },
+    {
+      "byte_end": 537,
+      "byte_start": 507,
+      "callee": "format_widget",
+      "caller": "make_widget",
+      "line": 26
+    },
+    {
+      "byte_end": 381,
+      "byte_start": 362,
+      "callee": "format_widget",
+      "caller": "render",
+      "line": 20
+    }
+  ],
+  "imports": [
+    {
+      "line": 2,
+      "module_path": "moonbitlang/core/string"
+    }
+  ],
+  "pattern_nodes": [
+    {
+      "excerpt": "@core",
+      "line_end": 24,
+      "line_start": 24,
+      "signature": "@core"
+    },
+    {
+      "excerpt": "GoldenAlias",
+      "line_end": 12,
+      "line_start": 12,
+      "signature": "GoldenAlias"
+    },
+    {
+      "excerpt": "GoldenRenderable",
+      "line_end": 4,
+      "line_start": 4,
+      "signature": "GoldenRenderable"
+    },
+    {
+      "excerpt": "GoldenState",
+      "line_end": 14,
+      "line_start": 14,
+      "signature": "GoldenState"
+    },
+    {
+      "excerpt": "GoldenWidget",
+      "line_end": 8,
+      "line_start": 8,
+      "signature": "GoldenWidget"
+    },
+    {
+      "excerpt": "GoldenWidget",
+      "line_end": 19,
+      "line_start": 19,
+      "signature": "GoldenWidget"
+    },
+    {
+      "excerpt": "GoldenWidget",
+      "line_end": 23,
+      "line_start": 23,
+      "signature": "GoldenWidget"
+    },
+    {
+      "excerpt": "Post",
+      "line_end": 24,
+      "line_start": 24,
+      "signature": "Post"
+    },
+    {
+      "excerpt": "Ready",
+      "line_end": 15,
+      "line_start": 15,
+      "signature": "Ready"
+    },
+    {
+      "excerpt": "Self",
+      "line_end": 5,
+      "line_start": 5,
+      "signature": "Self"
+    },
+    {
+      "excerpt": "Self",
+      "line_end": 19,
+      "line_start": 19,
+      "signature": "Self"
+    },
+    {
+      "excerpt": "Spent",
+      "line_end": 16,
+      "line_start": 16,
+      "signature": "Spent"
+    },
+    {
+      "excerpt": "String",
+      "line_end": 5,
+      "line_start": 5,
+      "signature": "String"
+    },
+    {
+      "excerpt": "String",
+      "line_end": 9,
+      "line_start": 9,
+      "signature": "String"
+    },
+    {
+      "excerpt": "String",
+      "line_end": 12,
+      "line_start": 12,
+      "signature": "String"
+    },
+    {
+      "excerpt": "String",
+      "line_end": 16,
+      "line_start": 16,
+      "signature": "String"
+    },
+    {
+      "excerpt": "String",
+      "line_end": 19,
+      "line_start": 19,
+      "signature": "String"
+    },
+    {
+      "excerpt": "String",
+      "line_end": 23,
+      "line_start": 23,
+      "signature": "String"
+    },
+    {
+      "excerpt": "String",
+      "line_end": 29,
+      "line_start": 29,
+      "signature": "String"
+    },
+    {
+      "excerpt": "String",
+      "line_end": 30,
+      "line_start": 30,
+      "signature": "String"
+    },
+    {
+      "excerpt": "@core.HttpRequest(Post, \"/users\")",
+      "line_end": 24,
+      "line_start": 24,
+      "signature": "call-name:HttpRequest"
+    },
+    {
+      "excerpt": "decorate(name.trim())",
+      "line_end": 33,
+      "line_start": 33,
+      "signature": "call-name:decorate"
+    },
+    {
+      "excerpt": "format_widget(name)",
+      "line_end": 20,
+      "line_start": 20,
+      "signature": "call-name:format_widget"
+    },
+    {
+      "excerpt": "format_widget(greeting + name)",
+      "line_end": 26,
+      "line_start": 26,
+      "signature": "call-name:format_widget"
+    },
+    {
+      "excerpt": "format_widget(\"golden\")",
+      "line_end": 37,
+      "line_start": 37,
+      "signature": "call-name:format_widget"
+    },
+    {
+      "excerpt": "name.trim()",
+      "line_end": 33,
+      "line_start": 33,
+      "signature": "call-name:trim"
+    },
+    {
+      "excerpt": "@core.HttpRequest(Post, \"/users\")",
+      "line_end": 24,
+      "line_start": 24,
+      "signature": "call:@core.HttpRequest"
+    },
+    {
+      "excerpt": "decorate(name.trim())",
+      "line_end": 33,
+      "line_start": 33,
+      "signature": "call:decorate"
+    },
+    {
+      "excerpt": "format_widget(name)",
+      "line_end": 20,
+      "line_start": 20,
+      "signature": "call:format_widget"
+    },
+    {
+      "excerpt": "format_widget(greeting + name)",
+      "line_end": 26,
+      "line_start": 26,
+      "signature": "call:format_widget"
+    },
+    {
+      "excerpt": "format_widget(\"golden\")",
+      "line_end": 37,
+      "line_start": 37,
+      "signature": "call:format_widget"
+    },
+    {
+      "excerpt": "name.trim()",
+      "line_end": 33,
+      "line_start": 33,
+      "signature": "call:name.trim"
+    },
+    {
+      "excerpt": "enum GoldenState {\n  Ready\n  Spent(String)\n}",
+      "line_end": 17,
+      "line_start": 14,
+      "signature": "decl:enum:GoldenState"
+    },
+    {
+      "excerpt": "fn decorate(s : String) -> String {\n    s\n  }",
+      "line_end": 32,
+      "line_start": 30,
+      "signature": "decl:fn:decorate"
+    },
+    {
+      "excerpt": "fn format_widget(name : String) -> String {\n  fn decorate(s : String) -> String {\n    s\n  }\n  decorate(name.trim())\n}",
+      "line_end": 34,
+      "line_start": 29,
+      "signature": "decl:fn:format_widget"
+    },
+    {
+      "excerpt": "fn make_widget(name : String) -> GoldenWidget {\n  let req = @core.HttpRequest(Post, \"/users\")\n  let greeting = \"widget\"\n  format_widget(greeting + name)\n}",
+      "line_end": 27,
+      "line_start": 23,
+      "signature": "decl:fn:make_widget"
+    },
+    {
+      "excerpt": "fn GoldenWidget::render(self : Self, name : String) -> String {\n  format_widget(name)\n}",
+      "line_end": 21,
+      "line_start": 19,
+      "signature": "decl:fn:render"
+    },
+    {
+      "excerpt": "trait GoldenRenderable {\n  render(self : Self, name : String) -> String\n}",
+      "line_end": 6,
+      "line_start": 4,
+      "signature": "decl:interface:GoldenRenderable"
+    },
+    {
+      "excerpt": "struct GoldenWidget {\n  name : String\n}",
+      "line_end": 10,
+      "line_start": 8,
+      "signature": "decl:struct:GoldenWidget"
+    },
+    {
+      "excerpt": "type GoldenAlias = String",
+      "line_end": 12,
+      "line_start": 12,
+      "signature": "decl:type:GoldenAlias"
+    },
+    {
+      "excerpt": "decorate",
+      "line_end": 30,
+      "line_start": 30,
+      "signature": "decorate"
+    },
+    {
+      "excerpt": "decorate",
+      "line_end": 33,
+      "line_start": 33,
+      "signature": "decorate"
+    },
+    {
+      "excerpt": "enum GoldenState {\n  Ready\n  Spent(String)\n}",
+      "line_end": 17,
+      "line_start": 14,
+      "signature": "enum GoldenState"
+    },
+    {
+      "excerpt": "fn decorate(s : String) -> String {\n    s\n  }",
+      "line_end": 32,
+      "line_start": 30,
+      "signature": "fn decorate"
+    },
+    {
+      "excerpt": "fn format_widget(name : String) -> String {\n  fn decorate(s : String) -> String {\n    s\n  }\n  decorate(name.trim())\n}",
+      "line_end": 34,
+      "line_start": 29,
+      "signature": "fn format_widget"
+    },
+    {
+      "excerpt": "fn make_widget(name : String) -> GoldenWidget {\n  let req = @core.HttpRequest(Post, \"/users\")\n  let greeting = \"widget\"\n  format_widget(greeting + name)\n}",
+      "line_end": 27,
+      "line_start": 23,
+      "signature": "fn make_widget"
+    },
+    {
+      "excerpt": "fn GoldenWidget::render(self : Self, name : String) -> String {\n  format_widget(name)\n}",
+      "line_end": 21,
+      "line_start": 19,
+      "signature": "fn render"
+    },
+    {
+      "excerpt": "format_widget",
+      "line_end": 20,
+      "line_start": 20,
+      "signature": "format_widget"
+    },
+    {
+      "excerpt": "format_widget",
+      "line_end": 26,
+      "line_start": 26,
+      "signature": "format_widget"
+    },
+    {
+      "excerpt": "format_widget",
+      "line_end": 29,
+      "line_start": 29,
+      "signature": "format_widget"
+    },
+    {
+      "excerpt": "format_widget",
+      "line_end": 37,
+      "line_start": 37,
+      "signature": "format_widget"
+    },
+    {
+      "excerpt": "greeting",
+      "line_end": 25,
+      "line_start": 25,
+      "signature": "greeting"
+    },
+    {
+      "excerpt": "greeting",
+      "line_end": 26,
+      "line_start": 26,
+      "signature": "greeting"
+    },
+    {
+      "excerpt": "trait GoldenRenderable {\n  render(self : Self, name : String) -> String\n}",
+      "line_end": 6,
+      "line_start": 4,
+      "signature": "interface GoldenRenderable"
+    },
+    {
+      "excerpt": "format_widget(name)",
+      "line_end": 20,
+      "line_start": 20,
+      "signature": "kind:apply_expression"
+    },
+    {
+      "excerpt": "@core.HttpRequest(Post, \"/users\")",
+      "line_end": 24,
+      "line_start": 24,
+      "signature": "kind:apply_expression"
+    },
+    {
+      "excerpt": "format_widget(greeting + name)",
+      "line_end": 26,
+      "line_start": 26,
+      "signature": "kind:apply_expression"
+    },
+    {
+      "excerpt": "decorate(name.trim())",
+      "line_end": 33,
+      "line_start": 33,
+      "signature": "kind:apply_expression"
+    },
+    {
+      "excerpt": "format_widget(\"golden\")",
+      "line_end": 37,
+      "line_start": 37,
+      "signature": "kind:apply_expression"
+    },
+    {
+      "excerpt": "name.trim()",
+      "line_end": 33,
+      "line_start": 33,
+      "signature": "kind:dot_apply_expression"
+    },
+    {
+      "excerpt": "enum GoldenState {\n  Ready\n  Spent(String)\n}",
+      "line_end": 17,
+      "line_start": 14,
+      "signature": "kind:enum_definition"
+    },
+    {
+      "excerpt": "fn GoldenWidget::render(self : Self, name : String) -> String {\n  format_widget(name)\n}",
+      "line_end": 21,
+      "line_start": 19,
+      "signature": "kind:function_definition"
+    },
+    {
+      "excerpt": "fn make_widget(name : String) -> GoldenWidget {\n  let req = @core.HttpRequest(Post, \"/users\")\n  let greeting = \"widget\"\n  format_widget(greeting + name)\n}",
+      "line_end": 27,
+      "line_start": 23,
+      "signature": "kind:function_definition"
+    },
+    {
+      "excerpt": "fn format_widget(name : String) -> String {\n  fn decorate(s : String) -> String {\n    s\n  }\n  decorate(name.trim())\n}",
+      "line_end": 34,
+      "line_start": 29,
+      "signature": "kind:function_definition"
+    },
+    {
+      "excerpt": "fn decorate(s : String) -> String {\n    s\n  }",
+      "line_end": 32,
+      "line_start": 30,
+      "signature": "kind:named_lambda_expression"
+    },
+    {
+      "excerpt": "struct GoldenWidget {\n  name : String\n}",
+      "line_end": 10,
+      "line_start": 8,
+      "signature": "kind:struct_definition"
+    },
+    {
+      "excerpt": "trait GoldenRenderable {\n  render(self : Self, name : String) -> String\n}",
+      "line_end": 6,
+      "line_start": 4,
+      "signature": "kind:trait_definition"
+    },
+    {
+      "excerpt": "type GoldenAlias = String",
+      "line_end": 12,
+      "line_start": 12,
+      "signature": "kind:type_definition"
+    },
+    {
+      "excerpt": "make_widget",
+      "line_end": 23,
+      "line_start": 23,
+      "signature": "make_widget"
+    },
+    {
+      "excerpt": "name",
+      "line_end": 5,
+      "line_start": 5,
+      "signature": "name"
+    },
+    {
+      "excerpt": "name",
+      "line_end": 9,
+      "line_start": 9,
+      "signature": "name"
+    },
+    {
+      "excerpt": "name",
+      "line_end": 19,
+      "line_start": 19,
+      "signature": "name"
+    },
+    {
+      "excerpt": "name",
+      "line_end": 20,
+      "line_start": 20,
+      "signature": "name"
+    },
+    {
+      "excerpt": "name",
+      "line_end": 23,
+      "line_start": 23,
+      "signature": "name"
+    },
+    {
+      "excerpt": "name",
+      "line_end": 26,
+      "line_start": 26,
+      "signature": "name"
+    },
+    {
+      "excerpt": "name",
+      "line_end": 29,
+      "line_start": 29,
+      "signature": "name"
+    },
+    {
+      "excerpt": "name",
+      "line_end": 33,
+      "line_start": 33,
+      "signature": "name"
+    },
+    {
+      "excerpt": "render",
+      "line_end": 5,
+      "line_start": 5,
+      "signature": "render"
+    },
+    {
+      "excerpt": "render",
+      "line_end": 19,
+      "line_start": 19,
+      "signature": "render"
+    },
+    {
+      "excerpt": "req",
+      "line_end": 24,
+      "line_start": 24,
+      "signature": "req"
+    },
+    {
+      "excerpt": "s",
+      "line_end": 30,
+      "line_start": 30,
+      "signature": "s"
+    },
+    {
+      "excerpt": "s",
+      "line_end": 31,
+      "line_start": 31,
+      "signature": "s"
+    },
+    {
+      "excerpt": "self",
+      "line_end": 5,
+      "line_start": 5,
+      "signature": "self"
+    },
+    {
+      "excerpt": "self",
+      "line_end": 19,
+      "line_start": 19,
+      "signature": "self"
+    },
+    {
+      "excerpt": "struct GoldenWidget {\n  name : String\n}",
+      "line_end": 10,
+      "line_start": 8,
+      "signature": "struct GoldenWidget"
+    },
+    {
+      "excerpt": "type GoldenAlias = String",
+      "line_end": 12,
+      "line_start": 12,
+      "signature": "type GoldenAlias"
+    }
+  ],
+  "symbols": [
+    {
+      "byte_end": 248,
+      "byte_start": 223,
+      "kind": "type",
+      "line_end": 12,
+      "line_start": 12,
+      "name": "GoldenAlias"
+    },
+    {
+      "byte_end": 180,
+      "byte_start": 107,
+      "kind": "interface",
+      "line_end": 6,
+      "line_start": 4,
+      "name": "GoldenRenderable"
+    },
+    {
+      "byte_end": 294,
+      "byte_start": 250,
+      "kind": "enum",
+      "line_end": 17,
+      "line_start": 14,
+      "name": "GoldenState"
+    },
+    {
+      "byte_end": 221,
+      "byte_start": 182,
+      "kind": "type",
+      "line_end": 10,
+      "line_start": 8,
+      "name": "GoldenWidget"
+    },
+    {
+      "byte_end": 632,
+      "byte_start": 587,
+      "kind": "function",
+      "line_end": 32,
+      "line_start": 30,
+      "name": "decorate"
+    },
+    {
+      "byte_end": 658,
+      "byte_start": 541,
+      "kind": "function",
+      "line_end": 34,
+      "line_start": 29,
+      "name": "format_widget"
+    },
+    {
+      "byte_end": 539,
+      "byte_start": 385,
+      "kind": "function",
+      "line_end": 27,
+      "line_start": 23,
+      "name": "make_widget"
+    },
+    {
+      "byte_end": 383,
+      "byte_start": 296,
+      "kind": "function",
+      "line_end": 21,
+      "line_start": 19,
+      "name": "render"
+    }
+  ]
+}

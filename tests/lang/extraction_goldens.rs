@@ -18,6 +18,8 @@ const C: &str = include_str!("fixtures/extract/c.c");
 const CPP: &str = include_str!("fixtures/extract/cpp.cpp");
 const KT: &str = include_str!("fixtures/extract/kotlin.kt");
 const PHP: &str = include_str!("fixtures/extract/php.php");
+const DART: &str = include_str!("fixtures/extract/dart.dart");
+const MOONBIT: &str = include_str!("fixtures/extract/moonbit.mbt");
 
 use SymbolKind::*;
 
@@ -275,5 +277,64 @@ const CASES: &[LanguageConformanceCase] = &[
             ("format_widget($$$)", "format_widget"),
         ],
         forbid: &["doc_only_php"],
+    },
+    LanguageConformanceCase {
+        language: Language::Dart,
+        source: DART,
+        symbols: &[
+            ("GoldenRenderable", Class),
+            ("render", Method),
+            ("GoldenWidget", Class),
+            ("GoldenWidget", Method),
+            ("label", Method),
+            ("GoldenState", Enum),
+            ("makeWidget", Function),
+            ("formatWidget", Function),
+        ],
+        imports: &["dart:async"],
+        calls: &[
+            ("render", "formatWidget"),
+            ("formatWidget", "trim"),
+            ("makeWidget", "GoldenWidget"),
+        ],
+        patterns: &[
+            ("function $NAME($$$)", "makeWidget"),
+            ("function makeWidget($$$)", "makeWidget"),
+            ("function label($$$)", "label"),
+            ("formatWidget($$$)", "formatWidget"),
+        ],
+        forbid: &["doc_only_dart"],
+    },
+    LanguageConformanceCase {
+        language: Language::MoonBit,
+        source: MOONBIT,
+        symbols: &[
+            ("GoldenRenderable", Interface),
+            ("GoldenWidget", Type),
+            ("GoldenAlias", Type),
+            ("GoldenState", Enum),
+            ("render", Function),
+            ("make_widget", Function),
+            ("format_widget", Function),
+            ("decorate", Function),
+        ],
+        imports: &["moonbitlang/core/string"],
+        calls: &[
+            ("render", "format_widget"),
+            ("format_widget", "trim"),
+            ("format_widget", "decorate"),
+            ("make_widget", "format_widget"),
+            ("make_widget", "HttpRequest"),
+        ],
+        patterns: &[
+            ("fn $NAME($$$)", "make_widget"),
+            ("fn decorate($$$)", "decorate"),
+            ("fn render($$$)", "render"),
+            ("interface $NAME", "GoldenRenderable"),
+            ("struct $NAME", "GoldenWidget"),
+            ("type $NAME", "GoldenAlias"),
+            ("format_widget($$$)", "format_widget"),
+        ],
+        forbid: &["doc_only_moonbit"],
     },
 ];

@@ -169,7 +169,11 @@ pub(crate) fn run_embed_pass_cached(
     trust_snapshot: bool,
     use_field_rescoring: bool,
 ) -> Result<Vec<SearchHit>> {
-    let field = use_field_rescoring && !trust_snapshot;
+    // Field rescoring follows the caller's request on every SQL-backed path —
+    // CLI gold ranking depends on the name-field lift (cli_smoke
+    // repository_vocabulary). Only the warmed-RAM early return below skips
+    // it (no field-vector SQL by construction there).
+    let field = use_field_rescoring;
     if trust_snapshot {
         if let Some(ctx) = peek_semantic_cache(cache) {
             if ctx.ids.len() == ctx.chunks.len()
@@ -635,7 +639,7 @@ fn try_warmed_file_embed(
         intent,
         hit_limit,
         hit_limit,
-        use_field_rescoring && !trust_snapshot,
+        use_field_rescoring,
     )?))
 }
 

@@ -446,6 +446,10 @@ mod tests {
             file_idx.push((files.len() - 1) as u32);
         }
         let n_files = files.len();
+        // Compute the derived slices BEFORE the struct literal: `bytes` and
+        // `starts` move into `LineCorpus`, and both helpers need them.
+        let ends = file_byte_ends(&file_idx, &starts, n_files, bytes.len());
+        let first_lines = file_first_lines(&file_idx, n_files);
         let mut token_files = HashMap::new();
         for (i, &fi) in file_idx.iter().enumerate() {
             let start = starts[i] as usize;
@@ -467,8 +471,8 @@ mod tests {
             line_nos,
             file_idx: file_idx.clone(),
             files,
-            file_byte_ends: file_byte_ends(&file_idx, &starts, n_files, bytes.len()),
-            file_first_line: file_first_lines(&file_idx, n_files),
+            file_byte_ends: ends,
+            file_first_line: first_lines,
             token_files,
         }
     }

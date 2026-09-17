@@ -366,8 +366,18 @@ fn doctor_triage_json(cli: &Cli, root: &Path) -> anyhow::Result<Value> {
         "asgrep capabilities --json".to_string(),
         "asgrep robot-docs guide".to_string(),
     ]);
+    // H-PERF-001 option (b): supervision is opt-in; doctor reports the active
+    // policy so agents can discover (or restore) the CPU-limit contract.
+    let supervision = if crate::supervisor::supervision_requested() {
+        json!({"mode": "duty_cycle", "cpu_limit_percent": crate::supervisor::cpu_limit_percent()})
+    } else {
+        json!({
+            "mode": "off",
+            "opt_in": "set ASGREP_CPU_LIMIT_PERCENT=1..80 to enable duty-cycle supervision (SIGSTOP/CONT in a 10 ms window)",
+        })
+    };
     Ok(
-        json!({"robot_triage": true, "root": root, "index_path": cli.index_path, "status": status, "issues": issues, "suggested_commands": next, "healthy": issues.is_empty()}),
+        json!({"robot_triage": true, "root": root, "index_path": cli.index_path, "status": status, "issues": issues, "suggested_commands": next, "supervision": supervision, "healthy": issues.is_empty()}),
     )
 }
 /// Agent handbook body (markdown). Single source for human stdout and --json envelope.
@@ -567,12 +577,26 @@ pub(crate) fn suppress_progress() -> bool {
         .is_some_and(|term| term.eq_ignore_ascii_case("dumb"))
 }
 
+/// Commands a typo may be silently recovered INTO: read-only info commands,
+/// plus any command when the argv carries explicit help intent (the recovered
+/// run cannot mutate anything). Mutating commands (index, reindex, codemod…)
+/// are excluded so a near-miss token never performs writes.
+const RECOVERABLE_INFO_COMMANDS: &[&str] =
+    &["status", "capabilities", "version", "robot-docs", "doctor"];
+
+fn positional_recovery_is_safe(canonical: &str, help_intent: bool) -> bool {
+    RECOVERABLE_INFO_COMMANDS.contains(&canonical) || help_intent
+}
+
 /// Recover Levenshtein-1 / transposition flag and subcommand typos before clap.
 pub(crate) fn rewrite_typos(
     raw: Vec<std::ffi::OsString>,
 ) -> (Vec<std::ffi::OsString>, Vec<String>) {
     let mut warnings = Vec::new();
     let raw = inject_robot_triage(raw, &mut warnings);
+    let help_intent = raw.iter().any(|arg| {
+        matches!(arg.to_str(), Some("-h") | Some("--help") | Some("help"))
+    });
     let mut out = Vec::with_capacity(raw.len());
     let mut passthrough = false;
     let mut saw_positional = false;
@@ -635,13 +659,18 @@ pub(crate) fn rewrite_typos(
         if !saw_positional {
             saw_positional = true;
             if let Some(canonical) = query_looks_like_subcommand_typo(text) {
-                if canonical != text {
+                if canonical != text && positional_recovery_is_safe(canonical, help_intent) {
                     warnings.push(format!(
                         "note: recovered `{text}` as `{canonical}`. Next time: asgrep {canonical} …"
                     ));
                     out.push(std::ffi::OsString::from(canonical));
                     continue;
                 }
+                // Mutating-command typos are NOT executed from a guess: the
+                // token falls through to the bare-search path, whose
+                // subcommand-typo gate answers the fail-closed teaching
+                // envelope (`did you mean …`, exit 1) instead of silently
+                // running e.g. `index` (which writes the workspace).
             }
         }
         out.push(arg);

@@ -178,95 +178,48 @@ pub fn search_pattern(
     let has_pattern_rows = store.pattern_node_count()? > 0;
     let depth_truncated_in_scope =
         has_pattern_rows && store.has_depth_truncated_files(lang_filter)?;
-    if let Some(signatures) = cached_pattern_signatures(&match_spelling) {
-        // SEP15-3 (R-SEPT14E-2): decl signatures are budget-exempt at
-        // extraction (a beyond-budget node still records its own decl row;
-        // only recursion stops), so a pattern whose signatures are ALL decl:
-        // has COMPLETE rows even with depth-truncated files in scope — serve
-        // the cached lane instead of refusing. This branch is hoisted ABOVE
-        // the truncation skip: it exists precisely for the truncated scope.
-        // call:/kind:/ident rows stay incomplete past the budget and keep
-        // the walk/refusal paths below. Comment placement remains a matcher
-        // decision (FB-104B-1), so comment-carrying spellings stay excluded.
-        let decl_exact =
-            !signatures.is_empty() && signatures.iter().all(|s| s.starts_with("decl:"));
-        if depth_truncated_in_scope && comment_free && decl_exact {
-            let indexed =
-                search_pattern_cached(&match_spelling, &signatures, store, lang_filter, limit)?;
-            return Ok(indexed);
-        }
-        if has_pattern_rows
-            && !depth_truncated_in_scope
-            && comment_free
-            && !match_spelling.contains("$$$")
-            && !pattern_may_carry_expando_meta(pattern)
-            // PASS 122 (F3, f122c): keyword-literal roots (`null`/`true`/`false`,
-            // py `None`/`True`/`False`, `this`/`super`) have NO pattern_nodes
-            // identifier rows, so the "ident-exact" index serve below composed a
-            // silent empty where sg answers the keyword leaf node (oracle grid
-            // /tmp/phase122/f3). Route the class to the native walk, which
-            // answers sg-exactly; every other ident signature keeps the
-            // index-served lane.
-            && !ast_sgrep_lang::pattern_is_keyword_literal_root(&match_spelling)
-        {
-            let indexed =
-                search_pattern_cached(&match_spelling, &signatures, store, lang_filter, limit)?;
-            // Exact ident / decl / call signatures are complete in pattern_nodes.
-            // Re-walking the tree cannot add a hit the index missed.
-            if index_can_serve_pattern(&match_spelling, &signatures) {
-                return Ok(indexed);
-            }
-            // EXP-005 (H-CONF-010, pass 14): kind-only signatures are inexact
-            // (every `function_definition` — any arity, any return type).
-            // Unioning those rows into the result set let a zero-param
-            // `def main():` match a one-param template. The native walk below
-            // decides every hit, and its candidate narrowing
-            // (`candidate_kind_signatures`) covers exactly the files that can
-            // hold a match, so inexact rows are dropped, never merged.
-        }
+    if let Some(early) = serve_cached_exact_lane(
+        store,
+        &match_spelling,
+        pattern,
+        lang_filter,
+        limit,
+        comment_free,
+        has_pattern_rows,
+        depth_truncated_in_scope,
+    )? {
+        return Ok(early);
     }
-    // br-perf-candidates: narrow the native walk to files holding a node of
-    // the pattern's kind when the exact shape is not indexable. Sound: files
-    // without such a node cannot contain a match; the native matcher still
-    // decides every hit on surviving files.
-    let candidate_paths = match ast_sgrep_lang::candidate_kind_signatures(&match_spelling) {
-        Some(kinds) if has_pattern_rows && !depth_truncated_in_scope =>
-        {
-            Some(store.pattern_node_candidate_paths(&kinds, lang_filter)?)
-        }
-        _ => None,
-    };
-    let native_accepted = match search_pattern_native_profiled(
+    let mut native_accepted = false;
+    // PASS 131 (130A-F4): the same-line dedup key carries the hit's
+    // matched-node byte span. Its registered rationale is collapsing
+    // the SAME node found by overlapping query arms — two hits with
+    // equal (file, lines, span). Two INDEPENDENT same-line hits
+    // (`q(1); q(2);` — different spans) are distinct sg rows and
+    // must both survive; the old line-only key collapsed them.
+    // Index-lane rows carry no span (`None`), keeping the
+    // line-keyed behavior there (registered residual, CNR §45).
+    if let Some((native_hits, unanswerable)) = native_walk_candidate_narrowed(
+        store,
         &match_spelling,
         root,
         lang_filter,
-        true,
-        candidate_paths,
-    ) {
-        Ok(native) => {
-            // PASS 131 (130A-F4): the same-line dedup key carries the hit's
-            // matched-node byte span. Its registered rationale is collapsing
-            // the SAME node found by overlapping query arms — two hits with
-            // equal (file, lines, span). Two INDEPENDENT same-line hits
-            // (`q(1); q(2);` — different spans) are distinct sg rows and
-            // must both survive; the old line-only key collapsed them.
-            // Index-lane rows carry no span (`None`), keeping the
-            // line-keyed behavior there (registered residual, CNR §45).
-            for hit in native.hits {
-                if seen.insert((
-                    hit.file.clone(),
-                    hit.line_start,
-                    hit.line_end,
-                    hit.byte_span,
-                )) {
-                    hits.push(hit);
-                }
+        has_pattern_rows,
+        depth_truncated_in_scope,
+    )? {
+        for hit in native_hits {
+            if seen.insert((
+                hit.file.clone(),
+                hit.line_start,
+                hit.line_end,
+                hit.byte_span,
+            )) {
+                hits.push(hit);
             }
-            unanswerable_corpus_languages = native.unanswerable_corpus_languages;
-            true
         }
-        Err(_) => false,
-    };
+        unanswerable_corpus_languages = unanswerable;
+        native_accepted = true;
+    }
     if native_accepted
         && hits.is_empty()
         && (unanswerable_corpus_languages > 0 || needs_ast_grep_fallback(pattern))
@@ -294,24 +247,14 @@ pub fn search_pattern(
     // absent, so walk-empty stays an honest answer there (residual:
     // occurrences entirely inside truncated files are unanswerable by any
     // lane tonight; registered in the conformance ledger).
-    if depth_truncated_in_scope && hits.is_empty() {
-        if let Some(signatures) = cached_pattern_signatures(&match_spelling) {
-            if index_can_serve_pattern(&match_spelling, &signatures) {
-                let indexed =
-                    search_pattern_cached(&match_spelling, &signatures, store, lang_filter, limit)?;
-                if !indexed.is_empty() {
-                    return Err(crate::StoreError::Other(format!(
-                        "pattern {match_spelling:?} cannot be answered completely: \
-                         depth-truncated file(s) in scope make the cached lane \
-                         non-authoritative, and the native walk returned no hits \
-                         for this cache-servable shape whose rows exist. Search \
-                         the identifier form (pattern:<name>) or raise the \
-                         extraction depth budget and re-index"
-                    )));
-                }
-            }
-        }
-    }
+    depth_truncation_disagreement_check(
+        store,
+        &match_spelling,
+        lang_filter,
+        limit,
+        depth_truncated_in_scope,
+        hits.is_empty(),
+    )?;
     Ok(hits)
 }
 
@@ -328,6 +271,149 @@ fn structural_fallback_error(pattern: &str) -> crate::StoreError {
     crate::StoreError::Other(format!(
         "pattern requires structural fallback ({state}; fail-closed): {pattern}"
     ))
+}
+
+/// The exact-signature index-serve early returns of [`search_pattern`].
+/// Returns `Ok(Some(hits))` when a cached lane is authoritative for the
+/// pattern and the search is answered there; `Ok(None)` means the native
+/// walk (or a refusal) decides.
+///
+/// SEP15-3 (R-SEPT14E-2): decl signatures are budget-exempt at
+/// extraction (a beyond-budget node still records its own decl row;
+/// only recursion stops), so a pattern whose signatures are ALL decl:
+/// has COMPLETE rows even with depth-truncated files in scope — serve
+/// the cached lane instead of refusing. This branch is hoisted ABOVE
+/// the truncation skip: it exists precisely for the truncated scope.
+/// call:/kind:/ident rows stay incomplete past the budget and keep
+/// the walk/refusal paths below. Comment placement remains a matcher
+/// decision (FB-104B-1), so comment-carrying spellings stay excluded.
+fn serve_cached_exact_lane(
+    store: &crate::store::IndexStore,
+    match_spelling: &str,
+    pattern: &str,
+    lang_filter: Option<&str>,
+    limit: usize,
+    comment_free: bool,
+    has_pattern_rows: bool,
+    depth_truncated_in_scope: bool,
+) -> Result<Option<Vec<SearchHit>>> {
+    let Some(signatures) = cached_pattern_signatures(match_spelling) else {
+        return Ok(None);
+    };
+    let decl_exact = !signatures.is_empty() && signatures.iter().all(|s| s.starts_with("decl:"));
+    if depth_truncated_in_scope && comment_free && decl_exact {
+        let indexed =
+            search_pattern_cached(match_spelling, &signatures, store, lang_filter, limit)?;
+        return Ok(Some(indexed));
+    }
+    if has_pattern_rows
+        && !depth_truncated_in_scope
+        && comment_free
+        && !match_spelling.contains("$$$")
+        && !pattern_may_carry_expando_meta(pattern)
+        // PASS 122 (F3, f122c): keyword-literal roots (`null`/`true`/`false`,
+        // py `None`/`True`/`False`, `this`/`super`) have NO pattern_nodes
+        // identifier rows, so the "ident-exact" index serve below composed a
+        // silent empty where sg answers the keyword leaf node (oracle grid
+        // /tmp/phase122/f3). Route the class to the native walk, which
+        // answers sg-exactly; every other ident signature keeps the
+        // index-served lane.
+        && !ast_sgrep_lang::pattern_is_keyword_literal_root(match_spelling)
+    {
+        let indexed =
+            search_pattern_cached(match_spelling, &signatures, store, lang_filter, limit)?;
+        // Exact ident / decl / call signatures are complete in pattern_nodes.
+        // Re-walking the tree cannot add a hit the index missed.
+        if index_can_serve_pattern(match_spelling, &signatures) {
+            return Ok(Some(indexed));
+        }
+        // EXP-005 (H-CONF-010, pass 14): kind-only signatures are inexact
+        // (every `function_definition` — any arity, any return type).
+        // Unioning those rows into the result set let a zero-param
+        // `def main():` match a one-param template. The native walk below
+        // decides every hit, and its candidate narrowing
+        // (`candidate_kind_signatures`) covers exactly the files that can
+        // hold a match, so inexact rows are dropped, never merged.
+    }
+    Ok(None)
+}
+
+/// The native-walk leg of [`search_pattern`]: kind-candidate narrowing
+/// (skipped while depth-truncated files are in scope) followed by the
+/// profiled walk. A walk ERROR is not propagated — it composes into
+/// `Ok(None)` so the caller's fail-closed backstop decides, exactly as the
+/// historical `Err(_) => false` arm; candidate SQL errors DO propagate.
+///
+/// br-perf-candidates: narrow the native walk to files holding a node of
+/// the pattern's kind when the exact shape is not indexable. Sound: files
+/// without such a node cannot contain a match; the native matcher still
+/// decides every hit on surviving files.
+fn native_walk_candidate_narrowed(
+    store: &crate::store::IndexStore,
+    match_spelling: &str,
+    root: &Path,
+    lang_filter: Option<&str>,
+    has_pattern_rows: bool,
+    depth_truncated_in_scope: bool,
+) -> Result<Option<(Vec<SearchHit>, usize)>> {
+    let candidate_paths = match ast_sgrep_lang::candidate_kind_signatures(match_spelling) {
+        Some(kinds) if has_pattern_rows && !depth_truncated_in_scope => {
+            Some(store.pattern_node_candidate_paths(&kinds, lang_filter)?)
+        }
+        _ => None,
+    };
+    Ok(
+        match search_pattern_native_profiled(
+            match_spelling,
+            root,
+            lang_filter,
+            true,
+            candidate_paths,
+        ) {
+            Ok(native) => Some((native.hits, native.unanswerable_corpus_languages)),
+            Err(_) => None,
+        },
+    )
+}
+
+/// H-CONF-024/B7-F2 post-walk honesty check (Sept 14 wave): with a
+/// depth-truncated file in scope the cached lane must not serve, so the
+/// walk is the only answerer. When THAT answers empty for a shape whose
+/// signature rows demonstrably exist in untruncated files, the lanes
+/// disagree — the walk did not decide a shape the tree provably contains
+/// (partial templates parse but match nothing natively) — refuse loudly
+/// instead of composing ok:true-empty. Rows absent = possibly genuinely
+/// absent, so walk-empty stays an honest answer there (residual:
+/// occurrences entirely inside truncated files are unanswerable by any
+/// lane tonight; registered in the conformance ledger).
+fn depth_truncation_disagreement_check(
+    store: &crate::store::IndexStore,
+    match_spelling: &str,
+    lang_filter: Option<&str>,
+    limit: usize,
+    depth_truncated_in_scope: bool,
+    walk_answered_empty: bool,
+) -> Result<()> {
+    if !(depth_truncated_in_scope && walk_answered_empty) {
+        return Ok(());
+    }
+    if let Some(signatures) = cached_pattern_signatures(match_spelling) {
+        if index_can_serve_pattern(match_spelling, &signatures) {
+            let indexed =
+                search_pattern_cached(match_spelling, &signatures, store, lang_filter, limit)?;
+            if !indexed.is_empty() {
+                return Err(crate::StoreError::Other(format!(
+                    "pattern {match_spelling:?} cannot be answered completely: \
+                     depth-truncated file(s) in scope make the cached lane \
+                     non-authoritative, and the native walk returned no hits \
+                     for this cache-servable shape whose rows exist. Search \
+                     the identifier form (pattern:<name>) or raise the \
+                     extraction depth budget and re-index"
+                )));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// PASS 94a (FB-93A-3): whether the pattern carries comment syntax AND at
@@ -1183,50 +1269,7 @@ fn search_pattern_native_profiled(
     let lang_filter = canonical.as_deref();
     let total_started = Instant::now();
     let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
-    let walk_started = Instant::now();
-    // br-perf-parwalk-bfs: breadth-first traversal, one parallel level at a
-    // time. Each frontier dir is expanded on a walk-pool worker with its own
-    // IgnoreMatcher; files are claimed exactly once (each file has exactly
-    // one parent dir, and each dir appears in exactly one frontier); child
-    // dirs form the next level. No mixed-depth subroot sets, so no overlap
-    // or gap hazards. Skipped/ignored dirs prune their whole subtree.
-    //
-    // CPU budget (user requirement: never >3-4% sustained): BFS levels are
-    // short bursts; walker parallelism is capped (default 4 workers, ~40ms
-    // per distinct structural pattern on an M5 Max repo corpus). Sustained
-    // duty remains <1% of machine capacity under continuous load. Operators
-    // on constrained hosts can lower ASGREP_WALK_THREADS (1-2); power users
-    // can raise it for faster cold walks.
-    let walk_workers = std::env::var("ASGREP_WALK_THREADS")
-        .ok()
-        .and_then(|v| v.parse::<usize>().ok())
-        .filter(|&n| n >= 1)
-        .unwrap_or(4);
-    let walk_pool = rayon::ThreadPoolBuilder::new()
-        .num_threads(walk_workers)
-        .build()
-        .map_err(|error| crate::StoreError::Other(format!("failed to build walk pool: {error}")))?;
-    let mut paths: Vec<PathBuf> = Vec::new();
-    let mut frontier: Vec<std::sync::Arc<Path>> =
-        vec![std::sync::Arc::from(root.clone().into_boxed_path())];
-    while !frontier.is_empty() {
-        let collected: Vec<(Vec<PathBuf>, Vec<std::sync::Arc<Path>>)> = walk_pool.install(|| {
-            frontier
-                .par_iter()
-                .map(|dir| {
-                    let thread_ignore = crate::gitignore::IgnoreMatcher::new(&root);
-                    expand_dir(&thread_ignore, &root, dir)
-                })
-                .collect::<Vec<_>>()
-        });
-        let mut next: Vec<std::sync::Arc<Path>> = Vec::new();
-        for (mut files, children) in collected {
-            paths.append(&mut files);
-            next.extend(children);
-        }
-        frontier = next;
-    }
-    let walk_ns = walk_started.elapsed().as_nanos();
+    let (paths, walk_ns) = bfs_corpus_paths(&root)?;
     // PASS 87a (86a-H1): NeverMatches-classified patterns cannot phantom-hit —
     // match_pattern routes them to the structural arm that answers empty, so
     // the only arms that can answer are the registered sg-exact php-hook and
@@ -1383,35 +1426,8 @@ fn search_pattern_native_profiled(
     // non-NeverMatches (`$`-less) comment faces (template_comment_refused
     // above) — they previously dodged this census because the `$`-less arm
     // of native_pattern_answerable answers before any comment refusal.
-    let unanswerable_corpus_languages = {
-        let mut unanswerable: Vec<ast_sgrep_lang::Language> = Vec::new();
-        for path in paths.iter() {
-            // PASS 65 (LOW d): extension-only detection misses content-only
-            // languages — an extension-less file carrying a shebang (`pybox`)
-            // was invisible to this census, so the unanswerable-language gate
-            // stayed silent exactly where the per-file skip below guaranteed
-            // a silent empty (H-CONF-029 class fail-open). When the path
-            // alone cannot classify, detect from a capped content read.
-            let mut lang = ast_sgrep_lang::detect_language(path, None);
-            if lang.is_none() {
-                if let Some(bytes) = read_pattern_bytes_capped(path) {
-                    if let Ok(content) = std::str::from_utf8(&bytes) {
-                        lang = ast_sgrep_lang::detect_language(path, Some(content));
-                    }
-                }
-            }
-            let Some(lang) = lang else {
-                continue;
-            };
-            if lang_filter.is_some_and(|filter| lang.as_str() != filter) {
-                continue;
-            }
-            if !unanswerable.contains(&lang) && language_unanswerable(lang) {
-                unanswerable.push(lang);
-            }
-        }
-        unanswerable.len()
-    };
+    let unanswerable_corpus_languages =
+        census_unanswerable_languages(paths.iter(), lang_filter, &language_unanswerable);
     // PASS 96 (F-95A-1): an expando-spelled metavariable normalizes to `$`
     // per file language inside the walk, so a raw-byte required literal
     // (`µA`) would prefilter away µ-free files the meta reading answers
@@ -1422,141 +1438,285 @@ fn search_pattern_native_profiled(
         None
     };
     let parallel_started = Instant::now();
+    let file_ctx = FileMatchCtx {
+        pattern,
+        root: &root,
+        lang_filter,
+        candidate_paths: candidate_paths.as_ref(),
+        required_literal: required_literal.as_ref(),
+    };
     let results = paths
         .par_iter()
-        .map(|path| {
-            let prefilter_started = Instant::now();
-            if let Some(allowed) = &candidate_paths {
-                let rel_ok = path
-                    .strip_prefix(&root)
-                    .map(|rel| allowed.contains(&rel.to_string_lossy().replace('\\', "/")))
-                    .unwrap_or(false);
-                if !rel_ok {
-                    return NativeFileResult::default();
-                }
-            }
-            let Some(bytes) = read_pattern_bytes_capped(path) else {
-                return NativeFileResult::default();
-            };
-            let bytes_scanned = bytes.len() as u64;
-            if required_literal
-                .as_ref()
-                .is_some_and(|literal| memchr::memmem::find(&bytes, literal.as_bytes()).is_none())
-            {
-                return NativeFileResult {
-                    bytes_scanned,
-                    prefiltered: true,
-                    prefilter_ns: prefilter_started.elapsed().as_nanos(),
-                    ..NativeFileResult::default()
-                };
-            }
-            let Ok(content) = std::str::from_utf8(&bytes) else {
-                return NativeFileResult {
-                    bytes_scanned,
-                    prefilter_ns: prefilter_started.elapsed().as_nanos(),
-                    ..NativeFileResult::default()
-                };
-            };
-            let Some(lang) = detect_language(path, Some(content)) else {
-                return NativeFileResult {
-                    bytes_scanned,
-                    prefilter_ns: prefilter_started.elapsed().as_nanos(),
-                    ..NativeFileResult::default()
-                };
-            };
-            if lang_filter.is_some_and(|filter| lang.as_str() != filter) {
-                return NativeFileResult {
-                    bytes_scanned,
-                    prefilter_ns: prefilter_started.elapsed().as_nanos(),
-                    ..NativeFileResult::default()
-                };
-            }
-            // H-CONF-031 (pass 63): language-aware native walk. A file whose
-            // language has no native template for this pattern is SKIPPED —
-            // its non-matches are unanswerability, not evidence of absence —
-            // exactly the per-file semantics sg applies when a pattern fails
-            // its per-language pattern gate (no-lang `throw $A` skips the
-            // unparseable languages and answers 6 hits). The census above
-            // records the skip so the caller can fail closed when the WHOLE
-            // query answers empty (sg exits 8 on the same --lang-pinned
-            // inputs); without the skip, classifier-accepted shapes whose
-            // grammar cannot parse them still over-matched here
-            // (`function $A($B) { $$$C }` on python answered 2 phantom hits
-            // where sg exits 8).
-            // PASS 87a (86a-H1): NeverMatches-classified patterns are exempt
-            // (matcher_decides): their structural arm answers empty, so the
-            // phantom-hit hazard does not exist and match_pattern's own
-            // per-file answer is the honest one (the php hook / dollar-literal
-            // lanes answer their registered sg-exact faces here).
-            // PASS 89a (88c-H1): the exemption is per-language and covers only
-            // the sg-accepted comment placements (comment-free, or inline
-            // `/* */` in php) — glued line-comment and trailing-block faces
-            // fall back to this skip + the census, pre-r37 loud.
-            // PASS 91a (F-r40-4): non-NeverMatches comment faces join the
-            // same discipline (language_unanswerable): a `$`-less pattern
-            // short-circuits native_pattern_answerable's own refusal, so the
-            // placements sg 0.45.2 rc8s must skip the file here instead of
-            // walking into a silent empty.
-            // PASS 131 (130A-F4): the universal-root faces keep their
-            // REGISTERED line-collapsed rows — per-file detection (the file
-            // language decides the expando normalization), spans suppressed
-            // at the conversion site below.
-            let universal_root = ast_sgrep_lang::is_universal_root_pattern(lang, pattern);
-            if language_unanswerable(lang) {
-                return NativeFileResult {
-                    bytes_scanned,
-                    prefilter_ns: prefilter_started.elapsed().as_nanos(),
-                    ..NativeFileResult::default()
-                };
-            }
-            let prefilter_ns = prefilter_started.elapsed().as_nanos();
-            let parse_match_started = Instant::now();
-            let rel = path
-                .strip_prefix(&root)
-                .map(|path| path.to_string_lossy().replace('\\', "/"))
-                .unwrap_or_else(|_| path.to_string_lossy().replace('\\', "/"));
-            let hits = match_pattern(lang, content, pattern)
-                .unwrap_or_default()
-                .into_iter()
-                .map(|matched| {
-                    SearchHit::span(SpanHitInput {
-                        kind: HitKind::Pattern,
-                        file: rel.clone(),
-                        line_start: matched.line_start,
-                        line_end: matched.line_end,
-                        score: SCORE_PATTERN,
-                        excerpt: matched.excerpt,
-                        symbol: Some(pattern.to_string()),
-                        language: Some(lang.as_str().to_string()),
-                        // PASS 131 (130A-F4): the native walk knows the
-                        // matched-node byte span; it keys the same-line dedup
-                        // at the union site and the finish-layer DedupKey.
-                        // EXCEPTION: the universal-root lane (`$$A`) keeps
-                        // its REGISTERED line-collapsed rows (f96 pins the
-                        // 12-line `uA` set; per-node multiplicity there
-                        // would starve the finish keep-truncate), so its
-                        // spans stay suppressed.
-                        byte_span: if universal_root {
-                            None
-                        } else {
-                            Some((matched.byte_start, matched.byte_end))
-                        },
-                    })
-                })
-                .collect();
-            NativeFileResult {
-                hits,
-                bytes_scanned,
-                prefiltered: false,
-                parsed: true,
-                prefilter_ns,
-                parse_match_ns: parse_match_started.elapsed().as_nanos(),
-                ..NativeFileResult::default()
-            }
-        })
+        .map(|path| native_match_file(&file_ctx, &language_unanswerable, path))
         .collect::<Vec<_>>();
     let parallel_span_ns = parallel_started.elapsed().as_nanos();
     let rank_started = Instant::now();
+    let hits = merge_and_sort_hits(&results);
+    let rank_ns = rank_started.elapsed().as_nanos();
+    let (profile, max_file_work_ns) =
+        assemble_profile(&results, paths.len(), walk_ns, parallel_span_ns, rank_ns);
+    Ok(NativeSearchOutput {
+        hits,
+        profile,
+        total_elapsed_ns: total_started.elapsed().as_nanos(),
+        max_file_work_ns,
+        unanswerable_corpus_languages,
+    })
+}
+
+/// Per-file inputs shared by every `native_match_file` call in one walk.
+struct FileMatchCtx<'a> {
+    pattern: &'a str,
+    root: &'a Path,
+    lang_filter: Option<&'a str>,
+    candidate_paths: Option<&'a std::collections::HashSet<String>>,
+    required_literal: Option<&'a String>,
+}
+
+/// BFS the corpus root on the capped walk pool, claiming each file exactly
+/// once. Returns the discovered file paths and the walk's wall nanoseconds.
+///
+/// br-perf-parwalk-bfs: breadth-first traversal, one parallel level at a
+/// time. Each frontier dir is expanded on a walk-pool worker with its own
+/// IgnoreMatcher; files are claimed exactly once (each file has exactly
+/// one parent dir, and each dir appears in exactly one frontier); child
+/// dirs form the next level. No mixed-depth subroot sets, so no overlap
+/// or gap hazards. Skipped/ignored dirs prune their whole subtree.
+///
+/// CPU budget (user requirement: never >3-4% sustained): BFS levels are
+/// short bursts; walker parallelism is capped (default 4 workers, ~40ms
+/// per distinct structural pattern on an M5 Max repo corpus). Sustained
+/// duty remains <1% of machine capacity under continuous load. Operators
+/// on constrained hosts can lower ASGREP_WALK_THREADS (1-2); power users
+/// can raise it for faster cold walks.
+fn bfs_corpus_paths(root: &Path) -> Result<(Vec<PathBuf>, u128)> {
+    let walk_started = Instant::now();
+    let walk_workers = std::env::var("ASGREP_WALK_THREADS")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|&n| n >= 1)
+        .unwrap_or(4);
+    let walk_pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(walk_workers)
+        .build()
+        .map_err(|error| crate::StoreError::Other(format!("failed to build walk pool: {error}")))?;
+    let mut paths: Vec<PathBuf> = Vec::new();
+    let mut frontier: Vec<std::sync::Arc<Path>> = vec![std::sync::Arc::from(root.to_path_buf())];
+    while !frontier.is_empty() {
+        let collected: Vec<(Vec<PathBuf>, Vec<std::sync::Arc<Path>>)> = walk_pool.install(|| {
+            frontier
+                .par_iter()
+                .map(|dir| {
+                    let thread_ignore = crate::gitignore::IgnoreMatcher::new(root);
+                    expand_dir(&thread_ignore, root, dir)
+                })
+                .collect::<Vec<_>>()
+        });
+        let mut next: Vec<std::sync::Arc<Path>> = Vec::new();
+        for (mut files, children) in collected {
+            paths.append(&mut files);
+            next.extend(children);
+        }
+        frontier = next;
+    }
+    let walk_ns = walk_started.elapsed().as_nanos();
+    Ok((paths, walk_ns))
+}
+
+/// PASS 60 (H-CONF-029): census the corpus languages (post lang-filter)
+/// with NO native template for the pattern. Computed from the path set
+/// BEFORE the byte prefilter runs so prefiltered-away files cannot hide
+/// unanswerability behind a silent empty result. One unanswerable corpus
+/// language means a query over it can never be answered natively (sg
+/// rejects the same shape); the caller turns this into the loud
+/// fail-closed error when the query answers empty. NeverMatches-classified
+/// patterns are exempt where sg accepts the comment placement
+/// (matcher_decides; 88c-H1): the walk answers those files directly,
+/// so no language is unanswerable for them — every other comment face
+/// keeps this census and the loud backstop, exactly pre-r37.
+/// PASS 91a (F-r40-4): "every other comment face" now includes the
+/// non-NeverMatches (`$`-less) comment faces (template_comment_refused)
+/// — they previously dodged this census because the `$`-less arm
+/// of native_pattern_answerable answers before any comment refusal.
+fn census_unanswerable_languages<'a>(
+    paths: impl Iterator<Item = &'a PathBuf>,
+    lang_filter: Option<&str>,
+    language_unanswerable: &impl Fn(ast_sgrep_lang::Language) -> bool,
+) -> usize {
+    let mut unanswerable: Vec<ast_sgrep_lang::Language> = Vec::new();
+    for path in paths {
+        // PASS 65 (LOW d): extension-only detection misses content-only
+        // languages — an extension-less file carrying a shebang (`pybox`)
+        // was invisible to this census, so the unanswerable-language gate
+        // stayed silent exactly where the per-file skip below guaranteed
+        // a silent empty (H-CONF-029 class fail-open). When the path
+        // alone cannot classify, detect from a capped content read.
+        let mut lang = ast_sgrep_lang::detect_language(path, None);
+        if lang.is_none() {
+            if let Some(bytes) = read_pattern_bytes_capped(path) {
+                if let Ok(content) = std::str::from_utf8(&bytes) {
+                    lang = ast_sgrep_lang::detect_language(path, Some(content));
+                }
+            }
+        }
+        let Some(lang) = lang else {
+            continue;
+        };
+        if lang_filter.is_some_and(|filter| lang.as_str() != filter) {
+            continue;
+        }
+        if !unanswerable.contains(&lang) && language_unanswerable(lang) {
+            unanswerable.push(lang);
+        }
+    }
+    unanswerable.len()
+}
+
+/// One file's native match: candidate narrowing, byte prefilter, language
+/// gates, the H-CONF-031 unanswerability skip, then `match_pattern` and hit
+/// conversion. Each early return keeps its registered `NativeFileResult`
+/// shape (which profile counters get set).
+fn native_match_file(
+    ctx: &FileMatchCtx<'_>,
+    language_unanswerable: &impl Fn(ast_sgrep_lang::Language) -> bool,
+    path: &Path,
+) -> NativeFileResult {
+    let prefilter_started = Instant::now();
+    if let Some(allowed) = ctx.candidate_paths {
+        let rel_ok = path
+            .strip_prefix(ctx.root)
+            .map(|rel| allowed.contains(&rel.to_string_lossy().replace('\\', "/")))
+            .unwrap_or(false);
+        if !rel_ok {
+            return NativeFileResult::default();
+        }
+    }
+    let Some(bytes) = read_pattern_bytes_capped(path) else {
+        return NativeFileResult::default();
+    };
+    let bytes_scanned = bytes.len() as u64;
+    if ctx
+        .required_literal
+        .is_some_and(|literal| memchr::memmem::find(&bytes, literal.as_bytes()).is_none())
+    {
+        return NativeFileResult {
+            bytes_scanned,
+            prefiltered: true,
+            prefilter_ns: prefilter_started.elapsed().as_nanos(),
+            ..NativeFileResult::default()
+        };
+    }
+    let Ok(content) = std::str::from_utf8(&bytes) else {
+        return NativeFileResult {
+            bytes_scanned,
+            prefilter_ns: prefilter_started.elapsed().as_nanos(),
+            ..NativeFileResult::default()
+        };
+    };
+    let Some(lang) = detect_language(path, Some(content)) else {
+        return NativeFileResult {
+            bytes_scanned,
+            prefilter_ns: prefilter_started.elapsed().as_nanos(),
+            ..NativeFileResult::default()
+        };
+    };
+    if ctx
+        .lang_filter
+        .is_some_and(|filter| lang.as_str() != filter)
+    {
+        return NativeFileResult {
+            bytes_scanned,
+            prefilter_ns: prefilter_started.elapsed().as_nanos(),
+            ..NativeFileResult::default()
+        };
+    }
+    // H-CONF-031 (pass 63): language-aware native walk. A file whose
+    // language has no native template for this pattern is SKIPPED —
+    // its non-matches are unanswerability, not evidence of absence —
+    // exactly the per-file semantics sg applies when a pattern fails
+    // its per-language pattern gate (no-lang `throw $A` skips the
+    // unparseable languages and answers 6 hits). The census above
+    // records the skip so the caller can fail closed when the WHOLE
+    // query answers empty (sg exits 8 on the same --lang-pinned
+    // inputs); without the skip, classifier-accepted shapes whose
+    // grammar cannot parse them still over-matched here
+    // (`function $A($B) { $$$C }` on python answered 2 phantom hits
+    // where sg exits 8).
+    // PASS 87a (86a-H1): NeverMatches-classified patterns are exempt
+    // (matcher_decides): their structural arm answers empty, so the
+    // phantom-hit hazard does not exist and match_pattern's own
+    // per-file answer is the honest one (the php hook / dollar-literal
+    // lanes answer their registered sg-exact faces here).
+    // PASS 89a (88c-H1): the exemption is per-language and covers only
+    // the sg-accepted comment placements (comment-free, or inline
+    // `/* */` in php) — glued line-comment and trailing-block faces
+    // fall back to this skip + the census, pre-r37 loud.
+    // PASS 91a (F-r40-4): non-NeverMatches comment faces join the
+    // same discipline (language_unanswerable): a `$`-less pattern
+    // short-circuits native_pattern_answerable's own refusal, so the
+    // placements sg 0.45.2 rc8s must skip the file here instead of
+    // walking into a silent empty.
+    // PASS 131 (130A-F4): the universal-root faces keep their
+    // REGISTERED line-collapsed rows — per-file detection (the file
+    // language decides the expando normalization), spans suppressed
+    // at the conversion site below.
+    let universal_root = ast_sgrep_lang::is_universal_root_pattern(lang, ctx.pattern);
+    if language_unanswerable(lang) {
+        return NativeFileResult {
+            bytes_scanned,
+            prefilter_ns: prefilter_started.elapsed().as_nanos(),
+            ..NativeFileResult::default()
+        };
+    }
+    let prefilter_ns = prefilter_started.elapsed().as_nanos();
+    let parse_match_started = Instant::now();
+    let rel = path
+        .strip_prefix(ctx.root)
+        .map(|path| path.to_string_lossy().replace('\\', "/"))
+        .unwrap_or_else(|_| path.to_string_lossy().replace('\\', "/"));
+    let hits = match_pattern(lang, content, ctx.pattern)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|matched| {
+            SearchHit::span(SpanHitInput {
+                kind: HitKind::Pattern,
+                file: rel.clone(),
+                line_start: matched.line_start,
+                line_end: matched.line_end,
+                score: SCORE_PATTERN,
+                excerpt: matched.excerpt,
+                symbol: Some(ctx.pattern.to_string()),
+                language: Some(lang.as_str().to_string()),
+                // PASS 131 (130A-F4): the native walk knows the
+                // matched-node byte span; it keys the same-line dedup
+                // at the union site and the finish-layer DedupKey.
+                // EXCEPTION: the universal-root lane (`$$A`) keeps
+                // its REGISTERED line-collapsed rows (f96 pins the
+                // 12-line `uA` set; per-node multiplicity there
+                // would starve the finish keep-truncate), so its
+                // spans stay suppressed.
+                byte_span: if universal_root {
+                    None
+                } else {
+                    Some((matched.byte_start, matched.byte_end))
+                },
+            })
+        })
+        .collect();
+    NativeFileResult {
+        hits,
+        bytes_scanned,
+        prefiltered: false,
+        parsed: true,
+        prefilter_ns,
+        parse_match_ns: parse_match_started.elapsed().as_nanos(),
+        ..NativeFileResult::default()
+    }
+}
+
+/// Union per-file hits in file/line order (the native lane's registered
+/// deterministic order).
+fn merge_and_sort_hits(results: &[NativeFileResult]) -> Vec<SearchHit> {
     let mut hits = results
         .iter()
         .flat_map(|result| result.hits.iter().cloned())
@@ -1567,7 +1727,19 @@ fn search_pattern_native_profiled(
             .then(left.line_start.cmp(&right.line_start))
             .then(left.line_end.cmp(&right.line_end))
     });
-    let rank_ns = rank_started.elapsed().as_nanos();
+    hits
+}
+
+/// Roll the per-file results into the Brent-decomposed parallel profile.
+/// Returns the profile and `max_file_work_ns` (the t_inf critical-path
+/// term the caller reports alongside it).
+fn assemble_profile(
+    results: &[NativeFileResult],
+    files_considered: usize,
+    walk_ns: u128,
+    parallel_span_ns: u128,
+    rank_ns: u128,
+) -> (PatternSearchProfile, u128) {
     let prefilter_work_ns = results
         .iter()
         .map(|result| result.prefilter_ns)
@@ -1593,11 +1765,11 @@ fn search_pattern_native_profiled(
         serial_ns as f64 / t1_ns as f64
     };
     let profile = PatternSearchProfile {
-        files_considered: paths.len(),
+        files_considered,
         files_prefiltered: results.iter().filter(|result| result.prefiltered).count(),
         files_parsed: results.iter().filter(|result| result.parsed).count(),
         bytes_scanned: results.iter().map(|result| result.bytes_scanned).sum(),
-        hits: hits.len(),
+        hits: results.iter().map(|result| result.hits.len()).sum(),
         workers,
         walk_ns,
         prefilter_work_ns,
@@ -1612,13 +1784,7 @@ fn search_pattern_native_profiled(
         observed_speedup: 0.0,
         prefilter_speedup: 0.0,
     };
-    Ok(NativeSearchOutput {
-        hits,
-        profile,
-        total_elapsed_ns: total_started.elapsed().as_nanos(),
-        max_file_work_ns,
-        unanswerable_corpus_languages,
-    })
+    (profile, max_file_work_ns)
 }
 
 /// Timed `try_wait` loop shared by the optional ast-grep version probe and bench runner.

@@ -46,8 +46,10 @@ pub fn main() -> anyhow::Result<()> {
             } else {
                 supervisor::supervise()
             }
-        } else {
+        } else if supervisor::supervision_requested() {
             supervisor::supervise()
+        } else {
+            supervisor::run_unsupervised()
         }
     }
 }

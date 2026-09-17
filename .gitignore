@@ -166,3 +166,6 @@ crates/**/.bench-history/
 /docs/internal/
 
 .empryo
+
+# Generated build marker (ast-sgrep pi extension)
+packages/pi/extension/custom-index/

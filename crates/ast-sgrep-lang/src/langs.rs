@@ -49,6 +49,14 @@ const PHP_CLASS: &[&str] = &[
     "interface_declaration",
     "enum_declaration",
 ];
+// Dart enclosing type bodies for Method classification.
+const DART_CLASS: &[&str] = &[
+    "class_declaration",
+    "mixin_declaration",
+    "extension_declaration",
+    "extension_type_declaration",
+    "enum_declaration",
+];
 const GO_TYPE_CASES: &[(&str, SymbolKind)] = &[("interface_type", Interface)];
 const SWIFT_TYPE_CASES: &[(&str, SymbolKind)] = &[
     ("class", Class),
@@ -239,6 +247,50 @@ const PHP: &[(&str, KindRule)] = &[
     ),
 ];
 
+// ─── Dart / MoonBit ─────────────────────────────────────────────────────────
+
+/// Dart: constructors, fields, and abstract/external member signatures come as
+/// a generic `declaration` node whose name is nested; methods/getters/setters
+/// are `method_declaration` with the name under `signature`.
+#[rustfmt::skip]
+const DART: &[(&str, KindRule)] = &[
+    ("function_declaration",           SymSignature(Function)),
+    ("external_function_declaration",  SymSignature(Function)),
+    ("local_function_declaration",     SymSignature(Function)),
+    ("getter_declaration",             SymSignature(Function)),
+    ("setter_declaration",             SymSignature(Function)),
+    ("external_getter_declaration",    SymSignature(Function)),
+    ("external_setter_declaration",    SymSignature(Function)),
+    ("method_declaration",             MethodInSignature(DART_CLASS)),
+    ("declaration",                    MethodInSignature(DART_CLASS)),
+    ("class_declaration",              Sym(Class)),
+    ("enum_declaration",               Sym(Enum)),
+    ("mixin_declaration",              Sym(Interface)),
+    ("extension_declaration",          Sym(Type)),
+    ("extension_type_declaration",     Sym(Type)),
+    ("call_expression",                Call("function")),
+    ("import_specification",           ImportQuoted("uri")),
+];
+
+/// MoonBit names are positional (`function_identifier` / bare `identifier`
+/// children), so extraction resolves the last identifier under them.
+#[rustfmt::skip]
+const MOONBIT: &[(&str, KindRule)] = &[
+    ("function_definition", SymChild("function_identifier", Function)),
+    ("impl_definition",     SymChild("function_identifier", Method)),
+    ("named_lambda_expression", SymChild("lowercase_identifier", Function)),
+    ("apply_expression",    CallFirstNamed),
+    ("dot_apply_expression", CallDotAccessor),
+    ("struct_definition",   SymChild("identifier", Type)),
+    ("tuple_struct_definition", SymChild("identifier", Type)),
+    ("enum_definition",     SymChild("identifier", Enum)),
+    ("extenum_definition",  SymChild("identifier", Enum)),
+    ("type_definition",     SymChild("identifier", Type)),
+    ("error_type_definition", SymChild("identifier", Enum)),
+    ("trait_definition",    SymChild("identifier", Interface)),
+    ("import_declaration",  ImportItems("import_item", "path")),
+];
+
 // ─── Parsers ────────────────────────────────────────────────────────────────
 
 parser!(RustParser, Rust, tree_sitter_rust::LANGUAGE, RUST);
@@ -269,3 +321,5 @@ parser!(
     tree_sitter_javascript::LANGUAGE,
     TS_JS
 );
+parser!(DartParser, Dart, tree_sitter_dart::LANGUAGE, DART);
+parser!(MoonBitParser, MoonBit, tree_sitter_moonbit::LANGUAGE, MOONBIT);

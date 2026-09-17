@@ -18,6 +18,8 @@ pub enum Language {
     Cpp,
     Kotlin,
     Php,
+    Dart,
+    MoonBit,
 }
 impl Language {
     pub fn as_str(self) -> &'static str {
@@ -35,6 +37,8 @@ impl Language {
             Language::Cpp => "cpp",
             Language::Kotlin => "kotlin",
             Language::Php => "php",
+            Language::Dart => "dart",
+            Language::MoonBit => "moonbit",
         }
     }
     pub fn all() -> &'static [Language] {
@@ -52,6 +56,8 @@ impl Language {
             Language::Cpp,
             Language::Kotlin,
             Language::Php,
+            Language::Dart,
+            Language::MoonBit,
         ]
     }
 
@@ -86,6 +92,9 @@ impl Language {
         ("kt", Language::Kotlin),
         ("kts", Language::Kotlin),
         ("php", Language::Php),
+        ("dart", Language::Dart),
+        ("mbt", Language::MoonBit),
+        ("mbti", Language::MoonBit),
     ];
 
     /// Language for a file extension (`ts`, `hpp`, `pyi`, …). Case-insensitive.
@@ -118,6 +127,8 @@ impl Language {
             "ruby" => Some(Language::Ruby),
             "c++" => Some(Language::Cpp),
             "kotlin" => Some(Language::Kotlin),
+            "dart" => Some(Language::Dart),
+            "moonbit" => Some(Language::MoonBit),
             _ => None,
         }
     }
@@ -254,8 +265,9 @@ mod pattern;
 mod pattern_queries;
 mod signature;
 use langs::{
-    CParser, CSharpParser, CppParser, GoParser, JavaParser, JavaScriptParser, KotlinParser,
-    PhpParser, PythonParser, RubyParser, RustParser, SwiftParser, TypeScriptParser,
+    CParser, CSharpParser, CppParser, DartParser, GoParser, JavaParser, JavaScriptParser,
+    KotlinParser, MoonBitParser, PhpParser, PythonParser, RubyParser, RustParser, SwiftParser,
+    TypeScriptParser,
 };
 pub use pattern::{
     classify_native, declaration_prefix, is_universal_root_pattern, literal_trailing_comment_lane,
@@ -283,6 +295,8 @@ fn make_parser(lang: Language) -> Box<dyn LanguageParser> {
         Language::Cpp => Box::new(CppParser),
         Language::Kotlin => Box::new(KotlinParser),
         Language::Php => Box::new(PhpParser),
+        Language::Dart => Box::new(DartParser),
+        Language::MoonBit => Box::new(MoonBitParser),
     }
 }
 

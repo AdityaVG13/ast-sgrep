@@ -425,12 +425,58 @@ fn is_code_kind(kind: HitKind) -> bool {
 ///
 /// Runs after `fusion::apply_weighted_rrf` (contributor sets are final) and
 /// before `finish_response` (margins/confidence see critiqued scores).
+///
+/// The per-hit work is split into stage functions applied IN ORDER for every
+/// hit; each stage owns one rule family and mutates only `score`/notes, so
+/// the multiplier sequence per hit is exactly the historical one.
 pub(crate) fn apply_critic(parsed: &ParsedQuery, intent: QueryIntent, hits: &mut Vec<SearchHit>) {
     if hits.is_empty() {
         return;
     }
-    // Non-embed witnesses per file: spans and symbols that can corroborate an
-    // embed-only parent (child chunks map to parent symbols).
+    let uncorroborated = uncorroborated_embeds(hits);
+    let conceptual = intent == QueryIntent::Conceptual;
+    let ctx = CriticCtx {
+        fragments: identifier_fragments(parsed),
+        query_ident: query_identifier(parsed, intent),
+        has_code_evidence: hits
+            .iter()
+            .any(|hit| is_code_kind(hit.kind) && !is_prose_path(&hit.file)),
+        conceptual,
+        expanded: conceptual.then(|| concept_expansion(parsed)),
+    };
+    let mut kept = Vec::with_capacity(hits.len());
+    for (index, mut hit) in hits.drain(..).enumerate() {
+        if uncorroborated.contains(&index) {
+            push_note(&mut hit, CriticNote::SemanticUncorroborated);
+        }
+        stage_channel_agreement(&mut hit);
+        stage_identifier_adjudication(&mut hit, &ctx);
+        stage_context_penalties(&mut hit, &ctx);
+        stage_concept_affinity(&mut hit, &ctx);
+        kept.push(hit);
+    }
+    *hits = kept;
+    if let Some(expanded) = ctx.expanded.as_ref() {
+        demote_test_paths_below_implementation(hits);
+        demote_thieves_below_conjunction_combine(expanded, hits);
+    }
+}
+
+/// Shared per-shortlist critic context, computed once and read by every
+/// per-hit stage.
+struct CriticCtx {
+    fragments: HashMap<String, String>,
+    query_ident: Option<String>,
+    has_code_evidence: bool,
+    conceptual: bool,
+    expanded: Option<HashSet<String>>,
+}
+
+/// Indices of embed-only hits with no non-embed witness in the same file.
+///
+/// Non-embed witnesses per file: spans and symbols that can corroborate an
+/// embed-only parent (child chunks map to parent symbols).
+fn uncorroborated_embeds(hits: &[SearchHit]) -> HashSet<usize> {
     let mut witnesses: HashMap<&str, Vec<Corroborator>> = HashMap::new();
     for hit in hits.iter() {
         if embed_only(hit) {
@@ -463,138 +509,149 @@ pub(crate) fn apply_critic(parsed: &ParsedQuery, intent: QueryIntent, hits: &mut
         }
         uncorroborated.insert(index);
     }
+    uncorroborated
+}
 
-    let fragments = identifier_fragments(parsed);
-    let query_ident = query_identifier(parsed, intent);
-    let has_code_evidence = hits
-        .iter()
-        .any(|hit| is_code_kind(hit.kind) && !is_prose_path(&hit.file));
-    let conceptual = intent == QueryIntent::Conceptual;
-    let expanded = conceptual.then(|| concept_expansion(parsed));
-    let mut kept = Vec::with_capacity(hits.len());
-    for (index, mut hit) in hits.drain(..).enumerate() {
-        if uncorroborated.contains(&index) {
-            push_note(&mut hit, CriticNote::SemanticUncorroborated);
-        }
-        let has_embed = has_kind(&hit, |k| k == HitKind::Embed);
-        let has_structural = has_kind(&hit, is_structural_kind);
-        if has_embed && has_structural {
-            let has_def = has_kind(&hit, |k| k == HitKind::Def);
-            let has_usage = has_kind(&hit, is_usage_kind);
-            if has_def && has_usage {
-                hit.score *= FULL_AGREEMENT_BOOST;
-                push_note(&mut hit, CriticNote::FullAgreement);
-            } else {
-                hit.score *= AGREEMENT_BOOST;
-                push_note(&mut hit, CriticNote::ChannelAgreement);
-            }
-        }
-        if let Some(symbol) = hit.symbol.clone() {
-            let folded = symbol.to_lowercase();
-            if let Some(full_ident) = fragments.get(&folded) {
-                let evidences_full = hit.excerpt.to_lowercase().contains(full_ident.as_str());
-                if !evidences_full {
-                    hit.score *= COLLISION_PENALTY;
-                    push_note(&mut hit, CriticNote::IdentifierCollision);
-                }
-            }
-            if let Some(query_ident) = query_ident.as_deref() {
-                let stem_match = file_stem_eq(&hit.file, query_ident);
-                match identifier_match(query_ident, &symbol) {
-                    IdentifierMatch::Exact => hit.score *= EXACT_IDENTIFIER_BOOST,
-                    IdentifierMatch::Folded => {
-                        if query_ident.chars().any(|c| c.is_uppercase()) {
-                            hit.score *= FOLDED_IDENTIFIER_PENALTY;
-                            push_note(&mut hit, CriticNote::IdentifierCollision);
-                        }
-                    }
-                    IdentifierMatch::Compound if stem_match => {
-                        // `load_semantic_ivf` in `semantic_ivf.rs` is the
-                        // implementation, not a colliding helper.
-                    }
-                    IdentifierMatch::Compound => {
-                        hit.score *= COMPOUND_SYMBOL_PENALTY;
-                        push_note(&mut hit, CriticNote::IdentifierCollision);
-                    }
-                    IdentifierMatch::Partial if stem_match => {}
-                    IdentifierMatch::Partial => {
-                        hit.score *= PARTIAL_IDENTIFIER_PENALTY;
-                        push_note(&mut hit, CriticNote::IdentifierCollision);
-                    }
-                    IdentifierMatch::None => {
-                        if hit.kind == HitKind::Def && !stem_match {
-                            hit.score *= UNRELATED_DEF_PENALTY;
-                        }
-                    }
-                }
-            }
-        }
-        if let Some(query_ident) = query_ident.as_deref() {
-            if file_stem_eq(&hit.file, query_ident) {
-                hit.score *= FILE_STEM_BOOST;
-            }
-        }
-        if let Some(symbol_name) = hit.symbol.as_deref() {
-            if is_instrumentation_symbol(symbol_name) {
-                hit.score *= INSTRUMENTATION_PENALTY;
-            }
-        }
-        if has_code_evidence && hit.kind == HitKind::Asgrep && is_prose_path(&hit.file) {
-            hit.score *= PROSE_PATH_PENALTY;
-        }
-        if conceptual && has_code_evidence && is_test_path(&hit.file) {
-            hit.score *= TEST_PATH_PENALTY;
-        }
-        if conceptual && has_code_evidence && hit.kind == HitKind::Asgrep {
-            hit.score *= CONCEPTUAL_LEXICAL_PENALTY;
-        }
-        if let Some(expanded) = expanded.as_ref() {
-            let caller = hit.caller.as_deref().unwrap_or("");
-            let symbol_name = hit.symbol.as_deref().unwrap_or("");
-            if matches!(hit.kind, HitKind::Caller | HitKind::Graph)
-                && (is_generic_entrypoint(caller) || is_generic_entrypoint(symbol_name))
-            {
-                hit.score *= GENERIC_ENTRYPOINT_PENALTY;
-            }
-            let test_path = is_test_path(&hit.file);
-            if !test_path {
-                if let Some(symbol_name) = hit.symbol.as_deref() {
-                    let affinity = conceptual_symbol_affinity(expanded, symbol_name);
-                    if affinity >= 2
-                        || (affinity >= 1 && matches!(hit.kind, HitKind::Def | HitKind::Embed))
-                    {
-                        hit.score *= CONCEPT_SYMBOL_BOOST;
-                    }
-                    if affinity >= 2 {
-                        hit.score *= MULTI_CONCEPT_SYMBOL_BOOST;
-                        if looks_like_type_ident(symbol_name) {
-                            hit.score *= CONCEPT_TYPE_DEF_BOOST;
-                        }
-                    }
-                    let tokens = identifier_tokens(symbol_name);
-                    if tokens.len() == 1
-                        && !is_generic_concept_token(&tokens[0])
-                        && expanded.contains(&tokens[0])
-                    {
-                        hit.score *= EXACT_CONCEPT_SYMBOL_BOOST;
-                    } else if expanded.contains("combine")
-                        && tokens.iter().any(|token| token == "combine")
-                        && !symbol_name.eq_ignore_ascii_case("combine")
-                    {
-                        hit.score *= COMPOUND_SYMBOL_PENALTY;
-                    }
-                }
-                if conceptual_file_stem_affinity(expanded, &hit.file) {
-                    hit.score *= CONCEPT_FILE_STEM_BOOST;
-                }
-            }
-        }
-        kept.push(hit);
+/// Embed+structural co-contributors corroborate the hit's channels; a Def
+/// plus a usage witness is full agreement.
+fn stage_channel_agreement(hit: &mut SearchHit) {
+    let has_embed = has_kind(hit, |k| k == HitKind::Embed);
+    let has_structural = has_kind(hit, is_structural_kind);
+    if !(has_embed && has_structural) {
+        return;
     }
-    *hits = kept;
-    if let Some(expanded) = expanded.as_ref() {
-        demote_test_paths_below_implementation(hits);
-        demote_thieves_below_conjunction_combine(expanded, hits);
+    let has_def = has_kind(hit, |k| k == HitKind::Def);
+    let has_usage = has_kind(hit, is_usage_kind);
+    if has_def && has_usage {
+        hit.score *= FULL_AGREEMENT_BOOST;
+        push_note(hit, CriticNote::FullAgreement);
+    } else {
+        hit.score *= AGREEMENT_BOOST;
+        push_note(hit, CriticNote::ChannelAgreement);
+    }
+}
+
+/// Adjudicate the hit's symbol against the query's identifiers: a folded
+/// collision when the excerpt never spells the full identifier, then the
+/// exact/folded/compound/partial ladder against the query identifier.
+fn stage_identifier_adjudication(hit: &mut SearchHit, ctx: &CriticCtx) {
+    let Some(symbol) = hit.symbol.clone() else {
+        return;
+    };
+    let folded = symbol.to_lowercase();
+    if let Some(full_ident) = ctx.fragments.get(&folded) {
+        let evidences_full = hit.excerpt.to_lowercase().contains(full_ident.as_str());
+        if !evidences_full {
+            hit.score *= COLLISION_PENALTY;
+            push_note(hit, CriticNote::IdentifierCollision);
+        }
+    }
+    let Some(query_ident) = ctx.query_ident.as_deref() else {
+        return;
+    };
+    let stem_match = file_stem_eq(&hit.file, query_ident);
+    match identifier_match(query_ident, &symbol) {
+        IdentifierMatch::Exact => hit.score *= EXACT_IDENTIFIER_BOOST,
+        IdentifierMatch::Folded => {
+            if query_ident.chars().any(|c| c.is_uppercase()) {
+                hit.score *= FOLDED_IDENTIFIER_PENALTY;
+                push_note(hit, CriticNote::IdentifierCollision);
+            }
+        }
+        IdentifierMatch::Compound if stem_match => {
+            // `load_semantic_ivf` in `semantic_ivf.rs` is the
+            // implementation, not a colliding helper.
+        }
+        IdentifierMatch::Compound => {
+            hit.score *= COMPOUND_SYMBOL_PENALTY;
+            push_note(hit, CriticNote::IdentifierCollision);
+        }
+        IdentifierMatch::Partial if stem_match => {}
+        IdentifierMatch::Partial => {
+            hit.score *= PARTIAL_IDENTIFIER_PENALTY;
+            push_note(hit, CriticNote::IdentifierCollision);
+        }
+        IdentifierMatch::None => {
+            if hit.kind == HitKind::Def && !stem_match {
+                hit.score *= UNRELATED_DEF_PENALTY;
+            }
+        }
+    }
+}
+
+/// Cross-cutting multipliers: file-stem boost, instrumentation penalty, and
+/// the prose/test/lexical penalties that key on code evidence elsewhere in
+/// the shortlist.
+fn stage_context_penalties(hit: &mut SearchHit, ctx: &CriticCtx) {
+    if let Some(query_ident) = ctx.query_ident.as_deref() {
+        if file_stem_eq(&hit.file, query_ident) {
+            hit.score *= FILE_STEM_BOOST;
+        }
+    }
+    if let Some(symbol_name) = hit.symbol.as_deref() {
+        if is_instrumentation_symbol(symbol_name) {
+            hit.score *= INSTRUMENTATION_PENALTY;
+        }
+    }
+    if ctx.has_code_evidence && hit.kind == HitKind::Asgrep && is_prose_path(&hit.file) {
+        hit.score *= PROSE_PATH_PENALTY;
+    }
+    if ctx.conceptual && ctx.has_code_evidence && is_test_path(&hit.file) {
+        hit.score *= TEST_PATH_PENALTY;
+    }
+    if ctx.conceptual && ctx.has_code_evidence && hit.kind == HitKind::Asgrep {
+        hit.score *= CONCEPTUAL_LEXICAL_PENALTY;
+    }
+}
+
+/// Conceptual-intent affinity: generic entrypoints demote; on non-test
+/// paths, multi-concept symbols and exact concept tokens boost.
+fn stage_concept_affinity(hit: &mut SearchHit, ctx: &CriticCtx) {
+    let Some(expanded) = ctx.expanded.as_ref() else {
+        return;
+    };
+    let caller = hit.caller.as_deref().unwrap_or("");
+    let symbol_name = hit.symbol.as_deref().unwrap_or("");
+    if matches!(hit.kind, HitKind::Caller | HitKind::Graph)
+        && (is_generic_entrypoint(caller) || is_generic_entrypoint(symbol_name))
+    {
+        hit.score *= GENERIC_ENTRYPOINT_PENALTY;
+    }
+    if is_test_path(&hit.file) {
+        return;
+    }
+    stage_symbol_concept_affinity(hit, expanded);
+    if conceptual_file_stem_affinity(expanded, &hit.file) {
+        hit.score *= CONCEPT_FILE_STEM_BOOST;
+    }
+}
+
+/// Symbol-side concept affinity: affinity >= 2 (or >= 1 on a def/embed)
+/// boosts, the exact-single-concept-token spelling boosts further, and
+/// `combine`-compounds that merely contain the token demote. Applies with or
+/// without a symbol (file-stem affinity is the caller's concern).
+fn stage_symbol_concept_affinity(hit: &mut SearchHit, expanded: &HashSet<String>) {
+    let Some(symbol_name) = hit.symbol.as_deref() else {
+        return;
+    };
+    let affinity = conceptual_symbol_affinity(expanded, symbol_name);
+    if affinity >= 2 || (affinity >= 1 && matches!(hit.kind, HitKind::Def | HitKind::Embed)) {
+        hit.score *= CONCEPT_SYMBOL_BOOST;
+    }
+    if affinity >= 2 {
+        hit.score *= MULTI_CONCEPT_SYMBOL_BOOST;
+        if looks_like_type_ident(symbol_name) {
+            hit.score *= CONCEPT_TYPE_DEF_BOOST;
+        }
+    }
+    let tokens = identifier_tokens(symbol_name);
+    if tokens.len() == 1 && !is_generic_concept_token(&tokens[0]) && expanded.contains(&tokens[0]) {
+        hit.score *= EXACT_CONCEPT_SYMBOL_BOOST;
+    } else if expanded.contains("combine")
+        && tokens.iter().any(|token| token == "combine")
+        && !symbol_name.eq_ignore_ascii_case("combine")
+    {
+        hit.score *= COMPOUND_SYMBOL_PENALTY;
     }
 }
 
