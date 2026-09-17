@@ -4,6 +4,7 @@ import type { ChainArgs, EditArgs, FindArgs, ReadArgs, SearchArgs } from "./type
 import {
   createCodemodeDispatcher,
   type BatchCapableHost,
+  type DispatchCall,
   type DispatchStats,
 } from "./dispatch.js";
 
@@ -55,6 +56,8 @@ export type AsgrepConnector = {
 export type ConnectorBundle = {
   asgrep: AsgrepConnector;
   stats: () => DispatchStats;
+  /** Per-call dispatch trace for the current run (lane + ms + ok, capped). */
+  trace: () => DispatchCall[];
   resetStats: () => void;
 };
 
@@ -168,6 +171,7 @@ export function createAsgrepConnector(
   return {
     asgrep,
     stats: dispatcher.stats,
+    trace: dispatcher.trace,
     resetStats: dispatcher.resetStats,
   };
 }

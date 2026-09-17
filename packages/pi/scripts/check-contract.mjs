@@ -25,8 +25,15 @@ const launcherManifest = JSON.parse(await readFile(path.join(root, 'packages/pi/
 const runtimeSource = await readFile(path.join(root, 'packages/pi/extension/src/runtime.ts'), 'utf8');
 const runtimeDist = await readFile(path.join(root, 'packages/pi/extension/dist/runtime.js'), 'utf8');
 const runtimeDeclarations = await readFile(path.join(root, 'packages/pi/extension/dist/runtime.d.ts'), 'utf8');
+// Version/schema markers now live in the leaf module types.ts (runtime.ts re-exports them).
+const typesSource = await readFile(path.join(root, 'packages/pi/extension/src/types.ts'), 'utf8');
+const typesDist = await readFile(path.join(root, 'packages/pi/extension/dist/types.js'), 'utf8');
+const typesDeclarations = await readFile(path.join(root, 'packages/pi/extension/dist/types.d.ts'), 'utf8');
 const nativeSource = await readFile(path.join(root, 'packages/pi/extension/src/codemode/native.ts'), 'utf8');
 const nativeDist = await readFile(path.join(root, 'packages/pi/extension/dist/codemode/native.js'), 'utf8');
+// The codemode guest worker is plain .mjs copied (not compiled) into dist; a
+// missing copy silently bricks every codemode run in the packed package.
+const guestWorkerDist = await readFile(path.join(root, 'packages/pi/extension/dist/codemode/guest-worker.mjs'), 'utf8');
 const launcherSource = await readFile(path.join(root, 'packages/pi/launcher/src/index.js'), 'utf8');
 const indexSchemaSource = await readFile(path.join(root, 'crates/ast-sgrep-core/src/store/sqlite/mod.rs'), 'utf8');
 const rustIndexSchemaVersion = Number(indexSchemaSource.match(/pub const INDEX_SCHEMA_VERSION:\s*i64\s*=\s*(\d+)/)?.[1]);
@@ -124,11 +131,12 @@ const isExtensionPatchOf = (extensionVersion, canonical) => {
   return Boolean(actual && expected && actual[0] === expected[0] && actual[1] === expected[1] && actual[2] > expected[2]);
 };
 report(isExtensionPatchOf(extensionManifest.version, version) && launcherManifest.version === version && extensionManifest.dependencies?.['ast-sgrep'] === version, 'extension and launcher manifests drift from the compatibility matrix');
-report(runtimeSource.includes(`export const RUNTIME_VERSION = "${nativeVersion}";`) && launcherSource.includes(`const VERSION = "${version}";`), 'runtime native CLI expectation or launcher package version drifts from the compatibility matrix');
+report(typesSource.includes(`export const RUNTIME_VERSION = "${nativeVersion}";`) && launcherSource.includes(`const VERSION = "${version}";`), 'runtime native CLI expectation or launcher package version drifts from the compatibility matrix');
 report(nativeSource.includes(`export const CODEMODE_BINDING_VERSION = "${nativeVersion}";`) && nativeDist.includes(`export const CODEMODE_BINDING_VERSION = "${nativeVersion}";`), 'Code Mode NAPI binding expectation drifts from the compatibility matrix');
-report(layers.machineSchema?.version === '1.0.0' && equal(layers.machineSchema.readable, ['1.0.0']) && runtimeSource.includes('export const MACHINE_SCHEMA_VERSION = "1.0.0";'), 'machine schema compatibility matrix is inconsistent');
-report(layers.configSchema?.current === 1 && equal(layers.configSchema.readable, [0, 1]) && equal(layers.configSchema.rollback, [0]) && runtimeSource.includes('export const CONFIG_SCHEMA_VERSION = 1 as const;'), 'config schema migration/rollback matrix is inconsistent');
-report(layers.indexFormat?.current === 16 && equal(layers.indexFormat.reusable, [16]) && equal(layers.indexFormat.rebuild, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]) && layers.indexFormat.newer === 'reject-and-preserve' && runtimeSource.includes('export const INDEX_FORMAT_VERSION = 16 as const;') && runtimeDist.includes('export const INDEX_FORMAT_VERSION = 16;') && runtimeDeclarations.includes('export declare const INDEX_FORMAT_VERSION: 16;'), 'index format reuse/rebuild matrix is inconsistent');
+report(guestWorkerDist.includes('parentPort.on("message"') && guestWorkerDist.includes('op: "ready"'), 'codemode guest-worker.mjs missing from dist or lost its message protocol');
+report(layers.machineSchema?.version === '1.0.0' && equal(layers.machineSchema.readable, ['1.0.0']) && typesSource.includes('export const MACHINE_SCHEMA_VERSION = "1.0.0";'), 'machine schema compatibility matrix is inconsistent');
+report(layers.configSchema?.current === 1 && equal(layers.configSchema.readable, [0, 1]) && equal(layers.configSchema.rollback, [0]) && typesSource.includes('export const CONFIG_SCHEMA_VERSION = 1 as const;'), 'config schema migration/rollback matrix is inconsistent');
+report(layers.indexFormat?.current === 16 && equal(layers.indexFormat.reusable, [16]) && equal(layers.indexFormat.rebuild, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]) && layers.indexFormat.newer === 'reject-and-preserve' && typesSource.includes('export const INDEX_FORMAT_VERSION = 16 as const;') && typesDist.includes('export const INDEX_FORMAT_VERSION = 16;') && typesDeclarations.includes('export declare const INDEX_FORMAT_VERSION: 16;'), 'index format reuse/rebuild matrix is inconsistent');
 report(Number.isSafeInteger(rustIndexSchemaVersion) && rustIndexSchemaVersion === layers.indexFormat?.current, 'extension INDEX_FORMAT_VERSION must equal INDEX_SCHEMA_VERSION in crates/ast-sgrep-core — this coupling is what keeps the extension and its bundled binary on one index schema');
 report(equal(contract.config?.precedenceHighToLow, ['explicit-project-config', 'project-settings', 'global-settings', 'environment', 'defaults']), 'config precedence changed');
 report(contract.offlineSemantics?.defaultBackend === 'local' && contract.offlineSemantics.localSemanticSearchAlwaysAvailable === true && contract.offlineSemantics.firstUseModelDownload === false && contract.offlineSemantics.credentialsRequired === false && contract.offlineSemantics.lazyIndexOnFirstSearch === true, 'offline local semantic contract changed');

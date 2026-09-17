@@ -100,6 +100,7 @@ export function createAsgrepConnector(host, context, options = {}) {
     return {
         asgrep,
         stats: dispatcher.stats,
+        trace: dispatcher.trace,
         resetStats: dispatcher.resetStats,
     };
 }

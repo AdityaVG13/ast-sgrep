@@ -487,21 +487,24 @@ setInterval(() => {}, 1000);
 });
 
 test("dispatcher never replays a mutation after an ambiguous native failure", async () => {
-  let batchFallbacks = 0;
-  let spawnFallbacks = 0;
+  // Mutations ride a serial lane (never batched, never replayed). A transport
+  // failure rejects the mutation exactly once; reads in the same wave may
+  // still settle via a safe fallback — they are idempotent.
+  let mutationCalls = 0;
   const transportFailure = new Error("native transport closed after dispatch");
   const dispatcher = createCodemodeDispatcher({
     sticky: {
-      async call() { throw new Error("not used"); },
+      async call(tool: string) {
+        if (tool === "index_repo") mutationCalls += 1;
+        throw transportFailure;
+      },
       async batch() { throw transportFailure; },
       async end() {},
     },
     async runBatch() {
-      batchFallbacks += 1;
       return { results: [] };
     },
     async run() {
-      spawnFallbacks += 1;
       return asEnvelope({ hits: [] });
     },
   });
@@ -510,10 +513,44 @@ test("dispatcher never replays a mutation after an ambiguous native failure", as
     dispatcher.host.call("index_repo", { force: false }, { cwd: "/p" }),
     dispatcher.host.call("search", { query: "auth" }, { cwd: "/p" }),
   ]);
-  assert.deepEqual(results.map(({ status }) => status), ["rejected", "rejected"]);
-  assert.ok(results.every((result) => result.status === "rejected" && result.reason === transportFailure));
-  assert.equal(batchFallbacks, 0);
-  assert.equal(spawnFallbacks, 0);
+  assert.equal(results[0]!.status, "rejected", "mutation must reject");
+  if (results[0]!.status === "rejected") {
+    assert.equal(results[0]!.reason, transportFailure);
+  }
+  assert.equal(mutationCalls, 1, "mutation must be invoked exactly once — never replayed");
+});
+
+test("mutations serialize against each other on the write lane", async () => {
+  let inFlight = 0;
+  let overlapSeen = false;
+  const order: string[] = [];
+  const dispatcher = createCodemodeDispatcher({
+    async run(): Promise<MachineEnvelope> {
+      throw new Error("run should not be used for mutations");
+    },
+    sticky: {
+      async call(tool: string) {
+        inFlight += 1;
+        if (inFlight > 1) overlapSeen = true;
+        order.push(tool);
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        inFlight -= 1;
+        return { tool: "asgrep", schema_version: "1.0.0", ok: true };
+      },
+      async batch() {
+        throw new Error("mutations must not batch");
+      },
+      async end() {},
+    },
+  });
+  const results = await Promise.allSettled([
+    dispatcher.host.call("edit", { path: "a.ts", oldText: "a", newText: "b" }, { cwd: "/p" }),
+    dispatcher.host.call("index_repo", { force: false }, { cwd: "/p" }),
+    dispatcher.host.call("edit", { path: "c.ts", oldText: "c", newText: "d" }, { cwd: "/p" }),
+  ]);
+  assert.ok(results.every((r) => r.status === "fulfilled"), JSON.stringify(results));
+  assert.equal(overlapSeen, false, "mutations must never overlap");
+  assert.deepEqual(order, ["edit", "index_repo", "edit"], "mutations keep issue order");
 });
 
 test("runner binds asgrep and console through the isolated bridge", async () => {
@@ -885,15 +922,17 @@ test("find/read/edit ride the same Promise.all wave", async () => {
 
 test("edit is a mutating tool and does not spawn-replay after sticky failure", async () => {
   const transportFailure = new Error("sticky died");
-  let spawnFallbacks = 0;
+  let editCalls = 0;
   const dispatcher = createCodemodeDispatcher({
     sticky: {
-      async call() { throw new Error("not used"); },
+      async call(tool: string) {
+        if (tool === "edit") editCalls += 1;
+        throw transportFailure;
+      },
       async batch() { throw transportFailure; },
       async end() {},
     },
     async run() {
-      spawnFallbacks += 1;
       return asEnvelope({ hits: [] });
     },
   });
@@ -901,8 +940,8 @@ test("edit is a mutating tool and does not spawn-replay after sticky failure", a
     dispatcher.host.call("edit", { path: "a.ts", oldText: "a", newText: "b" }, { cwd: "/p" }),
     dispatcher.host.call("search", { query: "auth" }, { cwd: "/p" }),
   ]);
-  assert.deepEqual(results.map(({ status }) => status), ["rejected", "rejected"]);
-  assert.equal(spawnFallbacks, 0);
+  assert.equal(results[0]!.status, "rejected", "edit must reject on transport failure");
+  assert.equal(editCalls, 1, "edit must be invoked exactly once — never spawn-replayed");
 });
 
 test("Code Mode activation stays off serve-process spawn", async () => {

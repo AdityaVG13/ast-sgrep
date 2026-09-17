@@ -155,12 +155,6 @@ export function timeoutHint(message: string): string {
   return `${message}; narrow with asgrep.search(query, { in: "src" }), lower limit, or split the program`;
 }
 
-export function missingReturnHint(code: string, result: unknown): string | undefined {
-  if (result !== undefined) return undefined;
-  if (/\breturn\b/.test(code)) return undefined;
-  return "no return statement; add `return` to send a value to the model";
-}
-
 function looksLikeBareExpression(code: string): boolean {
   const trimmed = code.trim().replace(/;\s*$/u, "");
   if (!trimmed || /\breturn\b/.test(trimmed)) return false;

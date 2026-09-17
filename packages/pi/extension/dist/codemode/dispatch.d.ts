@@ -18,6 +18,13 @@ export type DispatchStats = {
     stickyCalls: number;
     wallMs: number;
 };
+/** One settled host call: which lane carried it and how long it took. */
+export type DispatchCall = {
+    tool: string;
+    lane: "sticky" | "batch" | "spawn" | "serial";
+    ok: boolean;
+    ms: number;
+};
 export type BatchResult = {
     results: Array<{
         id: string;
@@ -65,6 +72,7 @@ export type BatchCapableHost = ConnectorHost & {
 export declare function createCodemodeDispatcher(host: BatchCapableHost): {
     host: DispatchSurface;
     stats: () => DispatchStats;
+    trace: () => DispatchCall[];
     resetStats: () => void;
 };
 export declare function argvFor(tool: string, args: Record<string, unknown>): string[];
