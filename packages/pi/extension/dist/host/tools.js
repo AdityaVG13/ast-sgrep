@@ -2,7 +2,7 @@ import { isAbsolute } from "node:path";
 import { Type } from "typebox";
 import { createAsgrepConnector, runCodemode, runNativeBatch, runBatchViaStdin, CODEMODE_TYPES_FOR_MODEL, NativeSessionPool, argvFor, asEnvelope, applyQueryScope, warmCodemodeSandbox, resetCodemodeSandboxForTests, isClosedWorkerError, } from "../codemode/index.js";
 import { AstSgrepRuntime, FreshnessCoordinator, RuntimeError } from "../runtime/runtime.js";
-import { ASGREP_PROMPT_GUIDELINES, ASGREP_PROMPT_SNIPPET, formatCodemodeCall, formatCodemodeResult, formatIndexCall, formatSearchCall, formatStatusCall, presentText, } from "../ui/present.js";
+import { ASGREP_PROMPT_GUIDELINES, ASGREP_PROMPT_SNIPPET, formatCodemodeCall, formatCodemodeResult, formatEditCall, formatIndexCall, formatReadCall, formatSearchCall, formatStatusCall, presentText, } from "../ui/present.js";
 import { renderAsgrepResult } from "../ui/card.js";
 import { bounded, errorDetails, failure, isFreshnessTimeout, extractInPath, report, success, } from "./results.js";
 export const DEFAULT_LIMIT = 8;
@@ -32,6 +32,25 @@ const indexParameters = Type.Object({
     force: Type.Optional(Type.Boolean({ default: false, description: "Rebuild the index from scratch" })),
 }, { additionalProperties: false });
 const statusParameters = Type.Object({}, { additionalProperties: false });
+const editParameters = Type.Object({
+    path: Type.Optional(Type.String({ minLength: 1, maxLength: 512, description: "Repository-relative file to edit" })),
+    oldText: Type.Optional(Type.String({ description: "Exact text to replace — must match exactly once in the file" })),
+    newText: Type.Optional(Type.String({ description: "Replacement text" })),
+    edits: Type.Optional(Type.Array(Type.Object({
+        path: Type.Optional(Type.String({ minLength: 1, maxLength: 512 })),
+        oldText: Type.String({ minLength: 1 }),
+        newText: Type.String(),
+    }), { maxItems: 64, description: "Multi-edit entries; top-level path is the default for entries that omit it" })),
+}, { additionalProperties: false });
+const readParameters = Type.Object({
+    path: Type.Optional(Type.String({ minLength: 1, maxLength: 512, description: "Repository-relative file path" })),
+    ref: Type.Optional(Type.String({ minLength: 1, description: "Hit ref (path#L12-L40) from a search result" })),
+    refs: Type.Optional(Type.Array(Type.String({ minLength: 1 }), { maxItems: 24, description: "Multiple refs to read in one call" })),
+    start: Type.Optional(Type.Integer({ minimum: 1 })),
+    end: Type.Optional(Type.Integer({ minimum: 1 })),
+    contextLines: Type.Optional(Type.Integer({ minimum: 0, maximum: 40 })),
+    maxChars: Type.Optional(Type.Integer({ minimum: 64, maximum: 64_000 })),
+}, { additionalProperties: false });
 const codemodeParameters = Type.Object({
     code: Type.String({
         minLength: 1,
@@ -141,32 +160,23 @@ export function registerAstSgrepTools(pi, runtime = new AstSgrepRuntime(pi), fre
         requireBackend(probeCli(options), context);
         return runtime.run(args, context, options);
     };
+    /** Typed sticky call that degrades to null when no backend is available or
+     * the session is crash-looping — the caller's CLI fallback owns the error
+     * fidelity when the binary itself is also broken. pool.call owns the
+     * respawn-on-closed retry; we only translate its outcomes. */
     const callSticky = async (root, tool, args, options = {}) => {
-        const invoke = async () => {
-            const worker = await pool.acquire(root);
-            if (!worker)
-                return null;
-            return worker.call(tool, args, options.signal ? { signal: options.signal } : {});
-        };
         try {
-            return await invoke();
+            return await pool.call(root, tool, args, options.signal ? { signal: options.signal } : {});
         }
         catch (cause) {
-            if (options.signal?.aborted || !isClosedWorkerError(cause))
-                throw cause;
-            await pool.invalidate(root);
-            try {
-                return await invoke();
-            }
-            catch (second) {
-                // A respawn that is also closed means the backend is crash-looping —
-                // degrade to the cold CLI path instead of pinning the tool on a dead
-                // transport (the runCli fallback carries the real cause if the
-                // binary itself is the problem).
-                if (options.signal?.aborted || !isClosedWorkerError(second))
-                    throw second;
+            // Aborted: return null so the CLI fallback surfaces the cancellation with
+            // its own semantics (runCli -> runtime.run maps abort to CANCELLED).
+            if (options.signal?.aborted)
                 return null;
-            }
+            const message = cause instanceof Error ? cause.message : String(cause);
+            if (isClosedWorkerError(cause) || message.includes("backend unavailable"))
+                return null;
+            throw cause;
         }
     };
     const nativeCall = async (tool, args, context, options = {}) => {
@@ -184,14 +194,14 @@ export function registerAstSgrepTools(pi, runtime = new AstSgrepRuntime(pi), fre
         resolveRoot: (context) => resolveRoot(context.cwd),
         nativeCall,
     };
-    if (runtime.watchExternalChanges !== undefined) {
-        warmRuntime.watchExternalChanges = runtime.watchExternalChanges;
-    }
-    if (runtime.resolveIndexPath) {
-        warmRuntime.resolveIndexPath = (root) => runtime.resolveIndexPath(root);
-    }
-    if (runtime.inspectIndexCompatibility) {
-        warmRuntime.inspectIndexCompatibility = (context) => runtime.inspectIndexCompatibility(context);
+    // Optional runtime capabilities pass through when present — bound, since
+    // they are class methods whose private fields live on the runtime instance.
+    for (const key of ["watchExternalChanges", "resolveIndexPath", "inspectIndexCompatibility"]) {
+        const member = runtime[key];
+        if (member !== undefined) {
+            warmRuntime[key] =
+                typeof member === "function" ? member.bind(runtime) : member;
+        }
     }
     if (runtime.rebuildIncompatibleIndex) {
         warmRuntime.rebuildIncompatibleIndex = async (context, options) => {
@@ -200,6 +210,68 @@ export function registerAstSgrepTools(pi, runtime = new AstSgrepRuntime(pi), fre
             return runtime.rebuildIncompatibleIndex(context, options);
         };
     }
+    /** Freshness gate shared by the one-shot tools: ensureFresh with a bounded
+     * timeout fallback, or a scoped-path index when the query carries in:/fileFilter. */
+    const freshRoot = async (cwd, signal, scopedPath) => {
+        const options = signal ? { signal } : {};
+        if (scopedPath) {
+            const root = await resolveRoot(cwd);
+            try {
+                await nativeCall("index_repo", { paths: [scopedPath] }, { cwd }, options);
+            }
+            catch (cause) {
+                if (!isFreshnessTimeout(cause, signal))
+                    throw cause;
+                await pool.invalidate(root).catch(() => undefined);
+            }
+            return root;
+        }
+        try {
+            return await freshness.ensureFresh(warmRuntime, { cwd }, options);
+        }
+        catch (cause) {
+            if (!isFreshnessTimeout(cause, signal))
+                throw cause;
+            const root = await resolveRoot(cwd);
+            await pool.invalidate(root).catch(() => undefined);
+            return root;
+        }
+    };
+    /** Typed sticky call first, argv fallback when no session — the shape every
+     * one-shot tool shares. */
+    const machineCall = async (root, tool, stickyArgs, argv, context, options) => (await callSticky(root, tool, stickyArgs, options)) ?? await runCli(argv, context, options);
+    /** Native launch env + resolved binary for the codemode batch host. */
+    const nativeLaunch = () => {
+        const env = runtime.nativeEnv?.() ?? { NO_COLOR: "1" };
+        let binary = null;
+        try {
+            binary = runtime.resolveBinaryPath?.({ env }) ?? null;
+        }
+        catch {
+            binary = null;
+        }
+        return { env, binary };
+    };
+    /** Host surface for codemode: argv run + optional sticky + stdin batch. */
+    const buildBatchHost = (sticky, env, binary) => {
+        const host = {
+            run: (args, context, runOptions) => runtime.run(args, context, runOptions ?? {}),
+            sticky,
+        };
+        if (binary) {
+            host.runBatch = (calls, context, runOptions) => runNativeBatch((a, c, o) => runtime.run(a, c, o ?? {}), calls, context, runOptions, (body, c, o) => {
+                const stdinOpts = { binary, cwd: c.cwd, body, env };
+                if (o?.signal)
+                    stdinOpts.signal = o.signal;
+                if (runtime.config?.timeoutMs !== undefined)
+                    stdinOpts.timeoutMs = runtime.config.timeoutMs;
+                if (runtime.config?.maxOutputBytes !== undefined)
+                    stdinOpts.maxOutputBytes = runtime.config.maxOutputBytes;
+                return runBatchViaStdin(stdinOpts);
+            });
+        }
+        return host;
+    };
     let stopWorkspaceEvents;
     function watchWorkspaceChanges() {
         stopWorkspaceEvents ??= pi.events?.on("workspace:changed", (data) => {
@@ -295,48 +367,11 @@ export function registerAstSgrepTools(pi, runtime = new AstSgrepRuntime(pi), fre
                     : timeoutSignal;
                 const options = { signal: operationSignal };
                 ensurePool();
-                let root;
-                try {
-                    root = await freshness.ensureFresh(warmRuntime, { cwd: ctx.cwd }, options);
-                }
-                catch (cause) {
-                    if (!isFreshnessTimeout(cause, signal))
-                        throw cause;
-                    root = await resolveRoot(ctx.cwd);
-                    await pool.invalidate(root).catch(() => undefined);
-                }
-                const env = runtime.nativeEnv?.() ?? { NO_COLOR: "1" };
-                let binary = null;
-                try {
-                    binary = runtime.resolveBinaryPath?.({ env }) ?? null;
-                }
-                catch {
-                    binary = null;
-                }
+                const root = await freshRoot(ctx.cwd, signal);
+                const { env, binary } = nativeLaunch();
                 // In-process NAPI first; CLI sticky only if addon missing.
                 const sticky = await pool.acquire(root);
-                const batchHost = {
-                    run: (args, context, runOptions) => runtime.run(args, context, runOptions ?? {}),
-                    sticky,
-                };
-                if (binary) {
-                    batchHost.runBatch = (calls, context, runOptions) => runNativeBatch((a, c, o) => runtime.run(a, c, o ?? {}), calls, context, runOptions, (body, c, o) => {
-                        const stdinOpts = {
-                            binary: binary,
-                            cwd: c.cwd,
-                            body,
-                            env,
-                        };
-                        if (o?.signal)
-                            stdinOpts.signal = o.signal;
-                        if (runtime.config?.timeoutMs !== undefined)
-                            stdinOpts.timeoutMs = runtime.config.timeoutMs;
-                        if (runtime.config?.maxOutputBytes !== undefined)
-                            stdinOpts.maxOutputBytes = runtime.config.maxOutputBytes;
-                        return runBatchViaStdin(stdinOpts);
-                    });
-                }
-                const bundle = createAsgrepConnector(batchHost, { cwd: ctx.cwd }, options);
+                const bundle = createAsgrepConnector(buildBatchHost(sticky, env, binary), { cwd: ctx.cwd }, options);
                 bundle.resetStats();
                 const codemodeOptions = { stats: bundle.stats };
                 codemodeOptions.timeoutMs = Math.max(1, deadline - Date.now());
@@ -409,32 +444,9 @@ export function registerAstSgrepTools(pi, runtime = new AstSgrepRuntime(pi), fre
                 const scopedPath = (typeof params.in === "string" ? params.in : undefined)
                     ?? (typeof params.fileFilter === "string" ? params.fileFilter : undefined)
                     ?? extractInPath(params.query);
-                let root;
-                if (scopedPath) {
-                    root = await resolveRoot(ctx.cwd);
-                    try {
-                        await nativeCall("index_repo", { paths: [scopedPath] }, { cwd: ctx.cwd }, options);
-                    }
-                    catch (cause) {
-                        if (!isFreshnessTimeout(cause, signal))
-                            throw cause;
-                        await pool.invalidate(root).catch(() => undefined);
-                    }
-                }
-                else {
-                    try {
-                        root = await freshness.ensureFresh(warmRuntime, { cwd: ctx.cwd }, options);
-                    }
-                    catch (cause) {
-                        if (!isFreshnessTimeout(cause, signal))
-                            throw cause;
-                        root = await resolveRoot(ctx.cwd);
-                        await pool.invalidate(root).catch(() => undefined);
-                    }
-                }
+                const root = await freshRoot(ctx.cwd, signal, scopedPath);
                 const [tool, args] = searchToolCall(params);
-                const sticky = await callSticky(root, tool, args, options);
-                const response = sticky ?? await runCli(searchArgs(params), { cwd: ctx.cwd }, options);
+                const response = await machineCall(root, tool, args, searchArgs(params), { cwd: ctx.cwd }, options);
                 report(onUpdate, "search", "completed");
                 return success("search", response, {
                     query: params.query,
@@ -445,6 +457,66 @@ export function registerAstSgrepTools(pi, runtime = new AstSgrepRuntime(pi), fre
             }
             catch (cause) {
                 return failure("search", cause, signal);
+            }
+        },
+    });
+    // Trained-priorty escape hatches: direct edit/read without writing JS.
+    // Both ride the connector's arg plumbing and the same sticky pool.
+    pi.registerTool({
+        name: "asgrep_edit",
+        label: "asgrep edit",
+        promptSnippet: "Edit a file by exact-string replace (asgrep_edit; use asgrep for multi-step)",
+        description: "Edit a file by exact-string replace — oldText must match exactly once. edits[] applies many edits atomically. Prefer the asgrep tool for anything multi-step or filtered.",
+        parameters: editParameters,
+        renderCall(args, theme, context) {
+            return presentText(formatEditCall(args, theme), context.lastComponent);
+        },
+        renderResult(result, options, theme, context) {
+            return renderAsgrepResult(result, options, theme, context);
+        },
+        async execute(_toolCallId, params, signal, onUpdate, ctx) {
+            report(onUpdate, "edit", "started");
+            try {
+                ensurePool();
+                const options = signal ? { signal } : {};
+                const root = await freshRoot(ctx.cwd, signal);
+                const sticky = await pool.acquire(root);
+                const bundle = createAsgrepConnector({ run: (a, c, o) => runtime.run(a, c, o), sticky }, { cwd: ctx.cwd }, options);
+                const response = await bundle.asgrep.edit(params);
+                report(onUpdate, "edit", "completed");
+                return success("edit", response, { backend: pool.backend() });
+            }
+            catch (cause) {
+                return failure("edit", cause, signal);
+            }
+        },
+    });
+    pi.registerTool({
+        name: "asgrep_read",
+        label: "asgrep read",
+        promptSnippet: "Read file windows or hit refs (asgrep_read; use asgrep for multi-step)",
+        description: "Read a file window or resolve hit refs (path#L1-L40) into content. Prefer the asgrep tool for composed lookups.",
+        parameters: readParameters,
+        renderCall(args, theme, context) {
+            return presentText(formatReadCall(args, theme), context.lastComponent);
+        },
+        renderResult(result, options, theme, context) {
+            return renderAsgrepResult(result, options, theme, context);
+        },
+        async execute(_toolCallId, params, signal, onUpdate, ctx) {
+            report(onUpdate, "read", "started");
+            try {
+                ensurePool();
+                const options = signal ? { signal } : {};
+                const root = await freshRoot(ctx.cwd, signal);
+                const sticky = await pool.acquire(root);
+                const bundle = createAsgrepConnector({ run: (a, c, o) => runtime.run(a, c, o), sticky }, { cwd: ctx.cwd }, options);
+                const response = await bundle.asgrep.read(params);
+                report(onUpdate, "read", "completed");
+                return success("read", response, { backend: pool.backend() });
+            }
+            catch (cause) {
+                return failure("read", cause, signal);
             }
         },
     });
@@ -466,11 +538,9 @@ export function registerAstSgrepTools(pi, runtime = new AstSgrepRuntime(pi), fre
             report(onUpdate, command, "started");
             try {
                 ensurePool();
-                const root = await resolveRoot(ctx.cwd);
-                const sticky = await pool.acquire(root);
-                const response = sticky
-                    ? await sticky.call("index_repo", { force }, signal ? { signal } : {})
-                    : await runCli([command, ".", "--json"], { cwd: ctx.cwd }, signal ? { signal } : {});
+                const options = signal ? { signal } : {};
+                const root = await freshRoot(ctx.cwd, signal);
+                const response = await machineCall(root, "index_repo", { force }, [command, ".", "--json"], { cwd: ctx.cwd }, options);
                 report(onUpdate, command, "completed");
                 return success(command, response);
             }
@@ -495,11 +565,9 @@ export function registerAstSgrepTools(pi, runtime = new AstSgrepRuntime(pi), fre
             report(onUpdate, "status", "started");
             try {
                 ensurePool();
-                const root = await resolveRoot(ctx.cwd);
-                const sticky = await pool.acquire(root);
-                const response = sticky
-                    ? await sticky.call("index_status", {}, signal ? { signal } : {})
-                    : await runCli(["status", ".", "--json"], { cwd: ctx.cwd }, signal ? { signal } : {});
+                const options = signal ? { signal } : {};
+                const root = await freshRoot(ctx.cwd, signal);
+                const response = await machineCall(root, "index_status", {}, ["status", ".", "--json"], { cwd: ctx.cwd }, options);
                 report(onUpdate, "status", "completed");
                 return success("status", response);
             }

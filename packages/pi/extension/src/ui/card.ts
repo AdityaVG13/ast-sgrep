@@ -13,6 +13,17 @@ import {
   type PresentTheme,
 } from "./present.js";
 
+/** Header text that rides the top border: "asgrep search · 4 hits · 12ms · napi". */
+function frameLabel(model: CardModel): string {
+  const bits = ["asgrep", model.command, ...model.title.filter((b): b is string => Boolean(b))];
+  const tail = model.error ? "failed" : model.running ? "running" : "";
+  if (tail) bits.push(tail);
+  const counts: string[] = [];
+  if (model.ops?.length) counts.push(model.ops.length + (model.ops.length === 1 ? " call" : " calls"));
+  if (model.hits) counts.push(model.hits.length + (model.hits.length === 1 ? " hit" : " hits"));
+  return [...bits.slice(0, 2), ...counts, ...bits.slice(2)].join(" \u00b7 ");
+}
+
 /** renderCall component that paints nothing — the result card owns display. */
 export const EMPTY_CALL = {
   render: (): string[] => [],
@@ -35,6 +46,34 @@ export type CardModel = {
 const TOOL_COL = 12;
 const DUR_COL = 7;
 
+/** Rounded frame glyphs — pi themes may provide theme.boxRound; default ASCII-art set. */
+const BOX = { tl: "\u256d", tr: "\u256e", bl: "\u2570", br: "\u256f", h: "\u2500", v: "\u2502" };
+
+type BoxGlyphs = { tl: string; tr: string; bl: string; br: string; h: string; v: string };
+
+function boxOf(theme: PresentTheme | undefined): BoxGlyphs {
+  const b = (theme as unknown as { boxRound?: Record<string, string> | undefined })?.boxRound;
+  if (b && typeof b.topLeft === "string" && typeof b.horizontal === "string" && typeof b.vertical === "string") {
+    return { tl: b.topLeft, tr: b.topRight ?? BOX.tr, bl: b.bottomLeft ?? BOX.bl, br: b.bottomRight ?? BOX.br, h: b.horizontal, v: b.vertical };
+  }
+  return BOX;
+}
+
+function borderKey(model: CardModel): string {
+  if (model.error) return "error";
+  if (model.running) return "accent";
+  return "dim";
+}
+
+/** Top/bottom bar with an optional label embedded in the rule. Geometry is in
+ * display cells (frameW): \u256d + 3 rules on the left, corner on the right. */
+function frameBar(theme: PresentTheme | undefined, box: BoxGlyphs, border: (t: string) => string, left: string, right: string, label: string | null, width: number): string {
+  const leftRaw = left + box.h.repeat(3);
+  const shown = label ? clamp(" " + label + " ", Math.max(0, width - frameW(leftRaw) - 1)) : "";
+  const fill = Math.max(0, width - frameW(leftRaw) - frameW(shown) - 1);
+  return border(leftRaw) + shown + border(box.h.repeat(fill)) + border(right);
+}
+
 function clamp(text: string, width: number): string {
   return truncateToWidth(text, Math.max(1, width));
 }
@@ -43,6 +82,13 @@ function fitPath(text: string, budget: number): string {
   if (visibleWidth(text) <= budget) return text;
   if (budget <= 1) return "\u2026";
   return "\u2026" + text.slice(Math.max(0, text.length - budget + 1));
+}
+
+/** Display columns for frame geometry: ANSI-stripped code-point count.
+ * Box glyphs/·/✓ render width-1 in real terminals; the conservative
+ * visibleWidth() over-counts them (width 2) which would ragged the box. */
+function frameW(text: string): number {
+  return text.replace(/\u001b\[[0-9;]*m/g, "").length;
 }
 
 function fmtMs(ms: number): string {
@@ -70,16 +116,6 @@ function hitRow(theme: PresentTheme | undefined, n: number, hit: HitLike, width:
   return clamp(row, width);
 }
 
-function describe(model: CardModel): string {
-  const bits: string[] = [];
-  if (model.ops && model.ops.length > 0) bits.push(model.ops.length + (model.ops.length === 1 ? " call" : " calls"));
-  else if (model.hits) bits.push(model.hits.length + (model.hits.length === 1 ? " hit" : " hits"));
-  for (const bit of model.title) if (bit) bits.push(bit);
-  if (model.error) bits.push("failed");
-  else if (model.running) bits.push("running");
-  return bits.join(" \u00b7 ");
-}
-
 export class AsgrepCard {
   theme: PresentTheme | undefined;
   model: CardModel | undefined;
@@ -100,22 +136,32 @@ export class AsgrepCard {
     const model = this.model;
     if (!model || width <= 0) return [];
     if (this.cache?.width === width) return this.cache.lines;
-    const lines = bodyLines(theme, model, Math.max(20, width));
+    const lines = framedLines(theme, model, Math.max(8, width));
     this.cache = { width, lines };
     return lines;
   }
 }
 
+/** Rounded card: header embedded in the top rule, body rows in \u2502 gutters. */
+function framedLines(theme: PresentTheme | undefined, model: CardModel, width: number): string[] {
+  const box = boxOf(theme);
+  const key = borderKey(model);
+  const border = (text: string): string => paint(theme, key, text);
+  const inner = Math.max(1, width - 4); // "\u2502 " + content + " \u2502"
+  const label = frameLabel(model);
+  const rows = bodyLines(theme, model, inner);
+  const out = [frameBar(theme, box, border, box.tl, box.tr, label, width)];
+  for (const row of rows) {
+    const body = clamp(row, inner);
+    const pad = Math.max(0, inner - frameW(body));
+    out.push(border(box.v) + " " + body + " ".repeat(pad) + " " + border(box.v));
+  }
+  out.push(frameBar(theme, box, border, box.bl, box.br, null, width));
+  return out;
+}
+
 function bodyLines(theme: PresentTheme | undefined, model: CardModel, width: number): string[] {
   const lines: string[] = [];
-  const icon = model.error
-    ? paint(theme, "error", "\u2717")
-    : model.running
-      ? paint(theme, "dim", "\u00b7")
-      : paint(theme, "success", "\u2713");
-  const head = icon + " " + paint(theme, "accent", "asgrep", true) + " " + paint(theme, "muted", model.command);
-  const desc = describe(model);
-  lines.push(clamp(desc ? head + " " + paint(theme, "dim", desc) : head, width));
 
   const maxOps = model.expanded ? 24 : 8;
   const maxHits = model.expanded ? 24 : 12;
@@ -249,8 +295,16 @@ export function cardModel(result: ResultLike, options: RenderOptions): CardModel
 
   const hits = hitsOf(response) ?? hitsOf(details.result);
   const resultEdits = editsOf(details.result) ?? editsOf(response);
+  // read envelopes carry windows: preview each window's first lines.
+  const windows = command === "read" && response && Array.isArray((response as { windows?: unknown }).windows)
+    ? (response as { windows: Array<{ path?: string; start?: number; end?: number; text?: string }> }).windows
+    : undefined;
+  const readLines = windows?.flatMap((w) => [
+    (w.path ?? "?") + ":" + (w.start ?? 1) + "-" + (w.end ?? ""),
+    ...(typeof w.text === "string" ? w.text.split("\n").slice(0, expanded ? 20 : 6).map((l) => "  " + l) : []),
+  ]);
   // When edits carry diffs they are the interesting part of the result.
-  const resultLines = hits || resultEdits ? undefined : resultPreviewLines(details.result);
+  const resultLines = hits || resultEdits ? undefined : (readLines ?? resultPreviewLines(details.result));
 
   const model: CardModel = { command, title, expanded };
   if (ops && ops.length > 0) model.ops = ops;

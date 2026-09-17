@@ -1,4 +1,5 @@
 import { coerceHostArgs } from "./guest-api.js";
+import { defined } from "./types.js";
 import { createCodemodeDispatcher, } from "./dispatch.js";
 const DEFAULT_LIMIT = 8;
 function clampLimit(limit) {
@@ -49,15 +50,15 @@ export function createAsgrepConnector(host, context, options = {}) {
     const asgrep = {
         search: (input, callOptions) => call("search", searchPayload("search", input), callOptions?.signal),
         find: (input, callOptions) => call("find", searchPayload("find", input), callOptions?.signal),
-        read: (input, callOptions) => call("read", {
-            ...(typeof input.path === "string" ? { path: input.path } : {}),
-            ...(input.start !== undefined ? { start: input.start } : {}),
-            ...(input.end !== undefined ? { end: input.end } : {}),
-            ...(typeof input.ref === "string" ? { ref: input.ref } : {}),
-            ...(input.refs !== undefined ? { refs: input.refs } : {}),
-            ...(input.contextLines !== undefined ? { context_lines: input.contextLines } : {}),
-            ...(input.maxChars !== undefined ? { max_chars: input.maxChars } : {}),
-        }, callOptions?.signal),
+        read: (input, callOptions) => call("read", defined({
+            path: input.path,
+            start: input.start,
+            end: input.end,
+            ref: input.ref,
+            refs: input.refs,
+            context_lines: input.contextLines,
+            max_chars: input.maxChars,
+        }), callOptions?.signal),
         edit: (input, callOptions) => {
             // Multi-edit wire contract: every entry carries its own path; the
             // top-level path is the default for entries that omit it.
@@ -65,19 +66,15 @@ export function createAsgrepConnector(host, context, options = {}) {
                 ...(typeof input.path === "string" ? { path: input.path } : {}),
                 ...entry,
             }));
-            return call("edit", {
-                ...(typeof input.path === "string" ? { path: input.path } : {}),
-                ...(typeof input.oldText === "string" ? { oldText: input.oldText } : {}),
-                ...(typeof input.newText === "string" ? { newText: input.newText } : {}),
-                ...(edits !== undefined ? { edits } : {}),
-            }, callOptions?.signal);
+            return call("edit", defined({
+                path: input.path,
+                oldText: input.oldText,
+                newText: input.newText,
+                edits,
+            }), callOptions?.signal);
         },
         semantic: (input, callOptions) => call("semantic", searchPayload("semantic", input), callOptions?.signal),
-        chain: (input, callOptions) => call("chain", {
-            query: input.query,
-            limit: clampLimit(input.limit),
-            top_n: 20,
-        }, callOptions?.signal),
+        chain: (input, callOptions) => call("chain", { query: input.query, limit: clampLimit(input.limit), top_n: 20 }, callOptions?.signal),
         defs: (input, callOptions) => {
             const scoped = coerceHostArgs("defs", { ...input });
             return call("defs", {
@@ -94,11 +91,7 @@ export function createAsgrepConnector(host, context, options = {}) {
                 excerpt_lines: clampExcerpt(input.excerptLines),
             }, callOptions?.signal);
         },
-        imports: (input, callOptions) => call("imports", {
-            module: input.module,
-            limit: clampLimit(input.limit),
-            excerpt_lines: clampExcerpt(input.excerptLines),
-        }, callOptions?.signal),
+        imports: (input, callOptions) => call("imports", defined({ module: input.module, limit: clampLimit(input.limit), excerpt_lines: clampExcerpt(input.excerptLines) }), callOptions?.signal),
         indexStatus: (callOptions) => call("index_status", {}, callOptions?.signal),
         indexRepo: (input = {}, callOptions) => call("index_repo", { force: input.force === true }, callOptions?.signal),
         catalogSearch: (input, callOptions) => call("catalog_search", { query: input.query }, callOptions?.signal),

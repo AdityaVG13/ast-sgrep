@@ -293,7 +293,7 @@ export class AstSgrepRuntime {
     if (options.signal?.aborted) throw new RuntimeError("CANCELLED", "ast-sgrep execution was cancelled");
     const root = await this.resolveRoot(context);
     const timeout = finitePositive(options.timeoutMs, this.config.timeoutMs, "timeoutMs");
-    const env: NodeJS.ProcessEnv = { ...this.#environment, ...this.config.env, ...options.env, NO_COLOR: "1" };
+    const env = this.#mergedEnv(options.env);
     const binary = getBinary(this.config, env, this.#resolver);
     try {
       const execOptions: ExecOptions = { cwd: root, env, timeout };
@@ -305,15 +305,19 @@ export class AstSgrepRuntime {
     }
   }
 
+  /** environment < config.env < options.env < NO_COLOR — the merge every path shares. */
+  #mergedEnv(extra?: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+    return { ...this.#environment, ...this.config.env, ...extra, NO_COLOR: "1" };
+  }
+
   /** Absolute path to the native binary (for sticky serve / stdin batch spawn). */
   resolveBinaryPath(options: { env?: NodeJS.ProcessEnv } = {}): string {
-    const env: NodeJS.ProcessEnv = { ...this.#environment, ...this.config.env, ...options.env, NO_COLOR: "1" };
-    return getBinary(this.config, env, this.#resolver);
+    return getBinary(this.config, this.#mergedEnv(options.env), this.#resolver);
   }
 
   /** Merged process env for native Code Mode workers. */
   nativeEnv(options: { env?: NodeJS.ProcessEnv } = {}): NodeJS.ProcessEnv {
-    return { ...this.#environment, ...this.config.env, ...options.env, NO_COLOR: "1" };
+    return this.#mergedEnv(options.env);
   }
 
   async checkCompatibility(context: RuntimeContext, options: RunOptions = {}): Promise<MachineEnvelope> {

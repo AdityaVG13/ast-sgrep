@@ -11,6 +11,7 @@
 import type { MachineEnvelope } from "../runtime/runtime.js";
 import { asEnvelope, type BatchResult, type StickyWorker } from "./dispatch.js";
 import { loadCodemodeNative, type NativeSession } from "./native.js";
+import { defined } from "./types.js";
 import { startStickyWorker, type StickyWorkerOptions } from "./worker.js";
 
 export type SessionPoolOptions = {
@@ -306,15 +307,12 @@ export class NativeSessionPool {
     let napiError: unknown = null;
     if (binding) {
       try {
-        const config: {
-          root: string;
-          indexPath?: string;
-          limit?: number;
-          useEmbed?: boolean;
-        } = { root };
-        if (opts.indexPath) config.indexPath = opts.indexPath;
-        if (opts.limit !== undefined) config.limit = opts.limit;
-        if (opts.useEmbed !== undefined) config.useEmbed = opts.useEmbed;
+        const config = defined({
+          root,
+          indexPath: opts.indexPath,
+          limit: opts.limit,
+          useEmbed: opts.useEmbed,
+        }) as { root: string; indexPath?: string; limit?: number; useEmbed?: boolean };
         const session = new binding.Session(config);
         const worker = inProcessWorker(session);
         if (gen !== this.#generationFor(root)) {
@@ -336,13 +334,13 @@ export class NativeSessionPool {
       return fail(napiError ?? new Error("native Code Mode backend unavailable (no addon, no binary)"));
     }
     try {
-      const stickyOpts: StickyWorkerOptions = {
+      const stickyOpts = defined({
         binary: opts.binary,
         cwd: root,
-      };
-      if (opts.env) stickyOpts.env = opts.env;
-      if (opts.timeoutMs !== undefined) stickyOpts.timeoutMs = opts.timeoutMs;
-      if (opts.maxOutputBytes !== undefined) stickyOpts.maxOutputBytes = opts.maxOutputBytes;
+        env: opts.env,
+        timeoutMs: opts.timeoutMs,
+        maxOutputBytes: opts.maxOutputBytes,
+      }) as StickyWorkerOptions;
       const worker = await this.#startFn(stickyOpts);
       if (gen !== this.#generationFor(root)) {
         await worker.end().catch(() => undefined);

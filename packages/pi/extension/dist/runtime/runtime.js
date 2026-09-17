@@ -232,7 +232,7 @@ export class AstSgrepRuntime {
             throw new RuntimeError("CANCELLED", "ast-sgrep execution was cancelled");
         const root = await this.resolveRoot(context);
         const timeout = finitePositive(options.timeoutMs, this.config.timeoutMs, "timeoutMs");
-        const env = { ...this.#environment, ...this.config.env, ...options.env, NO_COLOR: "1" };
+        const env = this.#mergedEnv(options.env);
         const binary = getBinary(this.config, env, this.#resolver);
         try {
             const execOptions = { cwd: root, env, timeout };
@@ -245,14 +245,17 @@ export class AstSgrepRuntime {
             rethrowExecFailure(cause, options, timeout);
         }
     }
+    /** environment < config.env < options.env < NO_COLOR — the merge every path shares. */
+    #mergedEnv(extra) {
+        return { ...this.#environment, ...this.config.env, ...extra, NO_COLOR: "1" };
+    }
     /** Absolute path to the native binary (for sticky serve / stdin batch spawn). */
     resolveBinaryPath(options = {}) {
-        const env = { ...this.#environment, ...this.config.env, ...options.env, NO_COLOR: "1" };
-        return getBinary(this.config, env, this.#resolver);
+        return getBinary(this.config, this.#mergedEnv(options.env), this.#resolver);
     }
     /** Merged process env for native Code Mode workers. */
     nativeEnv(options = {}) {
-        return { ...this.#environment, ...this.config.env, ...options.env, NO_COLOR: "1" };
+        return this.#mergedEnv(options.env);
     }
     async checkCompatibility(context, options = {}) {
         const value = await this.run(["version", "--json"], context, options);

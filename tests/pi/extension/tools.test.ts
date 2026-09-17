@@ -46,7 +46,7 @@ async function invoke(tool: Tool, params: Record<string, unknown> = {}, signal =
 
 test("registers Code Mode first with auto-use prompt snippet", () => {
   const { tools, byName } = fixture();
-  assert.deepEqual(tools.map(({ name }) => name), ["asgrep", "asgrep_search", "asgrep_index", "asgrep_status"]);
+  assert.deepEqual(tools.map(({ name }) => name), ["asgrep", "asgrep_search", "asgrep_edit", "asgrep_read", "asgrep_index", "asgrep_status"]);
   assert.ok(byName("asgrep").promptSnippet);
   assert.match(byName("asgrep").promptSnippet!, /without being asked/);
   assert.ok((byName("asgrep").promptGuidelines ?? []).length >= 2);

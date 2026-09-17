@@ -5,7 +5,7 @@
 import { isClosedWorkerError } from "../codemode/index.js";
 import { RuntimeError, type MachineEnvelope, type RunOptions, type RuntimeContext } from "../runtime/types.js";
 import type { FreshnessCoordinator } from "../runtime/freshness.js";
-import { formatIndexResult, formatSearchResult, formatStatusResult } from "../ui/present.js";
+import { formatEditResult, formatIndexResult, formatReadResult, formatSearchResult, formatStatusResult } from "../ui/present.js";
 
 export const MAX_CONTENT_CHARS = 8_000;
 
@@ -47,7 +47,11 @@ export function success(
     ? formatStatusResult(response)
     : command === "index" || command === "reindex"
       ? formatIndexResult(command, response)
-      : formatSearchResult(response, { command, ...extra });
+      : command === "edit"
+        ? formatEditResult(response)
+        : command === "read"
+          ? formatReadResult(response)
+          : formatSearchResult(response, { command, ...extra });
   return {
     content: [{ type: "text" as const, text: bounded(text) }],
     // The tool execute owns its machine command: normalize the envelope's

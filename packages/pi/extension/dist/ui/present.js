@@ -44,6 +44,44 @@ export function formatIndexCall(force, theme) {
 export function formatStatusCall(theme) {
     return header(theme, "status", []);
 }
+export function formatEditCall(params, theme) {
+    const n = Array.isArray(params.edits) ? params.edits.length : 0;
+    return header(theme, "edit", [params.path, n > 1 ? n + " edits" : undefined]);
+}
+export function formatReadCall(params, theme) {
+    const target = params.path ?? params.ref;
+    const range = params.start !== undefined ? "L" + params.start + "-L" + (params.end ?? "") : undefined;
+    return header(theme, "read", [target, range]);
+}
+/** Model-visible text for an edit envelope: what changed, per file. */
+export function formatEditResult(response, theme) {
+    const edits = Array.isArray(response.edits) ? response.edits : [];
+    const changed = edits.filter((e) => e.changed === true).length;
+    const title = header(theme, "edit", [changed + "/" + edits.length + " changed"]);
+    const rows = edits.slice(0, 12).map((e) => {
+        const path = typeof e.path === "string" ? e.path : "?";
+        const line = typeof e.line === "number" ? ":" + e.line : "";
+        return paint(theme, "toolOutput", "  " + path + line);
+    });
+    return [title, ...rows].join("\n");
+}
+/** Model-visible text for a read envelope: the window contents themselves. */
+export function formatReadResult(response, theme) {
+    const windows = Array.isArray(response.windows) ? response.windows : [];
+    if (windows.length === 0)
+        return header(theme, "read", ["0 windows"]);
+    const out = [];
+    for (const w of windows.slice(0, 8)) {
+        const path = typeof w.path === "string" ? w.path : "?";
+        out.push(header(theme, "read", [path + "#L" + (w.start ?? 1) + "-L" + (w.end ?? "")]));
+        const text = typeof w.text === "string" ? w.text : "";
+        for (const line of text.split("\n").slice(0, 80))
+            out.push(line);
+    }
+    if (windows.length > 8)
+        out.push("… " + (windows.length - 8) + " more windows");
+    return out.join("\n");
+}
 export function formatCodemodeCall(code, theme) {
     const preview = code.trim().replace(/\s+/g, " ").slice(0, 80);
     return header(theme, "codemode", [`${preview}${code.trim().length > 80 ? "…" : ""}`]);

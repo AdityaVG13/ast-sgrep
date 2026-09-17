@@ -170,16 +170,15 @@ async function settleOne(host, item, stats) {
         item.reject(err);
     }
 }
+/** Pending[] -> wire calls ({id, tool, args}) shared by both batch transports. */
+function packCalls(wave) {
+    return wave.map((item, index) => ({ id: String(index), tool: item.tool, args: item.args }));
+}
 async function settleWave(host, wave, stats) {
     if (host.sticky) {
         const transportOptions = sharedBatchOptions(wave);
         try {
-            const calls = wave.map((item, index) => ({
-                id: String(index),
-                tool: item.tool,
-                args: item.args,
-            }));
-            const batch = await host.sticky.batch(calls, transportOptions);
+            const batch = await host.sticky.batch(packCalls(wave), transportOptions);
             stats.stickyCalls += wave.length;
             for (const item of wave)
                 item.lane = "sticky";
@@ -206,12 +205,7 @@ async function settleWave(host, wave, stats) {
     if (host.runBatch) {
         const transportOptions = sharedBatchOptions(batchWave);
         try {
-            const calls = batchWave.map((item, index) => ({
-                id: String(index),
-                tool: item.tool,
-                args: item.args,
-            }));
-            const batch = await host.runBatch(calls, batchWave[0].context, transportOptions);
+            const batch = await host.runBatch(packCalls(batchWave), batchWave[0].context, transportOptions);
             stats.batchedCalls += batchWave.length;
             for (const item of batchWave)
                 item.lane = "batch";

@@ -4,7 +4,7 @@
  */
 import { isClosedWorkerError } from "../codemode/index.js";
 import { RuntimeError } from "../runtime/types.js";
-import { formatIndexResult, formatSearchResult, formatStatusResult } from "../ui/present.js";
+import { formatEditResult, formatIndexResult, formatReadResult, formatSearchResult, formatStatusResult } from "../ui/present.js";
 export const MAX_CONTENT_CHARS = 8_000;
 export function bounded(text) {
     return text.length <= MAX_CONTENT_CHARS ? text : `${text.slice(0, MAX_CONTENT_CHARS - 1)}…`;
@@ -14,7 +14,11 @@ export function success(command, response, extra = {}) {
         ? formatStatusResult(response)
         : command === "index" || command === "reindex"
             ? formatIndexResult(command, response)
-            : formatSearchResult(response, { command, ...extra });
+            : command === "edit"
+                ? formatEditResult(response)
+                : command === "read"
+                    ? formatReadResult(response)
+                    : formatSearchResult(response, { command, ...extra });
     return {
         content: [{ type: "text", text: bounded(text) }],
         // The tool execute owns its machine command: normalize the envelope's

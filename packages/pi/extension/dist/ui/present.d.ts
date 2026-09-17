@@ -39,6 +39,20 @@ export declare function formatSearchCall(params: {
 }, theme?: PresentTheme): string;
 export declare function formatIndexCall(force: boolean, theme?: PresentTheme): string;
 export declare function formatStatusCall(theme?: PresentTheme): string;
+export declare function formatEditCall(params: {
+    path?: string;
+    edits?: unknown[];
+}, theme?: PresentTheme): string;
+export declare function formatReadCall(params: {
+    path?: string;
+    ref?: string;
+    start?: number;
+    end?: number;
+}, theme?: PresentTheme): string;
+/** Model-visible text for an edit envelope: what changed, per file. */
+export declare function formatEditResult(response: EnvelopeLike, theme?: PresentTheme): string;
+/** Model-visible text for a read envelope: the window contents themselves. */
+export declare function formatReadResult(response: EnvelopeLike, theme?: PresentTheme): string;
 export declare function formatCodemodeCall(code: string, theme?: PresentTheme): string;
 export declare function formatSearchResult(response: EnvelopeLike, meta: {
     command: string;

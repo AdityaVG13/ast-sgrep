@@ -1,5 +1,12 @@
 /** Typed surface the model sees inside a Code Mode program (`asgrep.*`). */
 
+/** Drop undefined keys — replaces spread-conditional arg-building chains. */
+export function defined<T extends Record<string, unknown>>(args: T): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(args)) if (value !== undefined) out[key] = value;
+  return out;
+}
+
 export type SearchArgs = {
   query: string;
   limit?: number;
@@ -28,7 +35,7 @@ export type EditArgs = {
   path?: string;
   oldText?: string;
   newText?: string;
-  edits?: Array<{ path: string; oldText: string; newText: string }>;
+  edits?: Array<{ path?: string; oldText: string; newText: string }>;
 };
 
 export type ChainArgs = {
