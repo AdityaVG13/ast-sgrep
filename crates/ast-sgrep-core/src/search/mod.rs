@@ -1185,6 +1185,16 @@ impl Searcher {
             if spelling.chars().count() >= 3 {
                 let def_query = ParsedQuery::parse(&format!("defs:{spelling}"));
                 structural.extend(search_defs(&self.store, &self.options, &def_query)?);
+                // Whole-word occurrences of the exact spelling, but only when
+                // the query IS the identifier: SCREAMING/snake_case tokens
+                // fragment into noisy terms that match unrelated comments
+                // (VT_LMHEAD_FP8 vs VT-MATMUL-FP8-BLOCK-*). Multi-word natural
+                // queries keep their expansion/fusion path or literal hits
+                // crowd out the semantic lane (invent_path gold).
+                if parsed.raw.trim() == spelling {
+                    let word_query = ParsedQuery::parse(&format!("word:{spelling}"));
+                    structural.extend(literal_pass(&self.store, &self.options, &word_query)?);
+                }
             }
         }
         if !conceptual {

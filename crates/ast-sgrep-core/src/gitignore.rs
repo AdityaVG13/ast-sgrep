@@ -1,14 +1,22 @@
+use ast_sgrep_lang::Language;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::rc::Rc;
 pub const DEFAULT_SKIP_DIR_NAMES: &[&str] = &[".git", ".asgrep"];
-pub const INDEXABLE_EXTENSIONS: &[&str] = &[
-    "rs", "ts", "tsx", "js", "jsx", "mjs", "cjs", "py", "pyi", "go", "java", "cs", "rb", "swift",
-    "c", "h", "cpp", "cc", "cxx", "hpp", "hxx", "hh", "ipp", "kt", "kts", "php", "dart", "mbt",
-    "mbti", "toml", "md", "txt", "json", "yaml", "yml",
-];
+
+/// Document/data rows indexed alongside source: they carry no tree-sitter
+/// Language but their lines feed lexical search.
+pub const DOCUMENT_EXTENSIONS: &[&str] = &["toml", "md", "txt", "json", "yaml", "yml"];
+
+/// True when the index walk should admit ext. Source extensions resolve
+/// through Language::from_extension so this set can never drift from
+/// SOURCE_EXTENSIONS in ast-sgrep-lang.
+pub fn is_indexable_extension(ext: &str) -> bool {
+    Language::from_extension(ext).is_some()
+        || DOCUMENT_EXTENSIONS.contains(&ext.to_ascii_lowercase().as_str())
+}
 pub fn should_skip_dir(path: &Path) -> bool {
     path.file_name()
         .and_then(|n| n.to_str())
@@ -24,7 +32,7 @@ pub fn should_skip_file(path: &Path) -> bool {
     }
     path.extension()
         .and_then(|e| e.to_str())
-        .map(|ext| !INDEXABLE_EXTENSIONS.contains(&ext.to_lowercase().as_str()))
+        .map(|ext| !is_indexable_extension(ext))
         .unwrap_or(true)
 }
 

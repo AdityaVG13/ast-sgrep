@@ -74,6 +74,85 @@ test("concurrent acquire shares one in-flight start", async () => {
   await pool.shutdown();
 });
 
+test("a crash-looping backend backs off and surfaces the real start error", async () => {
+  let starts = 0;
+  const pool = new NativeSessionPool(async () => {
+    starts += 1;
+    throw new Error("index schema 16 is newer than supported version 15");
+  });
+  pool.configure({ binary: "/fake/asgrep" });
+
+  assert.equal(await pool.acquire("/p"), null);
+  assert.equal(starts, 1);
+  // Inside the backoff window the pool does not pay another doomed spawn.
+  assert.equal(await pool.acquire("/p"), null);
+  assert.equal(starts, 1);
+  assert.match(pool.lastStartError("/p") ?? "", /newer than supported/u);
+
+  // pool.call on a dead transport surfaces the real start error, not a stale
+  // "is closed" that hides the schema refusal.
+  const pool2 = new NativeSessionPool(async () => {
+    throw new Error("spawn ENOENT codemode-serve");
+  });
+  pool2.configure({ binary: "/fake/asgrep" });
+  await assert.rejects(
+    pool2.call("/p", "search", {}),
+    /codemode backend unavailable: spawn ENOENT codemode-serve/u,
+  );
+});
+
+test("a freshly spawned worker that is already closed counts as a start failure", async () => {
+  let starts = 0;
+  const deadOnArrival = (): StickyWorker => ({
+    closed: () => true,
+    async call() { throw new Error("codemode-serve is closed"); },
+    async batch() { throw new Error("codemode-serve is closed"); },
+    async end() {},
+  });
+  const pool = new NativeSessionPool(async () => {
+    starts += 1;
+    return deadOnArrival();
+  });
+  pool.configure({ binary: "/fake/asgrep" });
+  assert.equal(await pool.acquire("/p"), null);
+  assert.equal(starts, 1);
+  // Second acquire inside backoff must not spawn again.
+  assert.equal(await pool.acquire("/p"), null);
+  assert.equal(starts, 1);
+  assert.match(pool.lastStartError("/p") ?? "", /exited during startup/u);
+});
+
+test("a closed worker is replaced on the next call and recovers automatically", async () => {
+  const log: string[] = [];
+  let closed = false;
+  const flaky = (): StickyWorker => ({
+    closed: () => closed,
+    async call(tool) {
+      if (closed) throw new Error("codemode-serve is closed");
+      return { tool: "asgrep", schema_version: "1.0.0", ok: true, hits: [] } as MachineEnvelope;
+    },
+    async batch() { return { results: [] }; },
+    async end() { closed = true; },
+  });
+  let starts = 0;
+  const pool = new NativeSessionPool(async () => {
+    starts += 1;
+    closed = false;
+    return flaky();
+  });
+  pool.configure({ binary: "/fake/asgrep" });
+
+  const w1 = await pool.acquire("/p");
+  assert.ok(w1);
+  // Kill the transport out-of-band (serve crash): next call retries once and
+  // the restarted worker serves normally.
+  closed = true;
+  const response = await pool.call("/p", "search", {});
+  assert.equal(response.ok, true);
+  assert.equal(starts, 2);
+  await pool.shutdown();
+});
+
 test("pre-aborted calls reject before starting a backend", async () => {
   let starts = 0;
   const pool = new NativeSessionPool(async () => {

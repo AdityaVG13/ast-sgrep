@@ -350,6 +350,25 @@ describe("per-root index freshness", () => {
     assert.deepEqual(commands(runtime), ["status", "reindex"]);
   });
 
+  it("bounds one caller's freshness wait while the shared refresh completes in the background", async () => {
+    const runtime = new FakeFreshnessRuntime();
+    let finishRefresh!: () => void;
+    const gate = new Promise<void>((resolve) => { finishRefresh = resolve; });
+    runtime.handler = async (command) => {
+      if (command === "index") await gate;
+      return machine({ command, root: "/root", index_path: "/root/.asgrep/index.db", file_count: command === "status" ? 0 : 1 });
+    };
+    const subject = new FreshnessCoordinator({ maxWaitMs: 25 });
+    const error = await errorCode(() => subject.ensureFresh(runtime, { cwd: "/root" }), "TIMEOUT");
+    assert.match(error.message, /serving the current index/u);
+    // The shared refresh is root-owned: it finishes in the background, so the
+    // next caller gets a fresh index instead of paying the wait again.
+    finishRefresh();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(await subject.ensureFresh(runtime, { cwd: "/root" }), "/root");
+    assert.ok(commands(runtime).includes("index"));
+  });
+
   it("re-probes status on interval expiry without walking a ready index", async () => {
     let now = 0;
     const runtime = new FakeFreshnessRuntime();

@@ -117,6 +117,10 @@ export class NativeSessionPool {
     #startFn;
     #backend = "none";
     #shutdownPromise = null;
+    /** Real start failure per root — surfaced instead of a stale "closed" error. */
+    #startFailures = new Map();
+    /** Crash-loop guard: a failing backend gets this long before respawn retries. */
+    static #RESTART_BACKOFF_MS = 15_000;
     constructor(startFn = startStickyWorker) {
         this.#startFn = startFn;
     }
@@ -130,6 +134,10 @@ export class NativeSessionPool {
     backend() {
         return this.#backend;
     }
+    /** Why the last start attempt failed — for doctor/status and error fidelity. */
+    lastStartError(root) {
+        return this.#startFailures.get(root)?.error;
+    }
     async acquire(root) {
         if (this.#shutdownPromise)
             return null;
@@ -138,6 +146,13 @@ export class NativeSessionPool {
             if (!workerIsClosed(existing.worker))
                 return existing.worker;
             await this.invalidate(root);
+        }
+        // A backend that just failed is crash-looping: skip the respawn for a
+        // bounded window so callers fall back instead of paying a doomed spawn
+        // per call. The window expires and recovery still happens automatically.
+        const failure = this.#startFailures.get(root);
+        if (failure && Date.now() - failure.at < NativeSessionPool.#RESTART_BACKOFF_MS) {
+            return null;
         }
         const inFlight = this.#starting.get(root);
         if (inFlight)
@@ -157,8 +172,12 @@ export class NativeSessionPool {
             throw abortError();
         try {
             const worker = await this.acquire(root);
-            if (!worker)
-                throw new Error("native Code Mode backend unavailable");
+            if (!worker) {
+                const startError = this.lastStartError(root);
+                throw new Error(startError
+                    ? "codemode backend unavailable: " + startError
+                    : "native Code Mode backend unavailable");
+            }
             return await worker.call(tool, args, options);
         }
         catch (cause) {
@@ -166,8 +185,14 @@ export class NativeSessionPool {
                 throw cause;
             await this.invalidate(root);
             const retry = await this.acquire(root);
-            if (!retry)
+            if (!retry) {
+                // Surface the real restart failure (spawn error / schema refusal), not
+                // the stale "closed" message that hides it.
+                const startError = this.lastStartError(root);
+                if (startError)
+                    throw new Error("codemode backend unavailable: " + startError);
                 throw cause;
+            }
             return retry.call(tool, args, options);
         }
     }
@@ -177,6 +202,7 @@ export class NativeSessionPool {
         this.#starting.delete(root);
         const entry = this.#entries.get(root);
         this.#entries.delete(root);
+        this.#startFailures.delete(root);
         if (entry)
             await entry.worker.end().catch(() => undefined);
         if (starting)
@@ -217,8 +243,16 @@ export class NativeSessionPool {
     async #start(root) {
         const gen = this.#generationFor(root);
         const opts = this.#options ?? {};
+        const fail = (error) => {
+            this.#startFailures.set(root, {
+                at: Date.now(),
+                error: error instanceof Error ? error.message : String(error),
+            });
+            return null;
+        };
         // 1) In-process NAPI (preferred — zero spawn).
         const binding = loadCodemodeNative();
+        let napiError = null;
         if (binding) {
             try {
                 const config = { root };
@@ -236,15 +270,18 @@ export class NativeSessionPool {
                 }
                 this.#entries.set(root, { root, worker, generation: gen, backend: "napi" });
                 this.#backend = "napi";
+                this.#startFailures.delete(root);
                 return worker;
             }
-            catch {
-                // Fall through to CLI sticky.
+            catch (cause) {
+                // Fall through to CLI sticky, but keep the real error for fidelity.
+                napiError = cause;
             }
         }
         // 2) CLI sticky fallback (degraded).
-        if (!opts.binary)
-            return null;
+        if (!opts.binary) {
+            return fail(napiError ?? new Error("native Code Mode backend unavailable (no addon, no binary)"));
+        }
         try {
             const stickyOpts = {
                 binary: opts.binary,
@@ -261,12 +298,17 @@ export class NativeSessionPool {
                 await worker.end().catch(() => undefined);
                 return null;
             }
+            if (workerIsClosed(worker)) {
+                await worker.end().catch(() => undefined);
+                return fail(new Error("codemode-serve exited during startup"));
+            }
             this.#entries.set(root, { root, worker, generation: gen, backend: "cli" });
             this.#backend = "cli";
+            this.#startFailures.delete(root);
             return worker;
         }
-        catch {
-            return null;
+        catch (cause) {
+            return fail(cause);
         }
     }
 }

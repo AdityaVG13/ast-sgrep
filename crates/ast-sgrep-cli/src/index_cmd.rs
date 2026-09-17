@@ -325,7 +325,7 @@ pub(crate) fn run_index_dry_run(command: &str, root: &Path, cli: &Cli) -> anyhow
     let mut skipped = 0usize;
     let mut walk_errors = false;
     // Intentional product set for dry-run "source-like" counts — broader than
-    // INDEXABLE_EXTENSIONS (which also indexes md/json/toml/yml). Do not silently
+    // is_indexable_extension (which also indexes md/json/toml/yml). Do not silently
     // unify without affirming dry-run semantics in machine_contracts / agent docs.
     fn walk(dir: &Path, files: &mut usize, skipped: &mut usize, walk_errors: &mut bool) {
         let rd = match std::fs::read_dir(dir) {

@@ -11,6 +11,8 @@ export const INDEX_FORMAT_VERSION = 16;
 export const DEFAULT_TIMEOUT_MS = 30_000;
 export const DEFAULT_MAX_OUTPUT_BYTES = 4 * 1024 * 1024;
 export const DEFAULT_REFRESH_INTERVAL_MS = 30_000;
+/** Max one caller waits on a shared index refresh before serving stale. */
+export const DEFAULT_FRESHNESS_WAIT_MS = 10_000;
 const MAX_TARGETED_INDEX_PATHS = 1_024;
 const RESOLVED_ROOT = Symbol("resolvedRoot");
 export class RuntimeError extends Error {
@@ -295,31 +297,45 @@ function cancelledRefreshWait() {
     return new RuntimeError("CANCELLED", "ast-sgrep freshness wait was cancelled");
 }
 /** Stop one caller waiting without transferring cancellation ownership to shared work. */
-function waitForRefresh(refresh, signal) {
-    if (!signal)
+function waitForRefresh(refresh, signal, waitMs) {
+    if (!signal && (!waitMs || waitMs <= 0))
         return refresh;
-    if (signal.aborted)
+    if (signal?.aborted)
         return Promise.reject(cancelledRefreshWait());
     return new Promise((resolveWait, rejectWait) => {
+        let timer;
+        const cleanup = () => {
+            signal?.removeEventListener("abort", onAbort);
+            if (timer)
+                clearTimeout(timer);
+        };
         const onAbort = () => {
-            signal.removeEventListener("abort", onAbort);
+            cleanup();
             rejectWait(cancelledRefreshWait());
         };
-        signal.addEventListener("abort", onAbort, { once: true });
+        signal?.addEventListener("abort", onAbort, { once: true });
+        // A caller never spends its whole budget on freshness: after waitMs it
+        // serves whatever index state exists instead of dying on a 60s index.
+        if (waitMs && waitMs > 0) {
+            timer = setTimeout(() => {
+                cleanup();
+                rejectWait(new RuntimeError("TIMEOUT", "ast-sgrep freshness wait exceeded " + waitMs + "ms; serving the current index", { timeoutMs: waitMs }));
+            }, waitMs);
+        }
         refresh.then(() => {
-            signal.removeEventListener("abort", onAbort);
+            cleanup();
             resolveWait();
         }, (cause) => {
-            signal.removeEventListener("abort", onAbort);
+            cleanup();
             rejectWait(cause);
         });
     });
 }
 /** Shared refresh continues while other waiters remain; the last cancel stops it. */
-function attachRefreshWaiter(state, refresh, signal) {
+function attachRefreshWaiter(state, refresh, signal, waitMs) {
     state.waiterCount += 1;
     let cancelledByWaiter = false;
-    const wait = waitForRefresh(refresh, signal).catch((cause) => {
+    const wait = waitForRefresh(refresh, signal, waitMs).catch((cause) => {
         cancelledByWaiter = cause instanceof RuntimeError && cause.code === "CANCELLED" && signal?.aborted === true;
         throw cause;
     });
@@ -334,12 +350,19 @@ export class FreshnessCoordinator {
     #states = new Map();
     #pending = new Map();
     #interval;
+    #maxWaitMs;
     #now;
     #watchFactory;
     constructor(options = {}) {
         this.#interval = finitePositive(options.refreshIntervalMs, DEFAULT_REFRESH_INTERVAL_MS, "refreshIntervalMs");
+        this.#maxWaitMs = finitePositive(options.maxWaitMs, DEFAULT_FRESHNESS_WAIT_MS, "maxWaitMs");
         this.#now = options.now ?? Date.now;
         this.#watchFactory = options.watchFactory ?? watch;
+    }
+    /** One caller's freshness budget: bounded, and never more than its own timeout. */
+    #waitBudget(options) {
+        const budget = this.#maxWaitMs;
+        return options.timeoutMs !== undefined ? Math.min(budget, options.timeoutMs) : budget;
     }
     markAffectedPath(path, cwd) {
         const affected = canonicalizeAffectedPath(isAbsolute(path) ? path : resolve(canonicalizeAffectedPath(cwd), path));
@@ -433,7 +456,7 @@ export class FreshnessCoordinator {
                 this.#pending.delete(pendingRoot);
         }
         if (state.inFlight) {
-            await attachRefreshWaiter(state, state.inFlight, options.signal);
+            await attachRefreshWaiter(state, state.inFlight, options.signal, this.#waitBudget(options));
             return this.ensureFresh(runtime, rootContext, options);
         }
         if (options.signal?.aborted)
@@ -499,7 +522,7 @@ export class FreshnessCoordinator {
         // If every waiter is cancelled, the root-owned refresh still needs a
         // rejection handler while it finishes in the background.
         void tracked.catch(() => undefined);
-        await attachRefreshWaiter(state, tracked, options.signal);
+        await attachRefreshWaiter(state, tracked, options.signal, this.#waitBudget(options));
         if (state.cleanGeneration !== state.dirtyGeneration) {
             return this.ensureFresh(runtime, rootContext, options);
         }
@@ -683,13 +706,15 @@ function throwIndexRebuildFailed(cause, indexPath, quarantinesBefore) {
         ...newQuarantines,
         ...(existsSync(indexPath) ? [indexPath] : []),
     ];
-    throw new RuntimeError("INDEX_REBUILD_FAILED", "Incompatible index rebuild failed; the prior index remains recoverable", {
+    const causeText = cause instanceof Error ? cause.message : String(cause);
+    throw new RuntimeError("INDEX_REBUILD_FAILED", "Incompatible index rebuild failed: " + causeText + "; the prior index remains recoverable", {
         indexPath,
         recoveryPath: recoveryPaths[0] ?? indexPath,
         recoveryPaths,
         priorIndexPreserved: recoveryPaths.length > 0,
         expectedIndexFormat: INDEX_FORMAT_VERSION,
-        cause: cause instanceof Error ? cause.message : String(cause),
+        cause: causeText,
+        repair: "run /asgrep-reindex, or remove the project's .asgrep directory and run /asgrep-index",
     });
 }
 /** Read the on-disk index format marker. The binary is the authority on what it can read. */

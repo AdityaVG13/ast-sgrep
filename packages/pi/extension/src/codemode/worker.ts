@@ -60,6 +60,9 @@ export async function startStickyWorker(options: StickyWorkerOptions): Promise<S
   const pending = new Map<string, Pending>();
   let nextId = 0;
   let closed = false;
+  // The real termination cause (exit code + stderr) — callers that hit a dead
+  // transport must see WHY it died, not a bare "is closed".
+  let deadCause: Error | null = null;
   let stderr = "";
   let stdout: Buffer = Buffer.alloc(0);
   const decoder = new TextDecoder("utf-8", { fatal: true });
@@ -73,6 +76,7 @@ export async function startStickyWorker(options: StickyWorkerOptions): Promise<S
   const terminate = (err: Error) => {
     if (closed) return;
     closed = true;
+    deadCause ??= err;
     options.signal?.removeEventListener("abort", onAbort);
     killChild(child);
     failAll(err);
@@ -149,21 +153,24 @@ export async function startStickyWorker(options: StickyWorkerOptions): Promise<S
   child.on("close", (code, signal) => {
     closed = true;
     options.signal?.removeEventListener("abort", onAbort);
+    deadCause ??= new Error(
+      `codemode-serve exited code=${code ?? "null"} signal=${signal ?? "null"} stderr=${stderr.slice(0, 512)}`,
+    );
     if (pending.size > 0) {
-      failAll(
-        new Error(
-          `codemode-serve exited code=${code ?? "null"} signal=${signal ?? "null"} stderr=${stderr.slice(0, 512)}`,
-        ),
-      );
+      failAll(deadCause);
     }
   });
 
   const onAbort = () => terminate(new Error("codemode-serve aborted"));
   options.signal?.addEventListener("abort", onAbort, { once: true });
 
+  const closedError = (): Error => deadCause
+    ? new Error("codemode-serve is closed (" + deadCause.message + ")")
+    : new Error("codemode-serve is closed");
+
   const write = (payload: Record<string, unknown>): Promise<Record<string, unknown>> => {
     if (closed || !child.stdin.writable) {
-      return Promise.reject(new Error("codemode-serve is closed"));
+      return Promise.reject(closedError());
     }
     const id = typeof payload.id === "string" ? payload.id : String(nextId++);
     payload.id = id;

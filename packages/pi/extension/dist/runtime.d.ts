@@ -8,6 +8,8 @@ export declare const INDEX_FORMAT_VERSION: 16;
 export declare const DEFAULT_TIMEOUT_MS = 30000;
 export declare const DEFAULT_MAX_OUTPUT_BYTES: number;
 export declare const DEFAULT_REFRESH_INTERVAL_MS = 30000;
+/** Max one caller waits on a shared index refresh before serving stale. */
+export declare const DEFAULT_FRESHNESS_WAIT_MS = 10000;
 export interface RuntimeConfig {
     schemaVersion?: typeof CONFIG_SCHEMA_VERSION;
     binaryPath?: string;
@@ -97,6 +99,8 @@ export interface FreshnessRuntime {
 }
 export interface FreshnessCoordinatorOptions {
     refreshIntervalMs?: number;
+    /** Cap on how long one caller waits for an in-flight refresh (serve-stale after). */
+    maxWaitMs?: number;
     now?: () => number;
     watchFactory?: FreshnessWatchFactory;
 }

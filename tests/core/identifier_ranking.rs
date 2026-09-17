@@ -750,3 +750,49 @@ fn module_caller_ranks_below_fn_caller_on_conceptual_nl() {
         failures.join("\n\n")
     );
 }
+
+/// A single-token SCREAMING_SNAKE query must reach the source file holding the
+/// exact token. Without a whole-word leg the fragmented terms only matched an
+/// unrelated hyphenated flag name in comments.
+#[test]
+fn natural_mode_exact_token_reaches_source_file() {
+    let temp = TempDir::new().unwrap();
+    write_src(
+        temp.path(),
+        "kernels/lmhead.cu",
+        "#ifdef VT_LMHEAD_FP8
+__global__ void vt_lmhead_fp8_kernel() {}
+#endif
+",
+    );
+    write_src(
+        temp.path(),
+        "docs/flags.md",
+        "# VT-MATMUL-FP8-BLOCK-CUDA is a different flag than VT_LMHEAD_FP8.
+",
+    );
+    ast_sgrep_core::Indexer::new(IndexOptions {
+        root: temp.path().to_path_buf(),
+        force_reindex: true,
+        ..IndexOptions::default()
+    })
+    .expect("indexer")
+    .index_all()
+    .expect("index");
+    let searcher = Searcher::new(SearchOptions {
+        root: temp.path().to_path_buf(),
+        limit: 8,
+        ..SearchOptions::default()
+    })
+    .expect("searcher");
+    let response = searcher.search("VT_LMHEAD_FP8").expect("search");
+    assert!(
+        response
+            .hits
+            .iter()
+            .any(|h| h.file.replace(char::from(92), "/").ends_with("lmhead.cu")),
+        "exact-token query must surface the .cu source file; hits:
+{}",
+        autopsy(&response.hits)
+    );
+}

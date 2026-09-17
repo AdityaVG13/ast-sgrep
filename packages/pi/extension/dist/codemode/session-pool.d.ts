@@ -32,6 +32,8 @@ export declare class NativeSessionPool {
     configured(): boolean;
     /** Active backend after first successful acquire. */
     backend(): "napi" | "cli" | "none";
+    /** Why the last start attempt failed — for doctor/status and error fidelity. */
+    lastStartError(root: string): string | undefined;
     acquire(root: string): Promise<StickyWorker | null>;
     call(root: string, tool: string, args?: Record<string, unknown>, options?: {
         signal?: AbortSignal;

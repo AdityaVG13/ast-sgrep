@@ -8,6 +8,7 @@
       "callee": null,
       "caller": null,
       "contributors": [
+        "asgrep",
         "def",
         "anchor",
         "pattern"
@@ -23,12 +24,13 @@
         "end": 11,
         "start": 8
       },
-      "margin": 0.0016546304865150685,
-      "score": 0.09578265468006346,
+      "margin": 0.022524195703906374,
+      "score": 0.11665221989745476,
       "semantic": false,
       "signal": "structural",
       "symbol": "process_request",
       "why": [
+        "exact_text",
         "exact_symbol",
         "anchor",
         "structural_pattern"

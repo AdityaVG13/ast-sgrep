@@ -12,6 +12,8 @@ export const INDEX_FORMAT_VERSION = 16 as const;
 export const DEFAULT_TIMEOUT_MS = 30_000;
 export const DEFAULT_MAX_OUTPUT_BYTES = 4 * 1024 * 1024;
 export const DEFAULT_REFRESH_INTERVAL_MS = 30_000;
+/** Max one caller waits on a shared index refresh before serving stale. */
+export const DEFAULT_FRESHNESS_WAIT_MS = 10_000;
 const MAX_TARGETED_INDEX_PATHS = 1_024;
 
 export interface RuntimeConfig {
@@ -191,6 +193,8 @@ export interface FreshnessRuntime {
 
 export interface FreshnessCoordinatorOptions {
   refreshIntervalMs?: number;
+  /** Cap on how long one caller waits for an in-flight refresh (serve-stale after). */
+  maxWaitMs?: number;
   now?: () => number;
   watchFactory?: FreshnessWatchFactory;
 }
@@ -424,22 +428,39 @@ function cancelledRefreshWait(): RuntimeError {
 }
 
 /** Stop one caller waiting without transferring cancellation ownership to shared work. */
-function waitForRefresh(refresh: Promise<void>, signal?: AbortSignal): Promise<void> {
-  if (!signal) return refresh;
-  if (signal.aborted) return Promise.reject(cancelledRefreshWait());
+function waitForRefresh(refresh: Promise<void>, signal?: AbortSignal, waitMs?: number): Promise<void> {
+  if (!signal && (!waitMs || waitMs <= 0)) return refresh;
+  if (signal?.aborted) return Promise.reject(cancelledRefreshWait());
   return new Promise<void>((resolveWait, rejectWait) => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const cleanup = () => {
+      signal?.removeEventListener("abort", onAbort);
+      if (timer) clearTimeout(timer);
+    };
     const onAbort = () => {
-      signal.removeEventListener("abort", onAbort);
+      cleanup();
       rejectWait(cancelledRefreshWait());
     };
-    signal.addEventListener("abort", onAbort, { once: true });
+    signal?.addEventListener("abort", onAbort, { once: true });
+    // A caller never spends its whole budget on freshness: after waitMs it
+    // serves whatever index state exists instead of dying on a 60s index.
+    if (waitMs && waitMs > 0) {
+      timer = setTimeout(() => {
+        cleanup();
+        rejectWait(new RuntimeError(
+          "TIMEOUT",
+          "ast-sgrep freshness wait exceeded " + waitMs + "ms; serving the current index",
+          { timeoutMs: waitMs },
+        ));
+      }, waitMs);
+    }
     refresh.then(
       () => {
-        signal.removeEventListener("abort", onAbort);
+        cleanup();
         resolveWait();
       },
       (cause) => {
-        signal.removeEventListener("abort", onAbort);
+        cleanup();
         rejectWait(cause);
       },
     );
@@ -447,10 +468,10 @@ function waitForRefresh(refresh: Promise<void>, signal?: AbortSignal): Promise<v
 }
 
 /** Shared refresh continues while other waiters remain; the last cancel stops it. */
-function attachRefreshWaiter(state: RootFreshness, refresh: Promise<void>, signal?: AbortSignal): Promise<void> {
+function attachRefreshWaiter(state: RootFreshness, refresh: Promise<void>, signal?: AbortSignal, waitMs?: number): Promise<void> {
   state.waiterCount += 1;
   let cancelledByWaiter = false;
-  const wait = waitForRefresh(refresh, signal).catch((cause: unknown) => {
+  const wait = waitForRefresh(refresh, signal, waitMs).catch((cause: unknown) => {
     cancelledByWaiter = cause instanceof RuntimeError && cause.code === "CANCELLED" && signal?.aborted === true;
     throw cause;
   });
@@ -466,13 +487,21 @@ export class FreshnessCoordinator {
   readonly #states = new Map<string, RootFreshness>();
   readonly #pending = new Map<string, PendingFreshness>();
   readonly #interval: number;
+  readonly #maxWaitMs: number;
   readonly #now: () => number;
   readonly #watchFactory: FreshnessWatchFactory;
 
   constructor(options: FreshnessCoordinatorOptions = {}) {
     this.#interval = finitePositive(options.refreshIntervalMs, DEFAULT_REFRESH_INTERVAL_MS, "refreshIntervalMs");
+    this.#maxWaitMs = finitePositive(options.maxWaitMs, DEFAULT_FRESHNESS_WAIT_MS, "maxWaitMs");
     this.#now = options.now ?? Date.now;
     this.#watchFactory = options.watchFactory ?? watch;
+  }
+
+  /** One caller's freshness budget: bounded, and never more than its own timeout. */
+  #waitBudget(options: RunOptions): number {
+    const budget = this.#maxWaitMs;
+    return options.timeoutMs !== undefined ? Math.min(budget, options.timeoutMs) : budget;
   }
 
   markAffectedPath(path: string, cwd: string): void {
@@ -563,7 +592,7 @@ export class FreshnessCoordinator {
       if (pending.paths.size === 0) this.#pending.delete(pendingRoot);
     }
     if (state.inFlight) {
-      await attachRefreshWaiter(state, state.inFlight, options.signal);
+      await attachRefreshWaiter(state, state.inFlight, options.signal, this.#waitBudget(options));
       return this.ensureFresh(runtime, rootContext, options);
     }
     if (options.signal?.aborted) throw cancelledRefreshWait();
@@ -621,7 +650,7 @@ export class FreshnessCoordinator {
     // If every waiter is cancelled, the root-owned refresh still needs a
     // rejection handler while it finishes in the background.
     void tracked.catch(() => undefined);
-    await attachRefreshWaiter(state, tracked, options.signal);
+    await attachRefreshWaiter(state, tracked, options.signal, this.#waitBudget(options));
     if (state.cleanGeneration !== state.dirtyGeneration) {
       return this.ensureFresh(runtime, rootContext, options);
     }
@@ -800,14 +829,20 @@ function throwIndexRebuildFailed(cause: unknown, indexPath: string, quarantinesB
     ...newQuarantines,
     ...(existsSync(indexPath) ? [indexPath] : []),
   ];
-  throw new RuntimeError("INDEX_REBUILD_FAILED", "Incompatible index rebuild failed; the prior index remains recoverable", {
-    indexPath,
-    recoveryPath: recoveryPaths[0] ?? indexPath,
-    recoveryPaths,
-    priorIndexPreserved: recoveryPaths.length > 0,
-    expectedIndexFormat: INDEX_FORMAT_VERSION,
-    cause: cause instanceof Error ? cause.message : String(cause),
-  });
+  const causeText = cause instanceof Error ? cause.message : String(cause);
+  throw new RuntimeError(
+    "INDEX_REBUILD_FAILED",
+    "Incompatible index rebuild failed: " + causeText + "; the prior index remains recoverable",
+    {
+      indexPath,
+      recoveryPath: recoveryPaths[0] ?? indexPath,
+      recoveryPaths,
+      priorIndexPreserved: recoveryPaths.length > 0,
+      expectedIndexFormat: INDEX_FORMAT_VERSION,
+      cause: causeText,
+      repair: "run /asgrep-reindex, or remove the project's .asgrep directory and run /asgrep-index",
+    },
+  );
 }
 
 /** Read the on-disk index format marker. The binary is the authority on what it can read. */

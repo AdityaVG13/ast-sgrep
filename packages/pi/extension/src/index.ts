@@ -352,7 +352,16 @@ export function registerAstSgrepTools(
     } catch (cause) {
       if (options.signal?.aborted || !isClosedWorkerError(cause)) throw cause;
       await pool.invalidate(root);
-      return invoke();
+      try {
+        return await invoke();
+      } catch (second) {
+        // A respawn that is also closed means the backend is crash-looping —
+        // degrade to the cold CLI path instead of pinning the tool on a dead
+        // transport (the runCli fallback carries the real cause if the
+        // binary itself is the problem).
+        if (options.signal?.aborted || !isClosedWorkerError(second)) throw second;
+        return null;
+      }
     }
   };
 
