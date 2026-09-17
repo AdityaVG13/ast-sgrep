@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -14,6 +14,16 @@ const canonicalVersion = contract.canonicalVersion.version;
 const repositoryUrl = "git+https://github.com/AdityaVG13/ast-sgrep.git";
 
 const readJson = (path) => JSON.parse(readFileSync(path, "utf8"));
+/** Recursively list files under dir matching suffix. */
+function walkSources(dir, suffix) {
+  const out = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const full = join(dir, entry.name);
+    if (entry.isDirectory()) out.push(...walkSources(full, suffix));
+    else if (entry.name.endsWith(suffix)) out.push(full);
+  }
+  return out;
+}
 const parseRelease = (value) => {
   const match = String(value).match(/^(\d+)\.(\d+)\.(\d+)$/);
   return match ? [Number(match[1]), Number(match[2]), Number(match[3])] : null;
@@ -74,8 +84,7 @@ test("package runtime has no telemetry, credential integration, or network downl
     }
   }
   const runtimeFiles = [
-    join(extensionDir, "src/index.ts"),
-    join(extensionDir, "src/runtime.ts"),
+    ...walkSources(join(extensionDir, "src"), ".ts"),
     join(launcherDir, "src/index.js"),
     join(launcherDir, "bin/asgrep.js"),
   ];

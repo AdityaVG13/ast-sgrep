@@ -13,4 +13,4 @@ const dstDir = join(extensionDir, "dist", "codemode");
 mkdirSync(dstDir, { recursive: true });
 const dst = join(dstDir, "guest-worker.mjs");
 copyFileSync(join(extensionDir, "src", "codemode", "guest-worker.mjs"), dst);
-console.log("copied guest-worker.mjs -> dist/codemode/");
+console.error("copied guest-worker.mjs -> dist/codemode/");

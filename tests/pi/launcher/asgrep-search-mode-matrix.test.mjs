@@ -1,6 +1,6 @@
 /**
  * ktog: schema modes ⊆ tested modes ⊆ tool docs.
- * Mirrors packages/pi/extension/src/index.ts searchArgs/queryForMode without TS deps.
+ * Mirrors packages/pi/extension/src/host/tools.ts searchArgs/queryForMode without TS deps.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -9,8 +9,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
-const indexTs = readFileSync(path.join(root, "packages/pi/extension/src/index.ts"), "utf8");
-const presentTs = readFileSync(path.join(root, "packages/pi/extension/src/present.ts"), "utf8");
+const indexTs = readFileSync(path.join(root, "packages/pi/extension/src/host/tools.ts"), "utf8");
+const presentTs = readFileSync(path.join(root, "packages/pi/extension/src/ui/present.ts"), "utf8");
 const readme = readFileSync(path.join(root, "packages/pi/extension/README.md"), "utf8");
 
 const SCHEMA_MODES = [
