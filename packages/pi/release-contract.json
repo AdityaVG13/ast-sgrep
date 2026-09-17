@@ -6,18 +6,22 @@
     "npmWorkspaceSource": "package.json#version",
     "tag": "v2.0.0",
     "coupledComponents": [
-      "pi-extension",
       "npm-launcher",
       "native-platform-packages"
     ],
-    "driftPolicy": "All Pi/npm packages and release metadata MUST equal the canonical npm version; the embedded native CLI MUST equal nativeCliVersion. Mixed package versions or unexpected CLI versions are rejected.",
+    "driftPolicy": "The npm launcher, native platform packages, and release metadata MUST equal the canonical npm version; the embedded native CLI MUST equal nativeCliVersion. The pi-extension package is deliberately decoupled: it versions independently under packages.extension and may be published ahead of the canonical family via its own signed pi-v<version> tag lane. Mixed launcher/platform versions or unexpected CLI versions are still rejected.",
     "nativeCliVersion": "2.0.0",
     "nativeCliSource": "Cargo.toml#workspace.package.version"
   },
   "packages": {
     "extension": {
       "name": "pi-ast-sgrep",
-      "directory": "packages/pi/extension"
+      "directory": "packages/pi/extension",
+      "version": "2.1.0",
+      "independent": true,
+      "tagPrefix": "pi-v",
+      "launcherRange": ">=2.0.0 <3",
+      "policy": "The extension is the dogfooding surface and releases independently of the canonical family. Each release MUST (a) equal packages.extension.version, (b) declare dependencies.ast-sgrep exactly equal to launcherRange, (c) be built from the committed dist of its signed pi-v<version> tag, and (d) degrade gracefully when the resolved launcher predates a feature's native fields."
     },
     "launcher": {
       "name": "ast-sgrep",
@@ -125,8 +129,10 @@
     },
     "layers": {
       "extension": {
-        "version": "2.0.0",
-        "compatibility": "exact"
+        "compatibility": "range",
+        "launcherRange": ">=2.0.0 <3",
+        "minLauncherVersion": "2.0.0",
+        "policy": "Extension accepts any launcher satisfying launcherRange; machine-schema assertions fail closed on incompatible envelopes. Features requiring newer native fields gate on envelope content, not version."
       },
       "launcher": {
         "version": "2.0.0",
@@ -186,6 +192,8 @@
     "tools": [
       "asgrep",
       "asgrep_search",
+      "asgrep_edit",
+      "asgrep_read",
       "asgrep_index",
       "asgrep_status"
     ],
@@ -247,7 +255,8 @@
   "updates": {
     "mainBranch": "Pack and test relevant artifacts; never publish a stable npm version.",
     "officialTag": "Every human-approved official version tag prepares and publishes all npm layers at the canonical version in platform, launcher, extension order.",
-    "selection": "Pi/npm update selects the exact matching extension, launcher, platform package (CLI + Code Mode NAPI addon), and protocol version.",
+    "extensionTag": "A human-approved signed pi-v<version> tag publishes only pi-ast-sgrep at packages.extension.version, built from that tag's committed dist. Extension releases never carry binaries and never republish launcher or platform packages.",
+    "selection": "Pi/npm update selects the extension at its own released version; the launcher and platform packages (CLI + Code Mode NAPI addon) resolve through the extension's declared launcherRange, keeping launcher<->platform lockstep.",
     "runtimeDownloads": false,
     "partialPublishRecovery": "Resume only when every live package at the version has registry integrity identical to the preserved release tarball; otherwise move forward with a new immutable version."
   },
@@ -298,6 +307,7 @@
     "dryRunWorkflow": ".github/workflows/pi-native-artifacts.yml",
     "officialWorkflow": ".github/workflows/pi-npm-release.yml",
     "officialTrigger": "signed canonical version tag only",
+    "extensionTrigger": "signed pi-v<extension version> tag on the same workflow's extension layer input",
     "protectedEnvironment": "npm-production",
     "trustedPublishing": "npm OIDC",
     "provenance": true,
