@@ -1,4 +1,4 @@
-import type { MachineEnvelope } from "../runtime.js";
+import type { MachineEnvelope } from "../runtime/runtime.js";
 import { coerceHostArgs } from "./guest-api.js";
 import type { ChainArgs, EditArgs, FindArgs, ReadArgs, SearchArgs } from "./types.js";
 import {

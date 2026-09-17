@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { afterEach, test } from "node:test";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { registerAstSgrepTools } from "../../../packages/pi/extension/src/index.js";
-import { FreshnessCoordinator, RuntimeError, resolveConfig, resolveRuntimeRoot, type MachineEnvelope, type RunOptions, type RuntimeContext } from "../../../packages/pi/extension/src/runtime.js";
+import { FreshnessCoordinator, RuntimeError, resolveConfig, resolveRuntimeRoot, type MachineEnvelope, type RunOptions, type RuntimeContext } from "../../../packages/pi/extension/src/runtime/runtime.js";
 
 const { Check } = createRequire(
   new URL("../../../packages/pi/extension/package.json", import.meta.url),

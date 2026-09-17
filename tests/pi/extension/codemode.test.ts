@@ -10,7 +10,7 @@ import { createCodemodeDispatcher, argvFor, asEnvelope } from "../../../packages
 import { normalizeCode, resetCodemodeSandboxForTests, runCodemode, warmCodemodeSandbox } from "../../../packages/pi/extension/src/codemode/runner.js";
 import { runBatchViaStdin, startStickyWorker } from "../../../packages/pi/extension/src/codemode/worker.js";
 import { applyQueryScope, packGuestCall, resolveHostMethod, unknownMethodError } from "../../../packages/pi/extension/src/codemode/guest-api.js";
-import type { MachineEnvelope } from "../../../packages/pi/extension/src/runtime.js";
+import type { MachineEnvelope } from "../../../packages/pi/extension/src/runtime/runtime.js";
 
 test("normalizeCode wraps bare bodies and strips fences", () => {
   assert.match(normalizeCode("return 1"), /async \(\) =>/);

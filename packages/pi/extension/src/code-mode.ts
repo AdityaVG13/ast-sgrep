@@ -1,7 +1,7 @@
 import { constants, type Stats } from "node:fs";
 import { lstat, open, realpath, type FileHandle } from "node:fs/promises";
 import { isAbsolute, relative, resolve, sep } from "node:path";
-import { RuntimeError, type AstSgrepRuntime, type MachineEnvelope, type RunOptions, type RuntimeContext } from "./runtime.js";
+import { RuntimeError, type AstSgrepRuntime, type MachineEnvelope, type RunOptions, type RuntimeContext } from "./runtime/runtime.js";
 
 export type SgrepKind = "asgrep" | "def" | "caller" | "graph" | "anchor" | "import" | "pattern" | "embed";
 export type SgrepSignal = "exact" | "structural" | "semantic";

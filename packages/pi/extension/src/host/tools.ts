@@ -20,10 +20,10 @@ import {
   resetCodemodeSandboxForTests,
   isClosedWorkerError,
   type StickyWorker,
-} from "./codemode/index.js";
-import { AstSgrepRuntime, FreshnessCoordinator, RuntimeError } from "./runtime.js";
-import type { MachineEnvelope, RunOptions } from "./types.js";
-import type { FreshnessRuntime } from "./freshness.js";
+} from "../codemode/index.js";
+import { AstSgrepRuntime, FreshnessCoordinator, RuntimeError } from "../runtime/runtime.js";
+import type { MachineEnvelope, RunOptions } from "../runtime/types.js";
+import type { FreshnessRuntime } from "../runtime/freshness.js";
 import {
   ASGREP_PROMPT_GUIDELINES,
   ASGREP_PROMPT_SNIPPET,
@@ -34,7 +34,7 @@ import {
   formatStatusCall,
   presentText,
   type PresentTheme,
-} from "./present.js";
+} from "../ui/present.js";
 import {
   bounded,
   errorDetails,
@@ -47,7 +47,7 @@ import {
   type RuntimeLike,
   type ToolContext,
   type Update,
-} from "./envelope.js";
+} from "./results.js";
 
 export const DEFAULT_LIMIT = 8;
 const MAX_LIMIT = 100;

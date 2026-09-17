@@ -5,8 +5,8 @@ import { mkdtemp, mkdir, realpath, rename, rm, symlink, writeFile } from "node:f
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, describe, it } from "node:test";
-import { AstSgrepRuntime, CONFIG_SCHEMA_VERSION, DEFAULT_MAX_OUTPUT_BYTES, DEFAULT_REFRESH_INTERVAL_MS, DEFAULT_TIMEOUT_MS, FreshnessCoordinator, INDEX_FORMAT_VERSION, MACHINE_SCHEMA_VERSION, RUNTIME_VERSION, RuntimeError, migrateConfig, resolveConfig, resolveRuntimeRoot, rollbackConfig, type ExecOptions, type ExecResult, type MachineEnvelope, type PiExec, type RunOptions, type RuntimeContext } from "../../../packages/pi/extension/src/runtime.js";
-import { openIndexDatabase } from "../../../packages/pi/extension/src/sqlite.js";
+import { AstSgrepRuntime, CONFIG_SCHEMA_VERSION, DEFAULT_MAX_OUTPUT_BYTES, DEFAULT_REFRESH_INTERVAL_MS, DEFAULT_TIMEOUT_MS, FreshnessCoordinator, INDEX_FORMAT_VERSION, MACHINE_SCHEMA_VERSION, RUNTIME_VERSION, RuntimeError, migrateConfig, resolveConfig, resolveRuntimeRoot, rollbackConfig, type ExecOptions, type ExecResult, type MachineEnvelope, type PiExec, type RunOptions, type RuntimeContext } from "../../../packages/pi/extension/src/runtime/runtime.js";
+import { openIndexDatabase } from "../../../packages/pi/extension/src/runtime/sqlite.js";
 
 const temporary: string[] = [];
 afterEach(async () => { await Promise.all(temporary.splice(0).map((path) => rm(path, { recursive: true, force: true }))); });

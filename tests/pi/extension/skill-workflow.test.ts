@@ -3,8 +3,8 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { registerAstSgrepCommands, registerAstSgrepTools } from "../../../packages/pi/extension/src/index.js";
-import { ASGREP_PROMPT_GUIDELINES, ASGREP_PROMPT_SNIPPET } from "../../../packages/pi/extension/src/present.js";
-import type { MachineEnvelope } from "../../../packages/pi/extension/src/runtime.js";
+import { ASGREP_PROMPT_GUIDELINES, ASGREP_PROMPT_SNIPPET } from "../../../packages/pi/extension/src/ui/present.js";
+import type { MachineEnvelope } from "../../../packages/pi/extension/src/runtime/runtime.js";
 
 test("tools auto-register so a deterministic agent can complete the workflow without a skill file", async () => {
   const packageRoot = new URL("../../../packages/pi/extension/", import.meta.url);

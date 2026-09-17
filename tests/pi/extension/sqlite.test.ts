@@ -5,8 +5,8 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, it } from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { INDEX_FORMAT_VERSION } from "../../../packages/pi/extension/src/runtime.js";
-import { openIndexDatabase, sqliteBackend } from "../../../packages/pi/extension/src/sqlite.js";
+import { INDEX_FORMAT_VERSION } from "../../../packages/pi/extension/src/runtime/runtime.js";
+import { openIndexDatabase, sqliteBackend } from "../../../packages/pi/extension/src/runtime/sqlite.js";
 
 const temporary: string[] = [];
 afterEach(async () => {
@@ -14,8 +14,8 @@ afterEach(async () => {
 });
 
 const here = dirname(fileURLToPath(import.meta.url));
-const runtimeSource = join(here, "../../../packages/pi/extension/src/runtime.ts");
-const runtimeDist = join(here, "../../../packages/pi/extension/dist/runtime.js");
+const runtimeSource = join(here, "../../../packages/pi/extension/src/runtime/runtime.ts");
+const runtimeDist = join(here, "../../../packages/pi/extension/dist/runtime/runtime.js");
 
 describe("sqlite backend", () => {
   it("selects node:sqlite on Node and bun:sqlite when Bun is the host", () => {

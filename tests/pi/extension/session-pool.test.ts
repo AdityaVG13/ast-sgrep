@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { isUncachedSearchError, NativeSessionPool } from "../../../packages/pi/extension/src/codemode/session-pool.js";
 import type { StickyWorker } from "../../../packages/pi/extension/src/codemode/dispatch.js";
-import type { MachineEnvelope } from "../../../packages/pi/extension/src/runtime.js";
+import type { MachineEnvelope } from "../../../packages/pi/extension/src/runtime/runtime.js";
 
 function fakeWorker(log: string[]): StickyWorker {
   return {

@@ -22,13 +22,13 @@ const workspace = await readJson('package.json');
 const cargo = await readFile(path.join(root, 'Cargo.toml'), 'utf8');
 const extensionManifest = JSON.parse(await readFile(path.join(root, 'packages/pi/extension/package.json'), 'utf8'));
 const launcherManifest = JSON.parse(await readFile(path.join(root, 'packages/pi/launcher/package.json'), 'utf8'));
-const runtimeSource = await readFile(path.join(root, 'packages/pi/extension/src/runtime.ts'), 'utf8');
-const runtimeDist = await readFile(path.join(root, 'packages/pi/extension/dist/runtime.js'), 'utf8');
-const runtimeDeclarations = await readFile(path.join(root, 'packages/pi/extension/dist/runtime.d.ts'), 'utf8');
+const runtimeSource = await readFile(path.join(root, 'packages/pi/extension/src/runtime/runtime.ts'), 'utf8');
+const runtimeDist = await readFile(path.join(root, 'packages/pi/extension/dist/runtime/runtime.js'), 'utf8');
+const runtimeDeclarations = await readFile(path.join(root, 'packages/pi/extension/dist/runtime/runtime.d.ts'), 'utf8');
 // Version/schema markers now live in the leaf module types.ts (runtime.ts re-exports them).
-const typesSource = await readFile(path.join(root, 'packages/pi/extension/src/types.ts'), 'utf8');
-const typesDist = await readFile(path.join(root, 'packages/pi/extension/dist/types.js'), 'utf8');
-const typesDeclarations = await readFile(path.join(root, 'packages/pi/extension/dist/types.d.ts'), 'utf8');
+const typesSource = await readFile(path.join(root, 'packages/pi/extension/src/runtime/types.ts'), 'utf8');
+const typesDist = await readFile(path.join(root, 'packages/pi/extension/dist/runtime/types.js'), 'utf8');
+const typesDeclarations = await readFile(path.join(root, 'packages/pi/extension/dist/runtime/types.d.ts'), 'utf8');
 const nativeSource = await readFile(path.join(root, 'packages/pi/extension/src/codemode/native.ts'), 'utf8');
 const nativeDist = await readFile(path.join(root, 'packages/pi/extension/dist/codemode/native.js'), 'utf8');
 // The codemode guest worker is plain .mjs copied (not compiled) into dist; a

@@ -7,7 +7,7 @@
  * Fallback: sticky `codemode-serve` child only when the `.node` addon is missing
  * (unsupported host / incomplete install). Doctor reports that as degraded.
  */
-import type { MachineEnvelope } from "../runtime.js";
+import type { MachineEnvelope } from "../runtime/runtime.js";
 import { type StickyWorker } from "./dispatch.js";
 import { type StickyWorkerOptions } from "./worker.js";
 export type SessionPoolOptions = {

@@ -1,7 +1,7 @@
 import { constants } from "node:fs";
 import { lstat, open, realpath } from "node:fs/promises";
 import { isAbsolute, relative, resolve, sep } from "node:path";
-import { RuntimeError } from "./runtime.js";
+import { RuntimeError } from "./runtime/runtime.js";
 const DEFAULT_LIMIT = 20;
 const MAX_LIMIT = 100;
 const MAX_EXCERPT_LINES = 100;

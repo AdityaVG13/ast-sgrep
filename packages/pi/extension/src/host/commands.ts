@@ -2,9 +2,9 @@
  * Slash commands: /asgrep-doctor /asgrep-status /asgrep-index /asgrep-reindex.
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { AstSgrepRuntime } from "./runtime.js";
-import { bounded, errorDetails, type CommandContext, type CommandResult, type RuntimeLike, type ToolContext } from "./envelope.js";
-import type { MachineEnvelope } from "./types.js";
+import { AstSgrepRuntime } from "../runtime/runtime.js";
+import { bounded, errorDetails, type CommandContext, type CommandResult, type RuntimeLike, type ToolContext } from "./results.js";
+import type { MachineEnvelope } from "../runtime/types.js";
 
 const COMMANDS = [
   ["asgrep-doctor", "Check the ast-sgrep runtime, native binary, index, and project configuration", "doctor"],

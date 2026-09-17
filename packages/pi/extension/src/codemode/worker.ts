@@ -6,7 +6,7 @@
  */
 
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import type { MachineEnvelope } from "../runtime.js";
+import type { MachineEnvelope } from "../runtime/runtime.js";
 import { asEnvelope, type BatchResult, type StickyWorker } from "./dispatch.js";
 
 const DEFAULT_MAX_OUTPUT_BYTES = 4 * 1024 * 1024;

@@ -1,5 +1,5 @@
-import { AstSgrepRuntime } from "./runtime.js";
-import { bounded, errorDetails } from "./envelope.js";
+import { AstSgrepRuntime } from "../runtime/runtime.js";
+import { bounded, errorDetails } from "./results.js";
 const COMMANDS = [
     ["asgrep-doctor", "Check the ast-sgrep runtime, native binary, index, and project configuration", "doctor"],
     ["asgrep-status", "Show ast-sgrep runtime, index, backend, and capability status", "status"],

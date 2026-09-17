@@ -4,12 +4,12 @@
  * tools.ts / commands.ts; result plumbing in envelope.ts.
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { AstSgrepRuntime, FreshnessCoordinator } from "./runtime.js";
-import { registerAstSgrepTools } from "./tools.js";
-import { registerAstSgrepCommands } from "./commands.js";
+import { AstSgrepRuntime, FreshnessCoordinator } from "./runtime/runtime.js";
+import { registerAstSgrepTools } from "./host/tools.js";
+import { registerAstSgrepCommands } from "./host/commands.js";
 
-export { registerAstSgrepTools } from "./tools.js";
-export { registerAstSgrepCommands } from "./commands.js";
+export { registerAstSgrepTools } from "./host/tools.js";
+export { registerAstSgrepCommands } from "./host/commands.js";
 
 export default function astSgrepExtension(pi: ExtensionAPI): void {
   const runtime = new AstSgrepRuntime(pi);

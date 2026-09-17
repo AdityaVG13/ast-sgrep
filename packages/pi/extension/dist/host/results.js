@@ -2,9 +2,9 @@
  * Tool-result plumbing shared by tools.ts and commands.ts: bounded text,
  * success/failure envelopes, freshness-timeout classification, reporting.
  */
-import { isClosedWorkerError } from "./codemode/index.js";
-import { RuntimeError } from "./types.js";
-import { formatIndexResult, formatSearchResult, formatStatusResult } from "./present.js";
+import { isClosedWorkerError } from "../codemode/index.js";
+import { RuntimeError } from "../runtime/types.js";
+import { formatIndexResult, formatSearchResult, formatStatusResult } from "../ui/present.js";
 export const MAX_CONTENT_CHARS = 8_000;
 export function bounded(text) {
     return text.length <= MAX_CONTENT_CHARS ? text : `${text.slice(0, MAX_CONTENT_CHARS - 1)}…`;

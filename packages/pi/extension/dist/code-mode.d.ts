@@ -1,4 +1,4 @@
-import { type AstSgrepRuntime, type MachineEnvelope, type RunOptions, type RuntimeContext } from "./runtime.js";
+import { type AstSgrepRuntime, type MachineEnvelope, type RunOptions, type RuntimeContext } from "./runtime/runtime.js";
 export type SgrepKind = "asgrep" | "def" | "caller" | "graph" | "anchor" | "import" | "pattern" | "embed";
 export type SgrepSignal = "exact" | "structural" | "semantic";
 export type SgrepRef = `${string}#L${number}-L${number}`;

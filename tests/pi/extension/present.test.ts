@@ -9,7 +9,7 @@ import {
   formatStatusCall,
   formatStatusResult,
   presentText,
-} from "../../../packages/pi/extension/src/present.js";
+} from "../../../packages/pi/extension/src/ui/present.js";
 
 test("search call chrome names the tool, query, and mode", () => {
   const text = formatSearchCall({ query: "auth refresh", mode: "defs", limit: 8 });

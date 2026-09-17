@@ -1,4 +1,4 @@
-import type { MachineEnvelope } from "../runtime.js";
+import type { MachineEnvelope } from "../runtime/runtime.js";
 import type { ChainArgs, EditArgs, FindArgs, ReadArgs, SearchArgs } from "./types.js";
 import { type BatchCapableHost, type DispatchCall, type DispatchStats } from "./dispatch.js";
 /**

@@ -2,10 +2,10 @@
  * Tool-result plumbing shared by tools.ts and commands.ts: bounded text,
  * success/failure envelopes, freshness-timeout classification, reporting.
  */
-import { isClosedWorkerError } from "./codemode/index.js";
-import { RuntimeError, type MachineEnvelope, type RunOptions, type RuntimeContext } from "./types.js";
-import type { FreshnessCoordinator } from "./freshness.js";
-import { formatIndexResult, formatSearchResult, formatStatusResult } from "./present.js";
+import { isClosedWorkerError } from "../codemode/index.js";
+import { RuntimeError, type MachineEnvelope, type RunOptions, type RuntimeContext } from "../runtime/types.js";
+import type { FreshnessCoordinator } from "../runtime/freshness.js";
+import { formatIndexResult, formatSearchResult, formatStatusResult } from "../ui/present.js";
 
 export const MAX_CONTENT_CHARS = 8_000;
 

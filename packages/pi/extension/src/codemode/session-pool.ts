@@ -8,7 +8,7 @@
  * (unsupported host / incomplete install). Doctor reports that as degraded.
  */
 
-import type { MachineEnvelope } from "../runtime.js";
+import type { MachineEnvelope } from "../runtime/runtime.js";
 import { asEnvelope, type BatchResult, type StickyWorker } from "./dispatch.js";
 import { loadCodemodeNative, type NativeSession } from "./native.js";
 import { startStickyWorker, type StickyWorkerOptions } from "./worker.js";

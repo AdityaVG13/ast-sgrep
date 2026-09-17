@@ -8,7 +8,7 @@
 import { mkdtemp, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { MachineEnvelope } from "../runtime.js";
+import type { MachineEnvelope } from "../runtime/runtime.js";
 import type { ConnectorHost, DispatchSurface } from "./connector.js";
 
 export type CodemodeToolCall = {

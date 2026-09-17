@@ -1,5 +1,5 @@
-import { type MachineEnvelope, type RunOptions } from "./types.js";
-import type { FreshnessCoordinator } from "./freshness.js";
+import { type MachineEnvelope, type RunOptions } from "../runtime/types.js";
+import type { FreshnessCoordinator } from "../runtime/freshness.js";
 export declare const MAX_CONTENT_CHARS = 8000;
 export type RuntimeLike = {
     run(args: readonly string[], context: {
