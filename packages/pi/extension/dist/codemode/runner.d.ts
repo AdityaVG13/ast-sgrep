@@ -21,16 +21,18 @@ export type CodemodeRunFailure = {
     wallMs: number;
 };
 export type CodemodeRunResult = CodemodeRunSuccess | CodemodeRunFailure;
-/** No-op: programs run in-process. Kept so session_start / tests stay stable. */
+/** Spawn the warm standby isolate (session_start / pre-call). */
 export declare function warmCodemodeSandbox(): Promise<void>;
-/** No-op: there is no sticky Worker isolate to drop. */
+/** Drop the standby isolate (tests / session shutdown). */
 export declare function resetCodemodeSandboxForTests(): Promise<void>;
 /**
  * Run model-generated JavaScript against the typed `asgrep` connector.
  *
- * In-process `node:vm` (OpenCode/nicknisi: no Worker, no OS sandbox). `asgrep`
- * and `console` are built inside the context; the only host objects are a
- * JSON bridge and a log sink. Same trust as Pi `bash`.
+ * Execution happens in a single-use `worker_threads` isolate: the guest gets a
+ * `node:vm` context inside the worker; `asgrep`/`console` are built there; the
+ * only host channel is a JSON postMessage bridge. Timeout and abort call
+ * `worker.terminate()`, which is the only mechanism that actually stops a
+ * detached guest microtask or a runaway heap (each worker is heap-capped).
  */
 export declare function runCodemode(rawCode: string, asgrep: AsgrepConnector, options?: {
     timeoutMs?: number;

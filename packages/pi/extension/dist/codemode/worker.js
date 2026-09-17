@@ -16,6 +16,20 @@ export async function startStickyWorker(options) {
         env: { ...process.env, ...options.env, NO_COLOR: "1" },
         stdio: ["pipe", "pipe", "pipe"],
     });
+    // Fail fast on spawn errors (ENOENT / EACCES): callers get the spawn error
+    // now instead of a dead transport that only fails on first use.
+    await new Promise((resolve, reject) => {
+        const onError = (err) => {
+            child.removeListener("spawn", onSpawn);
+            reject(err);
+        };
+        const onSpawn = () => {
+            child.removeListener("error", onError);
+            resolve();
+        };
+        child.once("error", onError);
+        child.once("spawn", onSpawn);
+    });
     const pending = new Map();
     let nextId = 0;
     let closed = false;

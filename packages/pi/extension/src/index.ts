@@ -704,7 +704,7 @@ export function registerAstSgrepTools(
         report(onUpdate, "status", "completed");
         return success("status", response);
       } catch (cause) {
-        return failure("status", cause);
+        return failure("status", cause, signal);
       }
     },
   });

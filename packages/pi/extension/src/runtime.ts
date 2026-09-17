@@ -7,7 +7,8 @@ import { openIndexDatabase, type IndexDatabase } from "./sqlite.js";
 export const RUNTIME_VERSION = "2.0.0";
 export const MACHINE_SCHEMA_VERSION = "1.0.0";
 export const CONFIG_SCHEMA_VERSION = 1 as const;
-export const INDEX_FORMAT_VERSION = 12 as const;
+/** Index format this release ships. Must equal INDEX_SCHEMA_VERSION in crates/ast-sgrep-core (check-contract gates it). */
+export const INDEX_FORMAT_VERSION = 16 as const;
 export const DEFAULT_TIMEOUT_MS = 30_000;
 export const DEFAULT_MAX_OUTPUT_BYTES = 4 * 1024 * 1024;
 export const DEFAULT_REFRESH_INTERVAL_MS = 30_000;
@@ -238,9 +239,12 @@ function indexHealth(status: MachineEnvelope, knownExisting = false): IndexHealt
 }
 
 function incompatibleStatusFailure(cause: unknown): boolean {
-  if (!(cause instanceof RuntimeError) || (cause.code !== "OPERATIONAL_ERROR" && cause.code !== "PROCESS_FAILED")) return false;
-  const text = `${cause.message} ${JSON.stringify(cause.details)}`;
-  return /incompatib|unsupported.{0,24}schema|schema.{0,24}(version|mismatch)/i.test(text);
+  // RuntimeError (CLI envelope) or a plain sticky/NAPI error — both carry the
+  // native version-window message as text. The class gate is intentionally
+  // dropped: this classifier only feeds the rebuild decision.
+  const details = cause instanceof RuntimeError ? cause.details : undefined;
+  const text = `${cause instanceof Error ? cause.message : String(cause)} ${JSON.stringify(details ?? {})}`;
+  return /incompatib|unsupported.{0,24}schema|schema.{0,24}(version|mismatch)|(newer|older) than supported/i.test(text);
 }
 
 /** Probe compatibility hook then status; map incompat operational failures to health. */
@@ -806,23 +810,17 @@ function throwIndexRebuildFailed(cause: unknown, indexPath: string, quarantinesB
   });
 }
 
-function inspectIndexFile(path: string): IndexHealth {
+/** Read the on-disk index format marker. The binary is the authority on what it can read. */
+function inspectIndexFile(path: string): "missing" | "incompatible" | number {
   if (!existsSync(path)) return "missing";
   let database: IndexDatabase | undefined;
   try {
     database = openIndexDatabase(path, { readOnly: true });
     const row = database.prepare("PRAGMA user_version").get() as Record<string, unknown> | undefined;
     const version = Number(Object.values(row ?? {})[0]);
-    if (version > INDEX_FORMAT_VERSION) {
-      throw new RuntimeError("INDEX_VERSION_TOO_NEW", "Index schema is newer than this ast-sgrep runtime", {
-        actual: version,
-        supported: INDEX_FORMAT_VERSION,
-        rollbackSafe: true,
-      });
-    }
-    return version === INDEX_FORMAT_VERSION ? "ready" : "incompatible";
-  } catch (cause) {
-    if (cause instanceof RuntimeError) throw cause;
+    if (!Number.isSafeInteger(version) || version <= 0) return "incompatible";
+    return version;
+  } catch {
     return "incompatible";
   } finally {
     database?.close();
@@ -849,9 +847,53 @@ export class AstSgrepRuntime {
   resolveIndexPath(root: string): string {
     return indexPathFor(root, { ...this.#environment, ...this.config.env });
   }
+  /**
+   * Index format check. The configured binary is the sole authority on its own
+   * schema window (exact-match: it refuses both older and newer), so the local
+   * probe is only a pre-filter:
+   *   missing/unreadable -> cheap no-spawn health answers;
+   *   version == INDEX_FORMAT_VERSION (this release's shipped format) -> ready;
+   *   otherwise -> consult the binary's declared index_schema_version once
+   *   (cached), because a configured ASGREP_BIN/dev build may be newer than the
+   *   shipped constant. Index newer than the binary -> INDEX_VERSION_TOO_NEW
+   *   (never modified); older -> "incompatible" and rebuild migrates in place.
+   */
   async inspectIndexCompatibility(context: RuntimeContext): Promise<IndexHealth> {
     const root = await this.resolveRoot(context);
-    return inspectIndexFile(indexPathFor(root, { ...this.#environment, ...this.config.env }));
+    const indexPath = indexPathFor(root, { ...this.#environment, ...this.config.env });
+    const version = inspectIndexFile(indexPath);
+    if (version === "missing" || version === "incompatible") return version;
+    if (version === INDEX_FORMAT_VERSION) return "ready";
+    const supported = await this.supportedIndexFormat(context);
+    if (version === supported) return "ready";
+    if (version > supported) {
+      throw new RuntimeError("INDEX_VERSION_TOO_NEW", "Index schema is newer than the configured ast-sgrep binary", {
+        actual: version,
+        supported,
+        rollbackSafe: true,
+      });
+    }
+    return "incompatible";
+  }
+
+  /** The configured binary's declared index schema, or this release's shipped floor. */
+  #indexFormatProbe: Promise<number> | undefined;
+  private supportedIndexFormat(context: RuntimeContext): Promise<number> {
+    if (!this.#indexFormatProbe) {
+      const probe = this.run(["version", "--json"], context)
+        .then((envelope) => {
+          const declared = envelope.index_schema_version;
+          return typeof declared === "number" && Number.isSafeInteger(declared) && declared > 0
+            ? declared
+            : INDEX_FORMAT_VERSION;
+        });
+      this.#indexFormatProbe = probe;
+      // A failed probe (binary missing/exec error) must not be cached forever.
+      probe.catch(() => {
+        if (this.#indexFormatProbe === probe) this.#indexFormatProbe = undefined;
+      });
+    }
+    return this.#indexFormatProbe;
   }
 
   async rebuildIncompatibleIndex(context: RuntimeContext, options: RunOptions = {}): Promise<MachineEnvelope> {
@@ -872,7 +914,7 @@ export class AstSgrepRuntime {
           { failed, walkErrors, force: true },
         );
       }
-      if (inspectIndexFile(indexPath) !== "ready") {
+      if ((await this.inspectIndexCompatibility(context)) !== "ready") {
         throw new RuntimeError("INDEX_REBUILD_INVALID", "Rebuilt index has an incompatible format", { expected: INDEX_FORMAT_VERSION });
       }
       return response;

@@ -1,4 +1,4 @@
-import vm from "node:vm";
+import { Worker } from "node:worker_threads";
 import { coerceHostArgs, normalizeCode, packGuestCall, resolveHostMethod, timeoutHint, unknownMethodError } from "./guest-api.js";
 import { CODEMODE_HOST_METHODS } from "./types.js";
 export { normalizeCode };
@@ -13,6 +13,9 @@ const MAX_LOG_LINE_CHARS = 4_096;
 const MAX_RESULT_JSON_CHARS = 1_000_000;
 const RESULT_SERIALIZE_TIMEOUT_MS = 1_000;
 const MAX_TIMER_MS = 2_147_483_647;
+/** Hard ceiling on guest heap; an OOM guest kills its isolate, never the host. */
+const WORKER_MAX_OLD_SPACE_MB = 512;
+const WORKER_MAX_YOUNG_SPACE_MB = 64;
 /** NAPI u64/i64 fields cross as BigInt; keep safe ints numeric, exact-string the rest. */
 const jsonSafe = (_key, item) => typeof item === "bigint"
     ? item >= -9007199254740991n && item <= 9007199254740991n
@@ -97,8 +100,13 @@ function bootstrapSource() {
     let resultValue;
     const setResult = (value) => { resultValue = value; };
     const stringify = JSON.stringify;
+    // NAPI u64/i64 fields cross the bridge as BigInt; a guest re-passing them
+    // must not die on "Do not know how to serialize a BigInt".
+    const jsonSafe = (_key, item) => typeof item === "bigint"
+      ? (item >= -9007199254740991n && item <= 9007199254740991n ? Number(item) : item.toString())
+      : item;
     const stringifyBounded = (value, maxChars, label) => {
-      const serialized = stringify(value);
+      const serialized = stringify(value, jsonSafe);
       if (serialized === undefined) return serialized;
       if (serialized.length > maxChars) {
         throw new Error("codemode " + label + " exceeds " + maxChars + " characters");
@@ -176,12 +184,113 @@ function bootstrapSource() {
   }
   `;
 }
-const bootstrapScript = new vm.Script(bootstrapSource(), {
-    filename: "asgrep-codemode-bootstrap.js",
+/**
+ * Worker-side program. One program per worker; the worker is always terminated
+ * when the run ends. Guest microtasks share the worker's own loop, so a detached
+ * `Promise.resolve().then(loop)` starves only the isolate — the host kills it
+ * via `terminate()` at the wall-clock deadline. This is the boundary the
+ * previous in-process vm could not provide: in-process, a detached guest
+ * microtask could block Pi's event loop forever.
+ */
+function workerSource() {
+    return `
+"use strict";
+const { parentPort } = require("node:worker_threads");
+const vm = require("node:vm");
+
+const BOOTSTRAP_SOURCE = ${JSON.stringify(bootstrapSource())};
+
+let callSeq = 0;
+const pendingCalls = new Map();
+let outbox = [];
+let outboxScheduled = false;
+
+// Calls issued in one guest microtask burst travel as ONE message so the
+// host dispatcher sees them in a single tick and can coalesce the wave
+// (sticky batch / runBatch). Per-message posts arrive on separate host
+// turns and would silently defeat batching.
+const bridge = (method, payload) => new Promise((resolve, reject) => {
+  const id = "c" + (callSeq++);
+  pendingCalls.set(id, { resolve, reject });
+  outbox.push({ id, method, payload });
+  if (!outboxScheduled) {
+    outboxScheduled = true;
+    queueMicrotask(() => {
+      const calls = outbox;
+      outbox = [];
+      outboxScheduled = false;
+      try {
+        parentPort.postMessage({ type: "call-batch", calls });
+      } catch (cause) {
+        for (const call of calls) {
+          const pending = pendingCalls.get(call.id);
+          if (pending) {
+            pendingCalls.delete(call.id);
+            pending.resolve(JSON.stringify({ ok: false, error: "codemode call failed" }));
+          }
+        }
+      }
+    });
+  }
 });
-const serializeScript = new vm.Script("globalThis.__asgrepSerializeResult()", {
-    filename: "asgrep-codemode-result.js",
+const logSink = (line) => {
+  try { parentPort.postMessage({ type: "log", line: String(line) }); } catch {}
+};
+
+parentPort.on("message", (msg) => {
+  if (!msg || typeof msg !== "object") return;
+  if (msg.type === "call-result") {
+    const pending = pendingCalls.get(msg.id);
+    if (pending) {
+      pendingCalls.delete(msg.id);
+      pending.resolve(msg.body);
+    }
+    return;
+  }
+  if (msg.type === "run") {
+    void runProgram(msg);
+  }
 });
+
+async function runProgram(msg) {
+  const contextObject = Object.create(null);
+  Object.defineProperty(bridge, "constructor", { value: undefined });
+  Object.defineProperty(logSink, "constructor", { value: undefined });
+  contextObject.__asgrepBridge = bridge;
+  contextObject.__asgrepLog = logSink;
+  const context = vm.createContext(contextObject, {
+    codeGeneration: { strings: false, wasm: false },
+  });
+  try {
+    const bootstrapScript = new vm.Script(BOOTSTRAP_SOURCE, { filename: "asgrep-codemode-bootstrap.js" });
+    bootstrapScript.runInContext(context, { timeout: Math.min(msg.timeoutMs, 1000) });
+    const script = new vm.Script(msg.code, { filename: "asgrep-codemode.js" });
+    const value = await script.runInContext(context, {
+      displayErrors: true,
+      timeout: msg.timeoutMs,
+    });
+    const setResult = context.__asgrepSetResult;
+    if (typeof setResult !== "function") {
+      throw new Error("codemode result bridge is unavailable");
+    }
+    setResult(value);
+    const serializeScript = new vm.Script("globalThis.__asgrepSerializeResult()", {
+      filename: "asgrep-codemode-result.js",
+    });
+    const serialized = serializeScript.runInContext(context, {
+      displayErrors: true,
+      timeout: Math.min(msg.timeoutMs, ${RESULT_SERIALIZE_TIMEOUT_MS}),
+    });
+    parentPort.postMessage({ type: "result", serialized });
+  } catch (cause) {
+    const message = cause instanceof Error ? cause.message : String(cause);
+    try {
+      parentPort.postMessage({ type: "error", error: message.slice(0, ${MAX_ERROR_CHARS}) });
+    } catch {}
+  }
+}
+`;
+}
 function bindHostMethods(asgrep) {
     const wrap = (fn) => (args, options) => fn(args, options);
     return {
@@ -201,16 +310,111 @@ function bindHostMethods(asgrep) {
         catalogDescribe: wrap(asgrep.catalogDescribe.bind(asgrep)),
     };
 }
-/** No-op: programs run in-process. Kept so session_start / tests stay stable. */
-export async function warmCodemodeSandbox() { }
-/** No-op: there is no sticky Worker isolate to drop. */
-export async function resetCodemodeSandboxForTests() { }
+/**
+ * Warm standby worker. Each call consumes the standby and immediately spawns a
+ * replacement, so the spawn cost is paid off the critical path while every
+ * program still gets a virgin isolate. The standby is unref'd so it never
+ * holds the Pi process open.
+ */
+let standby = null;
+let standbyStarting = null;
+const activeWorkers = new Set();
+function spawnWorker() {
+    const worker = new Worker(workerSource(), spawnWorkerOptions());
+    return new Promise((resolve, reject) => {
+        worker.once("online", () => resolve(worker));
+        worker.once("error", reject);
+    });
+}
+function spawnWorkerOptions() {
+    return {
+        eval: true,
+        // A clean isolate: the guest must not inherit --import loaders, --test,
+        // or any other host flags (tsx bootstrap crashes the eval'd worker).
+        execArgv: [],
+        resourceLimits: {
+            maxOldGenerationSizeMb: WORKER_MAX_OLD_SPACE_MB,
+            maxYoungGenerationSizeMb: WORKER_MAX_YOUNG_SPACE_MB,
+        },
+    };
+}
+function ensureStandby() {
+    if (standby || standbyStarting)
+        return;
+    // The stored promise doubles as a claim token: takeWorker() may adopt the
+    // in-flight spawn for direct use, so the then-callback must only publish to
+    // standby while the spawn is still standby-owned. Without the identity
+    // check an adopted worker could be re-published and handed out twice.
+    const claimed = spawnWorker()
+        .then((worker) => {
+        if (standbyStarting === claimed) {
+            standby = worker;
+            standbyStarting = null;
+            worker.unref();
+        }
+        return worker;
+    })
+        .catch((cause) => {
+        if (standbyStarting === claimed)
+            standbyStarting = null;
+        throw cause;
+    });
+    standbyStarting = claimed;
+    // The warm path is opportunistic; a spawn failure must not crash the host.
+    void claimed.catch(() => undefined);
+}
+async function takeWorker() {
+    const ready = standby;
+    standby = null;
+    const starting = standbyStarting;
+    standbyStarting = null;
+    // Refill the warm slot for the next call before doing any real work.
+    ensureStandby();
+    if (ready) {
+        ready.ref();
+        return ready;
+    }
+    if (starting) {
+        try {
+            const worker = await starting;
+            worker.ref();
+            return worker;
+        }
+        catch {
+            // fall through to a cold spawn
+        }
+    }
+    return spawnWorker();
+}
+/** Spawn the warm standby isolate (session_start / pre-call). */
+export async function warmCodemodeSandbox() {
+    ensureStandby();
+}
+/** Drop the standby isolate (tests / session shutdown). */
+export async function resetCodemodeSandboxForTests() {
+    const worker = standby;
+    standby = null;
+    const starting = standbyStarting;
+    standbyStarting = null;
+    if (starting) {
+        const spawned = await starting.catch(() => undefined);
+        if (spawned)
+            await spawned.terminate().catch(() => undefined);
+    }
+    if (worker)
+        await worker.terminate().catch(() => undefined);
+    // In-flight runs own their workers, but shutdown must not leave them behind:
+    // terminating surfaces a "codemode worker exited" failure to the caller.
+    await Promise.all([...activeWorkers].map((active) => active.terminate().catch(() => undefined)));
+}
 /**
  * Run model-generated JavaScript against the typed `asgrep` connector.
  *
- * In-process `node:vm` (OpenCode/nicknisi: no Worker, no OS sandbox). `asgrep`
- * and `console` are built inside the context; the only host objects are a
- * JSON bridge and a log sink. Same trust as Pi `bash`.
+ * Execution happens in a single-use `worker_threads` isolate: the guest gets a
+ * `node:vm` context inside the worker; `asgrep`/`console` are built there; the
+ * only host channel is a JSON postMessage bridge. Timeout and abort call
+ * `worker.terminate()`, which is the only mechanism that actually stops a
+ * detached guest microtask or a runaway heap (each worker is heap-capped).
  */
 export async function runCodemode(rawCode, asgrep, options = {}) {
     const requestedTimeout = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
@@ -225,11 +429,11 @@ export async function runCodemode(rawCode, asgrep, options = {}) {
         return resultErr("codemode aborted", [], rawCode.slice(0, 200), wall0, options.stats);
     }
     const code = normalizeCode(rawCode);
-    const runController = new AbortController();
     const hostMethods = bindHostMethods(asgrep);
     const logs = [];
     let logChars = 0;
     let callCount = 0;
+    const runController = new AbortController();
     const hostCall = async (method, payload) => {
         try {
             if (runController.signal.aborted) {
@@ -274,66 +478,92 @@ export async function runCodemode(rawCode, asgrep, options = {}) {
         logs.push(bounded);
         logChars += bounded.length;
     };
-    const contextObject = Object.create(null);
-    Object.defineProperty(hostCall, "constructor", { value: undefined });
-    Object.defineProperty(hostLog, "constructor", { value: undefined });
-    contextObject.__asgrepBridge = hostCall;
-    contextObject.__asgrepLog = hostLog;
-    const context = vm.createContext(contextObject, {
-        codeGeneration: { strings: false, wasm: false },
-    });
-    let timer;
-    const onAbort = () => {
-        runController.abort();
-    };
-    options.signal?.addEventListener("abort", onAbort, { once: true });
+    let worker;
     try {
-        bootstrapScript.runInContext(context, { timeout: Math.min(timeoutMs, 1_000) });
-        const script = new vm.Script(code, { filename: "asgrep-codemode.js" });
-        const timeout = new Promise((_, reject) => {
-            timer = setTimeout(() => {
-                runController.abort();
-                reject(new Error(`codemode timeout after ${timeoutMs}ms`));
-            }, timeoutMs);
-        });
-        const aborted = options.signal
-            ? new Promise((_, reject) => {
-                if (options.signal?.aborted) {
-                    reject(new Error("codemode aborted"));
-                    return;
-                }
-                options.signal?.addEventListener("abort", () => reject(new Error("codemode aborted")), { once: true });
-            })
-            : undefined;
-        const value = await Promise.race([
-            Promise.resolve(script.runInContext(context, {
-                displayErrors: true,
-                timeout: timeoutMs,
-            })),
-            timeout,
-            ...(aborted ? [aborted] : []),
-        ]);
-        const setResult = context.__asgrepSetResult;
-        if (typeof setResult !== "function") {
-            throw new Error("codemode result bridge is unavailable");
-        }
-        setResult(value);
-        const serialized = serializeScript.runInContext(context, {
-            displayErrors: true,
-            timeout: Math.min(timeoutMs, RESULT_SERIALIZE_TIMEOUT_MS),
-        });
-        const result = serialized === undefined ? undefined : JSON.parse(serialized);
-        return resultOk(result, logs, code, wall0, options.stats);
+        worker = await takeWorker();
     }
     catch (cause) {
-        return resultErr(timeoutHint(safeErrorMessage(cause)).slice(0, MAX_ERROR_CHARS), logs, code, wall0, options.stats);
+        return resultErr(`codemode worker unavailable: ${safeErrorMessage(cause)}`, logs, code, wall0, options.stats);
     }
-    finally {
-        if (timer)
-            clearTimeout(timer);
-        options.signal?.removeEventListener("abort", onAbort);
-        runController.abort();
-    }
+    activeWorkers.add(worker);
+    return new Promise((resolveRun) => {
+        let settled = false;
+        let timer;
+        const finish = (outcome) => {
+            if (settled)
+                return;
+            settled = true;
+            activeWorkers.delete(worker);
+            if (timer)
+                clearTimeout(timer);
+            options.signal?.removeEventListener("abort", onAbort);
+            runController.abort();
+            void worker.terminate().catch(() => undefined);
+            resolveRun(outcome);
+        };
+        const fail = (message) => {
+            finish(resultErr(timeoutHint(message).slice(0, MAX_ERROR_CHARS), logs, code, wall0, options.stats));
+        };
+        const onAbort = () => fail("codemode aborted");
+        const onMessage = (msg) => {
+            if (!msg || typeof msg !== "object")
+                return;
+            if (msg.type === "log") {
+                hostLog(msg.line);
+                return;
+            }
+            if (msg.type === "call-batch") {
+                const calls = Array.isArray(msg.calls) ? msg.calls : [];
+                for (const call of calls) {
+                    const respond = (body) => {
+                        try {
+                            worker.postMessage({ type: "call-result", id: call.id, body });
+                        }
+                        catch {
+                            // Worker already terminated; the run is settled.
+                        }
+                    };
+                    void hostCall(call.method, call.payload).then(respond, () => respond(JSON.stringify({ ok: false, error: "codemode call failed" })));
+                }
+                return;
+            }
+            if (msg.type === "result") {
+                try {
+                    const serialized = msg.serialized;
+                    const result = serialized === undefined ? undefined : JSON.parse(serialized);
+                    finish(resultOk(result, logs, code, wall0, options.stats));
+                }
+                catch (cause) {
+                    fail("codemode result decode failed: " + safeErrorMessage(cause));
+                }
+                return;
+            }
+            if (msg.type === "error") {
+                fail(msg.error);
+            }
+        };
+        const onError = (cause) => {
+            fail(`codemode worker error: ${cause.message}`);
+        };
+        const onExit = (exitCode) => {
+            fail(`codemode worker exited code=${exitCode}`);
+        };
+        worker.on("message", onMessage);
+        worker.once("error", onError);
+        worker.once("exit", onExit);
+        if (options.signal) {
+            if (options.signal.aborted) {
+                fail("codemode aborted");
+                return;
+            }
+            options.signal.addEventListener("abort", onAbort, { once: true });
+        }
+        timer = setTimeout(() => {
+            fail(`codemode timeout after ${timeoutMs}ms`);
+        }, timeoutMs);
+        timer.unref?.();
+        worker.postMessage({ type: "run", code, timeoutMs });
+    });
 }
 function safeErrorMessage(cause) {
     try {

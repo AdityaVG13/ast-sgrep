@@ -20,6 +20,8 @@ test("packed extension inventory is exact and carries registry integrity", () =>
     "dist/codemode/connector.js",
     "dist/codemode/dispatch.d.ts",
     "dist/codemode/dispatch.js",
+    "dist/codemode/guest-api.d.ts",
+    "dist/codemode/guest-api.js",
     "dist/codemode/index.d.ts",
     "dist/codemode/index.js",
     "dist/codemode/native.d.ts",

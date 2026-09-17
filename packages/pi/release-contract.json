@@ -155,9 +155,9 @@
         "policy": "Migrate schema 0 copies without mutating their rollback source; reject ambiguous or newer schemas."
       },
       "indexFormat": {
-        "current": 12,
+        "current": 16,
         "reusable": [
-          12
+          16
         ],
         "rebuild": [
           0,
@@ -171,7 +171,11 @@
           8,
           9,
           10,
-          11
+          11,
+          12,
+          13,
+          14,
+          15
         ],
         "newer": "reject-and-preserve",
         "policy": "Reuse only an exact compatible format. Migrate and strictly rebuild older formats transactionally in place after quiescing warm sessions; preparation failures abort before file rewrites, failed write transactions roll back, and newer formats are rejected without modification."

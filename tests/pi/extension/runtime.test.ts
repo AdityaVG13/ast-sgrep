@@ -191,6 +191,11 @@ describe("index format upgrades", () => {
     await createIndex(indexPath, INDEX_FORMAT_VERSION - 1, "prior");
     const inode = statSync(indexPath).ino;
     const pi = new FakePi(async (_options, args) => {
+      // The binary declares its supported schema via version --json; the
+      // runtime consults it once for indexes older/newer than the shipped floor.
+      if (args[0] === "version") {
+        return valid({ command: "version", index_schema_version: INDEX_FORMAT_VERSION });
+      }
       assert.deepEqual(args, ["reindex", ".", "--json"]);
       const database = openIndexDatabase(indexPath);
       try {
@@ -230,7 +235,9 @@ describe("index format upgrades", () => {
     } finally {
       database.close();
     }
-    assert.equal(pi.calls.length, 0);
+    // The only permitted call is the cached "version --json" schema probe —
+    // a future index must never see an index/status/rebuild operation.
+    assert.ok(pi.calls.every((call) => call.args[0] === "version"), JSON.stringify(pi.calls.map((c) => c.args)));
   });
 
   it("preserves the recoverable prior index and returns a structured failure", async () => {

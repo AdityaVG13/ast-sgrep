@@ -3,7 +3,8 @@ import { resolveBinary } from "ast-sgrep";
 export declare const RUNTIME_VERSION = "2.0.0";
 export declare const MACHINE_SCHEMA_VERSION = "1.0.0";
 export declare const CONFIG_SCHEMA_VERSION: 1;
-export declare const INDEX_FORMAT_VERSION: 12;
+/** Index format this release ships. Must equal INDEX_SCHEMA_VERSION in crates/ast-sgrep-core (check-contract gates it). */
+export declare const INDEX_FORMAT_VERSION: 16;
 export declare const DEFAULT_TIMEOUT_MS = 30000;
 export declare const DEFAULT_MAX_OUTPUT_BYTES: number;
 export declare const DEFAULT_REFRESH_INTERVAL_MS = 30000;
@@ -121,7 +122,19 @@ export declare class AstSgrepRuntime {
     constructor(pi: PiExec, sources?: ConfigSources, dependencies?: RuntimeDependencies);
     resolveRoot(context: RuntimeContext): Promise<string>;
     resolveIndexPath(root: string): string;
+    /**
+     * Index format check. The configured binary is the sole authority on its own
+     * schema window (exact-match: it refuses both older and newer), so the local
+     * probe is only a pre-filter:
+     *   missing/unreadable -> cheap no-spawn health answers;
+     *   version == INDEX_FORMAT_VERSION (this release's shipped format) -> ready;
+     *   otherwise -> consult the binary's declared index_schema_version once
+     *   (cached), because a configured ASGREP_BIN/dev build may be newer than the
+     *   shipped constant. Index newer than the binary -> INDEX_VERSION_TOO_NEW
+     *   (never modified); older -> "incompatible" and rebuild migrates in place.
+     */
     inspectIndexCompatibility(context: RuntimeContext): Promise<IndexHealth>;
+    private supportedIndexFormat;
     rebuildIncompatibleIndex(context: RuntimeContext, options?: RunOptions): Promise<MachineEnvelope>;
     run(args: readonly string[], context: RuntimeContext, options?: RunOptions): Promise<MachineEnvelope>;
     /** Absolute path to the native binary (for sticky serve / stdin batch spawn). */

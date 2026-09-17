@@ -578,7 +578,7 @@ export function registerAstSgrepTools(pi, runtime = new AstSgrepRuntime(pi), fre
                 return success("status", response);
             }
             catch (cause) {
-                return failure("status", cause);
+                return failure("status", cause, signal);
             }
         },
     });

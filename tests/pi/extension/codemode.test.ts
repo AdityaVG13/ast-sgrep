@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { getEventListeners } from "node:events";
+import { existsSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -451,16 +452,30 @@ test("sticky stdin write failure terminates the transport", {
   let worker: Awaited<ReturnType<typeof startStickyWorker>> | undefined;
   try {
     const binary = join(dir, "fake-asgrep");
+    const closedMarker = join(dir, "stdin-closed");
     await writeFile(
       binary,
       `#!/usr/bin/env node
-require("node:fs").closeSync(0);
+const fs = require("node:fs");
+fs.closeSync(0);
+fs.writeFileSync(process.env.ASG_STDIN_CLOSED_MARKER, "1");
 setInterval(() => {}, 1000);
 `,
       { encoding: "utf8", mode: 0o755 },
     );
-    worker = await startStickyWorker({ binary, cwd: dir, timeoutMs: 1_000 });
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    worker = await startStickyWorker({
+      binary,
+      cwd: dir,
+      timeoutMs: 1_000,
+      env: { ASG_STDIN_CLOSED_MARKER: closedMarker },
+    });
+    // Deterministic: wait until the child has actually closed fd 0 before the
+    // write — a fixed sleep races interpreter startup and flaky-passes.
+    const markerDeadline = Date.now() + 5_000;
+    while (!existsSync(closedMarker) && Date.now() < markerDeadline) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    assert.ok(existsSync(closedMarker), "child must close stdin before the write");
     const started = Date.now();
     await assert.rejects(worker.call("search", { query: "x" }));
     assert.ok(Date.now() - started < 500, "write failure must reject before the request timeout");
@@ -551,7 +566,29 @@ test("runner interrupts synchronous infinite loops", async () => {
   if (!outcome.ok) assert.match(outcome.error, /timed out|timeout/iu);
 });
 
-test("runner timeout rejects a hanging await without a Worker", async () => {
+test("runner terminates a detached microtask that starves the guest loop", async () => {
+  const bundle = createAsgrepConnector({
+    async run(): Promise<MachineEnvelope> {
+      return { tool: "asgrep", schema_version: "1.0.0", ok: true };
+    },
+  }, { cwd: "/project" });
+  const started = Date.now();
+  const outcome = await runCodemode(
+    `Promise.resolve().then(() => { while (true) {} }); return 1;`,
+    bundle.asgrep,
+    { timeoutMs: 400 },
+  );
+  assert.equal(outcome.ok, false);
+  if (!outcome.ok) assert.match(outcome.error, /timed out|timeout/iu);
+  // The whole point of the isolate: a detached microtask must not outlive the
+  // run. In-process this froze the host loop forever; now it must terminate.
+  assert.ok(Date.now() - started < 5_000, "detached microtask must be terminated, not awaited");
+  const after = await runCodemode("return 2", bundle.asgrep, { timeoutMs: 2_000 });
+  assert.equal(after.ok, true, after.ok ? undefined : after.error);
+  assert.equal(after.result, 2);
+});
+
+test("runner timeout rejects a hanging await", async () => {
   const bundle = createAsgrepConnector({
     async run(): Promise<MachineEnvelope> {
       return { tool: "asgrep", schema_version: "1.0.0", ok: true };
@@ -868,7 +905,7 @@ test("edit is a mutating tool and does not spawn-replay after sticky failure", a
   assert.equal(spawnFallbacks, 0);
 });
 
-test("in-process Code Mode activation stays off Worker spawn", async () => {
+test("Code Mode activation stays off serve-process spawn", async () => {
   const bundle = createAsgrepConnector({
     async run(): Promise<MachineEnvelope> {
       return { tool: "asgrep", schema_version: "1.0.0", ok: true, hits: [] };
@@ -881,5 +918,5 @@ test("in-process Code Mode activation stays off Worker spawn", async () => {
   assert.equal(first.ok, true, first.ok ? undefined : first.error);
   assert.equal(second.ok, true, second.ok ? undefined : second.error);
   assert.equal(second.result, 2);
-  assert.ok(second.wallMs < 20, `in-process activation ${second.wallMs}ms`);
+  assert.ok(second.wallMs < 20, `warm-standby activation ${second.wallMs}ms`);
 });
