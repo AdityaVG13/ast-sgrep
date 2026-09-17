@@ -130,13 +130,28 @@ impl CodeModeSession {
                 }
             };
             let current = &plan[index].rewritten;
+            // Line where the unique match starts — computed before the buffer
+            // is replaced so the borrow is released.
+            let match_line = current
+                .find(&edit.old_text)
+                .map(|off| current[..off].matches('\n').count() as u32 + 1);
             let next = unique_replace(current, &edit.old_text, &edit.new_text)?;
             let changed = next != *current;
             plan[index].rewritten = next;
-            applied.push(json!({
+            // Echo a bounded diff so callers can render what changed.
+            let (removed, removed_more) = diff_lines(&edit.old_text);
+            let (added, added_more) = diff_lines(&edit.new_text);
+            let mut row = json!({
                 "path": rel_display(&rel),
                 "changed": changed,
-            }));
+                "line": match_line,
+                "removed": removed,
+                "added": added,
+            });
+            if removed_more || added_more {
+                row["truncated"] = json!(true);
+            }
+            applied.push(row);
         }
         // Phase 2: every edit validated — write each touched file once.
         let mut rel_paths = Vec::new();
@@ -330,6 +345,14 @@ fn parse_edit_value(value: &Value) -> anyhow::Result<EditSpec> {
         old_text: old_text.to_string(),
         new_text: new_text.to_string(),
     })
+}
+
+/// Bounded line split for edit diffs — caps each side so a whole-file paste
+/// can't bloat the envelope. Returns (lines, had_more).
+fn diff_lines(text: &str) -> (Vec<String>, bool) {
+    const MAX_DIFF_LINES: usize = 24;
+    let all: Vec<String> = text.lines().map(str::to_string).collect();
+    (all.iter().take(MAX_DIFF_LINES).cloned().collect(), all.len() > MAX_DIFF_LINES)
 }
 
 fn unique_replace(haystack: &str, old: &str, new: &str) -> anyhow::Result<String> {

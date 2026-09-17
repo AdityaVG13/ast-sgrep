@@ -11,6 +11,14 @@ export type CardModel = {
     command: string;
     title: Array<string | null | undefined>;
     hits?: HitLike[];
+    /** Applied edit diffs: path + line + removed/added line arrays. */
+    edits?: Array<{
+        path?: string;
+        line?: number;
+        removed?: string[];
+        added?: string[];
+        truncated?: boolean;
+    }>;
     ops?: Array<{
         tool: string;
         target: string;

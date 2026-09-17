@@ -23,6 +23,8 @@ export type CardModel = {
   command: string;
   title: Array<string | null | undefined>;
   hits?: HitLike[];
+  /** Applied edit diffs: path + line + removed/added line arrays. */
+  edits?: Array<{ path?: string; line?: number; removed?: string[]; added?: string[]; truncated?: boolean }>;
   ops?: Array<{ tool: string; target: string; ok: boolean; ms: number }>;
   resultLines?: string[];
   error?: string;
@@ -129,6 +131,18 @@ function bodyLines(theme: PresentTheme | undefined, model: CardModel, width: num
     lines.push(paint(theme, "dim", "   \u2026 " + ((model.hits?.length ?? 0) - hits.length) + " more"));
   }
 
+  for (const edit of (model.edits ?? []).slice(0, model.expanded ? 12 : 4)) {
+    const head = " " + paint(theme, "accent", edit.path ?? "?") + (edit.line ? paint(theme, "dim", ":" + edit.line) : "");
+    lines.push(clamp(head, width));
+    for (const line of (edit.removed ?? []).slice(0, model.expanded ? 24 : 8)) {
+      lines.push("   " + paint(theme, "error", "- " + clamp(line, width - 4)));
+    }
+    for (const line of (edit.added ?? []).slice(0, model.expanded ? 24 : 8)) {
+      lines.push("   " + paint(theme, "success", "+ " + clamp(line, width - 4)));
+    }
+    if (edit.truncated) lines.push(paint(theme, "dim", "   \u2026"));
+  }
+
   if (model.error) {
     for (const line of model.error.split("\n").slice(0, model.expanded ? 12 : 4)) {
       lines.push(" " + paint(theme, "error", clamp(line, width - 1)));
@@ -151,6 +165,16 @@ type ResultLike = {
 
 type RenderOptions = { expanded?: boolean; isPartial?: boolean };
 type RenderContext = { lastComponent?: unknown };
+
+function editsOf(value: unknown): Array<{ path?: string; line?: number; removed?: string[]; added?: string[]; truncated?: boolean }> | undefined {
+  if (value && typeof value === "object" && Array.isArray((value as { edits?: unknown }).edits)) {
+    return (value as { edits: unknown[] }).edits.filter(
+      (e): e is { path?: string; line?: number; removed?: string[]; added?: string[]; truncated?: boolean } =>
+        !!e && typeof e === "object" && (Array.isArray((e as { removed?: unknown }).removed) || Array.isArray((e as { added?: unknown }).added)),
+    );
+  }
+  return undefined;
+}
 
 function hitsOf(value: unknown): HitLike[] | undefined {
   if (value && typeof value === "object" && Array.isArray((value as EnvelopeLike).hits)) {
@@ -224,11 +248,14 @@ export function cardModel(result: ResultLike, options: RenderOptions): CardModel
   const ops = trace?.map((t) => ({ tool: t.tool, target: t.target ?? "", ok: t.ok !== false, ms: typeof t.ms === "number" ? t.ms : 0 }));
 
   const hits = hitsOf(response) ?? hitsOf(details.result);
-  const resultLines = hits ? undefined : resultPreviewLines(details.result);
+  const resultEdits = editsOf(details.result) ?? editsOf(response);
+  // When edits carry diffs they are the interesting part of the result.
+  const resultLines = hits || resultEdits ? undefined : resultPreviewLines(details.result);
 
   const model: CardModel = { command, title, expanded };
   if (ops && ops.length > 0) model.ops = ops;
   if (hits) model.hits = hits;
+  if (resultEdits) model.edits = resultEdits;
   if (resultLines) model.resultLines = resultLines;
   return model;
 }
