@@ -1,5 +1,5 @@
 //! Corrupt-index recovery and SQLite sidecar quarantine helpers.
-//! Extracted from `index.rs` (EXP-002 / F-001 C5+C6). Leaf FS helpers only;
+//! Extracted from `index.rs`. Leaf FS helpers only;
 //! `open_index_store` / `quick_check` stay in `index` (Indexer main open path).
 
 use crate::index::{open_index_store, quick_check, IndexOptions};

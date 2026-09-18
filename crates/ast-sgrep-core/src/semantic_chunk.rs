@@ -383,7 +383,7 @@ fn enclosing_scope(symbols: &[SymbolRow], sym: &SymbolRow) -> String {
 const DOC_LOOKBACK_LINES: usize = 8;
 /// `#` is only a comment marker for hash-comment languages (python/ruby).
 /// Rust attributes (`#[derive]`) and JS/TS private fields (`#foo`) must not
-/// be treated as docs (bead ast-sgrep-pwfm).
+/// be treated as docs.
 fn comment_markers_for(language: Option<&str>) -> &'static [&'static str] {
     match language {
         Some("python") | Some("ruby") => &["#"],

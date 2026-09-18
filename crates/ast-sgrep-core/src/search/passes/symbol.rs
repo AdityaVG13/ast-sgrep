@@ -147,8 +147,8 @@ fn restrict_to_files(
     };
     let mut paths: Vec<String> = allowed_files.iter().cloned().collect();
     paths.sort_unstable();
-    // br-perf-inlist-bucket: quantize the placeholder count up to a power of
-    // two by repeating the last path. IN-membership is unchanged by
+    // Quantize the placeholder count up to a power of two by repeating
+    // the last path. IN-membership is unchanged by
     // duplicates, and the SQL text becomes stable within a bucket so
     // prepare_cached stops re-parsing a fresh statement per distinct file
     // count (the tail-profile showed sqlite3RunParser/yy_reduce churn from

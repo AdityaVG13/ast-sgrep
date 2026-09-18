@@ -62,7 +62,7 @@ impl IndexStore {
         self.with_file_tx(|| {
             let id = self.upsert_file_inner(input, &emb.chunks, &struct_key, &struct_fp)?;
             self.persist_embed_cache_side_effects(&emb, cache_hits, cache_misses)?;
-            // SEP15-2 (store_delete contract): a semantic mutation must
+            // Store-delete contract: a semantic mutation must
             // invalidate the on-disk IVF sidecar BEFORE commit — a reader that
             // reloads the ANN after this transaction would otherwise answer
             // from embeddings of the previous content. Removal is fs-level and
@@ -229,7 +229,7 @@ impl IndexStore {
         let mut fts = self.conn.prepare_cached(
             "INSERT INTO lines_fts(rowid, content, file_id, line_no) VALUES(?1,?2,?3,?4)",
         )?;
-        // vvpk: the same line also lands in the unstemmed code field.
+        // The same line also lands in the unstemmed code field.
         let mut code_fts = self.conn.prepare_cached(
             "INSERT INTO lines_code_fts(rowid, content, file_id, line_no) VALUES(?1,?2,?3,?4)",
         )?;
@@ -276,7 +276,7 @@ impl IndexStore {
         if emb.is_empty() {
             // A re-upsert of an EXISTING file reaches here AFTER upsert_file_row's
             // delete_file_children already removed its old semantic_chunks. Bump so
-            // SemanticCache + IVF fingerprint detect the mutation (bead ast-sgrep-44a4).
+            // SemanticCache + IVF fingerprint detect the mutation.
             // Benign over-bump when the file never had chunks (new file, no chunks):
             // an extra cache miss, never a stale hit.
             self.bump_semantic_data_version()?;
@@ -395,7 +395,7 @@ impl IndexStore {
             self.set_meta("embed_dim", &d.to_string())?;
         }
         // Bump semantic_data_version on every chunk insertion so SemanticCache and
-        // the IVF fingerprint detect delete+re-add collisions (bead ast-sgrep-44a4).
+        // the IVF fingerprint detect delete+re-add collisions.
         self.bump_semantic_data_version()?;
         Ok(())
     }

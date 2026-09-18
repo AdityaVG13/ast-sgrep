@@ -1,6 +1,6 @@
 //! Watch-path normalize / canonicalize / skip helpers for indexing.
-//! Extracted from `index.rs` (EXP-008 / F-004 watch-path cluster). Leaf helpers
-//! only; `Indexer::update_paths` stays in `index`.
+//! Extracted from `index.rs`. Leaf helpers only; `Indexer::update_paths`
+//! stays in `index`.
 
 use crate::gitignore::{should_skip_dir, should_skip_file};
 use std::io::ErrorKind;

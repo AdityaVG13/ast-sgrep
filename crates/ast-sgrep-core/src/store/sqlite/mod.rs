@@ -13,17 +13,17 @@ use std::sync::Arc;
 // 11 = scip_facts overlay (kgvi.2). 12 = tests/examples semantic vector.
 // 13 = callers lower() expression indexes (gauntlet-r11: calls_matching full-scan fix).
 // 14 = pattern_nodes (file_id, signature) composite for cascade structural seeks.
-// 15 = F74c-1: the pass-73 php `::` call-signature re-key (`call:bar` →
-//      `call:Foo::bar`) shipped on 14 without a bump; 15 discards pre-rekey
-//      `pattern_nodes` signature rows and forces re-extraction (those rows are
-//      served AUTHORITATIVELY for exact `call:` patterns, so a pre-rekey index
-//      kept resurrecting the F72a-1 wrong answers under the default search
-//      path). Never reuse a SCHEMA_VERSION for two migrations.
-// 16 = br-g7j (H-CONF-024): additive `files.depth_truncated` flag from the
-//      extraction depth budget. No fast-path defeat: rows written before 16
-//      came from an unbounded (complete) walk, so DEFAULT 0 is truthful, and
-//      unchanged files keep their complete rows. Changed/NEW files carry the
-//      flag from the budgeted extraction; the cached pattern lane refuses to
+// 15 = the php `::` call-signature re-key (`call:bar` → `call:Foo::bar`)
+//      shipped on 14 without a bump; 15 discards pre-rekey `pattern_nodes`
+//      signature rows and forces re-extraction (those rows are served
+//      AUTHORITATIVELY for exact `call:` patterns, so a pre-rekey index
+//      kept resurrecting wrong answers under the default search path).
+//      Never reuse a SCHEMA_VERSION for two migrations.
+// 16 = additive `files.depth_truncated` flag from the extraction depth
+//      budget. No fast-path defeat: rows written before 16 came from an
+//      unbounded (complete) walk, so DEFAULT 0 is truthful, and unchanged
+//      files keep their complete rows. Changed/NEW files carry the flag
+//      from the budgeted extraction; the cached pattern lane refuses to
 //      serve flagged files as authoritative and walks them natively.
 pub const INDEX_SCHEMA_VERSION: i64 = 16;
 const SCHEMA_VERSION: i64 = INDEX_SCHEMA_VERSION;
@@ -170,9 +170,8 @@ pub struct UpsertFileInput<'a> {
     pub callers: &'a [CallerRow],
     pub imports: &'a [ImportRow],
     pub pattern_nodes: &'a [PatternNode],
-    /// H-CONF-024: extraction hit the depth budget; rows for this file are
-    /// incomplete and the cached pattern lane must not serve them as
-    /// authoritative.
+    /// Extraction hit the depth budget; rows for this file are incomplete
+    /// and the cached pattern lane must not serve them as authoritative.
     pub depth_truncated: bool,
     pub semantic_chunks: &'a [crate::semantic_chunk::SemanticChunkInput],
     pub embed_semantic: bool,
@@ -198,9 +197,9 @@ pub struct IndexStore {
     bulk_tx_active: std::cell::Cell<bool>,
     bulk_tx_owns: std::cell::Cell<bool>,
     cache_seq: std::cell::Cell<i64>,
-    /// Write-durability profile for this connection (0obi).
+    /// Write-durability profile for this connection.
     durability: crate::store::Durability,
-    /// Trigram document-frequency memo (br-umh rarest-trigram scan shortcut).
+    /// Trigram document-frequency memo (rarest-trigram scan shortcut).
     trigram_df: crate::store::trigram_df::TrigramDfCache,
     /// Memo for `indexed_line_count_at_least`: (index_data_version, threshold, at_least).
     /// Unique-hybrid prefilter called this once per discovery term (LIMIT 1000
@@ -209,7 +208,7 @@ pub struct IndexStore {
     line_count_at_least: std::cell::Cell<Option<(i64, usize, bool)>>,
     /// `index_data_version` meta: unique hybrid called this once per df probe
     /// (several times per conceptual query). Same invalidation as line corpus.
-    /// 80c: memo of the `index_data_version` meta row, keyed on SQLite's
+    /// Memo of the `index_data_version` meta row, keyed on SQLite's
     /// `PRAGMA data_version` so a commit from ANOTHER connection (a
     /// concurrent CLI reindex) invalidates it. Keyed on nothing, a
     /// long-lived process served stale-fresh forever.
@@ -226,7 +225,7 @@ impl IndexStore {
         Self::open_with_durability(root, index_path, crate::store::Durability::from_env())
     }
 
-    /// Open with an explicit durability profile (0obi).
+    /// Open with an explicit durability profile.
     pub fn open_with_durability(
         root: &Path,
         index_path: Option<&Path>,
@@ -240,16 +239,16 @@ impl IndexStore {
         Self::open_inner(root, index_path, crate::store::Durability::from_env(), true)
     }
 
-    /// H-CONF-033 (pass 63): an EMPTY in-memory store standing in for an
-    /// index bound to a different project root. Same schema, zero rows, so
+    /// An EMPTY in-memory store standing in for an index bound to a
+    /// different project root. Same schema, zero rows, so
     /// every serving lane (pattern signatures, candidate narrowing, literal
     /// line corpus, embeddings) degrades through its existing empty-index
     /// gates and the native walk alone answers from the query root — the
     /// foreign tree's rows can never be mixed into results. Nothing is
-    /// persisted; `:memory:` has no sidecar surface, and since pass 65 the
-    /// version-0 legacy migration's semantic-IVF invalidation is an explicit
-    /// no-op for in-memory targets instead of degenerating to a
-    /// CWD-relative `semantic.ivf` deletion (r15 finding 1, data loss).
+    /// persisted; `:memory:` has no sidecar surface, and the version-0
+    /// legacy migration's semantic-IVF invalidation is an explicit no-op
+    /// for in-memory targets instead of degenerating to a CWD-relative
+    /// `semantic.ivf` deletion (data loss).
     pub fn open_in_memory(root: &Path) -> Result<Self> {
         let conn = Connection::open_in_memory()?;
         let durability = crate::store::Durability::from_env();
@@ -408,8 +407,8 @@ impl IndexStore {
                 // re-runs on stores that never re-open through a rebuild.
             }
             if version < 15 {
-                // F74c-1 (r25 pass 75b): the pass-73 php `::` re-key changed
-                // the meaning of `call:` signature rows without bumping the
+                // The php `::` re-key changed the meaning of `call:`
+                // signature rows without bumping the
                 // schema version, so a pre-rekey index still holds `call:bar`
                 // rows the current binary would serve AUTHORITATIVELY for
                 // `bar($$$A)` patterns. Signature rows have no row-level
@@ -422,8 +421,8 @@ impl IndexStore {
                 // current keying. Read-only opens cannot migrate; they refuse
                 // loudly in `init_schema_readonly` instead.
                 //
-                // F76c-1 (r26 pass 77a): the hash prefix + mtime wipe defeat
-                // only TWO of the THREE skip layers. The per-file structure
+                // The hash prefix + mtime wipe defeat only TWO of the THREE
+                // skip layers. The per-file structure
                 // fingerprints (`body:<rel>` written by
                 // `commit_prepared_files`, `struct:<rel>` written by
                 // `upsert_file_material`) route a fingerprint-unchanged file
@@ -433,7 +432,7 @@ impl IndexStore {
                 // `pattern_nodes` stays permanently empty (the loud gate's
                 // own `asgrep reindex` remedy never rebuilt the rows; ident/
                 // decl search silently answered `[]` and the codemod
-                // H-CONF-023 gate flipped to a silent ok:true zero-edit).
+                // honesty gate flipped to a silent ok:true zero-edit).
                 // Discard both fingerprints here (same mechanism as the
                 // schema-7/10 blocks) so the next pass takes the full
                 // extract+upsert path and rebuilds the rows.
@@ -446,8 +445,8 @@ impl IndexStore {
                 )?;
             }
             if version < 16 {
-                // br-g7j (H-CONF-024): the extraction depth budget needs a
-                // per-file truncation flag. Purely additive — pre-16 rows were
+                // The extraction depth budget needs a per-file truncation
+                // flag. Purely additive — pre-16 rows were
                 // produced by the unbounded (complete) walk, so DEFAULT 0 is
                 // truthful and no unchanged-file fast path needs defeating;
                 // only re-extracted files can ever carry the flag. Guarded:
@@ -460,7 +459,7 @@ impl IndexStore {
                     "INSERT INTO lines_trigram(rowid, content) SELECT rowid, content FROM lines;",
                 )?;
             }
-            // Schema 8 (vvpk): backfill the unstemmed code field for older indexes.
+            // Schema 8: backfill the unstemmed code field for older indexes.
             if version < 8 {
                 self.conn.execute_batch(
                     "DELETE FROM lines_code_fts;
@@ -524,7 +523,7 @@ impl IndexStore {
         // the same db_path from agent surfaces.
         &self.conn
     }
-    /// Trigram document-frequency memo (br-umh rarest-trigram scan shortcut).
+    /// Trigram document-frequency memo (rarest-trigram scan shortcut).
     pub(crate) fn trigram_df(&self) -> &crate::store::trigram_df::TrigramDfCache {
         &self.trigram_df
     }
@@ -589,10 +588,10 @@ impl IndexStore {
 
     fn init_schema_readonly(&self, version: i64) -> Result<()> {
         if version < SCHEMA_VERSION {
-            // F74c-1 (r25 pass 75b): a below-current stamp means the on-disk
-            // rows may predate a schema migration (14→15: the pass-73 php `::`
-            // call re-key; 15→16: the additive per-file depth-truncation flag
-            // the cached-lane refusal keys on). A read-only open cannot
+            // A below-current stamp means the on-disk rows may predate a
+            // schema migration (14→15: the php `::` call re-key; 15→16: the
+            // additive per-file depth-truncation flag the cached-lane
+            // refusal keys on). A read-only open cannot
             // migrate, and the exact `call:`/`decl:` lane serves rows
             // AUTHORITATIVELY, so refuse with a rebuild instruction instead of
             // silently answering from stale rows. A writable open (asgrep
@@ -1006,7 +1005,6 @@ impl IndexStore {
     /// Monotonic counter bumped on every semantic_chunks mutation (insert or delete).
     /// Used by SemanticCache and the IVF fingerprint to detect delete+re-add
     /// collisions where max_id is reused but chunk content/vectors differ.
-    /// See bead ast-sgrep-44a4 (F-02).
     pub fn semantic_data_version(&self) -> Result<i64> {
         Ok(self
             .get_meta("semantic_data_version")?
@@ -1027,8 +1025,8 @@ impl IndexStore {
     }
     /// File-tx stays OFF until bulk commit (no re-NORMAL after each file).
     /// Nested begins only increment depth; only the owning outermost end commits
-    /// or rolls back (bead ast-sgrep-j97d.37er).
-    /// Active write-durability profile (0obi).
+    /// or rolls back.
+    /// Active write-durability profile.
     pub fn durability(&self) -> crate::store::Durability {
         self.durability
     }
@@ -1038,7 +1036,7 @@ impl IndexStore {
         if depth == 0 {
             self.file_tx_poisoned.set(false);
             if self.conn.is_autocommit() {
-                // 0obi: was unconditionally OFF; now the profile decides.
+                // Was unconditionally OFF; now the profile decides.
                 self.begin_owned_transaction(&format!(
                     "PRAGMA synchronous = {}",
                     self.durability.write_pragma()
@@ -1202,7 +1200,7 @@ impl IndexStore {
             return Ok(());
         }
         if self.conn.is_autocommit() {
-            // 0obi: was unconditionally OFF; now the profile decides.
+            // Was unconditionally OFF; now the profile decides.
             self.begin_owned_transaction(&format!(
                 "PRAGMA temp_store = MEMORY; PRAGMA cache_size = -131072; PRAGMA mmap_size = 536870912; \
                  PRAGMA synchronous = {}",
@@ -1225,7 +1223,7 @@ impl IndexStore {
     ///
     /// On `Ok`, commits. On `Err`, rolls back and **prefers** the rollback/restore
     /// error so a stuck FastUnsafe `synchronous=OFF` mode cannot hide behind the
-    /// original write failure (d2a1.2 residual / pass9: no `let _ = rollback`).
+    /// original write failure (no `let _ = rollback`).
     pub fn apply_bulk_write_result(&self, write_result: Result<()>) -> Result<()> {
         match write_result {
             Ok(()) => self.commit_bulk_tx(),

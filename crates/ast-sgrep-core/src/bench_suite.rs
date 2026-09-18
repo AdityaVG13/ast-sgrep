@@ -278,7 +278,7 @@ fn elapsed_ns(started: Instant) -> u64 {
 
 /// 99th percentile of latency samples (nanoseconds).
 ///
-/// Empty input returns `0` without panicking (d2a1.3). Call sites currently
+/// Empty input returns `0` without panicking. Call sites currently
 /// only pass non-empty 100..=1000 sample sets; the empty path is defensive.
 fn percentile_99(mut samples: Vec<u64>) -> u64 {
     if samples.is_empty() {

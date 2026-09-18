@@ -28,7 +28,7 @@ pub fn semantic_ivf_path(index_db: &Path) -> std::path::PathBuf {
 }
 
 pub fn invalidate_semantic_ivf(index_db: &Path) -> Result<()> {
-    // PASS 65 (r15 finding 1): an in-memory store has NO filesystem surface.
+    // An in-memory store has NO filesystem surface.
     // `Path::new(":memory:").parent()` is `Some("")`, so the historical path
     // resolution degenerated to a CWD-relative `semantic.ivf` and the
     // legacy user_version migration deleted whatever file sat in the

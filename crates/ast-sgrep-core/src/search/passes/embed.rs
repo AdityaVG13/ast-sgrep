@@ -34,7 +34,7 @@ pub(crate) struct SemanticCache {
     semantic_data_version: i64,
     embed_backend: String,
     embed_model: Option<String>,
-    /// SQLite `PRAGMA data_version` at load time (br-yp1). Bumps on EVERY
+    /// SQLite `PRAGMA data_version` at load time. Bumps on EVERY
     /// committed database write — including foreign raw-SQL mutations through
     /// a separate connection that move none of the local counters above — so
     /// a cached chunk set can never outlive an external writer's commit.
@@ -96,7 +96,7 @@ pub(crate) fn load_semantic_context(
     let max_id = store.semantic_chunk_max_id()?.unwrap_or(0);
     let index_data_version = store.index_data_version()?;
     let semantic_data_version = store.semantic_data_version()?;
-    // br-yp1: the local counters above miss foreign raw-SQL mutations. SQLite's
+    // The local counters above miss foreign raw-SQL mutations. SQLite's
     // PRAGMA data_version bumps on every committed write by ANY connection; an
     // unreadable pragma fails closed (no caching) rather than pinning a value.
     let data_version = store

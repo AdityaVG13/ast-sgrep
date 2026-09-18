@@ -1,4 +1,4 @@
-//! Rarest-trigram df picker for the literal trigram scan (bead br-umh).
+//! Rarest-trigram df picker for the literal trigram scan.
 //!
 //! The scan's cost grows with TERM LENGTH because the FTS5 phrase machinery
 //! intersects every trigram of the needle. Picking only the rarest trigram as
@@ -118,8 +118,8 @@ impl TrigramDfCache {
                 state.gen = gen;
                 return TrigramShortcut::Full;
             }
-            // br-perf-vocab-preload: fts5vocab point lookups walk the whole
-            // term index per probe (~ms each), which put ~11ms on every
+            // fts5vocab point lookups walk the whole term index per probe
+            // (~ms each), which put ~11ms on every
             // cold needle's df path. One bulk preload per generation turns
             // every later probe into a HashMap hit. Bounded by corpus
             // vocabulary size (~1-2MB for 30-50k trigrams here).
@@ -246,7 +246,6 @@ fn preload_vocab(store: &IndexStore) -> Result<HashMap<String, i64>, crate::Stor
         .prepare_cached(&sql)
         .map_err(|e| crate::StoreError::Other(format!("vocab preload prepare: {e}")))?;
     let mut map = HashMap::new();
-    use std::iter::Iterator as _;
     let mut rows = stmt
         .query([])
         .map_err(|e| crate::StoreError::Other(format!("vocab preload query: {e}")))?;

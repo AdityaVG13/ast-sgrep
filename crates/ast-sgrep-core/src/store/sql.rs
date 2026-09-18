@@ -3,7 +3,7 @@ use rusqlite::{params, Connection, ToSql};
 use std::time::Duration;
 // Full DDL for the current schema; init_schema applies when user_version is lower.
 // IMPORTANT: this string is line-continued without embedded newlines. Never use SQL `--`
-// comments inside it -- they run to end-of-input and drop the rest of the batch (vvpk / lines_code_fts).
+// comments inside it -- they run to end-of-input and drop the rest of the batch.
 // lines_code_fts: no porter stemming; `_` is a token character so `refresh_token` stays one term.
 pub(crate) const SCHEMA_DDL: &str = "\
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);\
@@ -76,7 +76,7 @@ where
         Err(e) => Err(e.into()),
     }
 }
-/// Allowlisted caller-column names for dynamic SQL (bead ast-sgrep-j97d.045r).
+/// Allowlisted caller-column names for dynamic SQL.
 pub const CALLER_COLUMN_ALLOWLIST: &[&str] = &["callee", "caller"];
 /// Allowlisted table names for dynamic COUNT / DELETE helpers.
 pub const COUNT_TABLE_ALLOWLIST: &[&str] = &[
@@ -290,7 +290,7 @@ pub fn delete_file_lines(conn: &Connection, file_id: i64, from_line: Option<u32>
                 "DELETE FROM lines_trigram WHERE rowid IN \
                  (SELECT rowid FROM lines WHERE file_id = ?1 AND line_no >= ?2)",
                 "DELETE FROM lines_fts WHERE file_id = ?1 AND line_no >= ?2",
-                // vvpk: the code field must stay in lockstep or it serves stale rows.
+                // The code field must stay in lockstep or it serves stale rows.
                 "DELETE FROM lines_code_fts WHERE file_id = ?1 AND line_no >= ?2",
                 "DELETE FROM lines WHERE file_id = ?1 AND line_no >= ?2",
             ],
@@ -331,18 +331,10 @@ pub fn delete_file_children(conn: &Connection, file_id: i64) -> Result<()> {
     }
     Ok(())
 }
-/// Meta keys preserved across `clear_all_data` / reindex (schema + monotonic gens).
-/// Fingerprints (`body:`/`struct:`/`eol:`) and `embed_*` backend/dim/cache stats
-/// are wiped so a reindex cannot inherit stale identity (ast-sgrep-28vo).
-#[allow(dead_code)] // kept in sync with CLEAR_ALL_SQL (see clear_all_meta_whitelist_matches_sql)
-pub const CLEAR_ALL_META_WHITELIST: &[&str] = &[
-    "root",
-    "semantic_data_version",
-    "index_data_version",
-    "lexicon_data_version",
-];
 /// Full wipe of index content tables (schema left intact). Order keeps FTS/content-sync safe.
-/// Meta is cleared except the schema whitelist (bead ast-sgrep-28vo).
+/// Meta is cleared except the schema whitelist (`root` + `*_data_version` keys);
+/// fingerprints (`body:`/`struct:`/`eol:`) and `embed_*` backend/dim/cache stats
+/// are wiped so a reindex cannot inherit stale identity.
 pub const CLEAR_ALL_SQL: &str = "\
 DELETE FROM lines_trigram; DELETE FROM lines_fts; DELETE FROM lines_code_fts; DELETE FROM lexicon; DELETE FROM semantic_chunks; \
 DELETE FROM pattern_nodes; DELETE FROM embeddings; DELETE FROM imports; \
@@ -352,7 +344,7 @@ DELETE FROM meta WHERE key NOT IN ('root', 'semantic_data_version', 'index_data_
 
 pub(crate) fn emb_vec(r: &rusqlite::Row<'_>, idx: usize) -> rusqlite::Result<Vec<f32>> {
     let v: Vec<u8> = r.get(idx)?;
-    // Fail closed on corrupt blobs (bead ast-sgrep-j97d.5qpa) -- never default to zeros.
+    // Fail closed on corrupt blobs -- never default to zeros.
     ast_sgrep_embed::embed_from_bytes(&v).map_err(|msg| {
         rusqlite::Error::FromSqlConversionFailure(
             idx,
@@ -395,7 +387,7 @@ pub fn configure_connection(conn: &Connection) -> Result<()> {
     configure_connection_with(conn, crate::store::Durability::default())
 }
 
-/// Configure a connection under an explicit durability profile (0obi).
+/// Configure a connection under an explicit durability profile.
 pub fn configure_connection_with(
     conn: &Connection,
     durability: crate::store::Durability,
@@ -433,8 +425,8 @@ fn configure_connection_inner(
         ))?;
     }
     if std::env::var_os("ASGREP_SQLITE_DEFAULTS").is_none() {
-        // br-perf-tail-cache: a serve session's p99/p100 is cold-page btree
-        // I/O for each first-touch needle's trigram doclists. The self-corpus
+        // A serve session's p99/p100 is cold-page btree I/O for each
+        // first-touch needle's trigram doclists. The self-corpus
         // index is ~58MB; a 70MB page cache makes the whole index
         // page-cache-resident in one long-lived session, flattening the
         // tail to memory speed after one warm pass. Read-path only; mmap

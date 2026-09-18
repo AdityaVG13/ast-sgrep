@@ -51,11 +51,6 @@ impl EmbeddedChunks {
         }
     }
 }
-fn hash_text(t: &str) -> String {
-    let mut h = Hasher::new();
-    h.update(t.as_bytes());
-    h.finalize().to_hex().to_string()
-}
 pub(super) fn embed_cache_cap() -> usize {
     std::env::var("ASGREP_EMBED_CACHE_CAP")
         .ok()
@@ -265,7 +260,7 @@ fn embed_parallel(
     let mut cached: Vec<Option<CacheRow>> = vec![None; jobs.len()];
     let mut primary_hits = Vec::new();
     for (i, (_, slot, text)) in jobs.iter().enumerate() {
-        let h = hash_text(text);
+        let h = crate::index_prepare::hash_content(text);
         if let Some(mid) = expected_mid {
             if let Some(row) = lookup_embed_cache(conn, &h, mid)? {
                 cached[i] = Some(row);
@@ -293,7 +288,7 @@ fn embed_parallel(
             let dim = r.vector.len();
             if let Some(mid) = cache_model_id_for_backend(r.backend) {
                 entries.push(CacheEntry {
-                    chunk_hash: hash_text(&jobs[job_i].2),
+                    chunk_hash: crate::index_prepare::hash_content(&jobs[job_i].2),
                     model_id: mid,
                     backend: r.backend,
                     dim,

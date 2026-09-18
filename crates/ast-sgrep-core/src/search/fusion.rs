@@ -14,13 +14,14 @@ struct DedupKey {
     symbol: u32,
     caller: u32,
     callee: u32,
-    // PASS 131 (130A-F4): the matched-node byte span joins the key. The
-    // dedup's rationale is collapsing the SAME node surfaced by several
+    // The matched-node byte span joins the key. The dedup's rationale is
+    // collapsing the SAME node surfaced by several
     // channels — two hits with equal (file, lines, span). Two INDEPENDENT
     // same-line hits (`q(1); q(2);` under `q($A)`) carry different spans
-    // and are distinct sg rows. Span-less rows (`None`) keep the exact
-    // pre-131 keying (the index lane has no byte columns — registered
-    // residual, CNR §45).
+    // and are distinct reference rows. Span-less rows (`None`) keep the
+    // exact
+    // pre-span keying (the index lane has no byte columns — a known
+    // residual).
     byte_span: Option<(usize, usize)>,
 }
 

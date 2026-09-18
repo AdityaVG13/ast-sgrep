@@ -86,8 +86,8 @@ fn cmp_ranked_hits(
     primary
         .then_with(|| a.file.cmp(&b.file))
         .then_with(|| a.line_start.cmp(&b.line_start))
-        // Total-order tail (br-23f): sort_unstable_by is NOT stable and the
-        // input order feeding it comes from a randomly seeded HashMap
+        // Total-order tail: sort_unstable_by is NOT stable and the input
+        // order feeding it comes from a randomly seeded HashMap
         // (lexical_from_fts), so any residual Equal flips hit order between
         // processes and breaks the documented cross-process byte-stability
         // contract. These arms evaluate only on exact upstream ties.
@@ -134,8 +134,8 @@ pub(crate) fn finish_response_checked(
     finish_response_checked_lazy(parsed, options, hits, dedup, None, false, false)
 }
 
-/// br-perf-lazy-excerpts: variant that defers per-hit excerpt SQL out of the
-/// channel passes. `lazy_excerpt_store` is the index whose `attach_indexed_
+/// Variant that defers per-hit excerpt SQL out of the channel passes.
+/// `lazy_excerpt_store` is the index whose `attach_indexed_
 /// excerpts` fills empty excerpts AFTER dedup/margins/confidence/best_def
 /// (none of which read excerpts) and BEFORE the coverage prune (which does).
 /// Channel passes marked lazy skip their own attachment; hits removed by
@@ -172,14 +172,14 @@ fn finish_response_inner(
         hits = dedup_hits(hits);
     }
     if let Some(ref filter) = options.file_filter {
-        // iva9.2: invalid globs error — never silently skip the filter.
+        // Invalid globs error — never silently skip the filter.
         let re = super::compile_glob(filter).map_err(|e| {
             crate::StoreError::Other(format!("invalid file_filter glob '{filter}': {e}"))
         })?;
         hits.retain(|h| re.is_match(&h.file));
     } else if let Some(scope) = parsed.path_scope.as_deref() {
-        // FB-80a-08: a file-resolved scope filters by exact rel path —
-        // the historic `scope/**` expansion can never match a file.
+        // A file-resolved scope filters by exact rel path — the historic
+        // `scope/**` expansion can never match a file.
         let glob = if parsed.path_scope_exact {
             scope.to_string()
         } else {
@@ -236,8 +236,8 @@ fn finish_response_inner(
     } else {
         None
     };
-    // br-perf-lazy-excerpts: fill deferred structural excerpts after the
-    // stages that ignore them and before the first excerpt-dependent prune.
+    // Fill deferred structural excerpts after the stages that ignore
+    // them and before the first excerpt-dependent prune.
     if let Some(store) = lazy_excerpt_store {
         crate::search::passes::symbol::attach_indexed_excerpts_if_empty(store, &mut hits)?;
     }

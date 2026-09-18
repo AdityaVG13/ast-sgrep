@@ -86,8 +86,8 @@ impl IgnoreMatcher {
         if let Some(hit) = self.chains.borrow().get(prefix) {
             return Rc::clone(hit);
         }
-        // br-perf-chain: share the parent's rule vector and append only this
-        // directory's own rules. The previous deep clone of the parent chain
+        // Share the parent's rule vector and append only this directory's
+        // own rules. The previous deep clone of the parent chain
         // made total rule-loading cost O(dirs² × rules) — measured 1.8s of a
         // 1.9s pattern query on this repo (545 entries). Rc-sharing keeps the
         // cached-per-prefix semantics; later directories never mutate an

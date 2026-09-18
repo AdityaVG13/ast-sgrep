@@ -21,7 +21,7 @@ pub use writer_generation::{
     WRITER_GENERATION_FILE,
 };
 
-/// Write-durability profile for the index database (0obi).
+/// Write-durability profile for the index database.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Durability {
@@ -94,9 +94,9 @@ pub fn index_db_path(root: &Path, index_path: Option<&Path>) -> PathBuf {
     try_index_db_path(root, index_path).unwrap_or_else(|_| root.join(INDEX_DIR).join(INDEX_DB))
 }
 
-/// H-CONF-015 (pass 14): a relative explicit index path (flag or
-/// `ASGREP_INDEX_PATH`) resolves against the process CWD for EVERY
-/// subcommand. `search` used to join it against the search root while
+/// A relative explicit index path (flag or `ASGREP_INDEX_PATH`) resolves
+/// against the process CWD for EVERY subcommand. `search` used to join it
+/// against the search root while
 /// `index` joined it against its root argument, so one invocation could see
 /// two different databases. Unknown-but-relative with no cwd is an error
 /// (fail closed), never a silent root-relative guess.
@@ -193,8 +193,8 @@ pub struct IndexStatus {
     pub embed_cache_hits: u64,
     pub embed_cache_misses: u64,
     pub semantic_ivf_present: bool,
-    /// Active write-durability profile (0obi).
+    /// Active write-durability profile.
     pub durability: String,
-    /// Cross-process writer epoch stamped beside the index home (R-XPROC-MULTIWRITER).
+    /// Cross-process writer epoch stamped beside the index home.
     pub writer_generation: u64,
 }

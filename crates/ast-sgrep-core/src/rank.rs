@@ -55,7 +55,7 @@ pub fn score_symbol(term: &str, symbol: &str) -> f64 {
     let symbol = normalized_symbol(symbol);
     score_normalized_symbol(term, symbol.as_ref(), has_minimum_substring_chars(&symbol))
 }
-/// am6l: normalize query terms once per query before scoring many rows.
+/// Normalize query terms once per query before scoring many rows.
 pub fn normalize_query_terms(terms: &[String]) -> Vec<String> {
     terms
         .iter()
@@ -95,26 +95,26 @@ pub fn coverage_symbol_score_normalized(normalized_terms: &[String], symbol: &st
     // dilute evidence from terms that already match the symbol.
     sum
 }
+/// Scale a coverage score onto a base: zero coverage stays zero (do not award
+/// base score to non-matches — prevents rank pollution from weak LIKE hits).
+fn score_scaled_coverage(coverage: f64, base: f64) -> f64 {
+    if coverage == 0.0 {
+        0.0
+    } else {
+        coverage * 2.0 + base
+    }
+}
 pub fn score_def(terms: &[String], symbol: &str) -> f64 {
     score_def_normalized(&normalize_query_terms(terms), symbol)
 }
 pub fn score_def_normalized(normalized_terms: &[String], symbol: &str) -> f64 {
     let coverage = coverage_symbol_score_normalized(normalized_terms, symbol);
-    // Do not award base score to non-matches (prevents rank pollution from weak LIKE hits).
-    if coverage == 0.0 {
-        0.0
-    } else {
-        coverage * 2.0 + SCORE_DEF_BASE
-    }
+    score_scaled_coverage(coverage, SCORE_DEF_BASE)
 }
 pub fn score_caller(terms: &[String], callee: &str) -> f64 {
     score_caller_normalized(&normalize_query_terms(terms), callee)
 }
 pub fn score_caller_normalized(normalized_terms: &[String], callee: &str) -> f64 {
     let coverage = coverage_symbol_score_normalized(normalized_terms, callee);
-    if coverage == 0.0 {
-        0.0
-    } else {
-        coverage * 2.0 + SCORE_CALLER_BASE
-    }
+    score_scaled_coverage(coverage, SCORE_CALLER_BASE)
 }

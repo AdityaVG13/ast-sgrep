@@ -93,11 +93,11 @@ struct ResponseCache {
 const RESPONSE_CACHE_CAP: usize = 128;
 pub struct Searcher {
     store: IndexStore,
-    /// H-CONF-033: true when `store` is the empty in-memory stand-in swapped
-    /// in for an index bound to a different project root (the store answers
-    /// nothing; the native walk decides). The CLI `--no-auto-index`
-    /// non-empty-index gate skips this stand-in — it exists precisely so a
-    /// passive foreign db degrades to walk-only instead of erroring.
+    /// True when `store` is the empty in-memory stand-in swapped in for an
+    /// index bound to a different project root (the store answers nothing;
+    /// the native walk decides). The CLI `--no-auto-index` non-empty-index
+    /// gate skips this stand-in — it exists precisely so a passive foreign
+    /// db degrades to walk-only instead of erroring.
     inert: bool,
     options: SearchOptions,
     use_field_rescoring: bool,
@@ -157,6 +157,19 @@ pub fn validate_search_feature_flags(options: &SearchOptions) -> Result<()> {
     Ok(())
 }
 
+/// True when the store's stamped `meta.root` names a different project root
+/// than the query root (trailing slashes ignored). Unstamped stores are
+/// never foreign. Shared by `new` (which propagates meta errors) and
+/// `with_store` (which treats unreadable bindings as non-foreign).
+fn foreign_root_bound(store: &IndexStore, root: &Path) -> Result<bool> {
+    let bound = store.get_meta("root")?;
+    Ok(bound.is_some_and(|bound| {
+        let bound = bound.trim_end_matches('/');
+        let here = root.display().to_string();
+        bound != here.trim_end_matches('/')
+    }))
+}
+
 impl Searcher {
     pub fn new(mut options: SearchOptions) -> Result<Self> {
         validate_search_feature_flags(&options)?;
@@ -188,29 +201,19 @@ impl Searcher {
                 )));
             }
         }
-        // H-CONF-033 (pass 63): read-side root binding. `Indexer` stamps the
-        // canonical indexed root into `meta.root` and cross-root REINDEX is
-        // the designed prune-replace (GA-12 / mtime_identity_root), so the
-        // last-indexed root owns the db. Answering a query rooted elsewhere
-        // against those rows silently returns wrong-tree paths, languages,
-        // and line corpus (both false-empty and phantom hits — the pass-62b
-        // corruption). The foreign db is therefore swapped for an EMPTY
-        // in-memory store: zero serving, zero candidate narrowing, the native
-        // walk decides every hit from the query root alone. (First cut
-        // refused the search outright; the single-root oracle lane proved
-        // that over-refuses — 13/75 cases where the walk answers correctly
-        // against a passive db — so the guard degrades to inert instead.)
-        // A fresh db with no binding keeps today's behavior.
+        // Read-side root binding. `Indexer` stamps the canonical indexed
+        // root into `meta.root` and cross-root REINDEX is the designed
+        // prune-replace, so the last-indexed root owns the db. Answering a
+        // query rooted elsewhere against those rows silently returns
+        // wrong-tree paths, languages, and line corpus (both false-empty
+        // and phantom hits). The foreign db is therefore swapped for an
+        // EMPTY in-memory store: zero serving, zero candidate narrowing,
+        // the native walk decides every hit from the query root alone.
+        // (Refusing the search outright over-refuses — cases where the walk
+        // answers correctly against a passive db — so the guard degrades to
+        // inert instead.) A fresh db with no binding keeps today's behavior.
         let mut store = IndexStore::open_readonly(&options.root, options.index_path.as_deref())?;
-        let foreign_root = match store.get_meta("root")? {
-            Some(bound) => {
-                let bound = bound.trim_end_matches('/');
-                let here = options.root.display().to_string();
-                let here = here.trim_end_matches('/');
-                bound != here
-            }
-            None => false,
-        };
+        let foreign_root = foreign_root_bound(&store, &options.root)?;
         let inert = foreign_root;
         if foreign_root {
             store = IndexStore::open_in_memory(&options.root)?;
@@ -221,33 +224,22 @@ impl Searcher {
     }
     pub fn with_store(store: IndexStore, mut options: SearchOptions) -> Self {
         // Bind SQL `f.language = ?` to Language::as_str so `--lang ts` matches
-        // stored `typescript` (br-5l6). matches_lang already aliases; SQL did not.
+        // stored `typescript`. matches_lang already aliases; SQL did not.
         options.lang_filter =
             ast_sgrep_lang::Language::canonical_filter(options.lang_filter.as_deref());
         let options_identity = options.cache_identity();
-        // PASS 65 (INFO adjudication, pass-64c F7 residual): the read-side
-        // root-binding predicate is bound HERE, not only in `new` — a direct
-        // `with_store` caller can no longer hand a foreign-root db to a
-        // searcher that would serve it as its own. Same rule as `new`
-        // (H-CONF-033): a db stamped for another root starts inert; `new`
+        // The read-side root-binding predicate is bound HERE, not only in
+        // `new` — a direct `with_store` caller can no longer hand a
+        // foreign-root db to a searcher that would serve it as its own. Same
+        // rule as `new`: a db stamped for another root starts inert; `new`
         // additionally swaps in the empty in-memory store before this runs.
-        let foreign_root = match store.get_meta("root") {
-            Ok(Some(bound)) => {
-                let bound = bound.trim_end_matches('/');
-                let here = options.root.display().to_string();
-                let here = here.trim_end_matches('/');
-                bound != here
-            }
-            // Fresh/unreadable bindings keep the historical behavior.
-            _ => false,
-        };
+        // Fresh/unreadable bindings keep the historical behavior.
+        let foreign_root = foreign_root_bound(&store, &options.root).unwrap_or(false);
         // Line corpus loads LAZILY: its only consumer is `literal_pass`
         // (`store.line_corpus()?`), which version-checks and caches on first
-        // use. An eager warm here materialized the whole `lines ⋈ files` table
-        // on EVERY search (pattern/regex/callers never touch it) — the
-        // DB-proportional ~0.61 ms/MB worker user-CPU block measured in the
-        // gauntlet EXP-008 sweep (pass-25 corrected mechanism; pass-37
-        // profile: `warm_line_corpus` subtree = 46% of a W01 worker capture).
+        // use. An eager warm here materialized the whole `lines ⋈ files`
+        // table on EVERY search (pattern/regex callers never touch it) — a
+        // DB-proportional worker CPU block.
         Self {
             store,
             inert: foreign_root,
@@ -278,8 +270,8 @@ impl Searcher {
     pub fn store(&self) -> &IndexStore {
         &self.store
     }
-    /// H-CONF-033: `store` is the empty in-memory stand-in for a foreign-root
-    /// index (nothing serves; the walk decides). See the `inert` field.
+    /// `store` is the empty in-memory stand-in for a foreign-root index
+    /// (nothing serves; the walk decides). See the `inert` field.
     pub fn store_is_inert(&self) -> bool {
         self.inert
     }
@@ -399,7 +391,7 @@ impl Searcher {
     /// revision (MAX(mtime_secs) over files), and the sidecar fingerprint are
     /// functions of the index contents alone: any change to them is gated by
     /// a generation counter bump (external data_version or the local
-    /// counters — br-yp1 semantics). `git_head` deliberately stays uncached:
+    /// counters). `git_head` deliberately stays uncached:
     /// it reads the worktree's HEAD file and can move without any index
     /// write. Memo validity therefore keys on IndexGeneration; on any pragma
     /// failure we skip the memo entirely (fail-open to recompute, hdwh).
@@ -843,8 +835,8 @@ impl Searcher {
             }
         })
     }
-    /// EXP-013 (GA-21): multi-pattern ingress. Runs each pattern through the
-    /// EXACT single-pattern ingress (`Searcher::search` on `pattern:<text>`),
+    /// Multi-pattern ingress. Runs each pattern through the EXACT
+    /// single-pattern ingress (`Searcher::search` on `pattern:<text>`),
     /// amortizing the per-process fixed cost (index open + supervisor floor,
     /// phase-13: ~19-23 ms per invocation) across N patterns, then merges the
     /// finished responses into ONE envelope: hits are grouped by pattern in
@@ -855,13 +847,12 @@ impl Searcher {
     /// invocations return. All-or-nothing on per-pattern errors (fail-closed):
     /// a pattern the single invocation would reject rejects the whole batch.
     pub fn search_multi_pattern(&self, patterns: &[String]) -> Result<SearchResponse> {
-        // EXP018 negative result: a concurrent fan-out (scoped threads, one
-        // `Searcher` per worker, merge in pattern order) measured 1.02x SLOWER
-        // than this sequential loop on the registered 3-pattern batch cell
-        // (312.4/312.8 ms vs 306.7/307.6 ms, both hyperfine arm orders) with a
-        // byte-identical envelope. Each per-pattern pipeline already
-        // saturates the global file-match pool, so the fan-out only adds
-        // pool contention plus N extra index opens. Recorded as
+        // Negative result: a concurrent fan-out (scoped threads, one
+        // `Searcher` per worker, merge in pattern order) measured 1.02x
+        // SLOWER than this sequential loop on the registered 3-pattern
+        // batch with a byte-identical envelope. Each per-pattern pipeline
+        // already saturates the global file-match pool, so the fan-out only
+        // adds pool contention plus N extra index opens. Recorded as
         // `multi-pattern-concurrent-fanout` in PERF_NEGATIVE_RESULTS.md.
         let mut merged: Option<SearchResponse> = None;
         for raw in patterns {
@@ -997,8 +988,8 @@ impl Searcher {
     }
     fn search_hybrid(&self, parsed: &ParsedQuery) -> Result<Vec<SearchHit>> {
         let mut intent = crate::intent::classify(parsed);
-        // SEP15-1 (chain seed contract; resolve_module regression): a
-        // single-term query whose term names an indexed symbol exactly is an
+        // Chain seed contract (resolve_module regression): a single-term
+        // query whose term names an indexed symbol exactly is an
         // identifier query even when classify() reads Conceptual — bare
         // dictionary words ("run", "test", "search") live in the
         // generic-concept vocabulary and every conceptual stage strips them,
@@ -1169,7 +1160,7 @@ impl Searcher {
             let warmed = lock_clear_on_poison(&self.symbol_table, |slot| *slot = None).clone();
             // Callers stay in the conceptual pool: rule 5 (critic) penalizes
             // `<module>`/`main` caller hits there, which requires them to
-            // reach fusion at all (H-AUDIT-52-6 e2e cell, br-uhf).
+            // reach fusion at all.
             symbol_pass_for_files_warmed(
                 &self.store,
                 &self.options,
@@ -1743,8 +1734,8 @@ fn append_ledger_entry(path: &Path, response: &SearchResponse) -> std::io::Resul
         .open(path)?
         .write_all(&line)
 }
-/// FB-80a-07/08 (owner ruling 2026-09-15): resolve an `in:` scope against the
-/// index root BEFORE any walk. A parse-time scope error refuses loudly (the
+/// Resolve an `in:` scope against the index root BEFORE any walk. A
+/// parse-time scope error refuses loudly (the
 /// historic silent drop ran the query unscoped); a scope that exists on disk
 /// as a FILE pins the exact file (`path_scope_exact`), a directory keeps the
 /// `dir/**` glob, and a path matching nothing under the root refuses with a

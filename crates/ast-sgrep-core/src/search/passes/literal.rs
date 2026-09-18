@@ -75,7 +75,7 @@ fn literal_trigram(
     parsed: &ParsedQuery,
     needle: &str,
 ) -> Result<Vec<SearchHit>> {
-    // Rarest-trigram df shortcut (br-umh): when trustworthy document-frequency
+    // Rarest-trigram df shortcut: when trustworthy document-frequency
     // data shows one needle trigram to be rare, MATCH only that trigram instead
     // of making FTS5 intersect every trigram of the phrase. Safety: only
     // trigrams derived from the needle are candidates, so any candidate's
@@ -189,8 +189,8 @@ fn scan_trigram_matches(
     Ok(hits)
 }
 /// SQL templates for literal line scan: [case_insensitive][has_lang].
-/// Case-insensitive → LIKE ESCAPE; case-sensitive → GLOB (no ESCAPE). Bead ast-sgrep-c2j5.
-/// Lang filter in SQL before ORDER/LIMIT so a lang page cannot go empty (iva9.5).
+/// Case-insensitive → LIKE ESCAPE; case-sensitive → GLOB (no ESCAPE).
+/// Lang filter in SQL before ORDER/LIMIT so a lang page cannot go empty.
 const LITERAL_SQL: [[&str; 2]; 2] = [
     // case_sensitive (GLOB)
     [

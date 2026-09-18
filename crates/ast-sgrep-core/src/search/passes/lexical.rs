@@ -64,8 +64,8 @@ fn lexical_from_fts(
     let mut matches = LineMatches::new();
     let fts_query = crate::fts::escape_fts_query(&parsed.terms);
     let limit = lexical_pool_limit(options);
-    // Apply lang filter in SQL before LIMIT so path order cannot drop matching langs (iva9.5 sibling).
-    // vvpk: pick the analyzer that matches the query. `lines_fts` is porter
+    // Apply lang filter in SQL before LIMIT so path order cannot drop matching langs.
+    // Pick the analyzer that matches the query. `lines_fts` is porter
     // stemmed, which is right for prose and wrong for identifiers -- it folds
     // `indexing` into `index` and splits `refresh_token`. `lines_code_fts` is
     // unstemmed with `_` as a token character.
@@ -86,7 +86,7 @@ fn lexical_from_fts(
     Ok(hits_from_matches(matches))
 }
 
-/// Run the lexical query against one analyzer field (vvpk).
+/// Run the lexical query against one analyzer field.
 ///
 // Join-free hot path: the FTS table itself stores `file_id`, `line_no`, and
 // `content` columns, so ranking + projection need no per-row joins. Only the
@@ -101,10 +101,10 @@ fn lexical_from_field(
     matches: &mut LineMatches,
 ) -> Result<()> {
     let fts_query = fts_query.to_string();
-    // Lang filter in SQL before ORDER/LIMIT so a lang page cannot go empty (iva9.5).
+    // Lang filter in SQL before ORDER/LIMIT so a lang page cannot go empty.
     // FTS5 resolves MATCH through the table-name pseudo-column: an alias
-    // ("FROM lines_fts t WHERE t MATCH") fails with "no such column" (ebfaace3
-    // regression). Keep the join-free projection but always qualify MATCH with
+    // ("FROM lines_fts t WHERE t MATCH") fails with "no such column".
+    // Keep the join-free projection but always qualify MATCH with
     // the real table name.
     let (sql, lang_bind): (String, Option<&str>) = match options.lang_filter.as_deref() {
         Some(lang) => (
@@ -197,9 +197,9 @@ fn accumulate(
         .push(rank);
 }
 fn hits_from_matches(matches: LineMatches) -> Vec<SearchHit> {
-    // PASS 56 (P48-R1): emit in (path, line_no) order. LineMatches is a
-    // randomly seeded HashMap, so `into_iter` made the lexical channel's hit
-    // order a per-process random value (the br-23f hazard at its source).
+    // Emit in (path, line_no) order. LineMatches is a randomly seeded
+    // HashMap, so `into_iter` made the lexical channel's hit order a
+    // per-process random value (the unstable-sort hazard at its source).
     let mut rows: Vec<((String, u32), (Vec<usize>, Option<String>, String))> =
         matches.into_iter().collect();
     rows.sort_unstable_by(|left, right| left.0.cmp(&right.0));
@@ -210,7 +210,7 @@ fn hits_from_matches(matches: LineMatches) -> Vec<SearchHit> {
         .collect()
 }
 
-/// Does this query look like code rather than prose (vvpk)?
+/// Does this query look like code rather than prose?
 ///
 /// Identifier shapes must not be stemmed: `refresh_token`, `HTTPStatus`, and
 /// `Store::open` mean exactly themselves. Natural-language questions benefit
@@ -256,8 +256,8 @@ mod emission_order_tests {
     use super::hits_from_matches;
     use std::collections::HashMap;
 
-    /// PASS 56 (P48-R1): the lexical channel must emit hits in (path, line_no)
-    /// order. LineMatches is a randomly seeded HashMap, so an unsorted
+    /// The lexical channel must emit hits in (path, line_no) order.
+    /// LineMatches is a randomly seeded HashMap, so an unsorted
     /// `into_iter` re-rolls the emission order every call and every process.
     #[test]
     fn lexical_emission_is_key_sorted_every_call() {

@@ -177,7 +177,7 @@ impl IndexStore {
         let mut stmt = self.conn.prepare_cached(
             // COALESCE both columns: SQLite substr() over an empty BLOB
             // (a blank line) yields NULL, which must read as an empty
-            // excerpt line, not an InvalidColumnType error (ast-sgrep-5vur).
+            // excerpt line, not an InvalidColumnType error.
             "SELECT COALESCE(CAST(substr(CAST(l.content AS BLOB), 1, ?4) AS BLOB), x''),
                     COALESCE(length(CAST(l.content AS BLOB)), 0)
              FROM lines l JOIN files f ON f.id = l.file_id
@@ -743,7 +743,7 @@ impl IndexStore {
     pub fn pattern_node_count(&self) -> Result<usize> {
         count_star(&self.conn, "pattern_nodes")
     }
-    /// SEP15-1: does any indexed symbol carry this exact name? Ground-truth
+    /// Does any indexed symbol carry this exact name? Ground-truth
     /// check for single-term hybrid queries that `classify` reads as
     /// Conceptual but that name a real identifier in this repository.
     pub fn has_symbol_named(&self, name: &str) -> Result<bool> {
@@ -761,8 +761,8 @@ impl IndexStore {
             })?;
         Ok(found.is_some())
     }
-    /// H-CONF-024: does the index hold any file whose extraction walk hit the
-    /// depth budget (optionally scoped to one language)? Such files' index
+    /// Does the index hold any file whose extraction walk hit the depth
+    /// budget (optionally scoped to one language)? Such files' index
     /// rows are incomplete, so the cached pattern lane must not serve them as
     /// authoritative and falls back to the native walk instead.
     pub fn has_depth_truncated_files(&self, lang: Option<&str>) -> Result<bool> {

@@ -112,7 +112,7 @@ pub(crate) fn parse(raw: &str) -> Option<Conjunction> {
     let raw = raw.trim();
     // Separator scan is quote-aware: an ` AND ` inside a quoted payload
     // (`semantic:"cats AND dogs"`, `literal:"a AND b"`) is payload bytes, not
-    // a channel boundary (br-9kb).
+    // a channel boundary.
     let (lhs, rhs) = split_outside_quotes(raw, " AND ")?;
     if contains_outside_quotes(rhs, " AND ") {
         // Two channels only in v1.

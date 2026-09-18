@@ -1,4 +1,4 @@
-//! Cross-process writer epoch for warm Searcher caches (R-XPROC-MULTIWRITER).
+//! Cross-process writer epoch for warm Searcher caches.
 //!
 //! Option C lite: index writers bump a durable stamp next to the index home;
 //! long-lived MCP / Code Mode Searcher caches poll it and reopen when it changes.

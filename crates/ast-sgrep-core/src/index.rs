@@ -20,8 +20,8 @@ use walkdir::WalkDir;
 /// Stable error text when cooperative index cancel fires (Pi/NAPI abort).
 pub const INDEX_CANCELLED: &str = "operation cancelled";
 
-/// Meta key certifying which root produced the stored row identities
-/// (GA-12 / H-CONF-016). The bulk index writes it atomically with the row
+/// Meta key certifying which root produced the stored row identities.
+/// The bulk index writes it atomically with the row
 /// updates; the mtime fast path trusts stored mtimes only while it equals
 /// the root being indexed, so cross-root reuse of one db decides skips on
 /// the content hash alone.
@@ -252,7 +252,7 @@ pub struct IndexOptions {
     pub embed_backend: EmbedBackend,
     pub force_reindex: bool,
     pub ann_threshold: Option<usize>,
-    /// Write-durability profile for the index database (0obi).
+    /// Write-durability profile for the index database.
     pub durability: crate::store::Durability,
 }
 impl Default for IndexOptions {
@@ -281,9 +281,9 @@ pub struct IndexStats {
     pub symbols_extracted: usize,
     pub callers_extracted: usize,
     pub imports_extracted: usize,
-    /// Files whose extraction walk hit the depth budget (H-CONF-024). Their
-    /// index rows are incomplete; the cached pattern lane refuses to serve
-    /// them and falls back to the native walk.
+    /// Files whose extraction walk hit the depth budget. Their index rows
+    /// are incomplete; the cached pattern lane refuses to serve them and
+    /// falls back to the native walk.
     pub files_depth_truncated: usize,
 }
 impl IndexStats {
@@ -417,8 +417,8 @@ impl Indexer {
         let perf_run_id = perf_run.id();
         self.ignore.clear();
         self.check_cancel()?;
-        // GA-12 (H-CONF-016): the mtime fast path applies only when the
-        // stored row identities were last produced from THIS root. See
+        // The mtime fast path applies only when the stored row identities
+        // were last produced from THIS root. See
         // prepare_file for the cross-root content-purity rationale. The
         // gate is re-committed inside the bulk tx below, atomically with
         // the row updates it certifies.
@@ -762,7 +762,7 @@ impl Indexer {
         Ok(())
     }
     /// Skip the lexical sidecar rebuild when the on-disk sidecar provably
-    /// reflects the current index generation (pass-17 H-PERF-002 lever).
+    /// reflects the current index generation.
     ///
     /// Every mutating index transaction (upsert, remove, clear) bumps
     /// `index_data_version` inside the same transaction as its rows, and the
@@ -1200,8 +1200,8 @@ impl Indexer {
         if self.store.needs_legacy_semantic_rewrite()? {
             return Ok(false);
         }
-        // Exact backend identity only (ast-sgrep-28vo): Auto is not a
-        // wildcard for concrete stored backends, and stored "auto" does not
+        // Exact backend identity only: Auto is not a wildcard for concrete
+        // stored backends, and stored "auto" does not
         // match a concrete active preference. Builds made under Auto record
         // "embed_backend_pref=auto", so an Auto reopen over an Auto build
         // stays a no-op (parity) while an Auto reopen over an explicit build
@@ -1210,7 +1210,7 @@ impl Indexer {
         let active = self.options.embed_backend.to_preference_str();
         let stored_pref = self.store.get_meta("embed_backend_pref")?;
         // Auto reopen: no-op only over an Auto build (parity idempotency);
-        // over an explicit build it reindexes (ast-sgrep-28vo). Explicit
+        // over an explicit build it reindexes. Explicit
         // reopen: exact resolved-kind match (semantic-v2 round-trips).
         let identity_ok = if active == "auto" {
             stored_pref.as_deref() == Some("auto")

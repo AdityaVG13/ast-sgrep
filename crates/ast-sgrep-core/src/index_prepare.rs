@@ -1,6 +1,6 @@
 //! Prepare / hash / extract-row helpers for indexing.
-//! Extracted from `index.rs` (EXP-007 / F-002 prepare/hash cluster). Leaf-ward of
-//! `Indexer`; watch-path helpers live in `index_watch` (EXP-008).
+//! Extracted from `index.rs`. Leaf-ward of `Indexer`; watch-path helpers
+//! live in `index_watch`.
 
 use crate::index::{split_content_lines, IndexOptions, SplitLines};
 use crate::store::{CallerRow, ImportRow, SymbolRow};
@@ -152,8 +152,8 @@ pub(crate) fn prepare_file(
     mtime_identity_ok: bool,
     perf_run_id: Option<u64>,
 ) -> PrepareOutcome {
-    // GA-12 (H-CONF-016): the mtime fast path is only sound when the stored
-    // identity was produced from a file at the SAME root as this walk. A
+    // The mtime fast path is only sound when the stored identity was
+    // produced from a file at the SAME root as this walk. A
     // shared db reused across roots stores one row per rel path; trusting
     // mtime agreement from a different root silently skipped changed content
     // (same mtime, different bytes) and served the other root's stale text.

@@ -255,7 +255,7 @@ fn is_compound_of(query_ident: &str, symbol: &str) -> bool {
 const GENERIC_ENTRYPOINTS: &[&str] = &[
     // `"<module>"` callers fold to `module` before the table probe, so the
     // table must carry the folded form or py/js module-level callers are
-    // never penalized (H-AUDIT-52-6).
+    // never penalized.
     "main", "__main__", "module", "start", "run", "init", "test", "tests", "setup", "teardown",
 ];
 

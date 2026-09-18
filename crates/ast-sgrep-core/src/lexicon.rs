@@ -1,4 +1,4 @@
-//! Repository-derived semantic lexicon (bead ast-sgrep-tef-semantic-lexicon-ufk7).
+//! Repository-derived semantic lexicon.
 
 use crate::Result;
 use std::collections::HashMap;

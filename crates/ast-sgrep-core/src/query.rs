@@ -6,13 +6,13 @@ pub struct ParsedQuery {
     pub terms: Vec<String>,
     /// Directory or glob from an `in:path` token. Applied as a file filter.
     pub path_scope: Option<String>,
-    /// FB-80a-07 (owner ruling 2026-09-15): set when an `in:` token was
-    /// present but unresolvable at parse time — bare `in:`, a `..` segment,
+    /// Set when an `in:` token was present but unresolvable at parse time
+    /// — bare `in:`, a `..` segment,
     /// an absolute path, or a duplicate token. Search must refuse loudly;
     /// the historic silent drop silently ran the query UNSCOPED.
     pub path_scope_error: Option<String>,
-    /// FB-80a-08: set by the Searcher when the scope resolves to a FILE
-    /// under the index root — finish filters by exact rel-path equality
+    /// Set by the Searcher when the scope resolves to a FILE under the
+    /// index root — finish filters by exact rel-path equality
     /// instead of the impossible `file/**` glob.
     pub path_scope_exact: bool,
 }
@@ -227,19 +227,19 @@ fn looks_like_symbol(term: &str) -> bool {
 }
 
 fn split_in_path_scope(input: &str) -> (String, Option<String>, Option<String>) {
-    // PASS 147 (146E-F1 TRUE ROOT): the scope split LOCATES `in:` tokens by
-    // whitespace word but must splice the REMAINING RAW BYTES. The old
-    // `split_whitespace().join(" ")` collapsed the query's interior layout,
-    // so a `pattern:` query carrying an interior line break
-    // (`pattern:return \n$A`) reached the pattern lane as the sg-ACCEPTED
-    // single-line spelling `return $A` and over-served rows sg 0.45.2
-    // refuses to parse (rc8 "Multiple AST nodes are detected"; the oracle
-    // grid /tmp/phase147R pins the py/js/go newline-seam cells). Byte
-    // fidelity is the sg-exact contract on every mode prefix: sg parses the
-    // RAW pattern text, so the ingress must never rewrite it.
+    // The scope split LOCATES `in:` tokens by whitespace word but must
+    // splice the REMAINING RAW BYTES. The old `split_whitespace().join(" ")`
+    // collapsed the query's interior layout, so a `pattern:` query carrying
+    // an interior line break (`pattern:return \n$A`) reached the pattern
+    // lane as the reference-accepted single-line spelling `return $A` and
+    // over-served rows the reference refuses to parse ("Multiple AST nodes
+    // are detected"; the oracle pins the py/js/go newline-seam cells). Byte
+    // fidelity is the reference-exact contract on every mode prefix: the
+    // reference parses the RAW pattern text, so the ingress must never
+    // rewrite it.
     //
-    // FB-80a-07/08/09 (owner ruling 2026-09-15): an `in:` token is honored
-    // only (a) at a whitespace word start AND (b) outside double quotes —
+    // An `in:` token is honored only (a) at a whitespace word start AND (b)
+    // outside double quotes —
     // an odd `"` count before the token means it sits inside a quoted
     // literal and stays pattern text (single-quoted literals remain a
     // documented boundary). Honored tokens that are bare, carry a `..`
