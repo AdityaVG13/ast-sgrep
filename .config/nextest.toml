@@ -1,0 +1,8 @@
+# Nextest runner profile (oracle-foundry L3): no fail-fast, no retries, raw
+# failure output. CI must surface every failure; a retry-away or forced
+# green is a defect, not a release.
+[profile.ci]
+fail-fast = false
+retries = 0
+failure-output = "immediate-final"
+success-output = "never"
