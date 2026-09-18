@@ -44,6 +44,7 @@ signal-hook = "0.3"
 
 [dev-dependencies]
 ast-sgrep-core = { path = "../ast-sgrep-core", version = "2.0.0" }
+ast-sgrep-lsp = { path = "../ast-sgrep-lsp" }
 ast-sgrep-testkit = { path = "../ast-sgrep-testkit", features = ["lsp"] }
 serde_json.workspace = true
 tempfile.workspace = true
@@ -88,3 +89,6 @@ path = "../../tests/cli/cpu_limit_orphan_reap.rs"
 [[test]]
 name = "outline_cmd"
 path = "../../tests/cli/outline_cmd.rs"
+[[test]]
+name = "oracle_foundry_pass1"
+path = "../../tests/cli/oracle_foundry_pass1.rs"

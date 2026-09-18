@@ -127,6 +127,7 @@ dependencies = [
  "anyhow",
  "ast-sgrep-codemode",
  "ast-sgrep-core",
+ "ast-sgrep-lsp",
  "ast-sgrep-plugins",
  "ast-sgrep-testkit",
  "clap",
@@ -209,6 +210,7 @@ name = "ast-sgrep-lang"
 version = "2.0.0"
 dependencies = [
  "anyhow",
+ "ast-sgrep-embed",
  "ast-sgrep-testkit",
  "serde",
  "serde_json",

@@ -187,3 +187,6 @@ path = "../../tests/core/trigram_shortcut.rs"
 [[test]]
 name = "store_inert_memory"
 path = "../../tests/core/store_inert_memory.rs"
+[[test]]
+name = "oracle_foundry_pass1"
+path = "../../tests/core/oracle_foundry_pass1.rs"

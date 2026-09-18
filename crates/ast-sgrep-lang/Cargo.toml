@@ -35,6 +35,7 @@ tree-sitter-dart = "0.2.0"
 tree-sitter-moonbit = { git = "https://github.com/moonbitlang/tree-sitter-moonbit", rev = "b63ce9169bcd831157f3b79ef8ff9219d305f9d0" }
 
 [dev-dependencies]
+ast-sgrep-embed = { path = "../ast-sgrep-embed" }
 ast-sgrep-testkit = { path = "../ast-sgrep-testkit" }
 serde_json.workspace = true
 
@@ -48,3 +49,6 @@ path = "../../tests/lang/pattern.rs"
 [[test]]
 name = "candidate_kind_table"
 path = "../../tests/lang/candidate_kind_table.rs"
+[[test]]
+name = "oracle_foundry_pass1"
+path = "../../tests/lang/oracle_foundry_pass1.rs"
