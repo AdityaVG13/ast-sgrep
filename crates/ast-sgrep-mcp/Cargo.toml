@@ -62,3 +62,6 @@ path = "../../tests/mcp/error_api_pass1.rs"
 [[test]]
 name = "error_api_pass2"
 path = "../../tests/mcp/error_api_pass2.rs"
+[[test]]
+name = "error_api_pass3"
+path = "../../tests/mcp/error_api_pass3.rs"
