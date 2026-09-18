@@ -47,3 +47,6 @@ path = "../../tests/mcp/oracle_foundry_pass4.rs"
 [[test]]
 name = "durable_recovery_pass1"
 path = "../../tests/mcp/durable_recovery_pass1.rs"
+[[test]]
+name = "durable_recovery_pass2"
+path = "../../tests/mcp/durable_recovery_pass2.rs"
