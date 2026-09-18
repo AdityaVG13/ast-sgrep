@@ -96,3 +96,6 @@ path = "../../tests/codemode/numerical_pass1.rs"
 [[test]]
 name = "numerical_pass2"
 path = "../../tests/codemode/numerical_pass2.rs"
+[[test]]
+name = "numerical_pass3"
+path = "../../tests/codemode/numerical_pass3.rs"

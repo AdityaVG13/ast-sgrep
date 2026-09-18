@@ -143,3 +143,6 @@ path = "../../tests/cli/numerical_pass1.rs"
 [[test]]
 name = "numerical_pass2"
 path = "../../tests/cli/numerical_pass2.rs"
+[[test]]
+name = "numerical_pass3"
+path = "../../tests/cli/numerical_pass3.rs"
