@@ -95,3 +95,6 @@ path = "../../tests/mcp/numerical_pass4.rs"
 [[test]]
 name = "tokio_pass1"
 path = "../../tests/mcp/tokio_pass1.rs"
+[[test]]
+name = "tokio_pass2"
+path = "../../tests/mcp/tokio_pass2.rs"
