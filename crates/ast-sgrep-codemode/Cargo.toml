@@ -87,3 +87,6 @@ path = "../../tests/codemode/invalidation_pass2.rs"
 [[test]]
 name = "invalidation_pass3"
 path = "../../tests/codemode/invalidation_pass3.rs"
+[[test]]
+name = "invalidation_pass4"
+path = "../../tests/codemode/invalidation_pass4.rs"
