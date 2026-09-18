@@ -248,8 +248,8 @@ pub(crate) const CLASS_QUERY_TABLE: &[(&[Language], &str, &[&str])] = &[
             "(class_declaration name: (type_identifier) @name) @match",
         ],
     ),
-    // PASS 131 (130A-F8, f131f): the ts interface row — the Class lane's
-    // member-count template (`interface $N { $B }`) needs the kind query to
+    // The ts interface row — the Class lane's member-count template
+    // (`interface $N { $B }`) needs the kind query to
     // engage at all. The ts `interface_declaration` name node is a
     // `type_identifier` (the js grammar has no interfaces; ts-only row).
     (
@@ -257,8 +257,8 @@ pub(crate) const CLASS_QUERY_TABLE: &[(&[Language], &str, &[&str])] = &[
         "interface",
         &["(interface_declaration name: (type_identifier) @name) @match"],
     ),
-    // PASS 135 (134A-F7, f135e): the ts alias-object face (`type $N = { $B }`)
-    // — keyword `type-alias` (classifier strips the leading `=` off a plain
+    // The ts alias-object shape (`type $N = { $B }`) — keyword `type-alias`
+    // (classifier strips the leading `=` off a plain
     // `type` tail) never collides with the plain `type` class rows. The ts
     // `type_alias_declaration` name node is a `type_identifier` (node-types
     // receipt, tree-sitter-typescript 0.23.2); brace-less alias tails stay

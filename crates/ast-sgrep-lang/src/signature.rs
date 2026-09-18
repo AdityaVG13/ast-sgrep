@@ -9,80 +9,74 @@ use crate::pattern::{classify_native, is_pattern_ident, DECL_PATTERN_PREFIXES};
 /// Shared with `classify_native` via [`DECL_PATTERN_PREFIXES`].
 pub use crate::pattern::DECL_PATTERN_PREFIXES as DECL_PREFIXES;
 
-/// Bare statement keywords (F62-2, pass 63): keyword tokens are NOT
-/// `pattern_nodes` rows (the index stores identifier/decl/call nodes), so an
-/// ident-serve of `break`/`return`/… can only ever answer a silent empty
-/// result while the native statement-template lane answers sg's hits
-/// (`break` -l javascript probes exit 0 with the break_statement hit). They
-/// must fall through to the native walk.
+/// Bare statement keywords: keyword tokens are NOT `pattern_nodes` rows
+/// (the index stores identifier/decl/call nodes), so an ident-serve of
+/// `break`/`return`/… can only ever answer a silent empty result while the
+/// native statement-template lane answers the reference's hits (`break`
+/// javascript probes exit 0 with the break_statement hit). They must fall
+/// through to the native walk.
 ///
-/// PASS 132 (F-131E-2): `debugger` joins the class. The bare (`;`-less)
-/// spelling is `is_pattern_ident`-admitted, so `index_can_serve_pattern`
-/// early-returned the empty ident rows as "ident-exact" on the CLI
-/// `--pattern` lane while sg 0.45.2 answers the js/ts debugger_statement
-/// n1 (oracle dbg_{js,ts}_bare faces) — the library's f131d kinds arm was
-/// reachable only below the early return. The `;`-ful spelling was never
-/// ident-shaped and kept walking.
+/// `debugger` joins the class. The bare (`;`-less) spelling is
+/// `is_pattern_ident`-admitted, so `index_can_serve_pattern` early-returned
+/// the empty ident rows as "ident-exact" on the CLI `--pattern` lane while
+/// the reference answers the js/ts debugger_statement once — the library's
+/// kinds arm was reachable only below the early return. The `;`-ful
+/// spelling was never ident-shaped and kept walking.
 ///
-/// PASS 133 (F-132E class sweep): the remaining bare drop faces join the
-/// escape — `import` (js/ts/py), `use` (rs), `fallthrough`/`goto` (go),
-/// `redo`/`retry` (rb), `pass`/`global`/`del`/`assert` (py). All are
-/// `is_pattern_ident`-admitted with NO `pattern_nodes` rows (keyword
-/// tokens are never identifier rows), so the ident-exact early-return
-/// answered silent `ok:true []` where sg 0.45.2 answers the statement
-/// family (52-cell grid /tmp/phase133/live/grid.json: every face sg n1,
-/// py `assert` n2; subject n0). Escaped to the walk, most of them are
-/// answered sg-exactly by the literal lane's keyword-token leaf (the same
-/// bytes sg reports) — mutants M-133b/M-133c2 kill the escape and the
-/// f133b/f133c pins fail. Two shapes needed MORE than the escape, both in
+/// The remaining bare drop shapes join the escape — `import` (js/ts/py),
+/// `use` (rs), `fallthrough`/`goto` (go), `redo`/`retry` (rb),
+/// `pass`/`global`/`del`/`assert` (py). All are `is_pattern_ident`-admitted
+/// with NO `pattern_nodes` rows (keyword tokens are never identifier rows),
+/// so the ident-exact early-return answered silent `ok:true []` where the
+/// reference answers the statement family (every shape the reference
+/// answers once, py `assert` twice; the subject answered none). Escaped to
+/// the walk, most of them are answered reference-exactly by the literal
+/// lane's keyword token leaf (the same bytes the reference reports) —
+/// regression pins fail if the escape is removed. Two shapes needed MORE
+/// than the escape, both in
 /// `match_bare_statement_kind`: the `return` family (a STATEMENT_HEAD
 /// keyword, so the general lane intercepts and under-answers arg-ful
 /// forms without a kinds arm) and rb `break` (ruby names the node
 /// `break`; the pre-existing arm's statement/expression kinds exist
-/// nowhere in tree-sitter-ruby and short-circuited sg's hit away). For
-/// grammars outside an arm's scope the literal lane keeps serving
-/// genuine identifier faces (the pass-132 rs `debugger` zero-drift
-/// doctrine).
+/// nowhere in tree-sitter-ruby and short-circuited the reference's hit
+/// away). For grammars outside an arm's scope the literal lane keeps
+/// serving genuine identifier shapes (the rs `debugger` zero-drift rule).
 const STATEMENT_KEYWORDS: &[&str] = &[
     "return", "raise", "yield", "throw", "await", "break", "continue", "next", "last", "debugger",
     "import", "pass", "global", "del", "assert", "use", "fallthrough", "goto", "redo", "retry",
-    // PASS 135 (134B-F1): go's bare `defer`/`go` are STATEMENT_HEAD_KEYWORDS
-    // whose statement faces sg 0.45.2 answers (grids G_go_defer/G_go_go:
-    // sg n2 vs subject n0) — the ident-serve trap silenced them exactly like
-    // bare `debugger` pre-132. Because both spellings are STATEMENT_HEADS,
-    // the escape alone was NOT enough: the walk's general-lane intercept
-    // silently answered nothing for them AND swallowed the genuine
-    // identifier faces of the same spellings in every other grammar
-    // (fresh Z-grid 2026-09-11: js/ts/py/java/c/rb/kt `go` sg n2 vs subject
-    // n0). `match_bare_statement_kind` now routes the un-armed escaped
-    // heads to the literal/identifier lanes (the F66a-8 doctrine); mutant
-    // M-135e (removed from this list) re-silences every face, M-135d
-    // (carve deleted) re-drops the ident faces.
-    // PASS 136 (F-136 grid sibling): js bare `delete` — the keyword token is
-    // never a `pattern_nodes` identifier row, so the ident-exact serve
-    // answered silent ok:true-0 where sg 0.45.2 answers the
-    // delete_expression family n1 per site (grid /tmp/phase136 sgprobe:
-    // `delete o.k;` sg n1). Un-armed, the walk's literal lane serves the
-    // keyword-token leaf at line parity (the 133 doctrine). The escape
-    // cannot OVER-answer in the keyword grammars; in grammars where the
-    // token is an ordinary identifier (ruby/php/go/c for `delete`) the
-    // walk's literal lane RE-SERVES those identifier rows at sg parity —
-    // the same literal-lane reserve that keeps the pass-132 rs `debugger`
-    // ident face zero-drift (the 136-era "keyword in every indexed grammar"
-    // safety wording was wrong of record; corrected PASS 137, 137B-F5a).
-    // PASS 137 (137B-F4 + 137A-F2 bare cells): the csharp statement-keyword
-    // faces join the same escape genus — bare `lock`/`using`/`var`/
-    // `fixed`/`checked`/`unchecked`/`unsafe` are keyword TOKENS in csharp
-    // (js `var`, go `var`, cpp `using`, rs `unsafe` likewise), so the
-    // ident-exact serve answered silent ok:true-0 where sg 0.45.2 answers
-    // the keyword-token rows per site (grid137 A-lane: cs bare
-    // fixed/checked/unchecked/unsafe/lock/using sg n1, `var` sg n2, subject
-    // n0 everywhere; js/go bare `var` sg n2, cpp `using` n1, rs `unsafe` n1
-    // — all subject n0). Un-armed, the walk's literal lane serves the
-    // keyword-token leaf AND every genuine identifier face of the same
-    // spelling in other grammars at sg parity (grid137: py/rs/rb
-    // `var`/`lock`/`checked` identifier faces n==n; the f132 rs-debugger
-    // zero-drift doctrine).
+    // Go's bare `defer`/`go` are STATEMENT_HEAD_KEYWORDS whose statement
+    // shapes the reference answers (twice vs the subject's none) — the
+    // ident-serve trap silenced them exactly like bare `debugger`. Because
+    // both spellings are STATEMENT_HEADS, the escape alone was NOT enough:
+    // the walk's general-lane intercept silently answered nothing for them
+    // AND swallowed the genuine identifier shapes of the same spellings in
+    // every other grammar (js/ts/py/java/c/rb/kt `go`: the reference
+    // answers twice vs the subject's none).
+    // `match_bare_statement_kind` now routes the un-armed escaped heads to
+    // the literal/identifier lanes; removing them from this list
+    // re-silences every shape, deleting the carve re-drops the ident
+    // shapes.
+    // Js bare `delete` — the keyword token is never a `pattern_nodes`
+    // identifier row, so the ident-exact serve answered silent ok:true-0
+    // where the reference answers the delete_expression family once per
+    // site (`delete o.k;` answers once). Un-armed, the walk's literal lane
+    // serves the keyword-token leaf at line parity (the same rule as
+    // above). The escape cannot OVER-answer in the keyword grammars; in
+    // grammars where the token is an ordinary identifier (ruby/php/go/c
+    // for `delete`) the walk's literal lane RE-SERVES those identifier
+    // rows at reference parity — the same literal-lane reserve that keeps
+    // the rs `debugger` ident shape zero-drift (an earlier "keyword in
+    // every indexed grammar" wording was wrong and has been corrected).
+    // The csharp statement-keyword shapes join the same escape genus —
+    // bare `lock`/`using`/`var`/`fixed`/`checked`/`unchecked`/`unsafe` are
+    // keyword TOKENS in csharp (js `var`, go `var`, cpp `using`, rs
+    // `unsafe` likewise), so the ident-exact serve answered silent
+    // ok:true-0 where the reference answers the keyword-token rows per
+    // site (the reference answers per site; the subject answered none).
+    // Un-armed, the walk's literal lane serves the keyword-token leaf AND
+    // every genuine identifier shape of the same spelling in other
+    // grammars at reference parity (py/rs/rb identifier shapes stay
+    // equal-count; the rs-debugger zero-drift rule).
     "defer", "go", "delete", "lock", "using", "var", "fixed", "checked", "unchecked", "unsafe",
 ];
 
@@ -131,15 +125,15 @@ pub fn cached_pattern_signatures(pattern: &str) -> Option<Vec<String>> {
     if pattern.contains('{') {
         return None;
     }
-    // PASS 71a (F70a-1a): a member-call CHAIN is not indexable by a single
-    // `call:`/`call-name:` row. `pattern_nodes` stores (callee path, kind)
-    // pairs that cannot express the head's argument template, the segment
-    // count, or the per-connector optional flags the native matcher enforces;
-    // serving `fetch()?.$M($$$A)` from `call:fetch` rows answered every bare
+    // A member-call CHAIN is not indexable by a single `call:`/`call-name:`
+    // row. `pattern_nodes` stores (callee path, kind) pairs that cannot
+    // express the head's argument template, the segment count, or the
+    // per-connector optional flags the native matcher enforces; serving
+    // `fetch()?.$M($$$A)` from `call:fetch` rows answered every bare
     // `fetch` call in the search lane while the codemod lane — which runs
-    // `match_pattern` — planned sg-exact edits on the same pattern. Returning
-    // `None` routes the search through the native walk, so both lanes answer
-    // through one matcher.
+    // `match_pattern` — planned reference-exact edits on the same pattern.
+    // Returning `None` routes the search through the native walk, so both
+    // lanes answer through one matcher.
     if has_multiple_call_segments(pattern) {
         return None;
     }
@@ -212,10 +206,10 @@ pub fn required_pattern_literal(pattern: &str) -> Option<String> {
         if is_pattern_ident(pattern) {
             return Some(pattern.to_string());
         }
-        // PASS 60 (H-CONF-030 i/ii): the R3 structural lane matches $-less
-        // patterns whose source spelling may differ byte-wise from the
-        // pattern text (trailing commas in argument lists, comments between
-        // arguments). The whole pattern text was an unsound prefilter there:
+        // The R3 structural lane matches $-less patterns whose source
+        // spelling may differ byte-wise from the pattern text (trailing
+        // commas in argument lists, comments between arguments). The whole
+        // pattern text was an unsound prefilter there:
         // it dropped files that DO hold a structural match. The longest
         // concrete token of the COMMENT-STRIPPED pattern is sound — every
         // code token of the pattern must appear in any matching file, while
@@ -240,13 +234,13 @@ pub fn required_pattern_literal(pattern: &str) -> Option<String> {
         }
     }
     let callee = pattern.split_once('(')?.0.trim();
-    // PASS 51: a segment containing `$` anywhere is not a usable byte literal
+    // A segment containing `$` anywhere is not a usable byte literal
     // (`Some($A).unwrap_or($A)` previously yielded the bogus prefilter
     // `Some($A)` once the general lane served such shapes — every file would
     // have been prefiltered away). Metavariable-bearing segments are dropped;
     // the longest clean segment is the literal.
-    // PASS 81 (FB-80a-06 root cause): each segment is TRIMMED before the
-    // pick. The callee split keeps interior layout, so the admitted
+    // Each segment is TRIMMED before the pick. The callee split keeps
+    // interior layout, so the admitted
     // multiline chain `$O.out\n.$M($A)` previously selected the segment
     // `"out\n"` (and its collapsed-ingress twin `$O.out .$M($A)` the
     // segment `"out "`) — whitespace-carrying literals no matching file's
@@ -254,17 +248,17 @@ pub fn required_pattern_literal(pattern: &str) -> Option<String> {
     // and the (already green) matcher never ran: silent [] search, 0-edit
     // codemod plans. Trimmed segments stay sound — the matched property
     // link bytes are literal — and a segment that is ONLY layout leaves no
-    // literal: `None` means both consumers (core/pattern.rs, codemod.rs)
+    // literal: `None` means both consumers (core/pattern.rs, codemod/plan.rs)
     // scan the file instead of filtering it.
-    // PASS 113B (CNR §39.9 residual 1): a trailing `?` is the `?.`
-    // CONNECTOR MARKER, not file content — sg 0.45.2 treats it as connector
-    // syntax only (`a?.b($X)` answers the trivia-bearing `a /*c*/ ?.b(1)`
-    // whose bytes never contain contiguous `a?`; first-hand grid: the
-    // marker is required as a matcher distinction — `a?.b($X)` refuses
-    // `a.b(1)`, `a?.($X)` refuses `a(1)` — but is never matchable text in
-    // isolation). The raw segment `"a?"` dropped every sg-answering
-    // commented-`?.` file at the prefilter. Trim it per segment before the
-    // pick; a shorter literal is the over-broad (sound) direction.
+    // A trailing `?` is the `?.` CONNECTOR MARKER, not file content —
+    // the reference treats it as connector syntax only (`a?.b($X)` answers
+    // the trivia-bearing `a /*c*/ ?.b(1)` whose bytes never contain
+    // contiguous `a?`; verified first-hand: the marker is required as a
+    // matcher distinction — `a?.b($X)` refuses `a.b(1)`, `a?.($X)` refuses
+    // `a(1)` — but is never matchable text in isolation). The raw segment
+    // `"a?"` dropped every reference-answered commented-`?.` file at the
+    // prefilter. Trim it per segment before the pick; a shorter literal is
+    // the over-broad (sound) direction.
     callee
         .split(['.', ':'])
         .map(|segment| {
@@ -276,13 +270,13 @@ pub fn required_pattern_literal(pattern: &str) -> Option<String> {
         })
         .filter(|segment| !segment.is_empty() && !segment.contains('$'))
         .max_by_key(|segment| segment.len())
-        // PASS 146 (145B-F1, oracle grid /tmp/phase146R cases k1/k2/k6/k7 +
-        // v1-v8): a segment may carry INTERIOR layout (`namespace A { f` —
-        // the callee of `namespace A { f(); $B }`), and layout is invisible
-        // to the structural matcher: sg binds the pretty-printed namespace
-        // body whose bytes never contain the single-space run, so the
-        // whitespace-carrying literal silently prefiltered sg-answering
-        // files away (same unsoundness genus as the FB-80a-06 edge-trim).
+        // A segment may carry INTERIOR layout (`namespace A { f` — the
+        // callee of `namespace A { f(); $B }`), and layout is invisible to
+        // the structural matcher: the reference binds the pretty-printed
+        // namespace body whose bytes never contain the single-space run, so
+        // the whitespace-carrying literal silently prefiltered
+        // reference-answered files away (same unsoundness genus as the
+        // edge-trim above).
         // A segment with interior whitespace degrades to its longest
         // whitespace-free TOKEN — still a required byte run of any match,
         // over-broad in the sound direction. A token-only segment never
@@ -352,8 +346,8 @@ fn longest_concrete_token(pattern: &str) -> Option<String> {
                 }
             }
             _ => {
-                // Latin-1 byte cast (pass-65 minor-cluster adjudication): a
-                // byte >= 0x80 casts to a char that is never
+                // Latin-1 byte cast: a byte >= 0x80 casts to a char that is
+                // never
                 // ascii-alphanumeric, so multibyte UTF-8 degrades to token
                 // separators — the emitted literal can only come from the
                 // pattern's ASCII runs, which is the sound (over-broad)
@@ -385,9 +379,9 @@ pub fn structural_term_signatures(term: &str) -> [String; 6] {
 
 /// Prefix → tree-sitter kind names used for metavariable declaration lookups.
 ///
-/// `fn ` keeps the historical `kind:function_item` entry. Pass 14 (EXP-010,
-/// H-CONF-012) widened `def ` with ruby's `method` / `singleton_method` and
-/// `function ` with php's `function_definition`: a missing kind here narrows
+/// `fn ` keeps the historical `kind:function_item` entry. An earlier
+/// widening gave `def ` ruby's `method` / `singleton_method` and
+/// `function ` php's `function_definition`: a missing kind here narrows
 /// the candidate file set below the set of files that can hold a match, which
 /// turned native-claim patterns into silent empty results. Over-broad entries
 /// are always sound — the native tree-sitter matcher still decides every hit.
@@ -398,7 +392,7 @@ const CACHED_DECL_KIND_TABLE: &[(&str, &[&str])] = &[
             "function_item",
             // MoonBit `fn` / `impl ... with fn` share C/Python's
             // `function_definition` kind; omitting them here silently empties
-            // indexed `fn $NAME` search (H-CONF-012). Over-broad is sound.
+            // indexed `fn $NAME` search. Over-broad is sound.
             "function_definition",
             "impl_definition",
             "named_lambda_expression",
@@ -480,18 +474,18 @@ fn is_pattern_path(value: &str) -> bool {
         && value
             .split(['.', ':'])
             .filter(|p| !p.is_empty())
-            // PASS 75a (74c-F3): namespace-qualified scope text (`\Foo`,
-            // `Foo\Bar`) — the re-keyed index emits `call:\Foo::bar`-style
-            // rows, so the pattern-side derivation must accept the same
-            // spellings to address them.
+            // Namespace-qualified scope text (`\Foo`, `Foo\Bar`) — the
+            // re-keyed index emits `call:\Foo::bar`-style rows, so the
+            // pattern-side derivation must accept the same spellings to
+            // address them.
             .all(|segment| {
                 is_pattern_ident(segment)
                     || crate::pattern::namespace_qualified_segment(segment)
             })
 }
 
-/// PASS 71a (F70a-1a): true when the pattern decomposes into MORE THAN ONE
-/// depth-0 call segment (`fetch()?.$M($$$A)`, `a.b($$$C).d()`) — a chain
+/// True when the pattern decomposes into MORE THAN ONE depth-0 call
+/// segment (`fetch()?.$M($$$A)`, `a.b($$$C).d()`) — a chain
 /// shape whose per-segment argument templates, segment count, and connector
 /// flags no single `pattern_nodes` signature can express. Nested parentheses
 /// stay out of the count (`a.b(f($$$X).g($$$Y))` is one call segment; its

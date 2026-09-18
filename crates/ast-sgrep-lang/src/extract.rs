@@ -101,8 +101,8 @@ pub(crate) fn dot_accessor_text<'a>(node: &Node, source: &'a str) -> Option<&'a 
 
 /// Member / scoped expression kinds that chain identifiers.
 ///
-/// Pass 22 (H-CONF-009): python's `attribute` is the member-chain kind for
-/// `obj.method`; without it the pattern matcher collapsed every dotted callee
+/// Python's `attribute` is the member-chain kind for `obj.method`;
+/// without it the pattern matcher collapsed every dotted callee
 /// to its trailing identifier, so wildcard dotted patterns (`$O.$M($$$)`)
 /// were silently empty. Index `call:` rows already carried the full chain
 /// (they use the callee node's text), so only match-side paths were wrong.
@@ -229,8 +229,8 @@ pub(crate) fn is_in_comment_or_string(node: &Node) -> bool {
     false
 }
 
-/// PASS 65a (F64-4): like [`is_in_comment_or_string`], but judging only the
-/// ANCESTOR chain — a string node itself is not "inside" a string, so a
+/// Like [`is_in_comment_or_string`], but judging only the ANCESTOR chain
+/// — a string node itself is not "inside" a string, so a
 /// string-rooted general-lane template can match the string node while every
 /// node nested under a comment/string ancestor stays skipped.
 pub(crate) fn is_inside_comment_or_string(node: &Node) -> bool {

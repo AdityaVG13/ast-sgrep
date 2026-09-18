@@ -210,8 +210,8 @@ pub struct ExtractionResult {
     pub pattern_nodes: Vec<PatternNode>,
     /// True when the extraction walk hit [`crate::pattern::MAX_EXTRACTION_DEPTH`]
     /// and skipped subtrees beyond it. The cached pattern lane must treat this
-    /// file's index rows as incomplete (H-CONF-024: a bare cap alone fails
-    /// open because `index_can_serve_pattern` trusts index completeness).
+    /// file's index rows as incomplete (a bare cap alone fails open
+    /// because `index_can_serve_pattern` trusts index completeness).
     pub depth_truncated: bool,
 }
 pub fn detect_language(path: &Path, content: Option<&str>) -> Option<Language> {
