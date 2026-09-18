@@ -56,3 +56,6 @@ path = "../../tests/mcp/durable_recovery_pass3.rs"
 [[test]]
 name = "durable_recovery_pass4"
 path = "../../tests/mcp/durable_recovery_pass4.rs"
+[[test]]
+name = "error_api_pass1"
+path = "../../tests/mcp/error_api_pass1.rs"

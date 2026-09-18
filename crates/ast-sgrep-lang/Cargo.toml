@@ -61,3 +61,6 @@ path = "../../tests/lang/oracle_foundry_pass3.rs"
 [[test]]
 name = "oracle_foundry_pass4"
 path = "../../tests/lang/oracle_foundry_pass4.rs"
+[[test]]
+name = "error_api_pass1"
+path = "../../tests/lang/error_api_pass1.rs"

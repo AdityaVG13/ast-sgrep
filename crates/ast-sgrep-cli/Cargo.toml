@@ -113,3 +113,6 @@ path = "../../tests/cli/durable_recovery_pass3.rs"
 [[test]]
 name = "durable_recovery_pass4"
 path = "../../tests/cli/durable_recovery_pass4.rs"
+[[test]]
+name = "error_api_pass1"
+path = "../../tests/cli/error_api_pass1.rs"
