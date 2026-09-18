@@ -1,4 +1,4 @@
-//! Token-budgeted, AST-aware result rendering (bead ast-sgrep-tef-token-budget-m38g).
+//! Token-budgeted, AST-aware result rendering.
 //!
 //! Result COUNT is a poor proxy for token cost: five full functions can dwarf
 //! twenty signatures. This module renders each hit at one of several detail

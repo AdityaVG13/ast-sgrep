@@ -402,8 +402,8 @@ pub fn run_serve(
                     )?;
                     continue;
                 }
-                // br-r49: a spent session answers the offending request once
-                // and then dies — never a flood of identical budget errors.
+                // A spent session answers the offending request once and then
+                // dies — never a flood of identical budget errors.
                 if session.exhausted() {
                     write_line(
                         &mut stdout,
@@ -463,8 +463,8 @@ pub fn run_serve(
                     continue;
                 }
                 let started = Instant::now();
-                // br-r49: same fail-once contract as single calls — a spent
-                // session answers the batch once and stops.
+                // Same fail-once contract as single calls — a spent session
+                // answers the batch once and stops.
                 if session.exhausted() {
                     write_line(
                         &mut stdout,

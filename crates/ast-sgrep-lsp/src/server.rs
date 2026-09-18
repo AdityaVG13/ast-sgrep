@@ -18,7 +18,7 @@ use std::path::PathBuf;
 pub struct LspServer {
     backend: Option<LspBackend>,
     /// Set after a successful `shutdown` request. Further requests get
-    /// InvalidRequest until `exit` (LSP lifecycle / d2a1.14).
+    /// InvalidRequest until `exit` (LSP lifecycle).
     shutdown_received: bool,
     /// Set by the `exit` notification; leaves the message loop.
     exit_requested: bool,
@@ -330,7 +330,7 @@ fn show_index_error(stdout: &mut impl Write, surface: &str, err: &anyhow::Error)
     let message = format!("asgrep index ({surface}): {err}");
     log(&message);
     // Notifications have no JSON-RPC response; surface via window/showMessage
-    // so clients see index failures instead of silent Ok (ast-sgrep-x46g).
+    // so clients see index failures instead of silent Ok.
     write_message(
         stdout,
         &serde_json::json!({

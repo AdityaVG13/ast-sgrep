@@ -74,8 +74,8 @@ pub enum CallError {
     UnknownTool(String),
     #[error("{0}")]
     InvalidArgs(String),
-    /// The sticky session's call budget is exhausted (br-r49). Serve must
-    /// answer once and stop instead of flooding identical per-call errors.
+    /// The sticky session's call budget is exhausted. Serve must answer
+    /// once and stop instead of flooding identical per-call errors.
     #[error("codemode call budget exceeded (max_calls={0})")]
     BudgetExhausted(usize),
     #[error(transparent)]

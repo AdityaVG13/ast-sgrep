@@ -148,8 +148,8 @@ impl CodeModeSession {
         Ok(value)
     }
 
-    /// True once the sticky call budget is exhausted (br-r49): serve callers
-    /// must answer the offending request once and then stop, not flood.
+    /// True once the sticky call budget is exhausted: serve callers must
+    /// answer the offending request once and then stop, not flood.
     pub fn exhausted(&self) -> bool {
         self.calls >= self.max_calls
     }

@@ -25,7 +25,7 @@ pub struct LspBackend {
     index_lock: Arc<Mutex<()>>,
     /// Unsaved (or open) document text keyed by workspace-relative path.
     /// Re-applied after every full disk `index_all` so background reindex
-    /// cannot clobber editor buffers (ast-sgrep-lsp-state-zblv.3).
+    /// cannot clobber editor buffers.
     dirty_buffers: Arc<Mutex<HashMap<String, String>>>,
 }
 
@@ -223,7 +223,7 @@ impl LspBackend {
         F: FnOnce(&mut Indexer) -> anyhow::Result<T>,
     {
         // Intentionally does NOT touch `index_ready`. Ready means a successful
-        // full `index_all` only (ast-sgrep-lsp-state-zblv.2).
+        // full `index_all` only.
         self.with_index_lock(|| {
             let mut indexer = Indexer::new(self.index_options())?;
             f(&mut indexer)
@@ -262,7 +262,7 @@ impl LspBackend {
     }
 
     /// Recover like `index_lock`: poison must not permanently brick document
-    /// sync for the rest of the process (d2a1.15). Fail closed by clearing the
+    /// sync for the rest of the process. Fail closed by clearing the
     /// untrusted dirty set rather than reusing half-mutated entries.
     fn dirty_map(&self) -> std::sync::MutexGuard<'_, HashMap<String, String>> {
         match self.dirty_buffers.lock() {

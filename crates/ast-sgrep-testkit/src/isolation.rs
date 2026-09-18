@@ -86,7 +86,7 @@ impl IsolatedIndexSession {
             .expect("open isolated on-disk IndexStore")
     }
 
-    /// Open the private store under an explicit durability profile (0obi).
+    /// Open the private store under an explicit durability profile.
     pub fn open_store_with_durability(&self, durability: ast_sgrep_core::Durability) -> IndexStore {
         IndexStore::open_with_durability(&self.corpus_root, Some(&self.index_path), durability)
             .expect("open isolated on-disk IndexStore")

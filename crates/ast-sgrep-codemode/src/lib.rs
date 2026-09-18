@@ -7,7 +7,7 @@
 //! crate must **never** depend on `ast-sgrep-mcp`, and MCP must never depend on
 //! this crate. Both sit on `ast-sgrep-core` only.
 //!
-//! # Root policy (R-CM-ROOT-POLICY option A)
+//! # Root policy
 //!
 //! Tool `root` args are jailed under `SessionConfig.root` (canonicalize +
 //! `Path::starts_with`), matching MCP `sandbox_root`. Foreign roots fail closed

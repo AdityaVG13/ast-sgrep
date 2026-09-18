@@ -393,7 +393,7 @@ pub fn extract_identifier_at(line: &str, byte_offset: usize) -> Option<String> {
 }
 
 fn ident_idx(chars: &[(usize, char)], byte_offset: usize) -> Option<usize> {
-    // Empty line → chars=[] must not index (ast-sgrep-lsp-state-zblv.1 / epic acceptance).
+    // Empty line → chars=[] must not index.
     if chars.is_empty() {
         return None;
     }

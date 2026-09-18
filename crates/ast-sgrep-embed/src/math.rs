@@ -1,6 +1,6 @@
 //! Similarity ranking primitives.
 //!
-//! # Finite-score invariants (`ast-sgrep-0pla`)
+//! # Finite-score invariants
 //!
 //! - [`Scored`] only admits finite `f32` similarities via [`Scored::new`].
 //! - Because NaN/±∞ never enter `Scored`, derived [`PartialEq`] and blank [`Eq`]
