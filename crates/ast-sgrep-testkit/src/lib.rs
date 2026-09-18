@@ -6,6 +6,9 @@
 //! `ast-sgrep-lsp`. Default Bill is core + lang only.
 
 mod cli;
+#[cfg(feature = "codemode")]
+mod codemode;
+mod fault;
 mod fixture;
 mod golden;
 mod hit;
@@ -14,15 +17,25 @@ mod isolation;
 mod lang;
 #[cfg(feature = "lsp")]
 mod lsp;
+mod mcp;
+mod num;
 mod scrub;
 mod verdict;
-pub use cli::CliSession;
-pub use fixture::{sample_file, sample_root};
+pub use cli::{
+    asgrep_bin, assert_failure_envelope, assert_success, parse_stdout, run, run_env, run_json,
+    CliSession,
+};
+#[cfg(feature = "codemode")]
+pub use codemode::{
+    batch_call, batch_request, catalog_call, config_at, serve_lines, serve_request_line, session_at,
+};
+pub use fault::{err_of, flip_bytes, remove_sqlite_sidecars, truncate_file, write_garbage};
+pub use fixture::{file_tree, sample_file, sample_root, set_mtime_secs, write_file};
 pub use golden::{
     assert_golden, assert_golden_at, assert_golden_json, assert_golden_json_at,
     canonicalize_chain_response, canonicalize_extraction, canonicalize_text, updating_goldens,
 };
-pub use hit::{hit_keys, HitKey};
+pub use hit::{hit_keys, mk_hit, HitKey};
 pub use index::{
     core_search_hit_keys, index_sample, json_hit_keys, reopen_indexer, response_hit_keys,
     searcher_from, HitKey as SurfaceHitKey, IndexedFixture,
@@ -34,5 +47,12 @@ pub use lang::{
 };
 #[cfg(feature = "lsp")]
 pub use lsp::{lsp_search_hit_keys, sample_backend};
+pub use mcp::{
+    assert_tool_error_shape, assert_tool_success, corrupt_index_db, index_tree, indexed_tree,
+    init_payload, initialized_notif, is_error, mcp_bin, ping, rpc_pipeline, rpc_session,
+    rpc_session_env, tool_body, tool_call, tool_text, tools_list, LiveSession,
+    TESTKIT_CLIENT_NAME,
+};
+pub use num::approx_eq;
 pub use scrub::Scrubber;
 pub use verdict::TestVerdict;

@@ -1,4 +1,22 @@
+use ast_sgrep_core::{search::SpanHitInput, HitKind, SearchHit};
 use serde_json::Value;
+
+/// Build a single-line [`SearchHit`] span: `line_end = line`, excerpt
+/// `excerpt {file}:{line}`, no symbol/language/byte-span. Pure constructor;
+/// callers mutate the returned hit for symbol/contributor/margin variants.
+pub fn mk_hit(kind: HitKind, file: &str, line: u32, score: f64) -> SearchHit {
+    SearchHit::span(SpanHitInput {
+        kind,
+        file: file.to_string(),
+        line_start: line,
+        line_end: line,
+        score,
+        excerpt: format!("excerpt {file}:{line}"),
+        symbol: None,
+        language: None,
+        byte_span: None,
+    })
+}
 /// Canonical cross-format hit identity: (file, line_start, kind, symbol, callee, caller).
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct HitKey {

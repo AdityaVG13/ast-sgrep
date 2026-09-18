@@ -279,9 +279,11 @@ dependencies = [
 name = "ast-sgrep-testkit"
 version = "2.0.0"
 dependencies = [
+ "ast-sgrep-codemode",
  "ast-sgrep-core",
  "ast-sgrep-lang",
  "ast-sgrep-lsp",
+ "ast-sgrep-plugins",
  "regex",
  "serde",
  "serde_json",

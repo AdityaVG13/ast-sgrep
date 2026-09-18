@@ -12,14 +12,20 @@ workspace = true
 
 # E17 (mct-e17-testkit-lsp-87kc): default Bill omits testkit→lsp. Enable
 # `lsp` only in crates whose tests call sample_backend / lsp_search_hit_keys.
+# `codemode` mirrors that gate for the CodeMode session fixtures: testkit→
+# codemode (+plugins for OutputFormat) only when a suite opts in. Default
+# Bill stays core + lang.
 [features]
 default = []
 lsp = ["dep:ast-sgrep-lsp"]
+codemode = ["dep:ast-sgrep-codemode", "dep:ast-sgrep-plugins"]
 
 [dependencies]
+ast-sgrep-codemode = { path = "../ast-sgrep-codemode", version = "2.0.0", optional = true }
 ast-sgrep-core = { path = "../ast-sgrep-core", version = "2.0.0" }
 ast-sgrep-lang = { path = "../ast-sgrep-lang", version = "2.0.0" }
 ast-sgrep-lsp = { path = "../ast-sgrep-lsp", version = "2.0.0", optional = true }
+ast-sgrep-plugins = { path = "../ast-sgrep-plugins", version = "2.0.0", optional = true }
 regex.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
