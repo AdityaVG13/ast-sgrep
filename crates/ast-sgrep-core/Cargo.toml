@@ -86,6 +86,9 @@ path = "../../tests/core/durable_recovery_pass2.rs"
 name = "durable_recovery_pass3"
 path = "../../tests/core/durable_recovery_pass3.rs"
 [[test]]
+name = "durable_recovery_pass4"
+path = "../../tests/core/durable_recovery_pass4.rs"
+[[test]]
 name = "e2e_smoke"
 path = "../../tests/core/e2e_smoke.rs"
 [[test]]
