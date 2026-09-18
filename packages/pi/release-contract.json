@@ -256,6 +256,7 @@
     "mainBranch": "Pack and test relevant artifacts; never publish a stable npm version.",
     "officialTag": "Every human-approved official version tag prepares and publishes all npm layers at the canonical version in platform, launcher, extension order.",
     "extensionTag": "A human-approved signed pi-v<version> tag publishes only pi-ast-sgrep at packages.extension.version, built from that tag's committed dist. Extension releases never carry binaries and never republish launcher or platform packages.",
+    "extensionLocalPublish": "The extension is the dogfooding lane: npm run publish:pi-extension may publish locally from a fully committed tree; it enforces contract version agreement, the launcherRange dependency, a rebuilt and committed dist, and the contract check before invoking npm publish. Provenance attestation and OIDC remain exclusive to the signed pi-v tag lane.",
     "selection": "Pi/npm update selects the extension at its own released version; the launcher and platform packages (CLI + Code Mode NAPI addon) resolve through the extension's declared launcherRange, keeping launcher<->platform lockstep.",
     "runtimeDownloads": false,
     "partialPublishRecovery": "Resume only when every live package at the version has registry integrity identical to the preserved release tarball; otherwise move forward with a new immutable version."

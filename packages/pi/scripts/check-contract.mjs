@@ -58,7 +58,7 @@ required(contract.surface, ['tools', 'commands', 'cliCommands', 'defaultSearchFo
 required(contract.config, ['precedenceHighToLow', 'developerBinaryOverrides', 'defaultRoot', 'rootPolicy'], 'config');
 required(contract.offlineSemantics, ['defaultBackend', 'localSemanticSearchAlwaysAvailable', 'firstUseModelDownload', 'credentialsRequired', 'lazyIndexOnFirstSearch', 'optionalBackends', 'policy'], 'offlineSemantics');
 required(contract.dataLifecycle, ['path', 'created', 'contents', 'gitignoreMutation', 'compatibleUpdate', 'incompatibleUpdate', 'failedUpdate', 'uninstall', 'deletion'], 'dataLifecycle');
-required(contract.updates, ['mainBranch', 'officialTag', 'selection', 'runtimeDownloads', 'partialPublishRecovery'], 'updates');
+required(contract.updates, ['mainBranch', 'officialTag', 'extensionTag', 'extensionLocalPublish', 'selection', 'runtimeDownloads', 'partialPublishRecovery'], 'updates');
 required(contract.registries, ['sharedAnchor', 'npm', 'cratesIo'], 'registries');
 required(contract.registries?.npm, ['requiresCratesIoPublication', 'availabilityObserved', 'policy'], 'registries.npm');
 required(contract.registries?.cratesIo, ['requiresNpmPublication', 'policy'], 'registries.cratesIo');
