@@ -1,466 +1,1349 @@
-//! Pass 3 (oracle-foundry, Mission 1): L3 snapshot + runner discipline for
-//! core search/index goldens and the mmap read-only boundary.
+//! Pass 3 (oracle-foundry, Mission 1 retry): L3 metamorphic / differential /
+//! adversarial oracles for ast-sgrep-core surface NOT covered by pass 1–2.
 //!
-//! Pass 1 pinned hand-computed values and pass 2 pinned mutant-killing
-//! discriminants; this pass pins the snapshot machinery itself: the update
-//! gate truth table, text canonicalization, compare-vs-update behavior,
-//! mismatch sidecars, JSON value (not text) comparison, chain-response
-//! canonical sorting, search-dump scrubbing, byte stability, and the
-//! repo-level runner pins (nextest profile, compare-only CI, layout).
+//! Pass 1–2 own: clamps, query-len, FTS escape/join, schema-mismatch, mmap,
+//! RRF/fusion scoring, ParsedQuery prefixes, path_scope parsing, limit consts.
+//! This pass owns: bounded stdin lines, capped reads, indexed rel paths,
+//! line splitting (CRLF), excerpt bounding, wire distrust, signal provenance,
+//! evidence merge (dedup), causal planner, finish gates, resolution tiers,
+//! lexicon support/expansion, SCIP degrade-never-fail, file filters, and
+//! intent classify/weights/routing plus raw-vs-normalized scoring agreement.
 //!
-//! Env discipline: tests that touch `ASGREP_UPDATE_GOLDENS` serialize on
-//! `ENV_LOCK` and always restore the previous value, so no test in this
-//! binary ever observes update mode by accident. Update-mode tests only write
-//! inside fresh tempdirs, never to real goldens.
+//! Every expectation is hand-computed from the documented contract.
+//! Failures assert discriminants (`is_err` / `None` / `matches!` / values),
+//! never message text. Deterministic only; no new deps.
 
-use ast_sgrep_core::chain::{ChainEdge, ChainNode, ChainResponse, EdgeLabel};
-use ast_sgrep_mmap::map_readonly;
-use ast_sgrep_testkit::{
-    assert_golden_at, assert_golden_json_at, canonicalize_chain_response, canonicalize_text,
-    updating_goldens, Scrubber,
+use ast_sgrep_core::gitignore::{
+    is_ignored, is_indexable_extension, should_skip_dir, should_skip_file, IgnoreMatcher,
+    DEFAULT_SKIP_DIR_NAMES, DOCUMENT_EXTENSIONS,
+};
+use ast_sgrep_core::index::{indexed_rel_path, split_content_lines};
+use ast_sgrep_core::intent::{
+    classify, default_weights, route_hits, weights_for, ChannelWeights, QueryIntent,
+};
+use ast_sgrep_core::io_bounds::{read_bounded_line, read_text_capped, BoundedLine};
+use ast_sgrep_core::lexicon::{
+    prose_terms, subtokens, Association, Lexicon, LexiconBuilder, Observation, MAX_PER_TERM,
+    MIN_SUPPORT,
+};
+use ast_sgrep_core::rank::{
+    best_symbol_score, best_symbol_score_normalized, coverage_symbol_score,
+    coverage_symbol_score_normalized, normalize_query_terms, rrf_score, score_caller,
+    score_caller_normalized, score_def, score_def_normalized, score_symbol, LEXICAL_RRF_SCALE,
+    RRF_K,
+};
+use ast_sgrep_core::resolution::{Resolution, SymbolId};
+use ast_sgrep_core::scip::{
+    load_scip_index, normalize_scip_path, scip_symbol_ident, ScipLoad, ScipOccurrence,
+    SCIP_CHANNEL, SCIP_ROLE_DEFINITION,
+};
+use ast_sgrep_core::search::passes::lexical::{lexical_pool_limit, LEXICAL_POOL_FLOOR};
+use ast_sgrep_core::search::{dedup_hits, finish_response, SnapshotStamp, SpanHitInput};
+use ast_sgrep_core::{
+    follow_ups_for_hit, format_hit_line, hit_why, margin_is_decisive, plan_suggested_next,
+    CriticNote, HitKind, HitSignal, ParsedQuery, SearchHit, SearchOptions, SearchResponse,
+    MAX_SEARCH_HIT_EXCERPT_BYTES,
 };
 use std::io::Write;
-use std::path::{Path, PathBuf};
-use std::sync::Mutex;
 
-static ENV_LOCK: Mutex<()> = Mutex::new(());
+// ---------------------------------------------------------------------------
+// helpers
+// ---------------------------------------------------------------------------
 
-/// Run `f` with `ASGREP_UPDATE_GOLDENS` set to `value` (`None` removes it),
-/// restoring the previous value afterwards. Serialized across this binary.
-fn with_update_env<R>(value: Option<&str>, f: impl FnOnce() -> R) -> R {
-    let _lock = ENV_LOCK.lock().expect("env lock");
-    let prev = std::env::var("ASGREP_UPDATE_GOLDENS").ok();
-    match value {
-        Some(v) => std::env::set_var("ASGREP_UPDATE_GOLDENS", v),
-        None => std::env::remove_var("ASGREP_UPDATE_GOLDENS"),
-    }
-    let out = f();
-    match prev {
-        Some(v) => std::env::set_var("ASGREP_UPDATE_GOLDENS", v),
-        None => std::env::remove_var("ASGREP_UPDATE_GOLDENS"),
-    }
-    out
-}
-
-/// Run `f`, returning the panic message when it panics and `None` otherwise.
-fn catch_message(f: impl FnOnce() -> ()) -> Option<String> {
-    std::panic::catch_unwind(std::panic::AssertUnwindSafe(f))
-        .err()
-        .map(|payload| {
-            if let Some(s) = payload.downcast_ref::<String>() {
-                s.clone()
-            } else if let Some(s) = payload.downcast_ref::<&str>() {
-                (*s).to_string()
-            } else {
-                String::from("<non-string panic payload>")
-            }
-        })
-}
-
-fn workspace() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
-}
-
-fn node(file: &str, symbol: Option<&str>, line: u32, depth: u32) -> ChainNode {
-    ChainNode {
+fn mk_hit(kind: HitKind, file: &str, line: u32, score: f64) -> SearchHit {
+    SearchHit::span(SpanHitInput {
+        kind,
         file: file.to_string(),
         line_start: line,
         line_end: line,
-        symbol: symbol.map(str::to_string),
+        score,
+        excerpt: format!("excerpt {file}:{line}"),
+        symbol: None,
         language: None,
-        score: 1.0,
-        depth,
+        byte_span: None,
+    })
+}
+
+fn hit_key(hit: &SearchHit) -> (String, u32, u32, u64, u64) {
+    (
+        hit.file.clone(),
+        hit.line_start,
+        hit.line_end,
+        hit.score.to_bits(),
+        hit.confidence.to_bits(),
+    )
+}
+
+fn sorted_contributors(hit: &SearchHit) -> Vec<&'static str> {
+    let mut kinds: Vec<&'static str> =
+        hit.contributors.iter().map(|kind| kind.as_str()).collect();
+    kinds.sort_unstable();
+    kinds
+}
+
+fn finish_options(root: &std::path::Path, limit: usize) -> SearchOptions {
+    SearchOptions {
+        root: root.to_path_buf(),
+        limit,
+        file_filter: None,
+        count_only: false,
+        use_rerank: false,
+        ..SearchOptions::default()
     }
 }
 
-fn edge(from: &str, to: &str, label: EdgeLabel, depth: u32) -> ChainEdge {
-    ChainEdge {
-        from_file: from.to_string(),
-        from_symbol: None,
-        to_file: to.to_string(),
-        to_symbol: None,
-        label,
-        depth,
+// ---------------------------------------------------------------------------
+// 1. stdin bounded lines: limit table, CRLF strip, drain, edges
+// ---------------------------------------------------------------------------
+
+#[test]
+fn stdin_bounded_line_table_crlf_and_edges() {
+    #[derive(Debug, PartialEq)]
+    enum Outcome {
+        Line(Vec<u8>),
+        TooLong,
     }
-}
-
-#[test]
-fn update_gate_truth_table_matches_sop() {
-    // Golden-files SOP: unset/0/false/off compare; 1/true/yes/on update.
-    for truthy in [
-        "1", "true", "TRUE", "True", "yes", "YES", "on", "ON", " 1 ", " on\n",
-    ] {
-        with_update_env(Some(truthy), || {
-            assert!(updating_goldens(), "truthy {truthy:?} must update");
-        });
+    fn drain(mut data: &[u8], limit: usize) -> Vec<Outcome> {
+        let mut out = Vec::new();
+        loop {
+            match read_bounded_line(&mut data, limit).expect("in-memory io") {
+                None => return out,
+                Some(BoundedLine::Line(bytes)) => out.push(Outcome::Line(bytes)),
+                Some(BoundedLine::TooLong) => out.push(Outcome::TooLong),
+            }
+        }
     }
-    with_update_env(None, || assert!(!updating_goldens(), "unset must compare"));
-    for falsy in [
-        "0",
-        "false",
-        "FALSE",
-        "off",
-        "OFF",
-        "",
-        "2",
-        "yes please",
-        "update",
-    ] {
-        with_update_env(Some(falsy), || {
-            assert!(!updating_goldens(), "falsy {falsy:?} must compare");
-        });
-    }
-}
 
-#[test]
-fn canonicalize_text_matches_hand_table() {
-    let cases: &[(&str, &str)] = &[
-        ("a\r\nb\r\n", "a\nb\n"),
-        ("a  \n b\t\n", "a\n b\n"),
-        ("a\n\n\n", "a\n"),
-        ("", ""),
-        ("\n\n", ""),
-        ("\r\n", ""),
-        ("x", "x\n"),
-        ("a\nb", "a\nb\n"),
-        ("a \r\n \n", "a\n"),
-        // Leading whitespace is content; trailing whitespace is not.
-        ("  indented\n\ttabbed  \n", "  indented\n\ttabbed\n"),
-    ];
-    for (input, expected) in cases {
-        assert_eq!(canonicalize_text(input), *expected, "input={input:?}");
-    }
-}
-
-#[test]
-fn golden_compare_ignores_canonical_differences() {
-    with_update_env(Some("0"), || {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let golden = dir.path().join("text.txt");
-        std::fs::write(&golden, "a  \r\nb\n").expect("write golden");
-        // Trailing whitespace + CRLF canonicalize away: must NOT panic.
-        assert_golden_at(&golden, "a\nb  \r\n");
-        // No sidecar on match.
-        assert!(!dir.path().join("text.txt.actual").exists());
-    });
-}
-
-#[test]
-fn golden_mismatch_writes_actual_and_panics() {
-    with_update_env(Some("0"), || {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let golden = dir.path().join("want.txt");
-        std::fs::write(&golden, "want\n").expect("write");
-        let message = catch_message(|| assert_golden_at(&golden, "got  \r\n"))
-            .expect("mismatch must panic in compare mode");
-        assert!(message.contains("golden mismatch"), "message: {message}");
-        assert!(message.contains("want.txt.actual"), "message: {message}");
-        assert!(
-            message.contains("ASGREP_UPDATE_GOLDENS=1"),
-            "message: {message}"
-        );
-        assert!(message.contains("--- golden"), "diff header: {message}");
-        let actual = std::fs::read_to_string(dir.path().join("want.txt.actual")).expect("sidecar");
-        assert_eq!(actual, "got\n", "sidecar holds canonicalized actual");
-        // The golden itself is untouched in compare mode.
-        assert_eq!(std::fs::read_to_string(&golden).expect("golden"), "want\n");
-    });
-}
-
-#[test]
-fn missing_golden_fails_loudly_without_creating_files() {
-    with_update_env(Some("0"), || {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let golden = dir.path().join("absent.txt");
-        let message = catch_message(|| assert_golden_at(&golden, "anything"))
-            .expect("missing golden must panic in compare mode");
-        assert!(message.contains("missing golden"), "message: {message}");
-        assert!(
-            message.contains("ASGREP_UPDATE_GOLDENS=1"),
-            "message: {message}"
-        );
-        assert!(!golden.exists(), "compare mode must not create goldens");
-        assert!(!dir.path().join("absent.txt.actual").exists());
-    });
-}
-
-#[test]
-fn update_mode_writes_nested_goldens_but_compare_never_does() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let golden = dir.path().join("sub").join("dir").join("new.txt");
-    with_update_env(Some("1"), || {
-        assert_golden_at(&golden, "fresh  \r\n");
-    });
+    // Empty input yields absence (None), not an empty line.
+    assert_eq!(drain(b"", 8), vec![]);
+    // Newline-terminated, unterminated, and bare-newline shapes.
+    assert_eq!(drain(b"abc\n", 8), vec![Outcome::Line(b"abc".to_vec())]);
+    assert_eq!(drain(b"abc", 8), vec![Outcome::Line(b"abc".to_vec())]);
+    assert_eq!(drain(b"\n", 8), vec![Outcome::Line(vec![])]);
+    // CRLF: the carriage return is framing, not payload.
+    assert_eq!(drain(b"a\r\n", 8), vec![Outcome::Line(b"a".to_vec())]);
+    // Unterminated CRLF keeps a lone CR (only newline-adjacent CR strips).
+    assert_eq!(drain(b"a\r", 8), vec![Outcome::Line(b"a\r".to_vec())]);
+    // Boundary: exactly-at-limit is a line; one byte over is TooLong.
+    assert_eq!(drain(b"abc\n", 3), vec![Outcome::Line(b"abc".to_vec())]);
+    assert_eq!(drain(b"abcd\n", 3), vec![Outcome::TooLong]);
+    // Zero limit: only the empty line fits.
+    assert_eq!(drain(b"\n", 0), vec![Outcome::Line(vec![])]);
+    assert_eq!(drain(b"a\n", 0), vec![Outcome::TooLong]);
+    // TooLong drains through the newline: the next record is the next line.
     assert_eq!(
-        std::fs::read_to_string(&golden).expect("written"),
-        "fresh\n"
+        drain(b"ok\ntoolonggggg\nok2", 4),
+        vec![
+            Outcome::Line(b"ok".to_vec()),
+            Outcome::TooLong,
+            Outcome::Line(b"ok2".to_vec()),
+        ]
     );
-    // Back in compare mode the same content matches and new content panics.
-    with_update_env(Some("0"), || {
-        assert_golden_at(&golden, "fresh\n");
-        let message = catch_message(|| assert_golden_at(&golden, "changed\n"))
-            .expect("changed content must panic");
-        assert!(message.contains("golden mismatch"), "message: {message}");
-    });
-    assert_eq!(std::fs::read_to_string(&golden).expect("golden"), "fresh\n");
+    // Multibyte payload passes through uninterpreted.
+    assert_eq!(
+        drain("é\n".as_bytes(), 8),
+        vec![Outcome::Line("é".as_bytes().to_vec())]
+    );
+    // Discriminant spot-check via matches!: not-None, not-Line.
+    let mut data: &[u8] = b"toolong\n";
+    assert!(matches!(
+        read_bounded_line(&mut data, 3).expect("io"),
+        Some(BoundedLine::TooLong)
+    ));
+    // Determinism under repetition.
+    assert_eq!(drain(b"a\nbb\nccc", 2), drain(b"a\nbb\nccc", 2));
 }
 
+// ---------------------------------------------------------------------------
+// 2. capped reads: exact boundary, fail-closed on binary/dir/oversize
+// ---------------------------------------------------------------------------
+
 #[test]
-fn golden_json_compares_values_not_text() {
-    with_update_env(Some("0"), || {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let golden = dir.path().join("v.json");
-        // Compact, reversed keys, no trailing newline: equal by Value.
-        std::fs::write(&golden, r#"{"b":2,"a":[1,2]}"#).expect("write");
-        assert_golden_json_at(&golden, &serde_json::json!({"a": [1, 2], "b": 2}));
-        assert!(!dir.path().join("v.json.actual").exists());
-        // A real value change fails and dumps pretty actual + newline.
-        let message = catch_message(|| {
-            assert_golden_json_at(&golden, &serde_json::json!({"a": [1, 2], "b": 3}))
-        })
-        .expect("value change must panic");
-        assert!(message.contains("golden mismatch"), "message: {message}");
-        let actual = std::fs::read_to_string(dir.path().join("v.json.actual")).expect("sidecar");
-        assert_eq!(
-            actual,
-            "{\n  \"a\": [\n    1,\n    2\n  ],\n  \"b\": 3\n}\n"
+fn capped_read_boundary_and_fail_closed() {
+    fn write_temp(bytes: &[u8]) -> tempfile::NamedTempFile {
+        let mut file = tempfile::NamedTempFile::new().expect("temp file");
+        file.write_all(bytes).expect("write");
+        file.flush().expect("flush");
+        file
+    }
+
+    let empty = write_temp(b"");
+    assert_eq!(read_text_capped(empty.path(), 64).expect("empty ok"), "");
+    let hello = write_temp(b"hello");
+    assert_eq!(
+        read_text_capped(hello.path(), 64).expect("small ok"),
+        "hello"
+    );
+    // Exact-cap content is accepted; one byte over is refused.
+    let at_cap = write_temp(&vec![b'a'; 8]);
+    assert_eq!(
+        read_text_capped(at_cap.path(), 8).expect("at-cap ok").len(),
+        8
+    );
+    let over_cap = write_temp(&vec![b'a'; 9]);
+    assert!(read_text_capped(over_cap.path(), 8).is_err());
+    // Invalid UTF-8 fails closed (binary), never lossy-decoded.
+    let binary = write_temp(&[0xff, 0xfe, 0x00, b'a']);
+    assert!(read_text_capped(binary.path(), 64).is_err());
+    // A directory is not a regular file.
+    let dir = tempfile::tempdir().expect("tempdir");
+    assert!(read_text_capped(dir.path(), 64).is_err());
+    // Unicode and CRLF survive byte-exact.
+    let uni = write_temp("hélloµ\r\nworld\n".as_bytes());
+    assert_eq!(
+        read_text_capped(uni.path(), 64).expect("unicode ok"),
+        "hélloµ\r\nworld\n"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 3. indexed rel paths: accept table, refuse table, determinism
+// ---------------------------------------------------------------------------
+
+#[test]
+fn indexed_rel_path_accepts_and_refuses() {
+    use std::path::Path;
+    assert_eq!(indexed_rel_path(Path::new("src/main.rs")).expect("ok"), "src/main.rs");
+    assert_eq!(indexed_rel_path(Path::new("a.rs")).expect("ok"), "a.rs");
+    assert_eq!(
+        indexed_rel_path(Path::new("src/µ.rs")).expect("unicode ok"),
+        "src/µ.rs"
+    );
+    for bad in ["", "/abs/x.rs", "../up.rs", "a/../b.rs", "a/../../b.rs", "a\0b.rs"] {
+        assert!(
+            indexed_rel_path(Path::new(bad)).is_err(),
+            "must refuse {bad:?}"
         );
-    });
+    }
+    // A backslash is an ordinary filename byte on Unix: accepted, unrewritten.
+    let backslash = indexed_rel_path(Path::new("a\\b.rs")).expect("backslash ok");
+    #[cfg(not(windows))]
+    assert_eq!(backslash, "a\\b.rs");
+    #[cfg(windows)]
+    assert_eq!(backslash, "a/b.rs");
+    // Determinism under repetition.
+    assert_eq!(
+        indexed_rel_path(Path::new("src/main.rs")).expect("ok"),
+        indexed_rel_path(Path::new("src/main.rs")).expect("ok")
+    );
 }
 
+// ---------------------------------------------------------------------------
+// 4. line splitting: EOL detection, 1-based numbering, round-trip
+// ---------------------------------------------------------------------------
+
 #[test]
-fn chain_canonicalization_sorts_seeds_nodes_edges() {
-    let response = ChainResponse {
-        query: "q".to_string(),
-        seeds: vec![node("b.rs", Some("b"), 1, 0), node("a.rs", Some("a"), 1, 0)],
-        nodes: vec![
-            node("a.rs", Some("b"), 9, 0),
-            node("a.rs", Some("a"), 9, 0),
-            node("a.rs", Some("a"), 3, 0),
-        ],
-        edges: vec![
-            edge("a.rs", "b.rs", EdgeLabel::Imports, 1),
-            edge("a.rs", "b.rs", EdgeLabel::Calls, 1),
-        ],
-        max_depth: 2,
-        decay_factor: 0.5,
-        node_count: 3,
-        edge_count: 2,
-    };
-    let sorted = canonicalize_chain_response(response);
-    let seed_files: Vec<&str> = sorted.seeds.iter().map(|n| n.file.as_str()).collect();
-    assert_eq!(seed_files, vec!["a.rs", "b.rs"]);
-    let node_keys: Vec<(&str, &str, u32)> = sorted
-        .nodes
-        .iter()
-        .map(|n| {
-            (
-                n.file.as_str(),
-                n.symbol.as_deref().unwrap_or(""),
-                n.line_start,
-            )
+fn split_lines_eol_numbering_and_roundtrip() {
+    // Empty content is one empty first line, LF by default.
+    let empty = split_content_lines("");
+    assert_eq!(empty.eol, "lf");
+    assert_eq!(empty.lines, vec![(1u32, String::new())]);
+    // LF shape: 1-based, no stripping beyond the newline itself.
+    let lf = split_content_lines("a\nb");
+    assert_eq!(lf.eol, "lf");
+    assert_eq!(lf.lines, vec![(1, "a".to_string()), (2, "b".to_string())]);
+    // Trailing newline yields a final empty line.
+    assert_eq!(
+        split_content_lines("a\n").lines,
+        vec![(1, "a".to_string()), (2, String::new())]
+    );
+    // CRLF: marker detected, carriage returns stripped from payload.
+    let crlf = split_content_lines("a\r\nb\r\n");
+    assert_eq!(crlf.eol, "crlf");
+    assert_eq!(
+        crlf.lines,
+        vec![
+            (1, "a".to_string()),
+            (2, "b".to_string()),
+            (3, String::new())
+        ]
+    );
+    // A lone CR is content, not framing: no CRLF marker, CR preserved.
+    let lone_cr = split_content_lines("a\rb");
+    assert_eq!(lone_cr.eol, "lf");
+    assert_eq!(lone_cr.lines, vec![(1, "a\rb".to_string())]);
+    // Unicode payload preserved verbatim.
+    let uni = split_content_lines("héllo\nµ");
+    assert_eq!(
+        uni.lines,
+        vec![(1, "héllo".to_string()), (2, "µ".to_string())]
+    );
+    // Metamorphic: LF content round-trips through join; line numbers are 1..=n.
+    for content in ["a\nb\n", "x", "l1\nl2\nl3"] {
+        let split = split_content_lines(content);
+        let joined = split
+            .lines
+            .iter()
+            .map(|(_, text)| text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_eq!(joined, content, "round-trip for {content:?}");
+        for (index, (number, _)) in split.lines.iter().enumerate() {
+            assert_eq!(*number, (index + 1) as u32);
+        }
+    }
+    // Differential: the `text::` re-export agrees with the canonical path.
+    let via_text = ast_sgrep_core::text::split_content_lines("a\r\nb");
+    let via_index = split_content_lines("a\r\nb");
+    assert_eq!(via_text.eol, via_index.eol);
+    assert_eq!(via_text.lines, via_index.lines);
+}
+
+// ---------------------------------------------------------------------------
+// 5. excerpt bounding: marker, idempotence, char-boundary safety
+// ---------------------------------------------------------------------------
+
+#[test]
+fn excerpt_bound_is_idempotent_and_marked() {
+    const MAX: usize = MAX_SEARCH_HIT_EXCERPT_BYTES;
+    assert_eq!(MAX, 65_536);
+    fn excerpt_of(excerpt: String) -> String {
+        SearchHit::span(SpanHitInput {
+            kind: HitKind::Asgrep,
+            file: "a.rs".to_string(),
+            line_start: 1,
+            line_end: 1,
+            score: 1.0,
+            excerpt,
+            symbol: None,
+            language: None,
+            byte_span: None,
         })
+        .excerpt
+    }
+
+    assert_eq!(excerpt_of(String::new()), "");
+    assert_eq!(excerpt_of("hello".to_string()), "hello");
+    // Exactly-at-cap passes through untouched: no marker, same length.
+    let at_cap = "a".repeat(MAX);
+    let bounded = excerpt_of(at_cap.clone());
+    assert_eq!(bounded.len(), MAX);
+    assert_eq!(bounded, at_cap);
+    // One byte over: truncated with the "\n…" marker, total stays within cap.
+    let bounded = excerpt_of("a".repeat(MAX + 1));
+    assert!(bounded.ends_with("\n…"), "marker required");
+    assert_eq!(bounded.len(), MAX);
+    // Idempotence: bounding an already-bounded excerpt is a fixpoint.
+    let huge = "b".repeat(MAX * 2);
+    let once = excerpt_of(huge);
+    let twice = excerpt_of(once.clone());
+    assert_eq!(once, twice);
+    // Char-boundary walk-back: "x" + é-run puts cut point 65532 mid-char,
+    // so the cut retreats one byte to 65531 and the total is 65535.
+    let mixed = format!("x{}", "é".repeat(MAX));
+    let bounded = excerpt_of(mixed);
+    assert_eq!(bounded.len(), MAX - 1);
+    assert!(bounded.ends_with("\n…"));
+    assert!(bounded.starts_with('x'));
+    assert!(bounded.is_char_boundary(bounded.len()));
+}
+
+// ---------------------------------------------------------------------------
+// 6. wire distrust: signal/contributors/margin/excerpt sanitized on decode
+// ---------------------------------------------------------------------------
+
+#[test]
+fn wire_hits_distrust_signal_margin_contributors() {
+    fn decode(value: serde_json::Value) -> SearchHit {
+        serde_json::from_value(value).expect("wire hit decodes")
+    }
+    fn wire(excerpt: &str, margin: f64) -> serde_json::Value {
+        serde_json::json!({
+            "kind": "asgrep",
+            "file": "a.rs",
+            "line_start": 1,
+            "line_end": 2,
+            "symbol": null,
+            "caller": null,
+            "callee": null,
+            "language": null,
+            "score": 3.0,
+            "signal": "semantic",
+            "contributors": ["embed", "def"],
+            "margin": margin,
+            "excerpt": excerpt,
+        })
+    }
+
+    let hit = decode(wire("short", -5.0));
+    // Signal is re-derived from kind; the wire claim is ignored.
+    assert_eq!(hit.signal, HitSignal::Exact);
+    // Contributors reset to the row's own kind.
+    assert_eq!(hit.contributors, vec![HitKind::Asgrep]);
+    // Negative margin sanitizes to zero; engine-derived fields stay empty.
+    assert_eq!(hit.margin, 0.0);
+    assert_eq!(hit.confidence, 0.0);
+    assert!(hit.resolution.is_none());
+    assert!(hit.embed_fields.is_none());
+    assert!(hit.critic.is_empty());
+    assert!(hit.byte_span.is_none());
+    // A finite non-negative margin survives decode.
+    assert_eq!(decode(wire("short", 2.5)).margin, 2.5);
+    // Differential: wire-ingress bounding agrees with constructor bounding.
+    let huge = "a".repeat(MAX_SEARCH_HIT_EXCERPT_BYTES + 4096);
+    let via_wire = decode(wire(&huge, 0.0)).excerpt;
+    let via_span = SearchHit::span(SpanHitInput {
+        kind: HitKind::Asgrep,
+        file: "a.rs".to_string(),
+        line_start: 1,
+        line_end: 2,
+        score: 3.0,
+        excerpt: huge,
+        symbol: None,
+        language: None,
+        byte_span: None,
+    })
+    .excerpt;
+    assert_eq!(via_wire, via_span);
+    assert!(via_wire.ends_with("\n…"));
+    // Fixpoint: serialize → decode is stable on the derived fields.
+    let round = decode(wire("short", 1.0));
+    let text = serde_json::to_string(&round).expect("serialize");
+    let again: SearchHit = serde_json::from_str(&text).expect("re-decode");
+    assert_eq!(again.signal, round.signal);
+    assert_eq!(again.contributors, round.contributors);
+    assert_eq!(again.margin, round.margin);
+    assert_eq!(again.excerpt, round.excerpt);
+}
+
+// ---------------------------------------------------------------------------
+// 7. signal ladder, evidence merge, confidence, why/format rendering
+// ---------------------------------------------------------------------------
+
+#[test]
+fn signal_ladder_confidence_and_dedup_merge() {
+    // Provenance mapping: exact text, structural kinds, semantic embed.
+    assert_eq!(HitKind::Asgrep.signal(), HitSignal::Exact);
+    assert_eq!(HitKind::Embed.signal(), HitSignal::Semantic);
+    for kind in [
+        HitKind::Def,
+        HitKind::Caller,
+        HitKind::Graph,
+        HitKind::Anchor,
+        HitKind::Import,
+        HitKind::Pattern,
+    ] {
+        assert_eq!(kind.signal(), HitSignal::Structural, "{kind:?}");
+    }
+    // Strength ladder is strict and hand-pinned.
+    assert_eq!(HitSignal::Semantic.rank(), 0);
+    assert_eq!(HitSignal::Structural.rank(), 1);
+    assert_eq!(HitSignal::Exact.rank(), 2);
+    assert_eq!(HitSignal::ALL.len(), 3);
+    assert_eq!(HitSignal::Exact.as_str(), "exact");
+    assert_eq!(HitSignal::Structural.as_str(), "structural");
+    assert_eq!(HitSignal::Semantic.as_str(), "semantic");
+    assert_eq!(HitKind::Asgrep.as_str(), "asgrep");
+    assert_eq!(HitKind::Def.as_str(), "def");
+    assert_eq!(HitKind::Embed.as_str(), "embed");
+
+    // Empty in, empty out.
+    assert!(dedup_hits(vec![]).is_empty());
+    // Singletons keep their base confidence: exact .75 / structural .60 / semantic .35.
+    assert_eq!(dedup_hits(vec![mk_hit(HitKind::Asgrep, "a.rs", 1, 5.0)])[0].confidence, 0.75);
+    assert_eq!(dedup_hits(vec![mk_hit(HitKind::Def, "a.rs", 1, 5.0)])[0].confidence, 0.60);
+    assert_eq!(dedup_hits(vec![mk_hit(HitKind::Embed, "a.rs", 1, 5.0)])[0].confidence, 0.35);
+
+    // Same location merges: best score wins regardless of input order.
+    let low = mk_hit(HitKind::Asgrep, "a.rs", 1, 1.0);
+    let high = mk_hit(HitKind::Def, "a.rs", 1, 5.0);
+    let merged = dedup_hits(vec![low.clone(), high.clone()]);
+    assert_eq!(merged.len(), 1);
+    assert_eq!(merged[0].score, 5.0);
+    assert_eq!(merged[0].kind, HitKind::Def);
+    let swapped = dedup_hits(vec![high, low]);
+    assert_eq!(swapped.len(), 1);
+    assert_eq!(swapped[0].score, 5.0);
+    assert_eq!(sorted_contributors(&merged[0]), sorted_contributors(&swapped[0]));
+    assert_eq!(sorted_contributors(&merged[0]), vec!["asgrep", "def"]);
+    // Agreement bonus: one extra contributor adds .08 to the exact base.
+    assert!((merged[0].confidence - 0.83).abs() < 1e-12);
+    // Bonus caps at three extra contributors: 4- and 8-way merges agree at .99.
+    let kinds = [
+        HitKind::Asgrep,
+        HitKind::Def,
+        HitKind::Caller,
+        HitKind::Graph,
+        HitKind::Anchor,
+        HitKind::Import,
+        HitKind::Pattern,
+        HitKind::Embed,
+    ];
+    let four = dedup_hits(
+        kinds[..4].iter().map(|kind| mk_hit(*kind, "a.rs", 1, 2.0)).collect(),
+    );
+    let eight = dedup_hits(
+        kinds.iter().map(|kind| mk_hit(*kind, "a.rs", 1, 2.0)).collect(),
+    );
+    assert_eq!(four.len(), 1);
+    assert_eq!(eight.len(), 1);
+    assert_eq!(four[0].confidence, eight[0].confidence);
+    assert!((four[0].confidence - 0.99).abs() < 1e-12);
+
+    // Identity: None is not Some("") — the pair must NOT merge.
+    let mut with_none = mk_hit(HitKind::Asgrep, "a.rs", 1, 1.0);
+    with_none.symbol = None;
+    let mut with_empty = mk_hit(HitKind::Asgrep, "a.rs", 1, 1.0);
+    with_empty.symbol = Some(String::new());
+    assert_eq!(dedup_hits(vec![with_none, with_empty]).len(), 2);
+    // Distinct lines never merge.
+    assert_eq!(
+        dedup_hits(vec![
+            mk_hit(HitKind::Asgrep, "a.rs", 1, 1.0),
+            mk_hit(HitKind::Asgrep, "a.rs", 2, 1.0),
+        ])
+        .len(),
+        2
+    );
+    // Idempotence: dedup is a fixpoint on keys and contributor sets.
+    let input = vec![
+        mk_hit(HitKind::Asgrep, "a.rs", 1, 1.0),
+        mk_hit(HitKind::Def, "a.rs", 1, 5.0),
+        mk_hit(HitKind::Embed, "b.rs", 3, 2.0),
+    ];
+    let once = dedup_hits(input);
+    let twice = dedup_hits(once.clone());
+    assert_eq!(
+        once.iter().map(hit_key).collect::<Vec<_>>(),
+        twice.iter().map(hit_key).collect::<Vec<_>>()
+    );
+    assert_eq!(
+        once.iter().map(sorted_contributors).collect::<Vec<_>>(),
+        twice.iter().map(sorted_contributors).collect::<Vec<_>>()
+    );
+
+    // hit_why renders contributor evidence in contributor order.
+    let mut merged_why = mk_hit(HitKind::Asgrep, "a.rs", 1, 1.0);
+    merged_why.contributors = vec![HitKind::Asgrep, HitKind::Def];
+    assert_eq!(hit_why(&merged_why), vec!["exact_text", "exact_symbol"]);
+    let mut caller = mk_hit(HitKind::Caller, "f.rs", 7, 1.0);
+    caller.caller = Some("main".to_string());
+    assert_eq!(hit_why(&caller), vec!["called_by:main"]);
+    let bare_caller = mk_hit(HitKind::Caller, "f.rs", 7, 1.0);
+    assert_eq!(hit_why(&bare_caller), vec!["caller_edge"]);
+    let mut noted = mk_hit(HitKind::Asgrep, "a.rs", 1, 1.0);
+    noted.critic = vec![CriticNote::ChannelAgreement];
+    assert_eq!(hit_why(&noted), vec!["exact_text", "critic:channel_agreement"]);
+
+    // format_hit_line: one hand-pinned prefix per kind.
+    assert_eq!(
+        format_hit_line(&mk_hit(HitKind::Asgrep, "f.rs", 1, 1.0))
+            .starts_with("ASGREP: "),
+        true
+    );
+    let mut def = mk_hit(HitKind::Def, "f.rs", 1, 1.0);
+    def.line_end = 2;
+    def.excerpt = "exc".to_string();
+    assert_eq!(format_hit_line(&def), "DEF: f.rs: ? span=1..2 | exc");
+    assert_eq!(format_hit_line(&caller), "CALLER: f.rs: main -> ?");
+    let mut graph = mk_hit(HitKind::Graph, "f.rs", 7, 1.0);
+    graph.caller = Some("a".to_string());
+    graph.callee = Some("b".to_string());
+    assert_eq!(format_hit_line(&graph), "GRAPH: f.rs: a calls b");
+    assert!(format_hit_line(&mk_hit(HitKind::Anchor, "f.rs", 1, 1.0)).starts_with("ANCHOR: "));
+    assert!(format_hit_line(&mk_hit(HitKind::Pattern, "f.rs", 1, 1.0)).starts_with("PATTERN: "));
+    assert!(format_hit_line(&mk_hit(HitKind::Import, "f.rs", 1, 1.0)).starts_with("IMPORT: "));
+    let mut embed = mk_hit(HitKind::Embed, "f.rs", 1, 1.0);
+    embed.symbol = Some("sym".to_string());
+    embed.excerpt = "e".to_string();
+    assert_eq!(format_hit_line(&embed), "EMBED: f.rs:1-1: sym | e");
+    // Long excerpts truncate to 120 chars plus "..." on excerpt-carrying rows.
+    let mut long = mk_hit(HitKind::Def, "f.rs", 1, 1.0);
+    long.excerpt = "a".repeat(200);
+    let line = format_hit_line(&long);
+    assert!(line.ends_with("..."));
+    assert_eq!(line.rsplit('|').next().expect("tail").trim().len(), 123);
+    let mut long_uni = mk_hit(HitKind::Def, "f.rs", 1, 1.0);
+    long_uni.excerpt = "é".repeat(200);
+    assert!(format_hit_line(&long_uni).ends_with("..."));
+}
+
+// ---------------------------------------------------------------------------
+// 8. causal planner: decisive boundary, follow-ups, suggestion shape, pool floor
+// ---------------------------------------------------------------------------
+
+#[test]
+fn planner_decisive_followups_and_pool_floor() {
+    fn hit_with(symbol: Option<&str>, contributors: Vec<HitKind>, score: f64, margin: f64) -> SearchHit {
+        let mut hit = mk_hit(HitKind::Asgrep, "a.rs", 1, score);
+        hit.symbol = symbol.map(str::to_string);
+        hit.contributors = contributors;
+        hit.margin = margin;
+        hit
+    }
+    // Decisive boundary is 10% of score: at-ratio true, below false, zero never.
+    assert!(margin_is_decisive(&hit_with(None, vec![HitKind::Asgrep], 10.0, 1.0)));
+    assert!(margin_is_decisive(&hit_with(None, vec![HitKind::Asgrep], 10.0, 2.0)));
+    assert!(!margin_is_decisive(&hit_with(None, vec![HitKind::Asgrep], 10.0, 0.9)));
+    assert!(!margin_is_decisive(&hit_with(None, vec![HitKind::Asgrep], 10.0, 0.0)));
+    assert!(!margin_is_decisive(&hit_with(None, vec![HitKind::Asgrep], 0.0, 0.0)));
+    assert!(!margin_is_decisive(&hit_with(None, vec![HitKind::Asgrep], -5.0, 1.0)));
+
+    // No symbol anywhere: no drill-down exists.
+    assert!(follow_ups_for_hit("foo", &hit_with(None, vec![HitKind::Asgrep], 5.0, 0.0)).is_empty());
+    // Settled evidence (def + usage + decisive): the plan is "done".
+    let settled = hit_with(Some("foo"), vec![HitKind::Def, HitKind::Caller], 10.0, 1.0);
+    assert!(follow_ups_for_hit("foo", &settled).is_empty());
+    // Missing definition and usage: both drill-downs, in defs/callers order.
+    let bare = hit_with(Some("foo"), vec![HitKind::Asgrep], 5.0, 0.0);
+    assert_eq!(follow_ups_for_hit("foo", &bare), vec!["defs:foo", "callers:foo"]);
+    // Definition present but usage missing: only the usage drill-down.
+    let def_only = hit_with(Some("foo"), vec![HitKind::Def], 10.0, 1.0);
+    assert_eq!(follow_ups_for_hit("foo", &def_only), vec!["callers:foo"]);
+    // Complete but indecisive: confirm with exact text, not a re-run.
+    let tied = hit_with(Some("foo"), vec![HitKind::Def, HitKind::Caller], 5.0, 0.0);
+    assert_eq!(follow_ups_for_hit("foo", &tied), vec!["literal:foo"]);
+    // Identifier collision drills into the query's compound identifier, not the fragment.
+    let mut collision = hit_with(Some("refresh"), vec![HitKind::Def], 5.0, 0.0);
+    collision.critic = vec![CriticNote::IdentifierCollision];
+    assert_eq!(
+        follow_ups_for_hit("auth_refresh", &collision),
+        vec!["defs:auth_refresh", "callers:auth_refresh"]
+    );
+    // Determinism under repetition.
+    assert_eq!(follow_ups_for_hit("foo", &bare), follow_ups_for_hit("foo", &bare));
+
+    fn response(query: &str, hits: Vec<SearchHit>) -> SearchResponse {
+        SearchResponse {
+            query: query.to_string(),
+            limit: 10,
+            hits,
+            counts: vec![],
+            read_bytes_estimate: 0,
+            returned_excerpt_bytes: 0,
+            prevented_read_bytes: 0,
+            snapshot: SnapshotStamp::default(),
+            query_expansions: vec![],
+        }
+    }
+    // Empty shortlist: semantic probe first, agent-format command last.
+    assert_eq!(
+        plan_suggested_next(&response("foo bar", vec![])),
+        vec![
+            "asgrep semantic 'foo bar'",
+            "asgrep --json --format agent 'foo bar'",
+        ]
+    );
+    // Top hit with gaps and no semantic evidence anywhere: full causal chain.
+    assert_eq!(
+        plan_suggested_next(&response("q", vec![bare])) ,
+        vec![
+            "asgrep 'defs:foo'",
+            "asgrep 'callers:foo'",
+            "asgrep semantic 'q'",
+            "asgrep --json --format agent 'q'",
+        ]
+    );
+    // Settled top hit plus semantic evidence: only the agent command remains.
+    let settled_response = response(
+        "q",
+        vec![
+            hit_with(Some("foo"), vec![HitKind::Def, HitKind::Caller], 10.0, 1.0),
+            mk_hit(HitKind::Embed, "b.rs", 1, 0.5),
+        ],
+    );
+    assert_eq!(
+        plan_suggested_next(&settled_response),
+        vec!["asgrep --json --format agent 'q'"]
+    );
+    // Shell quoting escapes a single quote without interpolation.
+    assert_eq!(
+        plan_suggested_next(&response("it's", vec![]))[0],
+        "asgrep semantic 'it'\\''s'"
+    );
+
+    // Lexical pool: floor 100, identity above, monotone non-decreasing.
+    assert_eq!(LEXICAL_POOL_FLOOR, 100);
+    for (limit, expected) in [(0, 100), (5, 100), (99, 100), (100, 100), (500, 500)] {
+        let options = SearchOptions { limit, ..SearchOptions::default() };
+        assert_eq!(lexical_pool_limit(&options), expected, "limit={limit}");
+    }
+    let mut previous = 0;
+    for limit in [0, 1, 50, 99, 100, 101, 1000] {
+        let options = SearchOptions { limit, ..SearchOptions::default() };
+        let pool = lexical_pool_limit(&options);
+        assert!(pool >= previous, "monotone at {limit}");
+        previous = pool;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 9. finish gates: limits, determinism, count-only, dedup, filters, bytes
+// ---------------------------------------------------------------------------
+
+#[test]
+fn finish_response_gates_limits_and_filters() {
+    fn scored(file: &str, score: f64, excerpt: &str) -> SearchHit {
+        let mut hit = mk_hit(HitKind::Asgrep, file, 1, score);
+        hit.excerpt = excerpt.to_string();
+        hit
+    }
+    let dir = tempfile::tempdir().expect("tempdir");
+    let parsed = ParsedQuery::parse("defs:needle");
+    let hits = || {
+        vec![
+            scored("s1.rs", 5.0, "e1"),
+            scored("s2.rs", 4.0, "e2"),
+            scored("s3.rs", 3.0, "e3"),
+            scored("s4.rs", 2.0, "e4"),
+            scored("s5.rs", 1.0, "e5"),
+        ]
+    };
+
+    // Result count is exactly min(limit, available); echo of query and limit.
+    for limit in 0..=7usize {
+        let response = finish_response(&parsed, &finish_options(dir.path(), limit), hits(), true);
+        assert_eq!(response.hits.len(), limit.min(5), "limit={limit}");
+        assert_eq!(response.query, "defs:needle");
+        assert_eq!(response.limit, limit);
+    }
+    // Score order decides rank; excerpt bytes are exactly the survivors' sum.
+    let two = finish_response(&parsed, &finish_options(dir.path(), 2), hits(), true);
+    assert_eq!(
+        two.hits.iter().map(|hit| hit.file.as_str()).collect::<Vec<_>>(),
+        vec!["s1.rs", "s2.rs"]
+    );
+    assert_eq!(two.returned_excerpt_bytes, 4);
+    // Absent files contribute zero estimated read bytes; prevented saturates.
+    assert_eq!(two.read_bytes_estimate, 0);
+    assert_eq!(two.prevented_read_bytes, 0);
+    // Determinism under repetition: identical keys in identical order.
+    let again = finish_response(&parsed, &finish_options(dir.path(), 2), hits(), true);
+    assert_eq!(
+        two.hits.iter().map(hit_key).collect::<Vec<_>>(),
+        again.hits.iter().map(hit_key).collect::<Vec<_>>()
+    );
+
+    // Count-only: no hits, per-file counts sorted by file, summing to the input.
+    let mut counted = finish_options(dir.path(), 10);
+    counted.count_only = true;
+    let counts = finish_response(&parsed, &counted, hits(), true);
+    assert!(counts.hits.is_empty());
+    assert_eq!(
+        counts.counts,
+        vec![
+            ("s1.rs".to_string(), 1),
+            ("s2.rs".to_string(), 1),
+            ("s3.rs".to_string(), 1),
+            ("s4.rs".to_string(), 1),
+            ("s5.rs".to_string(), 1),
+        ]
+    );
+    assert_eq!(counts.counts.iter().map(|(_, n)| n).sum::<u32>(), 5);
+
+    // The dedup flag collapses same-location rows; false preserves them.
+    let dupes = vec![
+        scored("d.rs", 5.0, "x"),
+        scored("d.rs", 4.0, "x"),
+        scored("e.rs", 1.0, "y"),
+    ];
+    let with_dedup = finish_response(&parsed, &finish_options(dir.path(), 10), dupes.clone(), true);
+    let without_dedup = finish_response(&parsed, &finish_options(dir.path(), 10), dupes, false);
+    assert_eq!(with_dedup.hits.len(), 2);
+    assert_eq!(without_dedup.hits.len(), 3);
+
+    // file_filter keeps matches even when the top score is filtered out.
+    let mixed = vec![
+        scored("src/a.rs", 3.0, "x"),
+        scored("src/b.rs", 2.0, "x"),
+        scored("other/c.rs", 5.0, "x"),
+    ];
+    let mut filtered = finish_options(dir.path(), 10);
+    filtered.file_filter = Some("src/**".to_string());
+    let response = finish_response(&parsed, &filtered, mixed.clone(), true);
+    assert_eq!(
+        response.hits.iter().map(|hit| hit.file.as_str()).collect::<Vec<_>>(),
+        vec!["src/a.rs", "src/b.rs"]
+    );
+    // Legacy compat: an invalid (empty / control-char) filter is ignored, never fatal.
+    for bad in ["", "a\nb"] {
+        let mut options = finish_options(dir.path(), 10);
+        options.file_filter = Some(bad.to_string());
+        let response = finish_response(&parsed, &options, mixed.clone(), true);
+        assert_eq!(response.hits.len(), 3, "filter {bad:?} must be ignored");
+    }
+    // Differential: an `in:` scope applies the same glob as an explicit filter.
+    let scoped = ParsedQuery::parse("needle in:src");
+    let via_scope = finish_response(&scoped, &finish_options(dir.path(), 10), mixed, true);
+    assert_eq!(via_scope.query, "needle");
+    assert_eq!(
+        via_scope.hits.iter().map(|hit| hit.file.as_str()).collect::<Vec<_>>(),
+        vec!["src/a.rs", "src/b.rs"]
+    );
+
+    // Hybrid def promotion: the definition is moved into the head at head-1.
+    let hybrid = ParsedQuery::parse("needle");
+    let hybrid_hits = || {
+        let mut def = scored("d.rs", 1.0, "e");
+        def.kind = HitKind::Def;
+        def.symbol = Some("needle".to_string());
+        def.signal = HitKind::Def.signal();
+        def.contributors = vec![HitKind::Def];
+        vec![
+            scored("t1.rs", 5.0, "e1"),
+            scored("t2.rs", 4.0, "e2"),
+            scored("t3.rs", 3.0, "e3"),
+            scored("t4.rs", 2.0, "e4"),
+            def,
+        ]
+    };
+    let promoted = finish_response(&hybrid, &finish_options(dir.path(), 2), hybrid_hits(), true);
+    assert_eq!(
+        promoted.hits.iter().map(|hit| hit.file.as_str()).collect::<Vec<_>>(),
+        vec!["t1.rs", "d.rs"]
+    );
+    let promoted = finish_response(&hybrid, &finish_options(dir.path(), 3), hybrid_hits(), true);
+    assert_eq!(
+        promoted.hits.iter().map(|hit| hit.file.as_str()).collect::<Vec<_>>(),
+        vec!["t1.rs", "t2.rs", "d.rs"]
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 10. resolution tiers: order, precision, upgrade algebra, candidate table
+// ---------------------------------------------------------------------------
+
+#[test]
+fn resolution_tiers_upgrade_and_candidates() {
+    // Strength rank is a strict hand-pinned ladder, strongest first.
+    let ladder = [
+        (Resolution::CompilerExact, 0u8),
+        (Resolution::ImportResolved, 1),
+        (Resolution::FileLocalUnique, 2),
+        (Resolution::ScipOccurrence, 3),
+        (Resolution::RepositoryUnique, 4),
+        (Resolution::NameOnly, 5),
+        (Resolution::Ambiguous { candidates: vec![] }, 6),
+    ];
+    for (tier, rank) in &ladder {
+        assert_eq!(tier.rank(), *rank, "{tier:?}");
+    }
+    for pair in ladder.windows(2) {
+        assert!(pair[0].1 < pair[1].1);
+    }
+    // Precision is exactly the top three tiers; occurrence evidence is not precise.
+    for (tier, _) in &ladder {
+        let precise = matches!(
+            tier,
+            Resolution::CompilerExact | Resolution::ImportResolved | Resolution::FileLocalUnique
+        );
+        assert_eq!(tier.is_precise(), precise, "{tier:?}");
+    }
+    // Wire names are stable.
+    assert_eq!(Resolution::CompilerExact.as_str(), "compiler_exact");
+    assert_eq!(Resolution::ScipOccurrence.as_str(), "scip_occurrence");
+    assert_eq!(Resolution::ImportResolved.as_str(), "import_resolved");
+    assert_eq!(Resolution::FileLocalUnique.as_str(), "file_local_unique");
+    assert_eq!(Resolution::RepositoryUnique.as_str(), "repository_unique");
+    assert_eq!(Resolution::NameOnly.as_str(), "name_only");
+    assert_eq!(
+        Resolution::Ambiguous { candidates: vec![] }.as_str(),
+        "ambiguous"
+    );
+    // Upgrade algebra: idempotent, commutative, keeps the stronger tier.
+    let tiers: Vec<Resolution> = ladder.into_iter().map(|(tier, _)| tier).collect();
+    for left in &tiers {
+        assert_eq!(left.clone().upgrade(left.clone()), *left);
+        for right in &tiers {
+            let forward = left.clone().upgrade(right.clone());
+            let backward = right.clone().upgrade(left.clone());
+            assert_eq!(forward, backward, "{left:?} vs {right:?}");
+            assert_eq!(forward.rank(), left.rank().min(right.rank()));
+        }
+    }
+    // Candidate table: file-unique beats repo-unique beats name-only;
+    // genuine ambiguity needs at least two collected candidates, capped at four.
+    let id = |module: &str, name: &str| SymbolId::new(module, name);
+    assert_eq!(
+        Resolution::from_candidates(1, 9, Vec::<SymbolId>::new()),
+        Resolution::FileLocalUnique
+    );
+    assert_eq!(
+        Resolution::from_candidates(2, 1, Vec::<SymbolId>::new()),
+        Resolution::RepositoryUnique
+    );
+    assert_eq!(
+        Resolution::from_candidates(0, 0, Vec::<SymbolId>::new()),
+        Resolution::NameOnly
+    );
+    assert_eq!(
+        Resolution::from_candidates(5, 9, vec![id("m", "a")]),
+        Resolution::NameOnly
+    );
+    assert_eq!(
+        Resolution::from_candidates(5, 9, Vec::<SymbolId>::new()),
+        Resolution::NameOnly
+    );
+    let three: Vec<SymbolId> = ["a", "b", "c"].iter().map(|n| id("m", n)).collect();
+    assert!(matches!(
+        Resolution::from_candidates(5, 9, three),
+        Resolution::Ambiguous { candidates } if candidates.len() == 3
+    ));
+    let six: Vec<SymbolId> = ["a", "b", "c", "d", "e", "f"].iter().map(|n| id("m", n)).collect();
+    assert!(matches!(
+        Resolution::from_candidates(2, 9, six),
+        Resolution::Ambiguous { candidates } if candidates.len() == 4
+    ));
+    // Describe: precise edges state a call; guesses say "may call" with the tier.
+    let precise = ast_sgrep_core::resolution::ResolvedEdge {
+        caller: id("m", "a"),
+        callee: id("m", "b"),
+        resolution: Resolution::CompilerExact,
+    };
+    assert_eq!(precise.describe(), ("m::a calls m::b".to_string(), true));
+    let guess = ast_sgrep_core::resolution::ResolvedEdge {
+        caller: id("m", "a"),
+        callee: id("m", "b"),
+        resolution: Resolution::NameOnly,
+    };
+    let (label, is_precise) = guess.describe();
+    assert!(!is_precise);
+    assert!(label.contains("may call"), "{label}");
+    assert!(label.contains("name_only"), "{label}");
+    // Qualified identity joins module, owners outermost-first, and name.
+    assert_eq!(id("m", "a").qualified(), "m::a");
+    assert_eq!(id("m", "a").with_owner("O").qualified(), "m::O::a");
+    assert_eq!(
+        id("m", "a").with_owner("A").with_owner("B").qualified(),
+        "m::A::B::a"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 11. lexicon: support gate, PPMI values, expansion stability
+// ---------------------------------------------------------------------------
+
+#[test]
+fn lexicon_support_gate_expand_stable() {
+    assert_eq!(MIN_SUPPORT, 3);
+    assert_eq!(MAX_PER_TERM, 8);
+    // Subtoken splitter: camel + snake agree, stops and short tokens drop.
+    assert_eq!(subtokens("refreshToken"), vec!["refresh", "token"]);
+    assert_eq!(subtokens("refresh_token"), vec!["refresh", "token"]);
+    assert_eq!(subtokens("HTTPRequest"), vec!["httprequest"]);
+    assert!(subtokens("the").is_empty());
+    assert!(subtokens("ab").is_empty());
+    assert!(subtokens("").is_empty());
+    assert!(subtokens("a::b").is_empty());
+    assert_eq!(subtokens("foo foo"), vec!["foo"]);
+    // Prose terms lowercase, split on punctuation, and drop stops.
+    assert_eq!(prose_terms("Refresh the token!"), vec!["refresh", "token"]);
+    assert!(prose_terms("").is_empty());
+    assert!(prose_terms("   ").is_empty());
+
+    fn observation(terms: &[&str]) -> Observation {
+        Observation {
+            identifier_terms: terms.iter().map(|term| term.to_string()).collect(),
+            prose_terms: vec![],
+        }
+    }
+    // Below MIN_SUPPORT observations, finish emits nothing (fail-closed).
+    let mut thin = LexiconBuilder::new();
+    thin.observe(&observation(&["alpha", "beta"]));
+    thin.observe(&observation(&["alpha", "beta"]));
+    assert!(thin.finish().is_empty());
+    // A lone term is not evidence of any pairing.
+    let mut lone = LexiconBuilder::new();
+    lone.observe(&observation(&["solo"]));
+    assert!(lone.finish().is_empty());
+
+    // Balanced corpus: joint 1/2 against expected 1/4, so PPMI is ln 2.
+    let mut builder = LexiconBuilder::new();
+    for _ in 0..3 {
+        builder.observe(&observation(&["alpha", "beta"]));
+        builder.observe(&observation(&["gamma", "delta"]));
+    }
+    let associations = builder.finish();
+    assert_eq!(associations.len(), 4);
+    for association in &associations {
+        assert_eq!(association.support, 3);
+        assert!((association.ppmi - 2.0f64.ln()).abs() < 1e-12, "{association:?}");
+    }
+    // Emission order is deterministic: sorted by (term, related).
+    let pairs: Vec<(&str, &str)> = associations
+        .iter()
+        .map(|a| (a.term.as_str(), a.related.as_str()))
         .collect();
     assert_eq!(
-        node_keys,
-        vec![("a.rs", "a", 3), ("a.rs", "a", 9), ("a.rs", "b", 9)]
+        pairs,
+        vec![
+            ("alpha", "beta"),
+            ("beta", "alpha"),
+            ("delta", "gamma"),
+            ("gamma", "delta"),
+        ]
     );
-    let labels: Vec<EdgeLabel> = sorted.edges.iter().map(|e| e.label).collect();
-    // Edge key stringifies the label: "Calls" < "Imports".
-    assert_eq!(labels, vec![EdgeLabel::Calls, EdgeLabel::Imports]);
-    // Canonicalization only reorders; counts and query survive.
-    assert_eq!(sorted.query, "q");
-    assert_eq!((sorted.node_count, sorted.edge_count), (3, 2));
-    // Fixpoint: already-sorted input serializes identically.
-    let again = canonicalize_chain_response(sorted.clone());
+    assert_eq!(builder.finish(), associations);
+
+    // Reverse lookup is symmetric: both directions resolve with equal weight.
+    let lexicon = Lexicon::from_associations(associations);
+    assert_eq!(lexicon.related("alpha").len(), 1);
+    assert_eq!(lexicon.related("alpha")[0].related, "beta");
+    assert_eq!(lexicon.related("beta")[0].related, "alpha");
     assert_eq!(
-        serde_json::to_value(&again).expect("json"),
-        serde_json::to_value(&sorted).expect("json")
+        lexicon.related("alpha")[0].ppmi,
+        lexicon.related("beta")[0].ppmi
     );
+
+    // Expansion is prefix-stable under max_added growth (sorted, then truncated).
+    let weighted = Lexicon::from_associations(vec![
+        Association { term: "a".into(), related: "b".into(), ppmi: 3.0, support: 5 },
+        Association { term: "a".into(), related: "c".into(), ppmi: 2.0, support: 5 },
+        Association { term: "a".into(), related: "d".into(), ppmi: 1.0, support: 5 },
+    ]);
+    let related: Vec<&str> = weighted.related("a").iter().map(|a| a.related.as_str()).collect();
+    assert_eq!(related, vec!["b", "c", "d"]);
+    let two: Vec<String> = weighted.expand(&["a".to_string()], 2).iter().map(|a| a.related.clone()).collect();
+    let three: Vec<String> = weighted.expand(&["a".to_string()], 3).iter().map(|a| a.related.clone()).collect();
+    assert_eq!(two, vec!["b", "c"]);
+    assert_eq!(three, vec!["b", "c", "d"]);
+    assert_eq!(&three[..two.len()], two.as_slice());
+    assert!(weighted.expand(&["a".to_string()], 0).is_empty());
+
+    // Template words never widen discovery, even when the lexicon knows them.
+    let templated = Lexicon::from_associations(vec![Association {
+        term: "how".into(),
+        related: "zzz".into(),
+        ppmi: 9.0,
+        support: 9,
+    }]);
+    assert!(templated.expand(&["how".to_string()], 5).is_empty());
+    // The gate is one-sided: other terms may still expand TO a template word.
+    assert_eq!(templated.expand(&["zzz".to_string()], 5).len(), 1);
+
+    // Per-term storage truncates to the strongest MAX_PER_TERM associations.
+    let many: Vec<Association> = (0..10)
+        .map(|i| Association {
+            term: "hub".into(),
+            related: format!("leaf{i}"),
+            ppmi: i as f64,
+            support: 4,
+        })
+        .collect();
+    let capped = Lexicon::from_associations(many);
+    assert_eq!(capped.related("hub").len(), MAX_PER_TERM);
+    assert!(capped.related("hub").iter().all(|a| a.ppmi >= 2.0));
 }
 
-#[test]
-fn search_dump_scrub_removes_paths_but_keeps_scores() {
-    let root = Path::new("/tmp/asgrep-work/tree");
-    let scrubbed = Scrubber::search_dump(root).apply(
-        r#"{"file": "/tmp/asgrep-work/tree/src/main.rs", "home": "/Users/adana", "score": 9.5, "rank": 3, "id": "01234567-89ab-cdef-0123-456789abcdef"}"#,
-    );
-    assert!(
-        scrubbed.contains("<ROOT>/src/main.rs"),
-        "scrubbed: {scrubbed}"
-    );
-    assert!(
-        !scrubbed.contains("/tmp/asgrep-work"),
-        "scrubbed: {scrubbed}"
-    );
-    assert!(scrubbed.contains("<HOME>"), "scrubbed: {scrubbed}");
-    assert!(!scrubbed.contains("/Users/adana"), "scrubbed: {scrubbed}");
-    assert!(scrubbed.contains("<UUID>"), "scrubbed: {scrubbed}");
-    // Scores and ranks are product signal: never scrubbed.
-    assert!(scrubbed.contains("9.5"), "scrubbed: {scrubbed}");
-    assert!(scrubbed.contains("\"rank\": 3"), "scrubbed: {scrubbed}");
-}
+// ---------------------------------------------------------------------------
+// 12. SCIP: degrades never fail; path/ident/occurrence tables
+// ---------------------------------------------------------------------------
 
 #[test]
-fn mmap_and_serde_views_are_byte_stable() {
-    // Mmap: two mappings of the same file agree byte-exact (pass 1 pinned
-    // the content; this pins the stability a snapshot needs).
-    let bytes: &[u8] = b"snapshot-stable \x00 bytes \xc3\xa9\n";
-    let mut file = tempfile::NamedTempFile::new().expect("temp file");
-    file.write_all(bytes).expect("write");
-    file.flush().expect("flush");
-    let first = map_readonly(file.as_file()).expect("map");
-    let second = map_readonly(file.as_file()).expect("remap");
-    assert_eq!(&first[..], &second[..]);
-    assert_eq!(&first[..], bytes);
-    // Serde: the same chain value serializes identically on repeat.
-    let response = ChainResponse {
-        query: "stable".to_string(),
-        seeds: vec![node("a.rs", None, 1, 0)],
-        nodes: vec![],
-        edges: vec![],
-        max_depth: 2,
-        decay_factor: 0.5,
-        node_count: 1,
-        edge_count: 0,
-    };
-    let a = serde_json::to_string(&response).expect("json");
-    let b = serde_json::to_string(&response).expect("json");
-    assert_eq!(a, b);
-    assert!(a.contains("\"query\":\"stable\""), "json: {a}");
-}
+fn scip_degrades_never_fails_and_ident_table() {
+    assert_eq!(SCIP_CHANNEL, "scip");
+    assert_eq!(SCIP_ROLE_DEFINITION, 1);
+    fn write_temp(bytes: &[u8]) -> tempfile::NamedTempFile {
+        let mut file = tempfile::NamedTempFile::new().expect("temp file");
+        file.write_all(bytes).expect("write");
+        file.flush().expect("flush");
+        file
+    }
 
-#[test]
-fn nextest_profile_forbids_retries_and_forced_green() {
-    let path = workspace().join(".config/nextest.toml");
-    let raw = std::fs::read_to_string(&path)
-        .unwrap_or_else(|err| panic!("missing {}: {err}", path.display()));
-    assert!(raw.contains("[profile.ci]"), "needs a ci profile:\n{raw}");
-    assert!(raw.contains("fail-fast = false"), "no fail-fast:\n{raw}");
-    assert!(raw.contains("retries = 0"), "no retries:\n{raw}");
-    assert!(raw.contains("failure-output"), "raw exits:\n{raw}");
-    assert!(raw.contains("success-output"), "quiet success:\n{raw}");
-    for line in raw.lines() {
-        let code = line.split('#').next().unwrap_or("").trim();
-        if let Some(value) = code.strip_prefix("retries") {
-            assert_eq!(value.trim(), "= 0", "retries must stay 0: {line}");
+    // Every hostile input degrades with a reason; none of them errors.
+    let missing = load_scip_index(std::path::Path::new("/nonexistent-dir-7f3a/index.scip.json"));
+    assert!(!missing.is_loaded());
+    assert!(missing.degraded_reason().is_some());
+    for bytes in [b"".as_slice(), b"  \n\t ", b"not json at all", b"{oops", b"\xff\xfe{binary}"] {
+        let file = write_temp(bytes);
+        let loaded = load_scip_index(file.path());
+        assert!(!loaded.is_loaded(), "must degrade for {bytes:?}");
+        assert!(loaded.degraded_reason().is_some());
+    }
+    // Minimal valid JSON loads with zero documents.
+    let minimal = write_temp(b"{}");
+    assert!(matches!(load_scip_index(minimal.path()), ScipLoad::Loaded(index) if index.documents.is_empty()));
+    // A document round-trips its relative path.
+    let doc = write_temp(br#"{"documents":[{"relativePath":"a.rs","occurrences":[]}]}"#);
+    match load_scip_index(doc.path()) {
+        ScipLoad::Loaded(index) => {
+            assert_eq!(index.documents.len(), 1);
+            assert_eq!(index.documents[0].relative_path, "a.rs");
         }
-        assert!(
-            !code.contains("force-pass") && !code.contains("force_pass"),
-            "no forced green: {line}"
+        ScipLoad::Degraded { .. } => panic!("valid SCIP JSON must load"),
+    }
+
+    // Path normalization: backslashes to slashes, leading ./ stripped.
+    assert_eq!(normalize_scip_path("a\\b\\c"), "a/b/c");
+    assert_eq!(normalize_scip_path("./a"), "a");
+    assert_eq!(normalize_scip_path("a/b"), "a/b");
+    // Symbol ident: last identifier, call/parens/qualifiers stripped.
+    assert_eq!(
+        scip_symbol_ident("rust+crate+auth+refresh()."),
+        Some("refresh".to_string())
+    );
+    assert_eq!(scip_symbol_ident("a::b"), Some("b".to_string()));
+    assert_eq!(scip_symbol_ident("foo"), Some("foo".to_string()));
+    assert_eq!(scip_symbol_ident(""), None);
+    assert_eq!(scip_symbol_ident("   "), None);
+    assert_eq!(scip_symbol_ident("..."), None);
+    // Definition bit: only bit 0 marks a definition.
+    for (roles, expected) in [(0u32, false), (1, true), (2, false), (3, true)] {
+        let occurrence = ScipOccurrence { symbol: "s".into(), symbol_roles: roles, range: vec![0] };
+        assert_eq!(occurrence.is_definition(), expected, "roles={roles}");
+    }
+    // Ranges are 0-based; indexed lines are 1-based with saturating add.
+    let at_zero = ScipOccurrence { symbol: "s".into(), symbol_roles: 0, range: vec![0] };
+    assert_eq!(at_zero.start_line_1based(), Some(1));
+    let at_41 = ScipOccurrence { symbol: "s".into(), symbol_roles: 0, range: vec![41, 2, 41, 9] };
+    assert_eq!(at_41.start_line_1based(), Some(42));
+    let unranged = ScipOccurrence { symbol: "s".into(), symbol_roles: 0, range: vec![] };
+    assert_eq!(unranged.start_line_1based(), None);
+    let saturated = ScipOccurrence { symbol: "s".into(), symbol_roles: 0, range: vec![u32::MAX] };
+    assert_eq!(saturated.start_line_1based(), Some(u32::MAX));
+}
+
+// ---------------------------------------------------------------------------
+// 13. file filters: skip tables, indexable extensions, ignore + negation
+// ---------------------------------------------------------------------------
+
+#[test]
+fn file_filters_skip_hidden_foreign_and_negate() {
+    use std::path::Path;
+    // Directory skip set is exactly the VCS + tool pair.
+    assert_eq!(DEFAULT_SKIP_DIR_NAMES.len(), 2);
+    assert!(DEFAULT_SKIP_DIR_NAMES.contains(&".git"));
+    assert!(DEFAULT_SKIP_DIR_NAMES.contains(&".asgrep"));
+    assert!(should_skip_dir(Path::new(".git")));
+    assert!(should_skip_dir(Path::new("a/.git")));
+    assert!(should_skip_dir(Path::new(".asgrep")));
+    assert!(!should_skip_dir(Path::new("src")));
+    assert!(!should_skip_dir(Path::new(".")));
+
+    // File skip: hidden files and foreign/missing extensions go; source+docs stay.
+    assert!(should_skip_file(Path::new(".hidden")));
+    assert!(should_skip_file(Path::new("x.xyz")));
+    assert!(should_skip_file(Path::new("Makefile")));
+    assert!(should_skip_file(Path::new("a.")));
+    assert!(!should_skip_file(Path::new("a.rs")));
+    assert!(!should_skip_file(Path::new("README.md")));
+    // Extension matching is case-insensitive on both source and document sets.
+    assert!(!should_skip_file(Path::new("a.RS")));
+    assert!(!should_skip_file(Path::new("data.JSON")));
+    assert!(is_indexable_extension("rs"));
+    assert!(is_indexable_extension("RS"));
+    assert!(is_indexable_extension("py"));
+    assert!(is_indexable_extension("md"));
+    assert!(is_indexable_extension("MD"));
+    assert!(!is_indexable_extension("xyz"));
+    assert!(!is_indexable_extension(""));
+    assert_eq!(DOCUMENT_EXTENSIONS.len(), 6);
+    for ext in ["toml", "md", "txt", "json", "yaml", "yml"] {
+        assert!(DOCUMENT_EXTENSIONS.contains(&ext), "{ext}");
+    }
+
+    // Default rules ignore VCS/tool directory CONTENTS; a same-named FILE is kept.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let matcher = IgnoreMatcher::new(dir.path());
+    assert!(matcher.is_ignored(Path::new(".git/config")));
+    assert!(matcher.is_ignored(Path::new(".asgrep/x")));
+    assert!(!matcher.is_ignored(Path::new(".git")));
+    assert!(!matcher.is_ignored(Path::new("src/main.rs")));
+    // Determinism under repetition (rule chains are cached per prefix).
+    assert_eq!(
+        matcher.is_ignored(Path::new(".git/config")),
+        matcher.is_ignored(Path::new(".git/config"))
+    );
+
+    // .gitignore: later negation re-includes; comments and blanks are inert.
+    std::fs::write(
+        dir.path().join(".gitignore"),
+        "*.log\n!important.log\n# comment\n\n",
+    )
+    .expect("gitignore");
+    let matcher = IgnoreMatcher::new(dir.path());
+    assert!(matcher.is_ignored(Path::new("a.log")));
+    assert!(matcher.is_ignored(Path::new("sub/a.log")));
+    assert!(!matcher.is_ignored(Path::new("important.log")));
+    assert!(!matcher.is_ignored(Path::new("src/main.rs")));
+    // Differential: the free function agrees with the matcher on every probe.
+    for probe in ["a.log", "sub/a.log", "important.log", "src/main.rs", ".git/config"] {
+        assert_eq!(
+            is_ignored(dir.path(), Path::new(probe)),
+            matcher.is_ignored(Path::new(probe)),
+            "{probe}"
         );
     }
 }
 
-#[test]
-fn ci_is_compare_only_without_snapshot_accept() {
-    let path = workspace().join(".github/workflows/ci.yml");
-    let raw = std::fs::read_to_string(&path).expect("ci.yml");
-    assert!(
-        raw.contains("ASGREP_UPDATE_GOLDENS"),
-        "ci must pin the golden gate"
-    );
-    let mut pinned = 0;
-    for line in raw.lines() {
-        if line.trim().starts_with('#') {
-            continue;
-        }
-        if line.contains("ASGREP_UPDATE_GOLDENS") {
-            assert!(line.contains("\"0\""), "compare-only pin required: {line}");
-            pinned += 1;
-        }
-        let lower = line.to_ascii_lowercase();
-        assert!(
-            !line.contains("INSTA_UPDATE"),
-            "forbidden insta gate: {line}"
-        );
-        // The custom gate is ASGREP_-prefixed; a bare UPDATE_GOLDENS is rejected.
-        let stripped = line.replace("ASGREP_UPDATE_GOLDENS", "");
-        assert!(
-            !stripped.contains("UPDATE_GOLDENS"),
-            "unprefixed golden gate: {line}"
-        );
-        assert!(
-            !lower.contains("insta accept") && !lower.contains("--accept"),
-            "no snapshot accept: {line}"
-        );
-        assert!(
-            !line.contains("INSTA_FORCE_PASS")
-                && !lower.contains("force-pass")
-                && !lower.contains("force_pass"),
-            "no forced green: {line}"
-        );
-        assert!(
-            !lower.contains("--retries") && !lower.contains("rerun-failed"),
-            "no retry-away: {line}"
-        );
-    }
-    assert!(
-        pinned >= 2,
-        "expected golden pins on test jobs, found {pinned}"
-    );
-}
+// ---------------------------------------------------------------------------
+// 14. intent: classify table, weight tables, routing, scoring-path agreement
+// ---------------------------------------------------------------------------
 
 #[test]
-fn workspace_layout_pins_and_gitignore() {
-    let root = workspace();
-    assert!(root.join("Cargo.toml").is_file());
-    // Crate-local test dirs and tests/unit are forbidden (mirror of the
-    // layout half of the CI gate; the inline-#[test] half is CI-owned).
-    let mut members = 0;
-    for entry in std::fs::read_dir(root.join("crates")).expect("crates dir") {
-        let entry = entry.expect("entry");
-        if !entry.file_type().expect("type").is_dir() {
-            continue;
-        }
-        members += 1;
-        assert!(
-            !entry.path().join("tests").exists(),
-            "crate-local tests dir forbidden: {}",
-            entry.path().display()
-        );
+fn intent_classify_weights_routing_and_scoring() {
+    // Mode prefixes route to fixed intents.
+    assert_eq!(classify(&ParsedQuery::parse("defs:foo")), QueryIntent::Symbol);
+    assert_eq!(classify(&ParsedQuery::parse("callers:Bar")), QueryIntent::Symbol);
+    assert_eq!(classify(&ParsedQuery::parse("imports:os")), QueryIntent::Symbol);
+    assert_eq!(classify(&ParsedQuery::parse("pattern:$A")), QueryIntent::Structural);
+    assert_eq!(classify(&ParsedQuery::parse("literal:Foo")), QueryIntent::Literal);
+    assert_eq!(classify(&ParsedQuery::parse("word:Foo")), QueryIntent::Literal);
+    assert_eq!(classify(&ParsedQuery::parse("regex:A+")), QueryIntent::Literal);
+    // Hybrid heuristics: quoted → literal; markers → structural; idents → symbol.
+    assert_eq!(classify(&ParsedQuery::parse("\"exact phrase\"")), QueryIntent::Literal);
+    assert_eq!(classify(&ParsedQuery::parse("foo {")), QueryIntent::Structural);
+    assert_eq!(classify(&ParsedQuery::parse("a => b")), QueryIntent::Structural);
+    assert_eq!(classify(&ParsedQuery::parse("foo_bar")), QueryIntent::Symbol);
+    assert_eq!(classify(&ParsedQuery::parse("Foo")), QueryIntent::Symbol);
+    assert_eq!(classify(&ParsedQuery::parse("café_au_lait")), QueryIntent::Symbol);
+    // Longer prose and empty queries fall through to conceptual.
+    assert_eq!(classify(&ParsedQuery::parse("hello world foo")), QueryIntent::Conceptual);
+    assert_eq!(classify(&ParsedQuery::parse("héllo wörld foo bar")), QueryIntent::Conceptual);
+    assert_eq!(classify(&ParsedQuery::parse("")), QueryIntent::Conceptual);
+    assert_eq!(classify(&ParsedQuery::parse("   ")), QueryIntent::Conceptual);
+    assert_eq!(QueryIntent::Literal.as_str(), "literal");
+    assert_eq!(QueryIntent::Symbol.as_str(), "symbol");
+    assert_eq!(QueryIntent::Structural.as_str(), "structural");
+    assert_eq!(QueryIntent::Conceptual.as_str(), "conceptual");
+    // Determinism under repetition.
+    for raw in ["defs:foo", "foo {", "\"q\"", "hello world foo", ""] {
+        assert_eq!(classify(&ParsedQuery::parse(raw)), classify(&ParsedQuery::parse(raw)));
     }
-    assert!(
-        members >= 11,
-        "expected 11 workspace crates, found {members}"
-    );
-    assert!(!root.join("tests/unit").exists(), "tests/unit is forbidden");
-    let gitignore = std::fs::read_to_string(root.join(".gitignore")).expect(".gitignore");
-    assert!(
-        gitignore.lines().any(|line| line.trim() == "*.actual"),
-        "gitignore must cover *.actual"
-    );
-}
 
-#[test]
-fn pi_launcher_and_validation_ledgers_present() {
-    let root = workspace();
-    let launcher = root.join("tests/pi/launcher");
-    for name in [
-        "asgrep-search-mode-matrix.test.mjs",
-        "binary-env-alias.test.mjs",
-        "extension-package.test.mjs",
-        "npm-native-packages.test.mjs",
-        "package-security.test.mjs",
-        "skill-security.test.mjs",
+    // Weight tables are hand-pinned; literal/structural use the uniform default.
+    assert_eq!(
+        default_weights(QueryIntent::Symbol),
+        ChannelWeights {
+            lexical: 0.8,
+            def: 2.0,
+            caller: 1.0,
+            graph: 0.7,
+            anchor: 1.0,
+            embed: 0.7,
+            pattern: 0.25,
+            import: 0.8,
+        }
+    );
+    assert_eq!(
+        default_weights(QueryIntent::Conceptual),
+        ChannelWeights {
+            lexical: 0.75,
+            def: 1.35,
+            caller: 0.45,
+            graph: 0.25,
+            anchor: 0.7,
+            embed: 1.45,
+            pattern: 0.25,
+            import: 0.5,
+        }
+    );
+    assert_eq!(default_weights(QueryIntent::Literal), ChannelWeights::default());
+    assert_eq!(default_weights(QueryIntent::Structural), ChannelWeights::default());
+    // Without an override spec, weights_for is exactly the default table.
+    std::env::remove_var("ASGREP_INTENT_WEIGHTS");
+    for intent in [
+        QueryIntent::Literal,
+        QueryIntent::Symbol,
+        QueryIntent::Structural,
+        QueryIntent::Conceptual,
     ] {
-        assert!(launcher.join(name).is_file(), "missing pi launcher {name}");
+        assert_eq!(weights_for(intent), default_weights(intent), "{intent:?}");
     }
-    for ledger in [
-        "golden-files.md",
-        "machine-json-schema.md",
-        "negative-ledgers.md",
-        "neural-trust.md",
-        "semantic-ivf-mmap.md",
-        "compact-output.md",
+
+    // Routing normalizes by the channel ceiling: an at-ceiling hit maps to 1.0.
+    let ceiling = rrf_score(0, RRF_K) * LEXICAL_RRF_SCALE;
+    let parsed = ParsedQuery::parse("needle");
+    let mut at_ceiling = vec![mk_hit(HitKind::Asgrep, "a.rs", 1, ceiling)];
+    route_hits(&parsed, &mut at_ceiling);
+    assert_eq!(at_ceiling[0].score, 1.0);
+    // Oversize scores clamp to 1.0 rather than escaping the unit range.
+    let mut huge = vec![mk_hit(HitKind::Asgrep, "a.rs", 1, 1e18)];
+    route_hits(&parsed, &mut huge);
+    assert_eq!(huge[0].score, 1.0);
+    // Empty-term queries zero TEXT channels but still scale non-text ones.
+    let empty = ParsedQuery::parse("");
+    let mut text = vec![mk_hit(HitKind::Asgrep, "a.rs", 1, 5.0)];
+    route_hits(&empty, &mut text);
+    assert_eq!(text[0].score, 0.0);
+    let mut structural_text = vec![mk_hit(HitKind::Def, "a.rs", 1, 5.0)];
+    route_hits(&empty, &mut structural_text);
+    assert_eq!(structural_text[0].score, 0.0);
+    let mut semantic = vec![mk_hit(HitKind::Embed, "a.rs", 1, 2.0)];
+    route_hits(&empty, &mut semantic);
+    assert_eq!(semantic[0].score, 0.5);
+    // Differential: a def hit scored by the scoring path normalizes to exactly 1.0.
+    let defs = ParsedQuery::parse("defs:foo");
+    let def_score = score_def(&defs.terms, "foo");
+    assert_eq!(def_score, 13.0);
+    let mut def_hit = vec![SearchHit::span(SpanHitInput {
+        kind: HitKind::Def,
+        file: "a.rs".to_string(),
+        line_start: 1,
+        line_end: 2,
+        score: def_score,
+        excerpt: "fn foo()".to_string(),
+        symbol: Some("foo".to_string()),
+        language: None,
+        byte_span: None,
+    })];
+    route_hits(&defs, &mut def_hit);
+    assert_eq!(def_hit[0].score, 1.0);
+    // Routing is a contraction: a second pass never raises any score.
+    for mut hits in [
+        vec![mk_hit(HitKind::Asgrep, "a.rs", 1, ceiling)],
+        vec![mk_hit(HitKind::Asgrep, "a.rs", 1, 5.0)],
+        vec![mk_hit(HitKind::Embed, "a.rs", 1, 2.0)],
     ] {
-        assert!(
-            root.join("docs/validation").join(ledger).is_file(),
-            "missing ledger {ledger}"
-        );
+        route_hits(&parsed, &mut hits);
+        let first = hits[0].score;
+        route_hits(&parsed, &mut hits);
+        assert!(hits[0].score <= first, "second pass must not raise");
     }
-    assert!(
-        root.join("docs/validation/audits").is_dir(),
-        "missing audits dir"
-    );
+    // Routing is deterministic for identical inputs.
+    let mut left = vec![mk_hit(HitKind::Asgrep, "a.rs", 1, 7.0)];
+    let mut right = vec![mk_hit(HitKind::Asgrep, "a.rs", 1, 7.0)];
+    route_hits(&parsed, &mut left);
+    route_hits(&parsed, &mut right);
+    assert_eq!(left[0].score, right[0].score);
+
+    // Scoring tables: exact def/caller scale from coverage; zero stays zero.
+    assert_eq!(score_def(&["foo".to_string()], "foo"), 13.0);
+    assert_eq!(score_caller(&["foo".to_string()], "foo"), 11.5);
+    assert_eq!(score_def(&[], "foo"), 0.0);
+    assert_eq!(score_def(&["xyz".to_string()], "foo"), 0.0);
+    assert_eq!(score_caller(&[], "x"), 0.0);
+    assert_eq!(score_symbol("é", "é"), 5.0);
+    assert_eq!(score_symbol("É", "é"), 5.0);
+    assert_eq!(score_symbol("é", "éx"), 0.0);
+    // Normalization is idempotent and lowercases across scripts.
+    let raw = ["Foo".to_string(), "BAR_baz".to_string(), "É".to_string()];
+    let normalized = normalize_query_terms(&raw);
+    assert_eq!(normalized, vec!["foo", "bar_baz", "é"]);
+    assert_eq!(normalize_query_terms(&normalized), normalized);
+    // Differential: raw and pre-normalized scoring paths agree exactly.
+    let term_sets: Vec<Vec<String>> = vec![
+        vec![],
+        vec!["foo".to_string()],
+        vec!["Foo".to_string()],
+        vec!["a".to_string()],
+        vec!["École".to_string()],
+        vec!["foo_bar".to_string()],
+        vec!["foo".to_string(), "bar".to_string()],
+    ];
+    for terms in &term_sets {
+        let pre = normalize_query_terms(terms);
+        for symbol in ["foo", "Foo", "foobar", "xyz", "école", "a", "foo_bar"] {
+            assert_eq!(score_def(terms, symbol), score_def_normalized(&pre, symbol));
+            assert_eq!(score_caller(terms, symbol), score_caller_normalized(&pre, symbol));
+            assert_eq!(best_symbol_score(terms, symbol), best_symbol_score_normalized(&pre, symbol));
+            assert_eq!(
+                coverage_symbol_score(terms, symbol),
+                coverage_symbol_score_normalized(&pre, symbol)
+            );
+            // Best (max) can never exceed coverage (sum of non-negative parts).
+            assert!(best_symbol_score(terms, symbol) <= coverage_symbol_score(terms, symbol));
+        }
+    }
+    // Coverage is monotone non-decreasing as matching terms accumulate.
+    let mut previous = 0.0;
+    for end in 1..=4 {
+        let terms: Vec<String> = ["foo", "bar", "xyz", "foo"][..end]
+            .iter()
+            .map(|term| term.to_string())
+            .collect();
+        let coverage = coverage_symbol_score(&terms, "foo bar");
+        assert!(coverage >= previous, "monotone at {end}");
+        previous = coverage;
+    }
 }
