@@ -43,3 +43,7 @@ path = "../../tests/codemode/ffi_bilateral_pass2.rs"
 [[test]]
 name = "ffi_bilateral_pass3"
 path = "../../tests/codemode/ffi_bilateral_pass3.rs"
+
+[[test]]
+name = "ffi_bilateral_pass4"
+path = "../../tests/codemode/ffi_bilateral_pass4.rs"
