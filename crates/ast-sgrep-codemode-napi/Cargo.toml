@@ -15,7 +15,7 @@ publish = false
 unsafe_code = "allow"
 
 [lib]
-crate-type = ["cdylib"]
+crate-type = ["cdylib", "rlib"]
 name = "ast_sgrep_codemode_napi"
 
 [dependencies]
@@ -27,3 +27,11 @@ serde_json = { workspace = true }
 
 [build-dependencies]
 napi-build = "2"
+
+[dev-dependencies]
+tempfile.workspace = true
+
+# Integration tests live in the repo-root tests/ tree.
+[[test]]
+name = "ffi_bilateral_pass1"
+path = "../../tests/codemode/ffi_bilateral_pass1.rs"
