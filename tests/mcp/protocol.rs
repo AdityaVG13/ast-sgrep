@@ -143,19 +143,79 @@ fn initialize_negotiates_the_requested_protocol_revision() {
         "legacy clients must not be forced onto a newer revision"
     );
 
-    let current = rpc(json!({
+    let previous = rpc(json!({
         "jsonrpc":"2.0","id":2,"method":"initialize",
         "params": initialize_params("2025-11-25")
     }));
-    assert_eq!(current["result"]["protocolVersion"], "2025-11-25");
+    assert_eq!(previous["result"]["protocolVersion"], "2025-11-25");
 
-    // The discovery-based revision is unsupported by this handshake server and
-    // must not be echoed back merely because the client requested it.
-    let unknown = rpc(json!({
+    let current = rpc(json!({
         "jsonrpc":"2.0","id":3,"method":"initialize",
         "params": initialize_params("2026-07-28")
     }));
-    assert_eq!(unknown["result"]["protocolVersion"], "2025-11-25");
+    assert_eq!(current["result"]["protocolVersion"], "2026-07-28");
+
+    // An unrecognized revision falls back to the server's current revision
+    // and must not be echoed back merely because the client requested it.
+    let unknown = rpc(json!({
+        "jsonrpc":"2.0","id":4,"method":"initialize",
+        "params": initialize_params("2030-01-01")
+    }));
+    assert_eq!(unknown["result"]["protocolVersion"], "2026-07-28");
+}
+
+/// 2026-07-28: `server/discover` advertises the supported revisions, and
+/// list/call results carry `resultType: complete` plus the SEP-2549 cache
+/// fields. Legacy sessions keep their old wire shape (no `resultType`).
+#[test]
+fn current_revision_serves_discovery_and_cacheable_results() {
+    let init = json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":initialize_params("2026-07-28")});
+    let initialized = json!({"jsonrpc":"2.0","method":"notifications/initialized"});
+    let discover = json!({"jsonrpc":"2.0","id":2,"method":"server/discover","params":{"_meta":{
+        "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+        "io.modelcontextprotocol/clientCapabilities": {}}}});
+    let list = json!({"jsonrpc":"2.0","id":3,"method":"tools/list","params":{}});
+    let call = json!({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"index_status","arguments":{}}});
+    let responses = rpc_session(vec![init, initialized, discover, list, call], None);
+    assert_eq!(responses.len(), 4, "{responses:#?}");
+    assert_eq!(
+        responses[0]["result"]["protocolVersion"], "2026-07-28",
+        "{:#}",
+        responses[0]
+    );
+
+    let discovery = &responses[1]["result"];
+    assert!(
+        discovery.is_object(),
+        "server/discover failed: {:#}",
+        responses[1]
+    );
+    let versions: Vec<_> = discovery["supportedVersions"]
+        .as_array()
+        .expect("supportedVersions")
+        .iter()
+        .map(|v| v.as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(versions, vec!["2024-11-05", "2025-11-25", "2026-07-28"]);
+    assert!(discovery["capabilities"]["tools"].is_object());
+    assert_eq!(discovery["resultType"], "complete");
+
+    let listed = &responses[2]["result"];
+    assert_eq!(listed["resultType"], "complete", "{listed:#}");
+    assert!(
+        listed["ttlMs"].as_u64().unwrap_or(0) > 0,
+        "tools/list needs a ttlMs freshness hint: {listed:#}"
+    );
+    assert_eq!(listed["cacheScope"], "public");
+    assert_eq!(listed["tools"].as_array().unwrap().len(), 8);
+    assert_eq!(responses[3]["result"]["resultType"], "complete");
+
+    // A legacy session keeps the pre-2026-07-28 wire shape.
+    let legacy = rpc(json!({"jsonrpc":"2.0","id":5,"method":"tools/list","params":{}}));
+    assert!(
+        legacy["result"].get("resultType").is_none(),
+        "legacy tools/list must omit resultType: {legacy:#}"
+    );
 }
 
 /// r2lu: every search tool declares an outputSchema, and results carry typed

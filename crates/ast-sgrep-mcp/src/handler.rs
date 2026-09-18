@@ -7,8 +7,8 @@ use super::McpServer;
 use anyhow::Context;
 use rmcp::handler::server::ServerHandler;
 use rmcp::model::{
-    CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, Implementation,
-    ListToolsResult, ProtocolVersion, ServerCapabilities, ServerInfo,
+    CacheScope, CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock,
+    Implementation, ListToolsResult, ProtocolVersion, ResultType, ServerCapabilities, ServerInfo,
 };
 use rmcp::service::{RequestContext, RoleServer, ServerInitializeError};
 use rmcp::{ErrorData as McpError, ServiceExt};
@@ -17,8 +17,14 @@ use std::borrow::Cow;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-const SUPPORTED_PROTOCOL_VERSIONS: [ProtocolVersion; 2] =
-    [ProtocolVersion::V_2024_11_05, ProtocolVersion::V_2025_11_25];
+const SUPPORTED_PROTOCOL_VERSIONS: [ProtocolVersion; 3] = [
+    ProtocolVersion::V_2024_11_05,
+    ProtocolVersion::V_2025_11_25,
+    ProtocolVersion::V_2026_07_28,
+];
+/// Freshness hint for `tools/list` (SEP-2549). The catalog is static per
+/// build under the byte-stability contract, so an hour is conservative.
+const TOOLS_LIST_TTL_MS: u64 = 3_600_000;
 
 #[derive(Clone)]
 pub(crate) struct McpService {
@@ -59,7 +65,7 @@ impl ServerHandler for McpService {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::new("ast-sgrep", env!("CARGO_PKG_VERSION")))
-            .with_protocol_version(ProtocolVersion::V_2025_11_25)
+            .with_protocol_version(ProtocolVersion::V_2026_07_28)
     }
 
     fn supported_protocol_versions(&self) -> Cow<'static, [ProtocolVersion]> {
@@ -71,8 +77,15 @@ impl ServerHandler for McpService {
         _request: Option<rmcp::model::PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, McpError> {
-        serde_json::from_value(self.inner.tools_catalog())
-            .map_err(|error| McpError::internal_error(error.to_string(), None))
+        let mut result: ListToolsResult = serde_json::from_value(self.inner.tools_catalog())
+            .map_err(|error| McpError::internal_error(error.to_string(), None))?;
+        // 2026-07-28 requires `resultType` plus the SEP-2549 cache fields on
+        // list results. The catalog carries no per-client data, so public
+        // scope is honest; rmcp strips `resultType` for older peers.
+        result.result_type = Some(ResultType::COMPLETE);
+        result.ttl_ms = Some(TOOLS_LIST_TTL_MS);
+        result.cache_scope = Some(CacheScope::Public);
+        Ok(result)
     }
 
     async fn call_tool(

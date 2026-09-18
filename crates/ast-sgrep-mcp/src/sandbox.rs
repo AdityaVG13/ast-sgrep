@@ -1,6 +1,6 @@
 //! Sandboxed project-root file reads for MCP `code_read`.
-//! Extracted from `lib.rs` (EXP-004). Leaf path/IO helpers only;
-//! JSON-RPC dispatch, `McpServer`, and `SearcherCache` stay in `lib`.
+//! Extracted from `lib.rs`. Leaf path/IO helpers only; JSON-RPC dispatch,
+//! `McpServer`, and `SearcherCache` stay in `lib`.
 
 use anyhow::Context;
 use serde_json::{json, Value};

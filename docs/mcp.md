@@ -179,11 +179,13 @@ Every search tool declares an `outputSchema`, and `tools/call` returns typed
 parses results directly instead of reverse-engineering the compact envelope.
 The two always agree: the text is the same JSON, minified.
 
-`initialize` negotiates. A client asking for `2024-11-05` keeps it, a client
-asking for `2025-11-25` gets it, and an unrecognized revision is answered with
-the server's current revision. The server deliberately does not advertise
-`2026-07-28`: that revision replaced this handshake lifecycle with
-`server/discover`, which this stdio server does not implement.
+`initialize` negotiates. A client asking for `2024-11-05` or `2025-11-25`
+keeps it, a client asking for `2026-07-28` gets it, and an unrecognized
+revision is answered with the server's current revision (`2026-07-28`).
+`server/discover` advertises the supported revisions. List results carry
+the required `resultType` discriminator plus `ttlMs`/`cacheScope` cache
+fields; peers on older revisions keep their historical wire shape without
+`resultType`.
 
 ### Misses
 

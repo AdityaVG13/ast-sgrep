@@ -1,5 +1,131 @@
 [
   {
+    "description": "Fused hybrid search (lexical + structural + semantic, same as CLI asgrep). Prefer this for workspace-grounded questions when the wording or location is unknown. Returns a compact envelope: `p` maps path ids to project paths, and each entry of `h` is [id, kind, signal, symbol, snippet] where id is `<path_id>:<start_line>-<end_line>`. kind: x=asgrep d=def c=caller g=graph a=anchor i=import p=pattern e=embed. signal: x=exact t=structural m=semantic. Pass any id straight to code_read for the full body. A snippet of `~` means this session already sent that exact body for that id: reuse the earlier result, or call code_read. Pass resend_seen=true to disable.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "budget_tokens": {
+          "description": "Whole-response token budget. Each hit gains a trailing detail level (metadata|signature|block|full) and omitted source is marked with a gap marker.",
+          "maximum": 65536,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "file_filter": {
+          "description": "Repository-relative glob restricting hits (e.g. src/**/*.rs)",
+          "type": "string"
+        },
+        "lang": {
+          "description": "Language filter: stored id or extension (rs, ts, py, …)",
+          "type": "string"
+        },
+        "limit": {
+          "maximum": 100,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "preview": {
+          "description": "Snippet size: none (ids only), short (default compact), full (larger excerpts)",
+          "enum": [
+            "none",
+            "short",
+            "full"
+          ],
+          "type": "string"
+        },
+        "query": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "type": "string"
+        },
+        "resend_seen": {
+          "description": "Send snippets already returned this session instead of the ~ marker. Set true only if you do not keep earlier results.",
+          "type": "boolean"
+        },
+        "root": {
+          "description": "Project root (defaults to ASGREP_ROOT or cwd)",
+          "type": "string"
+        }
+      },
+      "required": [
+        "query"
+      ],
+      "type": "object"
+    },
+    "name": "search",
+    "outputSchema": {
+      "properties": {
+        "h": {
+          "description": "Hits as [id, kind, signal, symbol, snippet] (plus detail level under budget_tokens)",
+          "items": {
+            "type": "array"
+          },
+          "type": "array"
+        },
+        "next": {
+          "type": "string"
+        },
+        "p": {
+          "description": "Path id to project path, or [root_index, suffix] when folded",
+          "type": "object"
+        },
+        "q": {
+          "description": "Echoed query",
+          "type": "string"
+        },
+        "r": {
+          "description": "Shared path roots; present only when folding is smaller",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "tried": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "v": {
+          "description": "Envelope schema version",
+          "type": "integer"
+        },
+        "why": {
+          "description": "Miss classification; present only on zero-hit responses",
+          "type": "string"
+        },
+        "zb": {
+          "items": {
+            "type": "integer"
+          },
+          "type": "array"
+        },
+        "zd": {
+          "description": "[token budget, spent]",
+          "items": {
+            "type": "integer"
+          },
+          "type": "array"
+        },
+        "ze": {
+          "description": "Snippets elided as already sent this session",
+          "type": "integer"
+        },
+        "zn": {
+          "description": "Hit count",
+          "type": "integer"
+        },
+        "zt": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "v",
+        "q"
+      ],
+      "type": "object"
+    }
+  },
+  {
     "description": "Lexical-only search (FTS/trigram). Does not fuse AST or semantic channels. Returns a compact envelope: `p` maps path ids to project paths, and each entry of `h` is [id, kind, signal, symbol, snippet] where id is `<path_id>:<start_line>-<end_line>`. kind: x=asgrep d=def c=caller g=graph a=anchor i=import p=pattern e=embed. signal: x=exact t=structural m=semantic. Pass any id straight to code_read for the full body. A snippet of `~` means this session already sent that exact body for that id: reuse the earlier result, or call code_read. Pass resend_seen=true to disable.",
     "inputSchema": {
       "additionalProperties": false,
@@ -10,10 +136,27 @@
           "minimum": 1,
           "type": "integer"
         },
+        "file_filter": {
+          "description": "Repository-relative glob restricting hits (e.g. src/**/*.rs)",
+          "type": "string"
+        },
+        "lang": {
+          "description": "Language filter: stored id or extension (rs, ts, py, …)",
+          "type": "string"
+        },
         "limit": {
           "maximum": 100,
           "minimum": 1,
           "type": "integer"
+        },
+        "preview": {
+          "description": "Snippet size: none (ids only), short (default compact), full (larger excerpts)",
+          "enum": [
+            "none",
+            "short",
+            "full"
+          ],
+          "type": "string"
         },
         "query": {
           "maxLength": 4096,
@@ -119,10 +262,27 @@
           "minimum": 1,
           "type": "integer"
         },
+        "file_filter": {
+          "description": "Repository-relative glob restricting hits (e.g. src/**/*.rs)",
+          "type": "string"
+        },
+        "lang": {
+          "description": "Language filter: stored id or extension (rs, ts, py, …)",
+          "type": "string"
+        },
         "limit": {
           "maximum": 100,
           "minimum": 1,
           "type": "integer"
+        },
+        "preview": {
+          "description": "Snippet size: none (ids only), short (default compact), full (larger excerpts)",
+          "enum": [
+            "none",
+            "short",
+            "full"
+          ],
+          "type": "string"
         },
         "query": {
           "maxLength": 4096,
@@ -228,10 +388,27 @@
           "minimum": 1,
           "type": "integer"
         },
+        "file_filter": {
+          "description": "Repository-relative glob restricting hits (e.g. src/**/*.rs)",
+          "type": "string"
+        },
+        "lang": {
+          "description": "Language filter: stored id or extension (rs, ts, py, …)",
+          "type": "string"
+        },
         "limit": {
           "maximum": 100,
           "minimum": 1,
           "type": "integer"
+        },
+        "preview": {
+          "description": "Snippet size: none (ids only), short (default compact), full (larger excerpts)",
+          "enum": [
+            "none",
+            "short",
+            "full"
+          ],
+          "type": "string"
         },
         "query": {
           "maxLength": 4096,
@@ -337,10 +514,27 @@
           "minimum": 1,
           "type": "integer"
         },
+        "file_filter": {
+          "description": "Repository-relative glob restricting hits (e.g. src/**/*.rs)",
+          "type": "string"
+        },
+        "lang": {
+          "description": "Language filter: stored id or extension (rs, ts, py, …)",
+          "type": "string"
+        },
         "limit": {
           "maximum": 100,
           "minimum": 1,
           "type": "integer"
+        },
+        "preview": {
+          "description": "Snippet size: none (ids only), short (default compact), full (larger excerpts)",
+          "enum": [
+            "none",
+            "short",
+            "full"
+          ],
+          "type": "string"
         },
         "query": {
           "maxLength": 4096,

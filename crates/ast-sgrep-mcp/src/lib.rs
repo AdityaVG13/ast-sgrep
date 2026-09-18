@@ -964,7 +964,7 @@ impl McpServer {
         };
         // Always drop cached Searcher / path ids / elisions after a mutative
         // attempt (Ok or Err). Mid-sidecar Err must not leave a warm Searcher
-        // serving pre-mutation hits (R-INDEX-ERR-CACHE-SYNC / d2a1.13).
+        // serving pre-mutation hits.
         self.invalidate_after_index_attempt();
         let stats = result?;
         anyhow::ensure!(
