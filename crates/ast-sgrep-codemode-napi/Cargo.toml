@@ -35,3 +35,7 @@ tempfile.workspace = true
 [[test]]
 name = "ffi_bilateral_pass1"
 path = "../../tests/codemode/ffi_bilateral_pass1.rs"
+
+[[test]]
+name = "ffi_bilateral_pass2"
+path = "../../tests/codemode/ffi_bilateral_pass2.rs"
