@@ -93,14 +93,11 @@ path = "../../tests/mcp/numerical_pass3.rs"
 name = "numerical_pass4"
 path = "../../tests/mcp/numerical_pass4.rs"
 [[test]]
-name = "tokio_pass1"
-path = "../../tests/mcp/tokio_pass1.rs"
+name = "tokio_concurrency"
+path = "../../tests/mcp/tokio_concurrency.rs"
 [[test]]
-name = "tokio_pass2"
-path = "../../tests/mcp/tokio_pass2.rs"
+name = "tokio_cancellation"
+path = "../../tests/mcp/tokio_cancellation.rs"
 [[test]]
-name = "tokio_pass3"
-path = "../../tests/mcp/tokio_pass3.rs"
-[[test]]
-name = "tokio_pass4"
-path = "../../tests/mcp/tokio_pass4.rs"
+name = "tokio_equivalence_chaos"
+path = "../../tests/mcp/tokio_equivalence_chaos.rs"

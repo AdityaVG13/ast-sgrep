@@ -48,10 +48,11 @@ pub use lang::{
 #[cfg(feature = "lsp")]
 pub use lsp::{lsp_search_hit_keys, sample_backend};
 pub use mcp::{
-    assert_tool_error_shape, assert_tool_success, corrupt_index_db, index_tree, indexed_tree,
-    init_payload, initialized_notif, is_error, mcp_bin, ping, rpc_pipeline, rpc_session,
-    rpc_session_env, tool_body, tool_call, tool_text, tools_list, LiveSession,
-    TESTKIT_CLIENT_NAME,
+    assert_ping_ok, assert_tool_error_shape, assert_tool_success, assert_tools_list_ok,
+    big_tree, cancelled_notif, collect_responses, corrupt_index_db, expected_tool_names,
+    index_tree, indexed_tree, init_payload, initialized_notif, is_error, mcp_bin, ping,
+    response_by_id, rpc_pipeline, rpc_session, rpc_session_env, small_tree, tool_body,
+    tool_call, tool_text, tools_list, LiveSession, TESTKIT_CLIENT_NAME,
 };
 pub use num::approx_eq;
 pub use scrub::Scrubber;

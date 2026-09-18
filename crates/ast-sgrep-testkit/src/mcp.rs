@@ -102,6 +102,12 @@ pub fn ping(id: u32) -> Value {
     json!({"jsonrpc":"2.0","id":id,"method":"ping"})
 }
 
+/// `notifications/cancelled` for `request_id` (no id, no response expected).
+/// Pure constructor.
+pub fn cancelled_notif(request_id: u32) -> Value {
+    json!({"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":request_id}})
+}
+
 /// A live stdio session with timeout-bounded reads: a regressed server fails
 /// the test instead of hanging the suite. Dropping the session kills the child.
 pub struct LiveSession {
@@ -328,6 +334,59 @@ pub fn assert_tool_success(response: &Value) {
     assert!(response.get("error").is_none(), "{response:#}");
 }
 
+/// Assert a `ping` response: id echo, no top-level `error`, object `result`.
+pub fn assert_ping_ok(response: &Value, id: u32) {
+    assert_eq!(response["id"], id, "{response:#}");
+    assert!(response.get("error").is_none(), "{response:#}");
+    assert!(response["result"].is_object(), "{response:#}");
+}
+
+/// Canonical `tools/list` tool names in server order.
+pub fn expected_tool_names() -> Vec<&'static str> {
+    vec![
+        "search",
+        "keyword_search",
+        "ast_search",
+        "semantic_search",
+        "code_search",
+        "code_read",
+        "index_status",
+        "index_repo",
+    ]
+}
+
+/// Assert a `tools/list` response: id echo plus exactly the canonical tool
+/// set, in server order.
+pub fn assert_tools_list_ok(response: &Value, id: u32) {
+    assert_eq!(response["id"], id, "{response:#}");
+    let names: Vec<String> = response["result"]["tools"]
+        .as_array()
+        .expect("tools array")
+        .iter()
+        .map(|t| t["name"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(names, expected_tool_names(), "{response:#}");
+}
+
+/// Collect exactly `n` responses, each within `per_read`. Returns arrival
+/// order. Panics on timeout, EOF, or non-JSON output (via
+/// [`LiveSession::recv_timeout`]).
+pub fn collect_responses(session: &LiveSession, n: usize, per_read: Duration) -> Vec<Value> {
+    let mut out = Vec::with_capacity(n);
+    for _ in 0..n {
+        out.push(session.recv_timeout(per_read));
+    }
+    out
+}
+
+/// The response bearing `id`. Panics when no response carries it. Pure accessor.
+pub fn response_by_id(responses: &[Value], id: u32) -> &Value {
+    responses
+        .iter()
+        .find(|r| r["id"] == id)
+        .unwrap_or_else(|| panic!("missing response id {id}: {responses:#?}"))
+}
+
 /// Assert the strictest error shape: `isError == true`, no top-level `error`,
 /// exactly one `text` content block, no `structuredContent`.
 pub fn assert_tool_error_shape(response: &Value) {
@@ -367,6 +426,36 @@ pub fn index_tree(path: &Path) {
 pub fn indexed_tree(files: &[(&str, &str)]) -> TempDir {
     let temp = crate::fixture::file_tree(files);
     index_tree(temp.path());
+    temp
+}
+
+/// Three-symbol indexed tree: one token-distinct symbol per file (no shared
+/// word-pieces, since keyword search ORs query tokens) so per-query
+/// attribution is exact. The caller keeps the [`TempDir`] alive.
+pub fn small_tree() -> TempDir {
+    indexed_tree(&[
+        ("a.rs", "fn redhammer() {}\n"),
+        ("b.rs", "fn blueanvil() {}\n"),
+        (
+            "c.rs",
+            "fn greenchisel() {}\nfn greenchisel_helper() {}\n",
+        ),
+    ])
+}
+
+/// Wide unindexed tree with `files` single-symbol files: `index_repo` over it
+/// is the reliably-slow tool call. Symbols carry a distinctive prefix so a
+/// follow-up search proves the index is queryable. The caller keeps the
+/// [`TempDir`] alive.
+pub fn big_tree(files: usize) -> TempDir {
+    let temp = tempfile::tempdir().unwrap();
+    for index in 0..files {
+        std::fs::write(
+            temp.path().join(format!("f{index}.rs")),
+            format!("pub fn k2requelch_{index}() {{}}\n"),
+        )
+        .unwrap();
+    }
     temp
 }
 
