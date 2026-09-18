@@ -52,3 +52,6 @@ path = "../../tests/lang/candidate_kind_table.rs"
 [[test]]
 name = "oracle_foundry_pass1"
 path = "../../tests/lang/oracle_foundry_pass1.rs"
+[[test]]
+name = "oracle_foundry_pass2"
+path = "../../tests/lang/oracle_foundry_pass2.rs"

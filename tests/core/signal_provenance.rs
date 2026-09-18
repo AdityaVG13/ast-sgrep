@@ -12,6 +12,7 @@ fn hit(kind: HitKind, file: &str, score: f64) -> SearchHit {
         excerpt: file.to_string(),
         symbol: Some(file.to_string()),
         language: Some("rust".to_string()),
+        byte_span: None,
     })
 }
 

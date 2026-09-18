@@ -35,3 +35,6 @@ tempfile.workspace = true
 [[test]]
 name = "protocol"
 path = "../../tests/mcp/protocol.rs"
+[[test]]
+name = "oracle_foundry_pass2"
+path = "../../tests/mcp/oracle_foundry_pass2.rs"

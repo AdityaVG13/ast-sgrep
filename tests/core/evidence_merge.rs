@@ -21,6 +21,7 @@ fn hit(kind: HitKind, score: f64, excerpt: &str) -> SearchHit {
         embed_fields: None,
         critic: Vec::new(),
         excerpt: excerpt.into(),
+        byte_span: None,
     }
 }
 
