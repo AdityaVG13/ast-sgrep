@@ -51,3 +51,6 @@ path = "../../tests/codemode/oracle_foundry_pass2.rs"
 [[test]]
 name = "oracle_foundry_pass3"
 path = "../../tests/codemode/oracle_foundry_pass3.rs"
+[[test]]
+name = "oracle_foundry_pass4"
+path = "../../tests/codemode/oracle_foundry_pass4.rs"
