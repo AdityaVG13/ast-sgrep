@@ -167,14 +167,10 @@ fn update_bench_history(
     let path = std::env::var_os("ASGREP_BENCH_HISTORY_PATH")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(BENCH_HISTORY_PATH));
-    // PASS 56 (keep-gate integrity): a corrupt history file is the human's
-    // evidence. Fail loudly naming the file — never silently reset the
-    // baseline (a reset launders whatever regression or corruption produced
-    // the parse error into a fresh baseline) and never auto-delete it.
-    // PASS 56 (keep-gate integrity): a corrupt history file is the human's
-    // evidence. Fail loudly naming the file — never silently reset the
-    // baseline (a reset launders whatever regression or corruption produced
-    // the parse error into a fresh baseline) and never auto-delete it.
+    // A corrupt history file is the human's evidence. Fail loudly naming
+    // the file — never silently reset the baseline (a reset launders
+    // whatever regression or corruption produced the parse error into a
+    // fresh baseline) and never auto-delete it.
     let mut root = if path.exists() {
         let raw = std::fs::read_to_string(&path)
             .with_context(|| format!("failed to read bench history file {}", path.display()))?;

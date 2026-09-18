@@ -50,15 +50,14 @@ pub(crate) fn run_codemod(cli: &Cli, command: &CodemodCmd) -> anyhow::Result<()>
         ),
     };
 
-    // F66a-9 (pass 67b): sg-agreed refusal class for read-only targets.
-    // sg's update-all applies the writable files, skips the read-only ones
+    // Reference-agreed refusal class for read-only targets. The reference's
+    // update-all applies the writable files, skips the read-only ones
     // (`Cannot rewrite file … Permission denied`, `Skip to next file`), and
     // exits 6. Mirror that surface: the writable edits above ARE applied and
     // the index refreshed; the run then fails loudly (exit 2, this CLI's
     // operational refusal class) naming every refused file — never a silent
     // ok:true. The refusal is previewed in the dry-run plan envelope
-    // (`read_only_refused`), so preview and apply stay in agreement
-    // (F66a-10 contract).
+    // (`read_only_refused`), so preview and apply stay in agreement.
     if !plan.read_only_refused.is_empty() {
         bail!(
             "codemod refused to rewrite read-only target file(s): {}; applied \

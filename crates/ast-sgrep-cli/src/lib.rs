@@ -185,11 +185,10 @@ fn run_cli(cli: &Cli) -> anyhow::Result<()> {
             "--file-filter applies only to search, keyword, or semantic commands",
         ));
     }
-    // H-CONF-003 (pass 14): an unknown --lang label must fail closed as a
-    // usage error instead of lowercasing into a silent filter-to-nothing
-    // (the reference exits 2 on unknown languages). Language::parse accepts
-    // every stored id, indexed extension, and alias (py, rs, ts, hpp, Title
-    // Case, golang, c#, c++).
+    // An unknown --lang label must fail closed as a usage error instead of
+    // lowercasing into a silent filter-to-nothing (the reference exits 2 on
+    // unknown languages). Language::parse accepts every stored id, indexed
+    // extension, and alias (py, rs, ts, hpp, Title Case, golang, c#, c++).
     if let Some(raw) = cli.lang.as_deref() {
         if ast_sgrep_core::Language::parse(raw).is_none() {
             return Err(usage_error(format!(
@@ -320,12 +319,12 @@ fn run_codemode_batch(cli: &Cli, requests: &Path) -> anyhow::Result<()> {
         "results": response.results,
     });
     // Compact JSON: Code Mode waves are hot; pretty-print is pure serial waste.
-    // Broken-pipe safe: agents often pipe batch JSON through head/jq (d2a1.9).
+    // Broken-pipe safe: agents often pipe batch JSON through head/jq.
     machine::write_stdout_line(&serde_json::to_string(&envelope)?)?;
     Ok(())
 }
 
-/// Cap batch payload (file *and* stdin) so a huge pipe cannot OOM the process (d2a1.9).
+/// Cap batch payload (file *and* stdin) so a huge pipe cannot OOM the process.
 fn load_batch_raw(requests: &Path) -> anyhow::Result<String> {
     use machine::{read_utf8_capped, MAX_BATCH_REQUEST_BYTES};
     if requests.as_os_str() == "-" {

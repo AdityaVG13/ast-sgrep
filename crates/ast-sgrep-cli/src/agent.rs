@@ -217,7 +217,7 @@ fn clap_catalog(command: &clap::Command) -> (Vec<Value>, Vec<String>, Vec<String
     commands.sort_by(|a, b| a["name"].as_str().cmp(&b["name"].as_str()));
     (commands, global_flags, search_tuning_flags)
 }
-/// Doctor issue when FastUnsafe durability is active (R-OPS-DOCS-FOOTGUNS).
+/// Doctor issue when FastUnsafe durability is active.
 fn doctor_fast_unsafe_issue(
     cli: &Cli,
     status: Option<&ast_sgrep_core::IndexStatus>,

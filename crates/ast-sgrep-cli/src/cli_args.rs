@@ -182,10 +182,10 @@ pub(crate) struct SearchTuning {
         help = "Snippet size for machine output: none|short|full (default short for compact/agent)"
     )]
     pub(crate) preview: Option<PreviewMode>,
-    /// F-SG-RUN-FILES-WITH-MATCHES (pass 31): boolean-listing output mode.
-    /// Text output prints matching paths (sorted, deduped, one per line) instead
-    /// of hit rows; --json envelopes add a top-level `files` array with the same
-    /// set. Zero matches stays exit 0 (ok:true, empty) per the exit contract.
+    /// Boolean-listing output mode. Text output prints matching paths
+    /// (sorted, deduped, one per line) instead of hit rows; --json envelopes
+    /// add a top-level `files` array with the same set. Zero matches stays
+    /// exit 0 (ok:true, empty) per the exit contract.
     #[arg(
         long,
         action = clap::ArgAction::SetTrue,
@@ -268,9 +268,8 @@ pub(crate) struct CodemodCmd {
 }
 
 /// Search-subcommand arguments: one QUERY positional OR N `--pattern` flags
-/// (EXP-013 multi-pattern ingress). The two forms are mutually exclusive and
-/// enforced at dispatch; clap keeps QUERY optional only when --pattern is
-/// present.
+/// (multi-pattern ingress). The two forms are mutually exclusive and enforced
+/// at dispatch; clap keeps QUERY optional only when --pattern is present.
 #[derive(Args, Clone, Debug)]
 pub(crate) struct QueryCmd {
     /// Search query string
@@ -362,7 +361,7 @@ pub(crate) struct Cli {
         help = "Language filter: stored id or file extension (ts, hpp, py, rs, h, …)"
     )]
     pub(crate) lang: Option<String>,
-    /// 0obi: `fast-unsafe` can corrupt the index on power loss, so it must be
+    /// `fast-unsafe` can corrupt the index on power loss, so it must be
     /// asked for by name; it is never reached by default.
     #[arg(
         long,
@@ -531,7 +530,7 @@ fn parse_bounded_usize(raw: &str, maximum: usize, name: &str) -> Result<usize, S
     Ok(value)
 }
 
-/// 0obi: an unrecognized durability value is a hard error, never a silent
+/// An unrecognized durability value is a hard error, never a silent
 /// downgrade to a weaker profile.
 fn parse_durability(raw: &str) -> Result<ast_sgrep_core::Durability, String> {
     ast_sgrep_core::Durability::parse(raw).ok_or_else(|| {

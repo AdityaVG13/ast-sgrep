@@ -123,16 +123,30 @@ fn uses_semantic_channel(cli: &Cli, semantic: bool) -> bool {
     semantic || cli.active_tuning().semantic_only
 }
 
-/// F-SG-RUN-FILES-WITH-MATCHES (pass 31): the boolean-listing result set —
-/// matching paths, sorted and deduped (a file with N hits is listed once).
-/// The sg-parity lane compares PATH-SET equality vs `sg run
-/// --files-with-matches`; no perf claim (hits are still computed, this only
-/// reshapes output).
+/// The boolean-listing result set — matching paths, sorted and deduped (a
+/// file with N hits is listed once). The parity lane compares PATH-SET
+/// equality vs the reference's `--files-with-matches`; no perf claim (hits
+/// are still computed, this only reshapes output).
 fn files_from_hits(response: &SearchResponse) -> Vec<String> {
     let mut files: Vec<String> = response.hits.iter().map(|h| h.file.clone()).collect();
     files.sort();
     files.dedup();
     files
+}
+
+/// Human-readable hit output: the boolean path listing when the flag is set,
+/// one line per hit otherwise. Shared by the single- and multi-pattern paths.
+fn print_human_hits(response: &SearchResponse, files_with_matches: bool) -> anyhow::Result<()> {
+    if files_with_matches {
+        for path in files_from_hits(response) {
+            write_stdout_line(&path)?;
+        }
+        return Ok(());
+    }
+    for hit in &response.hits {
+        write_stdout_line(&format_hit_line(hit))?;
+    }
+    Ok(())
 }
 
 pub(crate) fn run_search(
@@ -150,16 +164,7 @@ pub(crate) fn run_search(
     let response =
         do_search_with_cli(&open_searcher(root, cli)?, query, semantic, cli).context(ctx)?;
     if !cli.search_machine_output() {
-        if cli.active_tuning().files_with_matches {
-            for path in files_from_hits(&response) {
-                write_stdout_line(&path)?;
-            }
-            return Ok(());
-        }
-        for hit in &response.hits {
-            write_stdout_line(&format_hit_line(hit))?;
-        }
-        return Ok(());
+        return print_human_hits(&response, cli.active_tuning().files_with_matches);
     }
     let tuning = cli.active_tuning();
     let default = if semantic_ch {
@@ -176,14 +181,14 @@ pub(crate) fn run_search(
     )
 }
 
-/// EXP-013 (GA-21, pass 29): multi-pattern ingress — N `--pattern` flags, ONE
-/// process (one index open, one supervisor floor), ONE envelope. Each pattern
-/// runs the exact single-pattern path (`Searcher::search` on its `pattern:`
-/// token), so per-pattern hit sets are identical to N sequential invocations;
-/// hits are grouped by pattern in flag order and tagged via `SearchHit::symbol`
-/// (grouped hits). `--limit` applies per pattern. Fail-closed (H-CONF-006
-/// rule): a pattern the single invocation would reject rejects the whole
-/// batch — no partial envelope.
+/// Multi-pattern ingress — N `--pattern` flags, ONE process (one index open,
+/// one supervisor floor), ONE envelope. Each pattern runs the exact
+/// single-pattern path (`Searcher::search` on its `pattern:` token), so
+/// per-pattern hit sets are identical to N sequential invocations; hits are
+/// grouped by pattern in flag order and tagged via `SearchHit::symbol`
+/// (grouped hits). `--limit` applies per pattern. Fail-closed: a pattern the
+/// single invocation would reject rejects the whole batch — no partial
+/// envelope.
 pub(crate) fn run_multi_pattern_search(
     root: &Path,
     cli: &Cli,
@@ -194,16 +199,7 @@ pub(crate) fn run_multi_pattern_search(
         .search_multi_pattern(patterns)
         .context("multi-pattern search failed")?;
     if !cli.search_machine_output() {
-        if cli.active_tuning().files_with_matches {
-            for path in files_from_hits(&response) {
-                write_stdout_line(&path)?;
-            }
-            return Ok(());
-        }
-        for hit in &response.hits {
-            write_stdout_line(&format_hit_line(hit))?;
-        }
-        return Ok(());
+        return print_human_hits(&response, cli.active_tuning().files_with_matches);
     }
     let format = resolve_output_format(
         cli.active_tuning().format.as_deref(),
@@ -221,10 +217,9 @@ fn print_search_response(
     let tuning = cli.active_tuning();
     let preview = tuning.preview.unwrap_or_default();
     let mut value = render_search_json(command, response, format, preview, cli);
-    // F-SG-RUN-FILES-WITH-MATCHES (pass 31): machine envelopes carry the same
-    // sorted/deduped path set as a top-level `files` array (P3 decision: paths
-    // ARRAY, additive — hits and per-format schemas untouched; the field only
-    // appears when the flag is passed).
+    // Machine envelopes carry the same sorted/deduped path set as a
+    // top-level `files` array (paths ARRAY, additive — hits and per-format
+    // schemas untouched; the field only appears when the flag is passed).
     if tuning.files_with_matches {
         if let Some(object) = value.as_object_mut() {
             object.insert(

@@ -1,10 +1,9 @@
-//! F-SG-CMD-OUTLINE: file-scoped structure listing over the index.
+//! File-scoped structure listing over the index.
 //!
-//! Beyond-reference self-oracle surface by deliberate design (SURFACE_
-//! DEFERRALS `outline-command-surface`, owner-unblocked 2026-09-15): sg's
-//! outline contract (--items structure/exports/imports, --view
+//! Beyond-reference surface by deliberate design: the reference's outline
+//! contract (--items structure/exports/imports, --view
 //! names/signatures/digest/expanded, per-language --outline-rules) is NOT
-//! cloned — a half-clone would claim sg-parity it cannot score. The subject
+//! cloned — a half-clone would claim parity it cannot score. The subject
 //! schema is the index's own symbol rows: name, kind, line span, byte span,
 //! ordered by line_start. Outline is an INDEX READER (like status/chain):
 //! a path with no indexed symbols refuses loudly instead of answering

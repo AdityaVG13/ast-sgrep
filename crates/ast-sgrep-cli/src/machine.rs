@@ -154,7 +154,7 @@ pub(crate) fn raw_command_name(args: &[std::ffi::OsString]) -> &'static str {
 pub(crate) const MAX_BATCH_REQUEST_BYTES: u64 = (ast_sgrep_core::MAX_STDIN_LINE_BYTES as u64) * 4;
 
 /// Read UTF-8 from `reader`, never allocating more than `max_bytes + 1`.
-/// Rejects payloads larger than `max_bytes` (d2a1.9: stdin must not OOM).
+/// Rejects payloads larger than `max_bytes` (stdin must not OOM).
 pub(crate) fn read_utf8_capped(mut reader: impl io::Read, max_bytes: u64) -> io::Result<String> {
     let mut buf = String::new();
     reader

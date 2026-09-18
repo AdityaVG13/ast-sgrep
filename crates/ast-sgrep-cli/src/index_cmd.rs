@@ -136,7 +136,7 @@ pub(crate) fn index_options(root: &Path, cli: &Cli) -> IndexOptions {
         embed_backend: EmbedBackend::from_flags(t.neural_embed, t.semantic_only),
         force_reindex: false,
         ann_threshold: t.ann_threshold,
-        // 0obi: explicit flag wins; otherwise the safe default.
+        // Explicit flag wins; otherwise the safe default.
         durability: cli.durability.unwrap_or_default(),
     }
 }
@@ -395,7 +395,7 @@ pub(crate) fn run_index_dry_run(command: &str, root: &Path, cli: &Cli) -> anyhow
             root.display()
         );
         if walk_errors {
-            // Parity with print_index_stats; machine JSON carries walk_errors (d2a1.11).
+            // Parity with print_index_stats; machine JSON carries walk_errors.
             eprintln!(
                 "Warning: directory walk errors left the dry-run count incomplete; permission or IO failures may hide files"
             );
@@ -432,11 +432,10 @@ pub(crate) fn print_index_stats(stats: &IndexStats) {
         stats.imports_extracted
     );
     if stats.files_depth_truncated > 0 {
-        // H-CONF-024: flagged files' ident/call/kind rows are incomplete;
-        // those shapes fall back to the native walk (never a silent miss).
-        // Decl rows are budget-exempt (SEP15-3), so decl-exact templates stay
-        // cache-served. The machine JSON carries the count as
-        // files_depth_truncated.
+        // Flagged files' ident/call/kind rows are incomplete; those shapes
+        // fall back to the native walk (never a silent miss). Decl rows are
+        // budget-exempt, so decl-exact templates stay cache-served. The
+        // machine JSON carries the count as files_depth_truncated.
         println!(
             "Depth budget truncated {} file(s); non-declaration pattern rows are incomplete — decl templates stay cache-served, other shapes walk natively",
             stats.files_depth_truncated
@@ -505,8 +504,8 @@ pub(crate) fn open_searcher(root: &Path, cli: &Cli) -> anyhow::Result<ast_sgrep_
         ensure_fresh_index(&root, cli, count)?;
     }
     let searcher = open_searcher_raw(&root, cli)?;
-    // H-CONF-033: a foreign-root index was swapped for the empty in-memory
-    // stand-in; the walk answers instead. That stand-in must not trip the
+    // A foreign-root index was swapped for the empty in-memory stand-in;
+    // the walk answers instead. That stand-in must not trip the
     // --no-auto-index non-empty gate (it is deliberately empty).
     if !cli.should_auto_index() && !searcher.store_is_inert() {
         ensure_nonempty_index(&root, searcher.store().status()?.file_count)?;
