@@ -158,3 +158,6 @@ path = "../../tests/cli/topology_pass2.rs"
 [[test]]
 name = "topology_pass3"
 path = "../../tests/cli/topology_pass3.rs"
+[[test]]
+name = "topology_pass4"
+path = "../../tests/cli/topology_pass4.rs"
