@@ -30,20 +30,22 @@ napi-build = "2"
 
 [dev-dependencies]
 tempfile.workspace = true
+ast-sgrep-testkit = { path = "../ast-sgrep-testkit", features = ["codemode"] }
 
 # Integration tests live in the repo-root tests/ tree.
+# ffi_shared.rs is a shared-only module (no #[test]), included via #[path].
 [[test]]
-name = "ffi_bilateral_pass1"
-path = "../../tests/codemode/ffi_bilateral_pass1.rs"
+name = "ffi_surface"
+path = "../../tests/codemode/ffi_surface.rs"
 
 [[test]]
-name = "ffi_bilateral_pass2"
-path = "../../tests/codemode/ffi_bilateral_pass2.rs"
+name = "ffi_call_now"
+path = "../../tests/codemode/ffi_call_now.rs"
 
 [[test]]
-name = "ffi_bilateral_pass3"
-path = "../../tests/codemode/ffi_bilateral_pass3.rs"
+name = "ffi_bilateral"
+path = "../../tests/codemode/ffi_bilateral.rs"
 
 [[test]]
-name = "ffi_bilateral_pass4"
-path = "../../tests/codemode/ffi_bilateral_pass4.rs"
+name = "ffi_js_client"
+path = "../../tests/codemode/ffi_js_client.rs"

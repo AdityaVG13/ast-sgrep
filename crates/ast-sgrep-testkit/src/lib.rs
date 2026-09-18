@@ -27,7 +27,9 @@ pub use cli::{
 };
 #[cfg(feature = "codemode")]
 pub use codemode::{
-    batch_call, batch_request, catalog_call, config_at, serve_lines, serve_request_line, session_at,
+    assert_json_byte_identical, batch_call, batch_request, catalog_call, config_at,
+    config_at_indexed, serve_lines, serve_request_line, session_at, session_at_indexed,
+    BUDGET_EXCEEDED, CALL_NOW_ONLY, DEFS_NEEDS_SYMBOL, MAX_QUERY_CHARS, SESSION_BUSY,
 };
 pub use fault::{err_of, flip_bytes, remove_sqlite_sidecars, truncate_file, write_garbage};
 pub use fixture::{file_tree, sample_file, sample_root, set_mtime_secs, write_file};

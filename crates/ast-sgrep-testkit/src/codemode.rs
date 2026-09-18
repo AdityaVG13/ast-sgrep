@@ -80,6 +80,56 @@ pub fn serve_lines(input: String, root: &Path) -> (Result<(), CallError>, Vec<St
     (result, lines)
 }
 
+/// Hermetic indexed session config: explicit `root` + `index_path`, limit 5,
+/// lexical only, `AgentCapsule` format. Pure constructor — the indexed
+/// counterpart of [`config_at`] for suites whose sessions must touch a store
+/// (explicit temp db, never the ambient index home).
+pub fn config_at_indexed(root: &Path, index_path: &Path) -> SessionConfig {
+    SessionConfig {
+        root: root.to_path_buf(),
+        index_path: Some(index_path.to_path_buf()),
+        limit: 5,
+        use_embed: false,
+        default_format: OutputFormat::AgentCapsule,
+    }
+}
+
+/// Indexed [`CodeModeSession`] over [`config_at_indexed`].
+pub fn session_at_indexed(root: &Path, index_path: &Path) -> CodeModeSession {
+    CodeModeSession::new(config_at_indexed(root, index_path))
+}
+
+/// Exact `call_now` fast-gate reason. Owned by the napi wrapper: slow, aliased,
+/// and unknown tools are rejected with this text before dispatch, uncounted.
+pub const CALL_NOW_ONLY: &str = "callNow is only for bounded metadata/symbol lookups; use call() for search/index/semantic/chain";
+
+/// Exact contention reason. The napi `try_lock` loser path returns this so the
+/// JS host can fall back to `call()`.
+pub const SESSION_BUSY: &str = "session is busy";
+
+/// Exact JS-visible budget text: core `CallError::BudgetExhausted(10_000)`
+/// surfaced through napi. Bilateral suites also assert dynamic equality with
+/// the core `Display`, so core drift fails loudly instead of silently.
+pub const BUDGET_EXCEEDED: &str = "codemode call budget exceeded (max_calls=10000)";
+
+/// Exact missing-symbol reason: core `InvalidArgs` text surfaced through napi
+/// (shared by `defs` and `callers`).
+pub const DEFS_NEEDS_SYMBOL: &str =
+    "symbol is required. Call asgrep.defs(\"Name\") or asgrep.defs({ symbol: \"Name\" })";
+
+/// Core query-length limit, re-exported so suites pin oversize behavior
+/// without a literal that can drift from `ast-sgrep-core`.
+pub use ast_sgrep_core::MAX_QUERY_CHARS;
+
+/// Byte-identity over canonical serialization, not just `Value` equality:
+/// bilateral (napi-vs-core) and determinism (repeat/fresh-session) agreement.
+/// Panics with `what` context on mismatch. Pure assertion.
+pub fn assert_json_byte_identical(a: &Value, b: &Value, what: &str) {
+    let left = serde_json::to_vec(a).expect("serialize left");
+    let right = serde_json::to_vec(b).expect("serialize right");
+    assert_eq!(left, right, "{what} mismatch");
+}
+
 /// Serialize one [`ServeRequest`] as a newline-terminated serve input line.
 /// Pure constructor.
 pub fn serve_request_line(request: &ServeRequest) -> String {

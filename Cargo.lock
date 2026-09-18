@@ -159,6 +159,7 @@ name = "ast-sgrep-codemode-napi"
 version = "2.0.0"
 dependencies = [
  "ast-sgrep-codemode",
+ "ast-sgrep-testkit",
  "napi",
  "napi-build",
  "napi-derive",
