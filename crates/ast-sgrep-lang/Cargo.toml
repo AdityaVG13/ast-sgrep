@@ -79,3 +79,6 @@ path = "../../tests/lang/invalidation_pass1.rs"
 [[test]]
 name = "invalidation_pass2"
 path = "../../tests/lang/invalidation_pass2.rs"
+[[test]]
+name = "invalidation_pass3"
+path = "../../tests/lang/invalidation_pass3.rs"
