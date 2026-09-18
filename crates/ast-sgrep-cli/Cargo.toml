@@ -128,3 +128,6 @@ path = "../../tests/cli/error_api_pass4.rs"
 [[test]]
 name = "invalidation_pass1"
 path = "../../tests/cli/invalidation_pass1.rs"
+[[test]]
+name = "invalidation_pass2"
+path = "../../tests/cli/invalidation_pass2.rs"

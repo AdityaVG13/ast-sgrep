@@ -76,3 +76,6 @@ path = "../../tests/lang/error_api_pass4.rs"
 [[test]]
 name = "invalidation_pass1"
 path = "../../tests/lang/invalidation_pass1.rs"
+[[test]]
+name = "invalidation_pass2"
+path = "../../tests/lang/invalidation_pass2.rs"
