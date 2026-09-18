@@ -247,3 +247,6 @@ path = "../../tests/core/numerical_pass3.rs"
 [[test]]
 name = "numerical_pass4"
 path = "../../tests/core/numerical_pass4.rs"
+[[test]]
+name = "topology_pass1"
+path = "../../tests/core/topology_pass1.rs"
