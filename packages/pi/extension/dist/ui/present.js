@@ -6,11 +6,11 @@ export const ASGREP_PROMPT_GUIDELINES = [
     "Use grep only for exact log strings, filenames, or config keys. asgrep.edit does unique string replace plus targeted reindex; oldText must match exactly once.",
     "If a search returns 0 hits, use suggested_next or retry with asgrep.find, asgrep.defs, or asgrep.search(query, { in: \"src\" }).",
 ];
-function paint(theme, role, text, bold = false) {
+export function paint(theme, role, text, bold = false) {
     const body = bold && theme ? theme.bold(text) : text;
     return theme ? theme.fg(role, body) : body;
 }
-function hitLocation(hit) {
+export function hitLocation(hit) {
     const file = String(hit.file ?? hit.path ?? "");
     const line = hit.start_line ?? hit.line ?? hit.lines;
     if (typeof line === "number")
@@ -21,13 +21,13 @@ function hitLocation(hit) {
         return hit.ref;
     return file || "?";
 }
-function hitLabel(hit) {
+export function hitLabel(hit) {
     const symbol = typeof hit.symbol === "string" ? hit.symbol : "";
     const kind = typeof hit.kind === "string" ? hit.kind : "";
     const preview = typeof hit.preview === "string" ? hit.preview.replace(/\s+/g, " ").trim() : "";
     return [symbol, kind, preview && preview.length < 80 ? preview : ""].filter(Boolean).join("  ");
 }
-function header(theme, verb, bits) {
+export function header(theme, verb, bits) {
     return [paint(theme, "toolTitle", "asgrep", true), paint(theme, "accent", verb), ...bits.filter((bit) => Boolean(bit))].join("  ·  ");
 }
 export function formatSearchCall(params, theme) {
@@ -43,6 +43,44 @@ export function formatIndexCall(force, theme) {
 }
 export function formatStatusCall(theme) {
     return header(theme, "status", []);
+}
+export function formatEditCall(params, theme) {
+    const n = Array.isArray(params.edits) ? params.edits.length : 0;
+    return header(theme, "edit", [params.path, n > 1 ? n + " edits" : undefined]);
+}
+export function formatReadCall(params, theme) {
+    const target = params.path ?? params.ref;
+    const range = params.start !== undefined ? "L" + params.start + "-L" + (params.end ?? "") : undefined;
+    return header(theme, "read", [target, range]);
+}
+/** Model-visible text for an edit envelope: what changed, per file. */
+export function formatEditResult(response, theme) {
+    const edits = Array.isArray(response.edits) ? response.edits : [];
+    const changed = edits.filter((e) => e.changed === true).length;
+    const title = header(theme, "edit", [changed + "/" + edits.length + " changed"]);
+    const rows = edits.slice(0, 12).map((e) => {
+        const path = typeof e.path === "string" ? e.path : "?";
+        const line = typeof e.line === "number" ? ":" + e.line : "";
+        return paint(theme, "toolOutput", "  " + path + line);
+    });
+    return [title, ...rows].join("\n");
+}
+/** Model-visible text for a read envelope: the window contents themselves. */
+export function formatReadResult(response, theme) {
+    const windows = Array.isArray(response.windows) ? response.windows : [];
+    if (windows.length === 0)
+        return header(theme, "read", ["0 windows"]);
+    const out = [];
+    for (const w of windows.slice(0, 8)) {
+        const path = typeof w.path === "string" ? w.path : "?";
+        out.push(header(theme, "read", [path + "#L" + (w.start ?? 1) + "-L" + (w.end ?? "")]));
+        const text = typeof w.text === "string" ? w.text : "";
+        for (const line of text.split("\n").slice(0, 80))
+            out.push(line);
+    }
+    if (windows.length > 8)
+        out.push("… " + (windows.length - 8) + " more windows");
+    return out.join("\n");
 }
 export function formatCodemodeCall(code, theme) {
     const preview = code.trim().replace(/\s+/g, " ").slice(0, 80);
@@ -188,7 +226,10 @@ export function truncateToWidth(text, maxWidth, ellipsis = "...") {
         width += cell.width;
         index += cell.length;
     }
-    return `${kept}${ellipsis}`;
+    // The cut can land inside a painted span — its closing SGR is past the
+    // budget, so the ellipsis and everything after would inherit the open color.
+    // Close it explicitly; harmless when the kept spans were already balanced.
+    return kept + (kept.includes("\u001b[") ? "\u001b[0m" : "") + ellipsis;
 }
 function compactValue(value) {
     if (value === null || value === undefined)

@@ -88,7 +88,9 @@ Reranking applies query intent and code-aware evidence such as symbol identity, 
 
 ### Supervisor boundary
 
-On Unix the CLI supervisor wraps the worker process and can enforce a wall-time duty cycle via `ASGREP_CPU_LIMIT_PERCENT` (SIGSTOP/CONT in a 10 ms window). It does not maintain a second index or a separate ranking implementation. Retrieval stays in `ast-sgrep-core`; the supervisor only bounds runnable time and process lifecycle.
+On Unix the CLI supervisor wraps the worker process and can enforce a wall-time duty cycle (SIGSTOP/CONT in a 10 ms window). It does not maintain a second index or a separate ranking implementation. Retrieval stays in `ast-sgrep-core`; the supervisor only bounds runnable time and process lifecycle.
+
+Supervision is **opt-in** (H-PERF-001 option b): when `ASGREP_CPU_LIMIT_PERCENT` is unset the command runs as a single in-process process with the supervisor's thread-cap environment, no duty-cycle stretch, and no two-process floor. Setting `ASGREP_CPU_LIMIT_PERCENT` (1..=80) re-enables the supervisor with that duty bound; a malformed value still opts in at the default bound (80) so the CPU contract fails safe. `asgrep doctor --json` reports the active policy under `supervision`. The supervisor's process-lifecycle guards (orphan reaping, parent-watch) are supervision-scoped: unsupervised runs rely on the parent shell's own process management.
 
 ## Agent surfaces
 

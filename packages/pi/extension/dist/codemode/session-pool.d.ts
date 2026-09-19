@@ -7,7 +7,7 @@
  * Fallback: sticky `codemode-serve` child only when the `.node` addon is missing
  * (unsupported host / incomplete install). Doctor reports that as degraded.
  */
-import type { MachineEnvelope } from "../runtime.js";
+import type { MachineEnvelope } from "../runtime/runtime.js";
 import { type StickyWorker } from "./dispatch.js";
 import { type StickyWorkerOptions } from "./worker.js";
 export type SessionPoolOptions = {
@@ -32,6 +32,8 @@ export declare class NativeSessionPool {
     configured(): boolean;
     /** Active backend after first successful acquire. */
     backend(): "napi" | "cli" | "none";
+    /** Why the last start attempt failed — for doctor/status and error fidelity. */
+    lastStartError(root: string): string | undefined;
     acquire(root: string): Promise<StickyWorker | null>;
     call(root: string, tool: string, args?: Record<string, unknown>, options?: {
         signal?: AbortSignal;

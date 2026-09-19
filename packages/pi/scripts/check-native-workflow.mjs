@@ -73,8 +73,9 @@ const validateOfficial = (text, signersText = allowedSignersText) => {
   report(inputs?.release_tag?.required === true && inputs.release_tag.type === 'string', 'official publication requires an explicit release_tag string input');
   report(inputs?.publish?.required === true && inputs.publish.type === 'boolean' && inputs.publish.default === false, 'official publication requires an explicit publish intent defaulting to false');
   report(inputs?.bootstrap_token?.required === true && inputs.bootstrap_token.type === 'boolean' && inputs.bootstrap_token.default === false, 'official publication requires an explicit bootstrap_token intent defaulting to false');
+  report(inputs?.layer?.required === true && inputs.layer.type === 'choice' && JSON.stringify(inputs.layer.options) === '["family","extension"]' && inputs.layer.default === 'family', 'official publication requires an explicit family/extension layer input defaulting to family');
   const gate = workflow.jobs?.['release-gate'];
-  report(gate?.if === "${{ inputs.publish == true && github.ref_type == 'tag' && github.ref_name == inputs.release_tag }}", 'official release gate must require publish intent and an exact tag ref match');
+  report(gate?.if === "${{ inputs.publish == true && inputs.layer == 'family' && github.ref_type == 'tag' && github.ref_name == inputs.release_tag }}", 'official release gate must require publish intent, the family lane, and an exact tag ref match');
   const build = workflow.jobs?.['build-native'];
   const verify = workflow.jobs?.['verify-release'];
   const publish = workflow.jobs?.publish;
@@ -93,10 +94,26 @@ const validateOfficial = (text, signersText = allowedSignersText) => {
   report(verify?.permissions?.['id-token'] === 'write' && verify?.permissions?.attestations === 'write' && (verify?.steps ?? []).some((step) => step.uses === 'actions/attest-build-provenance@v2'), 'artifact provenance attestation is missing');
   report(publish?.environment === 'npm-production' && publish?.env?.ASGREP_NPM_PROTECTED_ENVIRONMENT === 'npm-production' && publish?.permissions?.['id-token'] === 'write' && publish?.needs === 'verify-release', 'npm publication must use protected npm-production OIDC after verification');
   report(publish?.env?.NODE_AUTH_TOKEN === bootstrapToken, 'npm bootstrap token must use the exact default-off opt-in expression');
-  report(text.split('\n').filter((line) => line.trim() === 'NODE_AUTH_TOKEN: ' + bootstrapToken).length === 1 && (text.match(/secrets\.NPM_TOKEN/gu) ?? []).length === 1, 'npm bootstrap token wiring must appear exactly once in the publish job');
+  report(text.split('\n').filter((line) => line.trim() === 'NODE_AUTH_TOKEN: ' + bootstrapToken).length === 2 && (text.match(/secrets\.NPM_TOKEN/gu) ?? []).length === 2, 'npm bootstrap token wiring must appear exactly once per publish job (family and extension lanes)');
   const publishSteps = (publish?.steps ?? []).filter((step) => step.name).map((step) => [step.name, activeRun(step)]);
   const layers = publishSteps.filter(([, run]) => run.includes('release-acceptance.mjs publish')).map(([, run]) => run.match(/--layer (native|launcher|extension)/u)?.[1]);
   report(JSON.stringify(layers) === '["native","launcher","extension"]', 'publication order must be native -> launcher -> extension');
+
+  // Extension lane: independent pi-v<version> releases of pi-ast-sgrep only.
+  const extGate = workflow.jobs?.['extension-gate'];
+  const extVerify = workflow.jobs?.['extension-verify'];
+  const extPublish = workflow.jobs?.['extension-publish'];
+  report(extGate?.if === "${{ inputs.publish == true && inputs.layer == 'extension' && github.ref_type == 'tag' && github.ref_name == inputs.release_tag }}", 'extension gate must require publish intent, the extension lane, and an exact tag ref match');
+  const extGateRuns = (extGate?.steps ?? []).map(activeRun);
+  report(extGateRuns.indexOf(sshSetup) !== -1 && extGateRuns.indexOf(sshSetup) < extGateRuns.findIndex((run) => run.includes('release-acceptance.mjs gate --lane extension')), 'extension gate must configure repository-local SSH verification before verifying the pi-v tag');
+  report(extGateRuns.join('\n').includes('npm run check:pi-contract') && extGateRuns.join('\n').includes('npm run check:pi-dist'), 'extension gate must run the contract and committed-dist checks');
+  const extVerifyRuns = (extVerify?.steps ?? []).map(activeRun).join('\n');
+  report(extVerify?.needs === 'extension-gate' && extVerifyRuns.includes('release-acceptance.mjs pack --lane extension') && extVerifyRuns.includes('release-acceptance.mjs verify --artifacts npm-packs'), 'extension lane must pack and verify the single artifact once');
+  report(extVerify?.permissions?.['id-token'] === 'write' && extVerify?.permissions?.attestations === 'write' && (extVerify?.steps ?? []).some((step) => step.uses === 'actions/attest-build-provenance@v2'), 'extension artifact provenance attestation is missing');
+  report(extPublish?.environment === 'npm-production' && extPublish?.env?.ASGREP_NPM_PROTECTED_ENVIRONMENT === 'npm-production' && extPublish?.permissions?.['id-token'] === 'write' && extPublish?.needs === 'extension-verify', 'extension npm publication must use protected npm-production OIDC after verification');
+  report(extPublish?.env?.NODE_AUTH_TOKEN === bootstrapToken, 'extension publish bootstrap token must use the exact default-off opt-in expression');
+  const extPublishRuns = (extPublish?.steps ?? []).map(activeRun).join('\n');
+  report(extPublishRuns.includes('release-acceptance.mjs verify --artifacts npm-packs') && extPublishRuns.includes('release-acceptance.mjs publish --artifacts npm-packs --layer extension'), 'extension publish must re-verify preserved checksums before publishing only the extension layer');
 
   return errors;
 };

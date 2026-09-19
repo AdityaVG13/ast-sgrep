@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -14,6 +14,28 @@ const canonicalVersion = contract.canonicalVersion.version;
 const repositoryUrl = "git+https://github.com/AdityaVG13/ast-sgrep.git";
 
 const readJson = (path) => JSON.parse(readFileSync(path, "utf8"));
+/** Recursively list files under dir matching suffix. */
+function walkSources(dir, suffix) {
+  const out = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const full = join(dir, entry.name);
+    if (entry.isDirectory()) out.push(...walkSources(full, suffix));
+    else if (entry.name.endsWith(suffix)) out.push(full);
+  }
+  return out;
+}
+const parseRelease = (value) => {
+  const match = String(value).match(/^(\d+)\.(\d+)\.(\d+)$/);
+  return match ? [Number(match[1]), Number(match[2]), Number(match[3])] : null;
+};
+// The extension may ship patch releases above canonical (check-contract.mjs
+// applies the same carve-out); every other layer must match exactly.
+const isExtensionPatchOf = (extensionVersion, canonical) => {
+  if (extensionVersion === canonical) return true;
+  const actual = parseRelease(extensionVersion);
+  const expected = parseRelease(canonical);
+  return Boolean(actual && expected && actual[0] === expected[0] && actual[1] === expected[1] && actual[2] > expected[2]);
+};
 const productionDependencies = (manifest) => ({
   ...manifest.dependencies,
   ...manifest.optionalDependencies,
@@ -27,7 +49,11 @@ test("every public npm package carries license and source provenance", () => {
   ];
   for (const [directory, repositoryDirectory] of packages) {
     const manifest = readJson(join(directory, "package.json"));
-    assert.equal(manifest.version, canonicalVersion, manifest.name);
+    if (manifest.name === "pi-ast-sgrep") {
+      assert.ok(isExtensionPatchOf(manifest.version, canonicalVersion), manifest.name + " must be canonical or a patch above it");
+    } else {
+      assert.equal(manifest.version, canonicalVersion, manifest.name);
+    }
     assert.equal(manifest.license, "MIT", manifest.name);
     assert.equal(existsSync(join(directory, "LICENSE")), true, manifest.name + " must ship a package-local license");
     assert.deepEqual(manifest.repository, {
@@ -58,8 +84,7 @@ test("package runtime has no telemetry, credential integration, or network downl
     }
   }
   const runtimeFiles = [
-    join(extensionDir, "src/index.ts"),
-    join(extensionDir, "src/runtime.ts"),
+    ...walkSources(join(extensionDir, "src"), ".ts"),
     join(launcherDir, "src/index.js"),
     join(launcherDir, "bin/asgrep.js"),
   ];

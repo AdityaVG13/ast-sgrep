@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, describe, it } from "node:test";
 import { createSgrepCodeMode, parseSgrepRef, type SgrepRef } from "../../../packages/pi/extension/src/code-mode.js";
-import { MACHINE_SCHEMA_VERSION, RuntimeError, type MachineEnvelope, type RunOptions, type RuntimeContext } from "../../../packages/pi/extension/src/runtime.js";
+import { MACHINE_SCHEMA_VERSION, RuntimeError, type MachineEnvelope, type RunOptions, type RuntimeContext } from "../../../packages/pi/extension/src/runtime/runtime.js";
 
 const temporary: string[] = [];
 afterEach(async () => {

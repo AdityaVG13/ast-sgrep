@@ -155,16 +155,10 @@ export function timeoutHint(message: string): string {
   return `${message}; narrow with asgrep.search(query, { in: "src" }), lower limit, or split the program`;
 }
 
-export function missingReturnHint(code: string, result: unknown): string | undefined {
-  if (result !== undefined) return undefined;
-  if (/\breturn\b/.test(code)) return undefined;
-  return "no return statement; add `return` to send a value to the model";
-}
-
 function looksLikeBareExpression(code: string): boolean {
   const trimmed = code.trim().replace(/;\s*$/u, "");
   if (!trimmed || /\breturn\b/.test(trimmed)) return false;
-  if (/^(?:const|let|var|function|class|if|for|while|switch|try|async|import|export)\b/u.test(trimmed)) return false;
+  if (/^(?:const|let|var|function|class|if|for|while|switch|try|async|import|export|throw|do|break|continue|debugger|yield|with|else|case|default)\b/u.test(trimmed)) return false;
   if (/;\s*\S/u.test(trimmed)) return false;
   return true;
 }

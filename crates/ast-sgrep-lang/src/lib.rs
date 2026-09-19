@@ -89,6 +89,10 @@ impl Language {
         ("hxx", Language::Cpp),
         ("hh", Language::Cpp),
         ("ipp", Language::Cpp),
+        // CUDA compiles as C++-with-extensions; the cpp grammar parses kernel
+        // bodies and headers so .cu/.cuh index as C++ instead of being skipped.
+        ("cu", Language::Cpp),
+        ("cuh", Language::Cpp),
         ("kt", Language::Kotlin),
         ("kts", Language::Kotlin),
         ("php", Language::Php),
@@ -125,7 +129,7 @@ impl Language {
             "golang" => Some(Language::Go),
             "csharp" | "c#" | "c-sharp" => Some(Language::CSharp),
             "ruby" => Some(Language::Ruby),
-            "c++" => Some(Language::Cpp),
+            "c++" | "cuda" => Some(Language::Cpp),
             "kotlin" => Some(Language::Kotlin),
             "dart" => Some(Language::Dart),
             "moonbit" => Some(Language::MoonBit),

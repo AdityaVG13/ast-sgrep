@@ -12,6 +12,28 @@ The npm release is one atomic versioned family at `2.0.0`, published only from t
 
 The extension, launcher, and five native npm packages share npm version `2.0.0`. The packaged executable is built from this release commit and reports native CLI version `2.0.0`; that expected CLI identity is recorded separately in [the release contract](../packages/pi/release-contract.json). All artifacts share one source commit and recorded checksums. Pi validation does not run automatically on pull requests, pushes to `main`, or tag pushes; both Pi workflows are manual `workflow_dispatch` actions. npm and crates.io are independently approved registry operations over the same source release; neither waits for or proves completion of the other.
 
+## Pi extension lane (pi-ast-sgrep)
+
+`pi-ast-sgrep` is deliberately decoupled from the canonical family: it is the primary dogfooding surface for the pi integration and releases on its own version line. The launcher, the five platform packages, and the embedded CLI remain lockstep; the extension does not carry binaries and resolves its launcher through the declared `packages.extension.launcherRange` (currently `>=2.0.0 <3`), so installs automatically pick up newer native families once they ship while remaining schema-guarded at runtime.
+
+Rules for the extension lane:
+
+- The extension version lives in two places that MUST agree: `packages/pi/extension/package.json` and `packages/pi/release-contract.json` at `packages.extension.version`. Bump both together.
+- Extension releases require a signed annotated tag in the `pi-v<version>` namespace (for example `pi-v2.1.0`) on the intended commit, then a manual `pi-npm-release.yml` dispatch with `layer: extension`, `release_tag: pi-v2.1.0`, `publish: true`. The lane builds the committed `dist` of that tag (check:pi-dist), packs exactly one tarball, attests it, preserves it as a GitHub Release asset, and publishes via the same protected `npm-production` OIDC environment — the npm trusted-publisher registration is shared with the family workflow file.
+- Features that need newer native envelope fields must degrade gracefully on older launchers; when a feature genuinely requires a new native floor, raise `launcherRange` and `compatibility.layers.extension.minLauncherVersion` in the contract and ship a family release first.
+- Local dry-run of the lane: `node packages/pi/scripts/release-acceptance.mjs pack --lane extension --output <empty-dir> --commit $(git rev-parse HEAD)` then `... verify --artifacts <dir>`. Gate locally: `... gate --lane extension --tag pi-v2.1.0 --commit <sha> --ref-type tag` against a real signed tag.
+
+### Dogfood publish (one command)
+
+For everyday iteration the extension may be published locally — this is the dogfooding lane the release contract blesses:
+
+```bash
+npm run publish:pi-extension            # publish the version in the contract
+npm run publish:pi-extension -- 2.1.1   # bump manifest+contract, commit them, publish
+```
+
+The script enforces the same invariants the tag lane checks: manifest and `packages.extension.version` agree, `ast-sgrep` dependency equals `launcherRange`, the extension tree and dist are fully committed (packed content = committed content, i.e. off origin/main once pushed), `check:pi-contract` passes, and the build is clean. Only then does it run `npm publish`. Provenance attestation and OIDC remain exclusive to the signed `pi-v` tag lane — use it for releases you want attestable.
+
 Local preparation is side-effect free:
 
 ```bash

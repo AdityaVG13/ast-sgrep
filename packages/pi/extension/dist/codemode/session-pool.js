@@ -9,6 +9,7 @@
  */
 import { asEnvelope } from "./dispatch.js";
 import { loadCodemodeNative } from "./native.js";
+import { defined } from "./types.js";
 import { startStickyWorker } from "./worker.js";
 const abortError = () => Object.assign(new Error("native call aborted"), { name: "AbortError" });
 /** Bounded metadata and symbol lookups that may run on the JS thread. */
@@ -30,6 +31,24 @@ function isBusyError(cause) {
 export function isUncachedSearchError(cause) {
     const message = cause instanceof Error ? cause.message : String(cause);
     return /use call\(\) for search/i.test(message);
+}
+/** NAPI can surface SQLite u64 counters as BigInt (writer_generation exceeds
+ * 2^53). BigInt breaks JSON.stringify downstream (pi serializes result
+ * details) — normalize to Number at the boundary. Precision past 2^53 is
+ * display-only here; equality comparisons still hold since both sides
+ * convert the same integer identically. */
+function normalizeNativeValue(value) {
+    if (typeof value === "bigint")
+        return Number(value);
+    if (Array.isArray(value))
+        return value.map(normalizeNativeValue);
+    if (value && typeof value === "object") {
+        const out = {};
+        for (const [key, entry] of Object.entries(value))
+            out[key] = normalizeNativeValue(entry);
+        return out;
+    }
+    return value;
 }
 export function isClosedWorkerError(cause) {
     const message = cause instanceof Error ? cause.message : String(cause);
@@ -76,7 +95,7 @@ function inProcessWorker(session) {
                 try {
                     const value = sync.call(session, tool, args ?? {});
                     if (!(tool === "search" && value == null)) {
-                        return Promise.resolve(asEnvelope(value, tool));
+                        return Promise.resolve(asEnvelope(normalizeNativeValue(value), tool));
                     }
                 }
                 catch (cause) {
@@ -88,13 +107,13 @@ function inProcessWorker(session) {
                     }
                 }
             }
-            return enqueue(async () => asEnvelope(await session.call(tool, args, options?.signal), tool), options?.signal);
+            return enqueue(async () => asEnvelope(normalizeNativeValue(await session.call(tool, args, options?.signal)), tool), options?.signal);
         },
         batch(calls, options) {
             return enqueue(async () => {
                 const response = await session.batch(calls, options?.signal);
                 const result = {
-                    results: response.results,
+                    results: normalizeNativeValue(response.results),
                     all_ok: response.allOk,
                     wall_ms: response.wallMs,
                     mode: response.mode,
@@ -117,6 +136,10 @@ export class NativeSessionPool {
     #startFn;
     #backend = "none";
     #shutdownPromise = null;
+    /** Real start failure per root — surfaced instead of a stale "closed" error. */
+    #startFailures = new Map();
+    /** Crash-loop guard: a failing backend gets this long before respawn retries. */
+    static #RESTART_BACKOFF_MS = 15_000;
     constructor(startFn = startStickyWorker) {
         this.#startFn = startFn;
     }
@@ -130,6 +153,10 @@ export class NativeSessionPool {
     backend() {
         return this.#backend;
     }
+    /** Why the last start attempt failed — for doctor/status and error fidelity. */
+    lastStartError(root) {
+        return this.#startFailures.get(root)?.error;
+    }
     async acquire(root) {
         if (this.#shutdownPromise)
             return null;
@@ -138,6 +165,13 @@ export class NativeSessionPool {
             if (!workerIsClosed(existing.worker))
                 return existing.worker;
             await this.invalidate(root);
+        }
+        // A backend that just failed is crash-looping: skip the respawn for a
+        // bounded window so callers fall back instead of paying a doomed spawn
+        // per call. The window expires and recovery still happens automatically.
+        const failure = this.#startFailures.get(root);
+        if (failure && Date.now() - failure.at < NativeSessionPool.#RESTART_BACKOFF_MS) {
+            return null;
         }
         const inFlight = this.#starting.get(root);
         if (inFlight)
@@ -157,8 +191,12 @@ export class NativeSessionPool {
             throw abortError();
         try {
             const worker = await this.acquire(root);
-            if (!worker)
-                throw new Error("native Code Mode backend unavailable");
+            if (!worker) {
+                const startError = this.lastStartError(root);
+                throw new Error(startError
+                    ? "codemode backend unavailable: " + startError
+                    : "native Code Mode backend unavailable");
+            }
             return await worker.call(tool, args, options);
         }
         catch (cause) {
@@ -166,8 +204,14 @@ export class NativeSessionPool {
                 throw cause;
             await this.invalidate(root);
             const retry = await this.acquire(root);
-            if (!retry)
+            if (!retry) {
+                // Surface the real restart failure (spawn error / schema refusal), not
+                // the stale "closed" message that hides it.
+                const startError = this.lastStartError(root);
+                if (startError)
+                    throw new Error("codemode backend unavailable: " + startError);
                 throw cause;
+            }
             return retry.call(tool, args, options);
         }
     }
@@ -177,6 +221,7 @@ export class NativeSessionPool {
         this.#starting.delete(root);
         const entry = this.#entries.get(root);
         this.#entries.delete(root);
+        this.#startFailures.delete(root);
         if (entry)
             await entry.worker.end().catch(() => undefined);
         if (starting)
@@ -217,17 +262,24 @@ export class NativeSessionPool {
     async #start(root) {
         const gen = this.#generationFor(root);
         const opts = this.#options ?? {};
+        const fail = (error) => {
+            this.#startFailures.set(root, {
+                at: Date.now(),
+                error: error instanceof Error ? error.message : String(error),
+            });
+            return null;
+        };
         // 1) In-process NAPI (preferred — zero spawn).
         const binding = loadCodemodeNative();
+        let napiError = null;
         if (binding) {
             try {
-                const config = { root };
-                if (opts.indexPath)
-                    config.indexPath = opts.indexPath;
-                if (opts.limit !== undefined)
-                    config.limit = opts.limit;
-                if (opts.useEmbed !== undefined)
-                    config.useEmbed = opts.useEmbed;
+                const config = defined({
+                    root,
+                    indexPath: opts.indexPath,
+                    limit: opts.limit,
+                    useEmbed: opts.useEmbed,
+                });
                 const session = new binding.Session(config);
                 const worker = inProcessWorker(session);
                 if (gen !== this.#generationFor(root)) {
@@ -236,37 +288,42 @@ export class NativeSessionPool {
                 }
                 this.#entries.set(root, { root, worker, generation: gen, backend: "napi" });
                 this.#backend = "napi";
+                this.#startFailures.delete(root);
                 return worker;
             }
-            catch {
-                // Fall through to CLI sticky.
+            catch (cause) {
+                // Fall through to CLI sticky, but keep the real error for fidelity.
+                napiError = cause;
             }
         }
         // 2) CLI sticky fallback (degraded).
-        if (!opts.binary)
-            return null;
+        if (!opts.binary) {
+            return fail(napiError ?? new Error("native Code Mode backend unavailable (no addon, no binary)"));
+        }
         try {
-            const stickyOpts = {
+            const stickyOpts = defined({
                 binary: opts.binary,
                 cwd: root,
-            };
-            if (opts.env)
-                stickyOpts.env = opts.env;
-            if (opts.timeoutMs !== undefined)
-                stickyOpts.timeoutMs = opts.timeoutMs;
-            if (opts.maxOutputBytes !== undefined)
-                stickyOpts.maxOutputBytes = opts.maxOutputBytes;
+                env: opts.env,
+                timeoutMs: opts.timeoutMs,
+                maxOutputBytes: opts.maxOutputBytes,
+            });
             const worker = await this.#startFn(stickyOpts);
             if (gen !== this.#generationFor(root)) {
                 await worker.end().catch(() => undefined);
                 return null;
             }
+            if (workerIsClosed(worker)) {
+                await worker.end().catch(() => undefined);
+                return fail(new Error("codemode-serve exited during startup"));
+            }
             this.#entries.set(root, { root, worker, generation: gen, backend: "cli" });
             this.#backend = "cli";
+            this.#startFailures.delete(root);
             return worker;
         }
-        catch {
-            return null;
+        catch (cause) {
+            return fail(cause);
         }
     }
 }

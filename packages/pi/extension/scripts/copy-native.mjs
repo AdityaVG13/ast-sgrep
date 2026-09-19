@@ -34,4 +34,16 @@ if (!src) {
 const destName = triple ? `ast-sgrep-codemode.${triple}.node` : "ast-sgrep-codemode.node";
 const dest = join(outDir, destName);
 copyFileSync(src, dest);
+if (platform === "darwin") {
+  // A copied Mach-O keeps the linker's adhoc signature but page hashes can go
+  // stale on copy (dyld kills the loader with "Code Signature Invalid").
+  // Re-signing after copy rewrites a clean signature — cheap and required for
+  // dlopen under a signed Node host.
+  const { spawnSync } = await import("node:child_process");
+  const sign = spawnSync("codesign", ["--force", "--sign", "-", dest], { stdio: "inherit" });
+  if (sign.status !== 0) {
+    console.error("codesign failed on", dest);
+    process.exit(sign.status ?? 1);
+  }
+}
 console.log(`copied ${src} -> ${dest}`);

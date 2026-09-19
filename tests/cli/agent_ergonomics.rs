@@ -346,3 +346,66 @@ fn pins_common_agent_typos() {
     let value: Value = serde_json::from_str(&stdout).expect("json");
     assert_eq!(value["command"], "doctor");
 }
+
+/// H-PERF-001 option (b): duty-cycle supervision is opt-in. The default run
+/// is a single in-process command; setting ASGREP_CPU_LIMIT_PERCENT (1..=80)
+/// re-enables the supervisor. Doctor is the discoverability surface: it must
+/// report the active policy and teach the opt-in variable.
+fn run_with_env(args: &[&str], envs: &[(&str, Option<&str>)]) -> (i32, String, String) {
+    let mut cmd = Command::new(asgrep_bin());
+    cmd.args(args).env("NO_COLOR", "1");
+    for (key, value) in envs {
+        match value {
+            Some(v) => {
+                cmd.env(key, v);
+            }
+            None => {
+                cmd.env_remove(key);
+            }
+        }
+    }
+    let output = cmd.output().expect("run asgrep");
+    (
+        output.status.code().unwrap_or(-1),
+        String::from_utf8_lossy(&output.stdout).into_owned(),
+        String::from_utf8_lossy(&output.stderr).into_owned(),
+    )
+}
+
+fn doctor_supervision_json(envs: &[(&str, Option<&str>)]) -> Value {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path().join("root");
+    std::fs::create_dir(&root).unwrap();
+    let (code, stdout, stderr) = run_with_env(&["--json", "doctor", root.to_str().unwrap()], envs);
+    // Doctor fail-closes with exit 2 on an unhealthy (here: indexless) root;
+    // the supervision policy field is reported on both paths (MJ-010 pins
+    // the exit contract, machine_shapes.json pins the key set).
+    assert!(code == 0 || code == 2, "stderr={stderr} stdout={stdout}");
+    serde_json::from_str(&stdout).expect("json stdout")
+}
+
+#[test]
+fn doctor_reports_supervision_default_off() {
+    let value = doctor_supervision_json(&[("ASGREP_CPU_LIMIT_PERCENT", None)]);
+    assert_eq!(
+        value["supervision"]["mode"], "off",
+        "supervision is opt-in (H-PERF-001 option b): default must be off: {value}"
+    );
+    let opt_in = value["supervision"]["opt_in"].as_str().unwrap_or_default();
+    assert!(
+        opt_in.contains("ASGREP_CPU_LIMIT_PERCENT"),
+        "doctor must teach the opt-in variable: {value}"
+    );
+}
+
+#[test]
+fn doctor_reports_opt_in_duty_cycle_and_invalid_falls_back_to_default() {
+    let value = doctor_supervision_json(&[("ASGREP_CPU_LIMIT_PERCENT", Some("50"))]);
+    assert_eq!(value["supervision"]["mode"], "duty_cycle", "{value}");
+    assert_eq!(value["supervision"]["cpu_limit_percent"], 50, "{value}");
+    // A malformed opt-in value keeps the supervised default bound (80) —
+    // fail-safe, never a silent switch to unsupervised.
+    let value = doctor_supervision_json(&[("ASGREP_CPU_LIMIT_PERCENT", Some("not-a-number"))]);
+    assert_eq!(value["supervision"]["mode"], "duty_cycle", "{value}");
+    assert_eq!(value["supervision"]["cpu_limit_percent"], 80, "{value}");
+}

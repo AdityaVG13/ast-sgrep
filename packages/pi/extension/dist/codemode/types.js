@@ -1,4 +1,12 @@
 /** Typed surface the model sees inside a Code Mode program (`asgrep.*`). */
+/** Drop undefined keys — replaces spread-conditional arg-building chains. */
+export function defined(args) {
+    const out = {};
+    for (const [key, value] of Object.entries(args))
+        if (value !== undefined)
+            out[key] = value;
+    return out;
+}
 /** Host methods the program may invoke. Primary lookup methods first. */
 export const CODEMODE_HOST_METHODS = [
     "search",

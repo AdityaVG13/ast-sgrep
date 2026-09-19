@@ -399,6 +399,51 @@ fn edit_unique_replace_then_reindex() {
 }
 
 #[test]
+fn edit_batch_is_atomic_when_a_later_edit_fails() {
+    let (_tmp, mut session) = writable_session();
+    // First edit is valid; second can never match. The batch must fail
+    // without committing the first edit — callers never see ok:false on a
+    // partially applied edits[].
+    session
+        .call(
+            "edit",
+            json!({
+                "edits": [
+                    { "path": "hello.py", "oldText": "return 1", "newText": "return 99" },
+                    { "path": "hello.py", "oldText": "not-present-anywhere", "newText": "x" }
+                ]
+            }),
+        )
+        .expect_err("a batch containing an unresolvable edit must fail");
+    let body = fs::read_to_string(_tmp.path().join("hello.py")).expect("reread");
+    assert!(
+        body.contains("return 1"),
+        "the valid earlier edit must not have committed: {body}"
+    );
+    assert!(!body.contains("return 99"), "{body}");
+}
+
+#[test]
+fn edit_batch_applies_all_valid_edits_in_order() {
+    let (_tmp, mut session) = writable_session();
+    let out = session
+        .call(
+            "edit",
+            json!({
+                "edits": [
+                    { "path": "hello.py", "oldText": "return 1", "newText": "return 2" },
+                    { "path": "hello.py", "oldText": "def hello():", "newText": "def greet():" }
+                ]
+            }),
+        )
+        .expect("all-valid batch");
+    assert_eq!(out["ok"], true);
+    assert_eq!(out["changed"], 2);
+    let body = fs::read_to_string(_tmp.path().join("hello.py")).expect("reread");
+    assert!(body.contains("def greet():") && body.contains("return 2"), "{body}");
+}
+
+#[test]
 fn edit_rejects_non_unique_old_text() {
     let (_tmp, mut session) = writable_session();
     let err = session
@@ -573,17 +618,22 @@ fn peek_cached_search_hits_after_first_call() {
 #[test]
 fn search_injects_in_and_fail_closes_unknown_lang() {
     let (_tmp, mut session) = indexed_session();
-    let scoped = session
+    // in: scopes refuse loudly when they match nothing (65fb66ba) — an empty
+    // scope silently returning zero hits hides typos in path filters.
+    let missing_scope = session
         .call(
             "search",
             json!({"query": "auth", "in": "no_such_dir", "limit": 8}),
         )
-        .expect("scoped search");
-    assert_eq!(
-        scoped["hits"].as_array().map(Vec::len).unwrap_or(0),
-        0,
-        "{scoped}"
+        .expect_err("a scope matching no file must fail loudly");
+    assert!(
+        missing_scope.to_string().contains("matches no file or directory"),
+        "{missing_scope}"
     );
+    let scoped = session
+        .call("search", json!({"query": "auth", "in": ".", "limit": 8}))
+        .expect("valid scope must search");
+    assert!(scoped["hits"].is_array(), "{scoped}");
     let err = session
         .call("search", json!({"query": "auth", "lang": "notalang"}))
         .expect_err("unknown lang");

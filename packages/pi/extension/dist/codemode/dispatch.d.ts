@@ -4,7 +4,7 @@
  * Amdahl: serial cost is process spawn + SQLite open. Sticky serve kills spawn
  * for the whole Code Mode program; batch coalescing kills it per Promise.all wave.
  */
-import type { MachineEnvelope } from "../runtime.js";
+import type { MachineEnvelope } from "../runtime/runtime.js";
 import type { ConnectorHost, DispatchSurface } from "./connector.js";
 export type CodemodeToolCall = {
     tool: string;
@@ -17,6 +17,15 @@ export type DispatchStats = {
     parallelSpawnCalls: number;
     stickyCalls: number;
     wallMs: number;
+};
+/** One settled host call: which lane carried it and how long it took. */
+export type DispatchCall = {
+    tool: string;
+    /** Short display target: query/symbol/module/path, whichever the call used. */
+    target: string;
+    lane: "sticky" | "batch" | "spawn" | "serial";
+    ok: boolean;
+    ms: number;
 };
 export type BatchResult = {
     results: Array<{
@@ -65,6 +74,7 @@ export type BatchCapableHost = ConnectorHost & {
 export declare function createCodemodeDispatcher(host: BatchCapableHost): {
     host: DispatchSurface;
     stats: () => DispatchStats;
+    trace: () => DispatchCall[];
     resetStats: () => void;
 };
 export declare function argvFor(tool: string, args: Record<string, unknown>): string[];

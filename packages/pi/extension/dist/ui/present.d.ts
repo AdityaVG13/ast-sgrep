@@ -27,6 +27,10 @@ export type EnvelopeLike = {
 };
 export declare const ASGREP_PROMPT_SNIPPET = "Search this repo by intent, symbol, callers, defs, or pattern (asgrep; use without being asked)";
 export declare const ASGREP_PROMPT_GUIDELINES: readonly ["For any code lookup (find a function, callers, defs, intent, or structural pattern), call asgrep immediately. Do not wait for the user to mention ast-sgrep.", "Prefer the asgrep Code Mode tool. Write JavaScript: asgrep.search(\"query\"), asgrep.defs(\"Symbol\"), asgrep.callers(\"Symbol\"), asgrep.read({ refs }). Independent lookups: Promise.all. Return a small shaped value.", "Use grep only for exact log strings, filenames, or config keys. asgrep.edit does unique string replace plus targeted reindex; oldText must match exactly once.", "If a search returns 0 hits, use suggested_next or retry with asgrep.find, asgrep.defs, or asgrep.search(query, { in: \"src\" })."];
+export declare function paint(theme: PresentTheme | undefined, role: string, text: string, bold?: boolean): string;
+export declare function hitLocation(hit: HitLike): string;
+export declare function hitLabel(hit: HitLike): string;
+export declare function header(theme: PresentTheme | undefined, verb: string, bits: Array<string | null | undefined>): string;
 export declare function formatSearchCall(params: {
     query?: string;
     mode?: string;
@@ -35,6 +39,20 @@ export declare function formatSearchCall(params: {
 }, theme?: PresentTheme): string;
 export declare function formatIndexCall(force: boolean, theme?: PresentTheme): string;
 export declare function formatStatusCall(theme?: PresentTheme): string;
+export declare function formatEditCall(params: {
+    path?: string;
+    edits?: unknown[];
+}, theme?: PresentTheme): string;
+export declare function formatReadCall(params: {
+    path?: string;
+    ref?: string;
+    start?: number;
+    end?: number;
+}, theme?: PresentTheme): string;
+/** Model-visible text for an edit envelope: what changed, per file. */
+export declare function formatEditResult(response: EnvelopeLike, theme?: PresentTheme): string;
+/** Model-visible text for a read envelope: the window contents themselves. */
+export declare function formatReadResult(response: EnvelopeLike, theme?: PresentTheme): string;
 export declare function formatCodemodeCall(code: string, theme?: PresentTheme): string;
 export declare function formatSearchResult(response: EnvelopeLike, meta: {
     command: string;

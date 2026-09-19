@@ -30,6 +30,19 @@ pub fn is_worker() -> bool {
 pub fn cpu_limit_percent() -> u8 {
     parse_cpu_limit(&std::env::var(CPU_LIMIT_ENV).unwrap_or_default())
 }
+/// H-PERF-001 option (b) — supervision is opt-in. Presence of
+/// `ASGREP_CPU_LIMIT_PERCENT` in the environment re-enables the supervisor;
+/// unset means a single in-process run. A malformed value still counts as
+/// opted-in and keeps the fail-safe default bound (`DEFAULT_CPU_LIMIT`) via
+/// `parse_cpu_limit` — it never silently disables the CPU contract.
+#[cfg(unix)]
+pub fn supervision_requested() -> bool {
+    std::env::var_os(CPU_LIMIT_ENV).is_some()
+}
+#[cfg(not(unix))]
+pub fn supervision_requested() -> bool {
+    false
+}
 pub fn parse_cpu_limit(raw: &str) -> u8 {
     raw.trim()
         .parse::<u8>()
@@ -53,6 +66,20 @@ pub fn clear_internal_envs() {
     std::env::remove_var(WORKER_MARKER);
     std::env::remove_var(SUPERVISOR_PID_ENV);
     std::env::remove_var(WORKER_NONCE_ENV);
+}
+/// In-process run for the unsupervised (default) mode. Keeps the supervised
+/// worker's thread-cap environment so embed/native threading behavior does
+/// not drift between the two modes, and clears the worker handshake
+/// variables defensively. The supervisor's process-lifecycle guards (orphan
+/// reaping, parent-watch) remain supervision-scoped by design (EV card
+/// option b risk acceptance).
+#[cfg(unix)]
+pub fn run_unsupervised() -> anyhow::Result<()> {
+    clear_internal_envs();
+    for var in THREAD_ENV_VARS {
+        std::env::set_var(var, "1");
+    }
+    crate::run_process()
 }
 #[cfg(unix)]
 pub fn supervise() -> anyhow::Result<()> {

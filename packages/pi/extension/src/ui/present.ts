@@ -39,12 +39,12 @@ export const ASGREP_PROMPT_GUIDELINES = [
   "If a search returns 0 hits, use suggested_next or retry with asgrep.find, asgrep.defs, or asgrep.search(query, { in: \"src\" }).",
 ] as const;
 
-function paint(theme: PresentTheme | undefined, role: string, text: string, bold = false): string {
+export function paint(theme: PresentTheme | undefined, role: string, text: string, bold = false): string {
   const body = bold && theme ? theme.bold(text) : text;
   return theme ? theme.fg(role, body) : body;
 }
 
-function hitLocation(hit: HitLike): string {
+export function hitLocation(hit: HitLike): string {
   const file = String(hit.file ?? hit.path ?? "");
   const line = hit.start_line ?? hit.line ?? hit.lines;
   if (typeof line === "number") return `${file}:${line}`;
@@ -53,14 +53,14 @@ function hitLocation(hit: HitLike): string {
   return file || "?";
 }
 
-function hitLabel(hit: HitLike): string {
+export function hitLabel(hit: HitLike): string {
   const symbol = typeof hit.symbol === "string" ? hit.symbol : "";
   const kind = typeof hit.kind === "string" ? hit.kind : "";
   const preview = typeof hit.preview === "string" ? hit.preview.replace(/\s+/g, " ").trim() : "";
   return [symbol, kind, preview && preview.length < 80 ? preview : ""].filter(Boolean).join("  ");
 }
 
-function header(theme: PresentTheme | undefined, verb: string, bits: Array<string | null | undefined>): string {
+export function header(theme: PresentTheme | undefined, verb: string, bits: Array<string | null | undefined>): string {
   return [paint(theme, "toolTitle", "asgrep", true), paint(theme, "accent", verb), ...bits.filter((bit): bit is string => Boolean(bit))].join("  ·  ");
 }
 
@@ -82,6 +82,51 @@ export function formatIndexCall(force: boolean, theme?: PresentTheme): string {
 
 export function formatStatusCall(theme?: PresentTheme): string {
   return header(theme, "status", []);
+}
+
+export function formatEditCall(
+  params: { path?: string; edits?: unknown[] },
+  theme?: PresentTheme,
+): string {
+  const n = Array.isArray(params.edits) ? params.edits.length : 0;
+  return header(theme, "edit", [params.path, n > 1 ? n + " edits" : undefined]);
+}
+
+export function formatReadCall(
+  params: { path?: string; ref?: string; start?: number; end?: number },
+  theme?: PresentTheme,
+): string {
+  const target = params.path ?? params.ref;
+  const range = params.start !== undefined ? "L" + params.start + "-L" + (params.end ?? "") : undefined;
+  return header(theme, "read", [target, range]);
+}
+
+/** Model-visible text for an edit envelope: what changed, per file. */
+export function formatEditResult(response: EnvelopeLike, theme?: PresentTheme): string {
+  const edits = Array.isArray(response.edits) ? (response.edits as Array<Record<string, unknown>>) : [];
+  const changed = edits.filter((e) => e.changed === true).length;
+  const title = header(theme, "edit", [changed + "/" + edits.length + " changed"]);
+  const rows = edits.slice(0, 12).map((e) => {
+    const path = typeof e.path === "string" ? e.path : "?";
+    const line = typeof e.line === "number" ? ":" + e.line : "";
+    return paint(theme, "toolOutput", "  " + path + line);
+  });
+  return [title, ...rows].join("\n");
+}
+
+/** Model-visible text for a read envelope: the window contents themselves. */
+export function formatReadResult(response: EnvelopeLike, theme?: PresentTheme): string {
+  const windows = Array.isArray(response.windows) ? (response.windows as Array<Record<string, unknown>>) : [];
+  if (windows.length === 0) return header(theme, "read", ["0 windows"]);
+  const out: string[] = [];
+  for (const w of windows.slice(0, 8)) {
+    const path = typeof w.path === "string" ? w.path : "?";
+    out.push(header(theme, "read", [path + "#L" + (w.start ?? 1) + "-L" + (w.end ?? "")]));
+    const text = typeof w.text === "string" ? w.text : "";
+    for (const line of text.split("\n").slice(0, 80)) out.push(line);
+  }
+  if (windows.length > 8) out.push("… " + (windows.length - 8) + " more windows");
+  return out.join("\n");
 }
 
 export function formatCodemodeCall(code: string, theme?: PresentTheme): string {
@@ -225,7 +270,10 @@ export function truncateToWidth(text: string, maxWidth: number, ellipsis = "..."
     width += cell.width;
     index += cell.length;
   }
-  return `${kept}${ellipsis}`;
+  // The cut can land inside a painted span — its closing SGR is past the
+  // budget, so the ellipsis and everything after would inherit the open color.
+  // Close it explicitly; harmless when the kept spans were already balanced.
+  return kept + (kept.includes("\u001b[") ? "\u001b[0m" : "") + ellipsis;
 }
 
 function compactValue(value: unknown): string {

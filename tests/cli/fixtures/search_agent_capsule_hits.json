@@ -7,8 +7,9 @@
     {
       "callee": null,
       "caller": null,
-      "confidence": 0.76,
+      "confidence": 0.99,
       "contributors": [
+        "asgrep",
         "def",
         "anchor",
         "pattern"
@@ -19,13 +20,14 @@
         "end": 11,
         "start": 8
       },
-      "margin": 0.0016546304865150685,
+      "margin": 0.022524195703906374,
       "preview": "def process_request(input)",
       "ref": "src/app.rb#L8-L11",
-      "score": 0.09578265468006346,
+      "score": 0.11665221989745476,
       "signal": "structural",
       "symbol": "process_request",
       "why": [
+        "exact_text",
         "exact_symbol",
         "anchor",
         "structural_pattern"

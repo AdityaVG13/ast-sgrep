@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { registerAstSgrepTools } from "../../../packages/pi/extension/src/index.js";
-import { RuntimeError, type MachineEnvelope } from "../../../packages/pi/extension/src/runtime.js";
+import { RuntimeError, type MachineEnvelope } from "../../../packages/pi/extension/src/runtime/runtime.js";
 
 type Tool = {
   name: string;
@@ -46,7 +46,7 @@ async function invoke(tool: Tool, params: Record<string, unknown> = {}, signal =
 
 test("registers Code Mode first with auto-use prompt snippet", () => {
   const { tools, byName } = fixture();
-  assert.deepEqual(tools.map(({ name }) => name), ["asgrep", "asgrep_search", "asgrep_index", "asgrep_status"]);
+  assert.deepEqual(tools.map(({ name }) => name), ["asgrep", "asgrep_search", "asgrep_edit", "asgrep_read", "asgrep_index", "asgrep_status"]);
   assert.ok(byName("asgrep").promptSnippet);
   assert.match(byName("asgrep").promptSnippet!, /without being asked/);
   assert.ok((byName("asgrep").promptGuidelines ?? []).length >= 2);

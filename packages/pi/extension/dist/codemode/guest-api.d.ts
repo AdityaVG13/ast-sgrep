@@ -8,7 +8,6 @@ export declare function coerceHostArgs(method: string, input: Record<string, unk
 export declare function applyQueryScope(query: string, args: Record<string, unknown>): string | undefined;
 export declare function unknownMethodError(method: string): string;
 export declare function timeoutHint(message: string): string;
-export declare function missingReturnHint(code: string, result: unknown): string | undefined;
 /**
  * Strip fences and invoke a function expression, including non-async arrows.
  * A single expression with no `return` is returned automatically.

@@ -5,8 +5,8 @@ import { mkdtemp, mkdir, realpath, rename, rm, symlink, writeFile } from "node:f
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, describe, it } from "node:test";
-import { AstSgrepRuntime, CONFIG_SCHEMA_VERSION, DEFAULT_MAX_OUTPUT_BYTES, DEFAULT_REFRESH_INTERVAL_MS, DEFAULT_TIMEOUT_MS, FreshnessCoordinator, INDEX_FORMAT_VERSION, MACHINE_SCHEMA_VERSION, RUNTIME_VERSION, RuntimeError, migrateConfig, resolveConfig, resolveRuntimeRoot, rollbackConfig, type ExecOptions, type ExecResult, type MachineEnvelope, type PiExec, type RunOptions, type RuntimeContext } from "../../../packages/pi/extension/src/runtime.js";
-import { openIndexDatabase } from "../../../packages/pi/extension/src/sqlite.js";
+import { AstSgrepRuntime, CONFIG_SCHEMA_VERSION, DEFAULT_MAX_OUTPUT_BYTES, DEFAULT_REFRESH_INTERVAL_MS, DEFAULT_TIMEOUT_MS, FreshnessCoordinator, INDEX_FORMAT_VERSION, MACHINE_SCHEMA_VERSION, RUNTIME_VERSION, RuntimeError, migrateConfig, resolveConfig, resolveRuntimeRoot, rollbackConfig, type ExecOptions, type ExecResult, type MachineEnvelope, type PiExec, type RunOptions, type RuntimeContext } from "../../../packages/pi/extension/src/runtime/runtime.js";
+import { openIndexDatabase } from "../../../packages/pi/extension/src/runtime/sqlite.js";
 
 const temporary: string[] = [];
 afterEach(async () => { await Promise.all(temporary.splice(0).map((path) => rm(path, { recursive: true, force: true }))); });
@@ -191,6 +191,11 @@ describe("index format upgrades", () => {
     await createIndex(indexPath, INDEX_FORMAT_VERSION - 1, "prior");
     const inode = statSync(indexPath).ino;
     const pi = new FakePi(async (_options, args) => {
+      // The binary declares its supported schema via version --json; the
+      // runtime consults it once for indexes older/newer than the shipped floor.
+      if (args[0] === "version") {
+        return valid({ command: "version", index_schema_version: INDEX_FORMAT_VERSION });
+      }
       assert.deepEqual(args, ["reindex", ".", "--json"]);
       const database = openIndexDatabase(indexPath);
       try {
@@ -230,7 +235,9 @@ describe("index format upgrades", () => {
     } finally {
       database.close();
     }
-    assert.equal(pi.calls.length, 0);
+    // The only permitted call is the cached "version --json" schema probe —
+    // a future index must never see an index/status/rebuild operation.
+    assert.ok(pi.calls.every((call) => call.args[0] === "version"), JSON.stringify(pi.calls.map((c) => c.args)));
   });
 
   it("preserves the recoverable prior index and returns a structured failure", async () => {
@@ -341,6 +348,25 @@ describe("per-root index freshness", () => {
     };
     await new FreshnessCoordinator().ensureFresh(runtime, { cwd: "/root" });
     assert.deepEqual(commands(runtime), ["status", "reindex"]);
+  });
+
+  it("bounds one caller's freshness wait while the shared refresh completes in the background", async () => {
+    const runtime = new FakeFreshnessRuntime();
+    let finishRefresh!: () => void;
+    const gate = new Promise<void>((resolve) => { finishRefresh = resolve; });
+    runtime.handler = async (command) => {
+      if (command === "index") await gate;
+      return machine({ command, root: "/root", index_path: "/root/.asgrep/index.db", file_count: command === "status" ? 0 : 1 });
+    };
+    const subject = new FreshnessCoordinator({ maxWaitMs: 25 });
+    const error = await errorCode(() => subject.ensureFresh(runtime, { cwd: "/root" }), "TIMEOUT");
+    assert.match(error.message, /serving the current index/u);
+    // The shared refresh is root-owned: it finishes in the background, so the
+    // next caller gets a fresh index instead of paying the wait again.
+    finishRefresh();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(await subject.ensureFresh(runtime, { cwd: "/root" }), "/root");
+    assert.ok(commands(runtime).includes("index"));
   });
 
   it("re-probes status on interval expiry without walking a ready index", async () => {

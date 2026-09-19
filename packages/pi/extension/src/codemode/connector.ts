@@ -1,9 +1,11 @@
-import type { MachineEnvelope } from "../runtime.js";
+import type { MachineEnvelope } from "../runtime/runtime.js";
 import { coerceHostArgs } from "./guest-api.js";
+import { defined } from "./types.js";
 import type { ChainArgs, EditArgs, FindArgs, ReadArgs, SearchArgs } from "./types.js";
 import {
   createCodemodeDispatcher,
   type BatchCapableHost,
+  type DispatchCall,
   type DispatchStats,
 } from "./dispatch.js";
 
@@ -55,6 +57,8 @@ export type AsgrepConnector = {
 export type ConnectorBundle = {
   asgrep: AsgrepConnector;
   stats: () => DispatchStats;
+  /** Per-call dispatch trace for the current run (lane + ms + ok, capped). */
+  trace: () => DispatchCall[];
   resetStats: () => void;
 };
 
@@ -112,30 +116,33 @@ export function createAsgrepConnector(
     search: (input, callOptions) => call("search", searchPayload("search", input), callOptions?.signal),
     find: (input, callOptions) => call("find", searchPayload("find", input), callOptions?.signal),
     read: (input, callOptions) =>
-      call("read", {
+      call("read", defined({
+        path: input.path,
+        start: input.start,
+        end: input.end,
+        ref: input.ref,
+        refs: input.refs,
+        context_lines: input.contextLines,
+        max_chars: input.maxChars,
+      }), callOptions?.signal),
+    edit: (input, callOptions) => {
+      // Multi-edit wire contract: every entry carries its own path; the
+      // top-level path is the default for entries that omit it.
+      const edits = input.edits?.map((entry) => ({
         ...(typeof input.path === "string" ? { path: input.path } : {}),
-        ...(input.start !== undefined ? { start: input.start } : {}),
-        ...(input.end !== undefined ? { end: input.end } : {}),
-        ...(typeof input.ref === "string" ? { ref: input.ref } : {}),
-        ...(input.refs !== undefined ? { refs: input.refs } : {}),
-        ...(input.contextLines !== undefined ? { context_lines: input.contextLines } : {}),
-        ...(input.maxChars !== undefined ? { max_chars: input.maxChars } : {}),
-      }, callOptions?.signal),
-    edit: (input, callOptions) =>
-      call("edit", {
-        ...(typeof input.path === "string" ? { path: input.path } : {}),
-        ...(typeof input.oldText === "string" ? { oldText: input.oldText } : {}),
-        ...(typeof input.newText === "string" ? { newText: input.newText } : {}),
-        ...(input.edits !== undefined ? { edits: input.edits } : {}),
-      }, callOptions?.signal),
+        ...entry,
+      }));
+      return call("edit", defined({
+        path: input.path,
+        oldText: input.oldText,
+        newText: input.newText,
+        edits,
+      }), callOptions?.signal);
+    },
     semantic: (input, callOptions) =>
       call("semantic", searchPayload("semantic", input), callOptions?.signal),
     chain: (input, callOptions) =>
-      call("chain", {
-        query: input.query,
-        limit: clampLimit(input.limit),
-        top_n: 20,
-      }, callOptions?.signal),
+      call("chain", { query: input.query, limit: clampLimit(input.limit), top_n: 20 }, callOptions?.signal),
     defs: (input, callOptions) => {
       const scoped = coerceHostArgs("defs", { ...input } as Record<string, unknown>);
       return call("defs", {
@@ -153,11 +160,7 @@ export function createAsgrepConnector(
       }, callOptions?.signal);
     },
     imports: (input, callOptions) =>
-      call("imports", {
-        module: input.module,
-        limit: clampLimit(input.limit),
-        excerpt_lines: clampExcerpt(input.excerptLines),
-      }, callOptions?.signal),
+      call("imports", defined({ module: input.module, limit: clampLimit(input.limit), excerpt_lines: clampExcerpt(input.excerptLines) }), callOptions?.signal),
     indexStatus: (callOptions) => call("index_status", {}, callOptions?.signal),
     indexRepo: (input = {}, callOptions) => call("index_repo", { force: input.force === true }, callOptions?.signal),
     catalogSearch: (input, callOptions) => call("catalog_search", { query: input.query }, callOptions?.signal),
@@ -168,6 +171,7 @@ export function createAsgrepConnector(
   return {
     asgrep,
     stats: dispatcher.stats,
+    trace: dispatcher.trace,
     resetStats: dispatcher.resetStats,
   };
 }

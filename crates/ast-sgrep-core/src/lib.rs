@@ -35,7 +35,8 @@ pub mod tantivy_index;
 /// Compatibility re-exports for callers using the pre-1.3 module paths.
 pub mod skip {
     pub use crate::gitignore::{
-        should_skip_dir, should_skip_file, DEFAULT_SKIP_DIR_NAMES, INDEXABLE_EXTENSIONS,
+        should_skip_dir, should_skip_file, is_indexable_extension, DEFAULT_SKIP_DIR_NAMES,
+        DOCUMENT_EXTENSIONS,
     };
 }
 

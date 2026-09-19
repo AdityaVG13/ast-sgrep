@@ -35,8 +35,9 @@ runStep('gate self-test', process.execPath, ['packages/pi/scripts/release-accept
 const live = [];
 const fresh = [];
 let registryOk = true;
+const specOf = (name) => `${name}@${name === extension.name ? extension.version : version}`;
 for (const name of packageNames) {
-  const view = sh('npm', ['view', `${name}@${version}`, 'version', '--json']);
+  const view = sh('npm', ['view', specOf(name), 'version', '--json']);
   if (view.status === 0) live.push(name);
   else if (/E404|404 Not Found|is not in this registry/u.test(view.stderr + view.stdout)) fresh.push(name);
   else { registryOk = false; console.log(`      registry query failed for ${name}@${version}: ${errorLine(view)}`); }

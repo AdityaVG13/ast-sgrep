@@ -90,34 +90,77 @@ impl CodeModeSession {
         if edits.len() > MAX_EDITS {
             return Err(anyhow!("edit exceeds max {MAX_EDITS} replacements"));
         }
+        // Phase 1: resolve, read, and compute every rewrite before any write.
+        // A validation failure anywhere aborts the batch with zero writes —
+        // callers must never observe ok:false on a partially applied edits[].
+        // Edits to one file compose on the evolving buffer (each edit sees the
+        // previous edit's output); the file is written once in phase 2.
+        struct PendingWrite {
+            rel: PathBuf,
+            abs: PathBuf,
+            original: String,
+            rewritten: String,
+        }
+        let mut plan: Vec<PendingWrite> = Vec::new();
+        let mut by_path: std::collections::HashMap<PathBuf, usize> =
+            std::collections::HashMap::new();
         let mut applied = Vec::with_capacity(edits.len());
-        let mut rel_paths = Vec::with_capacity(edits.len());
         for edit in &edits {
             let rel = jail_rel_path(&root, &edit.path)?;
-            let abs = root.join(&rel);
-            let original = fs::read_to_string(&abs)
-                .with_context(|| format!("cannot read {}", rel.display()))?;
-            if original.len() > MAX_INDEX_FILE_BYTES as usize {
-                return Err(anyhow!(
-                    "{} exceeds max {MAX_INDEX_FILE_BYTES} bytes",
-                    rel.display()
-                ));
-            }
-            let rewritten = unique_replace(&original, &edit.old_text, &edit.new_text)?;
-            if rewritten == original {
-                applied.push(json!({
-                    "path": rel_display(&rel),
-                    "changed": false,
-                }));
-                continue;
-            }
-            fs::write(&abs, rewritten.as_bytes())
-                .with_context(|| format!("cannot write {}", rel.display()))?;
-            applied.push(json!({
+            let index = match by_path.get(&rel) {
+                Some(&index) => index,
+                None => {
+                    let abs = root.join(&rel);
+                    let original = fs::read_to_string(&abs)
+                        .with_context(|| format!("cannot read {}", rel.display()))?;
+                    if original.len() > MAX_INDEX_FILE_BYTES as usize {
+                        return Err(anyhow!(
+                            "{} exceeds max {MAX_INDEX_FILE_BYTES} bytes",
+                            rel.display()
+                        ));
+                    }
+                    plan.push(PendingWrite {
+                        rel: rel.clone(),
+                        abs,
+                        rewritten: original.clone(),
+                        original,
+                    });
+                    by_path.insert(rel.clone(), plan.len() - 1);
+                    plan.len() - 1
+                }
+            };
+            let current = &plan[index].rewritten;
+            // Line where the unique match starts — computed before the buffer
+            // is replaced so the borrow is released.
+            let match_line = current
+                .find(&edit.old_text)
+                .map(|off| current[..off].matches('\n').count() as u32 + 1);
+            let next = unique_replace(current, &edit.old_text, &edit.new_text)?;
+            let changed = next != *current;
+            plan[index].rewritten = next;
+            // Echo a bounded diff so callers can render what changed.
+            let (removed, removed_more) = diff_lines(&edit.old_text);
+            let (added, added_more) = diff_lines(&edit.new_text);
+            let mut row = json!({
                 "path": rel_display(&rel),
-                "changed": true,
-            }));
-            rel_paths.push(rel_display(&rel));
+                "changed": changed,
+                "line": match_line,
+                "removed": removed,
+                "added": added,
+            });
+            if removed_more || added_more {
+                row["truncated"] = json!(true);
+            }
+            applied.push(row);
+        }
+        // Phase 2: every edit validated — write each touched file once.
+        let mut rel_paths = Vec::new();
+        for write in plan {
+            if write.rewritten != write.original {
+                fs::write(&write.abs, write.rewritten.as_bytes())
+                    .with_context(|| format!("cannot write {}", write.rel.display()))?;
+                rel_paths.push(rel_display(&write.rel));
+            }
         }
         if !rel_paths.is_empty() {
             let mut indexer = Indexer::new(IndexOptions {
@@ -302,6 +345,14 @@ fn parse_edit_value(value: &Value) -> anyhow::Result<EditSpec> {
         old_text: old_text.to_string(),
         new_text: new_text.to_string(),
     })
+}
+
+/// Bounded line split for edit diffs — caps each side so a whole-file paste
+/// can't bloat the envelope. Returns (lines, had_more).
+fn diff_lines(text: &str) -> (Vec<String>, bool) {
+    const MAX_DIFF_LINES: usize = 24;
+    let all: Vec<String> = text.lines().map(str::to_string).collect();
+    (all.iter().take(MAX_DIFF_LINES).cloned().collect(), all.len() > MAX_DIFF_LINES)
 }
 
 fn unique_replace(haystack: &str, old: &str, new: &str) -> anyhow::Result<String> {

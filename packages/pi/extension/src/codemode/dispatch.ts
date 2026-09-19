@@ -8,7 +8,7 @@
 import { mkdtemp, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { MachineEnvelope } from "../runtime.js";
+import type { MachineEnvelope } from "../runtime/runtime.js";
 import type { ConnectorHost, DispatchSurface } from "./connector.js";
 
 export type CodemodeToolCall = {
@@ -24,6 +24,25 @@ export type DispatchStats = {
   stickyCalls: number;
   wallMs: number;
 };
+
+/** One settled host call: which lane carried it and how long it took. */
+export type DispatchCall = {
+  tool: string;
+  /** Short display target: query/symbol/module/path, whichever the call used. */
+  target: string;
+  lane: "sticky" | "batch" | "spawn" | "serial";
+  ok: boolean;
+  ms: number;
+};
+
+function callTarget(args: Record<string, unknown>): string {
+  const refs = args.refs ?? args.ref;
+  const value = args.query ?? args.symbol ?? args.module ?? args.path ?? args.name
+    ?? (Array.isArray(refs) ? refs.map((r) => typeof r === "string" ? r : (r as Record<string, unknown>)?.path ?? "").filter(Boolean).join(", ")
+      : typeof refs === "string" ? refs : "");
+  const text = String(value).replace(/\s+/g, " ").trim();
+  return text.length > 60 ? text.slice(0, 59) + "…" : text;
+}
 
 export type BatchResult = {
   results: Array<{ id: string; ok: boolean; value?: unknown; error?: string }>;
@@ -64,6 +83,8 @@ type Pending = {
   context: { cwd: string };
   options?: { signal?: AbortSignal };
   settled: boolean;
+  startedAt: number;
+  lane: DispatchCall["lane"];
   resolve: (value: MachineEnvelope) => void;
   reject: (reason: unknown) => void;
 };
@@ -94,11 +115,26 @@ function isSharedAbort(cause: unknown, options: { signal?: AbortSignal } | undef
 export function createCodemodeDispatcher(host: BatchCapableHost): {
   host: DispatchSurface;
   stats: () => DispatchStats;
+  trace: () => DispatchCall[];
   resetStats: () => void;
 } {
   let pending: Pending[] = [];
   let scheduled = false;
   let stats: DispatchStats = emptyStats();
+  // Per-run call log: which lane each call took and how long it took. Bounded;
+  // surfaced in codemode result details so callers can see the dispatch shape.
+  const calls: DispatchCall[] = [];
+  const TRACE_CAP = 128;
+  const recordCall = (item: Pending, ok: boolean): void => {
+    if (calls.length >= TRACE_CAP) return;
+    calls.push({ tool: item.tool, target: callTarget(item.args), lane: item.lane, ok, ms: Date.now() - item.startedAt });
+  };
+  // Mutations never batch and never overlap each other: edit/index_repo run on
+  // a serial tail so Promise.all([edit, edit]) cannot interleave writes, and a
+  // later wave's mutation queues behind an earlier one. Reads keep wave
+  // batching; ordering vs a concurrent write is intentionally unspecified
+  // (same semantics as today's shared batch — the store stays transactional).
+  let mutationTail = Promise.resolve();
 
   const flush = async () => {
     const wave = pending.filter((item) => !item.settled);
@@ -110,18 +146,31 @@ export function createCodemodeDispatcher(host: BatchCapableHost): {
     stats.calls += wave.length;
     const waveStarted = Date.now();
 
-    try {
-      if (wave.length === 1) {
-        await settleOne(host, wave[0]!, stats);
-        return;
-      }
+    const mutations = wave.filter((item) => MUTATING_TOOLS.has(item.tool) && !item.settled);
+    const reads = wave.filter((item) => !MUTATING_TOOLS.has(item.tool) && !item.settled);
+    let writesDone: Promise<void> = mutationTail;
+    if (mutations.length > 0) {
+      writesDone = mutationTail.then(async () => {
+        for (const item of mutations) {
+          if (!item.settled) await settleOne(host, item, stats);
+        }
+      });
+      mutationTail = writesDone;
+    }
 
-      // Chunk oversized waves (batch max = 32).
-      for (let offset = 0; offset < wave.length; offset += MAX_WAVE) {
-        const chunk = wave.slice(offset, offset + MAX_WAVE).filter((item) => !item.settled);
-        if (chunk.length === 0) continue;
-        await settleWave(host, chunk, stats);
+    try {
+      if (reads.length === 1) {
+        await settleOne(host, reads[0]!, stats);
+      } else if (reads.length > 1) {
+        // Chunk oversized waves (batch max = 32).
+        for (let offset = 0; offset < reads.length; offset += MAX_WAVE) {
+          const chunk = reads.slice(offset, offset + MAX_WAVE).filter((item) => !item.settled);
+          if (chunk.length === 0) continue;
+          await settleWave(host, chunk, stats);
+        }
       }
+      // Reads resolve independently; the wave is not done until queued writes land.
+      await writesDone;
     } finally {
       stats.wallMs += Date.now() - waveStarted;
     }
@@ -135,12 +184,14 @@ export function createCodemodeDispatcher(host: BatchCapableHost): {
         if (item.settled) return;
         item.settled = true;
         cleanup();
+        recordCall(item, true);
         resolve(value);
       };
       item.reject = (reason) => {
         if (item.settled) return;
         item.settled = true;
         cleanup();
+        recordCall(item, false);
         reject(reason);
       };
       const onAbort = () => item.reject(abortError());
@@ -165,6 +216,8 @@ export function createCodemodeDispatcher(host: BatchCapableHost): {
         args,
         context,
         settled: false,
+        startedAt: Date.now(),
+        lane: MUTATING_TOOLS.has(tool) ? "serial" : "spawn",
         resolve: () => undefined,
         reject: () => undefined,
       };
@@ -176,8 +229,10 @@ export function createCodemodeDispatcher(host: BatchCapableHost): {
   return {
     host: dispatchHost,
     stats: () => ({ ...stats }),
+    trace: () => calls.slice(),
     resetStats: () => {
       stats = emptyStats();
+      calls.length = 0;
     },
   };
 }
@@ -185,6 +240,7 @@ export function createCodemodeDispatcher(host: BatchCapableHost): {
 async function settleOne(host: BatchCapableHost, item: Pending, stats: DispatchStats): Promise<void> {
   try {
     if (host.sticky) {
+      item.lane = "sticky";
       stats.stickyCalls += 1;
       item.resolve(await host.sticky.call(item.tool, item.args, item.options));
       return;
@@ -197,17 +253,18 @@ async function settleOne(host: BatchCapableHost, item: Pending, stats: DispatchS
   }
 }
 
+/** Pending[] -> wire calls ({id, tool, args}) shared by both batch transports. */
+function packCalls(wave: Pending[]): Array<{ id: string; tool: string; args: Record<string, unknown> }> {
+  return wave.map((item, index) => ({ id: String(index), tool: item.tool, args: item.args }));
+}
+
 async function settleWave(host: BatchCapableHost, wave: Pending[], stats: DispatchStats): Promise<void> {
   if (host.sticky) {
     const transportOptions = sharedBatchOptions(wave);
     try {
-      const calls = wave.map((item, index) => ({
-        id: String(index),
-        tool: item.tool,
-        args: item.args,
-      }));
-      const batch = await host.sticky.batch(calls, transportOptions);
+      const batch = await host.sticky.batch(packCalls(wave), transportOptions);
       stats.stickyCalls += wave.length;
+      for (const item of wave) item.lane = "sticky";
       settleFromBatch(wave, batch);
       return;
     } catch (cause) {
@@ -230,13 +287,9 @@ async function settleWave(host: BatchCapableHost, wave: Pending[], stats: Dispat
   if (host.runBatch) {
     const transportOptions = sharedBatchOptions(batchWave);
     try {
-      const calls = batchWave.map((item, index) => ({
-        id: String(index),
-        tool: item.tool,
-        args: item.args,
-      }));
-      const batch = await host.runBatch(calls, batchWave[0]!.context, transportOptions);
+      const batch = await host.runBatch(packCalls(batchWave), batchWave[0]!.context, transportOptions);
       stats.batchedCalls += batchWave.length;
+      for (const item of batchWave) item.lane = "batch";
       settleFromBatch(batchWave, batch);
       return;
     } catch (cause) {

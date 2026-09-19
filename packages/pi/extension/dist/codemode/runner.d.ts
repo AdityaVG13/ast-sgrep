@@ -2,7 +2,7 @@ import type { AsgrepConnector } from "./connector.js";
 import type { DispatchStats } from "./dispatch.js";
 import { normalizeCode } from "./guest-api.js";
 export { normalizeCode };
-/** Closed sum: success|failure — `ok:true` with `error` (or `ok:false` without) is unrepresentable. */
+/** Closed sum: success|failure — ok:true with error (or ok:false without) is unrepresentable. */
 export type CodemodeRunSuccess = {
     ok: true;
     result: unknown;
@@ -21,16 +21,18 @@ export type CodemodeRunFailure = {
     wallMs: number;
 };
 export type CodemodeRunResult = CodemodeRunSuccess | CodemodeRunFailure;
-/** No-op: programs run in-process. Kept so session_start / tests stay stable. */
+/** Spawn the warm standby isolate (session_start / pre-call). */
 export declare function warmCodemodeSandbox(): Promise<void>;
-/** No-op: there is no sticky Worker isolate to drop. */
+/** Drop the standby isolate and any in-flight runs (tests / session shutdown). */
 export declare function resetCodemodeSandboxForTests(): Promise<void>;
 /**
- * Run model-generated JavaScript against the typed `asgrep` connector.
+ * Run model-generated JavaScript against the typed asgrep connector.
  *
- * In-process `node:vm` (OpenCode/nicknisi: no Worker, no OS sandbox). `asgrep`
- * and `console` are built inside the context; the only host objects are a
- * JSON bridge and a log sink. Same trust as Pi `bash`.
+ * Execution happens in a single-use worker_threads isolate: the guest gets a
+ * node:vm context inside the worker; asgrep/console are built there; the only
+ * host channel is a JSON postMessage bridge carrying runId envelopes. Timeout
+ * and abort call worker.terminate(), which is the only mechanism that actually
+ * stops a detached guest microtask or a runaway heap.
  */
 export declare function runCodemode(rawCode: string, asgrep: AsgrepConnector, options?: {
     timeoutMs?: number;

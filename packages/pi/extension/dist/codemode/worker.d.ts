@@ -4,7 +4,7 @@
  * One process, one warm Searcher, for the entire Code Mode program — the biggest
  * Amdahl win over per-wave `codemode-batch` spawns.
  */
-import type { MachineEnvelope } from "../runtime.js";
+import type { MachineEnvelope } from "../runtime/runtime.js";
 import { type StickyWorker } from "./dispatch.js";
 export type StickyWorkerOptions = {
     binary: string;

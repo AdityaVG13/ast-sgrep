@@ -18,7 +18,7 @@ export {
   type ConnectorBundle,
 } from "./connector.js";
 export { runCodemode, normalizeCode, warmCodemodeSandbox, resetCodemodeSandboxForTests, type CodemodeRunResult, type CodemodeRunSuccess, type CodemodeRunFailure } from "./runner.js";
-export { applyQueryScope, packGuestCall, coerceHostArgs, missingReturnHint, resolveHostMethod } from "./guest-api.js";
+export { applyQueryScope, packGuestCall, coerceHostArgs, resolveHostMethod } from "./guest-api.js";
 export { CODEMODE_TYPES_FOR_MODEL, CODEMODE_HOST_METHODS, type SearchArgs, type FindArgs, type ReadArgs, type EditArgs, type ChainArgs, type CodemodeHostMethod } from "./types.js";
 export {
   createCodemodeDispatcher,

@@ -16,9 +16,26 @@ export async function startStickyWorker(options) {
         env: { ...process.env, ...options.env, NO_COLOR: "1" },
         stdio: ["pipe", "pipe", "pipe"],
     });
+    // Fail fast on spawn errors (ENOENT / EACCES): callers get the spawn error
+    // now instead of a dead transport that only fails on first use.
+    await new Promise((resolve, reject) => {
+        const onError = (err) => {
+            child.removeListener("spawn", onSpawn);
+            reject(err);
+        };
+        const onSpawn = () => {
+            child.removeListener("error", onError);
+            resolve();
+        };
+        child.once("error", onError);
+        child.once("spawn", onSpawn);
+    });
     const pending = new Map();
     let nextId = 0;
     let closed = false;
+    // The real termination cause (exit code + stderr) — callers that hit a dead
+    // transport must see WHY it died, not a bare "is closed".
+    let deadCause = null;
     let stderr = "";
     let stdout = Buffer.alloc(0);
     const decoder = new TextDecoder("utf-8", { fatal: true });
@@ -32,6 +49,7 @@ export async function startStickyWorker(options) {
         if (closed)
             return;
         closed = true;
+        deadCause ??= err;
         options.signal?.removeEventListener("abort", onAbort);
         killChild(child);
         failAll(err);
@@ -112,15 +130,19 @@ export async function startStickyWorker(options) {
     child.on("close", (code, signal) => {
         closed = true;
         options.signal?.removeEventListener("abort", onAbort);
+        deadCause ??= new Error(`codemode-serve exited code=${code ?? "null"} signal=${signal ?? "null"} stderr=${stderr.slice(0, 512)}`);
         if (pending.size > 0) {
-            failAll(new Error(`codemode-serve exited code=${code ?? "null"} signal=${signal ?? "null"} stderr=${stderr.slice(0, 512)}`));
+            failAll(deadCause);
         }
     });
     const onAbort = () => terminate(new Error("codemode-serve aborted"));
     options.signal?.addEventListener("abort", onAbort, { once: true });
+    const closedError = () => deadCause
+        ? new Error("codemode-serve is closed (" + deadCause.message + ")")
+        : new Error("codemode-serve is closed");
     const write = (payload) => {
         if (closed || !child.stdin.writable) {
-            return Promise.reject(new Error("codemode-serve is closed"));
+            return Promise.reject(closedError());
         }
         const id = typeof payload.id === "string" ? payload.id : String(nextId++);
         payload.id = id;

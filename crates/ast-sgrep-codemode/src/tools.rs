@@ -255,7 +255,8 @@ fn unknown_tool(name: &str) -> CallError {
         .map(|hint| format!(" Did you mean {hint}?"))
         .unwrap_or_default();
     CallError::UnknownTool(format!(
-        "unknown tool: {name}.{extra} Use search, find, defs, callers, read, edit."
+        "unknown tool: {name}.{extra} Use {}.",
+        KNOWN_TOOLS.join(", ")
     ))
 }
 

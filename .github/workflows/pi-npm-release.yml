@@ -17,6 +17,14 @@ on:
         required: true
         type: boolean
         default: false
+      layer:
+        description: Release lane — family publishes the canonical seven-package set; extension publishes only pi-ast-sgrep at packages.extension.version under a signed pi-v tag
+        required: true
+        type: choice
+        options:
+          - family
+          - extension
+        default: family
 
 concurrency:
   group: pi-npm-${{ github.ref }}
@@ -28,7 +36,7 @@ permissions:
 jobs:
   release-gate:
     name: Validate immutable signed release
-    if: ${{ inputs.publish == true && github.ref_type == 'tag' && github.ref_name == inputs.release_tag }}
+    if: ${{ inputs.publish == true && inputs.layer == 'family' && github.ref_type == 'tag' && github.ref_name == inputs.release_tag }}
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.targets.outputs.matrix }}
@@ -59,6 +67,7 @@ jobs:
 
   build-native:
     name: Build ${{ matrix.package }} once
+    if: ${{ inputs.layer == 'family' }}
     needs: release-gate
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
@@ -135,6 +144,7 @@ jobs:
 
   verify-release:
     name: Pack and verify complete npm family once
+    if: ${{ inputs.layer == 'family' }}
     needs: [release-gate, build-native]
     runs-on: ubuntu-latest
     permissions:
@@ -245,4 +255,124 @@ jobs:
       - name: Publish launcher after every native package
         run: node packages/pi/scripts/release-acceptance.mjs publish --artifacts npm-packs --layer launcher
       - name: Publish extension after launcher
+        run: node packages/pi/scripts/release-acceptance.mjs publish --artifacts npm-packs --layer extension
+
+  extension-gate:
+    name: Validate signed extension tag
+    if: ${{ inputs.publish == true && inputs.layer == 'extension' && github.ref_type == 'tag' && github.ref_name == inputs.release_tag }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Restore annotated signed release tag
+        run: git fetch --force origin "refs/tags/${{ inputs.release_tag }}:refs/tags/${{ inputs.release_tag }}"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.19.0
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - name: Configure SSH tag verification
+        run: |
+          git config --local gpg.format ssh
+          git config --local gpg.ssh.allowedSignersFile "$GITHUB_WORKSPACE/packages/pi/release/allowed-signers"
+      - name: Verify contracts and extension tag gate
+        run: |
+          npm run check:pi-contract
+          npm run check:pi-dist
+          node packages/pi/scripts/release-acceptance.mjs gate --lane extension
+
+  extension-verify:
+    name: Pack and verify the extension artifact once
+    if: ${{ inputs.layer == 'extension' }}
+    needs: extension-gate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.19.0
+          cache: npm
+      - run: npm ci
+      - name: Pack and verify the extension tarball
+        run: |
+          node packages/pi/scripts/release-acceptance.mjs pack --lane extension --output npm-packs --commit "$GITHUB_SHA"
+          node packages/pi/scripts/release-acceptance.mjs verify --artifacts npm-packs
+      - name: Attest the extension tarball
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: npm-packs/*.tgz
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pi-extension-${{ github.ref_name }}-${{ github.sha }}
+          path: npm-packs/
+          if-no-files-found: error
+          retention-days: 90
+      - name: Preserve immutable tarball as a durable GitHub Release asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "${{ github.ref_name }}" >/dev/null 2>&1 || \
+            gh release create "${{ github.ref_name }}" --verify-tag --draft \
+              --title "pi-ast-sgrep ${{ github.ref_name }}" \
+              --notes "Attested, immutable npm tarball for ${{ github.ref_name }}. Re-run the publish job to finish or repeat publication without rebuilding."
+          remote="$RUNNER_TEMP/existing-release-assets"
+          mkdir -p "$remote"
+          upload=()
+          for artifact in npm-packs/*.tgz npm-packs/release-manifest.json; do
+            name="$(basename "$artifact")"
+            if gh release view "${{ github.ref_name }}" --json assets --jq '.assets[].name' | grep -Fxq "$name"; then
+              gh release download "${{ github.ref_name }}" --pattern "$name" --dir "$remote"
+              cmp --silent "$artifact" "$remote/$name" || { echo "release asset differs: $name" >&2; exit 1; }
+            else
+              upload+=("$artifact")
+            fi
+          done
+          if [ "${#upload[@]}" -gt 0 ]; then gh release upload "${{ github.ref_name }}" "${upload[@]}"; fi
+
+  extension-publish:
+    name: Protected npm OIDC extension publication
+    if: ${{ inputs.layer == 'extension' }}
+    needs: extension-verify
+    runs-on: ubuntu-latest
+    environment: npm-production
+    env:
+      ASGREP_NPM_PROTECTED_ENVIRONMENT: npm-production
+      ASGREP_NPM_OWNERSHIP_APPROVED: ${{ secrets.NPM_OWNERSHIP_APPROVED }}
+      NODE_AUTH_TOKEN: ${{ inputs.bootstrap_token == 'true' && secrets.NPM_TOKEN || '' }}
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.19.0
+          registry-url: https://registry.npmjs.org
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npm install --global npm@11
+      - name: Download immutable GitHub Release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p npm-packs
+          api="repos/${{ github.repository }}/releases"
+          release_id="$(gh api "$api" --jq ".[] | select(.tag_name == "${{ github.ref_name }}") | .id" | head -1)"
+          test -n "$release_id" || { echo "release ${{ github.ref_name }} not found" >&2; exit 1; }
+          gh api "$api/$release_id/assets" --jq '.[] | [.name, .id] | @tsv' | while IFS=$'\t' read -r name id; do
+            case "$name" in
+              *.tgz|release-manifest.json)
+                gh api -H "Accept: application/octet-stream" "repos/${{ github.repository }}/releases/assets/$id" > "npm-packs/$name"
+                ;;
+            esac
+          done
+          ls -la npm-packs
+      - name: Re-verify preserved checksums
+        run: node packages/pi/scripts/release-acceptance.mjs verify --artifacts npm-packs
+      - name: Publish extension
         run: node packages/pi/scripts/release-acceptance.mjs publish --artifacts npm-packs --layer extension

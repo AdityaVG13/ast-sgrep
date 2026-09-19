@@ -1,4 +1,4 @@
-import vm from "node:vm";
+import { Worker } from "node:worker_threads";
 import { coerceHostArgs, normalizeCode, packGuestCall, resolveHostMethod, timeoutHint, unknownMethodError } from "./guest-api.js";
 import { CODEMODE_HOST_METHODS } from "./types.js";
 export { normalizeCode };
@@ -9,173 +9,378 @@ const MAX_BRIDGE_REQUEST_CHARS = 64_000;
 const MAX_ERROR_CHARS = 8_192;
 const MAX_LOG_LINES = 100;
 const MAX_LOG_CHARS = 64_000;
-const MAX_LOG_LINE_CHARS = 4_096;
 const MAX_RESULT_JSON_CHARS = 1_000_000;
-const RESULT_SERIALIZE_TIMEOUT_MS = 1_000;
 const MAX_TIMER_MS = 2_147_483_647;
-const BLOCKED_GLOBALS = [
-    "ArrayBuffer",
-    "SharedArrayBuffer",
-    "DataView",
-    "Atomics",
-    "WebAssembly",
-    "eval",
-    "Function",
-    "AsyncFunction",
-    "GeneratorFunction",
-    "Int8Array",
-    "Uint8Array",
-    "Uint8ClampedArray",
-    "Int16Array",
-    "Uint16Array",
-    "Int32Array",
-    "Uint32Array",
-    "Float32Array",
-    "Float64Array",
-    "BigInt64Array",
-    "BigUint64Array",
-];
-function bootstrapSource() {
-    return `
-  {
-    const hostCall = globalThis.__asgrepBridge;
-    const hostLog = globalThis.__asgrepLog;
-    delete globalThis.__asgrepBridge;
-    delete globalThis.__asgrepLog;
-
-    for (const name of ${JSON.stringify(BLOCKED_GLOBALS)}) {
-      Object.defineProperty(globalThis, name, {
-        value: undefined, configurable: false, writable: false,
-      });
-    }
-
-    const sealCtor = (obj) => {
-      if (obj === null || obj === undefined) return;
-      try {
-        Object.defineProperty(obj, "constructor", {
-          value: undefined, configurable: false, writable: false,
-        });
-      } catch {}
-    };
-    sealCtor(globalThis);
-    sealCtor(Object);
-    sealCtor(Object.prototype);
-    sealCtor(Array);
-    sealCtor(Array.prototype);
-    sealCtor(Number);
-    sealCtor(Number.prototype);
-    sealCtor(String);
-    sealCtor(String.prototype);
-    sealCtor(Boolean);
-    sealCtor(Boolean.prototype);
-    sealCtor(Error);
-    sealCtor(Error.prototype);
-    sealCtor(RegExp);
-    sealCtor(RegExp.prototype);
-    sealCtor(Date);
-    sealCtor(Date.prototype);
-    sealCtor(Promise);
-    sealCtor(Promise.prototype);
-    sealCtor(JSON);
-    sealCtor(Math);
-    sealCtor(Reflect);
-    sealCtor(Proxy);
-    sealCtor(Symbol);
-    sealCtor(Map);
-    sealCtor(Set);
-    sealCtor(WeakMap);
-    sealCtor(WeakSet);
-    sealCtor(hostCall);
-    sealCtor(hostLog);
-
-    let resultValue;
-    const setResult = (value) => { resultValue = value; };
-    const stringify = JSON.stringify;
-    const stringifyBounded = (value, maxChars, label) => {
-      const serialized = stringify(value);
-      if (serialized === undefined) return serialized;
-      if (serialized.length > maxChars) {
-        throw new Error("codemode " + label + " exceeds " + maxChars + " characters");
-      }
-      return serialized;
-    };
-    const serializeResult = () => stringifyBounded(resultValue, ${MAX_RESULT_JSON_CHARS}, "result");
-    Object.freeze(setResult);
-    Object.freeze(serializeResult);
-    Object.defineProperty(globalThis, "__asgrepSetResult", {
-      value: setResult, configurable: false, writable: false,
-    });
-    Object.defineProperty(globalThis, "__asgrepSerializeResult", {
-      value: serializeResult, configurable: false, writable: false,
-    });
-
-    const invoke = async (method, args = {}) => {
-      const payload = stringifyBounded(args, ${MAX_BRIDGE_REQUEST_CHARS}, "call arguments");
-      const response = JSON.parse(await hostCall(method, payload));
-      if (!response.ok) throw new Error(response.error || ("asgrep." + method + " failed"));
-      return response.value;
-    };
-    const known = ${JSON.stringify([...CODEMODE_HOST_METHODS])};
-    const blocked = new Set(["then", "constructor", "prototype", "__proto__"]);
-    const call = (method) => (...guestArgs) => invoke(method, { __guestArgs: guestArgs });
-    const api = new Proxy(Object.create(null), {
-      get(_target, prop) {
-        if (typeof prop !== "string" || blocked.has(prop)) return undefined;
-        return call(prop);
-      },
-      has(_target, prop) {
-        return typeof prop === "string" && !blocked.has(prop);
-      },
-      ownKeys() { return known.slice(); },
-      getOwnPropertyDescriptor(_target, prop) {
-        if (typeof prop !== "string" || blocked.has(prop)) return undefined;
-        return { enumerable: known.includes(prop), configurable: true, value: call(prop) };
-      },
-      set() { return false; },
-      defineProperty() { return false; },
-      deleteProperty() { return false; },
-    });
-
-    const formatLog = (value) => {
-      if (typeof value === "string") return value.slice(0, ${MAX_LOG_LINE_CHARS});
-      try { return stringifyBounded(value, ${MAX_LOG_LINE_CHARS}, "log line"); }
-      catch { return "[unserializable or oversized log value]"; }
-    };
-    const consoleApi = Object.create(null);
-    for (const level of ["log", "info", "warn", "error", "debug"]) {
-      Object.defineProperty(consoleApi, level, {
-        enumerable: true,
-        value: (...args) => {
-          let line = "";
-          for (const arg of args) {
-            const part = formatLog(arg);
-            const prefix = line.length === 0 ? "" : " ";
-            const remaining = ${MAX_LOG_LINE_CHARS} - line.length;
-            if (remaining <= 0) break;
-            line += (prefix + part).slice(0, remaining);
-          }
-          hostLog(line);
+/** Hard ceiling on guest heap; an OOM guest kills its isolate, never the host. */
+const WORKER_MAX_OLD_SPACE_MB = 512;
+const WORKER_MAX_YOUNG_SPACE_MB = 64;
+/** Parent-side RSS guard: a run may grow process RSS by this multiple of the heap cap. */
+const MEMORY_SLACK = 1.5;
+const MEMORY_POLL_MS = 50;
+/** Grace for in-flight host calls after the guest reports done. */
+const DRAIN_PENDING_MS = 250;
+const WORKER_URL = new URL("./guest-worker.mjs", import.meta.url);
+const ABORT_MESSAGE = "codemode timed out or aborted: pass timeoutMs to allow longer runs";
+let idle = null;
+let runSeq = 0;
+const activeWorkers = new Set();
+function spawnWorker() {
+    // Inline eval'd bootstrap: imports the real guest-worker file. execArgv is
+    // emptied so --import tsx / --test flags cannot leak in and crash the isolate.
+    const worker = new Worker("import(" + JSON.stringify(WORKER_URL.href) + ")", {
+        eval: true,
+        execArgv: [],
+        resourceLimits: {
+            maxOldGenerationSizeMb: WORKER_MAX_OLD_SPACE_MB,
+            maxYoungGenerationSizeMb: WORKER_MAX_YOUNG_SPACE_MB,
         },
-      });
-    }
-    Object.freeze(consoleApi);
-
-    Object.defineProperty(globalThis, "asgrep", { value: api, configurable: false, writable: false });
-    Object.defineProperty(globalThis, "console", { value: consoleApi, configurable: false, writable: false });
-    sealCtor(api);
-    sealCtor(consoleApi);
-    sealCtor(setResult);
-    sealCtor(serializeResult);
-    sealCtor(invoke);
-  }
-  `;
+    });
+    const handle = { worker, ready: Promise.resolve(), dead: false };
+    worker.on("error", () => { handle.dead = true; });
+    worker.on("exit", () => {
+        handle.dead = true;
+        if (idle === handle)
+            idle = null;
+    });
+    handle.ready = new Promise((resolve, reject) => {
+        const cleanup = () => {
+            worker.off("message", onMessage);
+            worker.off("error", onFail);
+            worker.off("exit", onFail);
+        };
+        const onMessage = (msg) => {
+            if (msg?.op !== "ready")
+                return;
+            cleanup();
+            resolve();
+        };
+        const onFail = (err) => {
+            cleanup();
+            reject(err instanceof Error ? err : new Error("codemode worker exited before ready (code " + err + ")"));
+        };
+        worker.on("message", onMessage);
+        worker.on("error", onFail);
+        worker.on("exit", onFail);
+    });
+    handle.ready.catch(() => undefined);
+    return handle;
 }
-const bootstrapScript = new vm.Script(bootstrapSource(), {
-    filename: "asgrep-codemode-bootstrap.js",
-});
-const serializeScript = new vm.Script("globalThis.__asgrepSerializeResult()", {
-    filename: "asgrep-codemode-result.js",
-});
+function killWorker(handle) {
+    if (!handle)
+        return undefined;
+    if (idle === handle)
+        idle = null;
+    handle.dead = true;
+    return handle.worker.terminate().then(() => undefined, () => undefined);
+}
+function acquireWorker() {
+    const candidate = idle;
+    idle = null;
+    const handle = candidate && !candidate.dead ? candidate : spawnWorker();
+    if (candidate && candidate.dead)
+        void killWorker(candidate);
+    handle.worker.ref?.();
+    // Pipeline the replacement while this run executes.
+    warmCodemodeSandbox().catch(() => undefined);
+    return handle;
+}
+/** Spawn the warm standby isolate (session_start / pre-call). */
+export function warmCodemodeSandbox() {
+    if (idle && !idle.dead)
+        return idle.ready;
+    const handle = spawnWorker();
+    idle = handle;
+    void handle.ready.then(() => {
+        if (idle === handle)
+            handle.worker.unref?.();
+    }, () => undefined);
+    return handle.ready;
+}
+/** Drop the standby isolate and any in-flight runs (tests / session shutdown). */
+export async function resetCodemodeSandboxForTests() {
+    await killWorker(idle);
+    await Promise.all([...activeWorkers].map((worker) => worker.terminate().catch(() => undefined)));
+}
+// ---------------------------------------------------------------------------
+// Admission funnel: validate everything before any worker work happens.
+// ---------------------------------------------------------------------------
+function admitTimeout(requested) {
+    if (requested === undefined)
+        return { timeoutMs: DEFAULT_TIMEOUT_MS };
+    if (!Number.isFinite(requested) || requested <= 0)
+        return { error: "timeoutMs must be a positive finite number" };
+    return { timeoutMs: Math.min(MAX_TIMER_MS, Math.max(1, Math.trunc(requested))) };
+}
+function admitRun(code, timeoutMs, signal) {
+    if (code.length > MAX_CODE_CHARS)
+        return { error: "code exceeds " + MAX_CODE_CHARS + " characters; split into multiple asgrep calls" };
+    if (signal?.aborted)
+        return { error: "codemode aborted" };
+    const timeout = admitTimeout(timeoutMs);
+    if ("error" in timeout)
+        return timeout;
+    return { code: normalizeCode(code), timeoutMs: timeout.timeoutMs };
+}
+// ---------------------------------------------------------------------------
+// GuestRun: one run = one worker = one class instance. Explicit lifecycle
+// states replace the closure flag soup: finished → terminal, accepting →
+// messages still honored, completing → draining, aborting → user/timeout path.
+// ---------------------------------------------------------------------------
+class GuestRun {
+    code;
+    timeoutMs;
+    hostMethods;
+    signal;
+    statsFn;
+    runId;
+    finished = false;
+    accepting = true;
+    completing = false;
+    aborting = false;
+    handle;
+    pending = new Set();
+    logs = [];
+    logChars = 0;
+    callCount = 0;
+    lastMethod = null;
+    timer;
+    memTimer;
+    hostError;
+    wall0 = performance.now();
+    runController = new AbortController();
+    rssStart;
+    rssLimit;
+    resolve;
+    constructor(code, timeoutMs, hostMethods, signal, statsFn, runId) {
+        this.code = code;
+        this.timeoutMs = timeoutMs;
+        this.hostMethods = hostMethods;
+        this.signal = signal;
+        this.statsFn = statsFn;
+        this.runId = runId;
+        this.rssStart = process.memoryUsage().rss;
+        this.rssLimit = this.rssStart + WORKER_MAX_OLD_SPACE_MB * MEMORY_SLACK * 1_048_576;
+    }
+    wall() {
+        return performance.now() - this.wall0;
+    }
+    ok(result) {
+        const out = { ok: true, result, logs: this.logs, code: this.code, wallMs: this.wall() };
+        const stats = this.statsFn?.();
+        if (stats)
+            out.stats = stats;
+        return out;
+    }
+    err(error) {
+        const out = {
+            ok: false,
+            result: null,
+            logs: this.logs,
+            error: timeoutHint(error).slice(0, MAX_ERROR_CHARS),
+            code: this.code,
+            wallMs: this.wall(),
+        };
+        const stats = this.statsFn?.();
+        if (stats)
+            out.stats = stats;
+        return out;
+    }
+    cleanup() {
+        clearTimeout(this.timer);
+        clearInterval(this.memTimer);
+        this.signal?.removeEventListener("abort", this.onAbort);
+        if (this.handle) {
+            this.handle.worker.off("message", this.onMessage);
+            this.handle.worker.off("error", this.onError);
+            this.handle.worker.off("exit", this.onExit);
+        }
+    }
+    finish(outcome) {
+        if (this.finished)
+            return;
+        this.finished = true;
+        this.accepting = false;
+        this.cleanup();
+        this.runController.abort();
+        if (this.handle) {
+            activeWorkers.delete(this.handle.worker);
+            void killWorker(this.handle);
+        }
+        this.resolve(outcome);
+    }
+    fail(message) {
+        this.finish(this.err(message));
+    }
+    abort() {
+        if (this.finished || this.aborting)
+            return;
+        this.aborting = true;
+        this.fail(ABORT_MESSAGE);
+        this.aborting = false;
+    }
+    onAbort = () => this.abort();
+    hostLog(line) {
+        if (this.logs.length >= MAX_LOG_LINES || this.logChars >= MAX_LOG_CHARS)
+            return;
+        const remaining = MAX_LOG_CHARS - this.logChars;
+        const bounded = line.length <= remaining ? line : line.slice(0, Math.max(0, remaining - 1)) + "…";
+        this.logs.push(bounded);
+        this.logChars += bounded.length;
+    }
+    async hostCall(method, payload) {
+        try {
+            if (this.runController.signal.aborted) {
+                throw Object.assign(new Error("codemode aborted"), { name: "AbortError" });
+            }
+            if (this.callCount >= MAX_BRIDGE_CALLS) {
+                throw new Error("codemode exceeds " + MAX_BRIDGE_CALLS + " host calls");
+            }
+            this.callCount += 1;
+            this.lastMethod = method;
+            if (payload.length > MAX_BRIDGE_REQUEST_CHARS) {
+                throw new Error("codemode call arguments exceed " + MAX_BRIDGE_REQUEST_CHARS + " characters");
+            }
+            const resolved = resolveHostMethod(method);
+            if (!resolved || !Object.hasOwn(this.hostMethods, resolved)) {
+                throw new Error(unknownMethodError(method));
+            }
+            const parsed = JSON.parse(payload);
+            const packed = Array.isArray(parsed.__guestArgs)
+                ? packGuestCall(resolved, parsed.__guestArgs)
+                : parsed;
+            const input = coerceHostArgs(resolved, packed);
+            const invokeHost = this.hostMethods[resolved];
+            if (!invokeHost)
+                throw new Error(unknownMethodError(method));
+            const value = await invokeHost(input, { signal: this.runController.signal });
+            return JSON.stringify({ ok: true, value }, jsonSafe);
+        }
+        catch (cause) {
+            return JSON.stringify({ ok: false, error: safeErrorMessage(cause).slice(0, MAX_ERROR_CHARS) });
+        }
+    }
+    respond(id, body) {
+        if (!this.handle || this.finished)
+            return;
+        try {
+            this.handle.worker.postMessage({ op: "call-result", runId: this.runId, id, body });
+        }
+        catch {
+            // Worker already terminated; the run is settled.
+        }
+    }
+    onCallBatch(calls) {
+        for (const call of calls) {
+            const work = this.hostCall(call.method, call.payload)
+                .then((body) => this.respond(call.id, body))
+                .catch(() => this.respond(call.id, JSON.stringify({ ok: false, error: "codemode call failed" })));
+            this.pending.add(work);
+            void work.finally(() => this.pending.delete(work));
+        }
+    }
+    onResult(msg) {
+        try {
+            const serialized = msg.serialized;
+            const result = serialized === undefined ? undefined : JSON.parse(serialized);
+            void this.complete(this.ok(result));
+        }
+        catch (cause) {
+            this.fail("codemode result decode failed: " + safeErrorMessage(cause));
+        }
+    }
+    onMessage = (msg) => {
+        if (this.finished || !this.accepting || !msg || typeof msg !== "object")
+            return;
+        if (typeof msg.runId === "number" && msg.runId !== this.runId)
+            return;
+        if (msg.op === "log") {
+            this.hostLog(msg.line);
+            return;
+        }
+        if (msg.op === "call-batch") {
+            this.onCallBatch(Array.isArray(msg.calls) ? msg.calls : []);
+            return;
+        }
+        if (msg.op === "result") {
+            this.onResult(msg);
+            return;
+        }
+        if (msg.op === "error") {
+            this.fail(msg.error);
+        }
+    };
+    onError = (cause) => {
+        void this.complete(this.err("codemode worker error: " + cause.message));
+    };
+    onExit = (exitCode) => {
+        void this.complete(this.err("codemode worker exited code=" + exitCode));
+    };
+    /** Give in-flight host calls a bounded settle window, then surface leaks. */
+    async drainPending(outcome) {
+        if (this.pending.size === 0)
+            return;
+        await Promise.race([
+            Promise.allSettled(this.pending),
+            new Promise((resolve) => setTimeout(resolve, DRAIN_PENDING_MS)),
+        ]);
+        if (this.pending.size && outcome.ok) {
+            this.hostError ??= "program completed with a host call still running";
+        }
+    }
+    async complete(outcome) {
+        if (this.finished || this.completing)
+            return;
+        this.completing = true;
+        this.accepting = false;
+        await this.drainPending(outcome);
+        if (this.finished)
+            return;
+        this.finish(outcome.ok && this.hostError ? this.err(this.hostError) : outcome);
+    }
+    memoryLimitError() {
+        const now = process.memoryUsage().rss;
+        const deltaMb = Math.max(0, (now - this.rssStart) / 1_048_576);
+        const where = this.lastMethod ? " during " + this.lastMethod : "";
+        return ("codemode exceeded memory limit: process RSS +" + deltaMb.toFixed(1) + "MB in " +
+            Math.round(this.wall()) + "ms" + where + " (" + this.callCount + " host calls); " +
+            "worker heap cap is " + WORKER_MAX_OLD_SPACE_MB + "MB — split the program or stream less data");
+    }
+    async boot() {
+        try {
+            this.handle = acquireWorker();
+            activeWorkers.add(this.handle.worker);
+            await this.handle.ready;
+            if (this.finished || this.signal?.aborted)
+                return this.abort();
+            this.handle.worker.on("message", this.onMessage);
+            this.handle.worker.on("error", this.onError);
+            this.handle.worker.on("exit", this.onExit);
+            if (this.wall() >= this.timeoutMs)
+                return this.abort();
+            this.handle.worker.postMessage({ op: "run", runId: this.runId, code: this.code, timeoutMs: this.timeoutMs });
+        }
+        catch (cause) {
+            if (this.finished)
+                return;
+            this.fail("codemode worker unavailable: " + safeErrorMessage(cause));
+        }
+    }
+    start() {
+        return new Promise((resolve) => {
+            this.resolve = resolve;
+            this.timer = setTimeout(() => this.abort(), this.timeoutMs);
+            this.timer.unref?.();
+            this.memTimer = setInterval(() => {
+                if (process.memoryUsage().rss <= this.rssLimit)
+                    return;
+                this.fail(this.memoryLimitError());
+            }, MEMORY_POLL_MS);
+            this.memTimer.unref?.();
+            this.signal?.addEventListener("abort", this.onAbort, { once: true });
+            void this.boot();
+        });
+    }
+}
 function bindHostMethods(asgrep) {
     const wrap = (fn) => (args, options) => fn(args, options);
     return {
@@ -195,139 +400,35 @@ function bindHostMethods(asgrep) {
         catalogDescribe: wrap(asgrep.catalogDescribe.bind(asgrep)),
     };
 }
-/** No-op: programs run in-process. Kept so session_start / tests stay stable. */
-export async function warmCodemodeSandbox() { }
-/** No-op: there is no sticky Worker isolate to drop. */
-export async function resetCodemodeSandboxForTests() { }
+/** NAPI u64/i64 fields cross as BigInt; keep safe ints numeric, exact-string the rest. */
+const jsonSafe = (_key, item) => typeof item === "bigint"
+    ? item >= -9007199254740991n && item <= 9007199254740991n
+        ? Number(item)
+        : item.toString()
+    : item;
 /**
- * Run model-generated JavaScript against the typed `asgrep` connector.
+ * Run model-generated JavaScript against the typed asgrep connector.
  *
- * In-process `node:vm` (OpenCode/nicknisi: no Worker, no OS sandbox). `asgrep`
- * and `console` are built inside the context; the only host objects are a
- * JSON bridge and a log sink. Same trust as Pi `bash`.
+ * Execution happens in a single-use worker_threads isolate: the guest gets a
+ * node:vm context inside the worker; asgrep/console are built there; the only
+ * host channel is a JSON postMessage bridge carrying runId envelopes. Timeout
+ * and abort call worker.terminate(), which is the only mechanism that actually
+ * stops a detached guest microtask or a runaway heap.
  */
-export async function runCodemode(rawCode, asgrep, options = {}) {
-    const requestedTimeout = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-    const timeoutMs = Number.isFinite(requestedTimeout)
-        ? Math.min(MAX_TIMER_MS, Math.max(1, Math.trunc(requestedTimeout)))
-        : DEFAULT_TIMEOUT_MS;
+export function runCodemode(rawCode, asgrep, options = {}) {
+    const admitted = admitRun(rawCode, options.timeoutMs, options.signal);
     const wall0 = performance.now();
-    if (rawCode.length > MAX_CODE_CHARS) {
-        return resultErr(`code exceeds ${MAX_CODE_CHARS} characters`, [], rawCode.slice(0, 200), wall0, options.stats);
+    if ("error" in admitted) {
+        const out = {
+            ok: false, result: null, logs: [], error: admitted.error,
+            code: rawCode.slice(0, 200), wallMs: performance.now() - wall0,
+        };
+        const stats = options.stats?.();
+        if (stats)
+            out.stats = stats;
+        return Promise.resolve(out);
     }
-    if (options.signal?.aborted) {
-        return resultErr("codemode aborted", [], rawCode.slice(0, 200), wall0, options.stats);
-    }
-    const code = normalizeCode(rawCode);
-    const runController = new AbortController();
-    const hostMethods = bindHostMethods(asgrep);
-    const logs = [];
-    let logChars = 0;
-    let callCount = 0;
-    const hostCall = async (method, payload) => {
-        try {
-            if (runController.signal.aborted) {
-                throw Object.assign(new Error("codemode aborted"), { name: "AbortError" });
-            }
-            if (callCount >= MAX_BRIDGE_CALLS) {
-                throw new Error(`codemode exceeds ${MAX_BRIDGE_CALLS} host calls`);
-            }
-            callCount += 1;
-            if (payload.length > MAX_BRIDGE_REQUEST_CHARS) {
-                throw new Error(`codemode call arguments exceed ${MAX_BRIDGE_REQUEST_CHARS} characters`);
-            }
-            const resolved = resolveHostMethod(method);
-            if (!resolved || !Object.hasOwn(hostMethods, resolved)) {
-                throw new Error(unknownMethodError(method));
-            }
-            const parsed = JSON.parse(payload);
-            const packed = Array.isArray(parsed.__guestArgs)
-                ? packGuestCall(resolved, parsed.__guestArgs)
-                : parsed;
-            const input = coerceHostArgs(resolved, packed);
-            const invokeHost = hostMethods[resolved];
-            if (!invokeHost)
-                throw new Error(unknownMethodError(method));
-            const value = await invokeHost(input, { signal: runController.signal });
-            return JSON.stringify({ ok: true, value });
-        }
-        catch (cause) {
-            return JSON.stringify({
-                ok: false,
-                error: safeErrorMessage(cause).slice(0, MAX_ERROR_CHARS),
-            });
-        }
-    };
-    const hostLog = (line) => {
-        if (logs.length >= MAX_LOG_LINES || logChars >= MAX_LOG_CHARS)
-            return;
-        const remaining = MAX_LOG_CHARS - logChars;
-        const bounded = line.length <= remaining
-            ? line
-            : `${line.slice(0, Math.max(0, remaining - 1))}…`;
-        logs.push(bounded);
-        logChars += bounded.length;
-    };
-    const contextObject = Object.create(null);
-    Object.defineProperty(hostCall, "constructor", { value: undefined });
-    Object.defineProperty(hostLog, "constructor", { value: undefined });
-    contextObject.__asgrepBridge = hostCall;
-    contextObject.__asgrepLog = hostLog;
-    const context = vm.createContext(contextObject, {
-        codeGeneration: { strings: false, wasm: false },
-    });
-    let timer;
-    const onAbort = () => {
-        runController.abort();
-    };
-    options.signal?.addEventListener("abort", onAbort, { once: true });
-    try {
-        bootstrapScript.runInContext(context, { timeout: Math.min(timeoutMs, 1_000) });
-        const script = new vm.Script(code, { filename: "asgrep-codemode.js" });
-        const timeout = new Promise((_, reject) => {
-            timer = setTimeout(() => {
-                runController.abort();
-                reject(new Error(`codemode timeout after ${timeoutMs}ms`));
-            }, timeoutMs);
-        });
-        const aborted = options.signal
-            ? new Promise((_, reject) => {
-                if (options.signal?.aborted) {
-                    reject(new Error("codemode aborted"));
-                    return;
-                }
-                options.signal?.addEventListener("abort", () => reject(new Error("codemode aborted")), { once: true });
-            })
-            : undefined;
-        const value = await Promise.race([
-            Promise.resolve(script.runInContext(context, {
-                displayErrors: true,
-                timeout: timeoutMs,
-            })),
-            timeout,
-            ...(aborted ? [aborted] : []),
-        ]);
-        const setResult = context.__asgrepSetResult;
-        if (typeof setResult !== "function") {
-            throw new Error("codemode result bridge is unavailable");
-        }
-        setResult(value);
-        const serialized = serializeScript.runInContext(context, {
-            displayErrors: true,
-            timeout: Math.min(timeoutMs, RESULT_SERIALIZE_TIMEOUT_MS),
-        });
-        const result = serialized === undefined ? undefined : JSON.parse(serialized);
-        return resultOk(result, logs, code, wall0, options.stats);
-    }
-    catch (cause) {
-        return resultErr(timeoutHint(safeErrorMessage(cause)).slice(0, MAX_ERROR_CHARS), logs, code, wall0, options.stats);
-    }
-    finally {
-        if (timer)
-            clearTimeout(timer);
-        options.signal?.removeEventListener("abort", onAbort);
-        runController.abort();
-    }
+    return new GuestRun(admitted.code, admitted.timeoutMs, bindHostMethods(asgrep), options.signal, options.stats, ++runSeq).start();
 }
 function safeErrorMessage(cause) {
     try {
@@ -336,18 +437,4 @@ function safeErrorMessage(cause) {
     catch {
         return "codemode call failed";
     }
-}
-function resultOk(result, logs, code, wall0, statsFn) {
-    const out = { ok: true, result, logs, code, wallMs: performance.now() - wall0 };
-    const stats = statsFn?.();
-    if (stats)
-        out.stats = stats;
-    return out;
-}
-function resultErr(error, logs, code, wall0, statsFn) {
-    const out = { ok: false, result: null, logs, error, code, wallMs: performance.now() - wall0 };
-    const stats = statsFn?.();
-    if (stats)
-        out.stats = stats;
-    return out;
 }
