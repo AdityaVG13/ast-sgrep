@@ -32,9 +32,13 @@ mod num;
 mod scrub;
 mod verdict;
 pub use cli::{
-    asgrep_bin, assert_failure_envelope, assert_fixture_hits, assert_human_error,
-    assert_human_success, assert_no_success_shape, assert_success, envelope_shape, fixture_root,
-    parse_stdout, run, run_env, run_index_default, run_json, run_json_full, CliSession,
+    asgrep_bin, assert_failure_envelope, assert_finite_unit, assert_fixture_hits,
+    assert_human_error, assert_human_success, assert_no_success_shape,
+    assert_operational_envelope, assert_success, assert_usage_envelope, envelope_shape,
+    eval_project, f64_at, fixture_root, indexed_project, indexed_project_n, parse_human_row,
+    parse_human_summary, parse_stdout, run, run_env, run_eval_ok, run_eval_raw,
+    run_index_default, run_index_json_noembed, run_json, run_json_full, run_search_json,
+    usage_message, write_fixture, write_gold, CliSession,
 };
 pub use cli_oracle::{
     oracle_build_json, oracle_keyword_corpus, oracle_outline_corpus, oracle_run_json, oracle_run_raw,
@@ -52,9 +56,9 @@ pub use cli_recovery::kill9;
 pub use codemode::{
     assert_json_byte_identical, assert_other_preserves_cause, batch_call, batch_request,
     batch_request_with_mode, call_error_discriminant, catalog_call, config_at, config_at_indexed,
-    sample_search_hit, search_select_plan, serve_lines, serve_request_line, session_at,
-    session_at_indexed, BUDGET_EXCEEDED, CALL_NOW_ONLY, DEFS_NEEDS_SYMBOL, MAX_QUERY_CHARS,
-    SESSION_BUSY,
+    hits_fixture, indexed_session_at, sample_search_hit, scored_hits5, scored_hits6,
+    search_select_plan, serve_lines, serve_request_line, session_at, session_at_indexed,
+    BUDGET_EXCEEDED, CALL_NOW_ONLY, DEFS_NEEDS_SYMBOL, MAX_QUERY_CHARS, SESSION_BUSY,
 };
 #[cfg(feature = "codemode")]
 pub use codemode_invalidation::{
@@ -70,8 +74,10 @@ pub use codemode_recovery::{
 };
 pub use core_invalidation::{hermetic_indexer, HitTuple, InvalidationFixture};
 pub use core_oracle::{
-    build_core_index, core_index_options, core_search_options, core_searcher, finish_options,
-    response_hit_keys_with_scores, searcher_at_root, sorted_hit_files, unit_channel_weights,
+    build_core_index, chain_store, core_index_options, core_search_options, core_searcher,
+    crossover_corpus, finish_options, fused_keys, hit_files_in_order, mixed_hits, pair_examples,
+    parsed_query, rank_fused, response_hit_keys_with_scores, route_fuse_pipeline, searcher_at_root,
+    set_rank, set_weight, single_rank, sorted_hit_files, tie_corpus, unit_channel_weights,
     write_core_fixture, CorePipelineFixture,
 };
 pub use core_recovery::{
@@ -92,7 +98,9 @@ pub use golden::{
     canonicalize_chain_response, canonicalize_extraction, canonicalize_text, golden_text_pretty,
     updating_goldens,
 };
-pub use hit::{hit_key_bits, hit_keys, mk_hit, sorted_contributors, HitKey};
+pub use hit::{
+    fused_key, hit_key_bits, hit_keys, mk_hit, sorted_contributors, HitKey,
+};
 pub use index::{
     core_search_hit_keys, index_sample, json_hit_keys, reopen_indexer, response_hit_keys,
     searcher_from, HitKey as SurfaceHitKey, IndexedFixture,
@@ -113,12 +121,13 @@ pub use mcp::{
     big_tree, cancelled_notif, collect_responses, corrupt_index_db, distinct_hit_paths,
     expected_tool_names, index_tree, indexed_tree, init_payload, initialized_notif, is_error,
     mcp_bin, multi_hit_tree, ping, response_by_id, rpc_at, rpc_pipeline, rpc_session,
-    rpc_session_env, rpc_session_raw, search_call, small_tree, spawn_raw_no_handshake, tool_body,
+    rpc_session_env, rpc_session_raw, search_call, small_tree, snippet_bytes,
+    spawn_raw_no_handshake, tool_body,
     tool_call, tool_error_discriminant, tool_text, tools_list, CallSession, LiveSession,
     TESTKIT_CLIENT_NAME,
 };
 #[cfg(feature = "plugins")]
 pub use mcp::{assert_hit_path_set, hit_path_set};
-pub use num::{approx_eq, fold_rank_scored};
+pub use num::{approx_eq, chunk_row, fold_rank_scored, lcg_vec, ranked_indices};
 pub use scrub::Scrubber;
 pub use verdict::TestVerdict;

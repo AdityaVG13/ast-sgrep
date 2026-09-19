@@ -239,17 +239,17 @@ path = "../../tests/core/invalidation_refresh.rs"
 name = "invalidation_drills"
 path = "../../tests/core/invalidation_drills.rs"
 [[test]]
-name = "numerical_pass1"
-path = "../../tests/core/numerical_pass1.rs"
+name = "numerical_fusion"
+path = "../../tests/core/numerical_fusion.rs"
 [[test]]
-name = "numerical_pass2"
-path = "../../tests/core/numerical_pass2.rs"
+name = "numerical_routing"
+path = "../../tests/core/numerical_routing.rs"
 [[test]]
-name = "numerical_pass3"
-path = "../../tests/core/numerical_pass3.rs"
+name = "numerical_search"
+path = "../../tests/core/numerical_search.rs"
 [[test]]
-name = "numerical_pass4"
-path = "../../tests/core/numerical_pass4.rs"
+name = "numerical_drills"
+path = "../../tests/core/numerical_drills.rs"
 [[test]]
 name = "topology_gates"
 path = "../../tests/core/topology_gates.rs"

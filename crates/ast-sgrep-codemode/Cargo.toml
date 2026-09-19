@@ -85,14 +85,26 @@ path = "../../tests/codemode/invalidation_parity.rs"
 name = "invalidation_drills"
 path = "../../tests/codemode/invalidation_drills.rs"
 [[test]]
-name = "numerical_pass1"
-path = "../../tests/codemode/numerical_pass1.rs"
+name = "numerical_batch"
+path = "../../tests/codemode/numerical_batch.rs"
 [[test]]
-name = "numerical_pass2"
-path = "../../tests/codemode/numerical_pass2.rs"
+name = "numerical_budget"
+path = "../../tests/codemode/numerical_budget.rs"
 [[test]]
-name = "numerical_pass3"
-path = "../../tests/codemode/numerical_pass3.rs"
+name = "numerical_filter_hits"
+path = "../../tests/codemode/numerical_filter_hits.rs"
 [[test]]
-name = "numerical_pass4"
-path = "../../tests/codemode/numerical_pass4.rs"
+name = "numerical_find"
+path = "../../tests/codemode/numerical_find.rs"
+[[test]]
+name = "numerical_keeps"
+path = "../../tests/codemode/numerical_keeps.rs"
+[[test]]
+name = "numerical_plan"
+path = "../../tests/codemode/numerical_plan.rs"
+[[test]]
+name = "numerical_read"
+path = "../../tests/codemode/numerical_read.rs"
+[[test]]
+name = "numerical_select"
+path = "../../tests/codemode/numerical_select.rs"

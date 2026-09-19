@@ -75,17 +75,14 @@ path = "../../tests/mcp/invalidation_matrix.rs"
 name = "invalidation_drills"
 path = "../../tests/mcp/invalidation_drills.rs"
 [[test]]
-name = "numerical_pass1"
-path = "../../tests/mcp/numerical_pass1.rs"
+name = "numerical_anchors"
+path = "../../tests/mcp/numerical_anchors.rs"
 [[test]]
-name = "numerical_pass2"
-path = "../../tests/mcp/numerical_pass2.rs"
+name = "numerical_code_read"
+path = "../../tests/mcp/numerical_code_read.rs"
 [[test]]
-name = "numerical_pass3"
-path = "../../tests/mcp/numerical_pass3.rs"
-[[test]]
-name = "numerical_pass4"
-path = "../../tests/mcp/numerical_pass4.rs"
+name = "numerical_keyword_search"
+path = "../../tests/mcp/numerical_keyword_search.rs"
 [[test]]
 name = "tokio_concurrency"
 path = "../../tests/mcp/tokio_concurrency.rs"

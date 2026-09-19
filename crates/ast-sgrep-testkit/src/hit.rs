@@ -17,6 +17,20 @@ pub fn mk_hit(kind: HitKind, file: &str, line: u32, score: f64) -> SearchHit {
         byte_span: None,
     })
 }
+/// INTENT: full observable fused-row projection — `SearchHit` has no
+/// `PartialEq`, so fusion/determinism asserts compare on this key: (kind,
+/// file, line span, exact score bits, contributors). Pure projection.
+pub fn fused_key(hit: &SearchHit) -> (HitKind, String, u32, u32, u64, Vec<HitKind>) {
+    (
+        hit.kind,
+        hit.file.clone(),
+        hit.line_start,
+        hit.line_end,
+        hit.score.to_bits(),
+        hit.contributors.clone(),
+    )
+}
+
 /// INTENT: order-sensitive hit identity (file, span, exact score and
 /// confidence bits) for fixpoint/determinism asserts. Pure projection.
 pub fn hit_key_bits(hit: &SearchHit) -> (String, u32, u32, u64, u64) {

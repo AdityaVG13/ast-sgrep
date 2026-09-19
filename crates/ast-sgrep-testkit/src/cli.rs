@@ -1,3 +1,4 @@
+use crate::cli_oracle::write_root_bytes;
 use crate::fixture::sample_root;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
@@ -318,4 +319,279 @@ pub fn assert_failure_envelope(
         "error.message must be a string: {value}"
     );
     value
+}
+
+/// INTENT: str-body fixture writer over [`write_root_bytes`] (which takes
+/// bytes); the numerical suites write `fn <term>() {}` fixtures through
+/// this one-liner. Panics on IO failure.
+pub fn write_fixture(root: &Path, name: &str, body: &str) {
+    write_root_bytes(root, name, body.as_bytes());
+}
+
+/// INTENT: eval-gold writer with caller-chosen filename. Panics on IO failure.
+pub fn write_gold(dir: &Path, name: &str, body: &Value) -> PathBuf {
+    let path = dir.join(name);
+    std::fs::write(&path, body.to_string()).expect("write gold");
+    path
+}
+
+/// INTENT: JSON-pointer f64 accessor — the eval-arithmetic suites pin exact
+/// floats at pointers. Panics when the pointer is missing or not a number.
+pub fn f64_at(value: &Value, pointer: &str) -> f64 {
+    value
+        .pointer(pointer)
+        .unwrap_or_else(|| panic!("missing {pointer} in {value}"))
+        .as_f64()
+        .unwrap_or_else(|| panic!("{pointer} is not a number in {value}"))
+}
+
+/// INTENT: [`f64_at`] plus a finite-unit [0,1] guard. A NaN leak would
+/// render as JSON null and fail `as_f64`; an out-of-range value fails the
+/// band check. Panics outside the finite unit band. Returns the value.
+pub fn assert_finite_unit(value: &Value, pointer: &str) -> f64 {
+    let v = f64_at(value, pointer);
+    assert!(
+        v.is_finite() && (0.0..=1.0).contains(&v),
+        "{pointer} must be a finite unit value, got {v}"
+    );
+    v
+}
+
+/// INTENT: `--json --no-embed index <root>` beat asserting exit 0. Delta vs
+/// [`run_index_default`] (bare `index`, human rendering, embed attempt) and
+/// [`crate::run_index`] (`--index-path`-fixed recovery shape): this is the
+/// default-layout machine beat. Panics on nonzero exit.
+pub fn run_index_json_noembed(root: &Path) {
+    let bin = asgrep_bin();
+    let output = run(
+        &bin,
+        &["--json", "--no-embed", "index", root.to_str().unwrap()],
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "index must succeed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// INTENT: one-file (`a.rs`) indexed project — the limit/budget/window
+/// shape. The caller keeps the [`TempDir`] alive. Panics on IO/index failure.
+pub fn indexed_project(term: &str) -> (TempDir, PathBuf) {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path().join("proj");
+    std::fs::create_dir_all(&root).unwrap();
+    write_fixture(&root, "a.rs", &format!("fn {term}() {{}}\n"));
+    run_index_json_noembed(&root);
+    (temp, root)
+}
+
+/// INTENT: n-file (`m00.rs..`) indexed project sharing one term — the
+/// search-limit shape. The caller keeps the [`TempDir`] alive. Panics on
+/// IO/index failure.
+pub fn indexed_project_n(term: &str, n_files: usize) -> (TempDir, PathBuf) {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path().join("proj");
+    std::fs::create_dir_all(&root).unwrap();
+    for i in 0..n_files {
+        write_fixture(&root, &format!("m{i:02}.rs"), &format!("fn {term}() {{}}\n"));
+    }
+    run_index_json_noembed(&root);
+    (temp, root)
+}
+
+/// INTENT: one-file (`a.rs`) project WITHOUT indexing — `eval` builds its
+/// own temp index from the root, so eval-totality suites must not index.
+/// The caller keeps the [`TempDir`] alive. Panics on IO failure.
+pub fn eval_project(term: &str) -> (TempDir, PathBuf) {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path().join("proj");
+    std::fs::create_dir_all(&root).unwrap();
+    write_fixture(&root, "a.rs", &format!("fn {term}() {{}}\n"));
+    (temp, root)
+}
+
+/// INTENT: canonical `eval --gold` success beat asserting exit 0. Returns
+/// the parsed body. Panics on nonzero exit.
+pub fn run_eval_ok(gold: &Path, root: &Path) -> Value {
+    let bin = asgrep_bin();
+    let output = run(
+        &bin,
+        &[
+            "--json",
+            "--no-embed",
+            "eval",
+            "--gold",
+            gold.to_str().unwrap(),
+            root.to_str().unwrap(),
+        ],
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "eval must succeed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    parse_stdout(&output)
+}
+
+/// INTENT: raw `eval --gold` beat for exit-code-pinning callers
+/// (fail-closed suites assert exit 2 via [`assert_operational_envelope`]).
+/// No exit assertion — the caller owns the verdict.
+pub fn run_eval_raw(gold: &Path, root: &Path) -> Output {
+    let bin = asgrep_bin();
+    run(
+        &bin,
+        &[
+            "--json",
+            "--no-embed",
+            "eval",
+            "--gold",
+            gold.to_str().unwrap(),
+            root.to_str().unwrap(),
+        ],
+    )
+}
+
+/// INTENT: canonical `--limit <n> <query> <root>` search beat asserting
+/// exit 0 (flags-first JSON shape). Returns the parsed body. Panics on
+/// nonzero exit.
+pub fn run_search_json(root: &Path, limit: usize, query: &str) -> Value {
+    let bin = asgrep_bin();
+    let limit_arg = limit.to_string();
+    let output = run(
+        &bin,
+        &[
+            "--json",
+            "--no-embed",
+            "--limit",
+            &limit_arg,
+            query,
+            root.to_str().unwrap(),
+        ],
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "search must succeed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    parse_stdout(&output)
+}
+
+/// INTENT: shape-only exit-1 usage guard (exit code, stderr silence,
+/// ok/exit_code/kind/message-type). Stricter than
+/// [`assert_failure_envelope`] on stderr, looser on schema/tool/command by
+/// design. Returns the parsed body.
+pub fn assert_usage_envelope(output: &Output) -> Value {
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "degenerate input must be a usage error: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        output.stderr.is_empty(),
+        "--json usage errors stay on stdout: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let value = parse_stdout(output);
+    assert_eq!(value["ok"], false, "{value}");
+    assert_eq!(value["exit_code"], 1, "{value}");
+    assert_eq!(value["error"]["kind"], "usage", "{value}");
+    assert!(value["error"]["message"].is_string(), "{value}");
+    value
+}
+
+/// INTENT: shape-only exit-2 operational guard, mirroring
+/// [`assert_usage_envelope`] for the fail-closed (never fabricate zeros)
+/// path. Returns the parsed body.
+pub fn assert_operational_envelope(output: &Output) -> Value {
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "degenerate input must fail closed as operational: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        output.stderr.is_empty(),
+        "--json operational errors stay on stdout: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let value = parse_stdout(output);
+    assert_eq!(value["ok"], false, "{value}");
+    assert_eq!(value["exit_code"], 2, "{value}");
+    assert_eq!(value["error"]["kind"], "operational", "{value}");
+    assert!(value["error"]["message"].is_string(), "{value}");
+    value
+}
+
+/// INTENT: over-cap flag beat — exit-1 usage with the exact numeric clause
+/// pinned by the caller (cap/message regressions hide when only the
+/// envelope shape is asserted). Returns the parsed body.
+pub fn usage_message(args: &[&str]) -> Value {
+    let bin = asgrep_bin();
+    let output = run(&bin, args);
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "over-cap flag must be a usage error: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        output.stderr.is_empty(),
+        "--json usage errors stay on stdout: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let value = parse_stdout(&output);
+    assert_eq!(value["error"]["kind"], "usage");
+    value
+}
+
+/// INTENT: human `| name | rank | rr | found/relevant | ndcg |` row parser
+/// into (rank_or_miss, rr, found, relevant, ndcg). Numeric fields only;
+/// the human-vs-JSON agreement suite is the consumer. Pure projection
+/// (panics when the row is missing or malformed).
+pub fn parse_human_row(stdout: &str, name: &str) -> (String, f64, u64, u64, f64) {
+    let line = stdout
+        .lines()
+        .find(|l| l.starts_with(&format!("| {name} |")))
+        .unwrap_or_else(|| panic!("missing human row for {name}: {stdout}"));
+    let cells: Vec<&str> = line.split('|').map(str::trim).collect();
+    assert_eq!(cells.len(), 7, "human row must have 5 cells: {line}");
+    let counts: Vec<&str> = cells[4].split('/').collect();
+    (
+        cells[2].to_owned(),
+        cells[3].parse().expect("rr parses"),
+        counts[0].parse().expect("found parses"),
+        counts[1].parse().expect("relevant parses"),
+        cells[5].parse().expect("ndcg parses"),
+    )
+}
+
+/// INTENT: human `MRR=.. Recall@k=.. nDCG@k=.. Recall@1=.. Recall@5=..
+/// Recall@20=.. n=..` summary-line parser into its seven numeric fields.
+/// The human-vs-JSON agreement suite is the consumer. Pure projection
+/// (panics when the line is missing or malformed).
+pub fn parse_human_summary(stdout: &str) -> (f64, f64, f64, f64, f64, f64, u64) {
+    let line = stdout
+        .lines()
+        .find(|l| l.starts_with("MRR="))
+        .unwrap_or_else(|| panic!("missing human summary: {stdout}"));
+    let mut vals = [0.0f64; 6];
+    let mut n = 0u64;
+    for token in line.split_whitespace() {
+        let (key, raw) = token.split_once('=').expect("key=value token");
+        match key {
+            "MRR" => vals[0] = raw.parse().expect("MRR parses"),
+            "Recall@k" => vals[1] = raw.parse().expect("Recall@k parses"),
+            "nDCG@k" => vals[2] = raw.parse().expect("nDCG@k parses"),
+            "Recall@1" => vals[3] = raw.parse().expect("Recall@1 parses"),
+            "Recall@5" => vals[4] = raw.parse().expect("Recall@5 parses"),
+            "Recall@20" => vals[5] = raw.parse().expect("Recall@20 parses"),
+            "n" => n = raw.parse().expect("n parses"),
+            other => panic!("unexpected summary token {other}"),
+        }
+    }
+    (vals[0], vals[1], vals[2], vals[3], vals[4], vals[5], n)
 }

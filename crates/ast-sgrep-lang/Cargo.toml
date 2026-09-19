@@ -92,14 +92,26 @@ path = "../../tests/lang/invalidation_orders.rs"
 name = "invalidation_drills"
 path = "../../tests/lang/invalidation_drills.rs"
 [[test]]
-name = "numerical_pass1"
-path = "../../tests/lang/numerical_pass1.rs"
+name = "numerical_dot"
+path = "../../tests/lang/numerical_dot.rs"
 [[test]]
-name = "numerical_pass2"
-path = "../../tests/lang/numerical_pass2.rs"
+name = "numerical_cosine"
+path = "../../tests/lang/numerical_cosine.rs"
 [[test]]
-name = "numerical_pass3"
-path = "../../tests/lang/numerical_pass3.rs"
+name = "numerical_normalize"
+path = "../../tests/lang/numerical_normalize.rs"
 [[test]]
-name = "numerical_pass4"
-path = "../../tests/lang/numerical_pass4.rs"
+name = "numerical_score_ranker"
+path = "../../tests/lang/numerical_score_ranker.rs"
+[[test]]
+name = "numerical_flat_ranker"
+path = "../../tests/lang/numerical_flat_ranker.rs"
+[[test]]
+name = "numerical_chunk_ranker"
+path = "../../tests/lang/numerical_chunk_ranker.rs"
+[[test]]
+name = "numerical_embed"
+path = "../../tests/lang/numerical_embed.rs"
+[[test]]
+name = "numerical_pipelines"
+path = "../../tests/lang/numerical_pipelines.rs"

@@ -420,6 +420,18 @@ pub fn tool_body(response: &Value) -> Value {
     serde_json::from_str(tool_text(response)).expect("tool body JSON")
 }
 
+/// INTENT: per-hit snippet byte lengths (hit row index 4) — elision and
+/// budget accounting re-sum rendered snippet bytes from this projection.
+/// Pure accessor (panics when the body lacks the compact hit rows).
+pub fn snippet_bytes(body: &Value) -> Vec<usize> {
+    body["h"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|hit| hit.as_array().unwrap()[4].as_str().unwrap().len())
+        .collect()
+}
+
 /// The `isError` discriminant (`result.isError == true`). Panics when the
 /// envelope lacks a boolean `isError` — a malformed envelope is a test
 /// failure, never a silent `false`. Pure accessor; never inspects message text.

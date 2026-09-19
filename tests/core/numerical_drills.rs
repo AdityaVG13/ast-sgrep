@@ -1,12 +1,11 @@
-//! N4 end-to-end scoring drills: FULL score -> rank -> fuse pipelines.
+//! N4 end-to-end scoring drills, kept standalone: FULL score -> rank -> fuse pipelines.
 //!
-//! N1 pins single-function exact values, N2 pins totality on hostile inputs,
-//! N3 pins metamorphic relations. N4 runs the whole pipeline — raw producer
-//! scores (`score_def`, hand raws) -> `route_hits` normalization (per-hit
-//! ceilings, clamp) -> `apply_weighted_rrf` (within-channel ranks + weighted
-//! RRF sums) — on hand-built adversarial corpora, asserting EXACT final
-//! orderings and EXACT fused scores. One drill extends through
-//! `finish_response` to the user-visible ranking.
+//! Each drill runs the whole pipeline — raw producer scores (`score_def`, hand
+//! raws) -> `route_hits` normalization (per-hit ceilings, clamp) ->
+//! `apply_weighted_rrf` (within-channel ranks + weighted RRF sums) — on
+//! hand-built adversarial corpora, asserting EXACT final orderings and EXACT
+//! fused scores. One drill extends through `finish_response` to the
+//! user-visible ranking. Each test carries INTENT + KILLS + ABSORBS.
 //!
 //! Every expectation is HAND-DERIVED (rational arithmetic in the comment above
 //! it). Nothing here snapshots production output. Bit-equality oracles reuse
@@ -19,76 +18,17 @@
 use ast_sgrep_core::fusion::apply_weighted_rrf;
 use ast_sgrep_core::intent::{route_hits, ChannelWeights};
 use ast_sgrep_core::rank::score_def;
-use ast_sgrep_core::search::{
-    finish_response, HitKind, SearchHit, SearchOptions, SpanHitInput,
-};
+use ast_sgrep_core::search::{finish_response, HitKind, SearchHit};
 use ast_sgrep_core::ParsedQuery;
+use ast_sgrep_testkit::{
+    crossover_corpus, finish_options, fused_key, hit_files_in_order, mk_hit, rank_fused,
+    route_fuse_pipeline, tie_corpus,
+};
 
-fn n4_hit(kind: HitKind, file: &str, line: u32, score: f64) -> SearchHit {
-    SearchHit::span(SpanHitInput {
-        kind,
-        file: file.to_string(),
-        line_start: line,
-        line_end: line,
-        score,
-        excerpt: format!("excerpt {file}:{line}"),
-        symbol: None,
-        language: None,
-        byte_span: None,
-    })
-}
-
-fn n4_options(root: &std::path::Path, limit: usize) -> SearchOptions {
-    SearchOptions {
-        root: root.to_path_buf(),
-        limit,
-        file_filter: None,
-        count_only: false,
-        use_rerank: false,
-        ..SearchOptions::default()
-    }
-}
-
-/// Run the full score -> rank -> fuse pipeline: normalize raws against
-/// per-hit ceilings, then rank within channels and fuse with `weights`.
-fn n4_pipeline(parsed: &ParsedQuery, hits: Vec<SearchHit>, weights: &ChannelWeights) -> Vec<SearchHit> {
-    let mut hits = hits;
-    route_hits(parsed, &mut hits);
-    apply_weighted_rrf(&mut hits, weights);
-    hits
-}
-
-/// Final ranking order: fused score desc, ties by (file, line).
-fn n4_ranked(mut fused: Vec<SearchHit>) -> Vec<SearchHit> {
-    fused.sort_by(|a, b| {
-        b.score
-            .total_cmp(&a.score)
-            .then_with(|| a.file.cmp(&b.file))
-            .then_with(|| a.line_start.cmp(&b.line_start))
-    });
-    fused
-}
-
-fn n4_files(hits: &[SearchHit]) -> Vec<String> {
-    hits.iter().map(|h| h.file.clone()).collect()
-}
-
-/// Full observable fused row (SearchHit has no PartialEq).
-fn n4_key(hit: &SearchHit) -> (HitKind, String, u32, u32, u64, Vec<HitKind>) {
-    (
-        hit.kind,
-        hit.file.clone(),
-        hit.line_start,
-        hit.line_end,
-        hit.score.to_bits(),
-        hit.contributors.clone(),
-    )
-}
-
-// ---------------------------------------------------------------------------
-// 1. Breadth beats a clamped single spike: the max raw finishes last
-// ---------------------------------------------------------------------------
-
+/// INTENT: two-channel breadth beats a 500-raw single spike clamped to 1.0;
+/// exact fused scores + order.
+/// KILLS: clamp/fuse-mutant.
+/// ABSORBS: none (KEEP standalone: `breadth_beats_clamped_single_spike`).
 #[test]
 fn breadth_beats_clamped_single_spike() {
     // Query "foo": Asgrep ceiling c = (1/61)*200 ~= 3.2787; Def ceiling 13
@@ -102,18 +42,18 @@ fn breadth_beats_clamped_single_spike() {
     // Q = 1/62+1/62 ~= 0.03226, R = 1/61 ~= 0.01639.
     // Final: P > Q > R — the 500-raw spike finishes LAST.
     let parsed = ParsedQuery::parse("foo");
-    let mut p_def = n4_hit(HitKind::Def, "p.rs", 1, 13.0);
+    let mut p_def = mk_hit(HitKind::Def, "p.rs", 1, 13.0);
     p_def.symbol = Some("foo".to_string());
-    let mut q_def = n4_hit(HitKind::Def, "q.rs", 1, 6.5);
+    let mut q_def = mk_hit(HitKind::Def, "q.rs", 1, 6.5);
     q_def.symbol = Some("foo".to_string());
-    let fused = n4_pipeline(
+    let fused = route_fuse_pipeline(
         &parsed,
         vec![
-            n4_hit(HitKind::Asgrep, "p.rs", 1, 3.0),
+            mk_hit(HitKind::Asgrep, "p.rs", 1, 3.0),
             p_def,
-            n4_hit(HitKind::Asgrep, "q.rs", 1, 2.0),
+            mk_hit(HitKind::Asgrep, "q.rs", 1, 2.0),
             q_def,
-            n4_hit(HitKind::Graph, "r.rs", 1, 500.0),
+            mk_hit(HitKind::Graph, "r.rs", 1, 500.0),
         ],
         &ChannelWeights::default(),
     );
@@ -122,43 +62,27 @@ fn breadth_beats_clamped_single_spike() {
     assert_eq!(by_file("p.rs").score, 1.0 / 61.0 + 1.0 / 61.0);
     assert_eq!(by_file("q.rs").score, 1.0 / 62.0 + 1.0 / 62.0);
     assert_eq!(by_file("r.rs").score, 1.0 / 61.0);
-    let ranked = n4_ranked(fused);
-    assert_eq!(n4_files(&ranked), vec!["p.rs", "q.rs", "r.rs"]);
+    let ranked = rank_fused(fused);
+    assert_eq!(hit_files_in_order(&ranked), vec!["p.rs", "q.rs", "r.rs"]);
 }
 
-// ---------------------------------------------------------------------------
-// 2. One corpus, three weightings: tie, then a tilt flips the order both ways
-// ---------------------------------------------------------------------------
-
-fn n4_crossover_corpus() -> Vec<SearchHit> {
-    // Asgrep raws A=3.0 > B=2.0; Def raws A=6.5 (routed 0.5) < B=13.0
-    // (routed 1.0, both symbol "foo", ceiling 13). Opposite within-channel
-    // orders: A = (lex 0, def 1), B = (lex 1, def 0).
-    let mut a_def = n4_hit(HitKind::Def, "a.rs", 1, 6.5);
-    a_def.symbol = Some("foo".to_string());
-    let mut b_def = n4_hit(HitKind::Def, "b.rs", 1, 13.0);
-    b_def.symbol = Some("foo".to_string());
-    vec![
-        n4_hit(HitKind::Asgrep, "a.rs", 1, 3.0),
-        a_def,
-        n4_hit(HitKind::Asgrep, "b.rs", 1, 2.0),
-        b_def,
-    ]
-}
-
+/// INTENT: same corpus ties at unit weights; lex-heavy -> A first, def-heavy
+/// -> B first; exact tilted scores.
+/// KILLS: weight-application-mutant.
+/// ABSORBS: none (KEEP standalone: `weight_tilt_flips_fused_order`).
 #[test]
 fn weight_tilt_flips_fused_order() {
     let parsed = ParsedQuery::parse("foo");
     // Unit weights: A = 1/61+1/62, B = 1/62+1/61 — the same two-term
     // multiset, and IEEE `+` is commutative, so the fused scores are
     // BIT-identical; the tie breaks by file: [a, b].
-    let fused = n4_pipeline(&parsed, n4_crossover_corpus(), &ChannelWeights::default());
+    let fused = route_fuse_pipeline(&parsed, crossover_corpus(), &ChannelWeights::default());
     assert_eq!(fused.len(), 2);
     let by_file = |fused: &[SearchHit], f: &str| fused.iter().find(|h| h.file == f).unwrap().score;
     assert_eq!(by_file(&fused, "a.rs"), 1.0 / 61.0 + 1.0 / 62.0);
     assert_eq!(by_file(&fused, "b.rs"), 1.0 / 62.0 + 1.0 / 61.0);
     assert_eq!(by_file(&fused, "a.rs"), by_file(&fused, "b.rs"));
-    assert_eq!(n4_files(&n4_ranked(fused)), vec!["a.rs", "b.rs"]);
+    assert_eq!(hit_files_in_order(&rank_fused(fused)), vec!["a.rs", "b.rs"]);
 
     // Lex-heavy (lex 2.0, def 0.25): A - B = (2-0.25)*(1/61-1/62)
     // = 1.75/3782 ~= 4.63e-4 > 0, strict A first.
@@ -167,7 +91,7 @@ fn weight_tilt_flips_fused_order() {
         def: 0.25,
         ..ChannelWeights::default()
     };
-    let fused = n4_pipeline(&parsed, n4_crossover_corpus(), &lex_heavy);
+    let fused = route_fuse_pipeline(&parsed, crossover_corpus(), &lex_heavy);
     assert_eq!(
         by_file(&fused, "a.rs"),
         2.0 * (1.0 / 61.0) + 0.25 * (1.0 / 62.0)
@@ -177,7 +101,7 @@ fn weight_tilt_flips_fused_order() {
         2.0 * (1.0 / 62.0) + 0.25 * (1.0 / 61.0)
     );
     assert!(by_file(&fused, "a.rs") > by_file(&fused, "b.rs"));
-    assert_eq!(n4_files(&n4_ranked(fused)), vec!["a.rs", "b.rs"]);
+    assert_eq!(hit_files_in_order(&rank_fused(fused)), vec!["a.rs", "b.rs"]);
 
     // Def-heavy (lex 0.25, def 2.0): mirror image, B wins by the same
     // 1.75/3782 delta — the tilt flips the order the other way.
@@ -186,7 +110,7 @@ fn weight_tilt_flips_fused_order() {
         def: 2.0,
         ..ChannelWeights::default()
     };
-    let fused = n4_pipeline(&parsed, n4_crossover_corpus(), &def_heavy);
+    let fused = route_fuse_pipeline(&parsed, crossover_corpus(), &def_heavy);
     assert_eq!(
         by_file(&fused, "a.rs"),
         0.25 * (1.0 / 61.0) + 2.0 * (1.0 / 62.0)
@@ -196,40 +120,22 @@ fn weight_tilt_flips_fused_order() {
         0.25 * (1.0 / 62.0) + 2.0 * (1.0 / 61.0)
     );
     assert!(by_file(&fused, "b.rs") > by_file(&fused, "a.rs"));
-    assert_eq!(n4_files(&n4_ranked(fused)), vec!["b.rs", "a.rs"]);
+    assert_eq!(hit_files_in_order(&rank_fused(fused)), vec!["b.rs", "a.rs"]);
 }
 
-// ---------------------------------------------------------------------------
-// 3. Routing CREATES ties from 100x-different raws; keys break them
-// ---------------------------------------------------------------------------
-
-fn n4_tie_corpus() -> Vec<SearchHit> {
-    // Def raws 13/26/130/1300 (symbol "foo", ceiling 13) all route to 1.0
-    // (1.0, then 2/10/100 clamped); Caller raws 11.5/115 (callee "foo",
-    // ceiling 11.5) both route to 1.0. Within-channel ranks fall back to
-    // (file, line): def a=0 b=1 c=2 d=3; caller a=0 b=1.
-    let mut defs = Vec::new();
-    for (file, raw) in [("a.rs", 13.0), ("b.rs", 26.0), ("c.rs", 130.0), ("d.rs", 1300.0)] {
-        let mut hit = n4_hit(HitKind::Def, file, 1, raw);
-        hit.symbol = Some("foo".to_string());
-        defs.push(hit);
-    }
-    let mut a_caller = n4_hit(HitKind::Caller, "a.rs", 1, 11.5);
-    a_caller.callee = Some("foo".to_string());
-    let mut b_caller = n4_hit(HitKind::Caller, "b.rs", 1, 115.0);
-    b_caller.callee = Some("foo".to_string());
-    defs.push(a_caller);
-    defs.push(b_caller);
-    defs
-}
-
+/// INTENT: routing CREATES ties from 100x-different raws; keys break them;
+/// exact fused scores; reversal bit-identical.
+/// KILLS: clamp/tiebreak-mutant.
+/// ABSORBS: none (KEEP standalone: `routing_clamp_creates_ties_with_key_breaks`;
+/// the reversal half overlaps the N3 permutation/tie cluster but the
+/// clamp-creates-ties intent is unique).
 #[test]
 fn routing_clamp_creates_ties_with_key_breaks() {
     // Fused (unit): a = 1/61+1/61 (def0+caller0), b = 1/62+1/62,
     // c = 1/63, d = 1/64. Order a > b > c > d is total: every adjacent
     // gap is >= 1/63-1/64 ~= 2.5e-4, ~1e11 ulps at this magnitude.
     let parsed = ParsedQuery::parse("foo");
-    let fused = n4_pipeline(&parsed, n4_tie_corpus(), &ChannelWeights::default());
+    let fused = route_fuse_pipeline(&parsed, tie_corpus(), &ChannelWeights::default());
     assert_eq!(fused.len(), 4);
     let by_file = |f: &str| fused.iter().find(|h| h.file == f).unwrap();
     assert_eq!(by_file("a.rs").score, 1.0 / 61.0 + 1.0 / 61.0);
@@ -238,28 +144,28 @@ fn routing_clamp_creates_ties_with_key_breaks() {
     assert_eq!(by_file("d.rs").score, 1.0 / 64.0);
     assert_eq!(by_file("a.rs").kind, HitKind::Def);
     assert_eq!(by_file("a.rs").contributors, vec![HitKind::Def, HitKind::Caller]);
-    let ranked = n4_ranked(fused);
-    assert_eq!(n4_files(&ranked), vec!["a.rs", "b.rs", "c.rs", "d.rs"]);
+    let ranked = rank_fused(fused);
+    assert_eq!(hit_files_in_order(&ranked), vec!["a.rs", "b.rs", "c.rs", "d.rs"]);
 
     // The tie order comes from keys, not input order: reversing the input
     // reproduces the fused stream bit-for-bit (emission is sorted by key).
-    let forward: Vec<_> = n4_pipeline(&parsed, n4_tie_corpus(), &ChannelWeights::default())
+    let forward: Vec<_> = route_fuse_pipeline(&parsed, tie_corpus(), &ChannelWeights::default())
         .iter()
-        .map(n4_key)
+        .map(fused_key)
         .collect();
-    let mut reversed = n4_tie_corpus();
+    let mut reversed = tie_corpus();
     reversed.reverse();
-    let backward: Vec<_> = n4_pipeline(&parsed, reversed, &ChannelWeights::default())
+    let backward: Vec<_> = route_fuse_pipeline(&parsed, reversed, &ChannelWeights::default())
         .iter()
-        .map(n4_key)
+        .map(fused_key)
         .collect();
     assert_eq!(forward, backward);
 }
 
-// ---------------------------------------------------------------------------
-// 4. Hostile weights fuse on the sanitize rails with a hand-computed order
-// ---------------------------------------------------------------------------
-
+/// INTENT: 8 channels x 8 sanitize rails fuse to exact rail x 1/61 with
+/// rail-cohort ranking.
+/// KILLS: sanitize-rail-mutant.
+/// ABSORBS: none (KEEP standalone: `hostile_weights_fuse_on_rails`).
 #[test]
 fn hostile_weights_fuse_on_rails() {
     // Eight channels, one hit each, every raw exactly at its ceiling so each
@@ -270,19 +176,19 @@ fn hostile_weights_fuse_on_rails() {
     // lexical = def = embed = pattern = 0.25/61.
     let parsed = ParsedQuery::parse("foo");
     let ceiling = (1.0f64 / 61.0) * 200.0; // Asgrep ceiling, production op order
-    let mut def = n4_hit(HitKind::Def, "b_def.rs", 1, 13.0);
+    let mut def = mk_hit(HitKind::Def, "b_def.rs", 1, 13.0);
     def.symbol = Some("foo".to_string());
-    let mut caller = n4_hit(HitKind::Caller, "c_caller.rs", 1, 11.5);
+    let mut caller = mk_hit(HitKind::Caller, "c_caller.rs", 1, 11.5);
     caller.callee = Some("foo".to_string());
     let hits = vec![
-        n4_hit(HitKind::Asgrep, "a_lex.rs", 1, ceiling),
+        mk_hit(HitKind::Asgrep, "a_lex.rs", 1, ceiling),
         def,
         caller,
-        n4_hit(HitKind::Graph, "d_graph.rs", 1, 5.0),
-        n4_hit(HitKind::Anchor, "e_anchor.rs", 1, 6.0),
-        n4_hit(HitKind::Embed, "f_embed.rs", 1, 4.0),
-        n4_hit(HitKind::Pattern, "g_pattern.rs", 1, 7.0),
-        n4_hit(HitKind::Import, "h_import.rs", 1, 2.0),
+        mk_hit(HitKind::Graph, "d_graph.rs", 1, 5.0),
+        mk_hit(HitKind::Anchor, "e_anchor.rs", 1, 6.0),
+        mk_hit(HitKind::Embed, "f_embed.rs", 1, 4.0),
+        mk_hit(HitKind::Pattern, "g_pattern.rs", 1, 7.0),
+        mk_hit(HitKind::Import, "h_import.rs", 1, 2.0),
     ];
     let hostile = ChannelWeights {
         lexical: 0.0,
@@ -294,7 +200,7 @@ fn hostile_weights_fuse_on_rails() {
         pattern: 5e-324,
         import: 2.5,
     };
-    let fused = n4_pipeline(&parsed, hits, &hostile);
+    let fused = route_fuse_pipeline(&parsed, hits, &hostile);
     assert_eq!(fused.len(), 8);
     let by_file = |f: &str| fused.iter().find(|h| h.file == f).unwrap().score;
     assert_eq!(by_file("c_caller.rs"), 2.0 * (1.0 / 61.0));
@@ -306,7 +212,7 @@ fn hostile_weights_fuse_on_rails() {
     }
     // Score-desc ranking with file tiebreaks inside each rail cohort.
     assert_eq!(
-        n4_files(&n4_ranked(fused)),
+        hit_files_in_order(&rank_fused(fused)),
         vec![
             "c_caller.rs",
             "h_import.rs",
@@ -320,10 +226,10 @@ fn hostile_weights_fuse_on_rails() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// 5. Empty / zeroed channels vanish; the surviving channel fuses alone
-// ---------------------------------------------------------------------------
-
+/// INTENT: zeroed/negative hits vanish, lone Embed fuses; empty-terms kills
+/// all text channels.
+/// KILLS: fuse-gate/empty-terms-mutant.
+/// ABSORBS: none (KEEP standalone: `empty_and_zeroed_channels_vanish`).
 #[test]
 fn empty_and_zeroed_channels_vanish() {
     // Only Embed carries signal: raws 4.0/2.0 -> routed 1.0/0.5 -> ranks
@@ -331,16 +237,16 @@ fn empty_and_zeroed_channels_vanish() {
     // 0.0 and the Graph -3.0 clamps to 0.0, so the fuse gate (> 0.0) drops
     // all three before ranking; the other channels are simply absent.
     let parsed = ParsedQuery::parse("foo");
-    let mut zeroed_def = n4_hit(HitKind::Def, "z2.rs", 1, 0.0);
+    let mut zeroed_def = mk_hit(HitKind::Def, "z2.rs", 1, 0.0);
     zeroed_def.symbol = Some("foo".to_string());
-    let fused = n4_pipeline(
+    let fused = route_fuse_pipeline(
         &parsed,
         vec![
-            n4_hit(HitKind::Embed, "e1.rs", 1, 4.0),
-            n4_hit(HitKind::Embed, "e2.rs", 1, 2.0),
-            n4_hit(HitKind::Asgrep, "z1.rs", 1, 0.0),
+            mk_hit(HitKind::Embed, "e1.rs", 1, 4.0),
+            mk_hit(HitKind::Embed, "e2.rs", 1, 2.0),
+            mk_hit(HitKind::Asgrep, "z1.rs", 1, 0.0),
             zeroed_def,
-            n4_hit(HitKind::Graph, "z3.rs", 1, -3.0),
+            mk_hit(HitKind::Graph, "z3.rs", 1, -3.0),
         ],
         &ChannelWeights::default(),
     );
@@ -348,22 +254,22 @@ fn empty_and_zeroed_channels_vanish() {
     let by_file = |fused: &[SearchHit], f: &str| fused.iter().find(|h| h.file == f).unwrap().score;
     assert_eq!(by_file(&fused, "e1.rs"), 1.0 / 61.0);
     assert_eq!(by_file(&fused, "e2.rs"), 1.0 / 62.0);
-    assert_eq!(n4_files(&n4_ranked(fused)), vec!["e1.rs", "e2.rs"]);
+    assert_eq!(hit_files_in_order(&rank_fused(fused)), vec!["e1.rs", "e2.rs"]);
 
     // Empty-terms query: all text channels (asgrep/def/graph/...) route to
     // 0.0 and vanish in fusion; the Embed 2.0/4 = 0.5 survivor is the sole
     // hit in its channel -> rank 0 -> exactly 1/61.
     let empty = ParsedQuery::parse("");
     assert!(empty.terms.is_empty());
-    let mut def = n4_hit(HitKind::Def, "t2.rs", 1, 99.0);
+    let mut def = mk_hit(HitKind::Def, "t2.rs", 1, 99.0);
     def.symbol = Some("foo".to_string());
-    let fused = n4_pipeline(
+    let fused = route_fuse_pipeline(
         &empty,
         vec![
-            n4_hit(HitKind::Asgrep, "t1.rs", 1, 99.0),
+            mk_hit(HitKind::Asgrep, "t1.rs", 1, 99.0),
             def,
-            n4_hit(HitKind::Graph, "t3.rs", 1, 99.0),
-            n4_hit(HitKind::Embed, "k.rs", 1, 2.0),
+            mk_hit(HitKind::Graph, "t3.rs", 1, 99.0),
+            mk_hit(HitKind::Embed, "k.rs", 1, 2.0),
         ],
         &ChannelWeights::default(),
     );
@@ -373,10 +279,10 @@ fn empty_and_zeroed_channels_vanish() {
     assert_eq!(fused[0].contributors, vec![HitKind::Embed]);
 }
 
-// ---------------------------------------------------------------------------
-// 6. Genuine producer scores INVERT through per-hit ceilings
-// ---------------------------------------------------------------------------
-
+/// INTENT: genuine score_def raws X>Y invert to Y>X via per-hit ceilings,
+/// cemented in fusion.
+/// KILLS: ceiling-denom-mutant.
+/// ABSORBS: none (KEEP standalone: `real_producer_scores_invert_through_routing`).
 #[test]
 fn real_producer_scores_invert_through_routing() {
     // Terms ["aa","bb","cc"] (tokenizer sorts+dedups; all len 2 so no
@@ -396,9 +302,9 @@ fn real_producer_scores_invert_through_routing() {
     assert_eq!(raw_y, 13.0);
     assert!(raw_x > raw_y, "X must lead on raw producer score");
 
-    let mut x = n4_hit(HitKind::Def, "x_inv.rs", 1, raw_x);
+    let mut x = mk_hit(HitKind::Def, "x_inv.rs", 1, raw_x);
     x.symbol = Some("xx aa yy bb zz cc".to_string());
-    let mut y = n4_hit(HitKind::Def, "y_inv.rs", 1, raw_y);
+    let mut y = mk_hit(HitKind::Def, "y_inv.rs", 1, raw_y);
     y.symbol = Some("aa".to_string());
     let mut routed = vec![x, y];
     route_hits(&parsed, &mut routed);
@@ -413,13 +319,13 @@ fn real_producer_scores_invert_through_routing() {
     let by_file = |f: &str| fused.iter().find(|h| h.file == f).unwrap().score;
     assert_eq!(by_file("y_inv.rs"), 1.0 / 61.0);
     assert_eq!(by_file("x_inv.rs"), 1.0 / 62.0);
-    assert_eq!(n4_files(&n4_ranked(fused)), vec!["y_inv.rs", "x_inv.rs"]);
+    assert_eq!(hit_files_in_order(&rank_fused(fused)), vec!["y_inv.rs", "x_inv.rs"]);
 }
 
-// ---------------------------------------------------------------------------
-// 7. Three-way same-line merge: canonical kind, contributors, breadth win
-// ---------------------------------------------------------------------------
-
+/// INTENT: 3-channel merge — canonical Def, contributor order, breadth beats
+/// three channel winners.
+/// KILLS: merge/canonical-mutant.
+/// ABSORBS: none (KEEP standalone: `three_way_merge_canonical_and_breadth_win`).
 #[test]
 fn three_way_merge_canonical_and_breadth_win() {
     // M = ("m.rs", 7) in three channels: asgrep 3.0 (3/c ~= 0.915),
@@ -432,23 +338,23 @@ fn three_way_merge_canonical_and_breadth_win() {
     // losing every channel head-to-head. Canonical kind: Def priority 0
     // beats Caller 1 and Asgrep 6; contributors sort by channel index.
     let parsed = ParsedQuery::parse("foo");
-    let mut m_def = n4_hit(HitKind::Def, "m.rs", 7, 13.0);
+    let mut m_def = mk_hit(HitKind::Def, "m.rs", 7, 13.0);
     m_def.symbol = Some("foo".to_string());
-    let mut m_caller = n4_hit(HitKind::Caller, "m.rs", 7, 11.5);
+    let mut m_caller = mk_hit(HitKind::Caller, "m.rs", 7, 11.5);
     m_caller.callee = Some("foo".to_string());
-    let mut d_def = n4_hit(HitKind::Def, "a.rs", 1, 13.0);
+    let mut d_def = mk_hit(HitKind::Def, "a.rs", 1, 13.0);
     d_def.symbol = Some("foo".to_string());
-    let mut c_caller = n4_hit(HitKind::Caller, "a.rs", 2, 11.5);
+    let mut c_caller = mk_hit(HitKind::Caller, "a.rs", 2, 11.5);
     c_caller.callee = Some("foo".to_string());
-    let fused = n4_pipeline(
+    let fused = route_fuse_pipeline(
         &parsed,
         vec![
-            n4_hit(HitKind::Asgrep, "m.rs", 7, 3.0),
+            mk_hit(HitKind::Asgrep, "m.rs", 7, 3.0),
             m_def,
             m_caller,
             d_def,
             c_caller,
-            n4_hit(HitKind::Asgrep, "a.rs", 3, 3.2),
+            mk_hit(HitKind::Asgrep, "a.rs", 3, 3.2),
         ],
         &ChannelWeights::default(),
     );
@@ -469,7 +375,7 @@ fn three_way_merge_canonical_and_breadth_win() {
     assert_eq!(by_key("a.rs", 1).score, 1.0 / 61.0);
     assert_eq!(by_key("a.rs", 2).score, 1.0 / 61.0);
     assert_eq!(by_key("a.rs", 3).score, 1.0 / 61.0);
-    let ranked = n4_ranked(fused);
+    let ranked = rank_fused(fused);
     assert_eq!(ranked[0].file, "m.rs");
     assert_eq!(
         ranked.iter().map(|h| (h.file.as_str(), h.line_start)).collect::<Vec<_>>(),
@@ -477,10 +383,10 @@ fn three_way_merge_canonical_and_breadth_win() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// 8. Capstone: route -> fuse -> finish preserves scores and ranks by score
-// ---------------------------------------------------------------------------
-
+/// INTENT: capstone route -> fuse -> finish — scores preserved, [b,a,c] order,
+/// margins 0, confidences.
+/// KILLS: finish-rewrite/sort-mutant.
+/// ABSORBS: none (KEEP standalone: `full_pipeline_through_finish_order_scores_margins`).
 #[test]
 fn full_pipeline_through_finish_order_scores_margins() {
     // A: asgrep-only (3.0 -> 3/c, sole channel hit -> rank 0 -> 1/61),
@@ -494,25 +400,25 @@ fn full_pipeline_through_finish_order_scores_margins() {
     // per-file cap, best-definition already retained, def-head no-op.
     let dir = tempfile::tempdir().unwrap();
     let parsed = ParsedQuery::parse("foo");
-    let mut b_def = n4_hit(HitKind::Def, "b_struct.rs", 1, 13.0);
+    let mut b_def = mk_hit(HitKind::Def, "b_struct.rs", 1, 13.0);
     b_def.symbol = Some("foo".to_string());
-    let mut b_caller = n4_hit(HitKind::Caller, "b_struct.rs", 1, 11.5);
+    let mut b_caller = mk_hit(HitKind::Caller, "b_struct.rs", 1, 11.5);
     b_caller.callee = Some("foo".to_string());
-    let fused = n4_pipeline(
+    let fused = route_fuse_pipeline(
         &parsed,
         vec![
-            n4_hit(HitKind::Asgrep, "a_exact.rs", 1, 3.0),
+            mk_hit(HitKind::Asgrep, "a_exact.rs", 1, 3.0),
             b_def,
             b_caller,
-            n4_hit(HitKind::Embed, "c_sem.rs", 1, 4.0),
+            mk_hit(HitKind::Embed, "c_sem.rs", 1, 4.0),
         ],
         &ChannelWeights::default(),
     );
     assert_eq!(fused.len(), 3);
-    let response = finish_response(&parsed, &n4_options(dir.path(), 10), fused, false);
+    let response = finish_response(&parsed, &finish_options(dir.path(), 10), fused, false);
     assert_eq!(response.hits.len(), 3);
     assert_eq!(
-        n4_files(&response.hits),
+        hit_files_in_order(&response.hits),
         vec!["b_struct.rs", "a_exact.rs", "c_sem.rs"]
     );
     let by_file = |f: &str| response.hits.iter().find(|h| h.file == f).unwrap();

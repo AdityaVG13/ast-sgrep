@@ -23,6 +23,7 @@ use ast_sgrep_plugins::OutputFormat;
 use serde_json::{json, Value};
 use std::io::Cursor;
 use std::path::Path;
+use tempfile::TempDir;
 
 /// Hermetic session config: explicit `root`, no index path, limit 5, lexical
 /// only, `AgentCapsule` format. Pure constructor.
@@ -117,6 +118,57 @@ pub fn config_at_indexed(root: &Path, index_path: &Path) -> SessionConfig {
 /// Indexed [`CodeModeSession`] over [`config_at_indexed`].
 pub fn session_at_indexed(root: &Path, index_path: &Path) -> CodeModeSession {
     CodeModeSession::new(config_at_indexed(root, index_path))
+}
+
+/// INTENT: indexed session that creates its own out-of-root index dir,
+/// runs `index_repo`, and asserts `ok:true` — the indexed-drill fixture.
+/// Delta vs [`session_at_indexed`]: that is the pure constructor; this runs
+/// the index beat. The caller keeps the [`TempDir`] alive. Panics on IO
+/// failure or a non-ok index beat.
+pub fn indexed_session_at(root: &Path) -> (TempDir, CodeModeSession) {
+    let index_dir = tempfile::tempdir().expect("index dir");
+    let mut session = session_at_indexed(root, &index_dir.path().join("index.db"));
+    let indexed = session
+        .call("index_repo", json!({"force": false}))
+        .expect("initial index");
+    assert_eq!(indexed["ok"], json!(true));
+    (index_dir, session)
+}
+
+/// INTENT: 3-hit boundary straddle (2.0/1.999/2.001) — the filter
+/// exactness/totality fixture. Pure constructor.
+pub fn hits_fixture() -> Value {
+    json!([
+        {"kind": "def", "file": "src/a.rs", "score": 2.0},
+        {"kind": "def", "file": "src/b.rs", "score": 1.999},
+        {"kind": "def", "file": "src/c.rs", "score": 2.001},
+    ])
+}
+
+/// INTENT: five hits with strictly descending scores 5..1 (input order is
+/// score order) for threshold/limit relations. Pure constructor.
+pub fn scored_hits5() -> Value {
+    json!([
+        {"kind": "def", "file": "src/s5.rs", "score": 5.0},
+        {"kind": "def", "file": "src/s4.rs", "score": 4.0},
+        {"kind": "def", "file": "src/s3.rs", "score": 3.0},
+        {"kind": "def", "file": "src/s2.rs", "score": 2.0},
+        {"kind": "def", "file": "src/s1.rs", "score": 1.0},
+    ])
+}
+
+/// INTENT: six hits with strictly descending scores 6..1 (input order is
+/// score order) for threshold sweeps and plan/chain drills. Pure
+/// constructor.
+pub fn scored_hits6() -> Value {
+    json!([
+        {"kind": "def", "file": "f6.rs", "score": 6.0},
+        {"kind": "def", "file": "f5.rs", "score": 5.0},
+        {"kind": "def", "file": "f4.rs", "score": 4.0},
+        {"kind": "def", "file": "f3.rs", "score": 3.0},
+        {"kind": "def", "file": "f2.rs", "score": 2.0},
+        {"kind": "def", "file": "f1.rs", "score": 1.0},
+    ])
 }
 
 /// Exact `call_now` fast-gate reason. Owned by the napi wrapper: slow, aliased,
