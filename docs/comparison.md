@@ -14,7 +14,7 @@ For **searching an indexed repo**, ast-sgrep replaces the other three. Identifie
 | **Caller / callee graph** | Yes (`callers:`) | No | No |
 | **Import tracking** | Yes (`imports:`) | No | No |
 | **Structural patterns** | Native indexed subset (`pattern:`) | Native (full rules/rewrites) | No |
-| **Polyglot AST** | 13 languages, unified index | Yes | Text only |
+| **Polyglot AST** | 15 languages, unified index | Yes | Text only |
 | **CI / platform JSON** | GitHub & GitLab shapes | No | `--json` (ripgrep format) |
 | **LSP** | `asgrep-lsp` | Separate ecosystem | No |
 | **Agent-oriented JSON** | `--format agent` + follow-ups | Limited | Line-based JSON |
