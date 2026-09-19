@@ -250,13 +250,17 @@ pub fn tool_catalog() -> Vec<ToolDef> {
         },
         ToolDef {
             name: "index_repo",
-            description: "Build or incrementally update the .asgrep index. Pass known changed paths for a targeted update; use force=true for a full rebuild.",
+            description: "Build or incrementally update the .asgrep index. Pass known changed paths for a targeted update; use force=true for a full rebuild. Embeddings default to the session setting; pass use_embed=false for a lexical/AST-only refresh.",
             kind: ToolKind::Index,
             input_schema: json!({
                 "type": "object",
                 "properties": {
                     "root": {"type": "string", "description": ROOT_ARG_DESC},
                     "force": {"type": "boolean", "default": false},
+                    "use_embed": {
+                        "type": "boolean",
+                        "description": "Compute semantic embeddings for this run (default: the session's setting)"
+                    },
                     "paths": {
                         "type": "array",
                         "items": {"type": "string", "minLength": 1},

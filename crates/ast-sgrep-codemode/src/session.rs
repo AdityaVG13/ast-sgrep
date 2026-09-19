@@ -487,6 +487,13 @@ impl CodeModeSession {
 
     pub(crate) fn index_repo(&mut self, args: &Value) -> anyhow::Result<Value> {
         let force = args.get("force").and_then(|v| v.as_bool()).unwrap_or(false);
+        // Per-call override: hosts drive freshness refreshes with embeddings off
+        // so the first search returns lexical/AST hits in seconds, and build
+        // vectors on the explicit index/reindex call. Absent = session default.
+        let use_embed = args
+            .get("use_embed")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(self.config.use_embed);
         let root = self.root_arg(args)?;
         let paths = incremental_paths(args, &root)?;
         if force && paths.is_some() {
@@ -495,7 +502,7 @@ impl CodeModeSession {
         let mut indexer = Indexer::new(IndexOptions {
             root,
             index_path: self.config.index_path.clone(),
-            embed_semantic: self.config.use_embed,
+            embed_semantic: use_embed,
             embed_backend: EmbedBackend::Auto,
             ..IndexOptions::default()
         })?;
