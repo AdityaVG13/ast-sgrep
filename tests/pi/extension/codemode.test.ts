@@ -959,3 +959,44 @@ test("Code Mode activation stays off serve-process spawn", async () => {
   assert.equal(second.result, 2);
   assert.ok(second.wallMs < 20, `warm-standby activation ${second.wallMs}ms`);
 });
+
+/**
+ * One index per checkout: when the session cwd is a subdirectory of the
+ * checkout that owns the index, path arguments rebase onto that root and
+ * searches stay scoped to the subdirectory — the caller never sees a second
+ * `.asgrep` appear inside the tree.
+ */
+test("anchor scope rebases paths and scopes searches under the checkout root", async () => {
+  const calls: Array<{ tool: string; args: Record<string, unknown> }> = [];
+  const host = {
+    async run() {
+      throw new Error("anchored calls must ride the warm session");
+    },
+    sticky: {
+      async call(tool: string, args: Record<string, unknown>) {
+        calls.push({ tool, args });
+        return { tool: "asgrep", schema_version: "1.0.0", ok: true } as never;
+      },
+      async batch(items: Array<{ id: string; tool: string; args: Record<string, unknown> }>) {
+        for (const item of items) calls.push({ tool: item.tool, args: item.args });
+        return { results: items.map((item) => ({ id: item.id, ok: true, value: { tool: "asgrep", schema_version: "1.0.0", ok: true } })) };
+      },
+      async end() {},
+    },
+  } as never;
+  const bundle = createAsgrepConnector(host, { cwd: "/repo/packages/x/src" }, { scope: "packages/x/src" });
+
+  await bundle.asgrep.search({ query: "auth" });
+  await bundle.asgrep.search({ query: "auth", in: "lib" });
+  await bundle.asgrep.read({ path: "src/lib.rs", start: 1, end: 20 });
+  await bundle.asgrep.read({ ref: "src/lib.rs#L3-L9" });
+  await bundle.asgrep.edit({ path: "./src/lib.rs", oldText: "a", newText: "b" });
+
+  const queries = calls.filter((call) => call.tool === "search").map((call) => call.args.query);
+  assert.deepEqual(queries, ["in:packages/x/src auth", "in:packages/x/src/lib auth"]);
+  const reads = calls.filter((call) => call.tool === "read").map((call) => call.args.path ?? call.args.ref);
+  assert.deepEqual(reads, ["packages/x/src/src/lib.rs", "packages/x/src/src/lib.rs#L3-L9"]);
+  const edit = calls.find((call) => call.tool === "edit");
+  assert.equal(edit?.args.path, "packages/x/src/src/lib.rs");
+});
+

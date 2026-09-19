@@ -70,18 +70,17 @@ export type CodemodeHostMethod = (typeof CODEMODE_HOST_METHODS)[number];
  * Return shapes are muscle memory (Blacksmith): field names, never values.
  * defs:/callers:/imports:/pattern:/blast: go through find or search prefixes.
  */
+/**
+ * Always-on API cheat sheet for the Code Mode tool description.
+ *
+ * Deliberately minimal: every token here rides in the system prompt of every
+ * request. The full per-method schema is one call away through
+ * `asgrep.catalogSearch(query)` / `asgrep.catalogDescribe(name)`, which returns
+ * the same shapes from the native catalog, so the model pays for the reference
+ * only when it needs it.
+ */
 export const CODEMODE_TYPES_FOR_MODEL = `
-type Hit = { file: string; symbol?: string; kind?: string; score?: number; line?: number; ref?: string };
-type Hits = { ok: boolean; hits: Hit[]; suggested_next?: string[] };
-type Window = { path: string; ref: string; start: number; end: number; truncated: boolean; text: string };
-declare const asgrep: {
-  search(query: string | { query: string; limit?: number; in?: string; lang?: string; excerptLines?: number }): Promise<Hits>;
-  find(query: string | { query: string; limit?: number }): Promise<Hits>;
-  defs(symbol: string | { symbol: string; limit?: number }): Promise<Hits>;
-  callers(symbol: string | { symbol: string; limit?: number }): Promise<Hits>;
-  read(input: { path?: string; start?: number; end?: number; ref?: string; refs?: unknown[]; contextLines?: number }): Promise<{ ok: boolean; count: number; windows: Window[] }>;
-  edit(path: string | { path?: string; oldText?: string; newText?: string; edits?: Array<{ path: string; oldText: string; newText: string }> }, oldText?: string, newText?: string): Promise<{ ok: boolean; changed: number }>;
-  indexStatus(): Promise<{ ok: boolean }>;
-};
-/** Positional args work: search("auth"), defs("Foo"). Promise.all independent calls. 0 hits include suggested_next. Return a small value. */
+asgrep.search(query|{query,in,lang,limit,excerptLines}) | find(q) | semantic(q) | defs(sym) | callers(sym)
+ | imports(mod) | chain(q) | read({path|ref|refs,start,end}) | edit({path,oldText,newText}|{edits}) | indexStatus()
+hits[{file,ref,symbol,kind,preview}] | windows[{path,start,end,text}] | catalogDescribe("name") for schemas
 `.trim();

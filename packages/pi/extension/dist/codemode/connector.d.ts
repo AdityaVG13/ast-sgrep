@@ -103,4 +103,5 @@ export declare function createAsgrepConnector(host: BatchCapableHost, context: {
     cwd: string;
 }, options?: {
     signal?: AbortSignal;
+    scope?: string;
 }): ConnectorBundle;

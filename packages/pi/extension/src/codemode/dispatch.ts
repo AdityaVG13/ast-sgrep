@@ -381,7 +381,10 @@ export function argvFor(tool: string, args: Record<string, unknown>): string[] {
     const paths = Array.isArray(args.paths)
       ? args.paths.filter((path): path is string => typeof path === "string")
       : [];
-    return [command, ".", "--json", ...paths.flatMap((path) => ["--path", path])];
+    // Callers that index on the hot path (freshness) pass use_embed:false so a
+    // cold repo answers with lexical/AST rows instead of waiting on vectors.
+    const embed = args.use_embed === false ? ["--no-embed"] : [];
+    return [command, ".", "--json", ...embed, ...paths.flatMap((path) => ["--path", path])];
   }
 
   const limit = num(args.limit, 8);

@@ -81,9 +81,32 @@ function clampExcerpt(excerptLines: number | undefined): number {
 export function createAsgrepConnector(
   host: BatchCapableHost,
   context: { cwd: string },
-  options: { signal?: AbortSignal } = {},
+  options: { signal?: AbortSignal; scope?: string } = {},
 ): ConnectorBundle {
   const dispatcher = createCodemodeDispatcher(host);
+  // One index per checkout: when the caller's cwd is a subdirectory of the
+  // checkout that owns the index, path arguments are rebased onto that checkout
+  // root and searches are scoped to the subdirectory. Callers never see a
+  // second `.asgrep` grow inside the tree.
+  const scope = options.scope && options.scope !== "."
+    ? options.scope.replace(/^(?:\.\/)+/u, "").replace(/\/+$/u, "")
+    : undefined;
+  const rebasePath = (path: string): string => {
+    if (!scope || path.startsWith("/") || path.startsWith("~")) return path;
+    const clean = path.replace(/^(?:\.\/)+/u, "");
+    return clean === "" || clean === "." ? scope : `${scope}/${clean}`;
+  };
+  const rebaseRef = (ref: string): string => {
+    const hash = ref.indexOf("#");
+    return hash === -1 ? rebasePath(ref) : rebasePath(ref.slice(0, hash)) + ref.slice(hash);
+  };
+  /** Directories below the checkout combine with the anchor scope, never replace it. */
+  const withScope = <T extends { in?: string; fileFilter?: string; file_filter?: string }>(input: T): T => {
+    if (!scope) return input;
+    const nested = input.in ?? input.fileFilter ?? input.file_filter;
+    const combined = typeof nested === "string" && nested.trim() ? `${scope}/${nested.replace(/^(?:\.\/)+/u, "")}` : scope;
+    return { ...input, in: combined };
+  };
   const combinedSignals = new WeakMap<AbortSignal, AbortSignal>();
   const callOptions = (signal?: AbortSignal): { signal?: AbortSignal } => {
     if (!options.signal) return signal ? { signal } : {};
@@ -100,7 +123,7 @@ export function createAsgrepConnector(
     dispatcher.host.call(tool, args, context, callOptions(signal));
 
   const searchPayload = (method: "search" | "find" | "semantic", input: SearchArgs): Record<string, unknown> => {
-    const scoped = coerceHostArgs(method, { ...input } as Record<string, unknown>);
+    const scoped = coerceHostArgs(method, withScope({ ...input }) as Record<string, unknown>);
     const payload: Record<string, unknown> = {
       query: scoped.query,
       limit: clampLimit(input.limit),
@@ -117,11 +140,11 @@ export function createAsgrepConnector(
     find: (input, callOptions) => call("find", searchPayload("find", input), callOptions?.signal),
     read: (input, callOptions) =>
       call("read", defined({
-        path: input.path,
+        path: typeof input.path === "string" ? rebasePath(input.path) : input.path,
         start: input.start,
         end: input.end,
-        ref: input.ref,
-        refs: input.refs,
+        ref: typeof input.ref === "string" ? rebaseRef(input.ref) : input.ref,
+        refs: Array.isArray(input.refs) ? input.refs.map((ref) => (typeof ref === "string" ? rebaseRef(ref) : ref)) : input.refs,
         context_lines: input.contextLines,
         max_chars: input.maxChars,
       }), callOptions?.signal),
@@ -129,11 +152,12 @@ export function createAsgrepConnector(
       // Multi-edit wire contract: every entry carries its own path; the
       // top-level path is the default for entries that omit it.
       const edits = input.edits?.map((entry) => ({
-        ...(typeof input.path === "string" ? { path: input.path } : {}),
+        ...(typeof input.path === "string" ? { path: rebasePath(input.path) } : {}),
         ...entry,
+        ...(typeof entry.path === "string" ? { path: rebasePath(entry.path) } : {}),
       }));
       return call("edit", defined({
-        path: input.path,
+        path: typeof input.path === "string" ? rebasePath(input.path) : input.path,
         oldText: input.oldText,
         newText: input.newText,
         edits,

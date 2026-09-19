@@ -46,4 +46,13 @@ export type CodemodeHostMethod = (typeof CODEMODE_HOST_METHODS)[number];
  * Return shapes are muscle memory (Blacksmith): field names, never values.
  * defs:/callers:/imports:/pattern:/blast: go through find or search prefixes.
  */
+/**
+ * Always-on API cheat sheet for the Code Mode tool description.
+ *
+ * Deliberately minimal: every token here rides in the system prompt of every
+ * request. The full per-method schema is one call away through
+ * `asgrep.catalogSearch(query)` / `asgrep.catalogDescribe(name)`, which returns
+ * the same shapes from the native catalog, so the model pays for the reference
+ * only when it needs it.
+ */
 export declare const CODEMODE_TYPES_FOR_MODEL: string;
