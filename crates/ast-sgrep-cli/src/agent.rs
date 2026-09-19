@@ -809,6 +809,12 @@ pub(crate) fn augment_clap_usage_message(msg: &str, command: &str) -> String {
             "\nTip: always plan with --dry-run first; apply requires --yes (alias --force).",
         );
     }
+    if msg.contains("unexpected argument") && msg.contains("[ROOT]") {
+        msg.push('\n');
+        msg.push_str(
+            "Tip: one ROOT per query -- ROOT is a single directory (positional or --root). Two trees need two searches, or pass their common parent and scope it with in:path.",
+        );
+    }
     msg
 }
 

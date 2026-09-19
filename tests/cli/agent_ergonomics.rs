@@ -22,6 +22,23 @@ fn run(args: &[&str]) -> (i32, String, String) {
 }
 
 #[test]
+fn second_root_positional_teaches_one_root_per_query() {
+    let (code, _stdout, stderr) = run(&["search", "auth", "crates", "tests"]);
+    assert_eq!(code, 1, "stderr={stderr}");
+    assert!(stderr.contains("unexpected argument"), "{stderr}");
+    assert!(stderr.contains("one ROOT per query"), "{stderr}");
+
+    let (code, stdout, _stderr) = run(&["--json", "search", "auth", "crates", "tests"]);
+    assert_eq!(code, 1);
+    let value: Value = serde_json::from_str(&stdout).expect("json stdout");
+    assert_eq!(value["error"]["kind"], "usage");
+    assert!(
+        value["error"]["message"].as_str().unwrap_or("").contains("one ROOT per query"),
+        "{value}"
+    );
+}
+
+#[test]
 fn jsno_flag_recovers_as_json() {
     let (code, stdout, stderr) = run(&["--jsno", "capabilities"]);
     assert_eq!(code, 0, "stderr={stderr}");
