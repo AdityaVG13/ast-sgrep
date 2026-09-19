@@ -1600,14 +1600,28 @@ fn structural_index_pass(
     let signatures: Vec<String> = sig_to_term.keys().cloned().collect();
     let mut hits = Vec::new();
     let mut seen = HashSet::new();
-    for (row, signature) in
-        store.pattern_nodes_matching_for_files(&signatures, lang, allowed_files)?
-    {
+    let rows = {
+        let _span = crate::perf_profile::Span::start(
+            "hybrid_structural_sql",
+            "search",
+            "pattern_nodes_matching_for_files",
+        );
+        // Same row budget as the symbol/caller/anchor passes: enough to score
+        // inside the 100-file cascade, never the whole node population.
+        let pattern_row_budget = crate::search::passes::bmh::retained_limit(options).max(32).min(500);
+        store.pattern_nodes_matching_for_files(&signatures, lang, allowed_files, pattern_row_budget)?
+    };
+    for (row, signature) in rows {
         if !seen.insert((row.path.clone(), row.line_start, row.line_end)) {
             continue;
         }
         let term = sig_to_term.get(&signature).cloned().unwrap_or(signature);
-        let excerpt = store.fill_pattern_excerpt(&row)?;
+        // Excerpts attach lazily in finish (attach_indexed_excerpts_if_empty) for
+        // the survivors only. Fetching one indexed excerpt per pattern node here
+        // ran a SQL query for rows fusion then discarded — measured p50 244us /
+        // p90 691us inside the search. Pattern nodes store an empty excerpt, so a
+        // survivor gets the identical string from the same call, once.
+        let excerpt = row.excerpt.clone();
         hits.push(SearchHit::span(SpanHitInput {
             kind: HitKind::Pattern,
             file: row.path,

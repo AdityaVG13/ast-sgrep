@@ -863,6 +863,7 @@ impl IndexStore {
         signatures: &[String],
         lang: Option<&str>,
         files: &std::collections::HashSet<String>,
+        limit: usize,
     ) -> Result<Vec<(PatternNodeRow, String)>> {
         if files.is_empty() || signatures.is_empty() {
             return Ok(Vec::new());
@@ -891,14 +892,29 @@ impl IndexStore {
             .map(|i| format!("?{i}"))
             .collect::<Vec<_>>()
             .join(",");
-        let mut sql = format!(
+        // Cap the row budget exactly like the symbol/caller/anchor passes, and
+        // order by the index the planner already drives (signature, then rowid)
+        // so the kept prefix is the same one today's scan yields first. A common
+        // term matches hundreds of nodes inside the 100-file cascade while
+        // fusion keeps `limit`; the tail paid row materialization for hits that
+        // could never survive (measured: 374 rows / 1.17 ms for `hits`).
+        let mut bind: Vec<String> = paths.clone();
+        bind.extend(sigs.iter().cloned());
+        if let Some(language) = lang {
+            bind.push(language.to_string());
+        }
+        let lang_ph = if lang.is_some() {
+            format!(" AND f.language = ?{}", bind.len())
+        } else {
+            String::new()
+        };
+        let sql = format!(
             "SELECT f.path, f.language, n.line_start, n.line_end, n.excerpt, n.signature \
              FROM files f JOIN pattern_nodes n ON n.file_id = f.id \
-             WHERE f.path IN ({path_ph}) AND n.signature IN ({sig_ph})"
+             WHERE f.path IN ({path_ph}) AND n.signature IN ({sig_ph}){lang_ph} \
+             ORDER BY n.signature, n.id LIMIT ?{}",
+            bind.len() + 1
         );
-        if lang.is_some() {
-            sql.push_str(&format!(" AND f.language = ?{}", sig_end + 1));
-        }
         let map = |r: &rusqlite::Row<'_>| {
             Ok((
                 PatternNodeRow {
@@ -911,17 +927,7 @@ impl IndexStore {
                 r.get::<_, String>(5)?,
             ))
         };
-        let mut bind: Vec<&str> = paths.iter().map(String::as_str).collect();
-        bind.extend(sigs.iter().map(String::as_str));
-        if let Some(language) = lang {
-            bind.push(language);
-        }
-        query_cached_map(
-            &self.conn,
-            &sql,
-            rusqlite::params_from_iter(bind.iter()),
-            map,
-        )
+        query_limit_map(&self.conn, &sql, bind, limit, map)
     }
     pub fn file_text(&self, path: &str) -> Result<Option<String>> {
         let lines = self.file_lines(path)?;

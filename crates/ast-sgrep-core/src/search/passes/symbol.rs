@@ -62,23 +62,30 @@ impl WarmedSymbolTable {
         limit: usize,
     ) -> Vec<SymbolSpanRow> {
         let terms_lower: Vec<String> = terms.iter().map(|t| t.to_lowercase()).collect();
-        let mut matched = Vec::new();
+        // Select indices first, materialize rows last: the old shape cloned every
+        // substring match (hundreds on common terms) before sorting and truncating
+        // to `limit`. Same iteration order, same sort keys, same quotas, only the
+        // rows that survive the budget are cloned.
+        let mut matched: Vec<usize> = Vec::new();
         for path in allowed_files {
             let Some(idxs) = self.by_file.get(path) else {
                 continue;
             };
             for &i in idxs {
-                let row = &self.rows[i];
-                if !matches_lang(row.1.as_deref(), options.lang_filter.as_deref()) {
+                if !matches_lang(self.rows[i].1.as_deref(), options.lang_filter.as_deref()) {
                     continue;
                 }
-                let name = &self.names_lower[i];
-                if terms_lower.iter().any(|term| name.contains(term.as_str())) {
-                    matched.push(row.clone());
+                if terms_lower
+                    .iter()
+                    .any(|term| self.names_lower[i].contains(term.as_str()))
+                {
+                    matched.push(i);
                 }
             }
         }
-        matched.sort_by(|left, right| {
+        let rows = &self.rows;
+        matched.sort_by(|&left, &right| {
+            let (left, right) = (&rows[left], &rows[right]);
             kind_rank(left.3.as_str())
                 .cmp(&kind_rank(right.3.as_str()))
                 .then_with(|| left.0.cmp(&right.0))
@@ -91,22 +98,25 @@ impl WarmedSymbolTable {
         let mut fns = Vec::new();
         let mut types = Vec::new();
         let mut others = Vec::new();
-        for row in matched {
-            if matches!(row.3.as_str(), "function" | "method") {
-                fns.push(row);
-            } else if is_type_symbol_kind(&row.3) {
-                types.push(row);
+        for &i in &matched {
+            let kind = rows[i].3.as_str();
+            if matches!(kind, "function" | "method") {
+                fns.push(i);
+            } else if is_type_symbol_kind(kind) {
+                types.push(i);
             } else {
-                others.push(row);
+                others.push(i);
             }
         }
         types.truncate(other_keep);
         let leftover = other_keep.saturating_sub(types.len());
         others.truncate(leftover);
         fns.truncate(limit.saturating_sub(types.len() + others.len()));
-        fns.append(&mut types);
-        fns.append(&mut others);
-        fns
+        fns.into_iter()
+            .chain(types)
+            .chain(others)
+            .map(|i| rows[i].clone())
+            .collect()
     }
 }
 
