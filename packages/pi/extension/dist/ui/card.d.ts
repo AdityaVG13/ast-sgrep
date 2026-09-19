@@ -26,6 +26,8 @@ export type CardModel = {
         ms: number;
     }>;
     resultLines?: string[];
+    /** Warnings that qualify the answer (stale index, unindexed repo). */
+    notes?: string[];
     error?: string;
     running?: boolean;
     expanded?: boolean;
@@ -55,9 +57,10 @@ type RenderOptions = {
 };
 type RenderContext = {
     lastComponent?: unknown;
+    args?: object;
 };
 /** Build the card model from the tool result's details payload. */
-export declare function cardModel(result: ResultLike, options: RenderOptions): CardModel;
+export declare function cardModel(result: ResultLike, options: RenderOptions, callArgs?: Record<string, unknown>): CardModel;
 /** renderResult entrypoint: bind one card per result slot, feed it details. */
 export declare function renderAsgrepResult(result: ResultLike, options: RenderOptions, theme: PresentTheme, context?: RenderContext): AsgrepCard;
 export {};

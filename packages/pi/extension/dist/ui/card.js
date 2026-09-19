@@ -1,7 +1,7 @@
 /** Pi TUI result card — supernova-style: the call slot is empty; one card
  * owns the whole lifecycle (running → ops ledger → result → error). Rows are
  * fixed-column and theme-painted; nothing here writes to the model channel. */
-import { hitLabel, hitLocation, paint, truncateToWidth, visibleWidth, } from "./present.js";
+import { displayWidth, hitLabel, hitLocation, paint, sanitizeContent, summarizeValue, truncateToWidth, visibleWidth, } from "./present.js";
 /** Header text that rides the top border: "asgrep search · 4 hits · 12ms · napi". */
 function frameLabel(model) {
     const bits = ["asgrep", model.command, ...model.title.filter((b) => Boolean(b))];
@@ -22,7 +22,6 @@ export const EMPTY_CALL = {
 };
 const TOOL_COL = 12;
 const DUR_COL = 7;
-const MAX_CARD_WIDTH = 100;
 /** Rounded frame glyphs — pi themes may provide theme.boxRound; default ASCII-art set. */
 const BOX = { tl: "\u256d", tr: "\u256e", bl: "\u2570", br: "\u256f", h: "\u2500", v: "\u2502" };
 function boxOf(theme) {
@@ -39,45 +38,54 @@ function borderKey(model) {
         return "accent";
     return "dim";
 }
+/** Tool box background per state — the same keys pi themes tint native tool rows with. */
+function backgroundKey(model) {
+    if (model.error)
+        return "toolErrorBg";
+    if (model.running)
+        return "toolPendingBg";
+    return "toolSuccessBg";
+}
+/**
+ * Paint the tool box background across the full row, when the theme has one.
+ * Without this the host's message background shows through the card, which
+ * reads as a dark band beside the border.
+ */
+function backgroundPaint(theme, model) {
+    const bg = theme?.bg;
+    if (typeof bg !== "function")
+        return undefined;
+    try {
+        const key = backgroundKey(model);
+        if (typeof bg.call(theme, key, "x") !== "string")
+            return undefined;
+        return (text) => {
+            const painted = bg.call(theme, key, text);
+            return typeof painted === "string" ? painted : text;
+        };
+    }
+    catch {
+        return undefined;
+    }
+}
 /** Top/bottom bar with an optional label embedded in the rule. Geometry is in
- * display cells (frameW): \u256d + 3 rules on the left, corner on the right. */
+ * display cells (displayWidth): \u256d + 3 rules on the left, corner on the right. */
 function frameBar(theme, box, border, left, right, label, width) {
     const leftRaw = left + box.h.repeat(3);
-    const shown = label ? clamp(" " + label + " ", Math.max(0, width - frameW(leftRaw) - 1)) : "";
-    const fill = Math.max(0, width - frameW(leftRaw) - frameW(shown) - 1);
+    const shown = label ? clamp(" " + label + " ", Math.max(0, width - displayWidth(leftRaw) - 1)) : "";
+    const fill = Math.max(0, width - displayWidth(leftRaw) - displayWidth(shown) - 1);
     return border(leftRaw) + shown + border(box.h.repeat(fill)) + border(right);
 }
-/** ANSI-aware cut to `width` display columns on the same scale as frameW
- * (stripped code-point count). Unlike truncateToWidth this never leaves an
- * unclosed SGR color behind: a cut inside a painted span appends \x1b[0m
- * before the ellipsis so the row cannot bleed color into the right border. */
+/**
+ * Cut a row to `width` display columns (pi's cell scale: tab = 3, wide = 2).
+ *
+ * Delegates to the shared cell-aware truncator so every surface measures with
+ * one rule. Counting code units here instead (the previous shape) under-counted
+ * tabs threefold and made tab-indented code rows overflow the card — the crash
+ * pi reports as "Rendered line N exceeds terminal width".
+ */
 function clamp(text, width) {
-    const limit = Math.max(1, width);
-    if (frameW(text) <= limit)
-        return text;
-    const budget = Math.max(1, limit - 1); // room for the ellipsis
-    const ansi = /\u001b\[[0-9;]*m/gu;
-    const stops = [];
-    for (let match = ansi.exec(text); match !== null; match = ansi.exec(text)) {
-        stops.push([match.index, match.index + match[0].length]);
-    }
-    let kept = "";
-    let visible = 0;
-    let index = 0;
-    let stopIndex = 0;
-    while (index < text.length && visible < budget) {
-        if (stopIndex < stops.length && index === stops[stopIndex][0]) {
-            const [, end] = stops[stopIndex];
-            kept += text.slice(index, end);
-            index = end;
-            stopIndex += 1;
-            continue;
-        }
-        kept += text[index];
-        visible += 1;
-        index += 1;
-    }
-    return kept + (stops.length > 0 ? "\u001b[0m" : "") + "\u2026";
+    return truncateToWidth(text, Math.max(1, width), "\u2026");
 }
 function fitPath(text, budget) {
     if (visibleWidth(text) <= budget)
@@ -85,12 +93,6 @@ function fitPath(text, budget) {
     if (budget <= 1)
         return "\u2026";
     return "\u2026" + text.slice(Math.max(0, text.length - budget + 1));
-}
-/** Display columns for frame geometry: ANSI-stripped code-point count.
- * Box glyphs/·/✓ render width-1 in real terminals; the conservative
- * visibleWidth() over-counts them (width 2) which would ragged the box. */
-function frameW(text) {
-    return text.replace(/\u001b\[[0-9;]*m/g, "").length;
 }
 function fmtMs(ms) {
     if (!Number.isFinite(ms) || ms < 0)
@@ -134,9 +136,11 @@ export class AsgrepCard {
             return [];
         if (this.cache?.width === width)
             return this.cache.lines;
-        // Pi hands us the full terminal width — a hollow frame at 200+ cols is a
-        // wall of empty border. Cap at a readable card width; pi pads the rest.
-        const lines = framedLines(theme, model, Math.min(Math.max(8, width), MAX_CARD_WIDTH));
+        // Pi hands us the full terminal width and renders this card with
+        // renderShell "self", so the frame must span every column the host gave
+        // us. Capping it left the host's message background showing as a dark
+        // band to the right of the border.
+        const lines = framedLines(theme, model, Math.max(8, width));
         this.cache = { width, lines };
         return lines;
     }
@@ -149,13 +153,15 @@ function framedLines(theme, model, width) {
     const inner = Math.max(1, width - 4); // "\u2502 " + content + " \u2502"
     const label = frameLabel(model);
     const rows = bodyLines(theme, model, inner);
-    const out = [frameBar(theme, box, border, box.tl, box.tr, label, width)];
+    const background = backgroundPaint(theme, model);
+    const fill = (line) => (background ? background(line) : line);
+    const out = [fill(frameBar(theme, box, border, box.tl, box.tr, label, width))];
     for (const row of rows) {
         const body = clamp(row, inner);
-        const pad = Math.max(0, inner - frameW(body));
-        out.push(border(box.v) + " " + body + " ".repeat(pad) + " " + border(box.v));
+        const pad = Math.max(0, inner - displayWidth(body));
+        out.push(fill(border(box.v) + " " + body + " ".repeat(pad) + " " + border(box.v)));
     }
-    out.push(frameBar(theme, box, border, box.bl, box.br, null, width));
+    out.push(fill(frameBar(theme, box, border, box.bl, box.br, null, width)));
     return out;
 }
 function bodyLines(theme, model, width) {
@@ -174,13 +180,13 @@ function bodyLines(theme, model, width) {
         lines.push(paint(theme, "dim", "   \u2026 " + ((model.hits?.length ?? 0) - hits.length) + " more"));
     }
     for (const edit of (model.edits ?? []).slice(0, model.expanded ? 12 : 4)) {
-        const head = " " + paint(theme, "accent", edit.path ?? "?") + (edit.line ? paint(theme, "dim", ":" + edit.line) : "");
+        const head = " " + paint(theme, "accent", sanitizeContent(edit.path ?? "?")) + (edit.line ? paint(theme, "dim", ":" + edit.line) : "");
         lines.push(clamp(head, width));
         for (const line of (edit.removed ?? []).slice(0, model.expanded ? 24 : 8)) {
-            lines.push("   " + paint(theme, "error", "- " + clamp(line, width - 4)));
+            lines.push("   " + paint(theme, "error", "- " + clamp(line, width - 5)));
         }
         for (const line of (edit.added ?? []).slice(0, model.expanded ? 24 : 8)) {
-            lines.push("   " + paint(theme, "success", "+ " + clamp(line, width - 4)));
+            lines.push("   " + paint(theme, "success", "+ " + clamp(line, width - 5)));
         }
         if (edit.truncated)
             lines.push(paint(theme, "dim", "   \u2026"));
@@ -198,11 +204,49 @@ function bodyLines(theme, model, width) {
             lines.push(paint(theme, "dim", "   \u2026 " + (model.resultLines.length - shown.length) + " more result lines"));
         }
     }
+    for (const note of model.notes ?? []) {
+        lines.push(" " + paint(theme, "warning", "! " + clamp(note, width - 3)));
+    }
     return lines;
+}
+/** Target bits taken from the call arguments, so a running card can name what
+ * the call is about before any result exists. Never duplicated on completion:
+ * once details land they own the label. */
+function callTargetBits(args) {
+    if (!args)
+        return [];
+    const bits = [];
+    if (typeof args.query === "string" && args.query)
+        bits.push(JSON.stringify(sanitizeContent(args.query)));
+    else if (typeof args.symbol === "string" && args.symbol)
+        bits.push(sanitizeContent(args.symbol));
+    else if (typeof args.code === "string" && args.code)
+        bits.push(sanitizeContent(args.code.trim().replace(/\s+/gu, " ")).slice(0, 60));
+    if (typeof args.path === "string" && args.path)
+        bits.push(sanitizeContent(args.path));
+    else if (typeof args.ref === "string" && args.ref)
+        bits.push(sanitizeContent(args.ref));
+    return bits;
 }
 function editsOf(value) {
     if (value && typeof value === "object" && Array.isArray(value.edits)) {
-        return value.edits.filter((e) => !!e && typeof e === "object" && (Array.isArray(e.removed) || Array.isArray(e.added)));
+        return value.edits
+            .filter((e) => !!e && typeof e === "object")
+            .filter((e) => Array.isArray(e.removed) || Array.isArray(e.added))
+            .map((e) => {
+            const entry = {
+                truncated: e.truncated === true,
+            };
+            if (typeof e.path === "string")
+                entry.path = sanitizeContent(e.path);
+            if (typeof e.line === "number")
+                entry.line = e.line;
+            if (Array.isArray(e.removed))
+                entry.removed = e.removed.map((line) => sanitizeContent(String(line)));
+            if (Array.isArray(e.added))
+                entry.added = e.added.map((line) => sanitizeContent(String(line)));
+            return entry;
+        });
     }
     return undefined;
 }
@@ -216,37 +260,44 @@ function resultPreviewLines(value) {
     if (value === undefined || value === null)
         return undefined;
     if (typeof value === "string")
-        return value.split("\n").filter((l) => l.length > 0).slice(0, 16);
+        return value.split("\n").filter((line) => line.length > 0).slice(0, 16).map(sanitizeContent);
     if (Array.isArray(value))
         return [value.length + " value" + (value.length === 1 ? "" : "s")];
     if (typeof value === "object") {
-        return Object.entries(value).slice(0, 12).map(([k, v]) => {
-            const text = typeof v === "string" ? v : JSON.stringify(v);
-            return k + ": " + (text.length > 80 ? text.slice(0, 79) + "\u2026" : text);
-        });
+        // Shaped summary only: transport fields (tool/command/schema_version/ok)
+        // describe the wire envelope, not the answer, and a raw JSON dump of them
+        // is noise in the transcript.
+        const rows = summarizeValue(value);
+        return rows.length > 0 ? rows : undefined;
     }
-    return [String(value)];
+    return [sanitizeContent(String(value))];
 }
 /** Build the card model from the tool result's details payload. */
-export function cardModel(result, options) {
+export function cardModel(result, options, callArgs) {
     const details = (result.details && typeof result.details === "object" ? result.details : {});
     const command = typeof details.command === "string" ? details.command : "asgrep";
     const expanded = options.expanded === true;
     // In-flight partial updates carry only {command, phase}.
     if (options.isPartial && !("ok" in details)) {
-        return { command, title: [typeof details.phase === "string" ? details.phase : undefined], running: true, expanded };
+        const phase = typeof details.phase === "string" && details.phase !== "started" ? details.phase : undefined;
+        return {
+            command,
+            title: [...callTargetBits(callArgs), phase],
+            running: true,
+            expanded,
+        };
     }
     const title = [];
     if (typeof details.query === "string" && details.query)
-        title.push(JSON.stringify(details.query));
+        title.push(JSON.stringify(sanitizeContent(details.query)));
     if (typeof details.mode === "string")
-        title.push(details.mode);
+        title.push(sanitizeContent(details.mode));
     const error = details.error;
     if (result.isError || details.ok === false || error) {
         return {
             command,
             title,
-            error: typeof error?.message === "string" ? error.message : "tool failed",
+            error: typeof error?.message === "string" ? sanitizeContent(error.message) : "tool failed",
             expanded,
         };
     }
@@ -289,8 +340,8 @@ export function cardModel(result, options) {
         ? response.windows
         : undefined;
     const readLines = windows?.flatMap((w) => [
-        (w.path ?? "?") + ":" + (w.start ?? 1) + "-" + (w.end ?? ""),
-        ...(typeof w.text === "string" ? w.text.split("\n").slice(0, expanded ? 20 : 6).map((l) => "  " + l) : []),
+        sanitizeContent((w.path ?? "?") + ":" + (w.start ?? 1) + "-" + (w.end ?? "")),
+        ...(typeof w.text === "string" ? sanitizeContent(w.text).split("\n").slice(0, expanded ? 20 : 6).map((l) => "  " + l) : []),
     ]);
     // When edits carry diffs they are the interesting part of the result.
     const resultLines = hits || resultEdits ? undefined : (readLines ?? resultPreviewLines(details.result));
@@ -303,13 +354,21 @@ export function cardModel(result, options) {
         model.edits = resultEdits;
     if (resultLines)
         model.resultLines = resultLines;
+    // Warnings travel with the model-visible text; keep them visible in the TUI
+    // too, or the transcript looks clean while the answer is qualified.
+    if (Array.isArray(details.notes)) {
+        const notes = details.notes.filter((note) => typeof note === "string" && note.length > 0);
+        if (notes.length > 0)
+            model.notes = notes.map((note) => sanitizeContent(note));
+    }
     return model;
 }
 /** renderResult entrypoint: bind one card per result slot, feed it details. */
 export function renderAsgrepResult(result, options, theme, context) {
     const prev = context?.lastComponent;
     const card = prev instanceof AsgrepCard ? prev : new AsgrepCard();
-    card.set(theme, cardModel(result, options));
+    const args = context?.args;
+    card.set(theme, cardModel(result, options, args && !Array.isArray(args) ? args : undefined));
     if (context)
         context.lastComponent = card;
     return card;

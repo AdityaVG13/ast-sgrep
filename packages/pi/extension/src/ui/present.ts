@@ -3,6 +3,8 @@
 export type PresentTheme = {
   bold(text: string): string;
   fg(role: string, text: string): string;
+  /** Optional: pi themes expose tool box backgrounds (toolSuccessBg/toolErrorBg/toolPendingBg). */
+  bg?(role: string, text: string): string;
 };
 
 export type HitLike = {
@@ -30,13 +32,11 @@ export type EnvelopeLike = {
 };
 
 export const ASGREP_PROMPT_SNIPPET =
-  "Search this repo by intent, symbol, callers, defs, or pattern (asgrep; use without being asked)";
+  "Code search by intent, symbol, defs, callers, pattern (asgrep; use without being asked)";
 
 export const ASGREP_PROMPT_GUIDELINES = [
-  "For any code lookup (find a function, callers, defs, intent, or structural pattern), call asgrep immediately. Do not wait for the user to mention ast-sgrep.",
-  "Prefer the asgrep Code Mode tool. Write JavaScript: asgrep.search(\"query\"), asgrep.defs(\"Symbol\"), asgrep.callers(\"Symbol\"), asgrep.read({ refs }). Independent lookups: Promise.all. Return a small shaped value.",
-  "Use grep only for exact log strings, filenames, or config keys. asgrep.edit does unique string replace plus targeted reindex; oldText must match exactly once.",
-  "If a search returns 0 hits, use suggested_next or retry with asgrep.find, asgrep.defs, or asgrep.search(query, { in: \"src\" }).",
+  "Any code lookup (function, def, caller, intent, pattern): call asgrep first.",
+  "Compose in Code Mode (search/defs/read with Promise.all, return a small shaped value); grep only for exact strings or filenames. Bound with in: \"path\"; on 0 hits use suggested_next.",
 ] as const;
 
 export function paint(theme: PresentTheme | undefined, role: string, text: string, bold = false): string {
@@ -45,130 +45,116 @@ export function paint(theme: PresentTheme | undefined, role: string, text: strin
 }
 
 export function hitLocation(hit: HitLike): string {
-  const file = String(hit.file ?? hit.path ?? "");
+  const file = sanitizeContent(String(hit.file ?? hit.path ?? ""));
   const line = hit.start_line ?? hit.line ?? hit.lines;
   if (typeof line === "number") return `${file}:${line}`;
-  if (typeof line === "string" && line.length > 0) return `${file}:${line}`;
-  if (typeof hit.ref === "string" && hit.ref.length > 0) return hit.ref;
+  if (typeof line === "string" && line.length > 0) return `${file}:${sanitizeContent(line)}`;
+  if (typeof hit.ref === "string" && hit.ref.length > 0) return sanitizeContent(hit.ref);
   return file || "?";
 }
 
+/** Hard caps for one result: rows shown, excerpt lines per hit, longest preview. */
+const MAX_HIT_ROWS = 24;
+const MAX_EXCERPT_LINES_OUT = 12;
+const MAX_PREVIEW_CHARS = 96;
+
 export function hitLabel(hit: HitLike): string {
-  const symbol = typeof hit.symbol === "string" ? hit.symbol : "";
-  const kind = typeof hit.kind === "string" ? hit.kind : "";
-  const preview = typeof hit.preview === "string" ? hit.preview.replace(/\s+/g, " ").trim() : "";
-  return [symbol, kind, preview && preview.length < 80 ? preview : ""].filter(Boolean).join("  ");
+  const symbol = typeof hit.symbol === "string" ? sanitizeContent(hit.symbol) : "";
+  const kind = typeof hit.kind === "string" ? sanitizeContent(hit.kind) : "";
+  const raw = typeof hit.preview === "string" ? sanitizeContent(hit.preview).replace(/\s+/g, " ").trim() : "";
+  // Truncate instead of dropping: a long preview used to vanish entirely, so a
+  // hit could carry no hint at all about what it contained.
+  const preview = raw.length > MAX_PREVIEW_CHARS ? raw.slice(0, MAX_PREVIEW_CHARS - 1) + "\u2026" : raw;
+  return [symbol, kind, preview].filter(Boolean).join("  ");
 }
 
-export function header(theme: PresentTheme | undefined, verb: string, bits: Array<string | null | undefined>): string {
-  return [paint(theme, "toolTitle", "asgrep", true), paint(theme, "accent", verb), ...bits.filter((bit): bit is string => Boolean(bit))].join("  ·  ");
-}
-
-export function formatSearchCall(
-  params: { query?: string; mode?: string; limit?: number; excerptLines?: number },
-  theme?: PresentTheme,
-): string {
-  return header(theme, "search", [
-    params.query ? JSON.stringify(params.query) : undefined,
-    params.mode ?? "natural",
-    params.limit !== undefined ? `limit ${params.limit}` : undefined,
-    params.excerptLines ? `excerpt ${params.excerptLines}` : undefined,
-  ]);
-}
-
-export function formatIndexCall(force: boolean, theme?: PresentTheme): string {
-  return header(theme, force ? "reindex" : "index", []);
-}
-
-export function formatStatusCall(theme?: PresentTheme): string {
-  return header(theme, "status", []);
-}
-
-export function formatEditCall(
-  params: { path?: string; edits?: unknown[] },
-  theme?: PresentTheme,
-): string {
-  const n = Array.isArray(params.edits) ? params.edits.length : 0;
-  return header(theme, "edit", [params.path, n > 1 ? n + " edits" : undefined]);
-}
-
-export function formatReadCall(
-  params: { path?: string; ref?: string; start?: number; end?: number },
-  theme?: PresentTheme,
-): string {
-  const target = params.path ?? params.ref;
-  const range = params.start !== undefined ? "L" + params.start + "-L" + (params.end ?? "") : undefined;
-  return header(theme, "read", [target, range]);
-}
-
-/** Model-visible text for an edit envelope: what changed, per file. */
 export function formatEditResult(response: EnvelopeLike, theme?: PresentTheme): string {
   const edits = Array.isArray(response.edits) ? (response.edits as Array<Record<string, unknown>>) : [];
   const changed = edits.filter((e) => e.changed === true).length;
-  const title = header(theme, "edit", [changed + "/" + edits.length + " changed"]);
-  const rows = edits.slice(0, 12).map((e) => {
-    const path = typeof e.path === "string" ? e.path : "?";
-    const line = typeof e.line === "number" ? ":" + e.line : "";
-    return paint(theme, "toolOutput", "  " + path + line);
-  });
-  return [title, ...rows].join("\n");
+  const rows = ["edit: " + changed + "/" + edits.length + " changed"];
+  for (const entry of edits.slice(0, 12)) {
+    const path = sanitizeContent(typeof entry.path === "string" ? entry.path : "?");
+    const line = typeof entry.line === "number" ? ":" + entry.line : "";
+    rows.push("  " + path + line);
+  }
+  return rows.join("\n");
 }
 
 /** Model-visible text for a read envelope: the window contents themselves. */
 export function formatReadResult(response: EnvelopeLike, theme?: PresentTheme): string {
   const windows = Array.isArray(response.windows) ? (response.windows as Array<Record<string, unknown>>) : [];
-  if (windows.length === 0) return header(theme, "read", ["0 windows"]);
+  if (windows.length === 0) return "read: 0 windows";
   const out: string[] = [];
   for (const w of windows.slice(0, 8)) {
-    const path = typeof w.path === "string" ? w.path : "?";
-    out.push(header(theme, "read", [path + "#L" + (w.start ?? 1) + "-L" + (w.end ?? "")]));
-    const text = typeof w.text === "string" ? w.text : "";
+    const path = sanitizeContent(typeof w.path === "string" ? w.path : "?");
+    // The window's own path+range is the line the model needs to cite back.
+    out.push(path + "#L" + (w.start ?? 1) + "-L" + (w.end ?? ""));
+    const text = sanitizeContent(typeof w.text === "string" ? w.text : "");
     for (const line of text.split("\n").slice(0, 80)) out.push(line);
   }
   if (windows.length > 8) out.push("… " + (windows.length - 8) + " more windows");
   return out.join("\n");
 }
 
-export function formatCodemodeCall(code: string, theme?: PresentTheme): string {
-  const preview = code.trim().replace(/\s+/g, " ").slice(0, 80);
-  return header(theme, "codemode", [`${preview}${code.trim().length > 80 ? "…" : ""}`]);
-}
-
+/**
+ * Model-facing result text is deliberately lean: the tool call already carries
+ * the query/mode, the TUI card renders timing and backend for the human, and
+ * every token here is re-sent with the whole transcript. The first line is the
+ * only chrome: "<command>: <payload summary>".
+ */
 export function formatSearchResult(
   response: EnvelopeLike,
-  meta: { command: string; query?: string; mode?: string; activationMs?: number; backend?: string },
+  meta: { command: string; excerptLines?: number },
   theme?: PresentTheme,
 ): string {
   const hits = Array.isArray(response.hits) ? (response.hits as HitLike[]) : [];
-  const title = header(theme, meta.command, [
-    meta.query ? JSON.stringify(meta.query) : undefined,
-    meta.mode,
-    `${hits.length} hit${hits.length === 1 ? "" : "s"}`,
-    meta.activationMs !== undefined ? `${meta.activationMs < 10 ? meta.activationMs.toFixed(2) : meta.activationMs.toFixed(1)}ms` : undefined,
-    meta.backend,
-  ]);
-  const rows = hits.slice(0, 24).map((hit) => {
+  // Capsules carry an excerpt whether or not the caller asked; render it only
+  // when they did, or every defs/imports answer pays for body text nobody
+  // requested (measured: 2.5k tokens of unasked-for excerpts before the guard).
+  const excerptBudget = Math.max(0, Math.min(meta.excerptLines ?? 0, MAX_EXCERPT_LINES_OUT));
+  let excerptLinesLeft = excerptBudget * Math.min(hits.length, MAX_HIT_ROWS);
+  const rows = [`${meta.command}: ${hits.length} hit${hits.length === 1 ? "" : "s"}`];
+  for (const hit of hits.slice(0, MAX_HIT_ROWS)) {
     const loc = hitLocation(hit);
     const label = hitLabel(hit);
-    return paint(theme, "toolOutput", label ? `  ${loc}  ${label}` : `  ${loc}`);
-  });
+    // Single-space fields: same payload, fewer tokens per row, and every row
+    // is re-sent with the transcript on each turn.
+    rows.push(label ? `  ${loc} ${label}` : `  ${loc}`);
+    // Body excerpts only exist when the caller asked for them (excerptLines);
+    // they used to be dropped here, so asking cost nothing and returned less.
+    const excerpt = (hit as { excerpt?: unknown }).excerpt;
+    if (excerptLinesLeft > 0 && typeof excerpt === "string" && excerpt.trim() !== "") {
+      for (const line of sanitizeContent(excerpt).split("\n")) {
+        if (excerptLinesLeft === 0) break;
+        if (line.trim() === "") continue;
+        rows.push("    " + line.replace(/\s+$/u, ""));
+        excerptLinesLeft -= 1;
+      }
+    }
+  }
   if (hits.length === 0) {
-    rows.push(paint(theme, "muted", "  0 hits"));
+    // A chain answer is nodes+edges, not hits: depth, site, symbol per row.
+    const nodes = Array.isArray((response as { nodes?: unknown }).nodes)
+      ? ((response as { nodes: Array<Record<string, unknown>> }).nodes)
+      : [];
+    if (nodes.length > 0) {
+      rows[0] = `${meta.command}: ${nodes.length} nodes`;
+      for (const node of nodes.slice(0, 24)) {
+        const file = sanitizeContent(typeof node.file === "string" ? node.file : "?");
+        const line = typeof node.line_start === "number" ? ":" + node.line_start : "";
+        const depth = typeof node.depth === "number" ? "d" + node.depth + " " : "";
+        const symbol = typeof node.symbol === "string" ? " " + sanitizeContent(node.symbol) : "";
+        rows.push(`  ${depth}${file}${line}${symbol}`);
+      }
+      return rows.join("\n");
+    }
     const next = Array.isArray(response.suggested_next)
       ? (response.suggested_next as unknown[]).filter((item): item is string => typeof item === "string")
       : [];
-    if (next.length > 0) {
-      for (const query of next.slice(0, 4)) {
-        rows.push(paint(theme, "toolOutput", `  try  ${query}`));
-      }
-    } else {
-      rows.push(paint(theme, "toolOutput", "  try  asgrep.find(query) or asgrep.defs(symbol) or asgrep.search(query, { in: \"src\" })"));
-    }
+    for (const query of next.slice(0, 3)) rows.push(`  try: ${sanitizeContent(query)}`);
   }
-  if (hits.length > 24) {
-    rows.push(paint(theme, "muted", `  … ${hits.length - 24} more`));
-  }
-  return [title, ...rows].join("\n");
+  if (hits.length > 24) rows.push(`  … ${hits.length - 24} more`);
+  return rows.join("\n");
 }
 
 export function formatStatusResult(response: EnvelopeLike, theme?: PresentTheme): string {
@@ -176,64 +162,102 @@ export function formatStatusResult(response: EnvelopeLike, theme?: PresentTheme)
     : typeof response.index_status === "string" ? response.index_status
     : response.ok ? "ok" : "failed";
   const counts = response.counts && typeof response.counts === "object"
-    ? Object.entries(response.counts as Record<string, unknown>).map(([key, value]) => `${key}=${String(value)}`).join("  ")
+    ? Object.entries(response.counts as Record<string, unknown>).map(([key, value]) => `${key}=${String(value)}`).join(" ")
     : "";
   const backend = typeof response.backend === "string" ? response.backend : "";
-  const title = header(theme, "status", [state, counts, backend]);
-  return title;
+  return ["status: " + state, counts, backend].filter(Boolean).join(" ");
 }
 
 export function formatIndexResult(command: string, response: EnvelopeLike, theme?: PresentTheme): string {
   const count = typeof response.count === "number" ? response.count
     : typeof response.total === "number" ? response.total
+    : typeof response.files_indexed === "number" ? response.files_indexed
     : undefined;
-  const tail = count === undefined ? "done" : `${count} file${count === 1 ? "" : "s"}`;
-  return header(theme, command, [tail]);
+  return count === undefined ? `${command}: done` : `${command}: ${count} file${count === 1 ? "" : "s"}`;
 }
 
+/** Longest escape sequence we will skip as a unit; longer runs are treated as
+ * text so an unterminated sequence cannot swallow the rest of a line. */
+const MAX_ESCAPE_LENGTH = 512;
+
+/**
+ * Length of the terminal escape starting at `index`, or 0 when there is none.
+ *
+ * A lone or unterminated ESC measures zero and everything after it is text,
+ * which is what pi does (measured: "\u001b[31" is three cells, ESC included as
+ * zero). Skipping unterminated sequences whole would under-count, and pi kills
+ * the process for any rendered line wider than the terminal.
+ */
 function ansiLengthAt(text: string, index: number): number {
   if (text.charCodeAt(index) !== 0x1b) return 0;
+  const limit = Math.min(text.length, index + MAX_ESCAPE_LENGTH);
   const next = text[index + 1];
   if (next === "[") {
-    let cursor = index + 2;
-    while (cursor < text.length) {
+    for (let cursor = index + 2; cursor < limit; cursor += 1) {
       const code = text.charCodeAt(cursor);
       if (code >= 0x40 && code <= 0x7e) return cursor - index + 1;
-      cursor += 1;
     }
-    return text.length - index;
+    return 1;
   }
   if (next === "]") {
-    let cursor = index + 2;
-    while (cursor < text.length) {
+    for (let cursor = index + 2; cursor < limit; cursor += 1) {
       if (text.charCodeAt(cursor) === 0x07) return cursor - index + 1;
       if (text.charCodeAt(cursor) === 0x1b && text[cursor + 1] === "\\") return cursor - index + 2;
-      cursor += 1;
     }
-    return text.length - index;
+    return 1;
   }
   if (next === "P" || next === "X" || next === "^" || next === "_") {
-    let cursor = index + 2;
-    while (cursor < text.length) {
+    for (let cursor = index + 2; cursor < limit; cursor += 1) {
       if (text.charCodeAt(cursor) === 0x1b && text[cursor + 1] === "\\") return cursor - index + 2;
-      cursor += 1;
     }
-    return text.length - index;
+    return 1;
   }
-  return Math.min(2, text.length - index);
+  return 1;
 }
 
-function cellWidthAt(text: string, index: number): { width: number; length: number } {
-  const code = text.charCodeAt(index);
-  if (code === 0x09) return { width: 3, length: 1 };
-  if (code >= 0xd800 && code <= 0xdbff) return { width: 2, length: 2 };
-  if (code <= 0x1f || (code >= 0x7f && code <= 0x9f)) return { width: 0, length: 1 };
-  if (code <= 0x7e) return { width: 1, length: 1 };
-  return { width: 2, length: 1 };
+/**
+ * Strip terminal control sequences and C0/C1 controls from untrusted content
+ * (tool output, code windows, paths) before this extension paints it. Without
+ * this a stray ESC in a file would sit inside our own SGR span, leaving an
+ * unterminated color and mis-measuring the row's width.
+ */
+export function sanitizeContent(text: string): string {
+  let out = "";
+  for (let index = 0; index < text.length; ) {
+    const ansi = ansiLengthAt(text, index);
+    if (ansi > 0) {
+      index += ansi;
+      continue;
+    }
+    const code = text.charCodeAt(index);
+    if (code === 0x09 || code === 0x0a || (code >= 0x20 && code !== 0x7f && !(code >= 0x80 && code <= 0x9f))) {
+      out += text[index];
+    }
+    index += 1;
+  }
+  return out;
 }
 
-/** Local stand-in so we do not take a pi-tui dependency. Over-counts wide glyphs rather than under-count. */
-export function visibleWidth(text: string): number {
+/**
+ * Chrome glyphs this extension draws itself. Pi measures every one of them as a
+ * single cell (verified against `visibleWidth` from @earendil-works/pi-tui), so
+ * frame geometry can stay exact while everything else rounds UP.
+ */
+const ONE_CELL_CHROME = /^[\u00b7\u00d7\u2022\u2026\u2192\u23f5\u23f8\u2500-\u257f\u25a0-\u25cf\u2591-\u2593\u26d3\u2713\u2714\u2717\u276f\u2588]$/u;
+
+/**
+ * Conservative display width on pi's scale: never under-counts what pi measures.
+ *
+ * Pi expands tabs to three spaces and measures grapheme clusters with East Asian
+ * Width (CJK/fullwidth/emoji = 2); lone combining marks, variation selectors and
+ * joiners are zero there. Re-deriving that table here would be a second source of
+ * truth that can drift, so this counts only what the card itself draws exactly
+ * (one cell) and rounds every other non-ASCII code point UP to two. A line that
+ * measures `width` here is therefore at most `width` in the terminal: over-counting
+ * can only leave slack before the right border, while under-counting is what pi
+ * kills the process for ("Rendered line N exceeds terminal width").
+ */
+export function displayWidth(text: string): number {
   let width = 0;
   for (let index = 0; index < text.length; ) {
     const ansi = ansiLengthAt(text, index);
@@ -246,6 +270,21 @@ export function visibleWidth(text: string): number {
     index += cell.length;
   }
   return width;
+}
+
+function cellWidthAt(text: string, index: number): { width: number; length: number } {
+  const code = text.charCodeAt(index);
+  if (code === 0x09) return { width: 3, length: 1 };
+  if (code <= 0x1f || (code >= 0x7f && code <= 0x9f)) return { width: 0, length: 1 };
+  if (code <= 0x7e) return { width: 1, length: 1 };
+  if (code >= 0xd800 && code <= 0xdbff) return { width: 2, length: 2 };
+  if (ONE_CELL_CHROME.test(text[index] ?? "")) return { width: 1, length: 1 };
+  return { width: 2, length: 1 };
+}
+
+/** Local stand-in so we do not take a pi-tui dependency. Over-counts wide glyphs rather than under-count. */
+export function visibleWidth(text: string): number {
+  return displayWidth(text);
 }
 
 export function truncateToWidth(text: string, maxWidth: number, ellipsis = "..."): string {
@@ -276,9 +315,63 @@ export function truncateToWidth(text: string, maxWidth: number, ellipsis = "..."
   return kept + (kept.includes("\u001b[") ? "\u001b[0m" : "") + ellipsis;
 }
 
+/** Wire-envelope fields that describe the transport, not the answer. Showing
+ * them turns a one-line answer into a JSON dump of our own protocol. */
+const TRANSPORT_KEYS = new Set([
+  "tool",
+  "command",
+  "schema_version",
+  "ok",
+  "ref",
+  "refs",
+  "index_path",
+  "expand_hint",
+  "snapshot",
+  "backend",
+  "wall_ms",
+  "exit_code",
+  "prevented_read_bytes",
+  "read_bytes_estimate",
+  "returned_excerpt_bytes",
+]);
+
+/**
+ * One summary line per interesting entry of a shaped value: known shapes get a
+ * sentence ("3 windows · path:1-340"), everything else `key: value` with the
+ * value compacted. Transport fields are dropped rather than rendered.
+ */
+export function summarizeValue(value: unknown, limit = 4): string[] {
+  if (value === null || value === undefined || typeof value !== "object" || Array.isArray(value)) {
+    return [compactValue(value)];
+  }
+  const recordValue = value as Record<string, unknown>;
+  const rows: string[] = [];
+  const hits = Array.isArray(recordValue.hits) ? recordValue.hits : undefined;
+  const windows = Array.isArray(recordValue.windows)
+    ? (recordValue.windows as Array<Record<string, unknown>>)
+    : undefined;
+  if (hits) rows.push(hits.length + " hit" + (hits.length === 1 ? "" : "s"));
+  if (windows && windows.length > 0) {
+    const first = windows[0] ?? {};
+    const where = typeof first.path === "string" ? sanitizeContent(first.path) : "";
+    const range = typeof first.start === "number"
+      ? ":" + first.start + (typeof first.end === "number" ? "-" + first.end : "")
+      : "";
+    rows.push(windows.length + " window" + (windows.length === 1 ? "" : "s") + (where ? " · " + where + range : ""));
+  }
+  for (const [key, entry] of Object.entries(recordValue)) {
+    if (rows.length >= limit) break;
+    if (TRANSPORT_KEYS.has(key)) continue;
+    if (hits && key === "hits") continue;
+    if (windows && (key === "windows" || key === "count")) continue;
+    rows.push(key + ": " + compactValue(entry));
+  }
+  return rows;
+}
+
 function compactValue(value: unknown): string {
   if (value === null || value === undefined) return String(value);
-  if (typeof value !== "object") return String(value);
+  if (typeof value !== "object") return sanitizeContent(String(value));
   if (Array.isArray(value)) return `${value.length} item${value.length === 1 ? "" : "s"}`;
   const json = JSON.stringify(value);
   return json.length <= 80 ? json : `${json.slice(0, 79)}…`;
@@ -305,62 +398,24 @@ export function formatCodemodeResult(
     if (typeof record.hit_count === "number") bits.push(`${record.hit_count} hit${record.hit_count === 1 ? "" : "s"}`);
     else if (typeof record.node_count === "number") bits.push(`${record.node_count} node${record.node_count === 1 ? "" : "s"}`);
   }
-  if (meta.backend === "napi") bits.push("in-process");
-  else if (meta.backend === "cli") bits.push("cli-sticky");
   if (meta.stats && meta.stats.calls > 0) {
-    const via =
-      (meta.stats.stickyCalls ?? 0) > 0
-        ? `native ${meta.stats.stickyCalls}`
-        : meta.stats.batchedCalls > 0
-          ? `batched ${meta.stats.batchedCalls}`
-          : meta.stats.parallelSpawnCalls > 0
-            ? `parallel-spawn ${meta.stats.parallelSpawnCalls}`
-            : `${meta.stats.calls} call${meta.stats.calls === 1 ? "" : "s"}`;
-    bits.push(via);
+    bits.push(`${meta.stats.calls} call${meta.stats.calls === 1 ? "" : "s"}`);
     if (meta.stats.waves > 1) bits.push(`${meta.stats.waves} waves`);
   }
-  if (meta.wallMs !== undefined) bits.push(`${meta.wallMs}ms`);
-  const title = header(theme, "codemode", bits);
+  // Backend and wall time are display concerns: the card renders them, the
+  // transcript does not need them repeated on every call.
+  const title = "codemode" + (bits.length > 0 ? ": " + bits.join(" ") : "");
   if (value === undefined) {
     return `${title}\n${paint(theme, "muted", "  (no return statement; add `return` to send a value to the model)")}`;
   }
   if (value && typeof value === "object" && !Array.isArray(value)) {
-    const rows = Object.entries(value as Record<string, unknown>).slice(0, 16).map(([key, entry]) =>
-      paint(theme, "toolOutput", `  ${key}: ${compactValue(entry)}`),
-    );
+    // The program's own return shape is a deliberate choice: summarize it
+    // wider than a hit preview, or the model has to re-run to see its value.
+    const rows = summarizeValue(value, 12).map((row) => paint(theme, "toolOutput", `  ${row}`));
     return [title, ...rows].join("\n");
   }
   if (Array.isArray(value)) {
     return [title, paint(theme, "toolOutput", `  ${value.length} value${value.length === 1 ? "" : "s"}`)].join("\n");
   }
   return `${title}\n${paint(theme, "toolOutput", `  ${compactValue(value)}`)}`;
-}
-
-/** Minimal pi-tui Text stand-in so we do not take a TUI package dependency. */
-export class AsgrepText {
-  #text: string;
-  constructor(text = "") {
-    this.#text = text;
-  }
-  setText(text: string): void {
-    this.#text = text;
-  }
-  invalidate(): void {}
-  render(width: number): string[] {
-    const maxWidth = Math.max(1, width);
-    if (this.#text.length === 0) return [""];
-    return this.#text.split("\n").map((line) => truncateToWidth(line, maxWidth));
-  }
-}
-
-export function presentText(formatted: string, last: unknown): AsgrepText {
-  if (last instanceof AsgrepText) {
-    last.setText(formatted);
-    return last;
-  }
-  if (last && typeof last === "object" && last !== null && "setText" in last && typeof (last as AsgrepText).setText === "function") {
-    (last as AsgrepText).setText(formatted);
-    return last as AsgrepText;
-  }
-  return new AsgrepText(formatted);
 }
