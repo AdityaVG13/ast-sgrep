@@ -63,7 +63,7 @@
     "node": ">=22.19.0"
   },
   "dependencies": {
-    "ast-sgrep": ">=2.0.0 <3",
+    "ast-sgrep": ">=2.1.0 <3",
     "typebox": "^1.0.0"
   },
   "peerDependencies": {

@@ -2,7 +2,7 @@
  * Shared leaf module: version constants, wire types, RuntimeError.
  * Imports nothing from sibling modules — any file may depend on it.
  */
-export declare const RUNTIME_VERSION = "2.0.0";
+export declare const RUNTIME_VERSION = "2.1.0";
 export declare const MACHINE_SCHEMA_VERSION = "1.0.0";
 export declare const CONFIG_SCHEMA_VERSION: 1;
 /** Index format this release ships. Must equal INDEX_SCHEMA_VERSION in crates/ast-sgrep-core (check-contract gates it). */
