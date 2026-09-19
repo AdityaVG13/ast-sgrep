@@ -1,17 +1,9 @@
-//! I4 end-to-end cache-consistency drills for ast-sgrep-lang.
+//! Lang cache-consistency drill suite: full workloads through warmed caches.
 //!
-//! I1 pinned reuse-is-unobservable, I2 pinned per-key deltas, I3 pinned
-//! rebuild-parity relations. I4 runs FULL workloads through warmed caches
-//! end-to-end: each drill chains the public pipeline
-//! detect -> parse -> match -> extract -> score -> rank over a multi-key
-//! corpus, populates every memo/cache key in a hostile order, and asserts the
-//! final ranked outcome is identical to the canonical-order run.
-//!
-//! The seven append-only caches (thread-local parser maps in
-//! `extract`/`templates`, the process-wide `SUPPORTED` gate memo and
-//! compiled-`Query` cache, and the per-thread general/literal/if-cond
-//! template maps) are exercised only through the public API. Score/rank are
-//! deterministic pure functions defined here; discriminants are line vectors,
+//! Contract under test: the seven append-only caches are pure functions of
+//! their keys, so hostile population orders, junk warm-up, and repetition
+//! never change the final ranked outcome of the public detect -> parse ->
+//! match -> gates -> score -> rank pipeline. Discriminants are line vectors,
 //! symbol names, gate verdicts, signature rows, scores, and rankings — never
 //! message text. Each order permutation runs in a fresh thread so
 //! thread-local slots start cold.
@@ -20,13 +12,11 @@ use ast_sgrep_lang::{
     cached_pattern_signatures, detect_language, index_can_serve_pattern, match_pattern,
     native_pattern_answerable, needs_ast_grep_fallback, Language, ParserRegistry,
 };
+use ast_sgrep_testkit::run_in_fresh_thread;
 use std::path::Path;
 
-fn run_in_fresh_thread<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
-    std::thread::spawn(f).join().unwrap()
-}
-
-/// One corpus cell: a file plus the pattern panel queried against it.
+// WHY area-local: one corpus cell (file + pattern panel) for the drill
+// workload harness; the drill harness is single-suite.
 #[derive(Debug, Clone, Copy)]
 struct Cell {
     path: &'static str,
@@ -35,7 +25,8 @@ struct Cell {
     patterns: &'static [&'static str],
 }
 
-/// Full per-file pipeline outcome: detect + extract + match + gates + score.
+// WHY area-local: full per-file pipeline outcome; the drill comparison unit.
+// Single-suite drill harness.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct FileOutcome {
     path: &'static str,
@@ -49,19 +40,22 @@ struct FileOutcome {
     score: u64,
 }
 
-/// Deterministic score: symbol mass dominates, then hit mass, then gate bits.
+// WHY area-local: deterministic in-test score (symbol mass, then hits, then
+// gate bits). Single-suite drill harness.
 fn score(symbols: usize, hits: usize, fallback_true: usize, answerable_true: usize) -> u64 {
     symbols as u64 * 1_000 + hits as u64 * 10 + fallback_true as u64 * 2 + answerable_true as u64
 }
 
-/// Deterministic rank: score desc, path asc as tie-break.
+// WHY area-local: deterministic rank — score desc, path asc as tie-break.
+// Single-suite drill harness.
 fn rank(outcomes: &[FileOutcome]) -> Vec<&'static str> {
     let mut order: Vec<&FileOutcome> = outcomes.iter().collect();
     order.sort_by(|a, b| b.score.cmp(&a.score).then_with(|| a.path.cmp(b.path)));
     order.into_iter().map(|o| o.path).collect()
 }
 
-/// Run one pipeline stage-set for a single cell through the public API.
+// WHY area-local: run one pipeline stage-set for a single cell through the
+// public API. Single-suite drill harness.
 fn run_cell(registry: &ParserRegistry, cell: &Cell) -> FileOutcome {
     let detected = detect_language(Path::new(cell.path), Some(cell.source));
     let extraction = registry.parse(cell.lang, cell.source).unwrap();
@@ -101,8 +95,9 @@ fn run_cell(registry: &ParserRegistry, cell: &Cell) -> FileOutcome {
     }
 }
 
-/// Run the full workload visiting cells in `order`, remapped to canonical
-/// cell order so hostile schedules compare directly against canonical runs.
+// WHY area-local: run the full workload visiting cells in `order`, remapped
+// to canonical cell order so hostile schedules compare directly against
+// canonical runs. Single-suite drill harness.
 fn run_workload(cells: &[Cell], order: &[usize]) -> (Vec<FileOutcome>, Vec<&'static str>) {
     let registry = ParserRegistry::new();
     let mut back: Vec<Option<FileOutcome>> = Vec::with_capacity(cells.len());
@@ -116,19 +111,17 @@ fn run_workload(cells: &[Cell], order: &[usize]) -> (Vec<FileOutcome>, Vec<&'sta
     (outcomes, ranking)
 }
 
+// WHY area-local: canonical / reversed visit orders for schedule-parity
+// legs. Single-suite drill harness.
 fn canonical_order(n: usize) -> Vec<usize> {
     (0..n).collect()
 }
 
+// WHY area-local: see `canonical_order`. Single-suite drill harness.
 fn reversed_order(n: usize) -> Vec<usize> {
     (0..n).rev().collect()
 }
 
-// ---------------------------------------------------------------------------
-// Workload shapes
-// ---------------------------------------------------------------------------
-
-/// Single-language heavy reuse: one Rust panel reused across four files.
 const RUST_PANEL: &[&str] = &["alpha", "beta", "gamma", "fn $NAME($$$)", "struct $NAME"];
 const RUST_CORPUS: &[Cell] = &[
     Cell {
@@ -157,7 +150,6 @@ const RUST_CORPUS: &[Cell] = &[
     },
 ];
 
-/// Many-language interleave: one literal + one structural pattern per file.
 const POLYGLOT_CORPUS: &[Cell] = &[
     Cell {
         path: "src/a.rs",
@@ -191,8 +183,6 @@ const POLYGLOT_CORPUS: &[Cell] = &[
     },
 ];
 
-/// Supported/unsupported mix: the if-cond panel discriminates covered
-/// grammars (JavaScript) from uncovered ones (Swift).
 const MIXED_CORPUS: &[Cell] = &[
     Cell {
         path: "src/a.js",
@@ -220,31 +210,49 @@ const MIXED_CORPUS: &[Cell] = &[
     },
 ];
 
-// ---------------------------------------------------------------------------
-// Drills: single-language heavy reuse
-// ---------------------------------------------------------------------------
-
+/// INTENT: junk-warmed threads agree with cold threads on a match panel, on
+/// the single-lang workload, and on the unsupported-mix workload.
+/// KILLS: warmed-vs-cold-divergence / warmed-vs-cold-workload-divergence /
+/// warmed-mixed-workload-divergence.
+/// ABSORBS: single_lang_heavy_reuse_warmed_vs_cold,
+/// unsupported_mix_warmed_caches_match_cold.
 #[test]
-fn single_lang_heavy_reuse_canonical_vs_reversed() {
-    let n = RUST_CORPUS.len();
-    let (canon_out, canon_rank) =
-        run_in_fresh_thread(move || run_workload(RUST_CORPUS, &canonical_order(n)));
-    let (rev_out, rev_rank) =
-        run_in_fresh_thread(move || run_workload(RUST_CORPUS, &reversed_order(n)));
-    assert_eq!(canon_out, rev_out);
-    assert_eq!(canon_rank, rev_rank);
-    // Discriminant sanity: detection, extraction, and hits are non-trivial.
-    assert!(canon_out.iter().all(|o| o.detected == Some(Language::Rust)));
-    assert_eq!(canon_out[0].symbols, vec!["alpha", "beta"]);
-    assert_eq!(canon_out[0].hits_per_pattern[0], vec![1]);
-    assert_eq!(canon_out[1].hits_per_pattern[2], vec![2]);
-    assert_eq!(canon_rank.len(), n);
-}
+fn warmed_caches_match_fresh_thread_results() {
+    // Leg 1 (anchor): junk-warmed thread agrees with a cold thread on a panel.
+    let panel = ["delta", "epsilon", "fn $NAME($$$)", "struct $NAME"];
+    let source = "fn delta() {}\nfn epsilon() {}\nstruct Widget {}\n";
+    for junk in ["zeta", "eta", "theta", "class $NAME", "$X $Y $Z"] {
+        let _ = match_pattern(Language::Rust, source, junk);
+        let _ = needs_ast_grep_fallback(junk);
+        let _ = cached_pattern_signatures(junk);
+    }
+    let warmed: Vec<Vec<u32>> = panel
+        .iter()
+        .map(|p| {
+            match_pattern(Language::Rust, source, p)
+                .unwrap()
+                .iter()
+                .map(|h| h.line_start)
+                .collect()
+        })
+        .collect();
+    let cold = run_in_fresh_thread(move || {
+        panel
+            .iter()
+            .map(|p| {
+                match_pattern(Language::Rust, source, p)
+                    .unwrap()
+                    .iter()
+                    .map(|h| h.line_start)
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(warmed, cold);
+    assert_eq!(warmed[0], vec![1]);
+    assert_eq!(warmed[1], vec![2]);
 
-#[test]
-fn single_lang_heavy_reuse_warmed_vs_cold() {
-    // Hostile warm-up: saturate every cache genus with junk keys on this
-    // thread, then run the canonical schedule; must equal a cold thread.
+    // Leg 2 (single-lang warmed): junk-saturated thread workload equals cold.
     let junk_sources = [
         (Language::Go, "package main\n\nfunc junk() {}\n"),
         (Language::Python, "def junk():\n    pass\n"),
@@ -272,26 +280,134 @@ fn single_lang_heavy_reuse_warmed_vs_cold() {
         }
     }
     let n = RUST_CORPUS.len();
-    let warmed = run_workload(RUST_CORPUS, &canonical_order(n));
-    let cold = run_in_fresh_thread(move || run_workload(RUST_CORPUS, &canonical_order(n)));
-    assert_eq!(warmed, cold);
-    assert_eq!(warmed.0[3].symbols, vec!["Gadget", "alpha", "beta", "gamma"]);
+    let warmed_rust = run_workload(RUST_CORPUS, &canonical_order(n));
+    let cold_rust = run_in_fresh_thread(move || run_workload(RUST_CORPUS, &canonical_order(n)));
+    assert_eq!(warmed_rust, cold_rust);
+    assert_eq!(warmed_rust.0[3].symbols, vec!["Gadget", "alpha", "beta", "gamma"]);
+
+    // Leg 3 (unsupported-mix warmed): unsupported-first + junk warm-up, then
+    // canonical, equals cold canonical.
+    let m = MIXED_CORPUS.len();
+    let unsupported_first = vec![1usize, 0, 3, 2];
+    let _ = run_workload(MIXED_CORPUS, &unsupported_first);
+    for pattern in ["$P + $Q", "yield $X", "while ($C) { $B }", "interface $N"] {
+        let _ = needs_ast_grep_fallback(pattern);
+        let _ = cached_pattern_signatures(pattern);
+        let _ = native_pattern_answerable(Language::Swift, pattern);
+    }
+    let warmed_mixed = run_workload(MIXED_CORPUS, &canonical_order(m));
+    let cold_mixed = run_in_fresh_thread(move || run_workload(MIXED_CORPUS, &canonical_order(m)));
+    assert_eq!(warmed_mixed, cold_mixed);
+    assert_eq!(warmed_mixed.0[3].symbols, vec!["zeta"]);
 }
 
-// ---------------------------------------------------------------------------
-// Drills: many-language interleave
-// ---------------------------------------------------------------------------
-
+/// INTENT: full detect→rank single-lang workload identical under canonical vs
+/// reversed file order.
+/// KILLS: file-order-dependence.
+/// ABSORBS: (standalone — no merges).
 #[test]
-fn many_lang_batched_vs_round_robin() {
+fn single_lang_heavy_reuse_canonical_vs_reversed() {
+    let n = RUST_CORPUS.len();
+    let (canon_out, canon_rank) =
+        run_in_fresh_thread(move || run_workload(RUST_CORPUS, &canonical_order(n)));
+    let (rev_out, rev_rank) =
+        run_in_fresh_thread(move || run_workload(RUST_CORPUS, &reversed_order(n)));
+    assert_eq!(canon_out, rev_out);
+    assert_eq!(canon_rank, rev_rank);
+    assert!(canon_out.iter().all(|o| o.detected == Some(Language::Rust)));
+    assert_eq!(canon_out[0].symbols, vec!["alpha", "beta"]);
+    assert_eq!(canon_out[0].hits_per_pattern[0], vec![1]);
+    assert_eq!(canon_out[1].hits_per_pattern[2], vec![2]);
+    assert_eq!(canon_rank.len(), n);
+}
+
+/// INTENT: mixed covered/uncovered workload identical under supported-first,
+/// unsupported-first, and canonical orders.
+/// KILLS: unsupported-first-poisoning.
+/// ABSORBS: (standalone — no merges).
+#[test]
+fn unsupported_mix_supported_first_vs_unsupported_first() {
+    let n = MIXED_CORPUS.len();
+    let supported_first = vec![0usize, 3, 2, 1];
+    let unsupported_first = vec![1usize, 0, 2, 3];
+    let a = run_in_fresh_thread(move || run_workload(MIXED_CORPUS, &supported_first));
+    let b = run_in_fresh_thread(move || run_workload(MIXED_CORPUS, &unsupported_first));
+    let canon = run_in_fresh_thread(move || run_workload(MIXED_CORPUS, &canonical_order(n)));
+    assert_eq!(a, b);
+    assert_eq!(a, canon);
+    assert!(a.0[0].answerable_per_pattern[0]);
+    assert!(!a.0[1].answerable_per_pattern[0]);
+    assert_eq!(a.0[0].hits_per_pattern[0], vec![1]);
+    assert_eq!(a.0[2].fallback_per_pattern[2], true);
+}
+
+/// INTENT: polyglot workload identical under canonical, hostile
+/// lane-alternating + junk-poisoned, round-robin, reverse, and repeated
+/// schedules; every repetition round pinned by hand oracles.
+/// KILLS: hostile-schedule-/-junk-poisoning-divergence /
+/// polyglot-schedule-dependence / polyglot-file-order-dependence /
+/// repetition-drift.
+/// ABSORBS: many_lang_batched_vs_round_robin,
+/// many_lang_forward_vs_reverse_pipeline,
+/// end_to_end_pipeline_repeat_is_stable (repetition leg WITH hand oracles;
+/// the hand-oracle-less repetition-equality-only assert is dropped).
+#[test]
+fn adversarial_interleave_matches_canonical_pipeline() {
+    // Leg 1 (anchor): hostile lane-alternating order with per-step junk
+    // genus-poisoning equals the canonical run incl ranking.
     let n = POLYGLOT_CORPUS.len();
+    let canonical =
+        run_in_fresh_thread(move || run_workload(POLYGLOT_CORPUS, &canonical_order(n)));
+    let adversarial = run_in_fresh_thread(move || {
+        let registry = ParserRegistry::new();
+        let junk = [
+            (Language::Rust, "fn junk() {}\n", "junk"),
+            (
+                Language::JavaScript,
+                "if (junk) { foo(); }\n",
+                "if (junk) { $$$ }",
+            ),
+            (
+                Language::JavaScript,
+                "function f() {\n  return 1;\n}\n",
+                "return $X",
+            ),
+            (Language::Python, "def junk():\n    pass\n", "class $NAME"),
+        ];
+        let order = vec![4usize, 2, 0, 3, 1];
+        let mut back: Vec<Option<FileOutcome>> = Vec::from_iter((0..n).map(|_| None));
+        for (step, cell_idx) in order.iter().enumerate() {
+            let (lang, src, pattern) = junk[step % junk.len()];
+            let _ = registry.parse(lang, src);
+            let _ = match_pattern(lang, src, pattern);
+            let _ = native_pattern_answerable(lang, pattern);
+            let _ = needs_ast_grep_fallback(pattern);
+            let _ = cached_pattern_signatures(pattern);
+            back[*cell_idx] = Some(run_cell(&registry, &POLYGLOT_CORPUS[*cell_idx]));
+        }
+        let outcomes: Vec<FileOutcome> = back.into_iter().map(|o| o.unwrap()).collect();
+        let ranking = rank(&outcomes);
+        (outcomes, ranking)
+    });
+    assert_eq!(canonical, adversarial);
+    let scores: Vec<u64> = canonical.0.iter().map(|o| o.score).collect();
+    let mut ranked_scores: Vec<u64> = canonical
+        .1
+        .iter()
+        .map(|p| canonical.0.iter().find(|o| &o.path == p).unwrap().score)
+        .collect();
+    let mut sorted = scores.clone();
+    sorted.sort_by(|a, b| b.cmp(a));
+    ranked_scores.sort_by(|a, b| b.cmp(a));
+    assert_eq!(ranked_scores, sorted);
+
+    // Leg 2 (round-robin): stride-2 schedule equals batched; literal cells
+    // hit decl lines, languages detected.
     let batched =
         run_in_fresh_thread(move || run_workload(POLYGLOT_CORPUS, &canonical_order(n)));
-    // Round-robin stride-2 schedule over the five cells.
     let rr_order = vec![0usize, 2, 4, 1, 3];
     let interleaved = run_in_fresh_thread(move || run_workload(POLYGLOT_CORPUS, &rr_order));
     assert_eq!(batched, interleaved);
-    // Discriminant sanity: literal cells hit their decl lines; langs detected.
     let literal_lines: Vec<Vec<u32>> = batched
         .0
         .iter()
@@ -312,150 +428,56 @@ fn many_lang_batched_vs_round_robin() {
             Some(Language::TypeScript),
         ]
     );
-}
 
-#[test]
-fn many_lang_forward_vs_reverse_pipeline() {
-    let n = POLYGLOT_CORPUS.len();
-    let forward =
-        run_in_fresh_thread(move || run_workload(POLYGLOT_CORPUS, &canonical_order(n)));
-    let reverse =
-        run_in_fresh_thread(move || run_workload(POLYGLOT_CORPUS, &reversed_order(n)));
-    assert_eq!(forward, reverse);
-    // Structural lane discriminates per language (non-empty somewhere).
+    // Leg 3 (forward vs reverse): polyglot workload identical; structural
+    // lane discriminates per language.
+    let fwd = run_in_fresh_thread(move || run_workload(POLYGLOT_CORPUS, &canonical_order(n)));
+    let rev = run_in_fresh_thread(move || run_workload(POLYGLOT_CORPUS, &reversed_order(n)));
+    assert_eq!(fwd, rev);
     assert!(
-        forward
-            .0
+        fwd.0
             .iter()
             .any(|o| !o.hits_per_pattern[1].is_empty())
     );
-    assert_eq!(forward.1.len(), n);
-}
+    assert_eq!(fwd.1.len(), n);
 
-// ---------------------------------------------------------------------------
-// Drills: unsupported-language mix
-// ---------------------------------------------------------------------------
-
-#[test]
-fn unsupported_mix_supported_first_vs_unsupported_first() {
-    let n = MIXED_CORPUS.len();
-    // Supported-first: JS, Rust, Python, then Swift. Unsupported-first: Swift
-    // cell leads so uncovered-grammar keys populate before covered ones.
-    let supported_first = vec![0usize, 3, 2, 1];
-    let unsupported_first = vec![1usize, 0, 2, 3];
-    let a = run_in_fresh_thread(move || run_workload(MIXED_CORPUS, &supported_first));
-    let b = run_in_fresh_thread(move || run_workload(MIXED_CORPUS, &unsupported_first));
-    let canon = run_in_fresh_thread(move || run_workload(MIXED_CORPUS, &canonical_order(n)));
-    assert_eq!(a, b);
-    assert_eq!(a, canon);
-    // Discriminant sanity: the JS/Swift if-cond answerability delta holds
-    // end-to-end under every population order.
-    assert!(a.0[0].answerable_per_pattern[0]);
-    assert!(!a.0[1].answerable_per_pattern[0]);
-    assert_eq!(a.0[0].hits_per_pattern[0], vec![1]);
-    assert_eq!(a.0[2].fallback_per_pattern[2], true);
-}
-
-#[test]
-fn unsupported_mix_warmed_caches_match_cold() {
-    // Warm this thread with the unsupported-first schedule plus junk growth,
-    // then re-run canonical; must equal a cold canonical thread.
-    let n = MIXED_CORPUS.len();
-    let unsupported_first = vec![1usize, 0, 3, 2];
-    let _ = run_workload(MIXED_CORPUS, &unsupported_first);
-    for pattern in ["$P + $Q", "yield $X", "while ($C) { $B }", "interface $N"] {
-        let _ = needs_ast_grep_fallback(pattern);
-        let _ = cached_pattern_signatures(pattern);
-        let _ = native_pattern_answerable(Language::Swift, pattern);
-    }
-    let warmed = run_workload(MIXED_CORPUS, &canonical_order(n));
-    let cold = run_in_fresh_thread(move || run_workload(MIXED_CORPUS, &canonical_order(n)));
-    assert_eq!(warmed, cold);
-    assert_eq!(warmed.0[3].symbols, vec!["zeta"]);
-}
-
-// ---------------------------------------------------------------------------
-// Drill: adversarial interleave
-// ---------------------------------------------------------------------------
-
-#[test]
-fn adversarial_interleave_matches_canonical_pipeline() {
-    // Adversarial schedule: alternate literal/structural/if-cond/general
-    // lanes across languages, with junk growth injected between every cell,
-    // in a cold thread; must equal the canonical batched run.
-    let n = POLYGLOT_CORPUS.len();
-    let canonical =
-        run_in_fresh_thread(move || run_workload(POLYGLOT_CORPUS, &canonical_order(n)));
-    let adversarial = run_in_fresh_thread(move || {
-        let registry = ParserRegistry::new();
-        let junk = [
-            (Language::Rust, "fn junk() {}\n", "junk"),
-            (
-                Language::JavaScript,
-                "if (junk) { foo(); }\n",
-                "if (junk) { $$$ }",
-            ),
-            (
-                Language::JavaScript,
-                "function f() {\n  return 1;\n}\n",
-                "return $X",
-            ),
-            (Language::Python, "def junk():\n    pass\n", "class $NAME"),
-        ];
-        // Hostile cell order: structural-heavy cells first, reversed within.
-        let order = vec![4usize, 2, 0, 3, 1];
-        let mut back: Vec<Option<FileOutcome>> =
-            Vec::from_iter((0..n).map(|_| None));
-        for (step, cell_idx) in order.iter().enumerate() {
-            // Poison a different cache genus between every pipeline cell.
-            let (lang, src, pattern) = junk[step % junk.len()];
-            let _ = registry.parse(lang, src);
-            let _ = match_pattern(lang, src, pattern);
-            let _ = native_pattern_answerable(lang, pattern);
-            let _ = needs_ast_grep_fallback(pattern);
-            let _ = cached_pattern_signatures(pattern);
-            back[*cell_idx] = Some(run_cell(&registry, &POLYGLOT_CORPUS[*cell_idx]));
-        }
-        let outcomes: Vec<FileOutcome> = back.into_iter().map(|o| o.unwrap()).collect();
-        let ranking = rank(&outcomes);
-        (outcomes, ranking)
-    });
-    assert_eq!(canonical, adversarial);
-    // Discriminant sanity: ranking is score-ordered and total order holds.
-    let scores: Vec<u64> = canonical.0.iter().map(|o| o.score).collect();
-    let mut ranked_scores: Vec<u64> = canonical
-        .1
-        .iter()
-        .map(|p| canonical.0.iter().find(|o| &o.path == p).unwrap().score)
-        .collect();
-    let mut sorted = scores.clone();
-    sorted.sort_by(|a, b| b.cmp(a));
-    ranked_scores.sort_by(|a, b| b.cmp(a));
-    assert_eq!(ranked_scores, sorted);
-}
-
-// ---------------------------------------------------------------------------
-// Drill: end-to-end repeat stability on warmed caches
-// ---------------------------------------------------------------------------
-
-#[test]
-fn end_to_end_pipeline_repeat_is_stable() {
-    // The full detect->parse->match->extract->score->rank workload, run
-    // three times on one warmed thread, is identical every round.
-    let n = MIXED_CORPUS.len();
-    let first = run_workload(MIXED_CORPUS, &canonical_order(n));
+    // Leg 4 (repetition with hand oracles): three rounds on one warmed
+    // thread are identical AND hand-pinned every round (symbols, lines,
+    // answerability delta, fallback verdict) — no oracle-less equality-only
+    // assert remains.
+    let m = MIXED_CORPUS.len();
+    let first = run_workload(MIXED_CORPUS, &canonical_order(m));
+    let assert_mixed_oracles = |outcomes: &[FileOutcome]| {
+        assert_eq!(outcomes[3].symbols, vec!["zeta"]);
+        assert_eq!(outcomes[0].hits_per_pattern[0], vec![1]);
+        assert_eq!(outcomes[0].hits_per_pattern[1], vec![2]);
+        assert!(outcomes[0].answerable_per_pattern[0]);
+        assert!(!outcomes[1].answerable_per_pattern[0]);
+        assert!(outcomes[2].fallback_per_pattern[2]);
+        assert!(outcomes[3].fallback_per_pattern[2]);
+    };
+    assert_mixed_oracles(&first.0);
     for _ in 0..2 {
-        assert_eq!(run_workload(MIXED_CORPUS, &canonical_order(n)), first);
+        let round = run_workload(MIXED_CORPUS, &canonical_order(m));
+        assert_mixed_oracles(&round.0);
+        assert_eq!(round, first);
     }
-    let poly_n = POLYGLOT_CORPUS.len();
-    let poly_first = run_workload(POLYGLOT_CORPUS, &canonical_order(poly_n));
+    let poly_first = run_workload(POLYGLOT_CORPUS, &canonical_order(n));
+    let assert_poly_oracles = |outcomes: &[FileOutcome]| {
+        let lit: Vec<Vec<u32>> = outcomes
+            .iter()
+            .map(|o| o.hits_per_pattern[0].clone())
+            .collect();
+        assert_eq!(lit, vec![vec![1], vec![1], vec![1], vec![3], vec![1]]);
+        assert_eq!(outcomes[0].symbols, vec!["zeta", "Widget"]);
+        assert_eq!(outcomes[3].symbols, vec!["zeta"]);
+    };
+    assert_poly_oracles(&poly_first.0);
     for _ in 0..2 {
-        assert_eq!(
-            run_workload(POLYGLOT_CORPUS, &canonical_order(poly_n)),
-            poly_first
-        );
+        let round = run_workload(POLYGLOT_CORPUS, &canonical_order(n));
+        assert_poly_oracles(&round.0);
+        assert_eq!(round, poly_first);
     }
-    // Discriminant sanity: the two workloads rank different leaders.
     assert!(!first.1.is_empty());
     assert!(!poly_first.1.is_empty());
 }

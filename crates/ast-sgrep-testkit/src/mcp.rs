@@ -652,3 +652,152 @@ pub fn corrupt_index_db(root: &Path) -> Vec<u8> {
     assert!(db.is_file(), "expected an index db at {}", db.display());
     crate::fault::write_garbage(&db)
 }
+
+/// INTENT: one-shot single-call fresh-process convenience over
+/// [`rpc_session`]. One canonical copy of the helper duplicated across the
+/// `tests/mcp/invalidation_*` suites.
+pub fn rpc_at(payload: Value, root: &Path) -> Value {
+    let mut responses = rpc_session(vec![payload], Some(root));
+    responses.pop().expect("one response")
+}
+
+/// INTENT: canonical `keyword_search` envelope (limit 8, resend_seen) shared
+/// by every invalidation phase so query shape cannot drift per test. One
+/// canonical copy of the helper duplicated across the suites.
+pub fn search_call(id: u32, query: &str) -> Value {
+    tool_call(
+        id,
+        "keyword_search",
+        json!({"query": query, "limit": 8, "resend_seen": true}),
+    )
+}
+
+/// INTENT: hit body-shape discriminant (no `why` + `zn >= 1` + nonempty `h`).
+/// One canonical copy of the helper triplicated across the suites.
+pub fn assert_hit_envelope(body: &Value) {
+    assert!(body.get("why").is_none(), "hit must carry no why: {body:#}");
+    assert!(
+        body["zn"].as_u64().unwrap_or(0) >= 1,
+        "hit must count >= 1: {body:#}"
+    );
+    assert!(
+        !body["h"].as_array().expect("hit h array").is_empty(),
+        "hit h must be nonempty: {body:#}"
+    );
+}
+
+/// INTENT: miss body-shape discriminant for one `why` code (`why` + `zn == 0`
+/// + empty `h`). One canonical copy of the helper triplicated across the
+/// suites.
+pub fn assert_miss_envelope(body: &Value, why: &str) {
+    assert_eq!(body["why"], why, "{body:#}");
+    assert_eq!(body["zn"], 0, "{body:#}");
+    assert_eq!(body["h"], json!([]), "{body:#}");
+}
+
+/// INTENT: id-tracking live session over [`LiveSession`] — the strictest of
+/// the three suite copies (spawn/call/finish plus the `search_text` /
+/// `status_text` / `refresh` convenience the drills add). Reads ride the 15s
+/// `recv` bound, `finish` rides the 15s `wait_clean` bound.
+pub struct CallSession {
+    inner: LiveSession,
+    next_id: u32,
+}
+
+impl CallSession {
+    /// Spawn the server at `root` and run the `initialize` handshake.
+    pub fn spawn(root: &Path) -> Self {
+        let mut inner = LiveSession::spawn(Some(root));
+        inner.handshake();
+        Self { inner, next_id: 1 }
+    }
+
+    /// Send one `tools/call` with the next id, read its response, assert the
+    /// id echo.
+    pub fn call(&mut self, name: &str, arguments: Value) -> Value {
+        let id = self.next_id;
+        self.next_id += 1;
+        self.inner.send(&tool_call(id, name, arguments));
+        let response = self.inner.recv();
+        assert_eq!(response["id"], id, "{response:#}");
+        response
+    }
+
+    /// Successful lexical search; returns the raw body bytes.
+    pub fn search_text(&mut self, query: &str) -> String {
+        let response = self.call(
+            "keyword_search",
+            json!({"query": query, "limit": 8, "resend_seen": true}),
+        );
+        assert_tool_success(&response);
+        tool_text(&response).to_owned()
+    }
+
+    /// Successful status call; returns the raw body bytes.
+    pub fn status_text(&mut self) -> String {
+        let response = self.call("index_status", json!({}));
+        assert_tool_success(&response);
+        tool_text(&response).to_owned()
+    }
+
+    /// Successful in-session refresh; returns the stats body.
+    pub fn refresh(&mut self) -> Value {
+        let response = self.call("index_repo", json!({}));
+        assert_tool_success(&response);
+        tool_body(&response)
+    }
+
+    /// Close stdin, wait (bounded), and assert a clean exit.
+    pub fn finish(mut self) {
+        self.inner.close_stdin();
+        let status = self.inner.wait_clean();
+        assert!(status.success(), "MCP exited {status}");
+    }
+}
+
+/// INTENT: hit paths projected through the compact `p` table exactly as the
+/// server resolves them, pinning `zn ==` row-count plus table `==` hit-paths
+/// (the old-path-leaves-table discriminant). One canonical copy of the helper
+/// duplicated across the suites (comment-only drift; strictest comment kept).
+/// Needs the `plugins` feature for the compact-path resolver.
+#[cfg(feature = "plugins")]
+pub fn hit_path_set(body: &Value) -> std::collections::BTreeSet<String> {
+    let table: std::collections::HashMap<String, String> =
+        ast_sgrep_plugins::resolve_compact_paths(body)
+            .into_iter()
+            .collect();
+    // The `p` table must name exactly the hit paths: no stale extras.
+    let table_paths: std::collections::BTreeSet<String> = table.values().cloned().collect();
+    let hits = body["h"].as_array().expect("hit h array");
+    assert_eq!(
+        body["zn"].as_u64().unwrap_or(u64::MAX),
+        hits.len() as u64,
+        "zn must equal hit rows: {body:#}"
+    );
+    let mut paths = std::collections::BTreeSet::new();
+    for row in hits {
+        let id = row[0].as_str().expect("hit id string");
+        let (path_id, _) = id.rsplit_once(':').expect("compact id carries range");
+        let path = table
+            .get(path_id)
+            .unwrap_or_else(|| panic!("path id {path_id} must resolve in p table: {body:#}"))
+            .clone();
+        paths.insert(path);
+    }
+    assert_eq!(
+        table_paths, paths,
+        "p table must name exactly the hit paths: {body:#}"
+    );
+    paths
+}
+
+/// INTENT: hit envelope whose every hit resolves under exactly `expected`
+/// paths. One canonical copy of the helper duplicated across the suites.
+/// Needs the `plugins` feature (see [`hit_path_set`]).
+#[cfg(feature = "plugins")]
+pub fn assert_hit_path_set(body: &Value, expected: &[&str]) {
+    assert_hit_envelope(body);
+    let want: std::collections::BTreeSet<String> =
+        expected.iter().map(ToString::to_string).collect();
+    assert_eq!(hit_path_set(body), want, "{body:#}");
+}

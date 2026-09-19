@@ -1,41 +1,28 @@
-//! I4 invalidation-contract oracles: END-TO-END change→detect→refresh→serve drills.
+//! Canonical core invalidation suite: END-TO-END DRILLS (I4).
 //!
-//! Scope: FULL drills through public APIs only. Every test runs the same
-//! five-phase loop against a populated index that is already serving queries:
+//! Implements `tests/catalog/invalidation-core.md` for pass 4: matrix target
+//! `M-drill` (one test over the four single-delta-class e2e loops) plus the 3
+//! KEEP drills (chain / rapid-succession / resurrection) as standalone tests.
+//! Every drill runs the five-phase loop — SERVE baseline → CHANGE → DETECT
+//! (frozen) → REFRESH → SERVE (exact new hit sets) — through public APIs only,
+//! and no drill is meaningful with any phase removed.
 //!
-//! 1. SERVE baseline — the populated index answers queries with exact hit sets.
-//! 2. CHANGE — a real filesystem mutation (add / modify / delete / rename).
-//! 3. DETECT — staleness is proven WITHOUT refreshing: the stored
-//!    `index_data_version`, the stored `status()` counts, and the
-//!    `writer_generation` stamp are all byte-frozen while the live tree has
-//!    moved on, and serve still answers the pre-change world (stale hits
-//!    linger, new hits are invisible).
-//! 4. REFRESH — one explicit `index_all` absorbs the pending delta(s).
-//! 5. SERVE — search proves the EXACT new hit sets (exact file vectors,
-//!    exact literal spots, emptiness of retired symbols), the generation
-//!    moved by exactly the mutated-file count, and stored counts match the
-//!    live tree.
-//!
-//! Non-duplication vs `invalidation_pass1/2/3.rs`: I1 pins staleness
-//! DETECTION discriminants in isolation (epochs, mtime gates, schema refusal,
-//! routing); I2 pins single-delta search CONSEQUENCES (before/after hit
-//! sets); I3 pins cross-strategy RELATIONS (incremental/full parity, order
-//! independence, idempotence, monotonicity). I4 pins the full LOOP: no test
-//! here is meaningful with any phase removed — each asserts the frozen
-//! detect-phase AND the exact serve-phase around the same change.
+//! Absorption map:
+//! - M-drill absorbs `drill_add_new_file_end_to_end`,
+//!   `drill_modify_file_end_to_end`, `drill_delete_file_end_to_end`,
+//!   `drill_rename_file_end_to_end`.
+//! - KEEPs: `drill_chained_multi_change_single_refresh`,
+//!   `drill_rapid_succession_change_refresh_change_refresh`,
+//!   `drill_delete_then_readd_same_path_end_to_end`.
 //!
 //! Determinism: MODIFY changes forge explicit whole-second mtimes with
-//! read-back preconditions (same technique as I1/I2/I3), so change detection
-//! never depends on filesystem timestamp granularity. No wall-clock sleeps.
+//! read-back preconditions via testkit `set_mtime_secs`. No wall-clock sleeps.
 //! Hermeticity: every open uses an explicit `index_path` outside the corpus
 //! root, so no test depends on ambient `ASGREP_*` routing. Assertions cover
 //! hit sets, counts, and generations only — never message text.
 
-use ast_sgrep_core::{
-    HitKind, IndexOptions, IndexStats, IndexStore, Indexer, SearchOptions, Searcher,
-};
+use ast_sgrep_testkit::{set_mtime_secs, InvalidationFixture as Fx};
 use std::path::{Path, PathBuf};
-use std::time::{Duration, UNIX_EPOCH};
 
 /// Fixed whole-second stamps (nanos = 0 survives every filesystem timestamp
 /// granularity). MODIFY drills forge T0 at creation, T1 (then T2) after each
@@ -44,27 +31,13 @@ const WHOLE_SECOND_T0: u64 = 1_700_000_000;
 const WHOLE_SECOND_T1: u64 = 1_700_003_600;
 const WHOLE_SECOND_T2: u64 = 1_700_007_200;
 
-fn set_mtime_checked(path: &Path, secs: u64) {
-    let time = UNIX_EPOCH + Duration::new(secs, 0);
-    std::fs::OpenOptions::new()
-        .write(true)
-        .open(path)
-        .unwrap()
-        .set_modified(time)
-        .unwrap();
-    assert_eq!(
-        path.metadata().unwrap().modified().unwrap(),
-        time,
-        "filesystem must store the forged mtime exactly"
-    );
-}
-
-struct Fx {
-    _corpus: tempfile::TempDir,
-    _index: tempfile::TempDir,
-    root: PathBuf,
-    db: PathBuf,
-}
+// Drills ride the shared hermetic fixture from testkit
+// (`core_invalidation::InvalidationFixture`, aliased to the file's `Fx`
+// vocabulary); the frozen-state detection snapshot below is the only
+// file-local surface.
+// WHY area-local: e2e-drill detection snapshot (generation + counts + writer
+// stamp) plus the live-tree ground-truth walk — single-suite companions to
+// the promoted fixture.
 
 /// Snapshot of the staleness-detection surface: stored generation, stored
 /// row counts, and the cross-process writer stamp.
@@ -74,141 +47,31 @@ struct DetectionSnap {
     writer: u64,
 }
 
-impl Fx {
-    fn new() -> Self {
-        let corpus = tempfile::tempdir().unwrap();
-        let index = tempfile::tempdir().unwrap();
-        let root = corpus.path().to_path_buf();
-        std::fs::create_dir_all(root.join("src")).unwrap();
-        let db = index.path().join("index.db");
-        Self {
-            _corpus: corpus,
-            _index: index,
-            root,
-            db,
-        }
-    }
+trait DrillFixtureExt {
+    fn writer_epoch(&self) -> u64;
+    fn snapshot(&self) -> DetectionSnap;
+    /// The DETECT phase: after a filesystem change but before any refresh,
+    /// the whole stored detection surface must be frozen — the index has no
+    /// idea the tree moved.
+    fn assert_frozen(&self, snap: &DetectionSnap);
+    /// Sorted rel paths of live `.rs` files under the root (the ground truth
+    /// the stored counts are stale against).
+    fn live_rs_files(&self) -> Vec<String>;
+}
 
-    fn write(&self, rel: &str, content: &str) -> PathBuf {
-        let abs = self.root.join(rel);
-        if let Some(parent) = abs.parent() {
-            std::fs::create_dir_all(parent).unwrap();
-        }
-        std::fs::write(&abs, content).unwrap();
-        abs
-    }
-
-    fn reindex(&self) -> IndexStats {
-        Indexer::new(IndexOptions {
-            root: self.root.clone(),
-            index_path: Some(self.db.clone()),
-            use_tantivy: false,
-            embed_semantic: false,
-            ..IndexOptions::default()
-        })
-        .unwrap()
-        .index_all()
-        .unwrap()
-    }
-
-    fn searcher(&self) -> Searcher {
-        Searcher::new(SearchOptions {
-            root: self.root.clone(),
-            index_path: Some(self.db.clone()),
-            limit: 256,
-            use_embed: false,
-            ..SearchOptions::default()
-        })
-        .unwrap()
-    }
-
-    /// Sorted `file` values of Def hits whose symbol is exactly `symbol`.
-    fn def_files(&self, symbol: &str) -> Vec<String> {
-        let query = format!("defs:{symbol}");
-        let mut files: Vec<String> = self
-            .searcher()
-            .search(&query)
-            .unwrap()
-            .hits
-            .iter()
-            .filter(|h| h.kind == HitKind::Def && h.symbol.as_deref() == Some(symbol))
-            .map(|h| h.file.clone())
-            .collect();
-        files.sort();
-        files
-    }
-
-    /// Sorted `(file, line_start)` spots for a `literal:` query (all hits).
-    fn literal_spots(&self, token: &str) -> Vec<(String, u32)> {
-        let query = format!("literal:{token}");
-        let mut spots: Vec<(String, u32)> = self
-            .searcher()
-            .search(&query)
-            .unwrap()
-            .hits
-            .iter()
-            .map(|h| (h.file.clone(), h.line_start))
-            .collect();
-        spots.sort();
-        spots
-    }
-
-    /// Sorted `file` values of Caller hits whose callee is exactly `callee`.
-    fn caller_files(&self, callee: &str) -> Vec<String> {
-        let query = format!("callers:{callee}");
-        let mut files: Vec<String> = self
-            .searcher()
-            .search(&query)
-            .unwrap()
-            .hits
-            .iter()
-            .filter(|h| h.kind == HitKind::Caller && h.callee.as_deref() == Some(callee))
-            .map(|h| h.file.clone())
-            .collect();
-        files.sort();
-        files
-    }
-
-    fn generation(&self) -> i64 {
-        IndexStore::open(&self.root, Some(&self.db))
-            .unwrap()
-            .index_data_version()
-            .unwrap()
-    }
-
-    fn counts(&self) -> (usize, usize, usize, usize, usize) {
-        let status = IndexStore::open(&self.root, Some(&self.db))
-            .unwrap()
-            .status()
-            .unwrap();
-        (
-            status.file_count,
-            status.line_count,
-            status.symbol_count,
-            status.caller_count,
-            status.import_count,
-        )
-    }
-
+impl DrillFixtureExt for Fx {
     fn writer_epoch(&self) -> u64 {
-        IndexStore::open(&self.root, Some(&self.db))
-            .unwrap()
-            .status()
-            .unwrap()
-            .writer_generation
+        self.open_store().status().unwrap().writer_generation
     }
 
     fn snapshot(&self) -> DetectionSnap {
         DetectionSnap {
             generation: self.generation(),
-            counts: self.counts(),
+            counts: self.stored_counts(),
             writer: self.writer_epoch(),
         }
     }
 
-    /// The DETECT phase: after a filesystem change but before any refresh,
-    /// the whole stored detection surface must be frozen — the index has no
-    /// idea the tree moved.
     fn assert_frozen(&self, snap: &DetectionSnap) {
         assert_eq!(
             self.generation(),
@@ -216,7 +79,7 @@ impl Fx {
             "stored generation must be frozen until a refresh runs"
         );
         assert_eq!(
-            self.counts(),
+            self.stored_counts(),
             snap.counts,
             "stored counts must be frozen until a refresh runs"
         );
@@ -227,8 +90,6 @@ impl Fx {
         );
     }
 
-    /// Sorted rel paths of live `.rs` files under the root (the ground truth
-    /// the stored counts are stale against).
     fn live_rs_files(&self) -> Vec<String> {
         fn visit(dir: &Path, root: &Path, out: &mut Vec<String>) {
             let mut entries: Vec<PathBuf> = std::fs::read_dir(dir)
@@ -251,10 +112,12 @@ impl Fx {
     }
 }
 
-// ---- drill: ADD ----
+// ---- M-drill: serve→change→detect→refresh→serve per delta class ----
 
-#[test]
-fn drill_add_new_file_end_to_end() {
+/// Phase absorbed from `drill_add_new_file_end_to_end`: e2e ADD loop — exact
+/// baseline serve → frozen detect (live tree outruns stored count, new symbol
+/// invisible) → +1 refresh → exact new serve.
+fn drill_phase_add() {
     let fx = Fx::new();
     fx.write("src/a.rs", "fn i4_add_alpha() { let _t = \"tokalphaa\"; }\n");
     assert_eq!(fx.reindex().files_indexed, 1);
@@ -296,7 +159,7 @@ fn drill_add_new_file_end_to_end() {
     // SERVE proves the exact new hit sets.
     assert_eq!(fx.generation(), snap.generation + 1);
     assert_ne!(fx.writer_epoch(), snap.writer);
-    assert_eq!(fx.counts().0, 2);
+    assert_eq!(fx.stored_counts().0, 2);
     assert_eq!(fx.def_files("i4_add_beta"), vec!["src/b.rs".to_string()]);
     assert_eq!(
         fx.literal_spots("tokbetaab"),
@@ -309,13 +172,13 @@ fn drill_add_new_file_end_to_end() {
     );
 }
 
-// ---- drill: MODIFY ----
-
-#[test]
-fn drill_modify_file_end_to_end() {
+/// Phase absorbed from `drill_modify_file_end_to_end`: e2e MODIFY loop
+/// including same-count undetectability (retired symbol lingers, new symbol
+/// invisible pre-refresh).
+fn drill_phase_modify() {
     let fx = Fx::new();
     let abs = fx.write("src/a.rs", "fn i4_mod_old() { let _t = \"tokmodold\"; }\n");
-    set_mtime_checked(&abs, WHOLE_SECOND_T0);
+    set_mtime_secs(&abs, WHOLE_SECOND_T0);
     fx.write("src/b.rs", "fn i4_mod_sib() { let _t = \"tokmodstbl\"; }\n");
     assert_eq!(fx.reindex().files_indexed, 2);
 
@@ -334,7 +197,7 @@ fn drill_modify_file_end_to_end() {
 
     // CHANGE: real new bytes on disk with a forged newer mtime.
     fx.write("src/a.rs", "fn i4_mod_new() { let _t = \"tokmodnew\"; }\n");
-    set_mtime_checked(&abs, WHOLE_SECOND_T1);
+    set_mtime_secs(&abs, WHOLE_SECOND_T1);
 
     // DETECT: same file count, so staleness shows in frozen state + stale
     // serve — the retired symbol lingers, the new one is invisible.
@@ -363,7 +226,7 @@ fn drill_modify_file_end_to_end() {
     // SERVE proves the exact new hit sets.
     assert_eq!(fx.generation(), snap.generation + 1);
     assert_ne!(fx.writer_epoch(), snap.writer);
-    assert_eq!(fx.counts().0, 2);
+    assert_eq!(fx.stored_counts().0, 2);
     assert!(fx.def_files("i4_mod_old").is_empty());
     assert!(fx.literal_spots("tokmodold").is_empty());
     assert_eq!(fx.def_files("i4_mod_new"), vec!["src/a.rs".to_string()]);
@@ -378,10 +241,9 @@ fn drill_modify_file_end_to_end() {
     );
 }
 
-// ---- drill: DELETE ----
-
-#[test]
-fn drill_delete_file_end_to_end() {
+/// Phase absorbed from `drill_delete_file_end_to_end`: e2e DELETE loop —
+/// dead-file hits linger pre-refresh, vanish post-refresh with generation +1.
+fn drill_phase_delete() {
     let fx = Fx::new();
     fx.write("src/a.rs", "fn i4_doomed() { let _t = \"tokdoomed\"; }\n");
     fx.write("src/b.rs", "fn i4_survivor() { let _t = \"toksurvive\"; }\n");
@@ -420,7 +282,7 @@ fn drill_delete_file_end_to_end() {
     // SERVE proves the exact new hit sets.
     assert_eq!(fx.generation(), snap.generation + 1);
     assert_ne!(fx.writer_epoch(), snap.writer);
-    assert_eq!(fx.counts().0, 1);
+    assert_eq!(fx.stored_counts().0, 1);
     assert!(fx.def_files("i4_doomed").is_empty());
     assert!(fx.literal_spots("tokdoomed").is_empty());
     assert_eq!(fx.def_files("i4_survivor"), vec!["src/b.rs".to_string()]);
@@ -430,10 +292,10 @@ fn drill_delete_file_end_to_end() {
     );
 }
 
-// ---- drill: RENAME ----
-
-#[test]
-fn drill_rename_file_end_to_end() {
+/// Phase absorbed from `drill_rename_file_end_to_end`: e2e RENAME loop —
+/// stale serve under the dead path, refresh removes+upserts, generation +2
+/// (rename = two mutations).
+fn drill_phase_rename() {
     let fx = Fx::new();
     fx.write(
         "src/old_name.rs",
@@ -482,7 +344,7 @@ fn drill_rename_file_end_to_end() {
         "a rename mutates two rows: one removal + one upsert"
     );
     assert_ne!(fx.writer_epoch(), snap.writer);
-    assert_eq!(fx.counts().0, 2);
+    assert_eq!(fx.stored_counts().0, 2);
     assert_eq!(
         fx.def_files("i4_roamer"),
         vec!["src/new_name.rs".to_string()]
@@ -494,8 +356,28 @@ fn drill_rename_file_end_to_end() {
     assert_eq!(fx.def_files("i4_ren_sib"), vec!["src/sib.rs".to_string()]);
 }
 
-// ---- drill: chained multi-change absorbed by one refresh ----
+/// INTENT (M-drill): e2e serve→change→detect→refresh→serve loop per single
+/// delta class — ADD (live tree outruns stored count, +1), MODIFY
+/// (same-count undetectability, +1), DELETE (dead hits linger then vanish,
+/// +1), RENAME (stale serve under the dead path, +2 for remove+upsert).
+/// KILLS: add-loop-break / modify-loop-break / delete-loop-break /
+/// rename-loop / rename-counted-once mutants.
+/// ABSORBS: `drill_add_new_file_end_to_end`, `drill_modify_file_end_to_end`,
+/// `drill_delete_file_end_to_end`, `drill_rename_file_end_to_end` (4 → 1).
+#[test]
+fn drill_matrix_serve_change_detect_refresh_serve_per_delta_class() {
+    drill_phase_add();
+    drill_phase_modify();
+    drill_phase_delete();
+    drill_phase_rename();
+}
 
+// ---- KEEP drills: chain / rapid succession / resurrection ----
+
+/// INTENT: One refresh absorbs a modify+delete+rename+add chain (+5) with
+/// exact converged sets including caller-edge carry to the renamed path.
+/// KILLS: multi-class-interaction mutants.
+/// ABSORBS: none (KEEP — standalone intent).
 #[test]
 fn drill_chained_multi_change_single_refresh() {
     let fx = Fx::new();
@@ -503,7 +385,7 @@ fn drill_chained_multi_change_single_refresh() {
         "src/a.rs",
         "fn i4_chain_old() { let _t = \"tokchainold\"; }\n",
     );
-    set_mtime_checked(&abs_a, WHOLE_SECOND_T0);
+    set_mtime_secs(&abs_a, WHOLE_SECOND_T0);
     fx.write("src/b.rs", "fn i4_chain_gone() {}\n");
     fx.write("src/c.rs", "fn i4_chain_roam() { i4_chain_old(); }\n");
     assert_eq!(fx.reindex().files_indexed, 3);
@@ -523,7 +405,7 @@ fn drill_chained_multi_change_single_refresh() {
 
     // CHAIN: one of every delta class lands before any refresh runs.
     fx.write("src/a.rs", "fn i4_chain_new() { let _t = \"tokchainnew\"; }\n");
-    set_mtime_checked(&abs_a, WHOLE_SECOND_T1);
+    set_mtime_secs(&abs_a, WHOLE_SECOND_T1);
     std::fs::remove_file(fx.root.join("src/b.rs")).unwrap();
     std::fs::rename(fx.root.join("src/c.rs"), fx.root.join("src/z.rs")).unwrap();
     fx.write("src/d.rs", "fn i4_chain_added() {}\n");
@@ -549,7 +431,7 @@ fn drill_chained_multi_change_single_refresh() {
     assert_eq!(stats.files_removed, 2, "b-deleted + c-moved");
     assert_eq!(fx.generation(), snap.generation + 5);
     assert_ne!(fx.writer_epoch(), snap.writer);
-    assert_eq!(fx.counts().0, 3);
+    assert_eq!(fx.stored_counts().0, 3);
 
     // SERVE proves the exact converged hit sets.
     assert!(fx.def_files("i4_chain_old").is_empty());
@@ -576,13 +458,15 @@ fn drill_chained_multi_change_single_refresh() {
     );
 }
 
-// ---- drill: rapid succession converges ----
-
+/// INTENT: Back-to-back modify cycles each detect/refresh/serve and converge
+/// on the latest content only.
+/// KILLS: cycle-linger / convergence mutants.
+/// ABSORBS: none (KEEP — standalone intent).
 #[test]
 fn drill_rapid_succession_change_refresh_change_refresh() {
     let fx = Fx::new();
     let abs = fx.write("src/a.rs", "fn i4_rapid_v1() { let _t = \"tokrapv1\"; }\n");
-    set_mtime_checked(&abs, WHOLE_SECOND_T0);
+    set_mtime_secs(&abs, WHOLE_SECOND_T0);
     fx.write("src/b.rs", "fn i4_rapid_anchor() {}\n");
     assert_eq!(fx.reindex().files_indexed, 2);
     assert_eq!(fx.def_files("i4_rapid_v1"), vec!["src/a.rs".to_string()]);
@@ -590,7 +474,7 @@ fn drill_rapid_succession_change_refresh_change_refresh() {
 
     // Cycle 1: modify -> detect -> refresh -> serve.
     fx.write("src/a.rs", "fn i4_rapid_v2() { let _t = \"tokrapv2\"; }\n");
-    set_mtime_checked(&abs, WHOLE_SECOND_T1);
+    set_mtime_secs(&abs, WHOLE_SECOND_T1);
     fx.assert_frozen(&snap0);
     assert_eq!(fx.def_files("i4_rapid_v1"), vec!["src/a.rs".to_string()]);
     assert!(fx.def_files("i4_rapid_v2").is_empty());
@@ -606,7 +490,7 @@ fn drill_rapid_succession_change_refresh_change_refresh() {
 
     // Cycle 2, immediately: modify again -> detect -> refresh -> serve.
     fx.write("src/a.rs", "fn i4_rapid_v3() { let _t = \"tokrapv3\"; }\n");
-    set_mtime_checked(&abs, WHOLE_SECOND_T2);
+    set_mtime_secs(&abs, WHOLE_SECOND_T2);
     fx.assert_frozen(&snap1);
     assert_eq!(
         fx.def_files("i4_rapid_v2"),
@@ -631,11 +515,13 @@ fn drill_rapid_succession_change_refresh_change_refresh() {
         fx.def_files("i4_rapid_anchor"),
         vec!["src/b.rs".to_string()]
     );
-    assert_eq!(fx.counts().0, 2);
+    assert_eq!(fx.stored_counts().0, 2);
 }
 
-// ---- drill: delete then re-add the same path ----
-
+/// INTENT: Path resurrection — delete→refresh→re-add of the same path with
+/// new content serves exactly the reborn hits (+1 per cycle).
+/// KILLS: resurrection-stale-row mutants.
+/// ABSORBS: none (KEEP — standalone intent).
 #[test]
 fn drill_delete_then_readd_same_path_end_to_end() {
     let fx = Fx::new();
@@ -656,7 +542,7 @@ fn drill_delete_then_readd_same_path_end_to_end() {
     assert_eq!(stats.files_indexed, 0);
     assert_eq!(fx.generation(), snap0.generation + 1);
     assert!(fx.def_files("i4_first_life").is_empty());
-    assert_eq!(fx.counts().0, 1);
+    assert_eq!(fx.stored_counts().0, 1);
     let snap1 = fx.snapshot();
 
     // Second life: re-add the SAME path with different content.
@@ -678,7 +564,7 @@ fn drill_delete_then_readd_same_path_end_to_end() {
     assert_eq!(stats.files_removed, 0);
     assert_eq!(fx.generation(), snap1.generation + 1);
     assert_ne!(fx.writer_epoch(), snap1.writer);
-    assert_eq!(fx.counts().0, 2);
+    assert_eq!(fx.stored_counts().0, 2);
     assert_eq!(
         fx.def_files("i4_second_life"),
         vec!["src/a.rs".to_string()]

@@ -117,17 +117,17 @@ path = "../../tests/cli/error_api_pass3.rs"
 name = "error_api_pass4"
 path = "../../tests/cli/error_api_pass4.rs"
 [[test]]
-name = "invalidation_pass1"
-path = "../../tests/cli/invalidation_pass1.rs"
+name = "invalidation_staleness"
+path = "../../tests/cli/invalidation_staleness.rs"
 [[test]]
-name = "invalidation_pass2"
-path = "../../tests/cli/invalidation_pass2.rs"
+name = "invalidation_deltas"
+path = "../../tests/cli/invalidation_deltas.rs"
 [[test]]
-name = "invalidation_pass3"
-path = "../../tests/cli/invalidation_pass3.rs"
+name = "invalidation_parity"
+path = "../../tests/cli/invalidation_parity.rs"
 [[test]]
-name = "invalidation_pass4"
-path = "../../tests/cli/invalidation_pass4.rs"
+name = "invalidation_drills"
+path = "../../tests/cli/invalidation_drills.rs"
 [[test]]
 name = "numerical_pass1"
 path = "../../tests/cli/numerical_pass1.rs"

@@ -73,17 +73,17 @@ path = "../../tests/codemode/error_api_pass3.rs"
 name = "error_api_pass4"
 path = "../../tests/codemode/error_api_pass4.rs"
 [[test]]
-name = "invalidation_pass1"
-path = "../../tests/codemode/invalidation_pass1.rs"
+name = "invalidation_freshness"
+path = "../../tests/codemode/invalidation_freshness.rs"
 [[test]]
-name = "invalidation_pass2"
-path = "../../tests/codemode/invalidation_pass2.rs"
+name = "invalidation_delta"
+path = "../../tests/codemode/invalidation_delta.rs"
 [[test]]
-name = "invalidation_pass3"
-path = "../../tests/codemode/invalidation_pass3.rs"
+name = "invalidation_parity"
+path = "../../tests/codemode/invalidation_parity.rs"
 [[test]]
-name = "invalidation_pass4"
-path = "../../tests/codemode/invalidation_pass4.rs"
+name = "invalidation_drills"
+path = "../../tests/codemode/invalidation_drills.rs"
 [[test]]
 name = "numerical_pass1"
 path = "../../tests/codemode/numerical_pass1.rs"

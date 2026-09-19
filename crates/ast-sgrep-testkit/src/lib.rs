@@ -11,7 +11,10 @@ mod cli_recovery;
 #[cfg(feature = "codemode")]
 mod codemode;
 #[cfg(feature = "codemode")]
+mod codemode_invalidation;
+#[cfg(feature = "codemode")]
 mod codemode_recovery;
+mod core_invalidation;
 mod core_oracle;
 mod core_recovery;
 mod fault;
@@ -54,11 +57,18 @@ pub use codemode::{
     SESSION_BUSY,
 };
 #[cfg(feature = "codemode")]
+pub use codemode_invalidation::{
+    external_reindex, find_limit8, hit_bytes, hit_count, hit_file_set, hit_files, hit_name_set,
+    hits_file, index_dir_db_path, search_limit8, seeded_py_repo, session_at_limit8,
+    status_file_count, status_writer_generation, targeted_refresh, write_py, SEEDED_ALPHA_TOKEN,
+};
+#[cfg(feature = "codemode")]
 pub use codemode_recovery::{
     db_user_version, indexed_codemode_repo, indexed_repo_files, load_batch_file, load_plan_file,
     remove_db_with_sidecars, serve_transcript_indexed, set_db_user_version, status_counts,
     twin_repos,
 };
+pub use core_invalidation::{hermetic_indexer, HitTuple, InvalidationFixture};
 pub use core_oracle::{
     build_core_index, core_index_options, core_search_options, core_searcher, finish_options,
     response_hit_keys_with_scores, searcher_at_root, sorted_hit_files, unit_channel_weights,
@@ -89,8 +99,8 @@ pub use index::{
 };
 pub use isolation::{isolated_index_session, with_temp_index, IsolatedIndexSession};
 pub use lang::{
-    assert_has_callee, assert_has_symbol, assert_language_conformance, parse, ExpectedCall,
-    ExpectedPattern, ExpectedSymbol, LanguageConformanceCase,
+    assert_has_callee, assert_has_symbol, assert_language_conformance, match_lines, parse,
+    run_in_fresh_thread, ExpectedCall, ExpectedPattern, ExpectedSymbol, LanguageConformanceCase,
 };
 pub use lang_pipeline::{
     assert_rank_sound, assert_spans_in_source, rank_hits, run_pipeline, score_hit, PipelineOutcome,
@@ -98,14 +108,17 @@ pub use lang_pipeline::{
 #[cfg(feature = "lsp")]
 pub use lsp::{edit_full_replace, edit_ranged, edit_ranged_len, lsp_search_hit_keys, sample_backend};
 pub use mcp::{
-    assert_jsonrpc_error, assert_ping_ok, assert_tool_error_shape, assert_tool_success,
-    assert_tool_success_shape, assert_tools_list_ok, big_tree, cancelled_notif, collect_responses,
-    corrupt_index_db, distinct_hit_paths, expected_tool_names, index_tree, indexed_tree,
-    init_payload, initialized_notif, is_error, mcp_bin, multi_hit_tree, ping, response_by_id,
-    rpc_pipeline, rpc_session, rpc_session_env, rpc_session_raw, small_tree,
-    spawn_raw_no_handshake, tool_body, tool_call, tool_error_discriminant, tool_text, tools_list,
-    LiveSession, TESTKIT_CLIENT_NAME,
+    assert_hit_envelope, assert_jsonrpc_error, assert_miss_envelope, assert_ping_ok,
+    assert_tool_error_shape, assert_tool_success, assert_tool_success_shape, assert_tools_list_ok,
+    big_tree, cancelled_notif, collect_responses, corrupt_index_db, distinct_hit_paths,
+    expected_tool_names, index_tree, indexed_tree, init_payload, initialized_notif, is_error,
+    mcp_bin, multi_hit_tree, ping, response_by_id, rpc_at, rpc_pipeline, rpc_session,
+    rpc_session_env, rpc_session_raw, search_call, small_tree, spawn_raw_no_handshake, tool_body,
+    tool_call, tool_error_discriminant, tool_text, tools_list, CallSession, LiveSession,
+    TESTKIT_CLIENT_NAME,
 };
+#[cfg(feature = "plugins")]
+pub use mcp::{assert_hit_path_set, hit_path_set};
 pub use num::{approx_eq, fold_rank_scored};
 pub use scrub::Scrubber;
 pub use verdict::TestVerdict;

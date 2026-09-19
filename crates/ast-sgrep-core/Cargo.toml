@@ -227,17 +227,17 @@ path = "../../tests/core/error_api_pass3.rs"
 name = "error_api_pass4"
 path = "../../tests/core/error_api_pass4.rs"
 [[test]]
-name = "invalidation_pass1"
-path = "../../tests/core/invalidation_pass1.rs"
+name = "invalidation_staleness"
+path = "../../tests/core/invalidation_staleness.rs"
 [[test]]
-name = "invalidation_pass2"
-path = "../../tests/core/invalidation_pass2.rs"
+name = "invalidation_delta_matrix"
+path = "../../tests/core/invalidation_delta_matrix.rs"
 [[test]]
-name = "invalidation_pass3"
-path = "../../tests/core/invalidation_pass3.rs"
+name = "invalidation_refresh"
+path = "../../tests/core/invalidation_refresh.rs"
 [[test]]
-name = "invalidation_pass4"
-path = "../../tests/core/invalidation_pass4.rs"
+name = "invalidation_drills"
+path = "../../tests/core/invalidation_drills.rs"
 [[test]]
 name = "numerical_pass1"
 path = "../../tests/core/numerical_pass1.rs"

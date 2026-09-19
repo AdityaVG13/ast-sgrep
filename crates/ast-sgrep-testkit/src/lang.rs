@@ -1,5 +1,6 @@
 use ast_sgrep_lang::{
-    match_pattern, tree_sitter_language, ExtractionResult, Language, ParserRegistry, SymbolKind,
+    match_pattern, tree_sitter_language, ExtractionResult, Language, ParserRegistry, PatternMatch,
+    SymbolKind,
 };
 use tree_sitter::Parser;
 
@@ -160,4 +161,19 @@ fn assert_spans(case: &LanguageConformanceCase, result: &ExtractionResult) {
             case.language
         );
     }
+}
+
+/// INTENT: `line_start` projection — the dominant discriminant for pattern-hit
+/// equality. One canonical copy of the helper duplicated across the
+/// `tests/lang/invalidation_*` suites. Pure projection.
+pub fn match_lines(hits: &[PatternMatch]) -> Vec<u32> {
+    hits.iter().map(|h| h.line_start).collect::<Vec<_>>()
+}
+
+/// INTENT: cold thread-local cache slots per order permutation — the core
+/// order-parity isolation primitive for the append-only lang caches. Runs `f`
+/// on a fresh thread (fresh thread-locals) and returns its value. One
+/// canonical copy of the helper duplicated across the suites.
+pub fn run_in_fresh_thread<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
+    std::thread::spawn(f).join().unwrap()
 }

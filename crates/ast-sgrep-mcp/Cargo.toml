@@ -28,7 +28,7 @@ serde_json.workspace = true
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "io-std", "sync", "time"] }
 
 [dev-dependencies]
-ast-sgrep-testkit = { path = "../ast-sgrep-testkit" }
+ast-sgrep-testkit = { path = "../ast-sgrep-testkit", features = ["plugins"] }
 tempfile.workspace = true
 
 # Integration tests live in the repo-root tests/ tree.
@@ -66,17 +66,14 @@ path = "../../tests/mcp/error_api_pass3.rs"
 name = "error_api_pass4"
 path = "../../tests/mcp/error_api_pass4.rs"
 [[test]]
-name = "invalidation_pass1"
-path = "../../tests/mcp/invalidation_pass1.rs"
+name = "invalidation_contract"
+path = "../../tests/mcp/invalidation_contract.rs"
 [[test]]
-name = "invalidation_pass2"
-path = "../../tests/mcp/invalidation_pass2.rs"
+name = "invalidation_matrix"
+path = "../../tests/mcp/invalidation_matrix.rs"
 [[test]]
-name = "invalidation_pass3"
-path = "../../tests/mcp/invalidation_pass3.rs"
-[[test]]
-name = "invalidation_pass4"
-path = "../../tests/mcp/invalidation_pass4.rs"
+name = "invalidation_drills"
+path = "../../tests/mcp/invalidation_drills.rs"
 [[test]]
 name = "numerical_pass1"
 path = "../../tests/mcp/numerical_pass1.rs"

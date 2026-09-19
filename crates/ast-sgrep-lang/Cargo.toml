@@ -77,17 +77,20 @@ path = "../../tests/lang/error_api_pass3.rs"
 name = "error_api_pass4"
 path = "../../tests/lang/error_api_pass4.rs"
 [[test]]
-name = "invalidation_pass1"
-path = "../../tests/lang/invalidation_pass1.rs"
+name = "invalidation_parser"
+path = "../../tests/lang/invalidation_parser.rs"
 [[test]]
-name = "invalidation_pass2"
-path = "../../tests/lang/invalidation_pass2.rs"
+name = "invalidation_templates"
+path = "../../tests/lang/invalidation_templates.rs"
 [[test]]
-name = "invalidation_pass3"
-path = "../../tests/lang/invalidation_pass3.rs"
+name = "invalidation_gates"
+path = "../../tests/lang/invalidation_gates.rs"
 [[test]]
-name = "invalidation_pass4"
-path = "../../tests/lang/invalidation_pass4.rs"
+name = "invalidation_orders"
+path = "../../tests/lang/invalidation_orders.rs"
+[[test]]
+name = "invalidation_drills"
+path = "../../tests/lang/invalidation_drills.rs"
 [[test]]
 name = "numerical_pass1"
 path = "../../tests/lang/numerical_pass1.rs"

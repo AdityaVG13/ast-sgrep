@@ -1,65 +1,36 @@
-//! I1 invalidation-contract oracles: STALENESS-DETECTION discriminants.
+//! Canonical core invalidation suite: STALENESS DETECTION (I1 KEEPs).
 //!
-//! Scope: writer-generation bump/read roundtrip + uniqueness; `index_data_version`
-//! exact-+1 monotonicity; mtime (secs,nanos) identity trust + the
-//! `mtime_identity_root` gate (within-root vs cross-root); schema-version
-//! staleness refusal (newer-than-binary on both open modes; stale lifecycle via
-//! peek/refuse/migrate); cache-home isolation + routing; index-status fresh /
-//! stale / empty / missing discriminants.
+//! Implements `tests/catalog/invalidation-core.md` for pass 1: all 13
+//! staleness-detection intents survive as standalone KEEP tests (writer
+//! epochs, `index_data_version` monotonicity, mtime-trust gates, schema
+//! refusal/migration, cache routing, stored-count status). No MERGE or DELETE
+//! verdicts apply to this file.
 //!
-//! Non-duplication vs prior art: `freshness_identity.rs` pins the sidecar-skip
-//! lever, byte-identical noop refresh, lexical fallback on generation change,
-//! git-head freshness, and the cross-connection `index_data_version` memo;
-//! `index_schema_rekey_freshness.rs` pins the stamp-14 re-key refusal/migration
-//! and codemod-plan refusal, all with message-text assertions. These oracles
-//! assert DISCRIMINANTS ONLY (is_ok/is_err, counts, u64/i64 equality and
-//! inequality, path equality, Option shape) and never inspect message text.
-//!
-//! Source sites pinned (enumerated from `crates/ast-sgrep-core/src`):
-//! - `store/writer_generation.rs`: `read_writer_generation` (absent/corrupt →
-//!   0 fail-open), `bump_writer_generation` (unique epoch, not read+1),
-//!   `writer_generation_home` (root vs explicit-index-path isolation).
-//! - `store/sqlite/mod.rs`: `index_data_version` (+1 per mutation via the
-//!   private `bump_index_data_version`), `index_generation` alias,
-//!   `peek_schema_version` (side-effect-free stamp read), `open_readonly`
-//!   refusal gates (`init_schema_readonly`, newer-than-binary).
-//! - `store/sqlite/queries.rs`: `status` (stored-row counts + live
-//!   writer-generation stamp).
-//! - `store/mod.rs`: `cache_index_path` (root-hashed, XDG/HOME base,
-//!   fail-closed), `try_index_db_path` (explicit > local > cache routing).
-//! - `index.rs` + `index_prepare.rs`: mtime fast path (`stored == walk` ⇒
-//!   `Unchanged` without hashing) gated by `mtime_identity_root`, hash fast
-//!   path, `files_indexed/files_skipped/files_removed` discriminants.
-//! - `lib.rs`: `StoreError::parse_schema_mismatch` (machine-readable
-//!   (on_disk, supported) pair).
+//! Overlap finding (catalog): I1 pins the detection MECHANISM while I2 pins
+//! the search-visible CONSEQUENCE — the halves are complementary, so every I1
+//! intent below stands alongside its I2 counterpart in
+//! `invalidation_delta_matrix.rs`; nothing here was dropped as a duplicate.
 //!
 //! Hermeticity: every store/indexer open uses an explicit `index_path`, so no
 //! test depends on ambient `ASGREP_*` routing. The two cache tests that mutate
 //! process env serialize on a static mutex and restore via an RAII guard.
-//! No wall-clock sleeps: mtimes are set to explicit whole-second stamps with
-//! read-back preconditions.
+//! No wall-clock sleeps: mtimes are forged whole-second stamps with read-back
+//! preconditions (`set_mtime_secs` from testkit; one nanos control below keeps
+//! a file-local exact forge).
 
-use ast_sgrep_core::store::{
-    cache_index_path, try_index_db_path, UpsertFileInput,
-};
+use ast_sgrep_core::store::{cache_index_path, try_index_db_path, UpsertFileInput};
 use ast_sgrep_core::{
-    bump_writer_generation, read_writer_generation, writer_generation_path, IndexOptions, IndexStore,
-    Indexer, StoreError, INDEX_SCHEMA_VERSION,
+    bump_writer_generation, read_writer_generation, writer_generation_path, IndexStore, StoreError,
+    INDEX_SCHEMA_VERSION,
 };
+use ast_sgrep_testkit::{hermetic_indexer as indexer_at, set_mtime_secs};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-fn indexer_at(root: &Path, db: &Path) -> Indexer {
-    Indexer::new(IndexOptions {
-        root: root.to_path_buf(),
-        index_path: Some(db.to_path_buf()),
-        use_tantivy: false,
-        embed_semantic: false,
-        ..IndexOptions::default()
-    })
-    .unwrap()
-}
-
+// WHY area-local: store-level `UpsertFileInput` builder with fixed
+// rust/mtime/eol/payload-shape; `core_recovery::upsert_test_file` writes
+// through a store instead of building the input struct, and no sibling suite
+// builds raw inputs — single-suite helper.
 fn plain_input<'a>(
     path: &'a str,
     hash: &'a str,
@@ -85,16 +56,14 @@ fn plain_input<'a>(
 }
 
 /// Fixed whole-second stamp (nanos = 0 survives every filesystem timestamp
-/// granularity). All mtime-forging tests use whole seconds + read-back asserts.
+/// granularity). Whole-second forges use testkit `set_mtime_secs`.
 const WHOLE_SECOND_T0: u64 = 1_700_000_000;
 
-fn whole_second(secs: u64) -> SystemTime {
-    UNIX_EPOCH + Duration::new(secs, 0)
-}
-
-/// Set an exact mtime and assert the filesystem stored it back bit-identically
-/// (precondition: proves the forge below is real, not truncated).
-fn set_mtime_checked(path: &Path, time: SystemTime) {
+// WHY area-local: `SystemTime`-exact mtime forge with read-back, needed only
+// by the cross-root control that replays a stored (secs, nanos) pair whose
+// nanos may be nonzero; testkit `set_mtime_secs` covers whole seconds only,
+// and no sibling needs an exact forge — single-suite helper.
+fn set_mtime_exact(path: &Path, time: SystemTime) {
     std::fs::OpenOptions::new()
         .write(true)
         .open(path)
@@ -108,6 +77,8 @@ fn set_mtime_checked(path: &Path, time: SystemTime) {
     );
 }
 
+// WHY area-local: direct `(secs, nanos)` stored-row read for the mtime
+// controls only; no sibling reads stored mtime pairs — single-suite helper.
 fn stored_mtime(store: &IndexStore, rel: &str) -> (i64, u32) {
     store
         .connection()
@@ -119,6 +90,9 @@ fn stored_mtime(store: &IndexStore, rel: &str) -> (i64, u32) {
         .unwrap()
 }
 
+// WHY area-local: process-env serialization lock plus the `EnvRestore` RAII
+// guard below; only the cache-routing tests mutate env, and no sibling needs
+// env guards — single-suite helpers.
 fn env_lock() -> &'static std::sync::Mutex<()> {
     static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
     LOCK.get_or_init(|| std::sync::Mutex::new(()))
@@ -151,6 +125,10 @@ impl Drop for EnvRestore {
 
 // ---- writer generation: roundtrip, uniqueness, isolation, fail-open ----
 
+/// INTENT: Cold-start epoch reads 0 and the bumped epoch round-trips,
+/// including the on-disk decimal format.
+/// KILLS: missing-default / bump-not-persisted / format mutants.
+/// ABSORBS: none (KEEP — standalone intent).
 #[test]
 fn writer_generation_absent_reads_zero_and_bump_roundtrips() {
     let temp = tempfile::tempdir().unwrap();
@@ -165,6 +143,10 @@ fn writer_generation_absent_reads_zero_and_bump_roundtrips() {
     assert_eq!(body.trim().parse::<u64>().unwrap(), stamped);
 }
 
+/// INTENT: Successive bumps publish distinct epochs (unique epoch,
+/// explicitly not a read+1 counter).
+/// KILLS: read+1-counter mutant.
+/// ABSORBS: none (KEEP — standalone intent).
 #[test]
 fn writer_generation_bumps_are_unique_not_sequential() {
     let temp = tempfile::tempdir().unwrap();
@@ -178,6 +160,10 @@ fn writer_generation_bumps_are_unique_not_sequential() {
     assert_ne!(first, second, "successive bumps must publish distinct epochs");
 }
 
+/// INTENT: Stamps isolate per root and per pinned DB parent; corrupt/empty
+/// stamp fails open to 0 without cross-root bleed.
+/// KILLS: shared-stamp / corrupt-errors mutants.
+/// ABSORBS: none (KEEP — standalone intent).
 #[test]
 fn writer_generation_isolated_per_home_and_fail_open_on_corrupt_stamp() {
     let temp_a = tempfile::tempdir().unwrap();
@@ -216,6 +202,11 @@ fn writer_generation_isolated_per_home_and_fail_open_on_corrupt_stamp() {
 
 // ---- index_data_version: exact-+1 monotonicity + alias ----
 
+/// INTENT: Each store upsert (including the same-structure
+/// refresh_lines_only path) bumps `index_data_version` by exactly 1;
+/// `index_generation` aliases it.
+/// KILLS: missed / double-bump / alias-drift mutants.
+/// ABSORBS: none (KEEP — standalone intent).
 #[test]
 fn index_data_version_bumps_exactly_one_per_upsert() {
     let temp = tempfile::tempdir().unwrap();
@@ -244,6 +235,10 @@ fn index_data_version_bumps_exactly_one_per_upsert() {
 
 // ---- mtime identity: trust, gate defeat, nanos, cross-root ----
 
+/// INTENT: Matching (secs, nanos) under a certified root skips without
+/// consulting the stored hash (tamper survives, generation unmoved, skipped=1).
+/// KILLS: always-hash / always-reextract mutants.
+/// ABSORBS: none (KEEP — standalone intent).
 #[test]
 fn mtime_match_short_circuits_hash_check_within_certified_root() {
     let temp = tempfile::tempdir().unwrap();
@@ -278,6 +273,10 @@ fn mtime_match_short_circuits_hash_check_within_certified_root() {
     assert_eq!(store.file_hash("src/a.rs").unwrap().as_deref(), Some("tampered"));
 }
 
+/// INTENT: Gate deletion or a nanos-only stored/fresh mismatch defeats the
+/// mtime skip and forces a hash-consult re-extraction.
+/// KILLS: gate-ignored / secs-only-identity mutants.
+/// ABSORBS: none (KEEP — standalone intent).
 #[test]
 fn mtime_gate_deletion_and_nanos_mismatch_force_hash_recheck() {
     let temp = tempfile::tempdir().unwrap();
@@ -328,6 +327,10 @@ fn mtime_gate_deletion_and_nanos_mismatch_force_hash_recheck() {
     );
 }
 
+/// INTENT: Same mtime but different bytes across roots forces a content
+/// decision (no skip); the within-root control with the same forge does skip.
+/// KILLS: cross-root-mtime-trust mutant.
+/// ABSORBS: none (KEEP — standalone intent).
 #[test]
 fn cross_root_db_reuse_disables_mtime_trust() {
     let dir_a = tempfile::tempdir().unwrap();
@@ -335,11 +338,10 @@ fn cross_root_db_reuse_disables_mtime_trust() {
     let dir_db = tempfile::tempdir().unwrap();
     let (root_a, root_b) = (dir_a.path(), dir_b.path());
     let db = dir_db.path().join("shared").join("index.db");
-    let t0 = whole_second(WHOLE_SECOND_T0);
 
     std::fs::create_dir_all(root_a.join("src")).unwrap();
     std::fs::write(root_a.join("src/a.rs"), "fn content_ax() {}\n").unwrap();
-    set_mtime_checked(&root_a.join("src/a.rs"), t0);
+    set_mtime_secs(&root_a.join("src/a.rs"), WHOLE_SECOND_T0);
     assert_eq!(indexer_at(root_a, &db).index_all().unwrap().files_indexed, 1);
     let hash_a = IndexStore::open(root_a, Some(&db))
         .unwrap()
@@ -352,7 +354,7 @@ fn cross_root_db_reuse_disables_mtime_trust() {
     // content-hash decision, which detects the change.
     std::fs::create_dir_all(root_b.join("src")).unwrap();
     std::fs::write(root_b.join("src/a.rs"), "fn content_by() {}\n").unwrap();
-    set_mtime_checked(&root_b.join("src/a.rs"), t0);
+    set_mtime_secs(&root_b.join("src/a.rs"), WHOLE_SECOND_T0);
     let stats = indexer_at(root_b, &db).index_all().unwrap();
     assert_eq!(
         stats.files_indexed, 1,
@@ -368,7 +370,7 @@ fn cross_root_db_reuse_disables_mtime_trust() {
     // Control: within root B (gate now certifies B), the same forge DOES skip.
     let (secs, nanos) = stored_mtime(&IndexStore::open(root_b, Some(&db)).unwrap(), "src/a.rs");
     std::fs::write(root_b.join("src/a.rs"), "fn content_cz() {}\n").unwrap();
-    set_mtime_checked(
+    set_mtime_exact(
         &root_b.join("src/a.rs"),
         UNIX_EPOCH + Duration::new(secs as u64, nanos),
     );
@@ -379,6 +381,11 @@ fn cross_root_db_reuse_disables_mtime_trust() {
 
 // ---- schema version: newer refusal, stale lifecycle ----
 
+/// INTENT: Newer-than-binary schema fails closed on writable and readonly
+/// opens with a machine-readable (on_disk, supported) pair; the
+/// side-effect-free peek still reports the stamp.
+/// KILLS: newer-fail-open / peek-side-effect mutants.
+/// ABSORBS: none (KEEP — standalone intent).
 #[test]
 fn newer_than_binary_schema_refused_on_both_open_modes() {
     let temp = tempfile::tempdir().unwrap();
@@ -403,6 +410,10 @@ fn newer_than_binary_schema_refused_on_both_open_modes() {
     assert_eq!(IndexStore::peek_schema_version(temp.path(), Some(&db)).unwrap(), future);
 }
 
+/// INTENT: Stale stamp lifecycle — peek reports without migrating, readonly
+/// refuses side-effect-free, writable migrates in place, second open is a noop.
+/// KILLS: skip-migration / readonly-mutates / non-idempotent mutants.
+/// ABSORBS: none (KEEP — standalone intent).
 #[test]
 fn stale_schema_lifecycle_peek_refuse_migrate_idempotent() {
     let temp = tempfile::tempdir().unwrap();
@@ -442,6 +453,10 @@ fn stale_schema_lifecycle_peek_refuse_migrate_idempotent() {
 
 // ---- cache home: isolation, routing, fail-closed ----
 
+/// INTENT: Cache path is deterministic per root, distinct across roots,
+/// rooted at the XDG base with an index.db leaf.
+/// KILLS: random-salt / shared-home / wrong-base mutants.
+/// ABSORBS: none (KEEP — standalone intent).
 #[test]
 fn cache_index_path_deterministic_and_root_isolated() {
     let _lock = env_lock().lock().unwrap();
@@ -464,6 +479,10 @@ fn cache_index_path_deterministic_and_root_isolated() {
     }
 }
 
+/// INTENT: Routing — cache home when no local DB exists, present local DB
+/// wins over cache, HOME fallback, error when no base is resolvable.
+/// KILLS: precedence-inversion / missing-fallback mutants.
+/// ABSORBS: none (KEEP — standalone intent).
 #[test]
 fn cache_routing_local_wins_and_env_selects_base_fail_closed() {
     let _lock = env_lock().lock().unwrap();
@@ -508,6 +527,10 @@ fn cache_routing_local_wins_and_env_selects_base_fail_closed() {
 
 // ---- index status: fresh vs stale vs empty vs missing ----
 
+/// INTENT: Status reports stored file/line/symbol counts + paths and reads
+/// the writer stamp live on every call.
+/// KILLS: cached-stamp / count mutants.
+/// ABSORBS: none (KEEP — standalone intent).
 #[test]
 fn status_reports_stored_counts_and_live_writer_epoch() {
     let temp = tempfile::tempdir().unwrap();
@@ -534,6 +557,10 @@ fn status_reports_stored_counts_and_live_writer_epoch() {
     assert_eq!(store.status().unwrap().writer_generation, bumped);
 }
 
+/// INTENT: Missing DB errors on open+peek, fresh DB reports zeros, status
+/// shows stored (stale) counts until a reindex prunes them.
+/// KILLS: live-tree-status / missing-fail-open mutants.
+/// ABSORBS: none (KEEP — standalone intent).
 #[test]
 fn status_distinguishes_empty_stored_stale_and_missing() {
     // Missing: no database file at all.
