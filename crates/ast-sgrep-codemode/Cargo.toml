@@ -29,7 +29,7 @@ serde_json.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
-ast-sgrep-testkit = { path = "../ast-sgrep-testkit" }
+ast-sgrep-testkit = { path = "../ast-sgrep-testkit", features = ["codemode"] }
 tempfile.workspace = true
 
 # Integration tests live in the repo-root tests/ tree.
@@ -55,17 +55,14 @@ path = "../../tests/codemode/oracle_foundry_pass3.rs"
 name = "oracle_foundry_pass4"
 path = "../../tests/codemode/oracle_foundry_pass4.rs"
 [[test]]
-name = "durable_recovery_pass1"
-path = "../../tests/codemode/durable_recovery_pass1.rs"
+name = "recovery_contracts"
+path = "../../tests/codemode/recovery_contracts.rs"
 [[test]]
-name = "durable_recovery_pass2"
-path = "../../tests/codemode/durable_recovery_pass2.rs"
+name = "recovery_relations"
+path = "../../tests/codemode/recovery_relations.rs"
 [[test]]
-name = "durable_recovery_pass3"
-path = "../../tests/codemode/durable_recovery_pass3.rs"
-[[test]]
-name = "durable_recovery_pass4"
-path = "../../tests/codemode/durable_recovery_pass4.rs"
+name = "recovery_drills"
+path = "../../tests/codemode/recovery_drills.rs"
 [[test]]
 name = "error_api_pass1"
 path = "../../tests/codemode/error_api_pass1.rs"

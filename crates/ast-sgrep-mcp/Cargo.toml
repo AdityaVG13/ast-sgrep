@@ -45,17 +45,14 @@ path = "../../tests/mcp/oracle_foundry_pass3.rs"
 name = "oracle_foundry_pass4"
 path = "../../tests/mcp/oracle_foundry_pass4.rs"
 [[test]]
-name = "durable_recovery_pass1"
-path = "../../tests/mcp/durable_recovery_pass1.rs"
+name = "recovery_contracts"
+path = "../../tests/mcp/recovery_contracts.rs"
 [[test]]
-name = "durable_recovery_pass2"
-path = "../../tests/mcp/durable_recovery_pass2.rs"
+name = "recovery_relations"
+path = "../../tests/mcp/recovery_relations.rs"
 [[test]]
-name = "durable_recovery_pass3"
-path = "../../tests/mcp/durable_recovery_pass3.rs"
-[[test]]
-name = "durable_recovery_pass4"
-path = "../../tests/mcp/durable_recovery_pass4.rs"
+name = "recovery_drills"
+path = "../../tests/mcp/recovery_drills.rs"
 [[test]]
 name = "error_api_pass1"
 path = "../../tests/mcp/error_api_pass1.rs"

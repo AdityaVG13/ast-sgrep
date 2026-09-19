@@ -14,7 +14,8 @@
 //!   up to session behavior (lexical only, no embeddings, no wall-clock).
 
 use ast_sgrep_codemode::{
-    run_serve, BatchCall, BatchRequest, CallError, CodeModeSession, ServeRequest, SessionConfig,
+    run_serve, BatchCall, BatchRequest, CallError, CodeModeSession, ParallelMode, ServeRequest,
+    SessionConfig,
 };
 use ast_sgrep_plugins::OutputFormat;
 use serde_json::{json, Value};
@@ -49,6 +50,23 @@ pub fn batch_request(calls: Vec<BatchCall>) -> BatchRequest {
         limit: None,
         parallel: None,
         parallel_mode: None,
+        calls,
+    }
+}
+
+/// [`batch_request`] with an explicit Serial/Parallel wave mode.
+/// INTENT: recovery suites pin mode agreement (serial vs parallel answers
+/// identical per call); the all-`None` envelope cannot express that. Pure
+/// constructor; [`batch_request`] is untouched, so existing callers keep the
+/// `Auto` default byte-identically.
+pub fn batch_request_with_mode(calls: Vec<BatchCall>, mode: ParallelMode) -> BatchRequest {
+    BatchRequest {
+        root: None,
+        index_path: None,
+        use_embed: None,
+        limit: None,
+        parallel: None,
+        parallel_mode: Some(mode),
         calls,
     }
 }

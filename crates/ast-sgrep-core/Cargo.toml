@@ -77,17 +77,17 @@ path = "../../tests/core/downstream_correctness.rs"
 name = "durability_epics"
 path = "../../tests/core/durability_epics.rs"
 [[test]]
-name = "durable_recovery_pass1"
-path = "../../tests/core/durable_recovery_pass1.rs"
+name = "recovery_contracts"
+path = "../../tests/core/recovery_contracts.rs"
 [[test]]
-name = "durable_recovery_pass2"
-path = "../../tests/core/durable_recovery_pass2.rs"
+name = "recovery_faults"
+path = "../../tests/core/recovery_faults.rs"
 [[test]]
-name = "durable_recovery_pass3"
-path = "../../tests/core/durable_recovery_pass3.rs"
+name = "recovery_relations"
+path = "../../tests/core/recovery_relations.rs"
 [[test]]
-name = "durable_recovery_pass4"
-path = "../../tests/core/durable_recovery_pass4.rs"
+name = "recovery_drills"
+path = "../../tests/core/recovery_drills.rs"
 [[test]]
 name = "e2e_smoke"
 path = "../../tests/core/e2e_smoke.rs"

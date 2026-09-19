@@ -102,17 +102,14 @@ path = "../../tests/cli/oracle_foundry_pass3.rs"
 name = "oracle_foundry_pass4"
 path = "../../tests/cli/oracle_foundry_pass4.rs"
 [[test]]
-name = "durable_recovery_pass1"
-path = "../../tests/cli/durable_recovery_pass1.rs"
+name = "recovery_aux"
+path = "../../tests/cli/recovery_aux.rs"
 [[test]]
-name = "durable_recovery_pass2"
-path = "../../tests/cli/durable_recovery_pass2.rs"
+name = "recovery_caches"
+path = "../../tests/cli/recovery_caches.rs"
 [[test]]
-name = "durable_recovery_pass3"
-path = "../../tests/cli/durable_recovery_pass3.rs"
-[[test]]
-name = "durable_recovery_pass4"
-path = "../../tests/cli/durable_recovery_pass4.rs"
+name = "recovery_store"
+path = "../../tests/cli/recovery_store.rs"
 [[test]]
 name = "error_api_pass1"
 path = "../../tests/cli/error_api_pass1.rs"

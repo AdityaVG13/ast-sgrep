@@ -27,7 +27,7 @@ use ast_sgrep_core::{Indexer, IndexOptions};
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStdin, ChildStdout, Command, ExitStatus, Stdio};
+use std::process::{Child, ChildStdin, ChildStdout, Command, ExitStatus, Output, Stdio};
 use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
@@ -189,6 +189,64 @@ impl LiveSession {
         serde_json::from_str(line.trim()).expect("server emitted JSON-RPC")
     }
 
+    /// INTENT: plant a byte-level stream fault — write one raw line + flush.
+    /// Unparsable lines must be ignored (no echo, no hang); the next valid
+    /// call still answers. Panics when stdin is closed or the write fails.
+    pub fn send_raw_line(&mut self, line: &str) {
+        let stdin = self.stdin.as_mut().expect("stdin open");
+        writeln!(stdin, "{line}").expect("write MCP stdin");
+        stdin.flush().expect("flush MCP stdin");
+    }
+
+    /// INTENT: plant a torn request — write bytes with no trailing newline,
+    /// as from a writer killed mid-line. The server must never answer the
+    /// torn id. Panics when stdin is closed or the write fails.
+    pub fn send_partial(&mut self, bytes: &str) {
+        let stdin = self.stdin.as_mut().expect("stdin open");
+        stdin.write_all(bytes.as_bytes()).expect("write MCP stdin");
+        stdin.flush().expect("flush MCP stdin");
+    }
+
+    /// INTENT: collect post-fault stdout as raw lines until EOF (or the total
+    /// budget, which panics past the deadline): proves a torn stream emits no
+    /// torn-id response and no non-JSON garbage.
+    pub fn drain_until_eof(&self, budget: Duration) -> Vec<String> {
+        let started = Instant::now();
+        let mut lines = Vec::new();
+        loop {
+            let remaining = budget.saturating_sub(started.elapsed());
+            if remaining.is_zero() {
+                panic!("timed out draining MCP stdout: got {} lines", lines.len());
+            }
+            match self.lines.recv_timeout(remaining) {
+                Ok(Some(line)) => lines.push(line),
+                Ok(None) => break,
+                Err(_) => panic!("timed out draining MCP stdout: got {} lines", lines.len()),
+            }
+        }
+        lines
+    }
+
+    /// INTENT: crash the server mid-session — SIGKILL without a clean stdin
+    /// close. Returns the terminal status; the caller asserts the crash
+    /// discriminant. Panics when the killed child does not terminate in budget.
+    pub fn crash_kill(&mut self) -> ExitStatus {
+        self.stdin.take();
+        let _ = self.child.kill();
+        let started = Instant::now();
+        loop {
+            if let Some(status) = self.child.try_wait().expect("poll MCP") {
+                return status;
+            }
+            if started.elapsed() > WAIT_TIMEOUT {
+                let _ = self.child.kill();
+                let _ = self.child.wait();
+                panic!("killed MCP did not terminate within {WAIT_TIMEOUT:?}");
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
     /// Close stdin (signals EOF to the server) without waiting.
     pub fn close_stdin(&mut self) {
         self.stdin.take();
@@ -269,6 +327,34 @@ pub fn rpc_session_env(
     let status = child.wait().expect("wait MCP");
     assert!(status.success(), "MCP exited {status}");
     responses
+}
+
+/// INTENT: startup-failure flows — spawn the server with NO handshake, write
+/// each payload as one stdin line, close stdin, and return the full [`Output`]
+/// (the canned drivers assert a clean exit, so they cannot express nonzero
+/// startup). Sets `ASGREP_ROOT` when `root` is `Some`; `extra_env` wins on
+/// collision. Panics when the child cannot be spawned or waited on.
+pub fn spawn_raw_no_handshake(
+    root: Option<&Path>,
+    extra_env: &[(&str, &str)],
+    stdin_lines: &[Value],
+) -> Output {
+    let mut command = Command::new(mcp_bin());
+    command.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    if let Some(root) = root {
+        command.env("ASGREP_ROOT", root);
+    }
+    for (key, value) in extra_env {
+        command.env(key, value);
+    }
+    let mut child = command.spawn().expect("spawn MCP");
+    {
+        let mut stdin = child.stdin.take().expect("MCP stdin");
+        for line in stdin_lines {
+            writeln!(stdin, "{line}").expect("write MCP stdin");
+        }
+    }
+    child.wait_with_output().expect("wait MCP")
 }
 
 /// Fire ALL payloads without waiting, then collect one response per id-bearing
