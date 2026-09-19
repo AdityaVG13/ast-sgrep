@@ -18,7 +18,7 @@ async function probeIndexHealth(runtime, rootContext, options) {
         const status = runtime.nativeCall
             ? await runtime.nativeCall("index_status", {}, rootContext, options)
             : await runtime.run(["status", ".", "--json"], rootContext, options);
-        return indexHealth(status, hinted === "ready");
+        return indexHealth(status);
     }
     catch (cause) {
         if (!incompatibleStatusFailure(cause))
@@ -26,11 +26,18 @@ async function probeIndexHealth(runtime, rootContext, options) {
         return "incompatible";
     }
 }
-/** Run index_repo via native sticky pool or CLI argv. force=true → reindex. */
+/**
+ * Run index_repo via the host's native call (the extension routes it out of
+ * process — see host/tools.ts) or CLI argv. force=true → reindex.
+ *
+ * Implicit (freshness-driven) refreshes index lexical/AST rows only: neural
+ * embeddings for a cold repo took 36-60s on large trees before the first search
+ * could answer. Embeddings are built by the explicit index/reindex tool.
+ */
 async function runIndex(runtime, force, rootContext, options) {
     const response = runtime.nativeCall
-        ? await runtime.nativeCall("index_repo", { force }, rootContext, options)
-        : await runtime.run([force ? "reindex" : "index", ".", "--json"], rootContext, options);
+        ? await runtime.nativeCall("index_repo", { force, use_embed: false }, rootContext, options)
+        : await runtime.run([force ? "reindex" : "index", ".", "--json", "--no-embed"], rootContext, options);
     const { failed, walkErrors } = indexCompletion(response, true);
     if (failed > 0 || walkErrors) {
         throw new RuntimeError("INDEX_UPDATE_INCOMPLETE", "ast-sgrep did not complete the full index reconciliation", { failed, walkErrors, force });
@@ -41,8 +48,8 @@ async function runTargetedIndex(runtime, paths, rootContext, options) {
     for (let offset = 0; offset < paths.length; offset += MAX_TARGETED_INDEX_PATHS) {
         const chunk = paths.slice(offset, offset + MAX_TARGETED_INDEX_PATHS);
         const response = runtime.nativeCall
-            ? await runtime.nativeCall("index_repo", { paths: chunk }, rootContext, options)
-            : await runtime.run(["index", ".", "--json", ...chunk.flatMap((path) => ["--path", path])], rootContext, options);
+            ? await runtime.nativeCall("index_repo", { paths: chunk, use_embed: false }, rootContext, options)
+            : await runtime.run(["index", ".", "--json", "--no-embed", ...chunk.flatMap((path) => ["--path", path])], rootContext, options);
         const { failed } = indexCompletion(response, false);
         if (failed > 0) {
             throw new RuntimeError("INDEX_UPDATE_INCOMPLETE", `ast-sgrep failed to update ${failed} changed path${failed === 1 ? "" : "s"}`, { failed, pathCount: chunk.length });
@@ -132,6 +139,22 @@ function markStateFullScan(state) {
 }
 function cancelledRefreshWait() {
     return new RuntimeError("CANCELLED", "ast-sgrep freshness wait was cancelled");
+}
+/**
+ * A cancellation that belongs to another caller's dead refresh, not to this
+ * caller. The last waiter's cancel aborts shared work (resource hygiene); a
+ * caller holding a live signal must never inherit that teardown as its own
+ * failure — it settles the dead refresh and owns a fresh one instead.
+ */
+function isForeignRefreshCancel(cause, signal) {
+    if (signal?.aborted === true)
+        return false;
+    if (cause instanceof RuntimeError)
+        return cause.code === "CANCELLED";
+    if (cause instanceof Error && cause.name === "AbortError")
+        return true;
+    const message = cause instanceof Error ? cause.message : String(cause);
+    return /aborted|was cancelled/i.test(message);
 }
 /** Stop one caller waiting without transferring cancellation ownership to shared work. */
 function waitForRefresh(refresh, signal, waitMs) {
@@ -293,7 +316,17 @@ export class FreshnessCoordinator {
                 this.#pending.delete(pendingRoot);
         }
         if (state.inFlight) {
-            await attachRefreshWaiter(state, state.inFlight, options.signal, this.#waitBudget(options));
+            const shared = state.inFlight;
+            try {
+                await attachRefreshWaiter(state, shared, options.signal, this.#waitBudget(options));
+            }
+            catch (cause) {
+                if (!isForeignRefreshCancel(cause, options.signal))
+                    throw cause;
+                // Another caller's cancel tore down the shared refresh. This caller is
+                // still alive: settle the dead promise, then decide for itself below.
+                await shared.catch(() => undefined);
+            }
             return this.ensureFresh(runtime, rootContext, options);
         }
         if (options.signal?.aborted)

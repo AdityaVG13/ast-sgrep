@@ -19,7 +19,7 @@ export function record(value: unknown): Record<string, unknown> | undefined {
   return value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
 }
 
-export function indexHealth(status: MachineEnvelope, knownExisting = false): IndexHealth {
+export function indexHealth(status: MachineEnvelope): IndexHealth {
   const index = record(status.index);
   const state = typeof index?.status === "string" ? index.status :
     typeof status.index_status === "string" ? status.index_status : undefined;
@@ -27,7 +27,9 @@ export function indexHealth(status: MachineEnvelope, knownExisting = false): Ind
   if (state === "missing" || index?.exists === false || status.indexed === false) return "missing";
   if (state === "ready" || state === "current" || index?.exists === true || status.indexed === true) return "ready";
   if (typeof status.index_path === "string" && typeof status.file_count === "number") {
-    return knownExisting || status.file_count > 0 ? "ready" : "missing";
+    // A present-but-empty index answers nothing: report it as unindexed so the
+    // caller indexes instead of reading zero rows as a legitimate no-match.
+    return status.file_count > 0 ? "ready" : "missing";
   }
   throw new RuntimeError("INDEX_STATUS_UNKNOWN", "ast-sgrep status did not report index freshness", { index: status.index, index_status: status.index_status });
 }

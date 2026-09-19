@@ -54,16 +54,16 @@ test("tools auto-register so a deterministic agent can complete the workflow wit
   await commands.get("asgrep-status")!.handler("", commandContext);
   await commands.get("asgrep-index")!.handler("", commandContext);
   const search = tools.get("asgrep_search")!;
-  assert.match(search.description, /Prefer asgrep/i);
+  assert.match(search.description, /Code Mode/i);
   const codemode = tools.get("asgrep")!;
   assert.equal(codemode.promptSnippet, ASGREP_PROMPT_SNIPPET);
   assert.deepEqual(codemode.promptGuidelines, [...ASGREP_PROMPT_GUIDELINES]);
-  assert.match(codemode.description, /do not wait for the user to mention asgrep/i);
-  assert.match(codemode.description, /Promise\.all/i);
+  assert.match(codemode.description, /use it for any code lookup/i);
+  assert.match(codemode.description, /returned value is your result/i);
   const signal = new AbortController().signal;
   const lookup = await search.execute("intent", { query: "refresh the index after edits", mode: "natural" }, signal, undefined, { cwd: "/fixture" });
-  assert.match(lookup.content[0]!.text, /asgrep/);
-  assert.match(lookup.content[0]!.text, /refresh the index after edits/);
+  assert.match(lookup.content[0]!.text, /^search: 1 hit/m);
+  assert.match(lookup.content[0]!.text, /src\/fixture\.ts/);
   await search.execute("callers", { query: "ensureFresh", mode: "callers", limit: 8 }, signal, undefined, { cwd: "/fixture" });
   await codemode.execute("compose", {
     code: `async () => {

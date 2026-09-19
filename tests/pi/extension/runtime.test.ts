@@ -309,7 +309,7 @@ const machine = (extra: Record<string, unknown> = {}): MachineEnvelope => {
     : extra;
   return { tool: "asgrep", schema_version: MACHINE_SCHEMA_VERSION, ok: true, ...normalized };
 };
-type FreshCall = { command: string; root: string; signal?: AbortSignal };
+type FreshCall = { command: string; root: string; signal?: AbortSignal; argv?: string[] };
 class FakeFreshnessRuntime {
   calls: FreshCall[] = [];
   aliases = new Map<string, string>();
@@ -319,7 +319,7 @@ class FakeFreshnessRuntime {
   async resolveRoot(context: RuntimeContext): Promise<string> { return this.aliases.get(context.cwd) ?? context.cwd; }
   async run(args: readonly string[], context: RuntimeContext, options: RunOptions = {}): Promise<MachineEnvelope> {
     const command = args[0]!;
-    this.calls.push({ command, root: context.cwd, signal: options.signal });
+    this.calls.push({ command, root: context.cwd, signal: options.signal, argv: [...args] });
     const response = await this.handler(command, context.cwd, options);
     if ((command === "index" || command === "reindex") && response.files_failed === undefined) {
       return { ...response, files_failed: 0, walk_errors: false };
@@ -369,6 +369,17 @@ describe("per-root index freshness", () => {
     assert.ok(commands(runtime).includes("index"));
   });
 
+  it("treats a present but empty index as unindexed instead of a no-match index", async () => {
+    const runtime = new FakeFreshnessRuntime();
+    // The index file exists with the current schema (compatible hint), but it
+    // holds zero files: querying it would answer "nothing found" for everything.
+    (runtime as unknown as { inspectIndexCompatibility: () => Promise<string> }).inspectIndexCompatibility = async () => "ready";
+    runtime.handler = async (command) => machine({ command, root: "/root", index_path: "/root/.asgrep/index.db", file_count: command === "status" ? 0 : 1 });
+    const subject = new FreshnessCoordinator({ refreshIntervalMs: 100, now: () => 0 });
+    await subject.ensureFresh(runtime, { cwd: "/root" });
+    assert.deepEqual(commands(runtime), ["status", "index"]);
+  });
+
   it("re-probes status on interval expiry without walking a ready index", async () => {
     let now = 0;
     const runtime = new FakeFreshnessRuntime();
@@ -410,7 +421,7 @@ describe("per-root index freshness", () => {
     await subject.ensureFresh(runtime, { cwd: project });
     assert.deepEqual(calls.at(-1), {
       tool: "index_repo",
-      args: { paths: [join(project, "src/changed.ts")] },
+      args: { paths: [join(project, "src/changed.ts")], use_embed: false },
     });
 
     const beforeSelfWrite = calls.length;
@@ -420,11 +431,11 @@ describe("per-root index freshness", () => {
 
     listener?.("rename", "src/created.ts");
     await subject.ensureFresh(runtime, { cwd: project });
-    assert.deepEqual(calls.at(-1), { tool: "index_repo", args: { force: false } });
+    assert.deepEqual(calls.at(-1), { tool: "index_repo", args: { force: false, use_embed: false } });
 
     watcher.emit("error", new Error("watch failed"));
     await subject.ensureFresh(runtime, { cwd: project });
-    assert.deepEqual(calls.at(-1), { tool: "index_repo", args: { force: false } });
+    assert.deepEqual(calls.at(-1), { tool: "index_repo", args: { force: false, use_embed: false } });
     assert.equal(watchAttempts, 1, "a failed watcher must not be restarted on every request");
     subject.shutdown();
     assert.equal(closed, true);
@@ -480,7 +491,7 @@ describe("per-root index freshness", () => {
     await subject.ensureFresh(runtime, { cwd: project });
     assert.deepEqual(calls.at(-1), {
       tool: "index_repo",
-      args: { paths: [join(project, "custom-index/source.ts")] },
+      args: { paths: [join(project, "custom-index/source.ts")], use_embed: false },
     });
     subject.shutdown();
   });
@@ -511,7 +522,7 @@ describe("per-root index freshness", () => {
     assert.equal(watchAttempts, 1);
     assert.deepEqual(calls, [
       { tool: "index_status", args: {} },
-      { tool: "index_repo", args: { force: false } },
+      { tool: "index_repo", args: { force: false, use_embed: false } },
     ]);
   });
 
@@ -533,9 +544,9 @@ describe("per-root index freshness", () => {
     await subject.ensureFresh(runtime, { cwd: project });
     assert.deepEqual(calls, [
       { tool: "index_status", args: {} },
-      { tool: "index_repo", args: { paths: [join(project, "src/created.ts")] } },
+      { tool: "index_repo", args: { paths: [join(project, "src/created.ts")], use_embed: false } },
       { tool: "index_status", args: {} },
-      { tool: "index_repo", args: { paths: [join(project, "src/modified.ts")] } },
+      { tool: "index_repo", args: { paths: [join(project, "src/modified.ts")], use_embed: false } },
     ]);
   });
 
@@ -555,7 +566,7 @@ describe("per-root index freshness", () => {
     await subject.ensureFresh(runtime, { cwd: project });
     assert.deepEqual(calls, [
       { tool: "index_status", args: {} },
-      { tool: "index_repo", args: { force: false } },
+      { tool: "index_repo", args: { force: false, use_embed: false } },
     ]);
   });
 
@@ -578,7 +589,7 @@ describe("per-root index freshness", () => {
     subject.markAffectedPath(join(outside, "outside.ts"), project);
     await subject.ensureFresh(runtime, { cwd: project });
     assert.deepEqual(calls.filter(({ tool }) => tool === "index_repo"), [
-      { tool: "index_repo", args: { paths: [contained] } },
+      { tool: "index_repo", args: { paths: [contained], use_embed: false } },
     ]);
   });
 
@@ -607,8 +618,8 @@ describe("per-root index freshness", () => {
     await assert.rejects(subject.ensureFresh(runtime, { cwd: project }), { code: "INDEX_UPDATE_INCOMPLETE" });
     await subject.ensureFresh(runtime, { cwd: project });
     assert.deepEqual(calls.filter(({ tool }) => tool === "index_repo"), [
-      { tool: "index_repo", args: { paths: [changed] } },
-      { tool: "index_repo", args: { paths: [changed] } },
+      { tool: "index_repo", args: { paths: [changed], use_embed: false } },
+      { tool: "index_repo", args: { paths: [changed], use_embed: false } },
     ]);
   });
 
@@ -629,7 +640,7 @@ describe("per-root index freshness", () => {
     }
     await subject.ensureFresh(runtime, { cwd: project });
     assert.deepEqual(calls.filter(({ tool }) => tool === "index_repo"), [
-      { tool: "index_repo", args: { force: false } },
+      { tool: "index_repo", args: { force: false, use_embed: false } },
     ]);
   });
 
@@ -655,8 +666,8 @@ describe("per-root index freshness", () => {
     await subject.ensureFresh(runtime, { cwd: projectB });
 
     assert.deepEqual(calls.filter(({ tool }) => tool === "index_repo"), [
-      { tool: "index_repo", root: projectA, args: { force: false } },
-      { tool: "index_repo", root: projectB, args: { paths: [changedB] } },
+      { tool: "index_repo", root: projectA, args: { force: false, use_embed: false } },
+      { tool: "index_repo", root: projectB, args: { paths: [changedB], use_embed: false } },
     ]);
   });
 
@@ -681,8 +692,8 @@ describe("per-root index freshness", () => {
     await subject.ensureFresh(runtime, { cwd: nested });
 
     assert.deepEqual(calls.filter(({ tool }) => tool === "index_repo"), [
-      { tool: "index_repo", root: nested, args: { force: false } },
-      { tool: "index_repo", root: project, args: { force: false } },
+      { tool: "index_repo", root: nested, args: { force: false, use_embed: false } },
+      { tool: "index_repo", root: project, args: { force: false, use_embed: false } },
     ]);
     subject.shutdown();
   });
@@ -786,6 +797,40 @@ describe("per-root index freshness", () => {
     assert.deepEqual(commands(runtime), ["status", "index"]);
   });
 
+  it("serves a caller that arrives while an aborted shared refresh is still settling", async () => {
+    const runtime = new FakeFreshnessRuntime();
+    let started!: () => void;
+    const didStart = new Promise<void>((resolve) => { started = resolve; });
+    let attempts = 0;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    runtime.handler = async (command, _root, options) => {
+      if (command === "status") {
+        return machine({ command, index: { exists: false, compatible: true, status: "missing" } });
+      }
+      attempts += 1;
+      if (attempts === 1) {
+        // The first refresh belongs to the caller that gets cancelled. It stays
+        // in flight (aborted, not yet settled) while a second caller arrives.
+        started();
+        await gate;
+        if (options.signal?.aborted) throw new RuntimeError("CANCELLED", "ast-sgrep execution was cancelled");
+      }
+      return machine({ command, index: { exists: true, compatible: true, status: "ready" } });
+    };
+    const subject = new FreshnessCoordinator();
+    const controller = new AbortController();
+    const cancelled = subject.ensureFresh(runtime, { cwd: "/root" }, { signal: controller.signal });
+    await didStart;
+    controller.abort();
+    await errorCode(() => cancelled, "CANCELLED");
+    // A fresh caller must never inherit the dead caller's cancellation.
+    const survivor = subject.ensureFresh(runtime, { cwd: "/root" });
+    release();
+    assert.equal(await survivor, "/root");
+    assert.ok(attempts >= 2, "the surviving caller must own a fresh refresh");
+  });
+
   it("reuses the original context when concurrent searches share a relative configured root", async () => {
     const { project } = await fixture();
     const sourceRoot = join(project, "src");
@@ -866,9 +911,9 @@ describe("per-root index freshness", () => {
     await subject.ensureFresh(runtime, { cwd: "/root" });
     assert.deepEqual(calls, [
       { tool: "index_status", args: {} },
-      { tool: "index_repo", args: { force: false } },
+      { tool: "index_repo", args: { force: false, use_embed: false } },
       { tool: "index_status", args: {} },
-      { tool: "index_repo", args: { force: false } },
+      { tool: "index_repo", args: { force: false, use_embed: false } },
     ]);
   });
 
@@ -949,7 +994,7 @@ describe("per-root index freshness", () => {
     await subject.ensureFresh(runtime, { cwd: project });
     subject.markAffectedPath(link, project);
     await subject.ensureFresh(runtime, { cwd: project });
-    assert.deepEqual(calls.at(-1), { tool: "index_repo", args: { paths: [link] } });
+    assert.deepEqual(calls.at(-1), { tool: "index_repo", args: { paths: [link], use_embed: false } });
   });
   it("refuses a symlink-out-of-root edit instead of indexing the target", async () => {
     const { project, outside } = await fixture();
@@ -975,7 +1020,7 @@ describe("per-root index freshness", () => {
     assert.equal(calls.length, afterInit, "escaped edit must not trigger a targeted index");
     subject.markAffectedPath(join(root, "ok.ts"), root);
     await subject.ensureFresh(runtime, { cwd: root });
-    assert.deepEqual(calls.at(-1), { tool: "index_repo", args: { paths: [join(root, "ok.ts")] } });
+    assert.deepEqual(calls.at(-1), { tool: "index_repo", args: { paths: [join(root, "ok.ts")], use_embed: false } });
     for (const call of calls) {
       const paths = call.args.paths;
       if (!Array.isArray(paths)) continue;
@@ -1012,3 +1057,33 @@ describe("classified runtime failures", () => {
     assert.equal(nonzeroError.message, "index unavailable");
   });
 });
+
+  it("indexes implicitly without embeddings, leaving vectors to the explicit index", async () => {
+    const runtime = new FakeFreshnessRuntime();
+    const nativeCalls: Array<{ tool: string; args: Record<string, unknown> }> = [];
+    (runtime as unknown as { nativeCall: unknown }).nativeCall = async (tool: string, args: Record<string, unknown>) => {
+      nativeCalls.push({ tool, args });
+      return machine({
+        command: tool,
+        root: "/root",
+        index_path: "/root/.asgrep/index.db",
+        file_count: tool === "index_status" ? 0 : 1,
+        files_failed: 0,
+        walk_errors: false,
+      });
+    };
+    await new FreshnessCoordinator().ensureFresh(runtime, { cwd: "/root" });
+    const indexCall = nativeCalls.find((call) => call.tool === "index_repo");
+    assert.ok(indexCall, "the refresh must index");
+    assert.equal(indexCall.args.use_embed, false, "implicit refresh is lexical/AST only");
+
+    // CLI fallback keeps the same policy through the flag.
+    const cli = new FakeFreshnessRuntime();
+    cli.handler = async (command) => machine({ command, root: "/root", index_path: "/root/.asgrep/index.db", file_count: command === "status" ? 0 : 1 });
+    await new FreshnessCoordinator().ensureFresh(cli, { cwd: "/root" });
+    const indexCall2 = cli.calls.find((call) => call.command === "index");
+    assert.ok(indexCall2, "CLI refresh must run index");
+    assert.ok((indexCall2.argv ?? []).includes("--no-embed"), "CLI refresh must pass --no-embed: " + JSON.stringify(indexCall2.argv));
+    assert.equal(cli.calls.find((call) => call.command === "reindex"), undefined, "a missing index is not a reindex");
+  });
+

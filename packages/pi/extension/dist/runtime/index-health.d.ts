@@ -2,7 +2,7 @@ import { type MachineEnvelope } from "./types.js";
 export type IndexHealth = "ready" | "missing" | "incompatible";
 export declare function pathContained(parent: string, child: string): boolean;
 export declare function record(value: unknown): Record<string, unknown> | undefined;
-export declare function indexHealth(status: MachineEnvelope, knownExisting?: boolean): IndexHealth;
+export declare function indexHealth(status: MachineEnvelope): IndexHealth;
 export declare function incompatibleStatusFailure(cause: unknown): boolean;
 export declare function indexCompletion(response: MachineEnvelope, requireWalkErrors: boolean): {
     failed: number;
