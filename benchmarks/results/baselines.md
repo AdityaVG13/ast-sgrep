@@ -14,7 +14,7 @@ repository. Any number quoted in docs, commit messages, or bead close reasons
 must trace back to a row here or carry its own reproduce command. Scores were
 produced by the harness, twice, on the machine below — no hand-edited figures.
 
-## 2026-09-19 ranking pass (self corpus, working tree)
+## 2026-09-19 ranking pass (self corpus)
 
 **Status: `reproducible-in-tree`.** Reproduce:
 `asgrep --json --no-embed eval --gold benchmarks/gold/self.json .`
@@ -23,7 +23,7 @@ produced by the harness, twice, on the machine below — no hand-edited figures.
 | Provenance | value |
 |------------|-------|
 | date | 2026-09-19 |
-| commit | working tree; base = `HEAD 9bfa6aa0` release build |
+| commit | `845fbf0a`; base = `9bfa6aa0` release build |
 | machine | Apple M5 Max (arm64), macOS 26.6.2 |
 | corpus | self, 637 indexed files, 17 gold queries |
 | harness | `asgrep eval --gold benchmarks/gold/self.json` (in tree) |

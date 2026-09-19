@@ -6,9 +6,9 @@ trace back to a dated row here or carry its own reproduce command.
 
 Status tags: [`benchmarks/README.md`](../README.md).
 
-## 2026-09-19 warm distinct-query latency (self corpus, working tree)
+## 2026-09-19 warm distinct-query latency (self corpus)
 
-**Status: `reproducible-in-tree` for the harness, `working tree` for the tree.**
+**Status: `reproducible-in-tree`.**
 Reproduce: `node benchmarks/warm_distinct.mjs <asgrep-binary> 3 [--no-embed]`
 -- 240 distinct identifiers sampled from `git ls-files crates`, driven through
 `asgrep codemode-serve` NDJSON (the warm path the Pi package uses: one process,
@@ -18,7 +18,7 @@ against the same index. Warm-up calls are excluded.
 | Provenance | value |
 |------------|-------|
 | date | 2026-09-19 |
-| commit | working tree; base binary = `HEAD 9bfa6aa0` release build |
+| commit | `c6f45d92`; base binary = `9bfa6aa0` release build |
 | machine | Apple M5 Max (arm64), macOS 26.6.2, APFS SSD |
 | build | `cargo build --release -p ast-sgrep-cli` (both binaries) |
 | index | schema 16, **637 files**, 197,487 lines, 6,211 symbols, 11,940 semantic chunks, IVF present |
