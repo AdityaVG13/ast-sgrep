@@ -64,6 +64,10 @@ pub const PARTIAL_IDENTIFIER_PENALTY: f64 = 0.45;
 pub const UNRELATED_DEF_PENALTY: f64 = 0.5;
 /// Score multiplier for markdown/changelog lexical hits when code evidence exists.
 pub const PROSE_PATH_PENALTY: f64 = 0.4;
+/// Score multiplier for a literal/word hit whose matched line is a comment:
+/// a comment *mentions* the needle, the code line *uses* it. Applied only when
+/// a non-comment code hit exists in the same shortlist.
+pub const COMMENT_MENTION_PENALTY: f64 = 0.55;
 /// Score multiplier for conceptual lexical hits when a def/embed exists.
 pub const CONCEPTUAL_LEXICAL_PENALTY: f64 = 0.55;
 /// Score multiplier for `main`/`start` callers on conceptual NL.
@@ -218,6 +222,11 @@ fn looks_like_type_ident(symbol: &str) -> bool {
         && !symbol.starts_with('#')
 }
 
+/// Reference material: prose, data files, and fixture trees. A match here is
+/// usually a *mention* of the code that answers the query rather than the answer
+/// itself, so with code evidence present in the shortlist it ranks below code.
+/// (Measured: a literal search's top hit was the JSON fixture that quotes the
+/// needle, ahead of the module that implements it.)
 fn is_prose_path(path: &str) -> bool {
     let normalized = path.replace("\\", "/").to_ascii_lowercase();
     let file = normalized.rsplit('/').next().unwrap_or(normalized.as_str());
@@ -225,9 +234,35 @@ fn is_prose_path(path: &str) -> bool {
         || file.ends_with(".mdx")
         || file.ends_with(".rst")
         || file.ends_with(".txt")
+        || file.ends_with(".json")
+        || file.ends_with(".jsonl")
+        || file.ends_with(".yaml")
+        || file.ends_with(".yml")
+        || file.ends_with(".toml")
+        || file.ends_with(".csv")
+        || file.ends_with(".xml")
+        || file.ends_with(".html")
         || file.starts_with("changelog")
         || file.starts_with("readme")
         || normalized.contains("/docs/")
+        || normalized
+            .split('/')
+            .any(|segment| segment == "fixtures" || segment == "testdata")
+}
+
+/// Matched line opens with a comment marker: a mention of the needle rather
+/// than a use of it. `#` only counts when it is not `#[attr]` or `#!shebang`.
+fn is_comment_mention(hit: &SearchHit) -> bool {
+    let line = hit.excerpt.lines().next().unwrap_or("").trim_start();
+    if line.starts_with("//")
+        || line.starts_with("/*")
+        || line.starts_with('*')
+        || line.starts_with("--")
+        || line.starts_with("<!--")
+    {
+        return true;
+    }
+    line.starts_with('#') && !(line.starts_with("#[") || line.starts_with("#!"))
 }
 
 fn query_identifier(parsed: &ParsedQuery, intent: QueryIntent) -> Option<String> {
@@ -429,7 +464,12 @@ fn is_code_kind(kind: HitKind) -> bool {
 /// The per-hit work is split into stage functions applied IN ORDER for every
 /// hit; each stage owns one rule family and mutates only `score`/notes, so
 /// the multiplier sequence per hit is exactly the historical one.
-pub(crate) fn apply_critic(parsed: &ParsedQuery, intent: QueryIntent, hits: &mut Vec<SearchHit>) {
+pub(crate) fn apply_critic(
+    parsed: &ParsedQuery,
+    intent: QueryIntent,
+    hits: &mut Vec<SearchHit>,
+    vocabulary: Option<&HashSet<String>>,
+) {
     if hits.is_empty() {
         return;
     }
@@ -438,11 +478,27 @@ pub(crate) fn apply_critic(parsed: &ParsedQuery, intent: QueryIntent, hits: &mut
     let ctx = CriticCtx {
         fragments: identifier_fragments(parsed),
         query_ident: query_identifier(parsed, intent),
-        has_code_evidence: hits
-            .iter()
-            .any(|hit| is_code_kind(hit.kind) && !is_prose_path(&hit.file)),
+        // Line hits count as code evidence too: a literal/word shortlist is all
+        // Asgrep rows, so requiring a def/caller/pattern kind left every
+        // prose/test penalty inert for those queries (measured: a JSON fixture
+        // and doc comments outranked the module that implements the needle).
+        has_code_evidence: hits.iter().any(|hit| {
+            !is_prose_path(&hit.file)
+                && (is_code_kind(hit.kind)
+                    || (matches!(hit.kind, HitKind::Asgrep) && !is_comment_mention(hit)))
+        }),
         conceptual,
-        expanded: conceptual.then(|| concept_expansion(parsed)),
+        // Adjudicate with the same concepts retrieval used: the static groups
+        // alone miss learned associations (compact -> budget, ids), so a symbol
+        // covering one of them counted as single-concept and could not outrank
+        // a one-token symbol.
+        expanded: conceptual.then(|| {
+            let mut expanded = concept_expansion(parsed);
+            if let Some(vocabulary) = vocabulary {
+                expanded.extend(vocabulary.iter().cloned());
+            }
+            expanded
+        }),
     };
     let mut kept = Vec::with_capacity(hits.len());
     for (index, mut hit) in hits.drain(..).enumerate() {
@@ -456,9 +512,8 @@ pub(crate) fn apply_critic(parsed: &ParsedQuery, intent: QueryIntent, hits: &mut
         kept.push(hit);
     }
     *hits = kept;
-    if let Some(expanded) = ctx.expanded.as_ref() {
+    if ctx.expanded.is_some() {
         demote_test_paths_below_implementation(hits);
-        demote_thieves_below_conjunction_combine(expanded, hits);
     }
 }
 
@@ -596,6 +651,13 @@ fn stage_context_penalties(hit: &mut SearchHit, ctx: &CriticCtx) {
     if ctx.has_code_evidence && hit.kind == HitKind::Asgrep && is_prose_path(&hit.file) {
         hit.score *= PROSE_PATH_PENALTY;
     }
+    if ctx.has_code_evidence
+        && !ctx.conceptual
+        && hit.kind == HitKind::Asgrep
+        && is_comment_mention(hit)
+    {
+        hit.score *= COMMENT_MENTION_PENALTY;
+    }
     if ctx.conceptual && ctx.has_code_evidence && is_test_path(&hit.file) {
         hit.score *= TEST_PATH_PENALTY;
     }
@@ -679,62 +741,6 @@ fn demote_test_paths_below_implementation(hits: &mut [SearchHit]) {
     }
 }
 
-/// Conjunction (`AND` of two channels) is not RRF, not eval CLI, and not
-/// field-score mixing.
-///
-/// When the query expanded to `conjunction` without `rrf`/`reciprocal`,
-/// fusion.rs / eval.rs / field_weight.rs / `combine_*` compounds cannot lead.
-/// Mutant: drop this clamp, or map `channels` back to `rrf`/`fusion`.
-fn demote_thieves_below_conjunction_combine(expanded: &HashSet<String>, hits: &mut [SearchHit]) {
-    if !expanded.contains("conjunction") {
-        return;
-    }
-    if expanded.contains("rrf") || expanded.contains("reciprocal") {
-        return;
-    }
-    let conjunction_file = |path: &str| path.replace('\\', "/").ends_with("conjunction.rs");
-    let best_combine = hits
-        .iter()
-        .filter(|hit| conjunction_file(&hit.file) && hit.symbol.as_deref() == Some("combine"))
-        .map(|hit| hit.score)
-        .max_by(|a, b| a.total_cmp(b));
-    let best_conjunction = best_combine.or_else(|| {
-        hits.iter()
-            .filter(|hit| conjunction_file(&hit.file))
-            .map(|hit| hit.score)
-            .max_by(|a, b| a.total_cmp(b))
-    });
-    let Some(best_conjunction) = best_conjunction else {
-        return;
-    };
-    let ceiling = best_conjunction * 0.5;
-    for hit in hits.iter_mut() {
-        if conjunction_file(&hit.file) && hit.symbol.as_deref() == Some("combine") {
-            continue;
-        }
-        if steals_conjunction_query(hit) && hit.score >= best_conjunction {
-            hit.score = ceiling;
-        }
-    }
-}
-
-fn steals_conjunction_query(hit: &SearchHit) -> bool {
-    let normalized = hit.file.replace('\\', "/");
-    let file = normalized.rsplit('/').next().unwrap_or(normalized.as_str());
-    if file.eq_ignore_ascii_case("fusion.rs")
-        || file.eq_ignore_ascii_case("eval.rs")
-        || file.eq_ignore_ascii_case("field_weight.rs")
-    {
-        return true;
-    }
-    hit.symbol.as_deref().is_some_and(|symbol| {
-        let tokens = identifier_tokens(symbol);
-        tokens.len() > 1
-            && tokens.iter().any(|token| token == "combine")
-            && !symbol.eq_ignore_ascii_case("combine")
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -763,6 +769,44 @@ mod tests {
         }
     }
 
+    /// The critic must adjudicate with the concepts retrieval used. The static
+    /// groups know compact; the repository vocabulary learned compact ->
+    /// budget. CompactBudget covers both, so it must outrank an equally scored
+    /// single-concept symbol -- and must NOT do so without the vocabulary,
+    /// which is what proves where the credit came from.
+    /// KILLS: affinity computed from static groups only.
+    #[test]
+    fn repository_vocabulary_credits_learned_multi_concept_symbols() {
+        let parsed = ParsedQuery::parse("compact output path interning");
+        let vocabulary: HashSet<String> = ["budget".to_string()].into_iter().collect();
+        let shortlist = || {
+            vec![
+                hit(HitKind::Def, "src/plugins.rs", Some("compact_kind"), 1.0),
+                hit(HitKind::Def, "src/plugins.rs", Some("CompactBudget"), 1.0),
+            ]
+        };
+        let mut with_vocabulary = shortlist();
+        apply_critic(
+            &parsed,
+            QueryIntent::Conceptual,
+            &mut with_vocabulary,
+            Some(&vocabulary),
+        );
+        with_vocabulary.sort_by(|a, b| b.score.total_cmp(&a.score));
+        assert_eq!(
+            with_vocabulary[0].symbol.as_deref(),
+            Some("CompactBudget"),
+            "a symbol covering a learned association must outrank a single-concept one"
+        );
+
+        let mut without_vocabulary = shortlist();
+        apply_critic(&parsed, QueryIntent::Conceptual, &mut without_vocabulary, None);
+        assert_eq!(
+            without_vocabulary[0].score, without_vocabulary[1].score,
+            "without the vocabulary the two stay equal: the credit came from the learned set"
+        );
+    }
+
     #[test]
     fn exact_identifier_outranks_compound_helpers() {
         let parsed = ParsedQuery::parse("Searcher");
@@ -770,7 +814,7 @@ mod tests {
             hit(HitKind::Def, "src/bench.rs", Some("bench_searcher"), 0.09),
             hit(HitKind::Def, "src/search.rs", Some("Searcher"), 0.04),
         ];
-        apply_critic(&parsed, QueryIntent::Symbol, &mut hits);
+        apply_critic(&parsed, QueryIntent::Symbol, &mut hits, None);
         hits.sort_by(|a, b| b.score.total_cmp(&a.score));
         assert_eq!(hits[0].symbol.as_deref(), Some("Searcher"));
         assert!(hits[1].critic.contains(&CriticNote::IdentifierCollision));
@@ -783,7 +827,7 @@ mod tests {
             hit(HitKind::Def, "tests/x.rs", Some("searcher"), 0.09),
             hit(HitKind::Def, "src/search.rs", Some("Searcher"), 0.04),
         ];
-        apply_critic(&parsed, QueryIntent::Symbol, &mut hits);
+        apply_critic(&parsed, QueryIntent::Symbol, &mut hits, None);
         hits.sort_by(|a, b| b.score.total_cmp(&a.score));
         assert_eq!(hits[0].symbol.as_deref(), Some("Searcher"));
         assert!(hits[1].critic.contains(&CriticNote::IdentifierCollision));
@@ -796,7 +840,7 @@ mod tests {
             hit(HitKind::Asgrep, "README.md", None, 0.02),
             hit(HitKind::Embed, "src/auth.rs", Some("auth_refresh"), 0.011),
         ];
-        apply_critic(&parsed, QueryIntent::Conceptual, &mut hits);
+        apply_critic(&parsed, QueryIntent::Conceptual, &mut hits, None);
         hits.sort_by(|a, b| b.score.total_cmp(&a.score));
         assert_eq!(hits[0].symbol.as_deref(), Some("auth_refresh"));
     }
@@ -815,7 +859,7 @@ mod tests {
             caller_hit("src/bin.rs", "main", "main", 0.028),
             hit(HitKind::Def, "src/auth.rs", Some("auth_refresh"), 0.016),
         ];
-        apply_critic(&parsed, QueryIntent::Conceptual, &mut hits);
+        apply_critic(&parsed, QueryIntent::Conceptual, &mut hits, None);
         hits.sort_by(|a, b| b.score.total_cmp(&a.score));
         assert_eq!(hits[0].symbol.as_deref(), Some("auth_refresh"));
     }
@@ -832,7 +876,7 @@ mod tests {
             ),
             hit(HitKind::Def, "src/auth.rs", Some("auth_refresh"), 0.04),
         ];
-        apply_critic(&parsed, QueryIntent::Symbol, &mut hits);
+        apply_critic(&parsed, QueryIntent::Symbol, &mut hits, None);
         hits.sort_by(|a, b| b.score.total_cmp(&a.score));
         assert_eq!(hits[0].symbol.as_deref(), Some("auth_refresh"));
         assert!(hits[1].critic.contains(&CriticNote::IdentifierCollision));
@@ -871,7 +915,7 @@ mod tests {
                 0.04,
             ),
         ];
-        apply_critic(&parsed, QueryIntent::Symbol, &mut hits);
+        apply_critic(&parsed, QueryIntent::Symbol, &mut hits, None);
         hits.sort_by(|a, b| b.score.total_cmp(&a.score));
         assert!(
             hits[0].file.ends_with("semantic_ivf.rs"),
@@ -902,7 +946,7 @@ mod tests {
                 0.025,
             ),
         ];
-        apply_critic(&parsed, QueryIntent::Conceptual, &mut hits);
+        apply_critic(&parsed, QueryIntent::Conceptual, &mut hits, None);
         hits.sort_by(|a, b| b.score.total_cmp(&a.score));
         assert_eq!(hits[0].symbol.as_deref(), Some("search_hybrid"));
         assert!(
@@ -932,80 +976,11 @@ mod tests {
                 0.04,
             ),
         ];
-        apply_critic(&parsed, QueryIntent::Symbol, &mut hits);
+        apply_critic(&parsed, QueryIntent::Symbol, &mut hits, None);
         hits.sort_by(|a, b| b.score.total_cmp(&a.score));
         assert_eq!(
             hits[0].symbol.as_deref(),
             Some("hybrid_query_cascades_lexical_files_into_structural_and_semantic_stages")
         );
-    }
-
-    fn critic_autopsy(hits: &[SearchHit]) -> String {
-        hits.iter()
-            .enumerate()
-            .map(|(i, h)| {
-                format!(
-                    "    #{} score={:.4} {:?} {} {:?}",
-                    i + 1,
-                    h.score,
-                    h.kind,
-                    h.file,
-                    h.symbol
-                )
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
-    }
-
-    #[test]
-    fn conjunction_combine_outranks_fusion_eval_and_field_weight() {
-        // Live thieves from cg4: combine_field_scores 0.0815, fusion/eval
-        // leftovers, combine at 0.030-0.048. If this is not #1, ranking is
-        // not a program.
-        let parsed = ParsedQuery::parse("combine two search channels in a single query");
-        let mut hits = vec![
-            hit(
-                HitKind::Def,
-                "crates/ast-sgrep-core/src/search/field_weight.rs",
-                Some("combine_field_scores"),
-                0.0815,
-            ),
-            hit(
-                HitKind::Def,
-                "crates/ast-sgrep-core/src/fusion.rs",
-                Some("channel_sensitivity"),
-                0.1145,
-            ),
-            hit(
-                HitKind::Def,
-                "crates/ast-sgrep-cli/src/eval.rs",
-                Some("print_single"),
-                0.0651,
-            ),
-            hit(
-                HitKind::Def,
-                "crates/ast-sgrep-core/src/search/conjunction.rs",
-                Some("combine"),
-                0.0305,
-            ),
-        ];
-        apply_critic(&parsed, QueryIntent::Conceptual, &mut hits);
-        hits.sort_by(|a, b| b.score.total_cmp(&a.score));
-        let board = critic_autopsy(&hits);
-        let first = hits.first().expect("critic emptied the shortlist");
-        if first.symbol.as_deref() != Some("combine")
-            || !first.file.replace('\\', "/").ends_with("conjunction.rs")
-        {
-            panic!(
-                "\n\n===== THIS IS NOT A SEARCH ENGINE =====\n\
-                 Query: combine two search channels in a single query\n\
-                 Required #1: combine in conjunction.rs\n\
-                 Actual   #1: {:?} {} {:?}\n\
-                 fusion.rs, eval.rs, and combine_field_scores must not lead.\n\n\
-                 SCOREBOARD:\n{board}\n\
-                 ===== END AUTOPSY =====\n",
-                first.kind, first.file, first.symbol
-            );
-        }
     }
 }

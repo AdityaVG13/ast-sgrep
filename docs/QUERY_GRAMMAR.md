@@ -73,6 +73,8 @@ selects the first leading mode prefix or Hybrid-as-text.
 | QG-024 | Nested / parenthesized boolean unsupported | `(defs:Foo AND callers:Bar)` is Hybrid-as-text (no leading prefix) | `qg_must_matrix` |
 | QG-025 | Prefix match is case-sensitive | `Callers:Foo` is Hybrid, not Callers | `qg_must_matrix` |
 | QG-026 | Unknown prefix is Hybrid-as-text | `xyzzy:Foo` is Hybrid | `qg_must_matrix` |
+| QG-027 | A literal / word answer prefers the code that *uses* the needle | a JSON fixture or a comment that merely quotes it ranks below the code line (shortlist-context rule in the critic) | `literal_answers_prefer_use_over_mention_and_reach_definitions` |
+| QG-028 | `word:<Identifier>` / `literal:<Identifier>` also return the declaration | the def lane joins the line lane for identifier-shaped needles, so the def ranks first | `literal_answers_prefer_use_over_mention_and_reach_definitions` |
 
 Use CLI/MCP/LSP options (language filter, semantic-only search) for filters
 that are not part of the query string. `pattern:` completeness vs ast-grep is

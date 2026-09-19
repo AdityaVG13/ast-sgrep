@@ -14,6 +14,61 @@ repository. Any number quoted in docs, commit messages, or bead close reasons
 must trace back to a row here or carry its own reproduce command. Scores were
 produced by the harness, twice, on the machine below — no hand-edited figures.
 
+## 2026-09-19 ranking pass (self corpus, working tree)
+
+**Status: `reproducible-in-tree`.** Reproduce:
+`asgrep --json --no-embed eval --gold benchmarks/gold/self.json .`
+(add `--no-embed` removal for the default embed-on config.)
+
+| Provenance | value |
+|------------|-------|
+| date | 2026-09-19 |
+| commit | working tree; base = `HEAD 9bfa6aa0` release build |
+| machine | Apple M5 Max (arm64), macOS 26.6.2 |
+| corpus | self, 637 indexed files, 17 gold queries |
+| harness | `asgrep eval --gold benchmarks/gold/self.json` (in tree) |
+| caveat | absolute values move with the indexed lexicon state; associations are learned at index time, so compare within one index, not across indexes |
+
+Paired run, same index, pre-pass binary vs current:
+
+| Metric | no-embed prev | **no-embed now** | embed-on prev | **embed-on now** |
+|--------|--------------:|-----------------:|--------------:|-----------------:|
+| MRR | 0.827 | **1.000** | 0.727 | 0.850 |
+| nDCG | 0.869 | **0.984** | 0.774 | 0.852 |
+| recall@1 | 0.706 | **0.882** | 0.618 | 0.735 |
+| recall@5 | 0.882 | **1.000** | 0.824 | 0.882 |
+| recall@20 | 1.000 | 1.000 | 0.941 | 0.941 |
+
+What changed:
+
+- **Adjudication now sees the retrieval concept set.** The post-fusion critic's
+  concept affinity read only the static hand-written concept groups, while the
+  retrieval passes expanded the query through the repository (PPMI) vocabulary.
+  A symbol covering a *learned* association (`compact -> budget`) therefore
+  counted as single-concept. With the union, `CompactBudget`
+  (`crates/ast-sgrep-plugins/src/lib.rs`) covers compact + budget and reaches
+  rank 1 for `compact output path interning` (was: pool rank 33, page rank 7).
+  Unit-tested with a mutation check in `search/critic.rs`.
+- **Literal/word lanes route through the critic** (previously hybrid only), and
+  `has_code_evidence` counts code-file line hits, so prose/data/test penalties
+  actually apply to line-hit shortlists. `is_prose_path` covers data/markup
+  extensions and fixture trees.
+- **Comment mentions rank below code uses** for non-conceptual intents
+  (`COMMENT_MENTION_PENALTY`, code evidence required).
+- **`word:<Identifier>` / `literal:<Identifier>` also run the def lane**, so the
+  declaration outranks incidental mentions.
+- **Removed `demote_thieves_below_conjunction_combine`** (plus
+  `steals_conjunction_query` and its unit test). That clamp hardcoded
+  `conjunction.rs` / `fusion.rs` / `eval.rs` / `field_weight.rs` and the symbol
+  `combine` to force one ordering. Measured: with the clamp deleted the numbers
+  above are identical, because the learned-vocabulary rule now carries the same
+  ordering by mechanism instead of by file name.
+
+Open, measured: the **default embed-on path stays 0.15 MRR behind** no-embed
+(0.850 vs 1.000) and one query keeps a relevant item outside the top 20
+(`recall@20 = 0.941`). Embedding-channel crowding is the next candidate, not a
+no-embed regression: the embed channel was not touched by this pass.
+
 ## Canonical fingerprint rows
 
 **Status: `canonical` + `UNREPRODUCIBLE`.** Cite these ids. The gold + eval

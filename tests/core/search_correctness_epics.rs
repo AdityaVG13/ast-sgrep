@@ -420,6 +420,11 @@ fn alias_source(ext: &str, needle: &str) -> String {
         }
         "kt" | "kts" => format!("val {needle} = 1\n"),
         "php" => format!("<?php function {needle}() {{}}\n"),
+        // CUDA maps to C++ in the language table, so the walk indexes it; the
+        // snippet table has to know that too.
+        "cu" | "cuh" => format!("__global__ void {needle}() {{}}\n"),
+        "dart" => format!("void {needle}() {{}}\n"),
+        "mbt" | "mbti" => format!("fn {needle}() -> Unit {{}}\n"),
         other => panic!("missing snippet for extension {other}"),
     }
 }
@@ -566,3 +571,83 @@ fn iva9_8_chain_edges_subset_and_callee_seed() {
     assert_eq!(resp.nodes.len(), resp.nodes.len().min(2));
     assert!(resp.edge_count == resp.edges.len());
 }
+
+/// INTENT: a literal/word answer prefers the code that *uses* the needle over
+/// material that merely *mentions* it, and an identifier needle reaches its
+/// definition. All three rules are shortlist-context rules, so each facet is
+/// asserted on one small corpus that carries both kinds of hit.
+/// FACETS: comment mention below code use; JSON fixture below Cargo source;
+/// `word:<Identifier>` returns the declaration first.
+/// KILLS: comment-outranks-code, fixture-outranks-code, identifier-loses-to-mentions.
+#[test]
+fn literal_answers_prefer_use_over_mention_and_reach_definitions() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    // The needle appears: in a fixture JSON that quotes it, in doc comments that
+    // mention it, and once in the code that actually runs it.
+    fs::create_dir_all(root.join("benchmarks/gold")).unwrap();
+    fs::write(
+        root.join("benchmarks/gold/self.json"),
+        "{\"query\": \"literal:needle_phrase_here\"}\n",
+    )
+    .unwrap();
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::write(
+        root.join("src/uses.rs"),
+        "// needle_phrase_here is documented here\n/// needle_phrase_here in a doc comment\npub struct NeedleProbe {\n    pub value: u32,\n}\npub fn run() {\n    let sql = \"PRAGMA needle_phrase_here = 1\";\n    let _ = sql;\n}\n",
+    )
+    .unwrap();
+    let index_path = root.join("index.db");
+    let mut indexer = Indexer::new(IndexOptions {
+        root: root.to_path_buf(),
+        index_path: Some(index_path.clone()),
+        force_reindex: true,
+        embed_semantic: false,
+        ..IndexOptions::default()
+    })
+    .unwrap();
+    indexer.index_all().unwrap();
+
+    let searcher = Searcher::new(SearchOptions {
+        root: root.to_path_buf(),
+        index_path: Some(index_path),
+        limit: 10,
+        use_embed: false,
+        ..SearchOptions::default()
+    })
+    .unwrap();
+
+    // Facet 1+2: literal phrase -> the code line, not the fixture, not comments.
+    let literal = searcher.search("literal:needle_phrase_here").unwrap();
+    let first = literal.hits.first().expect("literal lane must return hits");
+    assert!(
+        first.file.ends_with("src/uses.rs"),
+        "literal answer must prefer code over fixture/comments; got {:?}",
+        literal.hits.iter().map(|h| (h.file.clone(), h.excerpt.clone())).collect::<Vec<_>>()
+    );
+    assert!(
+        !first.excerpt.trim_start().starts_with("//"),
+        "the first hit must be a use, not a comment mention: {:?}",
+        first.excerpt
+    );
+    let fixture_rank = literal
+        .hits
+        .iter()
+        .position(|hit| hit.file.ends_with("self.json"))
+        .map(|index| index + 1);
+    assert!(
+        fixture_rank.is_none_or(|rank| rank > 1),
+        "a fixture that quotes the needle must not lead: rank {fixture_rank:?}"
+    );
+
+    // Facet 3: identifier needle -> its declaration, not the mentions.
+    let word = searcher.search("word:NeedleProbe").unwrap();
+    let first_word = word.hits.first().expect("word lane must return hits");
+    assert_eq!(
+        first_word.symbol.as_deref(),
+        Some("NeedleProbe"),
+        "word:<Identifier> must surface the declaration first; got {:?}",
+        word.hits.iter().map(|h| (h.symbol.clone(), h.file.clone())).take(4).collect::<Vec<_>>()
+    );
+}
+

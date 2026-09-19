@@ -587,6 +587,33 @@ impl Searcher {
         lexicon.expand(terms, MAX_QUERY_EXPANSIONS)
     }
 
+    /// Repository vocabulary for the critic: the learned associations the
+    /// retrieval passes already expand the query with.
+    ///
+    /// The critic's concept affinity read only the static concept groups, so a
+    /// symbol covering a learned association (compact -> budget, 3
+    /// co-occurrences) counted as single-concept while a one-token symbol
+    /// counted the same -- adjudication could not see what retrieval saw. The
+    /// lexicon is cached per data generation, so this shares one expansion.
+    fn critic_vocabulary(&self, parsed: &ParsedQuery) -> Option<std::collections::HashSet<String>> {
+        if !self.options.use_repository_vocabulary
+            || crate::intent::classify(parsed) != crate::intent::QueryIntent::Conceptual
+        {
+            return None;
+        }
+        let generation = match self.index_gen() {
+            Some(gen) => gen.lexicon,
+            None => self.store.search_data_versions().ok()?.1,
+        };
+        let terms = crate::lexicon::prose_terms(&parsed.raw);
+        let related: std::collections::HashSet<String> = self
+            .repository_associations(&terms, generation)
+            .into_iter()
+            .map(|association| association.related)
+            .collect();
+        (!related.is_empty()).then_some(related)
+    }
+
     /// Repository associations that apply to this query (ufk7).
     fn query_expansions(&self, query: &str, lexicon_generation: i64) -> Vec<QueryExpansion> {
         let parsed = ParsedQuery::parse(query);
@@ -779,6 +806,7 @@ impl Searcher {
             }
             let mut parsed = ParsedQuery::parse(query_str);
             resolve_path_scope(&self.options.root, &mut parsed)?;
+            let critic_vocabulary = self.critic_vocabulary(&parsed);
             let hits = match parsed.mode {
                 QueryMode::Callers => search_callers(&self.store, &self.options, &parsed)?,
                 QueryMode::Defs => search_defs(&self.store, &self.options, &parsed)?,
@@ -791,7 +819,29 @@ impl Searcher {
                     self.options.limit,
                 )?,
                 QueryMode::Literal | QueryMode::Word => {
-                    literal_pass(&self.store, &self.options, &parsed)?
+                    let mut hits = literal_pass(&self.store, &self.options, &parsed)?;
+                    // A single identifier needle means "where is it defined".
+                    // The line lane alone ranks incidental mentions above the
+                    // declaration (measured: word:SnapshotStamp put the struct's
+                    // own file 6th, behind three other files that merely use it),
+                    // and the hybrid lane already merges def hits for identifier
+                    // needles, so this lane does too.
+                    if let Some(spelling) = parsed.identifier_spelling() {
+                        if spelling.chars().count() >= 3 {
+                            let def_query = ParsedQuery::parse(&format!("defs:{spelling}"));
+                            hits.extend(search_defs(&self.store, &self.options, &def_query)?);
+                        }
+                    }
+                    // The critic ran only on the hybrid lane, so every context
+                    // penalty (prose/data paths, identifier collisions, folded
+                    // spellings) was inert for literal/word shortlists: a JSON
+                    // fixture quoting the needle and doc-comment mentions
+                    // outranked the code that implements it. No fusion here --
+                    // one channel, so rank order is the lane's own.
+                    crate::intent::route_hits(&parsed, &mut hits);
+                    let intent = crate::intent::classify(&parsed);
+                    critic::apply_critic(&parsed, intent, &mut hits, critic_vocabulary.as_ref());
+                    hits
                 }
                 QueryMode::Regex => regex_pass(&self.store, &self.options, &parsed)?,
                 QueryMode::Hybrid => {
@@ -811,7 +861,7 @@ impl Searcher {
                                 "weighted RRF + critic",
                             );
                             crate::fusion::apply_weighted_rrf(&mut hits, &weights);
-                            critic::apply_critic(&parsed, intent, &mut hits);
+                            critic::apply_critic(&parsed, intent, &mut hits, critic_vocabulary.as_ref());
                         }
                         hits
                     }
