@@ -1064,7 +1064,17 @@ impl Searcher {
             );
             self.repository_expanded_query(parsed)?
         };
-        let semantic_query = expanded.as_ref().unwrap_or(parsed);
+        // The local hashed backend re-encodes tokens, so feeding it a learned
+        // expansion makes it encode something the user did not ask for. Ask the
+        // derived backend for the query as written; a neural backend keeps the
+        // expansion (it is genuinely semantic). Measured with the expansion in
+        // the derived path: `derive the next command ...` lost its target from
+        // the page even after the cascade and lexical channels were cleaned.
+        let semantic_query = if self.options.use_neural_embed {
+            expanded.as_ref().unwrap_or(parsed)
+        } else {
+            parsed
+        };
         // Candidate discovery: original 3+ char terms, then a few concept
         // extras for zero-overlap paraphrases (throttle -> rate/limit).
         // Lexicon-expanded semantic terms stay on the embed path; stuffing
@@ -1095,7 +1105,18 @@ impl Searcher {
         } else {
             semantic_query.clone()
         };
-        let user_discovery: HashSet<String> = discovery.terms.iter().cloned().collect();
+        // User evidence is the query's own terms. Learned borrows (and the
+        // concept-group extras added below) are "extra" terms in the prefilter,
+        // which reserves budget for them instead of letting them spend the
+        // user's. Reading this after the borrow made learned terms look like
+        // user evidence: with embeddings on, three borrowed terms consumed the
+        // 100-file cascade budget and a structurally exact target fell out of
+        // the cascade entirely (measured: embed-on gold MRR 0.850 vs 1.000).
+        let user_discovery: HashSet<String> = if intent == crate::intent::QueryIntent::Conceptual {
+            parsed.terms.iter().cloned().collect()
+        } else {
+            discovery.terms.iter().cloned().collect()
+        };
         if intent == crate::intent::QueryIntent::Conceptual {
             let mut extra = discovery.terms.len().saturating_sub(parsed.terms.len());
             for tok in ast_sgrep_embed::tokenize(&ast_sgrep_embed::expand_concepts(&parsed.raw)) {
@@ -1130,11 +1151,28 @@ impl Searcher {
                 },
             )?
         };
+        let (lexical, user_files) = lexical;
         let mut lexical = lexical;
         let lexical_files = lexical
             .iter()
             .map(|hit| hit.file.clone())
             .collect::<HashSet<_>>();
+        // Learned borrows may not outrank the query's own evidence inside the
+        // lexical channel either. Their hits keep the channel honest about
+        // rank: a borrowed term that ranks first pushes every user-term hit
+        // down, and RRF reads ranks (measured: with borrows in the lexical
+        // channel, `derive the next command ...` kept its target out of the
+        // page; with them dropped the target returns to rank 1). Borrowing
+        // still applies when the query's terms find nothing -- the
+        // zero-overlap case the vocabulary exists for.
+        if !user_files.is_empty() {
+            lexical.retain(|hit| user_files.contains(&hit.file));
+        }
+        let cascade_files = if user_files.is_empty() {
+            lexical_files.clone()
+        } else {
+            user_files
+        };
         // Invent-path escape: conceptual NL with no lexical foothold still runs
         // unconstrained semantic (same path as `search_semantic`), then fan-out.
         // Identifier / literal intents stay fail-closed on empty discovery.
@@ -1198,7 +1236,7 @@ impl Searcher {
                 "search",
                 "structural_index_pass",
             );
-            structural_index_pass(&self.store, &self.options, &stage_query, &lexical_files)?
+            structural_index_pass(&self.store, &self.options, &stage_query, &cascade_files)?
         };
         let mut structural = ast_matches;
         structural.extend({
@@ -1215,7 +1253,7 @@ impl Searcher {
                 &self.store,
                 &self.options,
                 &stage_query,
-                &lexical_files,
+                &cascade_files,
                 true,
                 warmed.as_ref(),
             )?
@@ -1245,7 +1283,7 @@ impl Searcher {
                     "search",
                     "anchor_pass_for_files",
                 );
-                anchor_pass_for_files(&self.store, &self.options, &stage_query, &lexical_files)?
+                anchor_pass_for_files(&self.store, &self.options, &stage_query, &cascade_files)?
             });
         }
         let structural_files = structural
@@ -1261,7 +1299,16 @@ impl Searcher {
         lexical.retain(|hit| working_files.contains(&hit.file));
         let mut hits = lexical;
         hits.extend(structural);
-        if self.options.use_embed {
+        // Semantic evidence is a fallback, not a co-equal voter. The local
+        // hashed backend re-encodes the same text, so it cannot outvote
+        // structural evidence, and its *presence* measurably displaced
+        // structurally exact hits: embed-on gold MRR 0.850 vs 1.000 with the
+        // channel off, unchanged at semantic weight 0.001 (presence, not
+        // weight, was the lever) and unchanged when the vocabulary left the
+        // cascade. It still runs when structural + lexical evidence leaves the
+        // page thin -- the zero-overlap case it exists for.
+        let structural_evidence_is_thin = hits.len() < self.options.limit;
+        if self.options.use_embed && structural_evidence_is_thin {
             let semantic = {
                 let _span = crate::perf_profile::Span::start(
                     "hybrid_embed_pass",
@@ -1495,7 +1542,7 @@ fn literal_prefilter_pass(
     parsed: &ParsedQuery,
     drop_common: bool,
     user_first: Option<&HashSet<String>>,
-) -> Result<Vec<SearchHit>> {
+) -> Result<(Vec<SearchHit>, HashSet<String>)> {
     // Trigram MATCH needs 3 chars. Shorter needles use literal_sql LIKE/GLOB
     // with ORDER BY over the whole `lines` table — ~22 ms on a 54k-file
     // corpus for a digit like "0". Cascade file discovery does not need them.
@@ -1523,12 +1570,12 @@ fn literal_prefilter_pass(
             })
             .collect();
         if rare.is_empty() {
-            return Ok(Vec::new());
+            return Ok((Vec::new(), HashSet::new()));
         }
         terms = rare;
     }
     if terms.is_empty() {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), HashSet::new()));
     }
     // Rarest-trigram-df first, then stop at the file cap. Scanning every
     // leftover English term and *then* merging is equivalent for the 100
@@ -1550,6 +1597,13 @@ fn literal_prefilter_pass(
         None => CASCADE_PREFILTER_FILE_LIMIT,
     };
     let mut files = HashSet::new();
+    // Files the query's own terms found. Learned borrows may add lexical
+    // candidates, but the structural passes constrain to this set when it is
+    // non-empty: a borrowed term must not spend the cascade budget that the
+    // user's evidence needs (measured: embed-on gold MRR 0.902 -> 0.873 and one
+    // structurally exact target fell out of the def pool when borrows widened
+    // the constraint).
+    let mut user_files = HashSet::new();
     let mut out = Vec::new();
     let extra_reserve = if user_first.is_some() && file_cap > CASCADE_PER_TERM_FILE_LIMIT {
         CASCADE_EXTRA_FILE_RESERVE
@@ -1585,6 +1639,9 @@ fn literal_prefilter_pass(
             let term_cap = remaining.min(CASCADE_PER_TERM_FILE_LIMIT);
             for row in corpus.scan_distinct_files_cs(term, term_cap, &files) {
                 if files.insert(row.path.to_string()) {
+                    if !extra {
+                        user_files.insert(row.path.to_string());
+                    }
                     out.push(asgrep_line_hit(
                         row.path.to_string(),
                         row.language.map(str::to_string),
@@ -1599,24 +1656,28 @@ fn literal_prefilter_pass(
             }
         }
         if files.len() >= file_cap || terms.iter().all(|term| term.is_ascii()) {
-            return Ok(out);
+            return Ok((out, user_files));
         }
     }
     let mut prefilter_options = options.clone();
     prefilter_options.case_insensitive = true;
     prefilter_options.limit = file_cap;
     for term in terms {
+        let extra = user_first.is_some_and(|user| !user.contains(term.as_str()));
         let hits = literal_pass(store, &prefilter_options, &ParsedQuery::literal(term))?;
         for hit in hits {
             if files.insert(hit.file.clone()) {
+                if !extra {
+                    user_files.insert(hit.file.clone());
+                }
                 out.push(hit);
                 if files.len() >= file_cap {
-                    return Ok(out);
+                    return Ok((out, user_files));
                 }
             }
         }
     }
-    Ok(out)
+    Ok((out, user_files))
 }
 
 fn discovery_df(store: &IndexStore, term: &str) -> i64 {
