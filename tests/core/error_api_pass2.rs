@@ -10,8 +10,8 @@
 //! `crates/ast-sgrep-core/src`); each row names its pinning test:
 //!
 //! - `io_bounds::RootDir::open` rustix `map_err(io::Error)` + `?` (Io
-//!   preserved) → `indexer_new_missing_root_surfaces_io`,
-//!   `indexer_new_file_as_root_surfaces_io`.
+//!   preserved) → `indexer_new_missing_root_surfaces_io` (missing-root +
+//!   file-as-root trigger legs).
 //! - `Indexer::new` `canonicalize().unwrap_or(...)` swallow (harmless:
 //!   `RootDir::open` fails after) → `indexer_new_missing_root_surfaces_io`.
 //! - `Searcher::new` `canonicalize().map_err(... Other ...)` (deliberate
@@ -19,17 +19,18 @@
 //! - `store::sqlite::open_inner` `create_dir_all.map_err(... Other ...)`
 //!   (deliberate Io→Other) → `store_open_uncreatable_index_dir_converts_to_other`.
 //! - `store::sqlite::open_inner` `Connection::open ?` (`#[from]` Database,
-//!   kind preserved) + `init_schema ?` → `db_garbage_kind_preserved_*`,
-//!   `db_garbage_through_indexer_new_without_force_stays_database`.
+//!   kind preserved) + `init_schema ?` →
+//!   `db_garbage_kind_preserved_through_store_open` (store/searcher/indexer
+//!   layer legs + byte-identical rejection proof).
 //! - `open_inner` read-only missing-db guard (Other, fail-closed) →
 //!   `missing_db_through_searcher_new_fails_closed`.
 //! - `pattern::search_pattern` `store.pattern_node_count()?` →
 //!   `db_dropped_table_through_search_pattern_stays_database`.
 //! - `Indexer::update_paths` over-max gate before `ignore.clear()`/indexing
 //!   → `update_paths_over_max_rejects_before_side_effect`.
-//! - `Indexer::check_cancel ?` at `index_all` entry and per update path →
-//!   `cancelled_index_all_rejects_before_side_effect`,
-//!   `cancelled_update_paths_rejects_before_side_effect`.
+//! - `Indexer::check_cancel ?` at `index_all` entry and per update path → the
+//!   cancel anchor `cancelled_index_all_rejects_before_side_effect`
+//!   (entry×assert over both write entries; absorbs the E3 cancel relation).
 //! - `update_paths` per-file `index_failure` counted isolation
 //!   (`files_failed += 1`, batch stays `Ok`) → `per_file_failure_is_counted`.
 //!
@@ -40,110 +41,79 @@
 //! by walk-behavior suites), `Durability::from_env` `.ok().unwrap_or_default`
 //! (env parsing, not error propagation).
 
+#[path = "error_testkit.rs"]
+mod error_testkit;
+
 use ast_sgrep_core::{
     search_pattern, IndexOptions, IndexStore, Indexer, SearchOptions, Searcher, StoreError,
     MAX_INCREMENTAL_PATHS,
 };
+use ast_sgrep_testkit::err_of;
+use error_testkit::{
+    discriminant, indexer_at, is_corrupt_kind, searcher_at, sqlite_code, write_garbage_db,
+};
 use rusqlite::ErrorCode;
-use std::path::{Path, PathBuf};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
 };
 use tempfile::TempDir;
 
-fn err_of<T>(result: Result<T, StoreError>) -> StoreError {
-    match result {
-        Ok(_) => panic!("expected Err, got Ok"),
-        Err(err) => err,
-    }
-}
-
-/// Public caller-side replica of the crate-private `is_corrupt_database`
-/// predicate. E2 proves corruption stays detectable through the `Database`
-/// discriminant + rusqlite kind alone, at every layer.
-fn is_corrupt_kind(err: &StoreError) -> bool {
-    matches!(
-        err,
-        StoreError::Database(rusqlite::Error::SqliteFailure(code, _))
-            if matches!(
-                code.code,
-                ErrorCode::DatabaseCorrupt | ErrorCode::NotADatabase
-            )
-    )
-}
-
-fn sqlite_code(err: &StoreError) -> Option<ErrorCode> {
-    match err {
-        StoreError::Database(rusqlite::Error::SqliteFailure(code, _)) => Some(code.code),
-        _ => None,
-    }
-}
-
-fn write_garbage_db(dir: &Path, name: &str) -> PathBuf {
-    let db = dir.join(name);
-    std::fs::write(&db, b"this is not a sqlite database file; garbage").unwrap();
-    db
-}
-
-fn indexer_at(root: &Path, db: &Path) -> Indexer {
-    Indexer::new(IndexOptions {
-        root: root.to_path_buf(),
-        index_path: Some(db.to_path_buf()),
-        ..IndexOptions::default()
-    })
-    .expect("indexer")
-}
-
-/// `RootDir::open` ENOENT propagates through `Indexer::new` as `Io` (the
-/// `canonicalize().unwrap_or` above it swallows nothing observable: the open
-/// fails after). The db path must not be created: the root check precedes
-/// any store side effect.
+/// INTENT: `RootDir::open` failures propagate through `Indexer::new` as `Io` —
+/// missing root (NotFound kind, db not created) plus file-as-root (`O_DIRECTORY`) legs.
+/// KILLS: Io→Other-swap, side-effect-before-check, variant-swap.
+/// ABSORBS: indexer_new_file_as_root_surfaces_io (same RootDir::open path, second trigger).
 #[test]
 fn indexer_new_missing_root_surfaces_io() {
-    let temp = TempDir::new().unwrap();
-    let missing = temp.path().join("nosuch-root");
-    let db = temp.path().join("index.db");
-    let err = err_of(Indexer::new(IndexOptions {
-        root: missing,
-        index_path: Some(db.clone()),
-        ..IndexOptions::default()
-    }));
-    match &err {
-        StoreError::Io(io) => assert_eq!(
-            io.kind(),
-            std::io::ErrorKind::NotFound,
-            "missing root must surface NotFound kind, got {err:?}"
-        ),
-        other => panic!("missing root must fail as Io, got {other:?}"),
+    // Anchor leg: missing root. The `canonicalize().unwrap_or` above the open
+    // swallows nothing observable: the open fails after. The db path must not
+    // be created: the root check precedes any store side effect.
+    {
+        let temp = TempDir::new().unwrap();
+        let missing = temp.path().join("nosuch-root");
+        let db = temp.path().join("index.db");
+        let err = err_of(Indexer::new(IndexOptions {
+            root: missing,
+            index_path: Some(db.clone()),
+            ..IndexOptions::default()
+        }));
+        match &err {
+            StoreError::Io(io) => assert_eq!(
+                io.kind(),
+                std::io::ErrorKind::NotFound,
+                "missing root must surface NotFound kind, got {err:?}"
+            ),
+            other => panic!("missing root must fail as Io, got {other:?}"),
+        }
+        assert!(
+            !db.exists(),
+            "failed root open must not create the index file"
+        );
     }
-    assert!(
-        !db.exists(),
-        "failed root open must not create the index file"
-    );
+    // Absorbed leg: a regular file as root fails `RootDir::open`
+    // (`O_DIRECTORY`) and still surfaces as `Io` — not `Other`, not `Ok`,
+    // not a panic.
+    {
+        let temp = TempDir::new().unwrap();
+        let file_root = temp.path().join("file.rs");
+        std::fs::write(&file_root, b"fn main() {}\n").unwrap();
+        let err = err_of(Indexer::new(IndexOptions {
+            root: file_root,
+            index_path: Some(temp.path().join("index.db")),
+            ..IndexOptions::default()
+        }));
+        assert!(
+            matches!(err, StoreError::Io(_)),
+            "file-as-root must fail as Io, got {err:?}"
+        );
+    }
 }
 
-/// A regular file as root fails `RootDir::open` (`O_DIRECTORY`) and still
-/// surfaces as `Io` — not `Other`, not `Ok`, not a panic.
-#[test]
-fn indexer_new_file_as_root_surfaces_io() {
-    let temp = TempDir::new().unwrap();
-    let file_root = temp.path().join("file.rs");
-    std::fs::write(&file_root, b"fn main() {}\n").unwrap();
-    let err = err_of(Indexer::new(IndexOptions {
-        root: file_root,
-        index_path: Some(temp.path().join("index.db")),
-        ..IndexOptions::default()
-    }));
-    assert!(
-        matches!(err, StoreError::Io(_)),
-        "file-as-root must fail as Io, got {err:?}"
-    );
-}
-
-/// Same depth error as above through the read layer: `Searcher::new`
+/// INTENT: same depth error through the read layer — `Searcher::new`
 /// deliberately converts the `canonicalize` Io into `Other` with context
-/// (search/mod.rs map site). Fail-closed, never silent `Ok`.
+/// (deliberate conversion contract). Fail-closed, never silent `Ok`.
+/// KILLS: conversion-drop(raw-Io-leak).
+/// ABSORBS: none (kept solo).
 #[test]
 fn searcher_new_missing_root_converts_to_other() {
     let temp = TempDir::new().unwrap();
@@ -157,9 +127,11 @@ fn searcher_new_missing_root_converts_to_other() {
     );
 }
 
-/// `open_inner` maps `create_dir_all` Io into `Other` (sqlite/mod.rs map
-/// site). A file blocking the index directory therefore fails as `Other`,
+/// INTENT: `open_inner` maps `create_dir_all` Io into `Other` (deliberate
+/// map-site contract) — a file blocking the index directory fails as `Other`,
 /// deterministically, instead of leaking a raw Io or panicking.
+/// KILLS: conversion-drop.
+/// ABSORBS: none (kept solo).
 #[test]
 fn store_open_uncreatable_index_dir_converts_to_other() {
     let temp = TempDir::new().unwrap();
@@ -175,79 +147,83 @@ fn store_open_uncreatable_index_dir_converts_to_other() {
     );
 }
 
-/// Garbage bytes fail `open` as `Database` with the sqlite kind intact:
-/// `NotADatabase`, detectable as corruption through the public downcast.
-/// E1 pins the discriminant; E2 pins the kind preservation.
+/// INTENT: garbage bytes stay Database + NotADatabase kind +
+/// corrupt-detectable through the store open, the read-layer constructor, and
+/// the write-layer constructor without force — and rejection precedes any
+/// repair side effect (byte-identical).
+/// KILLS: kind-drop, variant-swap, read-layer-conversion, silent-recovery,
+/// repair-before-reject.
+/// ABSORBS: db_garbage_through_searcher_new_stays_database,
+/// db_garbage_through_indexer_new_without_force_stays_database (byte-identical
+/// assertion carried).
+/// OVERLAP: E3 garbage_db_same_discriminant asserts the same cross-layer relation.
 #[test]
 fn db_garbage_kind_preserved_through_store_open() {
-    let temp = TempDir::new().unwrap();
-    let db = write_garbage_db(temp.path(), "index.db");
-    let err = err_of(IndexStore::open(temp.path(), Some(&db)));
-    assert_eq!(
-        sqlite_code(&err),
-        Some(ErrorCode::NotADatabase),
-        "garbage db must preserve NotADatabase kind, got {err:?}"
-    );
-    assert!(
-        is_corrupt_kind(&err),
-        "garbage db must stay corruption-detectable, got {err:?}"
-    );
+    // Anchor leg: store open pins the kind + corrupt-detectability (E1 pins
+    // the discriminant; E2 pins the kind preservation).
+    {
+        let temp = TempDir::new().unwrap();
+        let db = write_garbage_db(temp.path(), "index.db");
+        let err = err_of(IndexStore::open(temp.path(), Some(&db)));
+        assert_eq!(
+            sqlite_code(&err),
+            Some(ErrorCode::NotADatabase),
+            "garbage db must preserve NotADatabase kind, got {err:?}"
+        );
+        assert!(
+            is_corrupt_kind(&err),
+            "garbage db must stay corruption-detectable, got {err:?}"
+        );
+    }
+    // Absorbed leg: the same depth failure through `Searcher::new` (readonly
+    // open + readonly configure + readonly schema probe) — the read layer
+    // adds no conversion.
+    {
+        let temp = TempDir::new().unwrap();
+        let db = write_garbage_db(temp.path(), "index.db");
+        let err = err_of(searcher_at(temp.path(), &db));
+        assert!(
+            matches!(err, StoreError::Database(_)),
+            "garbage db through Searcher::new must stay Database, got {err:?}"
+        );
+        assert!(
+            is_corrupt_kind(&err),
+            "garbage db kind must survive the read layer, got {err:?}"
+        );
+    }
+    // Absorbed leg: without `force_reindex`, `Indexer::new` propagates the
+    // open `Database` error untouched (no recovery, no `Ok`) and leaves the
+    // file byte-identical.
+    {
+        let temp = TempDir::new().unwrap();
+        let db = write_garbage_db(temp.path(), "index.db");
+        let before = std::fs::read(&db).unwrap();
+        let err = err_of(Indexer::new(IndexOptions {
+            root: temp.path().to_path_buf(),
+            index_path: Some(db.clone()),
+            ..IndexOptions::default()
+        }));
+        assert!(
+            matches!(err, StoreError::Database(_)),
+            "garbage db through Indexer::new must stay Database, got {err:?}"
+        );
+        assert!(
+            is_corrupt_kind(&err),
+            "garbage db kind must survive Indexer::new, got {err:?}"
+        );
+        assert_eq!(
+            std::fs::read(&db).unwrap(),
+            before,
+            "rejected open must not mutate the db file"
+        );
+    }
 }
 
-/// The same depth failure through `Searcher::new` (readonly open +
-/// readonly configure + readonly schema probe): still `Database` with the
-/// kind preserved — the read layer adds no conversion.
-#[test]
-fn db_garbage_through_searcher_new_stays_database() {
-    let temp = TempDir::new().unwrap();
-    let db = write_garbage_db(temp.path(), "index.db");
-    let err = err_of(Searcher::new(SearchOptions {
-        root: temp.path().to_path_buf(),
-        index_path: Some(db),
-        ..SearchOptions::default()
-    }));
-    assert!(
-        matches!(err, StoreError::Database(_)),
-        "garbage db through Searcher::new must stay Database, got {err:?}"
-    );
-    assert!(
-        is_corrupt_kind(&err),
-        "garbage db kind must survive the read layer, got {err:?}"
-    );
-}
-
-/// Without `force_reindex`, `Indexer::new` propagates the open `Database`
-/// error untouched (no recovery, no `Ok`) and leaves the file byte-identical:
-/// rejection precedes any repair side effect.
-#[test]
-fn db_garbage_through_indexer_new_without_force_stays_database() {
-    let temp = TempDir::new().unwrap();
-    let db = write_garbage_db(temp.path(), "index.db");
-    let before = std::fs::read(&db).unwrap();
-    let err = err_of(Indexer::new(IndexOptions {
-        root: temp.path().to_path_buf(),
-        index_path: Some(db.clone()),
-        ..IndexOptions::default()
-    }));
-    assert!(
-        matches!(err, StoreError::Database(_)),
-        "garbage db through Indexer::new must stay Database, got {err:?}"
-    );
-    assert!(
-        is_corrupt_kind(&err),
-        "garbage db kind must survive Indexer::new, got {err:?}"
-    );
-    assert_eq!(
-        std::fs::read(&db).unwrap(),
-        before,
-        "rejected open must not mutate the db file"
-    );
-}
-
-/// A sqlite failure below `search_pattern` (`pattern_node_count()?`)
-/// propagates as `Database` — the search lane never degrades it to `Ok`
-/// empty or `Other`. Control first: the same call on the healthy store is
-/// `Ok`, so the `Err` is the poisoned depth query, not the pattern.
+/// INTENT: a sqlite failure below `search_pattern` (`pattern_node_count()?`)
+/// propagates as `Database` — the search lane never degrades it to `Ok` empty
+/// or `Other`. Control first: the same call on the healthy store is `Ok`.
+/// KILLS: lane-degrade-to-Ok-empty, degrade-to-Other.
+/// ABSORBS: none (kept solo).
 #[test]
 fn db_dropped_table_through_search_pattern_stays_database() {
     let temp = TempDir::new().unwrap();
@@ -282,8 +258,11 @@ fn db_dropped_table_through_search_pattern_stays_database() {
     );
 }
 
-/// The over-max gate fires before `ignore.clear()` and before any file is
-/// touched: `Other` plus a store that never saw the batch.
+/// INTENT: the over-max gate fires before `ignore.clear()` and before any file
+/// is touched — `Other` plus a store that never saw the batch.
+/// KILLS: gate-after-side-effect.
+/// ABSORBS: none (kept solo).
+/// OVERLAP: E3 failed_writes (E2 pins never-saw-batch via file_hash).
 #[test]
 fn update_paths_over_max_rejects_before_side_effect() {
     let temp = TempDir::new().unwrap();
@@ -304,33 +283,16 @@ fn update_paths_over_max_rejects_before_side_effect() {
     );
 }
 
-/// Cancel-before-walk: `index_all` checks the flag at entry, returns `Other`,
-/// and indexes nothing even though an indexable file is present.
+/// INTENT: a set cancel flag fails every write entry (`index_all`,
+/// `update_paths`) as `Other` with nothing indexed and no Ok stats — one
+/// entry×assert matrix over the same `check_cancel` contract.
+/// KILLS: cancel-check-drop, partial-index-on-cancel, entry-divergence-on-cancel.
+/// ABSORBS: cancelled_update_paths_rejects_before_side_effect (same
+/// check_cancel contract, second entry); E3
+/// cancelled_writes_fail_closed_with_same_discriminant (entry-agreement
+/// relation folds here).
 #[test]
 fn cancelled_index_all_rejects_before_side_effect() {
-    let temp = TempDir::new().unwrap();
-    std::fs::write(temp.path().join("a.rs"), b"fn alpha() {}\n").unwrap();
-    let db = temp.path().join("index.db");
-    let mut indexer = indexer_at(temp.path(), &db);
-    let cancel = Arc::new(AtomicBool::new(false));
-    indexer.set_cancel(Arc::clone(&cancel));
-    cancel.store(true, Ordering::SeqCst);
-    let err = err_of(indexer.index_all().map(|_| ()));
-    assert!(
-        matches!(err, StoreError::Other(_)),
-        "cancelled index_all must fail as Other, got {err:?}"
-    );
-    assert_eq!(
-        indexer.store().file_hash("a.rs").expect("store readable"),
-        None,
-        "cancelled index_all must index nothing"
-    );
-}
-
-/// Per-path cancel: `update_paths` checks the flag before each path, so a
-/// cancelled single-file update returns `Other` without indexing the file.
-#[test]
-fn cancelled_update_paths_rejects_before_side_effect() {
     let temp = TempDir::new().unwrap();
     let rel = temp.path().join("a.rs");
     std::fs::write(&rel, b"fn alpha() {}\n").unwrap();
@@ -339,22 +301,31 @@ fn cancelled_update_paths_rejects_before_side_effect() {
     let cancel = Arc::new(AtomicBool::new(false));
     indexer.set_cancel(Arc::clone(&cancel));
     cancel.store(true, Ordering::SeqCst);
-    let err = err_of(indexer.update_paths(std::slice::from_ref(&rel)).map(|_| ()));
-    assert!(
-        matches!(err, StoreError::Other(_)),
-        "cancelled update_paths must fail as Other, got {err:?}"
+    // Entry×assert: both write entries fail as Other (neither reports Ok stats
+    // for work it did not do — the E3 relation leg).
+    let via_index_all = err_of(indexer.index_all().map(|_| ()));
+    let via_update = err_of(indexer.update_paths(std::slice::from_ref(&rel)).map(|_| ()));
+    assert_eq!(
+        (
+            discriminant(&via_index_all),
+            discriminant(&via_update)
+        ),
+        (2, 2),
+        "cancelled writes must fail as Other through both entries, got {via_index_all:?} / {via_update:?}"
     );
+    // Side-effect legs: neither entry indexed anything.
     assert_eq!(
         indexer.store().file_hash("a.rs").expect("store readable"),
         None,
-        "cancelled update_paths must index nothing"
+        "cancelled writes must index nothing"
     );
 }
 
-/// Per-file isolation degrades loudly, not silently: a binary `.rs` file
-/// fails its own path while its healthy sibling indexes; the batch stays
-/// `Ok` with the failure COUNTED in `files_failed` (plus a stderr line) —
-/// neither a batch `Err` that drops the sibling nor a silent skip.
+/// INTENT: per-file isolation degrades loudly, not silently — a binary `.rs`
+/// fails its own path while its healthy sibling indexes; the batch stays `Ok`
+/// with the failure COUNTED in `files_failed` (plus a stderr line).
+/// KILLS: silent-skip, batch-Err-on-single-failure.
+/// ABSORBS: none (kept solo; only loud-degradation pin).
 #[test]
 fn per_file_failure_is_counted_not_silent() {
     let temp = TempDir::new().unwrap();
@@ -384,10 +355,11 @@ fn per_file_failure_is_counted_not_silent() {
     );
 }
 
-/// Search-before-index fails closed as `Other` through `Searcher::new`
+/// INTENT: search-before-index fails closed as `Other` through `Searcher::new`
 /// (readonly missing-db guard) — never an `Ok` searcher silently answering
-/// empty. Control: after indexing, the same constructor is `Ok`, proving
-/// the `Other` was the missing db, not the root.
+/// empty. Control: after indexing, the same constructor is `Ok`.
+/// KILLS: fail-open-to-empty-searcher.
+/// ABSORBS: none (kept solo).
 #[test]
 fn missing_db_through_searcher_new_fails_closed() {
     let temp = TempDir::new().unwrap();

@@ -8,13 +8,10 @@
 //! Deterministic, tempfile fixtures, no new deps.
 //!
 //! Relation map (metamorphic relation -> test):
-//! - dispatch equivalence UnknownTool: session.call == tools::call_tool
-//!   (plus the documented budget-bump divergence)
-//!   -> e3_dispatch_equivalence_unknown_tool
-//! - dispatch equivalence InvalidArgs matrix: session.call == tools::call_tool
-//!   -> e3_dispatch_equivalence_invalid_args
-//! - dispatch equivalence Other matrix: session.call == tools::call_tool
-//!   -> e3_dispatch_equivalence_other
+//! - dispatch equivalence: session.call == tools::call_tool across the
+//!   UnknownTool + InvalidArgs + Other fault matrices (plus the documented
+//!   budget-bump divergence)
+//!   -> e3_dispatch_equivalence
 //! - repeat determinism: identical bad call twice == identical discriminant
 //!   sequence, same session and fresh sessions (plus budget-bypass divergence)
 //!   -> e3_repeat_bad_call_deterministic
@@ -22,195 +19,105 @@
 //!   and bit-identical across rotations
 //!   -> e3_batch_position_independence
 //! - batch mode equivalence: serial vs parallel mixed batch, same per-id
-//!   ok pattern and good values
+//!   ok pattern and good values (absorbs the E2 parallel isolation legs)
 //!   -> e3_batch_mode_equivalence
 //! - plan position independence: failing step at any index, same discriminant
 //!   as the direct call, call_count pins the executed prefix
 //!   -> e3_plan_position_independence
 //! - batch mirrors direct outcomes: per-call ok == direct is_ok, ok/error
-//!   exclusivity per row (fail-closed, never Ok-carried)
+//!   exclusivity per row (fail-closed, never Ok-carried; absorbs the E1
+//!   per-call mirroring legs)
 //!   -> e3_batch_mirrors_direct_outcomes
 //! - plan fail-closed: failure is Err never Ok, discriminant == direct,
-//!   documented prefix state (applied-before-fail vs untouched-on-fail)
+//!   documented prefix state (applied-before-fail vs untouched-on-fail),
+//!   remainder resumes (absorbs the E4 plan-prefix drill)
 //!   -> e3_plan_fail_closed_never_ok
 //! - serve stream position independence: bad request at any stream index,
 //!   neighbors unaffected, worker reaches Bye
 //!   -> e3_serve_stream_position_independence
 
+#[path = "error_testkit.rs"]
+mod error_testkit;
+
 use ast_sgrep_codemode::tools::call_tool;
 use ast_sgrep_codemode::{
-    parse_plan, run_batch, run_plan, run_serve, BatchCall, BatchRequest, CallError,
-    CodeModeSession, ParallelMode, ServeRequest, ServeResponse, SessionConfig,
+    parse_plan, run_batch, run_plan, BatchCall, CallError, ParallelMode, ServeRequest,
+    ServeResponse,
 };
-use ast_sgrep_plugins::OutputFormat;
+use error_testkit::{
+    assert_dispatch_equivalence, batch_call, batch_request, config_at, discriminant,
+    serve_lines, serve_request_line, session_at,
+};
 use serde_json::{json, Value};
-use std::io::Cursor;
 
-fn session_at(root: &std::path::Path) -> CodeModeSession {
-    CodeModeSession::new(SessionConfig {
-        root: root.to_path_buf(),
-        index_path: None,
-        limit: 5,
-        use_embed: false,
-        default_format: OutputFormat::AgentCapsule,
-    })
-}
-
-fn config_at(root: &std::path::Path) -> SessionConfig {
-    SessionConfig {
-        root: root.to_path_buf(),
-        index_path: None,
-        limit: 5,
-        use_embed: false,
-        default_format: OutputFormat::AgentCapsule,
-    }
-}
-
-fn batch_request(calls: Vec<BatchCall>) -> BatchRequest {
-    BatchRequest {
-        root: None,
-        index_path: None,
-        use_embed: None,
-        limit: None,
-        parallel: None,
-        parallel_mode: None,
-        calls,
-    }
-}
-
-fn batch_call(id: &str, tool: &str, args: Value) -> BatchCall {
-    BatchCall {
-        id: id.to_string(),
-        tool: tool.to_string(),
-        args,
-    }
-}
-
-fn serve_lines(input: String, root: &std::path::Path) -> (Result<(), CallError>, Vec<String>) {
-    let mut out = Vec::new();
-    let result = run_serve(config_at(root), Cursor::new(input), &mut out);
-    let text = String::from_utf8(out).expect("serve output is utf8");
-    let lines = text.lines().map(str::to_string).collect();
-    (result, lines)
-}
-
-fn serve_request_line(request: &ServeRequest) -> String {
-    format!("{}\n", serde_json::to_string(request).expect("request serializes"))
-}
-
-/// Discriminant projection: the enum variant only, never message text.
-fn discriminant(err: &CallError) -> &'static str {
-    match err {
-        CallError::UnknownTool(_) => "unknown_tool",
-        CallError::InvalidArgs(_) => "invalid_args",
-        CallError::BudgetExhausted(_) => "budget_exhausted",
-        CallError::Json(_) => "json",
-        CallError::Other(_) => "other",
-    }
-}
-
-/// Both dispatch surfaces must reject the same fault with the same variant.
-/// session.call consumes one budget unit; tools::call_tool bypasses the
-/// budget bump — the divergence is pinned, not the confusion.
-fn assert_dispatch_equivalence(root: &std::path::Path, tool: &str, args: Value) {
-    let mut via_session = session_at(root);
-    let session_err = via_session
-        .call(tool, args.clone())
-        .expect_err("session.call must fail");
-    let mut via_tool = session_at(root);
-    let tool_err = call_tool(&mut via_tool, tool, args).expect_err("call_tool must fail");
-    assert_eq!(
-        discriminant(&session_err),
-        discriminant(&tool_err),
-        "tool {tool}: dispatch surfaces disagree"
-    );
-    assert_eq!(via_session.call_count(), 1);
-    assert_eq!(via_tool.call_count(), 0);
-}
-
+/// INTENT=session.call == call_tool discriminant on UnknownTool + InvalidArgs + Other fault matrices (budget-bump divergence pinned).
+/// KILLS=dispatch-surface-divergence.
+/// ABSORBS=e3_dispatch_equivalence_unknown_tool, e3_dispatch_equivalence_other (anchor: e3_dispatch_equivalence_invalid_args).
 #[test]
-fn e3_dispatch_equivalence_unknown_tool() {
-    // Unknown names (including the empty name) fail identically on both
-    // dispatch surfaces: same UnknownTool discriminant, budget divergence pinned.
+fn e3_dispatch_equivalence() {
+    // One parameterized equivalence across all three fault matrices: both
+    // dispatch surfaces reject the same bad payload with the same variant —
+    // the variant lives in dispatch, not in the caller. Unknown names
+    // (including the empty name), pure-tool guard faults (InvalidArgs), and
+    // bound-tool pre-IO validation faults (Other, anyhow-wrapped at dispatch).
     let temp = tempfile::tempdir().expect("tempdir");
-    for name in ["no-such-tool", ""] {
-        let mut via_session = session_at(temp.path());
-        let session_err = via_session
-            .call(name, json!({}))
-            .expect_err("unknown tool");
-        assert!(
-            matches!(session_err, CallError::UnknownTool(_)),
-            "got {session_err:?}"
-        );
-        let mut via_tool = session_at(temp.path());
-        let tool_err = call_tool(&mut via_tool, name, json!({})).expect_err("unknown tool");
-        assert!(
-            matches!(tool_err, CallError::UnknownTool(_)),
-            "got {tool_err:?}"
-        );
-        assert_eq!(
-            discriminant(&session_err),
-            discriminant(&tool_err),
-            "name {name:?}: dispatch surfaces disagree"
-        );
-        assert_eq!(via_session.call_count(), 1);
-        assert_eq!(via_tool.call_count(), 0);
-    }
-}
-
-#[test]
-fn e3_dispatch_equivalence_invalid_args() {
-    // Pure-tool guard faults: both dispatch surfaces yield InvalidArgs for the
-    // same bad payload — the variant lives in dispatch, not in the caller.
-    let temp = tempfile::tempdir().expect("tempdir");
-    let cases: &[(&str, Value)] = &[
-        ("select", json!({})),
-        ("select", json!({"value": {"a": 1}, "fields": "a"})),
-        ("filter_hits", json!({})),
-        ("filter_hits", json!({"hits": 42})),
-        ("catalog_search", json!({})),
-        ("catalog_describe", json!({"name": "no-such-tool"})),
-        ("callers", json!({})),
-        ("imports", json!({"module": "   "})),
+    let cases: &[(&str, Value, &str)] = &[
+        ("no-such-tool", json!({}), "unknown_tool"),
+        ("", json!({}), "unknown_tool"),
+        ("select", json!({}), "invalid_args"),
+        (
+            "select",
+            json!({"value": {"a": 1}, "fields": "a"}),
+            "invalid_args",
+        ),
+        ("filter_hits", json!({}), "invalid_args"),
+        ("filter_hits", json!({"hits": 42}), "invalid_args"),
+        ("catalog_search", json!({}), "invalid_args"),
+        (
+            "catalog_describe",
+            json!({"name": "no-such-tool"}),
+            "invalid_args",
+        ),
+        ("callers", json!({}), "invalid_args"),
+        ("imports", json!({"module": "   "}), "invalid_args"),
+        ("search", json!({}), "other"),
+        ("find", json!({}), "other"),
+        ("chain", json!({}), "other"),
+        (
+            "search",
+            json!({"query": "auth", "lang": "notalang"}),
+            "other",
+        ),
+        ("read", json!({"ref": 42}), "other"),
     ];
-    for (tool, args) in cases {
+    for (tool, args, expected) in cases {
         assert_dispatch_equivalence(temp.path(), tool, args.clone());
         let mut probe = session_at(temp.path());
         let err = probe
             .call(tool, args.clone())
-            .expect_err("guard must fail");
-        assert!(
-            matches!(err, CallError::InvalidArgs(_)),
-            "tool {tool}: got {err:?}"
-        );
+            .expect_err("fault must fail");
+        assert_eq!(discriminant(&err), *expected, "tool {tool}");
+        match *expected {
+            "unknown_tool" => assert!(
+                matches!(err, CallError::UnknownTool(_)),
+                "tool {tool}: got {err:?}"
+            ),
+            "invalid_args" => assert!(
+                matches!(err, CallError::InvalidArgs(_)),
+                "tool {tool}: got {err:?}"
+            ),
+            "other" => assert!(
+                matches!(err, CallError::Other(_)),
+                "tool {tool}: got {err:?}"
+            ),
+            _ => unreachable!("unknown variant leg"),
+        }
     }
 }
 
-#[test]
-fn e3_dispatch_equivalence_other() {
-    // Bound-tool validation faults (pre-IO): both dispatch surfaces yield
-    // Other for the same bad payload — the anyhow wrap is dispatch-level.
-    let temp = tempfile::tempdir().expect("tempdir");
-    let cases: &[(&str, Value)] = &[
-        ("search", json!({})),
-        ("find", json!({})),
-        ("chain", json!({})),
-        ("search", json!({"query": "auth", "lang": "notalang"})),
-        ("read", json!({"ref": 42})),
-    ];
-    for (tool, args) in cases {
-        assert_dispatch_equivalence(temp.path(), tool, args.clone());
-        let mut probe = session_at(temp.path());
-        let err = probe
-            .call(tool, args.clone())
-            .expect_err("validation must fail");
-        assert!(
-            matches!(err, CallError::Other(_)),
-            "tool {tool}: got {err:?}"
-        );
-    }
-}
-
+/// INTENT=repeat bad call same discriminant same+fresh session; budget bypass pinned.
+/// KILLS=nondeterministic-discriminant, bypass-regression.
+/// ABSORBS=none.
 #[test]
 fn e3_repeat_bad_call_deterministic() {
     // The same bad call twice on one session yields the identical discriminant
@@ -268,6 +175,9 @@ fn e3_repeat_bad_call_deterministic() {
     );
 }
 
+/// INTENT=bad call at index 0/1/2: same envelope, good values bit-identical.
+/// KILLS=position-dependent-routing, good-row-taint.
+/// ABSORBS=none.
 #[test]
 fn e3_batch_position_independence() {
     // The bad call rides at index 0, 1, then 2 among good calls: the envelope
@@ -315,6 +225,9 @@ fn e3_batch_position_independence() {
     assert_eq!(good_values[0].1, good_values[2].1);
 }
 
+/// INTENT=serial vs parallel mixed batch: same per-id pattern, values, order.
+/// KILLS=mode-divergence.
+/// ABSORBS=e2_batch_parallel_readonly_isolates_failures (mode pin + per-row isolation legs).
 #[test]
 fn e3_batch_mode_equivalence() {
     // The same mixed read-only batch under Serial and Parallel resolves to the
@@ -352,8 +265,25 @@ fn e3_batch_mode_equivalence() {
     }
     let ok_pattern: Vec<bool> = serial.results.iter().map(|r| r.ok).collect();
     assert_eq!(ok_pattern, vec![true, false, false, true]);
+    // Absorbed from e2_batch_parallel_readonly_isolates_failures: ok/error
+    // exclusivity per row on both modes — failures stay isolated, ok siblings
+    // keep value + no error.
+    for response in [&serial, &parallel] {
+        for row in &response.results {
+            if row.ok {
+                assert!(row.value.is_some(), "ok without value: {}", row.id);
+                assert!(row.error.is_none(), "ok with error: {}", row.id);
+            } else {
+                assert!(row.value.is_none(), "fail with value: {}", row.id);
+                assert!(row.error.is_some(), "fail without error: {}", row.id);
+            }
+        }
+    }
 }
 
+/// INTENT=failing step at any index: same discriminant as direct, count pins prefix.
+/// KILLS=position-dependent-discriminant, count-drift.
+/// ABSORBS=none.
 #[test]
 fn e3_plan_position_independence() {
     // The failing step rides at index 0, 1, then 2 among good steps: every plan
@@ -389,6 +319,9 @@ fn e3_plan_position_independence() {
     }
 }
 
+/// INTENT=per-call ok == direct is_ok, exclusivity per row, all_ok conjunction.
+/// KILLS=mirror-divergence, partial-value-smuggle.
+/// ABSORBS=e1_batch_per_call_mirrors_direct_discriminants (call_count + id-order legs).
 #[test]
 fn e3_batch_mirrors_direct_outcomes() {
     // Fail-closed across the batch boundary: each per-call ok flag equals the
@@ -415,6 +348,11 @@ fn e3_batch_mirrors_direct_outcomes() {
     let response = run_batch(config_at(temp.path()), &batch_request(batch_calls))
         .expect("envelope stays Ok");
     assert_eq!(response.results.len(), direct_ok.len());
+    // Absorbed from e1_batch_per_call_mirrors_direct_discriminants: the batch
+    // charges one unit per call and echoes ids in input order.
+    assert_eq!(response.call_count, 5);
+    let ids: Vec<&str> = response.results.iter().map(|r| r.id.as_str()).collect();
+    assert_eq!(ids, vec!["g0", "u", "i", "o", "g1"]);
     for ((id, expected), row) in direct_ok.iter().zip(response.results.iter()) {
         assert_eq!(&row.id, id);
         assert_eq!(row.ok, *expected, "row {id}: batch disagrees with direct");
@@ -430,6 +368,9 @@ fn e3_batch_mirrors_direct_outcomes() {
     assert!(!response.all_ok);
 }
 
+/// INTENT=failed plan is Err with direct discriminant; prefix applied vs failing-edit untouched; remainder resumes.
+/// KILLS=Ok-carried-plan-failure, prefix-rollback, partial-edit-write.
+/// ABSORBS=e4_plan_prefix_applied_then_remainder_resumes (first half was a duplicate; remainder-resume half appended).
 #[test]
 fn e3_plan_fail_closed_never_ok() {
     // A failed plan is an Err with the direct call's discriminant — never an Ok
@@ -459,6 +400,20 @@ fn e3_plan_fail_closed_never_ok() {
     assert!(body.contains("hello mars"), "executed prefix must apply: {body:?}");
     assert!(!body.contains("hello world"), "prefix must apply fully: {body:?}");
 
+    // Absorbed remainder-resume half of e4_plan_prefix_applied_then_remainder_resumes
+    // (its first half was a line-for-line duplicate of the prefix block above):
+    // the same session resumes with the corrected remainder, prefix kept.
+    let remainder = parse_plan(&json!({"steps": [
+        {"id": "s", "tool": "select", "args": {"value": {"v": 7}, "fields": ["v"]}},
+        {"id": "g", "tool": "catalog_search", "args": {"query": "search"}},
+    ]}))
+    .expect("remainder plan parses");
+    let ok = run_plan(&mut session, &remainder).expect("remainder must resume");
+    assert!(ok.ok);
+    assert_eq!(session.call_count(), 4);
+    let body = std::fs::read_to_string(temp.path().join("a.txt")).expect("reread");
+    assert!(body.contains("hello mars"), "resume must keep the prefix: {body:?}");
+
     std::fs::write(temp.path().join("b.txt"), "keep me\n").expect("write");
     let mut direct = session_at(temp.path());
     let direct_err = direct
@@ -486,6 +441,9 @@ fn e3_plan_fail_closed_never_ok() {
     assert_eq!(body, "keep me\n");
 }
 
+/// INTENT=bad request at stream index 0/1/2: Result{ok:false}, neighbors identical, Bye reached.
+/// KILLS=stream-position-dependence, worker-abort.
+/// ABSORBS=none.
 #[test]
 fn e3_serve_stream_position_independence() {
     // The bad request rides at stream index 0, 1, then 2 among good requests:

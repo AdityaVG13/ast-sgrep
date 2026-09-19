@@ -27,16 +27,29 @@ use ast_sgrep_lang::{
     index_can_serve_pattern, is_pattern_ident, is_universal_root_pattern,
     literal_trailing_comment_lane, match_literal_pattern, match_pattern, native_pattern_answerable,
     needs_ast_grep_fallback, pattern_is_keyword_literal_root,
-    php_comment_transparent_operand_lane, required_pattern_literal, structural_term_signatures,
+    php_comment_transparent_operand_lane, required_pattern_literal,
     Language, ParserRegistry,
 };
 use std::path::Path;
 
-// E3-LANG-01: match entry-point agreement + repetition determinism.
-// Same hostile (lang, source, pattern) through both match entries: the
-// `is_ok` discriminant always agrees (never Ok in one and Err in the
-// other), and each entry repeated returns the identical hit vector.
-// Corpus is disjoint from E2's hostile set.
+// Area-local degenerate corpus: swept by the E3-01 match/extraction legs and
+// the E3-09 pure-entry legs (the split halves of the former
+// `degenerate_inputs_total_and_stable` no-panic sweep). Kept here, not
+// promoted: only these two tests sweep it.
+const DEGENERATE_PATTERNS: &[&str] = &[
+    "", " ", "\t\n", "\x00", "µ", "$", "$$$", "$Ü", "💥", "\u{feff}", "(", ")", "{", "}",
+    ";", ";;", "->", "&&", ".", "$A$$B",
+];
+
+/// E3-LANG-01: match entry-point agreement + repetition determinism.
+/// Same hostile (lang, source, pattern) through both match entries: the
+/// `is_ok` discriminant always agrees (never Ok in one and Err in the
+/// other), and each entry repeated returns the identical hit vector.
+/// Corpus is disjoint from E2's hostile set.
+/// INTENT: both match entries agree is_ok + identical hit vectors on repeat (disjoint corpus).
+/// KILLS: entry-divergence(Ok-vs-Err), nondeterministic-hits.
+/// OVERLAP: E2 hostile set (corpus disjoint by design).
+/// ABSORBS: degenerate_inputs_total_and_stable match/extraction repetition legs (kept as the degenerate no-panic sweep leg).
 #[test]
 fn match_entries_agree_and_repeat_deterministically() {
     let patterns = [
@@ -66,13 +79,31 @@ fn match_entries_agree_and_repeat_deterministically() {
         assert!(match_pattern(*lang, "fn f() {}", "").unwrap().is_empty());
         assert!(match_literal_pattern(*lang, "fn f() {}", "").unwrap().is_empty());
     }
+    // Absorbed degenerate leg: no-panic sweep — both match entries stay Ok
+    // with identical results across repetitions, and extraction treats the
+    // degenerates as source with Ok + identical results.
+    let registry = ParserRegistry::new();
+    for pattern in DEGENERATE_PATTERNS {
+        let a = match_pattern(Language::Rust, "fn f() { foo(1); }", pattern).unwrap();
+        let b = match_pattern(Language::Rust, "fn f() { foo(1); }", pattern).unwrap();
+        assert_eq!(a, b, "{pattern:?}");
+        let c = match_literal_pattern(Language::Rust, "fn f() { foo(1); }", pattern).unwrap();
+        let d = match_literal_pattern(Language::Rust, "fn f() { foo(1); }", pattern).unwrap();
+        assert_eq!(c, d, "{pattern:?}");
+        let e1 = registry.parse(Language::Rust, pattern).unwrap();
+        let e2 = registry.parse(Language::Rust, pattern).unwrap();
+        assert_eq!(e1, e2, "{pattern:?}");
+    }
 }
 
-// E3-LANG-02: language-id cross-entry consistency.
-// Every indexed extension agrees across parse / from_extension /
-// canonical_filter / normalize_id / detect_language, invariant under case
-// and padding; unknown labels agree as rejections with the documented
-// lowercase-normalize relation (never a silent default language).
+/// E3-LANG-02: language-id cross-entry consistency.
+/// Every indexed extension agrees across parse / from_extension /
+/// canonical_filter / normalize_id / detect_language, invariant under case
+/// and padding; unknown labels agree as rejections with the documented
+/// lowercase-normalize relation (never a silent default language).
+/// INTENT: parse/ext/filter/normalize/detect agree per ext, case/padding invariant, unknowns lowercase.
+/// KILLS: entry-divergence, case-sensitivity-regression.
+/// ABSORBS: none (relation pin; nothing merged).
 #[test]
 fn language_id_entries_agree() {
     for (ext, lang) in Language::SOURCE_EXTENSIONS {
@@ -123,11 +154,14 @@ fn language_id_entries_agree() {
     assert!(Language::canonical_filter(None).is_none());
 }
 
-// E3-LANG-03: classifier-to-downstream implication.
-// `cached_*` / `candidate_*` return `Some` only for classifier-accepted
-// shapes (they bail on classify rejection), and a classified shape never
-// needs the external fallback. Holds over a mixed valid/invalid corpus;
-// the empty pattern is the documented exception (indexable-to-nothing).
+/// E3-LANG-03: classifier-to-downstream implication.
+/// `cached_*` / `candidate_*` return `Some` only for classifier-accepted
+/// shapes (they bail on classify rejection), and a classified shape never
+/// needs the external fallback. Holds over a mixed valid/invalid corpus;
+/// the empty pattern is the documented exception (indexable-to-nothing).
+/// INTENT: cached/candidate Some ⟹ classified (dollar-less ident fast-path excepted); classified ⟹ no fallback.
+/// KILLS: implication-break, fast-path-regression.
+/// ABSORBS: none (relation pin; nothing merged).
 #[test]
 fn classifier_acceptance_implies_downstream_presence() {
     let patterns = [
@@ -181,10 +215,13 @@ fn classifier_acceptance_implies_downstream_presence() {
     assert!(classify_native("").is_none());
 }
 
-// E3-LANG-04: gate-denial totality.
-// Empty or kind-bearing signature sets deny EVERY pattern; statement
-// keywords deny under ANY otherwise-serving signatures; the verdict is
-// invariant under pattern padding and signature order.
+/// E3-LANG-04: gate-denial totality.
+/// Empty or kind-bearing signature sets deny EVERY pattern; statement
+/// keywords deny under ANY otherwise-serving signatures; the verdict is
+/// invariant under pattern padding and signature order.
+/// INTENT: empty/kind sigs deny every pattern; keywords deny under any sigs; padding/order invariant.
+/// KILLS: deny-hole, order-dependence.
+/// ABSORBS: none (relation pin; nothing merged).
 #[test]
 fn gate_denial_is_total_and_order_invariant() {
     let patterns = ["foo", "foo($$$)", "fn $N($$$)", "", "->", ";;", "$F($$$)", "break"];
@@ -229,10 +266,13 @@ fn gate_denial_is_total_and_order_invariant() {
     );
 }
 
-// E3-LANG-05: prefilter-literal soundness relations.
-// A `Some` literal is always a non-empty, `$`-free, whitespace-free
-// substring of the pattern; the answer is invariant under padding and
-// repetition (never a silently-wrong filter that drops matching files).
+/// E3-LANG-05: prefilter-literal soundness relations.
+/// A `Some` literal is always a non-empty, `$`-free, whitespace-free
+/// substring of the pattern; the answer is invariant under padding and
+/// repetition (never a silently-wrong filter that drops matching files).
+/// INTENT: Some literal is non-empty $-free whitespace-free substring; padding/repeat invariant.
+/// KILLS: unsound-literal(drops-matching-files).
+/// ABSORBS: none (relation pin; nothing merged).
 #[test]
 fn prefilter_literal_is_sound_substring() {
     let patterns = [
@@ -269,11 +309,14 @@ fn prefilter_literal_is_sound_substring() {
     }
 }
 
-// E3-LANG-06: semicolon-degenerate threshold boundary (1 vs 2+).
-// A single `;` is answerable in every language; 2+ `;`s (any ascii
-// layout) are unanswerable except py/swift/kt; the whole 2+ family shares
-// one verdict per language; unanswerable members match Ok + empty (never
-// Err, never fabricated hits).
+/// E3-LANG-06: semicolon-degenerate threshold boundary (1 vs 2+).
+/// A single `;` is answerable in every language; 2+ `;`s (any ascii
+/// layout) are unanswerable except py/swift/kt; the whole 2+ family shares
+/// one verdict per language; unanswerable members match Ok + empty (never
+/// Err, never fabricated hits).
+/// INTENT: 1×`;` answerable everywhere; 2+ family one verdict per lang (py/swift/kt only); match agrees.
+/// KILLS: threshold-off-by-one, per-lang-divergence.
+/// ABSORBS: none (relation pin; nothing merged).
 #[test]
 fn semicolon_count_boundary_consistent_across_languages() {
     let family = [";;", ";;;", ";;;;", "; ;", ";\n;"];
@@ -310,10 +353,13 @@ fn semicolon_count_boundary_consistent_across_languages() {
     }
 }
 
-// E3-LANG-07: depth-cap threshold monotonicity + just-below/above.
-// `depth_truncated` is monotone non-decreasing in nesting depth; the
-// empirical flip point has a clear just-below side; extraction stays `Ok`
-// and deterministic on both sides; match stays `Ok` on both sides.
+/// E3-LANG-07: depth-cap threshold monotonicity + just-below/above.
+/// `depth_truncated` is monotone non-decreasing in nesting depth; the
+/// empirical flip point has a clear just-below side; extraction stays `Ok`
+/// and deterministic on both sides; match stays `Ok` on both sides.
+/// INTENT: depth_truncated monotone in nesting; bisected flip has clear-below/loud-above; match Ok both sides.
+/// KILLS: nonmonotone-flag, flip-regression.
+/// ABSORBS: none (relation pin; nothing merged).
 #[test]
 fn depth_cap_monotone_with_loud_flip() {
     let registry = ParserRegistry::new();
@@ -364,68 +410,26 @@ fn depth_cap_monotone_with_loud_flip() {
     assert_eq!(js_flag(150), js_flag(150));
 }
 
-// E3-LANG-08: degenerate-input totality sweep.
-// Every Option/bool entry called twice on each degenerate pattern agrees
-// with itself (never panics, never drifts); extraction and both match
-// entries stay Ok with identical results across repetitions.
-#[test]
-fn degenerate_inputs_total_and_stable() {
-    let registry = ParserRegistry::new();
-    let patterns = [
-        "", " ", "\t\n", "\x00", "µ", "$", "$$$", "$Ü", "💥", "\u{feff}", "(", ")", "{", "}",
-        ";", ";;", "->", "&&", ".", "$A$$B",
-    ];
-    for pattern in patterns {
-        // Option/bool entries: repetition equality (totality = no panic).
-        assert_eq!(classify_native(pattern).is_some(), classify_native(pattern).is_some());
-        assert_eq!(cached_pattern_signatures(pattern), cached_pattern_signatures(pattern));
-        assert_eq!(candidate_kind_signatures(pattern), candidate_kind_signatures(pattern));
-        assert_eq!(required_pattern_literal(pattern), required_pattern_literal(pattern));
-        assert_eq!(needs_ast_grep_fallback(pattern), needs_ast_grep_fallback(pattern));
-        assert_eq!(
-            pattern_is_keyword_literal_root(pattern),
-            pattern_is_keyword_literal_root(pattern)
-        );
-        assert_eq!(is_pattern_ident(pattern), is_pattern_ident(pattern));
-        assert_eq!(
-            is_universal_root_pattern(Language::Rust, pattern),
-            is_universal_root_pattern(Language::Rust, pattern)
-        );
-        assert_eq!(
-            is_universal_root_pattern(Language::Python, pattern),
-            is_universal_root_pattern(Language::Python, pattern)
-        );
-        assert_eq!(
-            php_comment_transparent_operand_lane(pattern),
-            php_comment_transparent_operand_lane(pattern)
-        );
-        assert_eq!(
-            literal_trailing_comment_lane(Language::Rust, pattern),
-            literal_trailing_comment_lane(Language::Rust, pattern)
-        );
-        assert_eq!(
-            native_pattern_answerable(Language::Rust, pattern),
-            native_pattern_answerable(Language::Rust, pattern)
-        );
-        // Match entries: Ok + identical across repetitions.
-        let a = match_pattern(Language::Rust, "fn f() { foo(1); }", pattern).unwrap();
-        let b = match_pattern(Language::Rust, "fn f() { foo(1); }", pattern).unwrap();
-        assert_eq!(a, b, "{pattern:?}");
-        let c = match_literal_pattern(Language::Rust, "fn f() { foo(1); }", pattern).unwrap();
-        let d = match_literal_pattern(Language::Rust, "fn f() { foo(1); }", pattern).unwrap();
-        assert_eq!(c, d, "{pattern:?}");
-        // Extraction treats degenerates as source: Ok + identical.
-        let e1 = registry.parse(Language::Rust, pattern).unwrap();
-        let e2 = registry.parse(Language::Rust, pattern).unwrap();
-        assert_eq!(e1, e2, "{pattern:?}");
-    }
-}
+// NOTE: `degenerate_inputs_total_and_stable` (former E3-LANG-08) was SPLIT
+// per the errorapi catalog: its match/extraction repetition legs moved into
+// `match_entries_agree_and_repeat_deterministically` (E3-01) and its
+// pure-entry repetition legs moved into
+// `padding_invariant_entries_vs_sensitive_ident` (E3-09) below, each kept as
+// a no-panic sweep over DEGENERATE_PATTERNS. Net no new test.
+//
+// NOTE: `structural_term_signatures_shape_and_injectivity` (former E3-LANG-10)
+// was DELETED per the errorapi catalog: not error-API (no failure,
+// rejection, or boundary under test; kills no error mutant). The structural
+// boost-signature shape belongs to the structural/boost suites.
 
-// E3-LANG-09: padding invariance vs padding sensitivity contrast.
-// Entries that trim (classify, signatures, literal, fallback, answerable,
-// serve-gate, structural match) are padding-invariant, and the structural
-// match additionally strips a BOM; `is_pattern_ident` is documented
-// padding-SENSITIVE — the contrast itself is the pinned relation.
+/// E3-LANG-09: padding invariance vs padding sensitivity contrast.
+/// Entries that trim (classify, signatures, literal, fallback, answerable,
+/// serve-gate, structural match) are padding-invariant, and the structural
+/// match additionally strips a BOM; `is_pattern_ident` is documented
+/// padding-SENSITIVE — the contrast itself is the pinned relation.
+/// INTENT: trimming entries padding-invariant (+BOM-strip for match) vs is_pattern_ident padding-SENSITIVE.
+/// KILLS: trim-regression, ident-trim-added.
+/// ABSORBS: degenerate_inputs_total_and_stable pure-entry repetition legs (kept as the degenerate no-panic sweep leg).
 #[test]
 fn padding_invariant_entries_vs_sensitive_ident() {
     let patterns = [
@@ -485,31 +489,39 @@ fn padding_invariant_entries_vs_sensitive_ident() {
         assert!(!is_pattern_ident(&format!("  {ident}  ")), "{ident:?}");
     }
     assert!(!is_pattern_ident(""));
-}
-
-// E3-LANG-10: structural boost-signature relations.
-// Six signatures per term, the term itself always last, every element
-// carrying the term; deterministic, injective, and total on degenerates.
-#[test]
-fn structural_term_signatures_shape_and_injectivity() {
-    let terms = ["foo", "x", "", "Ü", "💥", "a.b"];
-    for term in terms {
-        let sigs = structural_term_signatures(term);
-        assert_eq!(sigs.len(), 6);
-        assert_eq!(sigs[5], term);
-        for s in &sigs {
-            assert!(s.contains(term), "{term:?} -> {s:?}");
-        }
-        assert_eq!(sigs, structural_term_signatures(term));
-    }
-    // Injectivity: distinct terms never share a signature vector.
-    for (i, a) in terms.iter().enumerate() {
-        for b in &terms[i + 1..] {
-            assert_ne!(
-                structural_term_signatures(a),
-                structural_term_signatures(b),
-                "{a:?} vs {b:?}"
-            );
-        }
+    // Absorbed degenerate leg: no-panic sweep — every Option/bool entry
+    // called twice on each degenerate pattern agrees with itself (never
+    // panics, never drifts).
+    for pattern in DEGENERATE_PATTERNS {
+        assert_eq!(classify_native(pattern).is_some(), classify_native(pattern).is_some());
+        assert_eq!(cached_pattern_signatures(pattern), cached_pattern_signatures(pattern));
+        assert_eq!(candidate_kind_signatures(pattern), candidate_kind_signatures(pattern));
+        assert_eq!(required_pattern_literal(pattern), required_pattern_literal(pattern));
+        assert_eq!(needs_ast_grep_fallback(pattern), needs_ast_grep_fallback(pattern));
+        assert_eq!(
+            pattern_is_keyword_literal_root(pattern),
+            pattern_is_keyword_literal_root(pattern)
+        );
+        assert_eq!(is_pattern_ident(pattern), is_pattern_ident(pattern));
+        assert_eq!(
+            is_universal_root_pattern(Language::Rust, pattern),
+            is_universal_root_pattern(Language::Rust, pattern)
+        );
+        assert_eq!(
+            is_universal_root_pattern(Language::Python, pattern),
+            is_universal_root_pattern(Language::Python, pattern)
+        );
+        assert_eq!(
+            php_comment_transparent_operand_lane(pattern),
+            php_comment_transparent_operand_lane(pattern)
+        );
+        assert_eq!(
+            literal_trailing_comment_lane(Language::Rust, pattern),
+            literal_trailing_comment_lane(Language::Rust, pattern)
+        );
+        assert_eq!(
+            native_pattern_answerable(Language::Rust, pattern),
+            native_pattern_answerable(Language::Rust, pattern)
+        );
     }
 }

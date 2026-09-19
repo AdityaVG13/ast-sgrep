@@ -94,6 +94,20 @@ pub fn core_searcher(fixture: &CorePipelineFixture, limit: usize) -> Searcher {
     Searcher::new(core_search_options(&fixture.root, &fixture.db, limit)).expect("searcher new")
 }
 
+/// INTENT: root-only opener — default [`SearchOptions`] over `root`, so the
+/// index resolves through the default state layout (`index_path: None`):
+/// the lib-side anchor over CLI/MCP-indexed roots. Delta vs
+/// [`core_searcher`]: that needs a [`CorePipelineFixture`] with an explicit
+/// DB; this opens whatever default state the root carries. Panics when the
+/// searcher cannot be constructed.
+pub fn searcher_at_root(root: &Path) -> Searcher {
+    let opts = SearchOptions {
+        root: root.to_path_buf(),
+        ..SearchOptions::default()
+    };
+    Searcher::new(opts).expect("lib Searcher::new succeeds on indexed root")
+}
+
 /// INTENT: order-sensitive identity of a ranked response (file, span, kind,
 /// symbol, exact score bits) — two full runs agree iff these agree. Pure
 /// projection; [`crate::response_hit_keys`] has no score bits, so pipeline

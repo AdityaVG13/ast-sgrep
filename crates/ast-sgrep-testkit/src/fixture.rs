@@ -59,3 +59,31 @@ pub fn file_tree(files: &[(&str, &str)]) -> tempfile::TempDir {
     }
     temp
 }
+
+/// INTENT: sorted directory listing (file names, UTF-8 lossy) for
+/// fail-closed fs-delta pins: identical trees list identically. Pure
+/// projection; panics on IO failure.
+pub fn dir_listing(root: &Path) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(root)
+        .expect("read dir")
+        .map(|entry| {
+            entry
+                .expect("dir entry")
+                .file_name()
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect();
+    names.sort();
+    names
+}
+
+/// INTENT: the default on-disk state path `<root>/.asgrep/index.db` — the
+/// ONE canonical join shared by the CLI and MCP error suites (previously
+/// inlined in both). Pure constructor; hermetic by design. Delta vs
+/// [`ast_sgrep_core::index_db_path`]: that resolver consults
+/// `ASGREP_INDEX_PATH` / `ASGREP_USE_CACHE` and the filesystem, so it cannot
+/// pin a hermetic layout; this is the fixed default arm only.
+pub fn index_db_path(root: &Path) -> PathBuf {
+    root.join(".asgrep").join("index.db")
+}

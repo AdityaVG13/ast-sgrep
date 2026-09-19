@@ -9,11 +9,14 @@
 //! - Payload builders return [`serde_json::Value`]; response extractors take
 //!   `&Value` and panic (never `Result`) on shape mismatch, matching suite
 //!   convention: a malformed envelope is a test failure, not a fallible op.
-//! - `rpc_session` / `rpc_pipeline` assert a clean exit (`status.success()`).
+//! - `rpc_session` / `rpc_session_env` / `rpc_pipeline` / `rpc_session_raw`
+//!   assert a clean exit (`status.success()`).
 //!   [`LiveSession::wait_clean`] returns the [`ExitStatus`](std::process::ExitStatus)
 //!   so long-lived drills can assert it themselves; every other wait panics.
 //! - [`LiveSession`] reads are timeout-bounded (reader thread +
 //!   `recv_timeout`); a regressed server fails the test instead of hanging CI.
+//!   The one-shot drivers ride [`LiveSession`], so every driver read and
+//!   every driver wait is bounded the same way (15s).
 //! - `index_tree` / `indexed_tree` index with **default** `IndexOptions`
 //!   resolution (not an explicit `index_path`) so the planted index lands
 //!   exactly where the server process opens it. By design, not hermetic:
@@ -120,10 +123,22 @@ impl LiveSession {
     /// Spawn the server; sets `ASGREP_ROOT` when `root` is `Some`.
     /// Panics when the child cannot be spawned.
     pub fn spawn(root: Option<&Path>) -> Self {
+        Self::spawn_env(root, &[])
+    }
+
+    /// INTENT: [`spawn`](Self::spawn) with extra child env applied (e.g.
+    /// fault-injection knobs like `ASGREP_NEURAL_EMBED=1` on the child only —
+    /// process-global `set_var` would leak across parallel tests). Extras are
+    /// applied after `ASGREP_ROOT`, so they win on collision. Panics when the
+    /// child cannot be spawned.
+    pub fn spawn_env(root: Option<&Path>, extra_env: &[(&str, &str)]) -> Self {
         let mut command = Command::new(mcp_bin());
         command.stdin(Stdio::piped()).stdout(Stdio::piped());
         if let Some(root) = root {
             command.env("ASGREP_ROOT", root);
+        }
+        for (key, value) in extra_env {
+            command.env(key, value);
         }
         let mut child = command.spawn().expect("spawn MCP");
         let stdin = child.stdin.take().expect("MCP stdin");
@@ -187,6 +202,19 @@ impl LiveSession {
         }
         .expect("MCP closed stdout while a response was pending");
         serde_json::from_str(line.trim()).expect("server emitted JSON-RPC")
+    }
+
+    /// INTENT: read one raw response line (without trailing CR/LF), bounded
+    /// by the 15s default — the byte-identity primitive for determinism
+    /// relations that compare wire bytes, not re-serialized values. Panics
+    /// on timeout or EOF.
+    pub fn recv_raw(&self) -> String {
+        let line = match self.lines.recv_timeout(RECV_TIMEOUT) {
+            Ok(line) => line,
+            Err(_) => panic!("timed out after {RECV_TIMEOUT:?} waiting for MCP output"),
+        }
+        .expect("MCP closed stdout while a response was pending");
+        line.trim_end_matches(['\r', '\n']).to_owned()
     }
 
     /// INTENT: plant a byte-level stream fault — write one raw line + flush.
@@ -278,8 +306,10 @@ impl Drop for LiveSession {
 
 /// Drive `payloads` through ONE server process, strictly sequential (send one,
 /// read one), so response order matches request order. Notifications (no `id`)
-/// are sent without waiting. Sets `ASGREP_ROOT` when `root` is `Some`.
-/// Panics on handshake mismatch, EOF, or a non-clean exit.
+/// are sent without waiting. Sets `ASGREP_ROOT` when `root` is `Some`. Every
+/// read and the exit wait are timeout-bounded (15s): a regressed server fails
+/// the test instead of hanging the suite. Panics on handshake mismatch, EOF,
+/// timeout, or a non-clean exit.
 pub fn rpc_session(payloads: Vec<Value>, root: Option<&Path>) -> Vec<Value> {
     rpc_session_env(payloads, root, &[])
 }
@@ -291,40 +321,37 @@ pub fn rpc_session_env(
     root: Option<&Path>,
     extra_env: &[(&str, &str)],
 ) -> Vec<Value> {
-    let mut command = Command::new(mcp_bin());
-    command.stdin(Stdio::piped()).stdout(Stdio::piped());
-    if let Some(root) = root {
-        command.env("ASGREP_ROOT", root);
-    }
-    for (key, value) in extra_env {
-        command.env(key, value);
-    }
-    let mut child = command.spawn().expect("spawn MCP");
-    let mut stdin = child.stdin.take().expect("MCP stdin");
-    let mut stdout = BufReader::new(child.stdout.take().expect("MCP stdout"));
-    let send = |stdin: &mut ChildStdin, payload: &Value| {
-        writeln!(stdin, "{payload}").expect("write MCP stdin");
-        stdin.flush().expect("flush MCP stdin");
-    };
-    let recv = |stdout: &mut BufReader<ChildStdout>| -> Value {
-        let mut line = String::new();
-        let n = stdout.read_line(&mut line).expect("read MCP line");
-        assert!(n > 0, "MCP closed stdout");
-        serde_json::from_str(line.trim()).expect("JSON-RPC")
-    };
-    send(&mut stdin, &init_payload(TESTKIT_CLIENT_NAME));
-    let init = recv(&mut stdout);
-    assert_eq!(init["id"], "__init", "{init:#}");
-    send(&mut stdin, &initialized_notif());
+    let mut session = LiveSession::spawn_env(root, extra_env);
+    session.handshake();
     let mut responses = Vec::new();
     for payload in &payloads {
-        send(&mut stdin, payload);
+        session.send(payload);
         if payload.get("id").is_some() {
-            responses.push(recv(&mut stdout));
+            responses.push(session.recv());
         }
     }
-    drop(stdin);
-    let status = child.wait().expect("wait MCP");
+    session.close_stdin();
+    let status = session.wait_clean();
+    assert!(status.success(), "MCP exited {status}");
+    responses
+}
+
+/// INTENT: [`rpc_session`] returning the RAW response lines (one per payload,
+/// post-handshake) so determinism relations compare wire bytes, not
+/// re-serialized values. Positional 1:1 — every payload consumes exactly one
+/// line, so callers pass id-bearing payloads only. Every read and the exit
+/// wait are timeout-bounded (15s). Panics on handshake mismatch, EOF,
+/// timeout, or a non-clean exit.
+pub fn rpc_session_raw(payloads: Vec<Value>, root: Option<&Path>) -> Vec<String> {
+    let mut session = LiveSession::spawn(root);
+    session.handshake();
+    let mut responses = Vec::new();
+    for payload in &payloads {
+        session.send(payload);
+        responses.push(session.recv_raw());
+    }
+    session.close_stdin();
+    let status = session.wait_clean();
     assert!(status.success(), "MCP exited {status}");
     responses
 }
@@ -359,37 +386,23 @@ pub fn spawn_raw_no_handshake(
 
 /// Fire ALL payloads without waiting, then collect one response per id-bearing
 /// payload. Arrival order is timing-dependent by design (the server dispatches
-/// each request on its own task); callers match by `id`. Panics on handshake
-/// mismatch, mid-batch EOF, or a non-clean exit.
+/// each request on its own task); callers match by `id`. Every read and the
+/// exit wait are timeout-bounded (15s): a regressed server fails the test
+/// instead of hanging the suite. Panics on handshake mismatch, mid-batch EOF,
+/// timeout, or a non-clean exit.
 pub fn rpc_pipeline(payloads: Vec<Value>, root: Option<&Path>) -> Vec<Value> {
-    let mut command = Command::new(mcp_bin());
-    command.stdin(Stdio::piped()).stdout(Stdio::piped());
-    if let Some(root) = root {
-        command.env("ASGREP_ROOT", root);
-    }
-    let mut child = command.spawn().expect("spawn MCP");
-    let mut stdin = child.stdin.take().expect("MCP stdin");
-    let mut stdout = BufReader::new(child.stdout.take().expect("MCP stdout"));
-    writeln!(stdin, "{}", init_payload(TESTKIT_CLIENT_NAME)).expect("write init");
-    stdin.flush().expect("flush init");
-    let mut line = String::new();
-    stdout.read_line(&mut line).expect("read init");
-    assert!(!line.trim().is_empty(), "MCP closed stdout");
-    writeln!(stdin, "{}", initialized_notif()).expect("write initialized");
-    let expected = payloads.iter().filter(|p| p.get("id").is_some()).count();
+    let mut session = LiveSession::spawn(root);
+    session.handshake();
     for payload in &payloads {
-        writeln!(stdin, "{payload}").expect("write MCP stdin");
+        session.send(payload);
     }
-    stdin.flush().expect("flush MCP stdin");
+    let expected = payloads.iter().filter(|p| p.get("id").is_some()).count();
     let mut responses = Vec::new();
     for _ in 0..expected {
-        let mut line = String::new();
-        let n = stdout.read_line(&mut line).expect("read MCP line");
-        assert!(n > 0, "MCP closed stdout mid-batch");
-        responses.push(serde_json::from_str::<Value>(line.trim()).expect("JSON-RPC"));
+        responses.push(session.recv());
     }
-    drop(stdin);
-    let status = child.wait().expect("wait MCP");
+    session.close_stdin();
+    let status = session.wait_clean();
     assert!(status.success(), "MCP exited {status}");
     responses
 }
@@ -418,6 +431,51 @@ pub fn is_error(response: &Value) -> bool {
 pub fn assert_tool_success(response: &Value) {
     assert_eq!(response["result"]["isError"], false, "{response:#}");
     assert!(response.get("error").is_none(), "{response:#}");
+}
+
+/// INTENT: strict tool-success envelope — `isError: false`, no top-level
+/// `error`, AND a machine-readable `structuredContent` body mirroring the
+/// text block. STRICTEST-wins delta vs [`assert_tool_success`]: that pins
+/// only the discriminant pair, so a success that drops its machine body
+/// passes it; this rejects that drift. Suites proving machine readability
+/// use this; discriminant-only probes keep the laxer form. Pure assertion.
+pub fn assert_tool_success_shape(response: &Value) {
+    assert_eq!(response["result"]["isError"], false, "{response:#}");
+    assert!(response.get("error").is_none(), "{response:#}");
+    assert!(
+        response["result"].get("structuredContent").is_some(),
+        "{response:#}"
+    );
+}
+
+/// INTENT: JSON-RPC error row — numeric `code`, object `error`, no
+/// `result`. Pure assertion.
+pub fn assert_jsonrpc_error(response: &Value, code: i64) {
+    assert_eq!(response["error"]["code"], code, "{response:#}");
+    assert!(response["error"].is_object(), "{response:#}");
+    assert!(response.get("result").is_none(), "{response:#}");
+}
+
+/// INTENT: machine-readable error discriminant — everything about a tool
+/// error EXCEPT the human message text: `(isError, content len, block-0
+/// type, block-0 text-is-string, has structuredContent, has top-level
+/// error)`. Equal discriminants mean the same error code/shape reached
+/// the caller. Pure projection.
+pub fn tool_error_discriminant(response: &Value) -> (bool, usize, String, bool, bool, bool) {
+    (
+        response["result"]["isError"].as_bool().unwrap_or(false),
+        response["result"]["content"]
+            .as_array()
+            .map(Vec::len)
+            .unwrap_or(usize::MAX),
+        response["result"]["content"][0]["type"]
+            .as_str()
+            .unwrap_or("")
+            .to_owned(),
+        response["result"]["content"][0]["text"].is_string(),
+        response["result"].get("structuredContent").is_some(),
+        response.get("error").is_some(),
+    )
 }
 
 /// Assert a `ping` response: id echo, no top-level `error`, object `result`.
@@ -587,8 +645,10 @@ pub fn multi_hit_tree() -> TempDir {
 /// Overwrite the durable `<root>/.asgrep/index.db` with deterministic
 /// non-SQLite bytes. Panics when no index db exists (the fault requires a
 /// planted index). Returns the bytes written for post-drill comparison.
+/// Sidecars are left behind by design (cf. [`crate::corrupt_db_total`], the
+/// WAL-total variant).
 pub fn corrupt_index_db(root: &Path) -> Vec<u8> {
-    let db = root.join(".asgrep").join("index.db");
+    let db = crate::index_db_path(root);
     assert!(db.is_file(), "expected an index db at {}", db.display());
     crate::fault::write_garbage(&db)
 }

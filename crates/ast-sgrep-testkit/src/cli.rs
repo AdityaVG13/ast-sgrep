@@ -168,6 +168,127 @@ pub fn assert_success(output: &Output, command: &str) -> Value {
     value
 }
 
+/// INTENT: the human failure face — pinned exit code, a stderr explanation,
+/// and no machine success shape on stdout (see [`assert_no_success_shape`]).
+/// The machine-envelope counterpart is [`assert_failure_envelope`].
+pub fn assert_human_error(output: &Output, exit_code: i32) {
+    assert_eq!(
+        output.status.code(),
+        Some(exit_code),
+        "stdout: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert!(
+        !output.stderr.is_empty(),
+        "human error must explain itself on stderr"
+    );
+    assert_no_success_shape(output);
+}
+
+/// INTENT: the human success face — exit 0 with non-empty stdout. The
+/// machine-envelope counterpart is [`assert_success`].
+pub fn assert_human_success(output: &Output) {
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        !output.stdout.is_empty(),
+        "human success must print to stdout"
+    );
+}
+
+/// INTENT: failure paths must never print a success shape — neither a parsed
+/// `ok:true` / `exit_code: 0` envelope nor (for non-JSON human output) the
+/// `ok:true` substring. Pure assertion over stdout bytes.
+pub fn assert_no_success_shape(output: &Output) {
+    if output.stdout.is_empty() {
+        return;
+    }
+    if let Ok(value) = serde_json::from_slice::<Value>(&output.stdout) {
+        assert_ne!(
+            value["ok"], true,
+            "failure path must not print ok:true: {value}"
+        );
+        assert_ne!(
+            value["exit_code"], 0,
+            "failure path must not print exit_code 0: {value}"
+        );
+    } else {
+        let text = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            !text.contains("\"ok\":true") && !text.contains("\"ok\": true"),
+            "human failure must not print a success shape: {text}"
+        );
+    }
+}
+
+/// INTENT: canonical one-function `greet` fixture (`a.rs`) for CLI error
+/// beats: the smallest tree an index/search round-trip can pin. The caller
+/// keeps the [`TempDir`] alive. Cf. [`CliSession::sample`]
+/// (sample-root-fixed) and [`crate::OracleCorpus`] (hand-corpus). Panics on
+/// IO failure.
+pub fn fixture_root() -> TempDir {
+    let dir = TempDir::new().expect("tempdir");
+    std::fs::write(
+        dir.path().join("a.rs"),
+        "fn greet() -> &'static str {\n    \"hello\"\n}\n",
+    )
+    .expect("write fixture");
+    dir
+}
+
+/// INTENT: default-state-path index beat — `index <root>` with NO
+/// `--index-path`, asserting exit 0: plants the default `.asgrep/index.db`
+/// layout the fault drills corrupt. Delta vs
+/// [`crate::run_index`]/[`crate::run_reindex`]: those are
+/// `--index-path`-fixed (timeout, explicit cwd), so they cannot pin the
+/// default layout; this inherits cwd and uses [`run`]'s hermetic env.
+/// `bin` is explicit per crate convention (`env!("CARGO_BIN_EXE_asgrep")`
+/// expands only in the test target). Panics on nonzero exit.
+pub fn run_index_default(bin: &Path, root: &Path) {
+    let root_arg = root.to_string_lossy().into_owned();
+    let output = run(bin, &["index", root_arg.as_str()]);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "fixture index must succeed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// INTENT: message-redacted envelope projection for determinism relations:
+/// `(schema_version, tool, command, ok, exit_code, error.kind, key count,
+/// error key count)`. Message text is excluded by design — equal shapes mean
+/// the same machine envelope reached the caller. Pure projection.
+pub fn envelope_shape(value: &Value) -> (String, String, String, bool, i64, String, usize, usize) {
+    (
+        value["schema_version"].as_str().unwrap_or("").to_owned(),
+        value["tool"].as_str().unwrap_or("").to_owned(),
+        value["command"].as_str().unwrap_or("").to_owned(),
+        value["ok"].as_bool().unwrap_or(true),
+        value["exit_code"].as_i64().unwrap_or(-1),
+        value["error"]["kind"].as_str().unwrap_or("").to_owned(),
+        value.as_object().map(|o| o.len()).unwrap_or(0),
+        value["error"].as_object().map(|o| o.len()).unwrap_or(0),
+    )
+}
+
+/// INTENT: non-empty-hits pin for recovered searches — the success envelope
+/// must carry a `hits` array and it must be non-empty (parity against an
+/// empty hit list would prove nothing). Pure assertion.
+pub fn assert_fixture_hits(value: &Value) {
+    let hits = value["hits"]
+        .as_array()
+        .expect("search success must carry a hits array");
+    assert!(
+        !hits.is_empty(),
+        "recovered search must hit the fixture: {value}"
+    );
+}
+
 /// Assert the strictest machine failure envelope: pinned exit code, fixed keys,
 /// `ok: false`, matching `exit_code`, `error.kind`, and a string
 /// `error.message` (presence only — content is never asserted). Usage errors

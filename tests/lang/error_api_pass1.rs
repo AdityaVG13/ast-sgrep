@@ -17,7 +17,10 @@ use ast_sgrep_lang::{
 };
 use std::path::Path;
 
-// E1-LANG-01: language-id parsing rejections.
+/// E1-LANG-01: language-id parsing rejections.
+/// INTENT: unknown/blank lang ids rejected (None) across parse/from_extension/canonical + controls.
+/// KILLS: silent-default-language, blank-accepted.
+/// ABSORBS: none (taxonomy anchor; nothing merged).
 #[test]
 fn lang_id_rejections() {
     // Unknown extension / label / blank input -> None.
@@ -39,7 +42,10 @@ fn lang_id_rejections() {
     assert_eq!(Language::normalize_id("Fortran"), "fortran");
 }
 
-// E1-LANG-02: unsupported-language detection paths.
+/// E1-LANG-02: unsupported-language detection paths.
+/// INTENT: unknown ext / no content / no shebang → None + controls.
+/// KILLS: detect-guess-on-unknown.
+/// ABSORBS: none (taxonomy anchor; nothing merged).
 #[test]
 fn detect_language_unsupported_paths() {
     // Unknown extension, no content, or content matching no shebang rule.
@@ -61,9 +67,12 @@ fn detect_language_unsupported_paths() {
     );
 }
 
-// E1-LANG-03: the registry serves every language; its `Err` side
-// ("no parser registered", "failed to set language", "failed to parse
-// source") is unreachable via the public API, so pin `Ok` on hostile input.
+/// E1-LANG-03: the registry serves every language; its `Err` side
+/// ("no parser registered", "failed to set language", "failed to parse
+/// source") is unreachable via the public API, so pin `Ok` on hostile input.
+/// INTENT: registry parse Ok on empty + hostile input for every language (Err side unreachable).
+/// KILLS: introduced-Err-on-user-input, per-language-panic.
+/// ABSORBS: none (taxonomy anchor; nothing merged).
 #[test]
 fn registry_parses_every_language_ok() {
     let registry = ParserRegistry::new();
@@ -73,8 +82,11 @@ fn registry_parses_every_language_ok() {
     }
 }
 
-// E1-LANG-04: extraction never errors on empty/garbage source; it fails
-// closed with empty rows.
+/// E1-LANG-04: extraction never errors on empty/garbage source; it fails
+/// closed with empty rows.
+/// INTENT: empty/garbage source → Ok + empty rows, flag clear + control.
+/// KILLS: invented-rows-on-garbage, Err-on-garbage.
+/// ABSORBS: none (taxonomy anchor; nothing merged).
 #[test]
 fn extraction_empty_and_garbage_fail_closed() {
     let registry = ParserRegistry::new();
@@ -92,7 +104,10 @@ fn extraction_empty_and_garbage_fail_closed() {
     assert!(!real.depth_truncated);
 }
 
-// E1-LANG-05: the MAX_EXTRACTION_DEPTH (256) threshold guard.
+/// E1-LANG-05: the MAX_EXTRACTION_DEPTH (256) threshold guard.
+/// INTENT: shallow clear / 300-deep paren nesting sets depth_truncated (256 cap).
+/// KILLS: cap-drop(fail-open-deep), cap-too-tight.
+/// ABSORBS: none (taxonomy anchor; nothing merged).
 #[test]
 fn depth_guard_threshold() {
     let registry = ParserRegistry::new();
@@ -103,7 +118,10 @@ fn depth_guard_threshold() {
     assert!(registry.parse(Language::Rust, &deep_src).unwrap().depth_truncated);
 }
 
-// E1-LANG-06: classifier rejections (exotic shapes -> None).
+/// E1-LANG-06: classifier rejections (exotic shapes -> None).
+/// INTENT: exotic shapes classify None + call-shape control.
+/// KILLS: misclassified-exotic.
+/// ABSORBS: none (taxonomy anchor; nothing merged).
 #[test]
 fn classify_native_rejections() {
     // Fallback-loud in the oracle suite implies classifier rejection.
@@ -114,7 +132,10 @@ fn classify_native_rejections() {
     assert!(classify_native("foo($$$)").is_some());
 }
 
-// E1-LANG-07: index-signature indexability gaps.
+/// E1-LANG-07: index-signature indexability gaps.
+/// INTENT: braced/chain/malformed unindexable None; empty→Some([]); + controls.
+/// KILLS: index-serve-unindexable, empty-rejected.
+/// ABSORBS: none (taxonomy anchor; nothing merged).
 #[test]
 fn cached_and_candidate_signature_gaps() {
     // Braced body templates and multi-segment chains are not indexable.
@@ -138,7 +159,10 @@ fn cached_and_candidate_signature_gaps() {
     assert!(candidate_kind_signatures("fn $N($$$)").is_some());
 }
 
-// E1-LANG-08: SIMD prefilter literal absence.
+/// E1-LANG-08: SIMD prefilter literal absence.
+/// INTENT: meta-only/keyword/comment/empty patterns yield no prefilter literal + controls.
+/// KILLS: wrong-literal-filter(drops-files), keyword-as-literal.
+/// ABSORBS: none (taxonomy anchor; nothing merged).
 #[test]
 fn required_pattern_literal_absent() {
     assert!(required_pattern_literal("").is_none());
@@ -153,7 +177,10 @@ fn required_pattern_literal_absent() {
     assert_eq!(required_pattern_literal("foo").as_deref(), Some("foo"));
 }
 
-// E1-LANG-09: serve/answer gate denials.
+/// E1-LANG-09: serve/answer gate denials.
+/// INTENT: serve/answer/keyword/ident/universal-root gate denials + controls.
+/// KILLS: gate-serve-unserveable, keyword-ident-serve.
+/// ABSORBS: none (taxonomy anchor; nothing merged).
 #[test]
 fn serve_and_answer_gates() {
     // index_can_serve_pattern denials.
@@ -176,7 +203,10 @@ fn serve_and_answer_gates() {
     assert!(!is_universal_root_pattern(Language::Rust, "$A"));
 }
 
-// E1-LANG-10: the loud fail-closed class (needs external ast-grep).
+/// E1-LANG-10: the loud fail-closed class (needs external ast-grep).
+/// INTENT: fallback-loud shapes need ast-grep; native/empty shapes do not.
+/// KILLS: fallback-misroute.
+/// ABSORBS: none (taxonomy anchor; nothing merged).
 #[test]
 fn fallback_loud_class() {
     assert!(needs_ast_grep_fallback("if ($COND) { $A; $B }"));
@@ -186,8 +216,11 @@ fn fallback_loud_class() {
     assert!(!needs_ast_grep_fallback("fn $NAME($$$)"));
 }
 
-// E1-LANG-11: match entry points return Ok(empty) on rejected shapes,
-// never Err, even on garbage source.
+/// E1-LANG-11: match entry points return Ok(empty) on rejected shapes,
+/// never Err, even on garbage source.
+/// INTENT: rejected shapes match Ok(empty) incl. garbage source, never Err + control.
+/// KILLS: Err-on-rejected-shape, garbage-Err.
+/// ABSORBS: none (taxonomy anchor; nothing merged).
 #[test]
 fn match_ok_empty_rejections() {
     // Empty pattern.
@@ -205,7 +238,10 @@ fn match_ok_empty_rejections() {
     assert!(!match_pattern(Language::Rust, "fn foo() {}", "foo").unwrap().is_empty());
 }
 
-// E1-LANG-12: declaration_prefix is None for non-declaration nodes.
+/// E1-LANG-12: declaration_prefix is None for non-declaration nodes.
+/// INTENT: declaration_prefix Some("fn") on function_item, None on name node.
+/// KILLS: prefix-on-non-decl, prefix-drop.
+/// ABSORBS: none (only node-level pin; nothing merged).
 #[test]
 fn declaration_prefix_non_decl_none() {
     let mut parser = tree_sitter::Parser::new();

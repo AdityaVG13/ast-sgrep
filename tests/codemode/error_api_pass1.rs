@@ -14,81 +14,33 @@
 //! - InvalidArgs: plan $ref arms -> e1_invalid_args_plan_ref_and_shape_gaps
 //! - InvalidArgs: serve maps to Error envelopes, never Err
 //!   -> e1_invalid_args_serve_envelope_not_err
-//! - BudgetExhausted: serve fail-once discriminant
-//!   -> e1_budget_exhausted_serve_returns_discriminant
-//! - Json: From<serde_json::Error> (production to_value sites are infallible
-//!   over in-memory values, so the From arm is the reachable constructor)
-//!   -> e1_json_row_from_conversion
 //! - Other: search/find/chain query validation
 //!   -> e1_other_search_find_chain_query_validation
 //! - Other: unknown lang (pre-IO) -> e1_other_unknown_lang_rejected_pre_io
 //! - Other: read ref shape + jail -> e1_other_read_ref_shape_and_jail
 //! - Other: edit shape + uniqueness -> e1_other_edit_shape_and_uniqueness
 //! - Other: index_repo targeted shape -> e1_other_index_repo_targeted_shape
-//! - Batch envelope: per-call mirroring of all direct discriminants
-//!   -> e1_batch_per_call_mirrors_direct_discriminants
+//!
+//! Folded out (MERGE verdicts; pinned at their anchors, not here):
+//! - BudgetExhausted serve discriminant -> e2_serve_budget_answers_once_ignores_trailing (pass2)
+//! - Json via-? arm -> e2_json_cause_preserved_via_downcast (pass2)
+//! - batch per-call mirroring -> e3_batch_mirrors_direct_outcomes (pass3)
+
+#[path = "error_testkit.rs"]
+mod error_testkit;
 
 use ast_sgrep_codemode::{
-    parse_plan, run_batch, run_plan, run_serve, BatchCall, BatchRequest, CallError,
-    CodeModeSession, ServeRequest, ServeResponse, SessionConfig,
+    parse_plan, run_batch, run_plan, CallError, ServeRequest, ServeResponse,
 };
 use ast_sgrep_core::MAX_QUERY_CHARS;
-use ast_sgrep_plugins::OutputFormat;
+use error_testkit::{
+    batch_call, batch_request, config_at, serve_lines, serve_request_line, session_at,
+};
 use serde_json::{json, Value};
-use std::io::Cursor;
 
-fn session_at(root: &std::path::Path) -> CodeModeSession {
-    CodeModeSession::new(SessionConfig {
-        root: root.to_path_buf(),
-        index_path: None,
-        limit: 5,
-        use_embed: false,
-        default_format: OutputFormat::AgentCapsule,
-    })
-}
-
-fn config_at(root: &std::path::Path) -> SessionConfig {
-    SessionConfig {
-        root: root.to_path_buf(),
-        index_path: None,
-        limit: 5,
-        use_embed: false,
-        default_format: OutputFormat::AgentCapsule,
-    }
-}
-
-fn batch_request(calls: Vec<BatchCall>) -> BatchRequest {
-    BatchRequest {
-        root: None,
-        index_path: None,
-        use_embed: None,
-        limit: None,
-        parallel: None,
-        parallel_mode: None,
-        calls,
-    }
-}
-
-fn batch_call(id: &str, tool: &str, args: Value) -> BatchCall {
-    BatchCall {
-        id: id.to_string(),
-        tool: tool.to_string(),
-        args,
-    }
-}
-
-fn serve_lines(input: String, root: &std::path::Path) -> (Result<(), CallError>, Vec<String>) {
-    let mut out = Vec::new();
-    let result = run_serve(config_at(root), Cursor::new(input), &mut out);
-    let text = String::from_utf8(out).expect("serve output is utf8");
-    let lines = text.lines().map(str::to_string).collect();
-    (result, lines)
-}
-
-fn serve_request_line(request: &ServeRequest) -> String {
-    format!("{}\n", serde_json::to_string(request).expect("request serializes"))
-}
-
+/// INTENT=UnknownTool row on direct/plan/batch/serve surfaces.
+/// KILLS=variant-swap(UnknownTool→InvalidArgs), serve-Err-instead-of-Result.
+/// ABSORBS=none.
 #[test]
 fn e1_unknown_tool_row_direct_plan_batch_serve() {
     // UnknownTool row: direct dispatch, plan-step propagation, batch per-call
@@ -139,6 +91,9 @@ fn e1_unknown_tool_row_direct_plan_batch_serve() {
     assert!(matches!(last, ServeResponse::Bye), "got {last:?}");
 }
 
+/// INTENT=7 pure-tool guard arms yield InvalidArgs.
+/// KILLS=guard-drop per tool.
+/// ABSORBS=none.
 #[test]
 fn e1_invalid_args_pure_tool_guard_gaps() {
     // Pure-tool guard arms the oracle taxonomy test does not pin: callers
@@ -164,6 +119,10 @@ fn e1_invalid_args_pure_tool_guard_gaps() {
     }
 }
 
+/// INTENT=plan $ref index-required arms + null-args guard yield InvalidArgs.
+/// KILLS=ref-arm-swap, null-args-panic.
+/// ABSORBS=none.
+/// OVERLAP=oracle ref matrix (pins gaps only).
 #[test]
 fn e1_invalid_args_plan_ref_and_shape_gaps() {
     // Plan arms the oracle ref matrix does not pin: non-numeric index into an
@@ -196,6 +155,9 @@ fn e1_invalid_args_plan_ref_and_shape_gaps() {
     assert!(matches!(err, CallError::InvalidArgs(_)), "got {err:?}");
 }
 
+/// INTENT=serve maps bad identity/batch shape to Error envelopes, keeps serving.
+/// KILLS=serve-abort-on-validation, Error-vs-Result-swap.
+/// ABSORBS=none.
 #[test]
 fn e1_invalid_args_serve_envelope_not_err() {
     // Serve maps request validation failures (bad identity, bad batch shape)
@@ -232,54 +194,9 @@ fn e1_invalid_args_serve_envelope_not_err() {
     }
 }
 
-#[test]
-fn e1_budget_exhausted_serve_returns_discriminant() {
-    // Serve pins max_calls=10_000: the 10_001st pure call gets exactly one
-    // Result{ok:false} and run_serve terminates with BudgetExhausted(10_000).
-    // The existing serve-budget test asserts is_err only; this pins the enum.
-    let temp = tempfile::tempdir().expect("tempdir");
-    let mut input = String::new();
-    for i in 0..10_001 {
-        input.push_str(&serve_request_line(&ServeRequest::Call {
-            id: format!("c{i}"),
-            tool: "select".to_string(),
-            args: json!({"value": {"v": i}, "fields": ["v"]}),
-        }));
-    }
-    let (result, lines) = serve_lines(input, temp.path());
-    let err = result.expect_err("serve must stop past budget");
-    assert!(
-        matches!(err, CallError::BudgetExhausted(10_000)),
-        "got {err:?}"
-    );
-    assert_eq!(lines.len(), 10_001);
-    let first: ServeResponse = serde_json::from_str(&lines[0]).expect("first line");
-    assert!(
-        matches!(first, ServeResponse::Result { ok: true, .. }),
-        "got {first:?}"
-    );
-    let last: ServeResponse = serde_json::from_str(&lines[10_000]).expect("last line");
-    assert!(
-        matches!(last, ServeResponse::Result { ok: false, .. }),
-        "got {last:?}"
-    );
-}
-
-#[test]
-fn e1_json_row_from_conversion() {
-    // Json row: production to_value/encoded-len sites are infallible over
-    // in-memory values, so the reachable constructor is From<serde_json::Error>
-    // (direct and via `?`). Both must land on CallError::Json.
-    fn load(text: &str) -> Result<Value, CallError> {
-        Ok(serde_json::from_str(text)?)
-    }
-    let direct = CallError::from(serde_json::from_str::<Value>("{oops").expect_err("bad json"));
-    assert!(matches!(direct, CallError::Json(_)), "got {direct:?}");
-    let err = load("{oops").expect_err("bad json via ?");
-    assert!(matches!(err, CallError::Json(_)), "got {err:?}");
-    assert!(load(r#"{"ok":true}"#).is_ok());
-}
-
+/// INTENT=missing/overlong query on search/find/chain yields Other pre-IO.
+/// KILLS=variant-swap(Other→InvalidArgs), validation-after-IO.
+/// ABSORBS=none.
 #[test]
 fn e1_other_search_find_chain_query_validation() {
     // Bound-tool query validation surfaces as Other (anyhow), pre-IO: missing
@@ -301,6 +218,10 @@ fn e1_other_search_find_chain_query_validation() {
     }
 }
 
+/// INTENT=unknown lang on search/find yields Other before index work.
+/// KILLS=lang-fallback-swallow.
+/// ABSORBS=none.
+/// OVERLAP=text pinned elsewhere (discriminant new).
 #[test]
 fn e1_other_unknown_lang_rejected_pre_io() {
     // Unknown lang fails closed as Other before any index work, on both the
@@ -316,6 +237,9 @@ fn e1_other_unknown_lang_rejected_pre_io() {
     }
 }
 
+/// INTENT=read ref-shape + jail arms yield Other.
+/// KILLS=guard-drop, jail-drop.
+/// ABSORBS=none.
 #[test]
 fn e1_other_read_ref_shape_and_jail() {
     // Read ref-shape arms surface as Other: >32 windows, unparseable ref
@@ -338,6 +262,9 @@ fn e1_other_read_ref_shape_and_jail() {
     }
 }
 
+/// INTENT=edit shape/uniqueness/jail arms yield Other, file untouched.
+/// KILLS=guard-drop, write-before-validate.
+/// ABSORBS=none.
 #[test]
 fn e1_other_edit_shape_and_uniqueness() {
     // Edit shape + uniqueness arms surface as Other: empty oldText, zero
@@ -365,6 +292,9 @@ fn e1_other_edit_shape_and_uniqueness() {
     assert_eq!(body, "def hello():\n    return 1\n");
 }
 
+/// INTENT=index_repo targeted-shape arms yield Other.
+/// KILLS=guard-drop, traversal-accept.
+/// ABSORBS=none.
 #[test]
 fn e1_other_index_repo_targeted_shape() {
     // index_repo targeted-shape arms surface as Other: force+paths exclusive,
@@ -388,39 +318,4 @@ fn e1_other_index_repo_targeted_shape() {
         let err = session.call("index_repo", args.clone()).expect_err("paths guard");
         assert!(matches!(err, CallError::Other(_)), "got {err:?}");
     }
-}
-
-#[test]
-fn e1_batch_per_call_mirrors_direct_discriminants() {
-    // The batch envelope maps every direct-call discriminant to a per-call
-    // failure (ok:false, value dropped, error set) and stays Ok itself; ids
-    // echo in input order and ok/error stay exclusive per result.
-    let temp = tempfile::tempdir().expect("tempdir");
-    let response = run_batch(
-        config_at(temp.path()),
-        &batch_request(vec![
-            batch_call("u", "no-such-tool", json!({})),
-            batch_call("i", "select", json!({})),
-            batch_call("o", "search", json!({})),
-            batch_call("g", "catalog_search", json!({"query": "search"})),
-        ]),
-    )
-    .expect("batch envelope stays Ok");
-    assert!(!response.all_ok);
-    assert_eq!(response.call_count, 4);
-    let ids: Vec<&str> = response.results.iter().map(|r| r.id.as_str()).collect();
-    assert_eq!(ids, vec!["u", "i", "o", "g"]);
-    for result in &response.results {
-        if result.ok {
-            assert!(result.value.is_some(), "ok without value: {}", result.id);
-            assert!(result.error.is_none(), "ok with error: {}", result.id);
-        } else {
-            assert!(result.value.is_none(), "fail with value: {}", result.id);
-            assert!(result.error.is_some(), "fail without error: {}", result.id);
-        }
-    }
-    assert!(!response.results[0].ok);
-    assert!(!response.results[1].ok);
-    assert!(!response.results[2].ok);
-    assert!(response.results[3].ok);
 }

@@ -30,157 +30,21 @@
 //! -32700 parse error (unparsable lines are ignored per `protocol.rs` pin),
 //! and `arguments must be an object` (rmcp rejects non-object `arguments`
 //! with J2 before dispatch; `null`/absent default to `{}` per pass 3 pin).
+//!
+//! Transport comes from [`error_testkit`](self::error_testkit): every
+//! live-session read and process wait is timeout-bounded.
 
+#[path = "error_testkit.rs"]
+mod error_testkit;
+
+use error_testkit::*;
 use serde_json::{json, Value};
-use std::io::{BufRead, BufReader, Write};
-use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
-
-fn mcp_bin() -> PathBuf {
-    if let Some(p) = option_env!("CARGO_BIN_EXE_asgrep-mcp") {
-        return PathBuf::from(p);
-    }
-    let profile = if cfg!(debug_assertions) {
-        "debug"
-    } else {
-        "release"
-    };
-    let exe = format!("asgrep-mcp{}", std::env::consts::EXE_SUFFIX);
-    if let Ok(dir) = std::env::var("CARGO_TARGET_DIR") {
-        let candidate = PathBuf::from(dir).join(profile).join(&exe);
-        if candidate.exists() {
-            return candidate;
-        }
-    }
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../target")
-        .join(profile)
-        .join(exe)
-}
-
-fn initialize_params(protocol_version: &str) -> Value {
-    json!({
-        "protocolVersion": protocol_version,
-        "capabilities": {},
-        "clientInfo": {"name": "asgrep-mcp-test", "version": "0"}
-    })
-}
-
-fn init_payload() -> Value {
-    json!({
-        "jsonrpc": "2.0",
-        "id": "__init",
-        "method": "initialize",
-        "params": initialize_params("2025-11-25")
-    })
-}
-
-fn initialized_notif() -> Value {
-    json!({"jsonrpc": "2.0", "method": "notifications/initialized"})
-}
-
-/// Handshake, then strictly sequential send-one/read-one. Response order
-/// matches request order; every payload here carries an `id`.
-fn rpc_session(payloads: Vec<Value>, root: Option<&Path>) -> Vec<Value> {
-    let mut command = Command::new(mcp_bin());
-    command.stdin(Stdio::piped()).stdout(Stdio::piped());
-    if let Some(root) = root {
-        command.env("ASGREP_ROOT", root);
-    }
-    let mut child = command.spawn().expect("spawn MCP");
-    let mut stdin = child.stdin.take().unwrap();
-    let mut stdout = BufReader::new(child.stdout.take().unwrap());
-    let send = |stdin: &mut std::process::ChildStdin, payload: &Value| {
-        writeln!(stdin, "{payload}").unwrap();
-        stdin.flush().unwrap();
-    };
-    let recv = |stdout: &mut BufReader<std::process::ChildStdout>| -> Value {
-        let mut line = String::new();
-        let n = stdout.read_line(&mut line).expect("read MCP line");
-        assert!(n > 0, "MCP closed stdout");
-        serde_json::from_str(line.trim()).expect("JSON-RPC")
-    };
-    send(&mut stdin, &init_payload());
-    let init = recv(&mut stdout);
-    assert_eq!(init["id"], "__init", "{init:#}");
-    send(&mut stdin, &initialized_notif());
-    let mut responses = Vec::new();
-    for payload in &payloads {
-        send(&mut stdin, payload);
-        responses.push(recv(&mut stdout));
-    }
-    drop(stdin);
-    let status = child.wait().expect("wait MCP");
-    assert!(status.success(), "MCP exited {status}");
-    responses
-}
-
-/// Raw session with no handshake: send every payload, read exactly
-/// `expect_lines` responses, return the exit status. For pre-init (J4),
-/// which is fatal to the process.
-fn rpc_raw(payloads: Vec<Value>, expect_lines: usize) -> (Vec<Value>, std::process::ExitStatus) {
-    let mut child = Command::new(mcp_bin())
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("spawn MCP");
-    let mut stdin = child.stdin.take().unwrap();
-    let mut stdout = BufReader::new(child.stdout.take().unwrap());
-    for payload in &payloads {
-        writeln!(stdin, "{payload}").unwrap();
-    }
-    stdin.flush().unwrap();
-    drop(stdin);
-    let mut responses = Vec::new();
-    for _ in 0..expect_lines {
-        let mut line = String::new();
-        let n = stdout.read_line(&mut line).expect("read MCP line");
-        assert!(n > 0, "MCP closed stdout early");
-        responses.push(serde_json::from_str(line.trim()).expect("JSON-RPC"));
-    }
-    let status = child.wait().expect("wait MCP");
-    (responses, status)
-}
-
-fn tool_call(id: u32, name: &str, arguments: Value) -> Value {
-    json!({"jsonrpc":"2.0","id":id,"method":"tools/call","params":{"name":name,"arguments":arguments}})
-}
-
-/// Uniform tool-error envelope (matches the pass 3 / pass 4 / recovery
-/// helper): `isError: true`, no top-level `error`, one `text` block, and
-/// no `structuredContent`. Never asserts the message text.
-fn assert_tool_error_shape(response: &Value) {
-    assert_eq!(response["result"]["isError"], true, "{response:#}");
-    assert!(response.get("error").is_none(), "{response:#}");
-    assert_eq!(
-        response["result"]["content"][0]["type"],
-        "text",
-        "{response:#}"
-    );
-    assert!(
-        response["result"].get("structuredContent").is_none(),
-        "{response:#}"
-    );
-}
-
-/// JSON-RPC error row: numeric `code`, no `result`.
-fn assert_jsonrpc_error(response: &Value, code: i64) {
-    assert_eq!(response["error"]["code"], code, "{response:#}");
-    assert!(response["error"].is_object(), "{response:#}");
-    assert!(response.get("result").is_none(), "{response:#}");
-}
-
-fn file_tree() -> tempfile::TempDir {
-    let temp = tempfile::tempdir().unwrap();
-    let source = temp.path().join("src");
-    std::fs::create_dir(&source).unwrap();
-    std::fs::write(source.join("lib.rs"), "fn target_symbol() {}\n").unwrap();
-    std::fs::write(temp.path().join("plain.txt"), "x\n").unwrap();
-    temp
-}
 
 /// J1: unknown methods are -32601 with the id echoed and no `result`.
+/// INTENT: unknown methods -32601, id echo, no result.
+/// KILLS: code-swap, id-drop.
+/// ABSORBS: none.
+/// OVERLAP: protocol.rs -32601 (repin in table context).
 #[test]
 fn taxonomy_unknown_method_is_32601_with_id_echo() {
     let responses = rpc_session(
@@ -201,6 +65,9 @@ fn taxonomy_unknown_method_is_32601_with_id_echo() {
 /// not -32602: missing `name`, mistyped `name`, non-object `arguments`,
 /// null params, and empty `initialize` params. Non-object `arguments` never
 /// reach dispatch, so `arguments must be an object` is wire-unreachable.
+/// INTENT: unshaped tools/call + initialize params map -32601 incl. non-object arguments.
+/// KILLS: code-swap(-32602), dispatch-on-unshaped.
+/// ABSORBS: none.
 #[test]
 fn taxonomy_unshaped_envelope_is_32601_not_32602() {
     let responses = rpc_session(
@@ -225,42 +92,27 @@ fn taxonomy_unshaped_envelope_is_32601_not_32602() {
 /// J3: invalid requests are -32600 with NO `id` member (even when the
 /// request carried one) and no `result`: missing method, missing `jsonrpc`,
 /// batch arrays, and mistyped `params`.
+/// INTENT: invalid requests -32600 with NO id member, no result.
+/// KILLS: code-swap, id-echo-on-32600.
+/// ABSORBS: none.
 #[test]
 fn taxonomy_invalid_request_is_32600_without_id() {
-    let mut child = Command::new(mcp_bin())
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .spawn()
-        .expect("spawn MCP");
-    let mut stdin = child.stdin.take().unwrap();
-    let mut stdout = BufReader::new(child.stdout.take().unwrap());
-    writeln!(stdin, "{}", init_payload()).unwrap();
-    stdin.flush().unwrap();
-    let mut line = String::new();
-    stdout.read_line(&mut line).expect("read init");
-    assert_eq!(
-        serde_json::from_str::<Value>(line.trim()).unwrap()["id"],
-        "__init"
-    );
-    writeln!(stdin, "{}", initialized_notif()).unwrap();
+    let mut session = LiveSession::spawn(None);
+    session.handshake();
     for payload in [
         json!({"jsonrpc": "2.0", "id": 2}),
         json!({"id": 3, "method": "ping"}),
         json!([{"jsonrpc": "2.0", "id": 4, "method": "ping"}]),
         json!({"jsonrpc": "2.0", "id": 5, "method": "tools/call", "params": "x"}),
     ] {
-        writeln!(stdin, "{payload}").unwrap();
+        session.send(&payload);
     }
-    stdin.flush().unwrap();
-    drop(stdin);
     let mut responses = Vec::new();
     for _ in 0..4 {
-        line.clear();
-        let n = stdout.read_line(&mut line).expect("read MCP line");
-        assert!(n > 0, "MCP closed stdout early");
-        responses.push(serde_json::from_str::<Value>(line.trim()).expect("JSON-RPC"));
+        responses.push(session.recv());
     }
-    let status = child.wait().expect("wait MCP");
+    session.close_stdin();
+    let status = session.wait_clean();
     assert!(status.success(), "MCP exited {status}");
     assert_eq!(responses.len(), 4);
     for response in &responses {
@@ -276,6 +128,9 @@ fn taxonomy_invalid_request_is_32600_without_id() {
 /// the id echoed and no `result` -- and it is fatal: the process exits
 /// non-zero after the single error. One process per trigger. The only
 /// wire-reachable -32602.
+/// INTENT: pre-init requests -32602 with id echo, fatal non-zero exit.
+/// KILLS: code-swap, non-fatal-pre-init.
+/// ABSORBS: none.
 #[test]
 fn taxonomy_pre_initialize_request_is_32602() {
     for (payload, id) in [
@@ -285,16 +140,23 @@ fn taxonomy_pre_initialize_request_is_32602() {
         ),
         (tool_call(2, "index_status", json!({})), 2),
     ] {
-        let (responses, status) = rpc_raw(vec![payload], 1);
-        assert_eq!(responses.len(), 1);
-        assert_jsonrpc_error(&responses[0], -32602);
-        assert_eq!(responses[0]["id"], id, "{:#}", responses[0]);
+        let mut session = LiveSession::spawn(None);
+        session.send(&payload);
+        let response = session.recv();
+        assert_jsonrpc_error(&response, -32602);
+        assert_eq!(response["id"], id, "{response:#}");
+        session.close_stdin();
+        let status = session.wait_clean();
         assert!(!status.success(), "pre-init request must exit non-zero");
     }
 }
 
 /// T1: unknown tool names are tool errors, never JSON-RPC errors: `isError`
 /// with no top-level `error`. Case, whitespace, and near-miss variants.
+/// INTENT: unknown/case/whitespace tool names are tool errors, never JSON-RPC errors.
+/// KILLS: level-escalation(tool→rpc), fuzzy-name-match.
+/// ABSORBS: none.
+/// OVERLAP: protocol.rs unknown-tool (adds variants).
 #[test]
 fn taxonomy_unknown_tool_is_tool_error_not_jsonrpc_error() {
     let temp = file_tree();
@@ -316,6 +178,9 @@ fn taxonomy_unknown_tool_is_tool_error_not_jsonrpc_error() {
 /// unknown keys) share the one tool-error shape. Gap rows: `budget_tokens`
 /// above max / negative / mistyped, mistyped `resend_seen` / `preview` /
 /// `file_filter` / `lang`, negative `limit`, mistyped `query` / `root`.
+/// INTENT: 11 search bound/type/unknown-key rejections share tool-error shape.
+/// KILLS: arg-accepted, level-escalation.
+/// ABSORBS: none.
 #[test]
 fn taxonomy_search_arg_rejections_share_tool_error_shape() {
     let temp = file_tree();
@@ -347,6 +212,10 @@ fn taxonomy_search_arg_rejections_share_tool_error_shape() {
 
 /// T3: code_read arg rejections share the tool-error shape, and exactly 20
 /// ids still succeed (pass 3 pins 21 rejected; this pins the ceiling).
+/// INTENT: 6 code_read bound/type rejections share shape + 20-id ceiling still succeeds.
+/// KILLS: arg-accepted, ceiling-off-by-one.
+/// ABSORBS: none.
+/// OVERLAP: pass 3 pins 21 rejected (this pins the ceiling).
 #[test]
 fn taxonomy_code_read_arg_rejections_share_tool_error_shape() {
     let temp = file_tree();
@@ -391,12 +260,9 @@ fn taxonomy_code_read_arg_rejections_share_tool_error_shape() {
     for response in &responses[..6] {
         assert_tool_error_shape(response);
     }
-    assert_eq!(responses[6]["result"]["isError"], false, "{:#}", responses[6]);
+    assert_tool_success_shape(&responses[6]);
     assert_eq!(
-        responses[6]["result"]["content"][0]["text"]
-            .as_str()
-            .and_then(|t| serde_json::from_str::<Value>(t).ok())
-            .and_then(|b| b["nodes"].as_array().map(Vec::len)),
+        tool_body(&responses[6])["nodes"].as_array().map(Vec::len),
         Some(20),
         "{:#}",
         responses[6]
@@ -405,6 +271,9 @@ fn taxonomy_code_read_arg_rejections_share_tool_error_shape() {
 
 /// T4: node-id shape rejections share the tool-error shape: missing range,
 /// wrong separator, absolute path, directory target, unknown file.
+/// INTENT: 6 node-id shape rejections share tool-error shape.
+/// KILLS: shape-accepted, level-escalation.
+/// ABSORBS: none.
 #[test]
 fn taxonomy_code_read_node_id_rows_share_tool_error_shape() {
     let temp = file_tree();
@@ -432,9 +301,15 @@ fn taxonomy_code_read_node_id_rows_share_tool_error_shape() {
 /// T5: index-tool arg rejections share the tool-error shape. Gap rows:
 /// unknown keys on both tools, mistyped `force`, mistyped `root`, and a
 /// `root` pointing at a file. All fail at parse; no indexing runs.
+/// INTENT: 7 index-tool unknown-key/type/file-root rejections share shape, no indexing runs.
+/// KILLS: arg-accepted, index-before-validate.
+/// ABSORBS: none.
 #[test]
 fn taxonomy_index_tool_arg_rejections_share_tool_error_shape() {
     let temp = file_tree();
+    // The file-root row needs a second file; the canonical tree stays
+    // single-file so `file_count` pins elsewhere stay exact.
+    std::fs::write(temp.path().join("plain.txt"), "x\n").unwrap();
     let file_root = temp.path().join("plain.txt").display().to_string();
     let responses = rpc_session(
         vec![
@@ -456,6 +331,10 @@ fn taxonomy_index_tool_arg_rejections_share_tool_error_shape() {
 
 /// T6: a per-call root outside the configured workspace is a tool error on
 /// every tool that takes one (`protocol.rs` pins `index_status` only).
+/// INTENT: per-call root outside workspace is tool error on all 4 root-taking tools.
+/// KILLS: jail-drop, per-tool-divergence.
+/// ABSORBS: none.
+/// OVERLAP: protocol.rs index_status-only (extends to all tools).
 #[test]
 fn taxonomy_sandbox_escape_is_tool_error_across_all_tools() {
     let workspace = file_tree();
@@ -487,42 +366,23 @@ fn taxonomy_sandbox_escape_is_tool_error_across_all_tools() {
 /// S1: notifications (absent id, null id) produce no response. The next
 /// line after two notifications plus a ping must be the ping response, and
 /// the session exits cleanly -- silence is observable without timeouts.
+/// INTENT: absent/null-id notifications silent; next line is the ping; clean exit.
+/// KILLS: notification-response-leak, session-stall.
+/// ABSORBS: none.
 #[test]
 fn taxonomy_notification_produces_no_response_session_continues() {
-    let mut child = Command::new(mcp_bin())
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .spawn()
-        .expect("spawn MCP");
-    let mut stdin = child.stdin.take().unwrap();
-    let mut stdout = BufReader::new(child.stdout.take().unwrap());
-    let send = |stdin: &mut std::process::ChildStdin, payload: &Value| {
-        writeln!(stdin, "{payload}").unwrap();
-        stdin.flush().unwrap();
-    };
-    send(&mut stdin, &init_payload());
-    let mut line = String::new();
-    stdout.read_line(&mut line).expect("read init");
-    assert_eq!(
-        serde_json::from_str::<Value>(line.trim()).unwrap()["id"],
-        "__init"
-    );
-    send(&mut stdin, &initialized_notif());
-    send(
-        &mut stdin,
+    let mut session = LiveSession::spawn(None);
+    session.handshake();
+    session.send(
         &json!({"jsonrpc":"2.0","method":"tools/call","params":{"name":"index_status","arguments":{}}}),
     );
-    send(&mut stdin, &json!({"jsonrpc":"2.0","id":null,"method":"ping"}));
-    send(&mut stdin, &json!({"jsonrpc":"2.0","id":77,"method":"ping"}));
-    stdin.flush().unwrap();
-    line.clear();
-    let n = stdout.read_line(&mut line).expect("read MCP line");
-    assert!(n > 0, "MCP closed stdout");
-    let first: Value = serde_json::from_str(line.trim()).expect("JSON-RPC");
+    session.send(&json!({"jsonrpc":"2.0","id":null,"method":"ping"}));
+    session.send(&json!({"jsonrpc":"2.0","id":77,"method":"ping"}));
+    let first = session.recv();
     assert_eq!(first["id"], 77, "notification leaked a response: {first:#}");
     assert!(first.get("error").is_none(), "{first:#}");
     assert!(first.get("result").is_some(), "{first:#}");
-    drop(stdin);
-    let status = child.wait().expect("wait MCP");
+    session.close_stdin();
+    let status = session.wait_clean();
     assert!(status.success(), "MCP exited {status}");
 }

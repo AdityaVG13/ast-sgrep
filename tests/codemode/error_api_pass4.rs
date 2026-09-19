@@ -19,61 +19,26 @@
 //!   -> e4_deleted_root_fault_scoped_and_recovers_after_repair
 //! - edits[] batch with a failing entry; zero writes (atomic batch), retry ok
 //!   -> e4_atomic_edit_batch_zero_writes_then_resumes
-//! - invalid args mid-plan; applied prefix kept, remainder resumes
-//!   -> e4_plan_prefix_applied_then_remainder_resumes
 //! - chained double fault: unknown-tool then budget on one session
 //!   -> e4_chained_double_fault_unknown_then_budget
 //! - oversized response mid-flow; session resumes after the rejection
 //!   -> e4_oversized_response_fault_then_resumes
+//!
+//! Folded out (MERGE verdict; pinned at its anchor, not here):
+//! - e4_plan_prefix_applied_then_remainder_resumes -> e3_plan_fail_closed_never_ok (pass3)
+
+#[path = "error_testkit.rs"]
+mod error_testkit;
 
 use ast_sgrep_codemode::{
-    parse_plan, run_plan, run_serve, BatchCall, CallError, CodeModeSession, ServeRequest,
-    ServeResponse, SessionConfig,
+    parse_plan, run_plan, CallError, ServeRequest, ServeResponse,
 };
-use ast_sgrep_plugins::OutputFormat;
+use error_testkit::{batch_call, serve_lines, serve_request_line, session_at};
 use serde_json::{json, Value};
-use std::io::Cursor;
 
-fn session_at(root: &std::path::Path) -> CodeModeSession {
-    CodeModeSession::new(SessionConfig {
-        root: root.to_path_buf(),
-        index_path: None,
-        limit: 5,
-        use_embed: false,
-        default_format: OutputFormat::AgentCapsule,
-    })
-}
-
-fn config_at(root: &std::path::Path) -> SessionConfig {
-    SessionConfig {
-        root: root.to_path_buf(),
-        index_path: None,
-        limit: 5,
-        use_embed: false,
-        default_format: OutputFormat::AgentCapsule,
-    }
-}
-
-fn batch_call(id: &str, tool: &str, args: Value) -> BatchCall {
-    BatchCall {
-        id: id.to_string(),
-        tool: tool.to_string(),
-        args,
-    }
-}
-
-fn serve_lines(input: String, root: &std::path::Path) -> (Result<(), CallError>, Vec<String>) {
-    let mut out = Vec::new();
-    let result = run_serve(config_at(root), Cursor::new(input), &mut out);
-    let text = String::from_utf8(out).expect("serve output is utf8");
-    let lines = text.lines().map(str::to_string).collect();
-    (result, lines)
-}
-
-fn serve_request_line(request: &ServeRequest) -> String {
-    format!("{}\n", serde_json::to_string(request).expect("request serializes"))
-}
-
+/// INTENT=mid-stream batch fault isolated per-call, stream reaches Bye.
+/// KILLS=isolation-breach, stream-abort.
+/// ABSORBS=none.
 #[test]
 fn e4_serve_batch_fault_mid_stream_isolates_and_resumes() {
     // Full sticky-serve flow: good call, batch with bad args in the middle,
@@ -139,6 +104,9 @@ fn e4_serve_batch_fault_mid_stream_isolates_and_resumes() {
     assert!(matches!(last, ServeResponse::Bye), "got {last:?}");
 }
 
+/// INTENT=UnknownTool mid-plan fails, same session resumes corrected plan.
+/// KILLS=session-poison-after-UnknownTool.
+/// ABSORBS=none.
 #[test]
 fn e4_unknown_tool_in_plan_resumes_with_corrected_plan() {
     // Working session runs a good plan, then a plan with an unknown tool
@@ -175,6 +143,10 @@ fn e4_unknown_tool_in_plan_resumes_with_corrected_plan() {
     assert_eq!(session.call_count(), 5);
 }
 
+/// INTENT=budget aborts mid-plan then sticks terminal (non-resumable).
+/// KILLS=budget-recovery-after-exhaustion.
+/// ABSORBS=none.
+/// OVERLAP=e2 budget pins (adds mid-plan flow).
 #[test]
 fn e4_budget_exhaustion_mid_plan_sticks_terminal() {
     // Working session nearly spends its budget on a good plan; the next plan
@@ -213,6 +185,9 @@ fn e4_budget_exhaustion_mid_plan_sticks_terminal() {
     assert!(session.exhausted());
 }
 
+/// INTENT=root deletion fails bound calls as Other, pure tools green, reindex resumes.
+/// KILLS=fault-scope-breach, stale-searcher-after-repair.
+/// ABSORBS=none.
 #[test]
 fn e4_deleted_root_fault_scoped_and_recovers_after_repair() {
     // Working session over an indexed root; the root is deleted mid-flow so
@@ -262,6 +237,9 @@ fn e4_deleted_root_fault_scoped_and_recovers_after_repair() {
     assert!(!session.exhausted());
 }
 
+/// INTENT=failing edits[] entry fails whole call, zero writes, retry applies.
+/// KILLS=partial-batch-write.
+/// ABSORBS=none.
 #[test]
 fn e4_atomic_edit_batch_zero_writes_then_resumes() {
     // A working session fires one edit call with an edits[] batch whose second
@@ -319,39 +297,9 @@ fn e4_atomic_edit_batch_zero_writes_then_resumes() {
     assert_eq!(session.call_count(), 3);
 }
 
-#[test]
-fn e4_plan_prefix_applied_then_remainder_resumes() {
-    // A plan whose first step mutates and whose second step has bad args fails
-    // end-to-end as InvalidArgs with the applied prefix kept on disk — then
-    // the remainder runs on the same session (resumable plan, prefix kept).
-    let temp = tempfile::tempdir().expect("tempdir");
-    std::fs::write(temp.path().join("a.txt"), "hello world\n").expect("write");
-    let mut session = session_at(temp.path());
-
-    let faulty = parse_plan(&json!({"steps": [
-        {"id": "e", "tool": "edit", "args": {"path": "a.txt", "oldText": "hello world", "newText": "hello mars"}},
-        {"id": "s", "tool": "select", "args": {}},
-    ]}))
-    .expect("faulty plan parses");
-    let err = run_plan(&mut session, &faulty).expect_err("bad-args step must fail");
-    assert!(matches!(err, CallError::InvalidArgs(_)), "got {err:?}");
-    assert_eq!(session.call_count(), 2);
-    let body = std::fs::read_to_string(temp.path().join("a.txt")).expect("reread");
-    assert!(body.contains("hello mars"), "executed prefix must apply: {body:?}");
-    assert!(!body.contains("hello world"), "prefix must apply fully: {body:?}");
-
-    let remainder = parse_plan(&json!({"steps": [
-        {"id": "s", "tool": "select", "args": {"value": {"v": 7}, "fields": ["v"]}},
-        {"id": "g", "tool": "catalog_search", "args": {"query": "search"}},
-    ]}))
-    .expect("remainder plan parses");
-    let ok = run_plan(&mut session, &remainder).expect("remainder must resume");
-    assert!(ok.ok);
-    assert_eq!(session.call_count(), 4);
-    let body = std::fs::read_to_string(temp.path().join("a.txt")).expect("reread");
-    assert!(body.contains("hello mars"), "resume must keep the prefix: {body:?}");
-}
-
+/// INTENT=UnknownTool then, after resume spends budget, terminal BudgetExhausted in order.
+/// KILLS=fault-order-swap, non-sticky-terminal.
+/// ABSORBS=none.
 #[test]
 fn e4_chained_double_fault_unknown_then_budget() {
     // Chained double fault on one session: an unknown-tool plan fault first
@@ -394,6 +342,10 @@ fn e4_chained_double_fault_unknown_then_budget() {
     assert_eq!(session.call_count(), 5);
 }
 
+/// INTENT=oversized response fails Other closed (never truncated-ok), session resumes.
+/// KILLS=truncated-ok, session-poison.
+/// ABSORBS=none.
+/// OVERLAP=oracle oversized pin (adds resume + budget-charge).
 #[test]
 fn e4_oversized_response_fault_then_resumes() {
     // A working session whose call would return more than the per-call cap

@@ -14,6 +14,7 @@
 //!   unexpected success is the failure under test.
 
 use ast_sgrep_core::StoreError;
+use rusqlite::ErrorCode;
 use std::ffi::OsString;
 use std::path::Path;
 
@@ -76,4 +77,56 @@ pub fn err_of<T>(result: Result<T, StoreError>) -> StoreError {
         Ok(_) => panic!("expected Err, got Ok"),
         Err(err) => err,
     }
+}
+
+/// INTENT: total `StoreError` discriminant projection (0 = Database,
+/// 1 = Io, 2 = Other): the cross-cutting error-comparison primitive —
+/// equal discriminants mean the same failure layer reached the caller.
+/// Message text never participates. Pure projection.
+pub fn store_error_discriminant(err: &StoreError) -> u8 {
+    match err {
+        StoreError::Database(_) => 0,
+        StoreError::Io(_) => 1,
+        StoreError::Other(_) => 2,
+    }
+}
+
+/// INTENT: sqlite [`ErrorCode`] carried by a `Database` error, if any —
+/// the kind projection beneath the discriminant. Pure projection.
+pub fn sqlite_code(err: &StoreError) -> Option<ErrorCode> {
+    match err {
+        StoreError::Database(rusqlite::Error::SqliteFailure(code, _)) => Some(code.code),
+        _ => None,
+    }
+}
+
+/// INTENT: caller-side replica of the crate-private
+/// `StoreError::is_corrupt_database` predicate (`DatabaseCorrupt` |
+/// `NotADatabase` under the `Database` discriminant). It MUST stay a
+/// replica: the predicate is `pub(crate)` in `ast-sgrep-core`, unnameable
+/// from any test target, so suites prove corruption stays detectable
+/// through the public `Database` discriminant + rusqlite kind alone, at
+/// every layer. Keep the match arms in sync with core by hand. Pure
+/// projection.
+pub fn is_corrupt_kind(err: &StoreError) -> bool {
+    matches!(
+        err,
+        StoreError::Database(rusqlite::Error::SqliteFailure(code, _))
+            if matches!(
+                code.code,
+                ErrorCode::DatabaseCorrupt | ErrorCode::NotADatabase
+            )
+    )
+}
+
+/// INTENT: WAL-total corruption fault — deterministic garbage over `db`
+/// plus removal of every sqlite sidecar (`-wal`, `-shm`, `-journal`), so
+/// no page survives anywhere. Returns the bytes written for post-drill
+/// comparison. Delta vs [`crate::corrupt_index_db`]: that takes a
+/// workspace root and leaves sidecars behind, so it cannot express total
+/// corruption; this takes the db path itself. Panics on IO failure.
+pub fn corrupt_db_total(db: &Path) -> Vec<u8> {
+    let bytes = write_garbage(db);
+    remove_sqlite_sidecars(db);
+    bytes
 }

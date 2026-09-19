@@ -21,6 +21,7 @@ mod hit;
 mod index;
 mod isolation;
 mod lang;
+mod lang_pipeline;
 #[cfg(feature = "lsp")]
 mod lsp;
 mod mcp;
@@ -28,8 +29,9 @@ mod num;
 mod scrub;
 mod verdict;
 pub use cli::{
-    asgrep_bin, assert_failure_envelope, assert_success, parse_stdout, run, run_env, run_json,
-    run_json_full, CliSession,
+    asgrep_bin, assert_failure_envelope, assert_fixture_hits, assert_human_error,
+    assert_human_success, assert_no_success_shape, assert_success, envelope_shape, fixture_root,
+    parse_stdout, run, run_env, run_index_default, run_json, run_json_full, CliSession,
 };
 pub use cli_oracle::{
     oracle_build_json, oracle_keyword_corpus, oracle_outline_corpus, oracle_run_json, oracle_run_raw,
@@ -45,10 +47,11 @@ pub use cli_recovery::{
 pub use cli_recovery::kill9;
 #[cfg(feature = "codemode")]
 pub use codemode::{
-    assert_json_byte_identical, batch_call, batch_request, batch_request_with_mode, catalog_call,
-    config_at, config_at_indexed, sample_search_hit, search_select_plan, serve_lines,
-    serve_request_line, session_at, session_at_indexed, BUDGET_EXCEEDED, CALL_NOW_ONLY,
-    DEFS_NEEDS_SYMBOL, MAX_QUERY_CHARS, SESSION_BUSY,
+    assert_json_byte_identical, assert_other_preserves_cause, batch_call, batch_request,
+    batch_request_with_mode, call_error_discriminant, catalog_call, config_at, config_at_indexed,
+    sample_search_hit, search_select_plan, serve_lines, serve_request_line, session_at,
+    session_at_indexed, BUDGET_EXCEEDED, CALL_NOW_ONLY, DEFS_NEEDS_SYMBOL, MAX_QUERY_CHARS,
+    SESSION_BUSY,
 };
 #[cfg(feature = "codemode")]
 pub use codemode_recovery::{
@@ -58,16 +61,22 @@ pub use codemode_recovery::{
 };
 pub use core_oracle::{
     build_core_index, core_index_options, core_search_options, core_searcher, finish_options,
-    response_hit_keys_with_scores, sorted_hit_files, unit_channel_weights, write_core_fixture,
-    CorePipelineFixture,
+    response_hit_keys_with_scores, searcher_at_root, sorted_hit_files, unit_channel_weights,
+    write_core_fixture, CorePipelineFixture,
 };
 pub use core_recovery::{
     assert_torn, build_and_quiet, corpus_session, home_names, quarantine_path,
     quiesced_db_bytes, search_parity_key, search_parity_keys, store_snapshot, upsert_test_file,
     RECOVERY_CORPUS,
 };
-pub use fault::{err_of, flip_bytes, remove_sqlite_sidecars, truncate_file, write_garbage};
-pub use fixture::{file_tree, sample_file, sample_root, set_mtime_secs, write_file, write_temp};
+pub use fault::{
+    corrupt_db_total, err_of, flip_bytes, is_corrupt_kind, remove_sqlite_sidecars, sqlite_code,
+    store_error_discriminant, truncate_file, write_garbage,
+};
+pub use fixture::{
+    dir_listing, file_tree, index_db_path, sample_file, sample_root, set_mtime_secs, write_file,
+    write_temp,
+};
 pub use golden::{
     assert_golden, assert_golden_at, assert_golden_json, assert_golden_json_at,
     canonicalize_chain_response, canonicalize_extraction, canonicalize_text, golden_text_pretty,
@@ -83,15 +92,19 @@ pub use lang::{
     assert_has_callee, assert_has_symbol, assert_language_conformance, parse, ExpectedCall,
     ExpectedPattern, ExpectedSymbol, LanguageConformanceCase,
 };
+pub use lang_pipeline::{
+    assert_rank_sound, assert_spans_in_source, rank_hits, run_pipeline, score_hit, PipelineOutcome,
+};
 #[cfg(feature = "lsp")]
 pub use lsp::{edit_full_replace, edit_ranged, edit_ranged_len, lsp_search_hit_keys, sample_backend};
 pub use mcp::{
-    assert_ping_ok, assert_tool_error_shape, assert_tool_success, assert_tools_list_ok,
-    big_tree, cancelled_notif, collect_responses, corrupt_index_db, distinct_hit_paths,
-    expected_tool_names, index_tree, indexed_tree, init_payload, initialized_notif, is_error,
-    mcp_bin, multi_hit_tree, ping, response_by_id, rpc_pipeline, rpc_session, rpc_session_env,
-    small_tree, spawn_raw_no_handshake, tool_body, tool_call, tool_text, tools_list, LiveSession,
-    TESTKIT_CLIENT_NAME,
+    assert_jsonrpc_error, assert_ping_ok, assert_tool_error_shape, assert_tool_success,
+    assert_tool_success_shape, assert_tools_list_ok, big_tree, cancelled_notif, collect_responses,
+    corrupt_index_db, distinct_hit_paths, expected_tool_names, index_tree, indexed_tree,
+    init_payload, initialized_notif, is_error, mcp_bin, multi_hit_tree, ping, response_by_id,
+    rpc_pipeline, rpc_session, rpc_session_env, rpc_session_raw, small_tree,
+    spawn_raw_no_handshake, tool_body, tool_call, tool_error_discriminant, tool_text, tools_list,
+    LiveSession, TESTKIT_CLIENT_NAME,
 };
 pub use num::{approx_eq, fold_rank_scored};
 pub use scrub::Scrubber;

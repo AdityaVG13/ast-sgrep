@@ -9,89 +9,41 @@
 //!   different entry points yields the same discriminant (and sqlite kind).
 //! - MR2 error determinism: the same trigger repeated yields the identical
 //!   discriminant sequence; a failure never poisons a later success.
-//! - MR3 fail-closed: a poisoned store/cancelled op returns `Err` through
-//!   every lane — never `Ok` with partial or empty results misreported as
-//!   success.
+//! - MR3 fail-closed: a poisoned store returns `Err` through every lane —
+//!   never `Ok` with partial or empty results misreported as success. (The
+//!   cancelled-writes entry×assert relation folds into the E2 cancel anchor;
+//!   this file keeps the poisoned-store legs.)
 //! - MR4 error-before-side-effect: a failed open/write leaves the filesystem
 //!   and all committed store rows exactly as they were.
 //!
 //! Discriminants (and sqlite `ErrorCode`) only; no message-text asserts.
 
+#[path = "error_testkit.rs"]
+mod error_testkit;
+
 use ast_sgrep_core::{
-    search_pattern, IndexOptions, IndexStore, Indexer, SearchOptions, Searcher, StoreError,
+    search_pattern, IndexOptions, IndexStore, Indexer, SearchOptions, Searcher,
     MAX_INCREMENTAL_PATHS, MAX_QUERY_CHARS,
+};
+use ast_sgrep_testkit::err_of;
+use error_testkit::{
+    discriminant, indexer_at, mem_searcher, searcher_at, sqlite_code, write_garbage_db,
 };
 use rusqlite::ErrorCode;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
+    atomic::AtomicBool,
     Arc,
 };
 use tempfile::TempDir;
 
-/// 0 = Database, 1 = Io, 2 = Other. Total: every `StoreError` maps to one.
-fn discriminant(err: &StoreError) -> u8 {
-    match err {
-        StoreError::Database(_) => 0,
-        StoreError::Io(_) => 1,
-        StoreError::Other(_) => 2,
-    }
-}
-
-fn err_of<T>(result: Result<T, StoreError>) -> StoreError {
-    match result {
-        Ok(_) => panic!("expected Err, got Ok"),
-        Err(err) => err,
-    }
-}
-
-fn sqlite_code(err: &StoreError) -> Option<ErrorCode> {
-    match err {
-        StoreError::Database(rusqlite::Error::SqliteFailure(code, _)) => Some(code.code),
-        _ => None,
-    }
-}
-
-fn mem_searcher(root: &Path) -> Searcher {
-    let store = IndexStore::open_in_memory(root).expect("in-memory store");
-    Searcher::with_store(
-        store,
-        SearchOptions {
-            root: root.to_path_buf(),
-            limit: 10,
-            use_embed: false,
-            ..SearchOptions::default()
-        },
-    )
-}
-
-fn write_garbage_db(dir: &Path, name: &str) -> PathBuf {
-    let db = dir.join(name);
-    std::fs::write(&db, b"this is not a sqlite database file; garbage").unwrap();
-    db
-}
-
-fn indexer_at(root: &Path, db: &Path) -> Indexer {
-    Indexer::new(IndexOptions {
-        root: root.to_path_buf(),
-        index_path: Some(db.to_path_buf()),
-        ..IndexOptions::default()
-    })
-    .expect("indexer")
-}
-
-fn searcher_at(root: &Path, db: &Path) -> Result<Searcher, StoreError> {
-    Searcher::new(SearchOptions {
-        root: root.to_path_buf(),
-        index_path: Some(db.to_path_buf()),
-        ..SearchOptions::default()
-    })
-}
-
-/// MR1: the same corrupt-bytes fault through the store open, the read-layer
-/// constructor, and the write-layer constructor yields the same discriminant
-/// AND the same sqlite kind — no layer converts or downgrades it.
+/// INTENT: MR1 — the same corrupt-bytes fault through the store open, the
+/// read-layer constructor, and the write-layer constructor yields the same
+/// discriminant AND the same sqlite kind (MR1 anchor).
+/// KILLS: layer-conversion, kind-divergence.
+/// ABSORBS: none (kept solo).
+/// OVERLAP: E2 garbage legs (this is the relation statement).
 #[test]
 fn garbage_db_same_discriminant_across_open_search_and_index() {
     let temp = TempDir::new().unwrap();
@@ -125,9 +77,11 @@ fn garbage_db_same_discriminant_across_open_search_and_index() {
     );
 }
 
-/// MR1: a file blocking the index directory fails identically through the
-/// store open and the write-layer constructor (both `Other` by the deliberate
-/// `create_dir_all` Io→Other map).
+/// INTENT: MR1 — a file blocking the index directory fails identically through
+/// the store open and the write-layer constructor (both `Other` by the
+/// deliberate `create_dir_all` Io→Other map).
+/// KILLS: layer-divergence.
+/// ABSORBS: none (kept solo; distinct map site from garbage).
 #[test]
 fn blocked_index_dir_same_discriminant_across_store_and_indexer() {
     let temp = TempDir::new().unwrap();
@@ -147,9 +101,11 @@ fn blocked_index_dir_same_discriminant_across_store_and_indexer() {
     );
 }
 
-/// MR1: one oversize query through every lexical search lane — including the
-/// multi-pattern fan-in, which delegates to `search` — yields `Other`
-/// everywhere. No lane answers, truncates, or converts.
+/// INTENT: MR1 — one oversize query through every lexical search lane,
+/// including the multi-pattern fan-in, yields `Other` everywhere. No lane
+/// answers, truncates, or converts.
+/// KILLS: lane-truncate-and-answer, lane-conversion.
+/// ABSORBS: none (kept solo).
 #[test]
 fn oversize_query_same_discriminant_across_search_lanes() {
     let temp = TempDir::new().unwrap();
@@ -175,21 +131,24 @@ fn oversize_query_same_discriminant_across_search_lanes() {
     }
 }
 
-/// MR1: one dropped table (`pattern_nodes`) observed through the depth query,
-/// the status-adjacent free function, the prefixed search lane, and the
-/// multi-pattern fan-in yields `Database` everywhere with the same sqlite
-/// kind — the fault is identical, so the discriminant must be too.
+/// INTENT: MR1+MR3 — one dropped-table fault fails as Database with the same
+/// sqlite kind through the depth query, the free function, the prefixed search
+/// lane, the multi-pattern fan-in, AND the status probe. Controls answer Ok
+/// first on the healthy stores, so the post-drop Errs are the poison.
+/// KILLS: lane-degrade, kind-divergence, status-Ok-over-broken-schema,
+/// Ok-empty-over-poison, cache-masks-poison.
+/// ABSORBS: dropped_table_fails_status_with_database_discriminant (status leg),
+/// poisoned_store_fails_closed_across_pattern_lanes (control-first + cache-off
+/// rationale).
+/// OVERLAP: E4 dropped-tables drill pins the status leg too (end-to-end + rebuild).
 #[test]
 fn dropped_table_same_discriminant_across_depth_and_search_lanes() {
     let temp = TempDir::new().unwrap();
     let store = IndexStore::open_in_memory(temp.path()).expect("in-memory store");
-    store
-        .connection()
-        .execute_batch("DROP TABLE pattern_nodes")
-        .unwrap();
-    let via_depth = err_of(store.pattern_node_count().map(|_| ()));
-    let via_free_fn =
-        err_of(search_pattern("greet_user", &store, temp.path(), None, 10).map(|_| ()));
+    // Response cache OFF: otherwise the control queries below would populate the
+    // cache and the post-drop lanes would answer cached `Ok` without touching
+    // the poisoned table — a legitimate cache layer, not the fail-closed
+    // relation under test.
     let searcher = Searcher::with_store(
         IndexStore::open_in_memory(temp.path()).expect("second store"),
         SearchOptions {
@@ -198,20 +157,54 @@ fn dropped_table_same_discriminant_across_depth_and_search_lanes() {
             use_embed: false,
             ..SearchOptions::default()
         },
+    )
+    .with_response_cache(false);
+    // Control first: every lane answers Ok on the healthy stores.
+    assert_eq!(
+        store.pattern_node_count().expect("table exists"),
+        0,
+        "control: fresh store must have an empty pattern_nodes table"
     );
+    assert!(
+        search_pattern("greet_user", &store, temp.path(), None, 10).is_ok(),
+        "control: free function on healthy store must be Ok"
+    );
+    assert!(
+        searcher.search("pattern:greet_user").is_ok(),
+        "control: prefixed search on healthy store must be Ok"
+    );
+    assert!(
+        searcher
+            .search_multi_pattern(&["greet_user".to_string()])
+            .is_ok(),
+        "control: multi-pattern on healthy store must be Ok"
+    );
+    assert!(
+        store.status().is_ok(),
+        "control: status on a healthy store must be Ok"
+    );
+    store
+        .connection()
+        .execute_batch("DROP TABLE pattern_nodes; DROP TABLE symbols")
+        .unwrap();
     searcher
         .store()
         .connection()
         .execute_batch("DROP TABLE pattern_nodes")
         .unwrap();
+    let via_depth = err_of(store.pattern_node_count().map(|_| ()));
+    let via_free_fn =
+        err_of(search_pattern("greet_user", &store, temp.path(), None, 10).map(|_| ()));
     let via_search = err_of(searcher.search("pattern:greet_user").map(|_| ()));
     let via_multi =
         err_of(searcher.search_multi_pattern(&["greet_user".to_string()]).map(|_| ()));
+    let via_status = err_of(store.status().map(|_| ()));
     for (lane, err) in [
         ("depth query", &via_depth),
         ("free function", &via_free_fn),
         ("prefixed search", &via_search),
         ("multi-pattern", &via_multi),
+        ("status probe", &via_status),
     ] {
         assert_eq!(
             discriminant(err),
@@ -229,38 +222,17 @@ fn dropped_table_same_discriminant_across_depth_and_search_lanes() {
         sqlite_code(&via_multi),
         "search and multi-pattern sqlite kinds must match"
     );
-}
-
-/// MR1 (status path): dropping a table the status probe counts fails the
-/// status probe as `Database` — the same discriminant the depth query for a
-/// dropped table yields. Status never answers `Ok` over a broken schema.
-#[test]
-fn dropped_table_fails_status_with_database_discriminant() {
-    let temp = TempDir::new().unwrap();
-    let store = IndexStore::open_in_memory(temp.path()).expect("in-memory store");
-    assert!(
-        store.status().is_ok(),
-        "control: status on a healthy store must be Ok"
-    );
-    store
-        .connection()
-        .execute_batch("DROP TABLE symbols")
-        .unwrap();
-    let via_status = err_of(store.status().map(|_| ()));
-    assert_eq!(
-        discriminant(&via_status),
-        0,
-        "dropped table via status must fail as Database, got {via_status:?}"
-    );
     assert!(
         sqlite_code(&via_status).is_some(),
         "status failure must carry a sqlite kind, got {via_status:?}"
     );
 }
 
-/// MR2: the same four triggers, run twice against fresh fixtures, yield the
-/// identical discriminant sequence (and identical sqlite kinds). Error
-/// identity is a pure function of the trigger — no run-to-run drift.
+/// INTENT: MR2 — the same four triggers, run twice against fresh fixtures,
+/// yield the identical discriminant sequence (and identical sqlite kinds).
+/// Error identity is a pure function of the trigger.
+/// KILLS: run-to-run-drift.
+/// ABSORBS: none (kept solo).
 #[test]
 fn repeated_triggers_yield_identical_discriminant_sequence() {
     fn run_once() -> (Vec<u8>, Vec<Option<ErrorCode>>) {
@@ -295,9 +267,12 @@ fn repeated_triggers_yield_identical_discriminant_sequence() {
     );
 }
 
-/// MR2: a failure never poisons later success through the same handle — an
-/// `Err` followed by a valid call is `Ok`, and the `Err` repeated is the
+/// INTENT: MR2 — a failure never poisons later success through the same handle:
+/// an `Err` followed by a valid call is `Ok`, and the `Err` repeated is the
 /// same discriminant. Errors are stateless rejections, not handle poison.
+/// KILLS: handle-poison-on-error.
+/// ABSORBS: none (kept solo).
+/// OVERLAP: E4 oversize drill (E3 is ingress-level).
 #[test]
 fn error_does_not_poison_later_success_on_same_handle() {
     let temp = TempDir::new().unwrap();
@@ -329,106 +304,11 @@ fn error_does_not_poison_later_success_on_same_handle() {
     );
 }
 
-/// MR3: with `pattern_nodes` dropped, every pattern lane returns `Err` —
-/// never `Ok` with silently empty hits. Control first: the same three lanes
-/// answer `Ok` on the healthy store, so the `Err`s are the poison, not the
-/// query.
-#[test]
-fn poisoned_store_fails_closed_across_pattern_lanes() {
-    let temp = TempDir::new().unwrap();
-    let store = IndexStore::open_in_memory(temp.path()).expect("in-memory store");
-    assert!(
-        search_pattern("greet_user", &store, temp.path(), None, 10).is_ok(),
-        "control: free function on healthy store must be Ok"
-    );
-    // Response cache OFF: otherwise the control queries below would populate the
-    // cache and the post-drop lanes would answer cached `Ok` without touching
-    // the poisoned table — a legitimate cache layer, not the fail-closed
-    // relation under test.
-    let searcher = Searcher::with_store(
-        IndexStore::open_in_memory(temp.path()).expect("second store"),
-        SearchOptions {
-            root: temp.path().to_path_buf(),
-            limit: 10,
-            use_embed: false,
-            ..SearchOptions::default()
-        },
-    )
-    .with_response_cache(false);
-    assert!(
-        searcher.search("pattern:greet_user").is_ok(),
-        "control: prefixed search on healthy store must be Ok"
-    );
-    assert!(
-        searcher
-            .search_multi_pattern(&["greet_user".to_string()])
-            .is_ok(),
-        "control: multi-pattern on healthy store must be Ok"
-    );
-    store
-        .connection()
-        .execute_batch("DROP TABLE pattern_nodes")
-        .unwrap();
-    searcher
-        .store()
-        .connection()
-        .execute_batch("DROP TABLE pattern_nodes")
-        .unwrap();
-    let errs = [
-        (
-            "free function",
-            err_of(search_pattern("greet_user", &store, temp.path(), None, 10).map(|_| ())),
-        ),
-        (
-            "prefixed search",
-            err_of(searcher.search("pattern:greet_user").map(|_| ())),
-        ),
-        (
-            "multi-pattern",
-            err_of(
-                searcher
-                    .search_multi_pattern(&["greet_user".to_string()])
-                    .map(|_| ()),
-            ),
-        ),
-    ];
-    for (lane, err) in &errs {
-        assert_eq!(
-            discriminant(err),
-            0,
-            "poisoned store via {lane} must fail closed as Database, got {err:?}"
-        );
-    }
-}
-
-/// MR3: a set cancel flag fails every write entry point as `Other` — full
-/// index and incremental update agree, and neither reports `Ok` stats for
-/// work it did not do.
-#[test]
-fn cancelled_writes_fail_closed_with_same_discriminant() {
-    let temp = TempDir::new().unwrap();
-    let rel = temp.path().join("a.rs");
-    std::fs::write(&rel, b"fn alpha() {}\n").unwrap();
-    let db = temp.path().join("index.db");
-    let mut indexer = indexer_at(temp.path(), &db);
-    let cancel = Arc::new(AtomicBool::new(true));
-    indexer.set_cancel(Arc::clone(&cancel));
-    let via_index_all = err_of(indexer.index_all().map(|_| ()));
-    let via_update = err_of(indexer.update_paths(std::slice::from_ref(&rel)).map(|_| ()));
-    assert_eq!(
-        (
-            discriminant(&via_index_all),
-            discriminant(&via_update)
-        ),
-        (2, 2),
-        "cancelled writes must fail as Other through both entries, got {via_index_all:?} / {via_update:?}"
-    );
-    cancel.store(false, Ordering::SeqCst);
-}
-
-/// MR4: failed opens leave the filesystem byte-identical — no half-created
-/// index file, no repaired garbage, no directory entries added or removed.
-/// Snapshot before, trigger, snapshot after; the maps must match exactly.
+/// INTENT: MR4 — failed opens leave the filesystem byte-identical: no
+/// half-created index file, no repaired garbage, no directory entries added or
+/// removed. Snapshot before, trigger, snapshot after; the maps must match.
+/// KILLS: half-created-index, garbage-repair-on-reject.
+/// ABSORBS: none (kept solo).
 #[test]
 fn failed_opens_leave_filesystem_untouched() {
     fn snapshot(dir: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
@@ -481,10 +361,12 @@ fn failed_opens_leave_filesystem_untouched() {
     );
 }
 
-/// MR4: failed writes leave committed store state intact — a previously
-/// indexed file keeps its exact hash and the line count is unchanged after
-/// an over-max batch, a cancelled update, and a cancelled full index, all
-/// of which report the same `Other` discriminant.
+/// INTENT: MR4 — failed writes leave committed store state intact: a previously
+/// indexed file keeps its exact hash and the line count is unchanged after an
+/// over-max batch, a cancelled update, and a cancelled full index, all of which
+/// report the same `Other` discriminant.
+/// KILLS: committed-row-clobber-on-failure.
+/// ABSORBS: none (kept solo).
 #[test]
 fn failed_writes_preserve_committed_rows() {
     let temp = TempDir::new().unwrap();

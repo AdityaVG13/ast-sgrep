@@ -14,301 +14,150 @@
 //!
 //! | row | live fault injection                        | per-call codes/shapes + usability |
 //! |-----|---------------------------------------------|-----------------------------------|
-//! | D1  | `index.db` deleted mid-session              | miss mapping, live `index_repo` heals |
+//! | D1  | `index.db` file, then `.asgrep/` dir, deleted live | miss mapping, live rebuild heals  |
 //! | D2  | `index.db` overwritten with garbage live    | toolerr x3, read survives, live heal |
-//! | D3  | `.asgrep/` dir deleted mid-session          | miss mapping, live rebuild recreates |
 //! | D4  | malformed envelopes mid-session             | -32601/-32600 codes, session usable |
 //! | D5  | bad-argument storm mid-session              | uniform toolerr, session usable     |
 //! | D6  | sandbox-escape roots mid-session            | toolerr x3, session unpoisoned      |
 //! | D7  | CHAINED double fault (garbage db + deleted source) | staged heal, faults independent |
+//!
+//! D1 absorbs the former D3 (whole-`.asgrep/` deletion): the same miss-mapping
+//! + live-rebuild shape at dir granularity, run as D1's second fault leg on
+//! the `search` channel (leg 1 uses `keyword_search`).
 //!
 //! Non-duplication: recovery pins mid-session stub/half index tears, root
 //! deletion + live heal, EOF, garbage lines, and shape-only invalid envelopes,
 //! plus kill+restart crash drills over corrupt/deleted indexes. E2 pins
 //! pre-session corrupt/empty mappings and a mid-session file flip. E4 pins
 //! only live-session injections with per-call CODE assertions and usability
-//! afterward that no earlier suite states: deletion/miss mapping live (D1,
-//! D3), overwrite + live heal without restart (D2), mid-session -32600 and
+//! afterward that no earlier suite states: deletion/miss mapping live (D1),
+//! overwrite + live heal without restart (D2), mid-session -32600 and
 //! code values (D4), storm uniformity + usability (D5), escape + usability
 //! (D6), and a staged-heal double fault (D7).
+//!
+//! Transport comes from [`error_testkit`](self::error_testkit): every
+//! live-session read and process wait is timeout-bounded.
 
+#[path = "error_testkit.rs"]
+mod error_testkit;
+
+use error_testkit::*;
 use serde_json::{json, Value};
-use std::io::{BufRead, BufReader, Write};
-use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStdin, ChildStdout, Command, ExitStatus, Stdio};
 
-fn mcp_bin() -> PathBuf {
-    if let Some(p) = option_env!("CARGO_BIN_EXE_asgrep-mcp") {
-        return PathBuf::from(p);
-    }
-    let profile = if cfg!(debug_assertions) {
-        "debug"
-    } else {
-        "release"
-    };
-    let exe = format!("asgrep-mcp{}", std::env::consts::EXE_SUFFIX);
-    if let Ok(dir) = std::env::var("CARGO_TARGET_DIR") {
-        let candidate = PathBuf::from(dir).join(profile).join(&exe);
-        if candidate.exists() {
-            return candidate;
-        }
-    }
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../target")
-        .join(profile)
-        .join(exe)
-}
-
-fn init_payload() -> Value {
-    json!({
-        "jsonrpc": "2.0",
-        "id": "__init",
-        "method": "initialize",
-        "params": {
-            "protocolVersion": "2025-11-25",
-            "capabilities": {},
-            "clientInfo": {"name": "asgrep-mcp-test", "version": "0"}
-        }
-    })
-}
-
-fn initialized_notif() -> Value {
-    json!({"jsonrpc": "2.0", "method": "notifications/initialized"})
-}
-
-/// One live stdio session: handshake once, then sequential send-one/read-one
-/// with filesystem fault injection between calls. No kills, no restarts.
-struct LiveSession {
-    child: Child,
-    stdin: Option<ChildStdin>,
-    stdout: BufReader<ChildStdout>,
-}
-
-impl LiveSession {
-    fn spawn(root: Option<&Path>) -> Self {
-        let mut command = Command::new(mcp_bin());
-        command.stdin(Stdio::piped()).stdout(Stdio::piped());
-        if let Some(root) = root {
-            command.env("ASGREP_ROOT", root);
-        }
-        let mut child = command.spawn().expect("spawn MCP");
-        let stdin = child.stdin.take().unwrap();
-        let stdout = BufReader::new(child.stdout.take().unwrap());
-        Self {
-            child,
-            stdin: Some(stdin),
-            stdout,
-        }
-    }
-
-    fn handshake(&mut self) {
-        self.send(&init_payload());
-        assert_eq!(self.recv()["id"], "__init");
-        self.send(&initialized_notif());
-    }
-
-    fn send(&mut self, payload: &Value) {
-        let stdin = self.stdin.as_mut().expect("stdin open");
-        writeln!(stdin, "{payload}").unwrap();
-        stdin.flush().unwrap();
-    }
-
-    fn recv(&mut self) -> Value {
-        let mut line = String::new();
-        let n = self.stdout.read_line(&mut line).expect("read MCP line");
-        assert!(n > 0, "MCP closed stdout");
-        serde_json::from_str(line.trim()).expect("JSON-RPC")
-    }
-
-    /// Send one call, read its response, assert the id echo.
-    fn call(&mut self, payload: &Value, id: u32) -> Value {
-        self.send(payload);
-        let response = self.recv();
-        assert_eq!(response["id"], id, "{response:#}");
-        response
-    }
-
-    fn finish(mut self) -> ExitStatus {
-        drop(self.stdin.take());
-        self.child.wait().expect("wait MCP")
-    }
-}
-
-fn tool_call(id: u32, name: &str, arguments: Value) -> Value {
-    json!({"jsonrpc":"2.0","id":id,"method":"tools/call","params":{"name":name,"arguments":arguments}})
-}
-
-fn tool_text(response: &Value) -> &str {
-    response["result"]["content"][0]["text"]
-        .as_str()
-        .expect("tool text content")
-}
-
-fn tool_body(response: &Value) -> Value {
-    serde_json::from_str(tool_text(response)).expect("tool body JSON")
-}
-
-/// Uniform tool-error envelope: `isError: true`, no top-level `error`, one
-/// `text` block, no `structuredContent`. Never asserts message text.
-fn assert_tool_error_shape(response: &Value) {
-    assert_eq!(response["result"]["isError"], true, "{response:#}");
-    assert!(response.get("error").is_none(), "{response:#}");
-    assert_eq!(
-        response["result"]["content"][0]["type"],
-        "text",
-        "{response:#}"
-    );
-    assert_eq!(
-        response["result"]["content"].as_array().map(Vec::len),
-        Some(1),
-        "{response:#}"
-    );
-    assert!(
-        response["result"].get("structuredContent").is_none(),
-        "{response:#}"
-    );
-}
-
-/// Tool-success envelope: `isError: false`, no top-level `error`, and a
-/// machine-readable `structuredContent` body mirroring the text block.
-fn assert_tool_success_shape(response: &Value) {
-    assert_eq!(response["result"]["isError"], false, "{response:#}");
-    assert!(response.get("error").is_none(), "{response:#}");
-    assert!(
-        response["result"].get("structuredContent").is_some(),
-        "{response:#}"
-    );
-}
-
-/// JSON-RPC error row: numeric `code`, no `result`.
-fn assert_jsonrpc_error(response: &Value, code: i64) {
-    assert_eq!(response["error"]["code"], code, "{response:#}");
-    assert!(response["error"].is_object(), "{response:#}");
-    assert!(response.get("result").is_none(), "{response:#}");
-}
-
-/// Machine-readable error discriminant: everything about a tool error EXCEPT
-/// the human message text.
-fn tool_error_discriminant(response: &Value) -> (bool, usize, String, bool, bool, bool) {
-    (
-        response["result"]["isError"].as_bool().unwrap_or(false),
-        response["result"]["content"]
-            .as_array()
-            .map(Vec::len)
-            .unwrap_or(usize::MAX),
-        response["result"]["content"][0]["type"]
-            .as_str()
-            .unwrap_or("")
-            .to_owned(),
-        response["result"]["content"][0]["text"].is_string(),
-        response["result"].get("structuredContent").is_some(),
-        response.get("error").is_some(),
-    )
-}
-
-fn index_tree(path: &Path) {
-    ast_sgrep_core::Indexer::new(ast_sgrep_core::IndexOptions {
-        root: path.to_path_buf(),
-        ..ast_sgrep_core::IndexOptions::default()
-    })
-    .unwrap()
-    .index_all()
-    .unwrap();
-}
-
-/// Single-file tree with one findable symbol, not yet indexed.
-fn file_tree() -> tempfile::TempDir {
-    let temp = tempfile::tempdir().unwrap();
-    let source = temp.path().join("src");
-    std::fs::create_dir(&source).unwrap();
-    std::fs::write(source.join("lib.rs"), "fn target_symbol() {}\n").unwrap();
-    temp
-}
-
-/// Single-file tree with one findable symbol, indexed.
-fn indexed_tree() -> tempfile::TempDir {
-    let temp = file_tree();
-    index_tree(temp.path());
-    temp
-}
-
-fn index_db_path(root: &Path) -> PathBuf {
-    root.join(".asgrep").join("index.db")
-}
-
-/// Overwrite the durable index db with deterministic non-SQLite bytes.
-fn corrupt_index_db(root: &Path) {
-    let db = index_db_path(root);
-    assert!(db.is_file(), "expected an index db at {}", db.display());
-    std::fs::write(&db, "E4-corrupt-index-sentinel;".repeat(128)).unwrap();
-}
-
-fn search_call(id: u32, channel: &str, limit: u32) -> Value {
-    tool_call(
-        id,
-        channel,
-        json!({"query": "target_symbol", "limit": limit, "resend_seen": true}),
-    )
-}
-
-fn read_call(id: u32) -> Value {
-    tool_call(id, "code_read", json!({"ids": ["src/lib.rs#L1-L1"]}))
-}
-
-/// D1: `index.db` is deleted under a live session. The next search is the
-/// documented empty-miss SUCCESS (never a tool error, never stale hits),
-/// status reports zero files, reads keep serving, and a live `index_repo`
-/// rebuild heals search in the SAME session. Recovery pins deletion only
-/// under kill+restart crash drills, never the live per-call mapping.
+/// D1: deletion under a live session maps to the documented empty-miss
+/// SUCCESS (never a tool error, never stale hits), reads keep serving, and a
+/// live `index_repo` rebuild heals search in the SAME session — at BOTH fault
+/// granularities. Leg 1 deletes the `index.db` file; leg 2 (absorbed D3)
+/// deletes the whole `.asgrep/` directory. Recovery pins deletion only under
+/// kill+restart crash drills, never the live per-call mapping.
+/// INTENT: live db delete → miss success + zero status, reads serve, live index_repo heals; live .asgrep/ delete → miss on search channel, reads serve, live rebuild recreates dir.
+/// KILLS: delete-as-tool-error, dir-delete-as-tool-error, stale-hits, heal-regression.
+/// ABSORBS: drill_asgrep_dir_deleted_mid_session_miss_then_live_rebuild (same miss-mapping + live-rebuild shape; differs only in fault granularity file-vs-dir and channel — folded as second fault leg in D1).
+/// OVERLAP: recovery deletion (kill+restart only; this is live mapping).
 #[test]
 fn drill_index_db_deleted_mid_session_miss_then_live_reindex_heals() {
-    let temp = indexed_tree();
-    assert!(index_db_path(temp.path()).is_file());
-    let mut session = LiveSession::spawn(Some(temp.path()));
-    session.handshake();
+    // Leg 1 (file granularity): `index.db` deleted under a live session.
+    {
+        let temp = indexed_tree();
+        assert!(index_db_path(temp.path()).is_file());
+        let mut session = LiveSession::spawn(Some(temp.path()));
+        session.handshake();
 
-    let before = session.call(&search_call(1, "keyword_search", 4), 1);
-    assert_tool_success_shape(&before);
-    assert!(
-        !tool_body(&before)["h"].as_array().unwrap().is_empty(),
-        "{before:#}"
-    );
+        let before = session.call(&search_call(1, "keyword_search", 4), 1);
+        assert_tool_success_shape(&before);
+        assert!(
+            !tool_body(&before)["h"].as_array().unwrap().is_empty(),
+            "{before:#}"
+        );
 
-    std::fs::remove_file(index_db_path(temp.path())).unwrap();
-    assert!(!index_db_path(temp.path()).exists());
+        std::fs::remove_file(index_db_path(temp.path())).unwrap();
+        assert!(!index_db_path(temp.path()).exists());
 
-    // Fresh limit so the call cannot ride the warm searcher cache.
-    let miss = session.call(&search_call(2, "keyword_search", 8), 2);
-    assert_tool_success_shape(&miss);
-    let body = tool_body(&miss);
-    assert_eq!(body["why"], "empty_index", "{body:#}");
-    assert_eq!(body["zn"], 0, "{body:#}");
-    assert_eq!(body["h"], json!([]), "{body:#}");
+        // Fresh limit so the call cannot ride the warm searcher cache.
+        let miss = session.call(&search_call(2, "keyword_search", 8), 2);
+        assert_tool_success_shape(&miss);
+        let body = tool_body(&miss);
+        assert_eq!(body["why"], "empty_index", "{body:#}");
+        assert_eq!(body["zn"], 0, "{body:#}");
+        assert_eq!(body["h"], json!([]), "{body:#}");
 
-    let status = session.call(&tool_call(3, "index_status", json!({})), 3);
-    assert_tool_success_shape(&status);
-    assert_eq!(tool_body(&status)["file_count"], 0, "{status:#}");
+        let status = session.call(&tool_call(3, "index_status", json!({})), 3);
+        assert_tool_success_shape(&status);
+        assert_eq!(tool_body(&status)["file_count"], 0, "{status:#}");
 
-    let read = session.call(&read_call(4), 4);
-    assert_tool_success_shape(&read);
-    assert_eq!(
-        tool_body(&read)["nodes"].as_array().map(Vec::len),
-        Some(1),
-        "{read:#}"
-    );
+        let read = session.call(&read_call(4), 4);
+        assert_tool_success_shape(&read);
+        assert_eq!(
+            tool_body(&read)["nodes"].as_array().map(Vec::len),
+            Some(1),
+            "{read:#}"
+        );
 
-    let rebuilt = session.call(&tool_call(5, "index_repo", json!({})), 5);
-    assert_tool_success_shape(&rebuilt);
-    assert_eq!(tool_body(&rebuilt)["files_indexed"], 1, "{rebuilt:#}");
+        let rebuilt = session.call(&tool_call(5, "index_repo", json!({})), 5);
+        assert_tool_success_shape(&rebuilt);
+        assert_eq!(tool_body(&rebuilt)["files_indexed"], 1, "{rebuilt:#}");
 
-    let after = session.call(&search_call(6, "keyword_search", 12), 6);
-    assert_tool_success_shape(&after);
-    assert!(
-        !tool_body(&after)["h"].as_array().unwrap().is_empty(),
-        "{after:#}"
-    );
+        let after = session.call(&search_call(6, "keyword_search", 12), 6);
+        assert_tool_success_shape(&after);
+        assert!(
+            !tool_body(&after)["h"].as_array().unwrap().is_empty(),
+            "{after:#}"
+        );
 
-    assert!(session.finish().success());
+        session.finish_clean();
+    }
+
+    // Leg 2 (dir granularity, absorbed D3): the whole `.asgrep/` directory
+    // deleted under a live session, drilled on the `search` channel.
+    {
+        let temp = indexed_tree();
+        assert!(temp.path().join(".asgrep").is_dir());
+        let mut session = LiveSession::spawn(Some(temp.path()));
+        session.handshake();
+
+        let before = session.call(&search_call(1, "search", 4), 1);
+        assert_tool_success_shape(&before);
+        assert!(
+            !tool_body(&before)["h"].as_array().unwrap().is_empty(),
+            "{before:#}"
+        );
+
+        std::fs::remove_dir_all(temp.path().join(".asgrep")).unwrap();
+        assert!(!temp.path().join(".asgrep").exists());
+
+        let miss = session.call(&search_call(2, "search", 8), 2);
+        assert_tool_success_shape(&miss);
+        let body = tool_body(&miss);
+        assert_eq!(body["why"], "empty_index", "{body:#}");
+        assert_eq!(body["zn"], 0, "{body:#}");
+        assert_eq!(body["h"], json!([]), "{body:#}");
+
+        let status = session.call(&tool_call(3, "index_status", json!({})), 3);
+        assert_tool_success_shape(&status);
+        assert_eq!(tool_body(&status)["file_count"], 0, "{status:#}");
+
+        let read = session.call(&read_call(4), 4);
+        assert_tool_success_shape(&read);
+        assert_eq!(
+            tool_body(&read)["nodes"].as_array().map(Vec::len),
+            Some(1),
+            "{read:#}"
+        );
+
+        let rebuilt = session.call(&tool_call(5, "index_repo", json!({})), 5);
+        assert_tool_success_shape(&rebuilt);
+        assert_eq!(tool_body(&rebuilt)["files_indexed"], 1, "{rebuilt:#}");
+        assert!(index_db_path(temp.path()).is_file());
+
+        let after = session.call(&search_call(6, "search", 12), 6);
+        assert_tool_success_shape(&after);
+        assert!(
+            !tool_body(&after)["h"].as_array().unwrap().is_empty(),
+            "{after:#}"
+        );
+
+        session.finish_clean();
+    }
 }
 
 /// D2: `index.db` is overwritten with garbage under a live session. Search,
@@ -316,6 +165,9 @@ fn drill_index_db_deleted_mid_session_miss_then_live_reindex_heals() {
 /// successes), reads keep serving files, and deleting the corrupt inode plus
 /// a live `index_repo` heals the SAME session. Recovery pins stub/half tears
 /// live without healin-session, and overwrite only under kill+restart.
+/// INTENT: live garbage overwrite → search/status/reindex toolerr, reads serve, delete+rebuild heals.
+/// KILLS: silent-empty-on-garbage, heal-regression.
+/// ABSORBS: none.
 #[test]
 fn drill_index_db_overwritten_mid_session_refused_then_live_heal() {
     let temp = indexed_tree();
@@ -359,63 +211,7 @@ fn drill_index_db_overwritten_mid_session_refused_then_live_heal() {
         "{after:#}"
     );
 
-    assert!(session.finish().success());
-}
-
-/// D3: the whole `.asgrep/` directory is deleted under a live session. The
-/// next search is the empty-miss success on the `search` channel, status
-/// reports zero files, reads keep serving, and a live `index_repo` recreates
-/// the directory and heals search. Dir-level removal is a distinct fault from
-/// the file-level tears and deletions pinned elsewhere.
-#[test]
-fn drill_asgrep_dir_deleted_mid_session_miss_then_live_rebuild() {
-    let temp = indexed_tree();
-    assert!(temp.path().join(".asgrep").is_dir());
-    let mut session = LiveSession::spawn(Some(temp.path()));
-    session.handshake();
-
-    let before = session.call(&search_call(1, "search", 4), 1);
-    assert_tool_success_shape(&before);
-    assert!(
-        !tool_body(&before)["h"].as_array().unwrap().is_empty(),
-        "{before:#}"
-    );
-
-    std::fs::remove_dir_all(temp.path().join(".asgrep")).unwrap();
-    assert!(!temp.path().join(".asgrep").exists());
-
-    let miss = session.call(&search_call(2, "search", 8), 2);
-    assert_tool_success_shape(&miss);
-    let body = tool_body(&miss);
-    assert_eq!(body["why"], "empty_index", "{body:#}");
-    assert_eq!(body["zn"], 0, "{body:#}");
-    assert_eq!(body["h"], json!([]), "{body:#}");
-
-    let status = session.call(&tool_call(3, "index_status", json!({})), 3);
-    assert_tool_success_shape(&status);
-    assert_eq!(tool_body(&status)["file_count"], 0, "{status:#}");
-
-    let read = session.call(&read_call(4), 4);
-    assert_tool_success_shape(&read);
-    assert_eq!(
-        tool_body(&read)["nodes"].as_array().map(Vec::len),
-        Some(1),
-        "{read:#}"
-    );
-
-    let rebuilt = session.call(&tool_call(5, "index_repo", json!({})), 5);
-    assert_tool_success_shape(&rebuilt);
-    assert_eq!(tool_body(&rebuilt)["files_indexed"], 1, "{rebuilt:#}");
-    assert!(index_db_path(temp.path()).is_file());
-
-    let after = session.call(&search_call(6, "search", 12), 6);
-    assert_tool_success_shape(&after);
-    assert!(
-        !tool_body(&after)["h"].as_array().unwrap().is_empty(),
-        "{after:#}"
-    );
-
-    assert!(session.finish().success());
+    session.finish_clean();
 }
 
 /// D4: malformed envelopes arrive mid-session between good calls. Each one
@@ -424,6 +220,10 @@ fn drill_asgrep_dir_deleted_mid_session_miss_then_live_rebuild() {
 /// with no method), and the session serves a read and a ping right after.
 /// Recovery pins one unknown-method envelope mid-stream shape-only; E4 pins
 /// the code values and the -32600 row live.
+/// INTENT: live malformed envelopes report -32601/-32600/-32601, read+ping serve after.
+/// KILLS: code-swap-live, session-poison.
+/// ABSORBS: none.
+/// OVERLAP: recovery mid-stream shape-only (this pins code values + -32600 live).
 #[test]
 fn drill_malformed_envelopes_mid_session_codes_then_session_usable() {
     let temp = file_tree();
@@ -467,7 +267,7 @@ fn drill_malformed_envelopes_mid_session_codes_then_session_usable() {
     assert!(ping.get("error").is_none(), "{ping:#}");
     assert!(ping.get("result").is_some(), "{ping:#}");
 
-    assert!(session.finish().success());
+    session.finish_clean();
 }
 
 /// D5: a storm of bad-argument calls hits a live session: bound, sign, type,
@@ -476,6 +276,10 @@ fn drill_malformed_envelopes_mid_session_codes_then_session_usable() {
 /// a search plus a read succeed immediately after. Pass 2 P8 pins one static
 /// mixed sequence; this pins a parse-level storm with uniformity plus
 /// usability-after on a live session.
+/// INTENT: 9-call parse-level storm uniform toolerr with ids, search+read serve after.
+/// KILLS: storm-divergence, session-poison.
+/// ABSORBS: none.
+/// OVERLAP: P8 static mix (this is parse-storm + live usability).
 #[test]
 fn drill_bad_argument_storm_mid_session_uniform_then_usable() {
     let temp = indexed_tree();
@@ -529,13 +333,17 @@ fn drill_bad_argument_storm_mid_session_uniform_then_usable() {
         "{read:#}"
     );
 
-    assert!(session.finish().success());
+    session.finish_clean();
 }
 
 /// D6: per-call roots escaping the workspace hit a live session on three
 /// tools. Each is a tool error with its id echoed, and the session is
 /// unpoisoned: a read, a status, and a ping succeed right after. Pass 1 T6
 /// pins the escape rows statically; this pins live injection plus usability.
+/// INTENT: live escape roots ×3 tools toolerr, read+status+ping serve after.
+/// KILLS: jail-drop-live, session-poison.
+/// ABSORBS: none.
+/// OVERLAP: T6 static rows (this is live + usability).
 #[test]
 fn drill_sandbox_escape_mid_session_refused_session_unpoisoned() {
     let workspace = file_tree();
@@ -583,7 +391,7 @@ fn drill_sandbox_escape_mid_session_refused_session_unpoisoned() {
     assert!(ping.get("error").is_none(), "{ping:#}");
     assert!(ping.get("result").is_some(), "{ping:#}");
 
-    assert!(session.finish().success());
+    session.finish_clean();
 }
 
 /// D7 (chained double fault): garbage overwrites `index.db` AND the read
@@ -593,6 +401,10 @@ fn drill_sandbox_escape_mid_session_refused_session_unpoisoned() {
 /// masks the other -- and deleting the corrupt inode plus a live `index_repo`
 /// heals search. Recovery pins a kill+kill double crash with restarts; this
 /// pins a live double fault with a staged live heal and per-call codes.
+/// INTENT: garbage db + deleted source live: staged heal revives reads while search still fails, then full heal.
+/// KILLS: fault-masking, heal-coupling.
+/// ABSORBS: none.
+/// OVERLAP: recovery double crash (kill+restart; this is live staged heal).
 #[test]
 fn drill_chained_double_fault_staged_heal_restores_live_session() {
     let temp = indexed_tree();
@@ -624,7 +436,7 @@ fn drill_chained_double_fault_staged_heal_restores_live_session() {
     assert_tool_error_shape(&read1);
 
     // Staged heal, step 1: restore the file only.
-    std::fs::write(&victim, "fn target_symbol() {}\n").unwrap();
+    std::fs::write(&victim, FIXTURE_SOURCE).unwrap();
     let read2 = session.call(&read_call(5), 5);
     assert_tool_success_shape(&read2);
     assert_eq!(
@@ -647,5 +459,5 @@ fn drill_chained_double_fault_staged_heal_restores_live_session() {
         "{search3:#}"
     );
 
-    assert!(session.finish().success());
+    session.finish_clean();
 }

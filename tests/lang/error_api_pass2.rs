@@ -46,10 +46,14 @@ use ast_sgrep_lang::{
 };
 use std::path::Path;
 
-// E2-LANG-01: detect -> parse handoff. Every indexed extension detects to a
-// language whose registry parser accepts hostile input with Ok — a detected
-// language can never strand the parse stage, and an undetectable path
-// yields None (no silent default language).
+/// E2-LANG-01: detect -> parse handoff. Every indexed extension detects to a
+/// language whose registry parser accepts hostile input with Ok — a detected
+/// language can never strand the parse stage, and an undetectable path
+/// yields None (no silent default language).
+/// INTENT: every indexed ext detects + parses hostile Ok; undetectable stays None.
+/// KILLS: detect-parse-handoff-break, silent-default.
+/// OVERLAP: E1 registry rows (adds the handoff link).
+/// ABSORBS: none (propagation pin; nothing merged).
 #[test]
 fn detect_some_always_parses_ok() {
     let registry = ParserRegistry::new();
@@ -63,9 +67,12 @@ fn detect_some_always_parses_ok() {
     assert!(detect_language(Path::new("n.fortran"), Some("print(1)")).is_none());
 }
 
-// E2-LANG-02: classify -> signatures handoff. Classifier rejection
-// propagates to index-stage None, so a rejected shape is never served
-// from the index; classifiable shapes keep their signatures.
+/// E2-LANG-02: classify -> signatures handoff. Classifier rejection
+/// propagates to index-stage None, so a rejected shape is never served
+/// from the index; classifiable shapes keep their signatures.
+/// INTENT: classifier None → both signature stages None; classified keeps signatures.
+/// KILLS: serve-rejected-shape-from-index.
+/// ABSORBS: none (propagation pin; nothing merged).
 #[test]
 fn classifier_rejection_propagates_to_index_none() {
     for pattern in ["$A $B", "greet($Ü)", "def a(x): $$$B"] {
@@ -79,10 +86,13 @@ fn classifier_rejection_propagates_to_index_none() {
     assert!(candidate_kind_signatures("fn $N($$$)").is_some());
 }
 
-// E2-LANG-03: signatures -> gate -> match handoff. Unindexable shapes
-// (braced bodies, member chains) propagate as gate denial, and the match
-// stage still answers Ok via the walk fallback — denial never becomes a
-// silent wrong answer or an Err.
+/// E2-LANG-03: signatures -> gate -> match handoff. Unindexable shapes
+/// (braced bodies, member chains) propagate as gate denial, and the match
+/// stage still answers Ok via the walk fallback — denial never becomes a
+/// silent wrong answer or an Err.
+/// INTENT: unindexable → gate deny → match Ok via walk; indexable control served.
+/// KILLS: deny-to-Err, deny-to-silent-empty.
+/// ABSORBS: none (propagation pin; nothing merged).
 #[test]
 fn unindexable_propagates_to_gate_denial_then_ok_match() {
     for pattern in ["fn $N($$$) { $B }", "fetch()?.$M($$$A)", "a.b($$$C).d()"] {
@@ -96,10 +106,13 @@ fn unindexable_propagates_to_gate_denial_then_ok_match() {
     assert!(match_pattern(Language::Rust, "fn foo() { foo(1); }", "foo($$$)").is_ok());
 }
 
-// E2-LANG-04: prefilter None means "scan", never "skip". A missing SIMD
-// literal must not empty the match stage: metavariable-callee patterns
-// still answer through the walk, while the all-comment shape stays
-// fail-closed (Ok + empty, not fail-open garbage).
+/// E2-LANG-04: prefilter None means "scan", never "skip". A missing SIMD
+/// literal must not empty the match stage: metavariable-callee patterns
+/// still answer through the walk, while the all-comment shape stays
+/// fail-closed (Ok + empty, not fail-open garbage).
+/// INTENT: no-literal patterns still scan via walk; all-comment stays Ok-empty.
+/// KILLS: None-means-skip, comment-fail-open.
+/// ABSORBS: none (propagation pin; nothing merged).
 #[test]
 fn prefilter_none_still_scans() {
     assert!(required_pattern_literal("$F($$$)").is_none());
@@ -114,9 +127,12 @@ fn prefilter_none_still_scans() {
     assert!(!match_pattern(Language::Rust, "fn f() { foo(1); }", "foo($$$)").unwrap().is_empty());
 }
 
-// E2-LANG-05: match is total on user input. Hostile pattern x hostile
-// source across every language: always Ok, never Err, never panic. This
-// pins the `answerable.rs` single-node `.expect` guards end to end.
+/// E2-LANG-05: match is total on user input. Hostile pattern x hostile
+/// source across every language: always Ok, never Err, never panic. This
+/// pins the `answerable.rs` single-node `.expect` guards end to end.
+/// INTENT: hostile pattern × hostile source × every lang always Ok both entries.
+/// KILLS: Err-on-user-input, single-node-expect-panic (answerable.rs guard pin).
+/// ABSORBS: none (propagation pin; nothing merged).
 #[test]
 fn match_never_errs_or_panics_on_hostile_input() {
     let patterns = [
@@ -138,9 +154,13 @@ fn match_never_errs_or_panics_on_hostile_input() {
     }
 }
 
-// E2-LANG-06: parse -> extract -> match agreement on garbage. Garbage
-// source propagates as Ok + empty rows (documented defaults), and the
-// match stage agrees (Ok) — no stage invents hits or errors.
+/// E2-LANG-06: parse -> extract -> match agreement on garbage. Garbage
+/// source propagates as Ok + empty rows (documented defaults), and the
+/// match stage agrees (Ok) — no stage invents hits or errors.
+/// INTENT: garbage → Ok + empty rows, flag clear, match Ok, every lang.
+/// KILLS: invented-hits-on-garbage, garbage-Err.
+/// OVERLAP: E1-LANG-04 (adds all-lang + match agreement).
+/// ABSORBS: none (propagation pin; nothing merged).
 #[test]
 fn garbage_propagates_ok_empty_through_extract_and_match() {
     let registry = ParserRegistry::new();
@@ -153,9 +173,12 @@ fn garbage_propagates_ok_empty_through_extract_and_match() {
     }
 }
 
-// E2-LANG-07: the depth cap propagates LOUD. A breached cap keeps
-// extraction Ok but sets `depth_truncated` (downstream must treat rows as
-// incomplete); the match stage is independent of the cap and stays Ok.
+/// E2-LANG-07: the depth cap propagates LOUD. A breached cap keeps
+/// extraction Ok but sets `depth_truncated` (downstream must treat rows as
+/// incomplete); the match stage is independent of the cap and stays Ok.
+/// INTENT: breach keeps Ok + sets depth_truncated; match independent Ok.
+/// KILLS: breach-as-Err, silent-breach.
+/// ABSORBS: none (propagation pin; nothing merged).
 #[test]
 fn depth_breach_propagates_loud_flag_not_err() {
     let registry = ParserRegistry::new();
@@ -168,10 +191,13 @@ fn depth_breach_propagates_loud_flag_not_err() {
     assert!(!shallow.depth_truncated);
 }
 
-// E2-LANG-08: gate denial forces the walk, not an empty. Statement-keyword
-// shapes are un-serveable from the index (keyword tokens are never rows)
-// yet still answered by the native walk — denial must not propagate as
-// silent empty.
+/// E2-LANG-08: gate denial forces the walk, not an empty. Statement-keyword
+/// shapes are un-serveable from the index (keyword tokens are never rows)
+/// yet still answered by the native walk — denial must not propagate as
+/// silent empty.
+/// INTENT: statement-keyword shapes unserveable yet walk-answered (break/return).
+/// KILLS: deny-to-silent-empty.
+/// ABSORBS: none (propagation pin; nothing merged).
 #[test]
 fn gate_denial_still_answers_via_walk() {
     assert!(!index_can_serve_pattern("break", &["break".to_string()]));
@@ -182,10 +208,13 @@ fn gate_denial_still_answers_via_walk() {
     assert!(!hits.is_empty());
 }
 
-// E2-LANG-09: fallback-loud shapes stay match-closed natively. A pattern
-// the search ingress refuses (`needs_ast_grep_fallback`) must not be
-// answered with fabricated hits by the native lane: Ok + empty is the
-// documented default, and the degenerates stay unanswerable per-language.
+/// E2-LANG-09: fallback-loud shapes stay match-closed natively. A pattern
+/// the search ingress refuses (`needs_ast_grep_fallback`) must not be
+/// answered with fabricated hits by the native lane: Ok + empty is the
+/// documented default, and the degenerates stay unanswerable per-language.
+/// INTENT: fallback-loud patterns natively Ok-empty; degenerates unanswerable + control.
+/// KILLS: fabricated-hits-on-loud-shape.
+/// ABSORBS: none (propagation pin; nothing merged).
 #[test]
 fn fallback_loud_shapes_match_closed() {
     assert!(needs_ast_grep_fallback("greet($Ü)"));
@@ -196,10 +225,13 @@ fn fallback_loud_shapes_match_closed() {
     assert!(!match_pattern(Language::Rust, "fn f() { greet(x); }", "greet($$$)").unwrap().is_empty());
 }
 
-// E2-LANG-10: chain-span guards hold. Optional/member chains across the
-// connector spellings exercise the `calls.rs` span-slice guard
-// (`all(end.is_some())` before `.end.unwrap()`): always Ok, never panic,
-// with bound hits where the shape genuinely matches.
+/// E2-LANG-10: chain-span guards hold. Optional/member chains across the
+/// connector spellings exercise the `calls.rs` span-slice guard
+/// (`all(end.is_some())` before `.end.unwrap()`): always Ok, never panic,
+/// with bound hits where the shape genuinely matches.
+/// INTENT: optional/member chains across connectors always Ok, genuine hit binds.
+/// KILLS: calls.rs-end-unwrap-panic (span-guard pin).
+/// ABSORBS: none (propagation pin; nothing merged).
 #[test]
 fn chain_span_guards_hold() {
     let cases = [

@@ -8,13 +8,14 @@
 //! detect -> parse/extract -> match -> score -> rank
 //! ```
 //!
-//! Score/rank live downstream of this crate, so the drills run a small
-//! deterministic in-test score+rank lane over the match hits and assert the
-//! ranked output is sound: same multiset as the hits (nothing invented,
-//! nothing dropped), non-increasing scores with a total tie-break, spans
-//! pointing inside the source, and identical output across repetitions.
+//! Score/rank live downstream of this crate, so the drills run the small
+//! deterministic score+rank lane from the `ast-sgrep-testkit` pipeline kit
+//! over the match hits and assert the ranked output is sound: same multiset as the
+//! hits (nothing invented, nothing dropped), non-increasing scores with a
+//! total tie-break, spans pointing inside the source, and identical output
+//! across repetitions.
 //!
-//! One drill per input class (garbage, empty, unicode/BOM/NUL,
+//! One drill per input class (empty/garbage, unicode/BOM/NUL,
 //! unsupported-language, hostile-pattern, fallback-loud, depth-breach) plus
 //! one mixed hostile-corpus drill. Each drill asserts the documented
 //! end-to-end outcome for its class: completion without panic, `Ok` on all
@@ -29,121 +30,25 @@ use ast_sgrep_lang::{
 };
 use std::path::Path;
 
-// --- In-test score+rank lane (deterministic downstream stand-in). ---
+use ast_sgrep_testkit::{assert_rank_sound, assert_spans_in_source, run_pipeline};
 
-fn score_hit(hit: &PatternMatch) -> u64 {
-    hit.excerpt.len() as u64 * 2
-        + hit.captures.len() as u64
-        + hit.byte_end.saturating_sub(hit.byte_start) as u64
-}
-
-fn rank_hits(mut hits: Vec<PatternMatch>) -> Vec<PatternMatch> {
-    hits.sort_by(|a, b| {
-        score_hit(b)
-            .cmp(&score_hit(a))
-            .then(a.byte_start.cmp(&b.byte_start))
-            .then(a.byte_end.cmp(&b.byte_end))
-            .then(a.excerpt.cmp(&b.excerpt))
-    });
-    hits
-}
-
-/// Ranked output must be exactly the hits, ordered: same length, same
-/// multiset of hit keys, scores non-increasing, deterministic tie-break.
-fn assert_rank_sound(ranked: &[PatternMatch], hits: &[PatternMatch]) {
-    assert_eq!(ranked.len(), hits.len());
-    let mut ranked_keys: Vec<(usize, usize, &str)> = ranked
-        .iter()
-        .map(|h| (h.byte_start, h.byte_end, h.excerpt.as_str()))
-        .collect();
-    let mut hit_keys: Vec<(usize, usize, &str)> = hits
-        .iter()
-        .map(|h| (h.byte_start, h.byte_end, h.excerpt.as_str()))
-        .collect();
-    ranked_keys.sort();
-    hit_keys.sort();
-    assert_eq!(ranked_keys, hit_keys);
-    for pair in ranked.windows(2) {
-        let (a, b) = (&pair[0], &pair[1]);
-        let order = score_hit(b)
-            .cmp(&score_hit(a))
-            .then(a.byte_start.cmp(&b.byte_start))
-            .then(a.byte_end.cmp(&b.byte_end))
-            .then(a.excerpt.cmp(&b.excerpt));
-        assert!(order != std::cmp::Ordering::Greater);
-    }
-}
-
-/// Every ranked span must point inside the source it was matched against.
-fn assert_spans_in_source(ranked: &[PatternMatch], source: &str) {
-    for hit in ranked {
-        assert!(hit.byte_start <= hit.byte_end);
-        assert!(hit.byte_end <= source.len());
-        assert!(source.get(hit.byte_start..hit.byte_end).is_some());
-    }
-}
-
-// --- Full-pipeline runner: detect -> parse -> match -> score -> rank. ---
-// Returns None exactly when detection yields None (short-circuit: no
-// parse, no match, no ranked output — the documented unsupported outcome).
-
-struct PipelineOutcome {
-    depth_truncated: bool,
-    rows_empty: bool,
-    ranked: Vec<PatternMatch>,
-}
-
-fn run_pipeline(
-    registry: &ParserRegistry,
-    path: &str,
-    content: &str,
-    pattern: &str,
-) -> Option<PipelineOutcome> {
-    let lang = detect_language(Path::new(path), Some(content))?;
-    let extraction = registry.parse(lang, content).ok()?;
-    let hits = match_pattern(lang, content, pattern).ok()?;
-    let ranked = rank_hits(hits);
-    Some(PipelineOutcome {
-        depth_truncated: extraction.depth_truncated,
-        rows_empty: extraction.symbols.is_empty()
-            && extraction.calls.is_empty()
-            && extraction.imports.is_empty(),
-        ranked,
-    })
-}
-
-// E4-LANG-01: garbage source end to end. Detect succeeds (known
-// extension), parse stays Ok with empty rows and a clear flag, match stays
-// Ok, rank is empty — never a panic, never invented output.
+/// E4-LANG-02 (+E4-LANG-01): empty / whitespace-only / garbage source end to
+/// end. One parameterized drill over source classes: every class shares the
+/// identical documented outcome — detected, Ok, empty rows, clear flag,
+/// empty rank — never a panic, never invented output.
+/// INTENT: empty/whitespace/garbage × every lang: detected, Ok, empty rows, flag clear, empty rank.
+/// KILLS: empty-invented-output, garbage-invented-output, garbage-Err.
+/// ABSORBS: garbage_source_end_to_end_rank_empty (folded as the garbage source-class leg; identical documented outcome).
 #[test]
-fn garbage_source_end_to_end_rank_empty() {
+fn empty_and_garbage_source_end_to_end_rank_empty() {
     let registry = ParserRegistry::new();
-    let garbages = ["{{{{ !!!", "}}}[[[", "@@@###$$$", "\x00\x01\x02\x03", "\u{fffd}{{{"];
-    for lang in Language::all() {
-        let ext = lang.as_str();
-        // Resolve one real extension per language via the table.
-        let table_ext = Language::SOURCE_EXTENSIONS
-            .iter()
-            .find(|(_, l)| *l == *lang)
-            .map(|(e, _)| *e)
-            .unwrap_or(ext);
-        let path = format!("n.{table_ext}");
-        for garbage in garbages {
-            let out = run_pipeline(&registry, &path, garbage, "foo($$$)");
-            assert!(out.is_some(), "{lang} {garbage:?}");
-            let out = out.unwrap();
-            assert!(out.rows_empty, "{lang} {garbage:?}");
-            assert!(!out.depth_truncated, "{lang} {garbage:?}");
-            assert!(out.ranked.is_empty(), "{lang} {garbage:?}");
-        }
-    }
-}
-
-// E4-LANG-02: empty / whitespace-only source end to end. Same documented
-// outcome as garbage: detected, Ok, empty rows, empty rank.
-#[test]
-fn empty_source_end_to_end_rank_empty() {
-    let registry = ParserRegistry::new();
+    let classes: [(&str, &[&str]); 2] = [
+        ("empty", &["", "   \n\t  "]),
+        (
+            "garbage",
+            &["{{{{ !!!", "}}}[[[", "@@@###$$$", "\x00\x01\x02\x03", "\u{fffd}{{{"],
+        ),
+    ];
     for lang in Language::all() {
         let table_ext = Language::SOURCE_EXTENSIONS
             .iter()
@@ -151,20 +56,30 @@ fn empty_source_end_to_end_rank_empty() {
             .map(|(e, _)| *e)
             .unwrap_or(lang.as_str());
         let path = format!("n.{table_ext}");
-        for source in ["", "   \n\t  "] {
-            let out = run_pipeline(&registry, &path, source, "foo($$$)");
-            assert!(out.is_some(), "{lang} {source:?}");
-            let out = out.unwrap();
-            assert!(out.rows_empty, "{lang} {source:?}");
-            assert!(!out.depth_truncated, "{lang} {source:?}");
-            assert!(out.ranked.is_empty(), "{lang} {source:?}");
+        for (class, sources) in classes {
+            for source in sources {
+                let out = run_pipeline(&registry, &path, source, "foo($$$)");
+                assert!(out.is_some(), "{lang} {class} {source:?}");
+                let out = out.unwrap();
+                assert!(out.rows_empty, "{lang} {class} {source:?}");
+                assert!(!out.depth_truncated, "{lang} {class} {source:?}");
+                assert!(out.ranked.is_empty(), "{lang} {class} {source:?}");
+            }
         }
     }
 }
 
-// E4-LANG-03: unicode / BOM / NUL source end to end. Documented outcome is
-// totality, not emptiness: detect Ok, parse Ok, match Ok, and the ranked
-// output is sound (spans in-source) and deterministic across repetitions.
+// NOTE: `garbage_source_end_to_end_rank_empty` (former E4-LANG-01) was MERGED
+// per the errorapi catalog into `empty_and_garbage_source_end_to_end_rank_empty`
+// above: its header stated the identical documented outcome, so it survives
+// as the garbage source-class leg of the one parameterized drill.
+
+/// E4-LANG-03: unicode / BOM / NUL source end to end. Documented outcome is
+/// totality, not emptiness: detect Ok, parse Ok, match Ok, and the ranked
+/// output is sound (spans in-source) and deterministic across repetitions.
+/// INTENT: unicode/BOM/NUL: total pipeline, spans in-source, identical repeat rank.
+/// KILLS: span-out-of-source, nondeterministic-rank.
+/// ABSORBS: none (drill pin; nothing merged).
 #[test]
 fn unicode_bom_nul_source_end_to_end_sound_and_stable() {
     let registry = ParserRegistry::new();
@@ -197,9 +112,12 @@ fn unicode_bom_nul_source_end_to_end_sound_and_stable() {
     }
 }
 
-// E4-LANG-04: unsupported-language inputs short-circuit with no ranked
-// output. Detection yields None, so no parse, no match, and no rank stage
-// ever runs — never a silent default language, never fabricated hits.
+/// E4-LANG-04: unsupported-language inputs short-circuit with no ranked
+/// output. Detection yields None, so no parse, no match, and no rank stage
+/// ever runs — never a silent default language, never fabricated hits.
+/// INTENT: unsupported inputs short-circuit None: no parse/match/rank + control.
+/// KILLS: silent-default-language, fabricated-hits.
+/// ABSORBS: none (drill pin; nothing merged).
 #[test]
 fn unsupported_language_short_circuits_with_no_ranked_output() {
     let registry = ParserRegistry::new();
@@ -219,9 +137,12 @@ fn unsupported_language_short_circuits_with_no_ranked_output() {
     assert!(run_pipeline(&registry, "n.rs", "fn foo() {}", "foo($$$)").is_some());
 }
 
-// E4-LANG-05: hostile patterns on real source end to end. Match stays Ok
-// for every hostile shape, and the ranked output is sound (exactly the
-// hits, ordered) and deterministic — never Err, never dropped hits.
+/// E4-LANG-05: hostile patterns on real source end to end. Match stays Ok
+/// for every hostile shape, and the ranked output is sound (exactly the
+/// hits, ordered) and deterministic — never Err, never dropped hits.
+/// INTENT: hostile patterns on real files: match Ok, rank sound + deterministic.
+/// KILLS: dropped-hits, unsound-rank.
+/// ABSORBS: none (drill pin; nothing merged).
 #[test]
 fn hostile_pattern_on_real_source_stays_sound() {
     let registry = ParserRegistry::new();
@@ -251,9 +172,12 @@ fn hostile_pattern_on_real_source_stays_sound() {
     }
 }
 
-// E4-LANG-06: fallback-loud patterns end to end. Shapes the search ingress
-// refuses stay match-closed on the native lane: Ok + empty rank, never
-// fabricated hits, with a native-shape control answering on the same file.
+/// E4-LANG-06: fallback-loud patterns end to end. Shapes the search ingress
+/// refuses stay match-closed on the native lane: Ok + empty rank, never
+/// fabricated hits, with a native-shape control answering on the same file.
+/// INTENT: fallback-loud patterns rank empty end-to-end + native control answers.
+/// KILLS: fabricated-hits-on-loud-shape.
+/// ABSORBS: none (drill pin; nothing merged).
 #[test]
 fn fallback_loud_pattern_end_to_end_match_closed() {
     let registry = ParserRegistry::new();
@@ -269,10 +193,13 @@ fn fallback_loud_pattern_end_to_end_match_closed() {
     assert!(!out.ranked.is_empty());
 }
 
-// E4-LANG-07: depth breach end to end. The cap propagates LOUD through the
-// full pipeline: extraction stays Ok with `depth_truncated` set, match
-// stays Ok, and the ranked output is sound and deterministic. The shallow
-// control keeps the flag clear.
+/// E4-LANG-07: depth breach end to end. The cap propagates LOUD through the
+/// full pipeline: extraction stays Ok with `depth_truncated` set, match
+/// stays Ok, and the ranked output is sound and deterministic. The shallow
+/// control keeps the flag clear.
+/// INTENT: deep pipeline: loud flag + sound deterministic rank; shallow control clear.
+/// KILLS: silent-breach, unsound-rank-on-deep.
+/// ABSORBS: none (drill pin; nothing merged).
 #[test]
 fn depth_breach_end_to_end_loud_flag_with_sound_rank() {
     let registry = ParserRegistry::new();
@@ -289,11 +216,14 @@ fn depth_breach_end_to_end_loud_flag_with_sound_rank() {
     assert!(!shallow.depth_truncated);
 }
 
-// E4-LANG-08: mixed hostile-corpus drill. One pipeline run per file over a
-// corpus mixing every hostile class; the corpus-level rank (files ordered
-// by hit count desc, path asc) is deterministic across full runs, and the
-// union of ranked hits equals the union of raw hits (no invented or
-// dropped output anywhere in the corpus).
+/// E4-LANG-08: mixed hostile-corpus drill. One pipeline run per file over a
+/// corpus mixing every hostile class; the corpus-level rank (files ordered
+/// by hit count desc, path asc) is deterministic across full runs, and the
+/// union of ranked hits equals the union of raw hits (no invented or
+/// dropped output anywhere in the corpus).
+/// INTENT: corpus mixing all hostile classes: per-class outcomes, union equality, corpus-rank determinism.
+/// KILLS: invented/dropped-corpus-hits, nondeterministic-corpus-rank.
+/// ABSORBS: none (drill pin; nothing merged).
 #[test]
 fn mixed_hostile_corpus_drill() {
     let registry = ParserRegistry::new();

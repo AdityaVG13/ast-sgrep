@@ -1,295 +1,187 @@
-//! E1 error-taxonomy inventory: one test per exit-code / error-shape cell.
+//! E1 error-taxonomy inventory: one test per exit-code family, not per cell.
 //!
 //! Pins the CLI contract `Exit: 0=ok 1=usage 2=fail` (see `Cli::command`
 //! `after_help`) plus the machine failure envelope
 //! `{schema_version, tool, command, ok:false, exit_code, error:{kind, message}}`
-//! (`print_machine_failure`). Assertions cover exit codes and envelope
-//! shapes/counts only — never message text.
-//!
-//! Cells covered: clap parse rejection (human + machine), missing query,
-//! unknown --lang, unknown --format, QUERY+--pattern conflict,
-//! --dry-run+--path conflict, codemod without --yes, ambiguous root
-//! (all usage/1); missing root, unindexed root, eval gold read/empty,
-//! outline without symbols, malformed codemode-batch (all operational/2);
-//! zero-hit search stays success/0 with an empty hit list.
+//! (`print_machine_failure`). The 12 taxonomy cells fold into 2 family anchors
+//! (usage/1, operational/2) with one leg per cell, plus a success-shape
+//! control row. Assertions cover exit codes and envelope shapes/counts only —
+//! never message text.
+
+#[path = "error_testkit.rs"]
+mod kit;
 
 use serde_json::Value;
-use std::ffi::OsString;
-use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
 use tempfile::TempDir;
 
-fn asgrep_bin() -> PathBuf {
-    PathBuf::from(env!("CARGO_BIN_EXE_asgrep"))
-}
-
-fn run(args: &[OsString]) -> Output {
-    Command::new(asgrep_bin())
-        .args(args)
-        .env("NO_COLOR", "1")
-        .output()
-        .expect("run asgrep")
-}
-
-fn sargs(args: &[&str]) -> Vec<OsString> {
-    args.iter().map(OsString::from).collect()
-}
-
-fn parse_stdout(output: &Output) -> Value {
-    serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
-        panic!(
-            "stdout is not one standalone JSON value: {error}\nstdout: {}\nstderr: {}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        )
-    })
-}
-
-/// Assert the machine failure envelope shape: fixed keys, `ok:false`,
-/// matching `exit_code`, `error.kind`, and a string `error.message`
-/// (presence only — content is never asserted).
-fn assert_failure_envelope(output: &Output, command: &str, exit_code: i32, kind: &str) -> Value {
-    assert_eq!(
-        output.status.code(),
-        Some(exit_code),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let value = parse_stdout(output);
-    assert_eq!(value["schema_version"], "1.0.0");
-    assert_eq!(value["tool"], "asgrep");
-    assert_eq!(value["command"], command);
-    assert_eq!(value["ok"], false);
-    assert_eq!(value["exit_code"], exit_code);
-    assert_eq!(value["error"]["kind"], kind);
-    assert!(
-        value["error"]["message"].is_string(),
-        "error.message must be a string: {value}"
-    );
-    value
-}
-
-fn assert_human_error(output: &Output, exit_code: i32) {
-    assert_eq!(
-        output.status.code(),
-        Some(exit_code),
-        "stdout: {}",
-        String::from_utf8_lossy(&output.stdout)
-    );
-    assert!(
-        !output.stderr.is_empty(),
-        "human error must explain itself on stderr"
-    );
-}
-
-fn fixture_root() -> TempDir {
-    let dir = TempDir::new().expect("tempdir");
-    std::fs::write(
-        dir.path().join("a.rs"),
-        "fn greet() -> &'static str {\n    \"hello\"\n}\n",
-    )
-    .expect("write fixture");
-    dir
-}
-
-fn index_root(root: &Path) {
-    let root_arg = root.to_string_lossy().into_owned();
-    let output = run(&sargs(&["index", &root_arg]));
-    assert_eq!(
-        output.status.code(),
-        Some(0),
-        "fixture index must succeed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-}
-
-// --- usage (exit 1): clap parse rejection, human and machine shapes ---
-
+/// INTENT: usage family — every CLI-side arg/shape rejection exits 1 with a
+/// usage envelope (machine) or a stderr explanation (human).
+/// KILLS: exit-code-swap(1↔2), envelope-kind-swap, missing-arg-default-Ok,
+/// lang/format-fallback-swallow, conflict-takes-first-silently,
+/// guard-drop (implicit --yes), first-wins-silently on ambiguous roots.
+/// ABSORBS: missing_query_is_usage_exit_1, unknown_lang_is_usage_exit_1,
+/// bad_format_is_usage_exit_1, query_and_pattern_conflict_is_usage_exit_1,
+/// index_dry_run_and_path_conflict_is_usage_exit_1,
+/// codemod_without_yes_is_usage_exit_1, ambiguous_root_is_usage_exit_1 — one
+/// leg each; the clap leg is the original anchor.
 #[test]
 fn clap_rejection_is_exit_1_with_usage_envelope() {
-    let human = run(&sargs(&["--no-such-flag-xyz"]));
-    assert_human_error(&human, 1);
+    // Leg 1 (anchor): clap parse rejection, human and machine shapes.
+    let human = kit::run(&["--no-such-flag-xyz"]);
+    kit::assert_human_error(&human, 1);
+    let machine = kit::run(&["--json", "--no-such-flag-xyz"]);
+    kit::assert_failure_envelope(&machine, "search", 1, "usage");
 
-    let machine = run(&sargs(&["--json", "--no-such-flag-xyz"]));
-    assert_failure_envelope(&machine, "search", 1, "usage");
+    // Leg 2 (was missing_query_is_usage_exit_1): bare invocation.
+    let output = kit::run(&[]);
+    kit::assert_human_error(&output, 1);
+
+    // Leg 3 (was unknown_lang_is_usage_exit_1): unknown --lang fails closed.
+    {
+        let dir = TempDir::new().expect("tempdir");
+        let root = dir.path().to_string_lossy().into_owned();
+        let output = kit::run(&[
+            "--json",
+            "--lang",
+            "xx-no-such-lang",
+            "search",
+            "greet",
+            root.as_str(),
+        ]);
+        kit::assert_failure_envelope(&output, "search", 1, "usage");
+    }
+
+    // Leg 4 (was bad_format_is_usage_exit_1): unknown --format on an indexed root.
+    {
+        let dir = kit::fixture_root();
+        kit::index_root(dir.path());
+        let root = dir.path().to_string_lossy().into_owned();
+        let output = kit::run(&[
+            "search",
+            "--json",
+            "--format",
+            "bogus",
+            "greet",
+            root.as_str(),
+        ]);
+        kit::assert_failure_envelope(&output, "search", 1, "usage");
+    }
+
+    // Legs 5-7 (were query_and_pattern_conflict / index_dry_run_and_path_conflict
+    // / codemod_without_yes): mutual-exclusion and guard rejections.
+    {
+        let dir = kit::fixture_root();
+        let root = dir.path().to_string_lossy().into_owned();
+        let conflict = kit::run(&["search", "--pattern", "greet", "greet", root.as_str()]);
+        kit::assert_human_error(&conflict, 1);
+        let dry_run = kit::run(&["index", "--dry-run", "--path", "a.rs", root.as_str()]);
+        kit::assert_human_error(&dry_run, 1);
+        let codemod = kit::run(&[
+            "codemod",
+            "--pattern",
+            "greet",
+            "--rewrite",
+            "greet",
+            root.as_str(),
+        ]);
+        kit::assert_human_error(&codemod, 1);
+    }
+
+    // Leg 8 (was ambiguous_root_is_usage_exit_1): --root + positional ROOT.
+    {
+        let a = kit::fixture_root();
+        let b = kit::fixture_root();
+        let ra = a.path().to_string_lossy().into_owned();
+        let rb = b.path().to_string_lossy().into_owned();
+        let output = kit::run(&["--json", "--root", ra.as_str(), "search", "greet", rb.as_str()]);
+        kit::assert_failure_envelope(&output, "search", 1, "usage");
+    }
 }
 
-// --- usage (exit 1): bare invocation without a query ---
-
-#[test]
-fn missing_query_is_usage_exit_1() {
-    let output = run(&sargs(&[]));
-    assert_human_error(&output, 1);
-}
-
-// --- usage (exit 1): unknown --lang label fails closed ---
-
-#[test]
-fn unknown_lang_is_usage_exit_1() {
-    let dir = TempDir::new().expect("tempdir");
-    let root = dir.path().to_string_lossy().into_owned();
-    let output = run(&sargs(&[
-        "--json",
-        "--lang",
-        "xx-no-such-lang",
-        "search",
-        "greet",
-        &root,
-    ]));
-    assert_failure_envelope(&output, "search", 1, "usage");
-}
-
-// --- usage (exit 1): unknown --format (indexed root: format resolves after open) ---
-
-#[test]
-fn bad_format_is_usage_exit_1() {
-    let dir = fixture_root();
-    index_root(dir.path());
-    let root = dir.path().to_string_lossy().into_owned();
-    let output = run(&sargs(&[
-        "search", "--json", "--format", "bogus", "greet", &root,
-    ]));
-    assert_failure_envelope(&output, "search", 1, "usage");
-}
-
-// --- usage (exit 1): QUERY positional and --pattern are mutually exclusive ---
-
-#[test]
-fn query_and_pattern_conflict_is_usage_exit_1() {
-    let dir = fixture_root();
-    let root = dir.path().to_string_lossy().into_owned();
-    let output = run(&sargs(&[
-        "search",
-        "--pattern",
-        "greet",
-        "greet",
-        &root,
-    ]));
-    assert_human_error(&output, 1);
-}
-
-// --- usage (exit 1): index --dry-run and --path are mutually exclusive ---
-
-#[test]
-fn index_dry_run_and_path_conflict_is_usage_exit_1() {
-    let dir = fixture_root();
-    let root = dir.path().to_string_lossy().into_owned();
-    let output = run(&sargs(&["index", "--dry-run", "--path", "a.rs", &root]));
-    assert_human_error(&output, 1);
-}
-
-// --- usage (exit 1): codemod apply requires --yes (checked before root IO) ---
-
-#[test]
-fn codemod_without_yes_is_usage_exit_1() {
-    let dir = fixture_root();
-    let root = dir.path().to_string_lossy().into_owned();
-    let output = run(&sargs(&[
-        "codemod",
-        "--pattern",
-        "greet",
-        "--rewrite",
-        "greet",
-        &root,
-    ]));
-    assert_human_error(&output, 1);
-}
-
-// --- usage (exit 1): --root plus positional ROOT is ambiguous ---
-
-#[test]
-fn ambiguous_root_is_usage_exit_1() {
-    let a = fixture_root();
-    let b = fixture_root();
-    let ra = a.path().to_string_lossy().into_owned();
-    let rb = b.path().to_string_lossy().into_owned();
-    let output = run(&sargs(&["--json", "--root", &ra, "search", "greet", &rb]));
-    assert_failure_envelope(&output, "search", 1, "usage");
-}
-
-// --- operational (exit 2): missing project root ---
-
+/// INTENT: operational family — every runtime/state fault exits 2 with an
+/// operational envelope (machine) or a stderr explanation (human).
+/// KILLS: exit-code-swap(2→1), envelope-kind-swap, auto-index-swallow-to-Ok,
+/// gold-default-empty-swallow, empty-outline-Ok-swallow, json-error-to-usage-swap.
+/// ABSORBS: unindexed_root_search_is_operational_exit_2,
+/// eval_gold_failures_are_operational_exit_2,
+/// outline_unindexed_file_is_operational_exit_2,
+/// codemode_batch_malformed_is_operational_exit_2 — one leg each; the
+/// missing-root leg is the original anchor.
 #[test]
 fn missing_root_search_is_operational_exit_2() {
-    let dir = TempDir::new().expect("tempdir");
-    let missing = dir.path().join("does-not-exist-xyz");
-    let missing_arg = missing.to_string_lossy().into_owned();
-    let output = run(&sargs(&["search", "--json", "greet", &missing_arg]));
-    assert_failure_envelope(&output, "search", 2, "operational");
+    // Leg 1 (anchor): missing project root.
+    {
+        let dir = TempDir::new().expect("tempdir");
+        let missing = dir.path().join("does-not-exist-xyz");
+        let missing_arg = missing.to_string_lossy().into_owned();
+        let output = kit::run(&["search", "--json", "greet", missing_arg.as_str()]);
+        kit::assert_failure_envelope(&output, "search", 2, "operational");
+    }
+
+    // Leg 2 (was unindexed_root_search_is_operational_exit_2): no auto-index.
+    // Leg 3 (was eval_gold_failures_are_operational_exit_2): unreadable gold
+    // (machine) and query-less gold (human).
+    {
+        let dir = kit::fixture_root();
+        let root = dir.path().to_string_lossy().into_owned();
+        let output = kit::run(&["search", "--json", "greet", root.as_str()]);
+        kit::assert_failure_envelope(&output, "search", 2, "operational");
+
+        let missing = dir.path().join("no-gold.json");
+        let missing_arg = missing.to_string_lossy().into_owned();
+        let unreadable = kit::run(&["eval", "--json", "--gold", missing_arg.as_str(), root.as_str()]);
+        kit::assert_failure_envelope(&unreadable, "eval", 2, "operational");
+
+        let empty = dir.path().join("empty-gold.json");
+        std::fs::write(&empty, r#"{"corpus":"e1","queries":[]}"#).expect("write gold");
+        let empty_arg = empty.to_string_lossy().into_owned();
+        let query_less = kit::run(&["eval", "--gold", empty_arg.as_str(), root.as_str()]);
+        kit::assert_human_error(&query_less, 2);
+    }
+
+    // Leg 4 (was outline_unindexed_file_is_operational_exit_2).
+    {
+        let dir = kit::fixture_root();
+        kit::index_root(dir.path());
+        let root = dir.path().to_string_lossy().into_owned();
+        let output = kit::run(&["outline", "--json", "no-such-file.rs", root.as_str()]);
+        kit::assert_failure_envelope(&output, "outline", 2, "operational");
+    }
+
+    // Leg 5 (was codemode_batch_malformed_is_operational_exit_2): malformed
+    // batch payload (always-machine).
+    {
+        let dir = TempDir::new().expect("tempdir");
+        let bad = dir.path().join("bad.json");
+        std::fs::write(&bad, "{not valid json").expect("write bad batch");
+        let bad_arg = bad.to_string_lossy().into_owned();
+        let output = kit::run(&["codemode-batch", "--requests", bad_arg.as_str()]);
+        kit::assert_failure_envelope(&output, "codemode-batch", 2, "operational");
+    }
 }
 
-// --- operational (exit 2): search over an unindexed root (no auto-index) ---
-
-#[test]
-fn unindexed_root_search_is_operational_exit_2() {
-    let dir = fixture_root();
-    let root = dir.path().to_string_lossy().into_owned();
-    let output = run(&sargs(&["search", "--json", "greet", &root]));
-    assert_failure_envelope(&output, "search", 2, "operational");
-}
-
-// --- operational (exit 2): eval gold unreadable or query-less ---
-
-#[test]
-fn eval_gold_failures_are_operational_exit_2() {
-    let dir = fixture_root();
-    let root = dir.path().to_string_lossy().into_owned();
-
-    let missing = dir.path().join("no-gold.json");
-    let missing_arg = missing.to_string_lossy().into_owned();
-    let unreadable = run(&sargs(&["eval", "--json", "--gold", &missing_arg, &root]));
-    assert_failure_envelope(&unreadable, "eval", 2, "operational");
-
-    let empty = dir.path().join("empty-gold.json");
-    std::fs::write(&empty, r#"{"corpus":"e1","queries":[]}"#).expect("write gold");
-    let empty_arg = empty.to_string_lossy().into_owned();
-    let query_less = run(&sargs(&["eval", "--gold", &empty_arg, &root]));
-    assert_human_error(&query_less, 2);
-}
-
-// --- operational (exit 2): outline over a file with no indexed symbols ---
-
-#[test]
-fn outline_unindexed_file_is_operational_exit_2() {
-    let dir = fixture_root();
-    index_root(dir.path());
-    let root = dir.path().to_string_lossy().into_owned();
-    let output = run(&sargs(&["outline", "--json", "no-such-file.rs", &root]));
-    assert_failure_envelope(&output, "outline", 2, "operational");
-}
-
-// --- operational (exit 2): malformed codemode-batch payload (always-machine) ---
-
-#[test]
-fn codemode_batch_malformed_is_operational_exit_2() {
-    let dir = TempDir::new().expect("tempdir");
-    let bad = dir.path().join("bad.json");
-    std::fs::write(&bad, "{not valid json").expect("write bad batch");
-    let bad_arg = bad.to_string_lossy().into_owned();
-    let output = run(&sargs(&["codemode-batch", "--requests", &bad_arg]));
-    assert_failure_envelope(&output, "codemode-batch", 2, "operational");
-}
-
-// --- success (exit 0): zero-hit search is ok:true with an empty hit list ---
-
+/// INTENT: success-shape control — a zero-hit search is ok:true with an empty
+/// hit list, proving empty results are not errors.
+/// KILLS: empty-to-error-swap.
+/// ABSORBS: none (stands alone as the control row).
 #[test]
 fn zero_hit_search_is_success_exit_0() {
-    let dir = fixture_root();
-    index_root(dir.path());
+    let dir = kit::fixture_root();
+    kit::index_root(dir.path());
     let root = dir.path().to_string_lossy().into_owned();
-    let output = run(&sargs(&[
+    let output = kit::run(&[
         "search",
         "--json",
         "literal:zzzqqqxxyy-no-such-substring",
-        &root,
-    ]));
+        root.as_str(),
+    ]);
     assert_eq!(
         output.status.code(),
         Some(0),
         "stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let value = parse_stdout(&output);
+    let value = kit::parse_stdout(&output);
     assert_eq!(value["ok"], true);
     assert_eq!(value["exit_code"], 0);
     assert_eq!(

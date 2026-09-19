@@ -194,3 +194,45 @@ pub fn search_select_plan() -> Value {
         {"id": "b", "tool": "select", "args": {"value": "$a", "fields": ["tools"]}},
     ], "return": "$b"})
 }
+
+/// INTENT: total `CallError` discriminant projection (the enum variant
+/// only, never message text): the cross-cutting error-comparison
+/// primitive — equal discriminants mean the same failure layer reached
+/// the caller. Pure projection.
+pub fn call_error_discriminant(err: &CallError) -> &'static str {
+    match err {
+        CallError::UnknownTool(_) => "unknown_tool",
+        CallError::InvalidArgs(_) => "invalid_args",
+        CallError::BudgetExhausted(_) => "budget_exhausted",
+        CallError::Json(_) => "json",
+        CallError::Other(_) => "other",
+    }
+}
+
+/// INTENT: canonical `CallError::Other` cause-chain assert — an anyhow
+/// failure wrapped as `Other` must keep its cause: the std source is
+/// present and the original typed cause `E` is still reachable by walking
+/// the chain, never flattened to a bare string. Generic over the expected
+/// cause type (e.g. `assert_other_preserves_cause::<std::io::Error>`).
+/// Panics when the error is not `Other`, has no source, or the chain
+/// lacks `E`.
+pub fn assert_other_preserves_cause<E>(err: &CallError)
+where
+    E: std::error::Error + 'static,
+{
+    let inner = match err {
+        CallError::Other(inner) => inner,
+        other => panic!("expected Other, got {other:?}"),
+    };
+    assert!(
+        std::error::Error::source(err).is_some(),
+        "Other must keep a source"
+    );
+    assert!(
+        inner
+            .chain()
+            .any(|cause| cause.downcast_ref::<E>().is_some()),
+        "{} cause must survive the wrap",
+        std::any::type_name::<E>()
+    );
+}

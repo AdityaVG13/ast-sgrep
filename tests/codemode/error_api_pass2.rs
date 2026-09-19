@@ -10,16 +10,13 @@
 //! Path map (propagation path -> test):
 //! - session anyhow cause preserved (io cause in chain, source Some)
 //!   -> e2_session_other_preserves_io_cause_chain
-//! - plan short-circuit on InvalidArgs (variant kept, later steps never run)
-//!   -> e2_plan_invalid_args_short_circuits
-//! - plan short-circuit on Other (variant kept, later steps never run)
-//!   -> e2_plan_other_short_circuits
+//! - plan short-circuit preserving the direct-call variant (InvalidArgs + Other
+//!   legs parameterized; later steps never run)
+//!   -> e2_plan_short_circuits_preserving_variant
 //! - plan parse/shape failures are InvalidArgs, consume zero budget
 //!   -> e2_plan_parse_and_shape_never_touch_budget
 //! - batch envelope validation is Err (never Ok with all_ok:false)
 //!   -> e2_batch_envelope_validation_is_err
-//! - batch parallel path isolates per-call failures, keeps order
-//!   -> e2_batch_parallel_readonly_isolates_failures
 //! - session budget sticks (same payload, frozen count, exhausted)
 //!   -> e2_budget_sticks_on_session
 //! - plan aborts on budget with the BudgetExhausted discriminant
@@ -29,95 +26,35 @@
 //! - serve BatchResult mirrors per-call ok/fail, serve continues
 //!   -> e2_serve_batch_mixed_propagates_percall
 //! - serve budget answers once, ignores trailing input, returns discriminant
+//!   (absorbs the E1 serve-budget discriminant run)
 //!   -> e2_serve_budget_answers_once_ignores_trailing
-//! - Json cause preserved (inner discriminant methods + source)
+//! - Json cause preserved (inner discriminant methods + source; absorbs the E1
+//!   via-? constructor arm as the single Json pin)
 //!   -> e2_json_cause_preserved_via_downcast
 //! - UnknownTool vs InvalidArgs precedence (name first, catalog entry second)
 //!   -> e2_unknown_tool_vs_invalid_args_precedence
-//! - Ok channel never carries failure (ok:true / all_ok:true on success)
-//!   -> e2_ok_channel_never_carries_failure
+//!
+//! Folded out / deleted (not here):
+//! - e2_plan_other_short_circuits -> e2_plan_short_circuits_preserving_variant (same file)
+//! - e2_batch_parallel_readonly_isolates_failures -> e3_batch_mode_equivalence (pass3)
+//! - e2_ok_channel_never_carries_failure -> DELETED (no unique error mutant)
+
+#[path = "error_testkit.rs"]
+mod error_testkit;
 
 use ast_sgrep_codemode::{
-    parse_plan, run_batch, run_plan, run_serve, BatchCall, BatchRequest, CallError,
-    CodeModeSession, ParallelMode, ServeRequest, ServeResponse, SessionConfig,
+    parse_plan, run_batch, run_plan, BatchCall, CallError, ServeRequest, ServeResponse,
     MAX_BATCH_CALLS, MAX_BATCH_ID_BYTES, MAX_BATCH_TOOL_BYTES,
 };
-use ast_sgrep_plugins::OutputFormat;
+use error_testkit::{
+    assert_other_preserves_cause, batch_call, batch_request, config_at, serve_lines,
+    serve_request_line, session_at,
+};
 use serde_json::{json, Value};
-use std::io::Cursor;
 
-fn session_at(root: &std::path::Path) -> CodeModeSession {
-    CodeModeSession::new(SessionConfig {
-        root: root.to_path_buf(),
-        index_path: None,
-        limit: 5,
-        use_embed: false,
-        default_format: OutputFormat::AgentCapsule,
-    })
-}
-
-fn config_at(root: &std::path::Path) -> SessionConfig {
-    SessionConfig {
-        root: root.to_path_buf(),
-        index_path: None,
-        limit: 5,
-        use_embed: false,
-        default_format: OutputFormat::AgentCapsule,
-    }
-}
-
-fn batch_request(calls: Vec<BatchCall>) -> BatchRequest {
-    BatchRequest {
-        root: None,
-        index_path: None,
-        use_embed: None,
-        limit: None,
-        parallel: None,
-        parallel_mode: None,
-        calls,
-    }
-}
-
-fn batch_call(id: &str, tool: &str, args: Value) -> BatchCall {
-    BatchCall {
-        id: id.to_string(),
-        tool: tool.to_string(),
-        args,
-    }
-}
-
-fn serve_lines(input: String, root: &std::path::Path) -> (Result<(), CallError>, Vec<String>) {
-    let mut out = Vec::new();
-    let result = run_serve(config_at(root), Cursor::new(input), &mut out);
-    let text = String::from_utf8(out).expect("serve output is utf8");
-    let lines = text.lines().map(str::to_string).collect();
-    (result, lines)
-}
-
-fn serve_request_line(request: &ServeRequest) -> String {
-    format!("{}\n", serde_json::to_string(request).expect("request serializes"))
-}
-
-/// An anyhow failure wrapped as `CallError::Other` must keep its cause: the
-/// std source is present and the original typed cause (here `io::Error`) is
-/// still reachable by walking the chain — never flattened to a bare string.
-fn assert_other_preserves_io_cause(err: &CallError) {
-    let inner = match err {
-        CallError::Other(inner) => inner,
-        other => panic!("expected Other, got {other:?}"),
-    };
-    assert!(
-        std::error::Error::source(err).is_some(),
-        "Other must keep a source"
-    );
-    assert!(
-        inner
-            .chain()
-            .any(|cause| cause.downcast_ref::<std::io::Error>().is_some()),
-        "io cause must survive the wrap"
-    );
-}
-
+/// INTENT=Other keeps std source + io::Error reachable in anyhow chain.
+/// KILLS=cause-flatten-to-string, source-drop.
+/// ABSORBS=none.
 #[test]
 fn e2_session_other_preserves_io_cause_chain() {
     // Two pre-execution IO failures with typed causes: a search against a
@@ -128,7 +65,7 @@ fn e2_session_other_preserves_io_cause_chain() {
     let err = missing_root
         .call("search", json!({"query": "hello"}))
         .expect_err("missing root must fail");
-    assert_other_preserves_io_cause(&err);
+    assert_other_preserves_cause::<std::io::Error>(&err);
 
     let mut session = session_at(temp.path());
     let err = session
@@ -137,61 +74,63 @@ fn e2_session_other_preserves_io_cause_chain() {
             json!({"path": "no-such-file.rs", "oldText": "a", "newText": "b"}),
         )
         .expect_err("missing file must fail");
-    assert_other_preserves_io_cause(&err);
+    assert_other_preserves_cause::<std::io::Error>(&err);
 }
 
+/// INTENT=mid-plan failure keeps its direct-call variant and later steps never run (InvalidArgs + Other).
+/// KILLS=variant-rewrap, no-short-circuit.
+/// ABSORBS=e2_plan_other_short_circuits (same short-circuit contract, second variant; parameterized).
 #[test]
-fn e2_plan_invalid_args_short_circuits() {
-    // A mid-plan tool guard failure propagates as the same InvalidArgs variant
-    // the direct call raises, and later steps never execute (call_count pins
-    // the short-circuit; the third step would otherwise succeed).
+fn e2_plan_short_circuits_preserving_variant() {
+    // A mid-plan tool failure propagates as the same variant the direct call
+    // raises, and later steps never execute (call_count pins the short-circuit;
+    // the third step would otherwise succeed). One leg per variant family: a
+    // pure-tool guard failure (InvalidArgs) and an anyhow-path failure (Other,
+    // which must surface as Err — never Ok with ok:false).
     let temp = tempfile::tempdir().expect("tempdir");
-    let mut direct = session_at(temp.path());
-    let direct_err = direct
-        .call("select", json!({}))
-        .expect_err("select guard");
-    assert!(
-        matches!(direct_err, CallError::InvalidArgs(_)),
-        "got {direct_err:?}"
-    );
+    let cases: &[(&str, Value, &str)] = &[
+        ("select", json!({}), "invalid_args"),
+        ("search", json!({}), "other"),
+    ];
+    for (tool, args, expected) in cases {
+        let mut direct = session_at(temp.path());
+        let direct_err = direct
+            .call(tool, args.clone())
+            .expect_err("direct guard must fail");
+        match *expected {
+            "invalid_args" => assert!(
+                matches!(direct_err, CallError::InvalidArgs(_)),
+                "got {direct_err:?}"
+            ),
+            "other" => assert!(
+                matches!(direct_err, CallError::Other(_)),
+                "got {direct_err:?}"
+            ),
+            _ => unreachable!("unknown variant leg"),
+        }
 
-    let plan = parse_plan(&json!({"steps": [
-        {"id": "a", "tool": "catalog_search", "args": {"query": "search"}},
-        {"id": "b", "tool": "select", "args": {}},
-        {"id": "c", "tool": "catalog_search", "args": {"query": "search"}},
-    ]}))
-    .expect("plan parses");
-    let mut planned = session_at(temp.path());
-    let err = run_plan(&mut planned, &plan).expect_err("plan must fail");
-    assert!(matches!(err, CallError::InvalidArgs(_)), "got {err:?}");
-    assert_eq!(planned.call_count(), 2);
+        let plan = parse_plan(&json!({"steps": [
+            {"id": "a", "tool": "catalog_search", "args": {"query": "search"}},
+            {"id": "b", "tool": tool, "args": args},
+            {"id": "c", "tool": "catalog_search", "args": {"query": "search"}},
+        ]}))
+        .expect("plan parses");
+        let mut planned = session_at(temp.path());
+        let err = run_plan(&mut planned, &plan).expect_err("plan must fail");
+        match *expected {
+            "invalid_args" => {
+                assert!(matches!(err, CallError::InvalidArgs(_)), "got {err:?}")
+            }
+            "other" => assert!(matches!(err, CallError::Other(_)), "got {err:?}"),
+            _ => unreachable!("unknown variant leg"),
+        }
+        assert_eq!(planned.call_count(), 2, "tool {tool}: later steps never run");
+    }
 }
 
-#[test]
-fn e2_plan_other_short_circuits() {
-    // Same short-circuit contract for the anyhow path: a mid-plan search with
-    // no query propagates as Other (matching the direct call), step three
-    // never runs, and the failure is an Err — never Ok with ok:false.
-    let temp = tempfile::tempdir().expect("tempdir");
-    let mut direct = session_at(temp.path());
-    let direct_err = direct.call("search", json!({})).expect_err("query guard");
-    assert!(
-        matches!(direct_err, CallError::Other(_)),
-        "got {direct_err:?}"
-    );
-
-    let plan = parse_plan(&json!({"steps": [
-        {"id": "a", "tool": "catalog_search", "args": {"query": "search"}},
-        {"id": "b", "tool": "search", "args": {}},
-        {"id": "c", "tool": "catalog_search", "args": {"query": "search"}},
-    ]}))
-    .expect("plan parses");
-    let mut planned = session_at(temp.path());
-    let err = run_plan(&mut planned, &plan).expect_err("plan must fail");
-    assert!(matches!(err, CallError::Other(_)), "got {err:?}");
-    assert_eq!(planned.call_count(), 2);
-}
-
+/// INTENT=malformed/empty plans fail InvalidArgs with zero budget consumed.
+/// KILLS=parse-failure-charges-budget, variant-swap.
+/// ABSORBS=none.
 #[test]
 fn e2_plan_parse_and_shape_never_touch_budget() {
     // Malformed plans fail at parse time as InvalidArgs (never Other/Json),
@@ -213,6 +152,9 @@ fn e2_plan_parse_and_shape_never_touch_budget() {
     assert_eq!(session.call_count(), 0);
 }
 
+/// INTENT=envelope-shape violations are Err InvalidArgs, never Ok+all_ok:false.
+/// KILLS=envelope-violation-as-per-call-row, Ok-carried-failure.
+/// ABSORBS=none.
 #[test]
 fn e2_batch_envelope_validation_is_err() {
     // Envelope-shape failures (empty/oversize calls, bad identity) are Err
@@ -239,40 +181,9 @@ fn e2_batch_envelope_validation_is_err() {
     }
 }
 
-#[test]
-fn e2_batch_parallel_readonly_isolates_failures() {
-    // The rayon path (all read-only tools, explicit Parallel) keeps the serial
-    // propagation contract: envelope stays Ok, per-call failures stay isolated
-    // (ok siblings keep value+no-error), ids echo in input order.
-    let temp = tempfile::tempdir().expect("tempdir");
-    let mut request = batch_request(vec![
-        batch_call("g0", "catalog_search", json!({"query": "search"})),
-        batch_call("i0", "select", json!({})),
-        batch_call("o0", "search", json!({})),
-        batch_call("g1", "catalog_search", json!({"query": "find"})),
-    ]);
-    request.parallel_mode = Some(ParallelMode::Parallel);
-    let response = run_batch(config_at(temp.path()), &request).expect("envelope stays Ok");
-    assert_eq!(response.mode, "parallel");
-    assert!(!response.all_ok);
-    assert_eq!(response.call_count, 4);
-    let ids: Vec<&str> = response.results.iter().map(|r| r.id.as_str()).collect();
-    assert_eq!(ids, vec!["g0", "i0", "o0", "g1"]);
-    assert!(response.results[0].ok);
-    assert!(!response.results[1].ok);
-    assert!(!response.results[2].ok);
-    assert!(response.results[3].ok);
-    for result in &response.results {
-        if result.ok {
-            assert!(result.value.is_some(), "ok without value: {}", result.id);
-            assert!(result.error.is_none(), "ok with error: {}", result.id);
-        } else {
-            assert!(result.value.is_none(), "fail with value: {}", result.id);
-            assert!(result.error.is_some(), "fail without error: {}", result.id);
-        }
-    }
-}
-
+/// INTENT=spent budget sticky: same payload, frozen count, exhausted.
+/// KILLS=budget-degrade-to-Other, counter-drift.
+/// ABSORBS=none.
 #[test]
 fn e2_budget_sticks_on_session() {
     // A spent session budget is sticky: every further call fails with the same
@@ -304,6 +215,9 @@ fn e2_budget_sticks_on_session() {
     assert!(session.exhausted());
 }
 
+/// INTENT=budget exhaustion inside plan aborts BudgetExhausted, unstarted step uncharged.
+/// KILLS=budget-wrap-as-Other, overcharge.
+/// ABSORBS=none.
 #[test]
 fn e2_plan_budget_aborts_with_discriminant() {
     // Budget exhaustion inside a plan aborts with BudgetExhausted (matching
@@ -323,6 +237,9 @@ fn e2_plan_budget_aborts_with_discriminant() {
     assert!(session.exhausted());
 }
 
+/// INTENT=serve maps tool failures to Result{ok:false}, keeps serving to Bye.
+/// KILLS=Result-vs-Error-swap, worker-abort.
+/// ABSORBS=none.
 #[test]
 fn e2_serve_tool_failures_are_result_and_continues() {
     // Tool-level InvalidArgs and Other failures over serve are per-request
@@ -363,6 +280,10 @@ fn e2_serve_tool_failures_are_result_and_continues() {
     assert!(matches!(last, ServeResponse::Bye), "got {last:?}");
 }
 
+/// INTENT=serve BatchResult mirrors per-call ok/fail, worker continues to Bye.
+/// KILLS=batch-abort-on-first-failure, percall-flatten.
+/// ABSORBS=none.
+/// OVERLAP=e4 serve-batch drill (E2 is the cheap field-level pin).
 #[test]
 fn e2_serve_batch_mixed_propagates_percall() {
     // A well-shaped mixed batch over serve yields one BatchResult with
@@ -406,6 +327,9 @@ fn e2_serve_batch_mixed_propagates_percall() {
     assert!(matches!(last, ServeResponse::Bye), "got {last:?}");
 }
 
+/// INTENT=serve fail-once: one Result{ok:false}, BudgetExhausted return, trailing input silent.
+/// KILLS=error-flood-past-budget, trailing-Bye.
+/// ABSORBS=e1_budget_exhausted_serve_returns_discriminant (first-line ok:true pin; duplicate 10k run deleted).
 #[test]
 fn e2_serve_budget_answers_once_ignores_trailing() {
     // Fail-once: the 10_001st call gets exactly one Result{ok:false}, the
@@ -433,6 +357,14 @@ fn e2_serve_budget_answers_once_ignores_trailing() {
         "got {err:?}"
     );
     assert_eq!(lines.len(), 10_001);
+    // Absorbed from e1_budget_exhausted_serve_returns_discriminant (the one pin
+    // its deleted 10k run added beyond this anchor): the stream opens with a
+    // success row before the single fail-once row.
+    let first: ServeResponse = serde_json::from_str(&lines[0]).expect("first line");
+    assert!(
+        matches!(first, ServeResponse::Result { ok: true, .. }),
+        "got {first:?}"
+    );
     let last: ServeResponse = serde_json::from_str(&lines[10_000]).expect("last line");
     assert!(
         matches!(last, ServeResponse::Result { ok: false, .. }),
@@ -440,6 +372,9 @@ fn e2_serve_budget_answers_once_ignores_trailing() {
     );
 }
 
+/// INTENT=Json keeps inner serde error: downcast, syntax/eof discriminants, transparent Display, via-? arm.
+/// KILLS=BEHAVIOR-ONLY (synthetic: constructs From over synthetic serde errors; no production call path yields Json).
+/// ABSORBS=e1_json_row_from_conversion (via-? arm + ok control; the sole Json pin).
 #[test]
 fn e2_json_cause_preserved_via_downcast() {
     // The Json variant keeps the original serde_json::Error intact: callers can
@@ -473,8 +408,20 @@ fn e2_json_cause_preserved_via_downcast() {
         }
         other => panic!("expected Json, got {other:?}"),
     }
+
+    // Absorbed from e1_json_row_from_conversion: the `?` conversion path lands
+    // on Json too, and well-formed input stays Ok (control).
+    fn load(text: &str) -> Result<Value, CallError> {
+        Ok(serde_json::from_str(text)?)
+    }
+    let err = load("{oops").expect_err("bad json via ?");
+    assert!(matches!(err, CallError::Json(_)), "got {err:?}");
+    assert!(load(r#"{"ok":true}"#).is_ok());
 }
 
+/// INTENT=unknown name beats garbage args; known tool + bad args (incl. unknown catalog entry) is InvalidArgs.
+/// KILLS=dispatch-order-swap, catalog-entry-as-UnknownTool.
+/// ABSORBS=none.
 #[test]
 fn e2_unknown_tool_vs_invalid_args_precedence() {
     // Dispatch order pins the confusion matrix: an unknown name wins over any
@@ -494,41 +441,4 @@ fn e2_unknown_tool_vs_invalid_args_precedence() {
         .call("catalog_describe", json!({"name": "no-such-tool"}))
         .expect_err("unknown catalog entry");
     assert!(matches!(err, CallError::InvalidArgs(_)), "got {err:?}");
-}
-
-#[test]
-fn e2_ok_channel_never_carries_failure() {
-    // Success shapes attest success: an ok plan returns PlanResult{ok:true},
-    // an ok batch returns all_ok:true with value-bearing per-call rows — and
-    // the same-shaped failing plan is an Err, never Ok with ok:false.
-    let temp = tempfile::tempdir().expect("tempdir");
-    let ok_plan = parse_plan(&json!({"steps": [
-        {"id": "a", "tool": "catalog_search", "args": {"query": "search"}},
-    ]}))
-    .expect("plan parses");
-    let mut session = session_at(temp.path());
-    let ok = run_plan(&mut session, &ok_plan).expect("ok plan succeeds");
-    assert!(ok.ok);
-    assert_eq!(ok.call_count, 1);
-
-    let response = run_batch(
-        config_at(temp.path()),
-        &batch_request(vec![batch_call(
-            "g0",
-            "catalog_search",
-            json!({"query": "search"}),
-        )]),
-    )
-    .expect("ok batch succeeds");
-    assert!(response.all_ok);
-    assert!(response.results[0].ok);
-    assert!(response.results[0].value.is_some());
-    assert!(response.results[0].error.is_none());
-
-    let bad_plan = parse_plan(&json!({"steps": [
-        {"id": "a", "tool": "select", "args": {}},
-    ]}))
-    .expect("plan parses");
-    let mut failing = session_at(temp.path());
-    assert!(run_plan(&mut failing, &bad_plan).is_err());
 }

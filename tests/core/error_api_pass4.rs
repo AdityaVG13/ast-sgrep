@@ -9,88 +9,22 @@
 //! intact or the rebuild reproduces it, and a subsequent clean run
 //! succeeds).
 //!
-//! One drill per fault kind (delete / corrupt / truncate / revoked perms /
-//! oversize query / dropped tables / missing root) plus one chained
-//! double-fault drill. Discriminants only (`matches!`); no message-text
-//! asserts.
+//! One drill per fault class (delete / corrupt × {garbage, truncated stump} /
+//! revoked perms / oversize query / dropped tables / missing root) plus one
+//! chained double-fault drill. Discriminants only (`matches!`); no
+//! message-text asserts.
 
-use ast_sgrep_core::{
-    IndexOptions, IndexStore, Indexer, SearchOptions, Searcher, StoreError, MAX_QUERY_CHARS,
-};
-use std::path::{Path, PathBuf};
+#[path = "error_testkit.rs"]
+mod error_testkit;
+
+use ast_sgrep_core::{IndexOptions, IndexStore, Indexer, StoreError, MAX_QUERY_CHARS};
+use ast_sgrep_testkit::{err_of, truncate_file, write_garbage};
+use error_testkit::{assert_clean_state, discriminant, populate, remove_db_files, searcher_at};
 use tempfile::TempDir;
 
-fn err_of<T>(result: Result<T, StoreError>) -> StoreError {
-    match result {
-        Ok(_) => panic!("expected Err, got Ok"),
-        Err(err) => err,
-    }
-}
-
-/// 0 = Database, 1 = Io, 2 = Other.
-fn discriminant(err: &StoreError) -> u8 {
-    match err {
-        StoreError::Database(_) => 0,
-        StoreError::Io(_) => 1,
-        StoreError::Other(_) => 2,
-    }
-}
-
-const FIXTURE: &[u8] = b"fn alpha() {}\nfn greet_user() {}\n";
-
-/// Populate a real file-backed store and drop the writer; returns the
-/// committed `file_hash` so drills can prove no-half-writes afterward.
-fn populate(root: &Path, db: &Path) -> Option<String> {
-    std::fs::write(root.join("a.rs"), FIXTURE).unwrap();
-    let mut indexer = Indexer::new(IndexOptions {
-        root: root.to_path_buf(),
-        index_path: Some(db.to_path_buf()),
-        ..IndexOptions::default()
-    })
-    .expect("populate indexer");
-    indexer.index_all().expect("populate index_all");
-    let hash = indexer.store().file_hash("a.rs").expect("hash readable");
-    assert!(hash.is_some(), "populated file must commit a hash");
-    hash
-}
-
-fn searcher_at(root: &Path, db: &Path) -> Result<Searcher, StoreError> {
-    Searcher::new(SearchOptions {
-        root: root.to_path_buf(),
-        index_path: Some(db.to_path_buf()),
-        ..SearchOptions::default()
-    })
-}
-
-/// Remove the db plus any sqlite sidecars so a rebuild starts truly clean.
-fn remove_db_files(db: &Path) {
-    for suffix in ["", "-wal", "-shm", "-journal"] {
-        let path = PathBuf::from(format!("{}{suffix}", db.display()));
-        let _ = std::fs::remove_file(path);
-    }
-}
-
-/// Clean-state proof shared by the rebuild drills: the rebuilt store serves
-/// search + status and reproduces the exact committed hash.
-fn assert_clean_state(root: &Path, db: &Path, committed: &Option<String>) {
-    let searcher = searcher_at(root, db).expect("clean Searcher::new must succeed");
-    assert!(
-        searcher.search("alpha").is_ok(),
-        "clean search after recovery must succeed"
-    );
-    assert!(
-        searcher.store().status().is_ok(),
-        "clean status after recovery must succeed"
-    );
-    assert_eq!(
-        searcher.store().file_hash("a.rs").expect("hash readable"),
-        *committed,
-        "rebuilt store must reproduce the committed hash (no half-writes)"
-    );
-}
-
-/// Deleted index: the full open flow fails closed as `Other`, and a fresh
-/// reindex restores search + status + the exact committed hash.
+/// INTENT: deleted db fails Other, reindex restores search+status+exact hash.
+/// KILLS: heal-hash-divergence, fail-open-on-missing-db.
+/// ABSORBS: none (kept solo).
 #[test]
 fn drill_deleted_index_search_fails_closed_then_reindex_recovers() {
     let temp = TempDir::new().unwrap();
@@ -117,67 +51,54 @@ fn drill_deleted_index_search_fails_closed_then_reindex_recovers() {
     assert_clean_state(temp.path(), &db, &committed);
 }
 
-/// Corrupt index: garbage bytes fail the full open flow as `Database`, and
-/// the `force_reindex` recovery path quarantines + rebuilds to clean state.
+/// INTENT: corrupt index — garbage-overwrite AND 32-byte-stump triggers — fails
+/// the full open flow as Database; the `force_reindex` recovery path
+/// quarantines + rebuilds to clean state for both triggers (corrupt-drill anchor).
+/// KILLS: quarantine-regression, heal-hash-divergence, truncation-tolerated.
+/// ABSORBS: drill_truncated_index_search_fails_database_then_rebuild_recovers
+/// (the stump is a second corruption trigger with identical discriminant +
+/// recovery; folded as a trigger leg).
+/// OVERLAP: recovery.
 #[test]
 fn drill_corrupt_index_open_fails_database_then_force_reindex_recovers() {
-    let temp = TempDir::new().unwrap();
-    let db = temp.path().join("index.db");
-    let committed = populate(temp.path(), &db);
-    std::fs::write(&db, b"this is not a sqlite database file; garbage").unwrap();
+    for trigger in ["garbage-overwrite", "32-byte-stump"] {
+        let temp = TempDir::new().unwrap();
+        let db = temp.path().join("index.db");
+        let committed = populate(temp.path(), &db);
+        match trigger {
+            "garbage-overwrite" => {
+                write_garbage(&db);
+            }
+            _ => truncate_file(&db, 32),
+        }
 
-    let err = err_of(searcher_at(temp.path(), &db));
-    assert_eq!(
-        discriminant(&err),
-        0,
-        "corrupt index through Searcher::new must fail as Database, got {err:?}"
-    );
+        let err = err_of(searcher_at(temp.path(), &db));
+        assert_eq!(
+            discriminant(&err),
+            0,
+            "{trigger} through Searcher::new must fail as Database, got {err:?}"
+        );
 
-    let mut indexer = Indexer::new(IndexOptions {
-        root: temp.path().to_path_buf(),
-        index_path: Some(db.clone()),
-        force_reindex: true,
-        ..IndexOptions::default()
-    })
-    .expect("force_reindex must quarantine and recover");
-    indexer.index_all().expect("recovery index_all");
-    drop(indexer);
-    assert_clean_state(temp.path(), &db, &committed);
+        let mut indexer = Indexer::new(IndexOptions {
+            root: temp.path().to_path_buf(),
+            index_path: Some(db.clone()),
+            force_reindex: true,
+            ..IndexOptions::default()
+        })
+        .unwrap_or_else(|err| panic!("{trigger}: force_reindex must quarantine and recover, got {err:?}"));
+        indexer
+            .index_all()
+            .unwrap_or_else(|err| panic!("{trigger}: recovery index_all failed, got {err:?}"));
+        drop(indexer);
+        assert_clean_state(temp.path(), &db, &committed);
+    }
 }
 
-/// Truncated index: a 32-byte stump fails the full open flow as `Database`,
-/// and delete + rebuild restores clean state.
-#[test]
-fn drill_truncated_index_search_fails_database_then_rebuild_recovers() {
-    let temp = TempDir::new().unwrap();
-    let db = temp.path().join("index.db");
-    let committed = populate(temp.path(), &db);
-    std::fs::OpenOptions::new()
-        .write(true)
-        .open(&db)
-        .unwrap()
-        .set_len(32)
-        .unwrap();
-
-    let err = err_of(searcher_at(temp.path(), &db));
-    assert_eq!(
-        discriminant(&err),
-        0,
-        "truncated index through Searcher::new must fail as Database, got {err:?}"
-    );
-
-    remove_db_files(&db);
-    let committed_rebuilt = populate(temp.path(), &db);
-    assert_eq!(
-        committed_rebuilt, committed,
-        "rebuilt store must reproduce the committed hash"
-    );
-    assert_clean_state(temp.path(), &db, &committed);
-}
-
-/// Revoked permissions: an unreadable index fails the full open flow as
-/// `Database` (sqlite open failure), and restoring perms restores the live
-/// store byte-identical — no rebuild, no half-writes.
+/// INTENT: unreadable index (unix 000) fails the full open flow as Database
+/// (sqlite open failure); restoring perms restores the live store
+/// byte-identical — no rebuild, no half-writes.
+/// KILLS: perm-error-misclassified, rebuild-on-transient.
+/// ABSORBS: none (kept solo; distinct fault + no-rebuild recovery).
 #[cfg(unix)]
 #[test]
 fn drill_unreadable_index_search_fails_database_then_perm_restore_recovers() {
@@ -199,9 +120,12 @@ fn drill_unreadable_index_search_fails_database_then_perm_restore_recovers() {
     assert_clean_state(temp.path(), &db, &committed);
 }
 
-/// Oversize query end-to-end: the full search flow rejects as `Other`
-/// without touching store state — the same handle then serves a valid
-/// search, status, and the unchanged committed hash.
+/// INTENT: oversize query end-to-end — the full search flow rejects as `Other`
+/// without touching store state; the same handle then serves a valid search,
+/// status, and the unchanged committed hash.
+/// KILLS: rejection-side-effect, handle-poison.
+/// ABSORBS: none (kept solo).
+/// OVERLAP: E3 no-poison (adds status+hash+repeat).
 #[test]
 fn drill_oversize_query_search_rejects_then_clean_query_succeeds() {
     let temp = TempDir::new().unwrap();
@@ -237,10 +161,13 @@ fn drill_oversize_query_search_rejects_then_clean_query_succeeds() {
     );
 }
 
-/// Dropped tables end-to-end: with `pattern_nodes` + `callers` gone (both
-/// outside the readonly core-table guard, so the open itself succeeds), the
-/// full pattern-search flow AND the status flow both fail as `Database`
-/// (never `Ok`-empty), and delete + rebuild restores clean state.
+/// INTENT: dropped tables end-to-end — with `pattern_nodes` + `callers` gone
+/// (both outside the readonly core-table guard, so the open itself succeeds),
+/// the full pattern-search flow AND the status flow both fail as `Database`
+/// (never `Ok`-empty); delete + rebuild restores clean state.
+/// KILLS: Ok-empty-over-poison, status-Ok-over-poison.
+/// ABSORBS: none (kept solo).
+/// OVERLAP: E3 dropped-table legs (end-to-end + rebuild).
 #[test]
 fn drill_dropped_tables_search_and_status_fail_database_then_rebuild_recovers() {
     let temp = TempDir::new().unwrap();
@@ -291,9 +218,11 @@ fn drill_dropped_tables_search_and_status_fail_database_then_rebuild_recovers() 
     assert_clean_state(temp.path(), &db, &committed);
 }
 
-/// Missing root end-to-end: with the populated root renamed away, the full
-/// write flow fails as `Io` (NotFound) and the full read flow fails closed
+/// INTENT: missing root end-to-end — with the populated root renamed away, the
+/// full write flow fails as `Io` (NotFound) and the full read flow fails closed
 /// as `Other`; restoring the directory restores both flows byte-identical.
+/// KILLS: flow-confusion(Io↔Other), restore-divergence.
+/// ABSORBS: none (kept solo).
 #[test]
 fn drill_missing_root_flows_fail_then_restore_recovers() {
     let temp = TempDir::new().unwrap();
@@ -337,11 +266,13 @@ fn drill_missing_root_flows_fail_then_restore_recovers() {
     assert_clean_state(&root, &db, &committed);
 }
 
-/// Chained double fault: a dropped `pattern_nodes` table PLUS an oversize
-/// query in one flow. Query ingress fires first (`Other` — the depth fault
-/// cannot mask input validation), the valid query then surfaces the schema
-/// fault (`Database`), and delete + rebuild restores clean state where the
-/// oversize query still rejects deterministically.
+/// INTENT: chained double fault — a dropped `pattern_nodes` table PLUS an
+/// oversize query in one flow. Query ingress fires first (`Other` — the depth
+/// fault cannot mask input validation), the valid query then surfaces the
+/// schema fault (`Database`); delete + rebuild restores clean state where the
+/// oversize query still rejects deterministically (only precedence pin).
+/// KILLS: ingress-after-store-touch, precedence-swap.
+/// ABSORBS: none (kept solo).
 #[test]
 fn drill_chained_double_fault_query_precedence_then_schema_fault_then_recovery() {
     let temp = TempDir::new().unwrap();
