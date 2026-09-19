@@ -150,14 +150,11 @@ path = "../../tests/cli/numerical_pass3.rs"
 name = "numerical_pass4"
 path = "../../tests/cli/numerical_pass4.rs"
 [[test]]
-name = "topology_pass1"
-path = "../../tests/cli/topology_pass1.rs"
+name = "topology_gates"
+path = "../../tests/cli/topology_gates.rs"
 [[test]]
-name = "topology_pass2"
-path = "../../tests/cli/topology_pass2.rs"
+name = "topology_identity"
+path = "../../tests/cli/topology_identity.rs"
 [[test]]
-name = "topology_pass3"
-path = "../../tests/cli/topology_pass3.rs"
-[[test]]
-name = "topology_pass4"
-path = "../../tests/cli/topology_pass4.rs"
+name = "topology_flows"
+path = "../../tests/cli/topology_flows.rs"

@@ -23,7 +23,7 @@ mod scrub;
 mod verdict;
 pub use cli::{
     asgrep_bin, assert_failure_envelope, assert_success, parse_stdout, run, run_env, run_json,
-    CliSession,
+    run_json_full, CliSession,
 };
 #[cfg(feature = "codemode")]
 pub use codemode::{

@@ -139,6 +139,16 @@ pub fn run_json(bin: &Path, args: &[&str]) -> Value {
     parse_stdout(&output)
 }
 
+/// [`run_env`] + [`parse_stdout`] keeping the exit code and stderr alongside
+/// the parsed body: the machine-envelope idiom for suites that pin rejection
+/// codes, stderr silence, and JSON shapes in one assertion block.
+pub fn run_json_full(bin: &Path, args: &[&str], envs: &[(&str, &str)]) -> (i32, Value, String) {
+    let output = run_env(bin, args, envs);
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    let value = parse_stdout(&output);
+    (output.status.code().expect("exit code"), value, stderr)
+}
+
 /// Assert the strictest machine success envelope: exit 0, `schema_version`
 /// `1.0.0`, `tool` `asgrep`, `command` echo, `ok: true`, `exit_code: 0`.
 /// Returns the parsed body.
