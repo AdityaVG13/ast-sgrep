@@ -90,17 +90,11 @@ path = "../../tests/cli/cpu_limit_orphan_reap.rs"
 name = "outline_cmd"
 path = "../../tests/cli/outline_cmd.rs"
 [[test]]
-name = "oracle_foundry_pass1"
-path = "../../tests/cli/oracle_foundry_pass1.rs"
+name = "oracle_foundry_units"
+path = "../../tests/cli/oracle_foundry_units.rs"
 [[test]]
-name = "oracle_foundry_pass2"
-path = "../../tests/cli/oracle_foundry_pass2.rs"
-[[test]]
-name = "oracle_foundry_pass3"
-path = "../../tests/cli/oracle_foundry_pass3.rs"
-[[test]]
-name = "oracle_foundry_pass4"
-path = "../../tests/cli/oracle_foundry_pass4.rs"
+name = "oracle_foundry_e2e"
+path = "../../tests/cli/oracle_foundry_e2e.rs"
 [[test]]
 name = "recovery_aux"
 path = "../../tests/cli/recovery_aux.rs"

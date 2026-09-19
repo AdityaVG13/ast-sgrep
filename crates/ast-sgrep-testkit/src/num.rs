@@ -16,3 +16,18 @@
 pub fn approx_eq(a: f32, b: f32) -> bool {
     (a - b).abs() < 1e-6
 }
+
+/// INTENT: independent f64-fold oracle for excerpt ranking — a deliberately
+/// different accumulation from the pipeline's `dot_similarity`, with the hand
+/// rule (score desc, ties by ascending index) applied explicitly over
+/// caller-supplied `(index, score)` pairs. Pure; `NaN` scores compare equal
+/// and fall back to index order.
+pub fn fold_rank_scored(order: &[(usize, f32)]) -> Vec<(usize, f32)> {
+    let mut ranked = order.to_vec();
+    ranked.sort_by(|a, b| {
+        b.1.partial_cmp(&a.1)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(a.0.cmp(&b.0))
+    });
+    ranked
+}

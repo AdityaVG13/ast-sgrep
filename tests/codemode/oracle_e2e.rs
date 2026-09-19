@@ -1,133 +1,41 @@
-//! Pass 4 (oracle-foundry, Mission 4): L4 end-to-end oracles for codemode.
+//! Oracle E2E for codemode (consolidated suite): full-flow compositions
+//! through public APIs.
 //!
-//! Pass 1/2 own single-surface contracts (formats, budgets, detail levels,
-//! parse/validate, batch ceilings, catalog search, miss reasons, scrubbers,
-//! pinning, aliases, budget boundary, dup/dangling, single_result). Pass 3
-//! owns cross-call relations (rerun Values, order-independence, serial/parallel
-//! agreement, monotonicity, idempotence, ref matrix, return default, shaping
-//! exclusivity, taxonomy split, unicode, precedence, transform agreement).
+//! Carries `oracle_foundry_pass4.rs` (L4) forward test-for-test: each wiring
+//! proof stays whole because the composition — not any single leg — is the
+//! intent. Single-surface contracts live in `oracle_core.rs` (plan, batch,
+//! budget) and `oracle_surface.rs` (session, taxonomy, names, helpers).
+//! Catalog: `tests/catalog/oracle-codemode.md` (pass4 rows).
 //!
-//! This pass owns only NEW full-flow compositions through public APIs:
-//! indexed session -> plan -> execute -> batch -> budget shaping -> golden
-//! text; rerun determinism at the golden-text level; mid-plan budget
-//! exhaustion with batch isolation; missing/escaping-root fail-closed;
-//! oversized-response fail-closed; bump-before-dispatch taxonomy. Pure
-//! catalog/transform legs stay index-free; indexed legs build their own
-//! fixed-content temp repos (no sample-fixture dependence).
-//!
-//! All expectations are hand-computed. Failures assert enum discriminants via
-//! `matches!`, never Display text. Golden legs assert byte-exact canonical
-//! text against inline literals.
+//! Discipline (inherited): hand-computed expectations; failures assert enum
+//! discriminants via `matches!`, never Display text; golden legs assert
+//! byte-exact canonical text against inline literals. Pure catalog/transform
+//! legs stay index-free; indexed legs build fixed-content temp repos (no
+//! sample-fixture dependence). Session/batch builders come from testkit
+//! (`session_at`, `config_at`, `batch_request`, `catalog_call` 2-arg
+//! canonical form); the fixed two-file repo comes from testkit
+//! (`indexed_codemode_repo`), as do the shared oracle helpers
+//! (`sample_search_hit`, `indexed_repo_files`, `golden_text_pretty`).
 
 use ast_sgrep_codemode::{
-    parse_plan, run_batch, run_plan, BatchCall, BatchRequest, CallError, CodeModeSession,
-    ParallelMode, SessionConfig, MAX_CALL_RESPONSE_BYTES,
+    parse_plan, run_batch, run_plan, BatchCall, CallError, CodeModeSession, ParallelMode,
+    MAX_CALL_RESPONSE_BYTES,
 };
-use ast_sgrep_core::search::HitSignal;
-use ast_sgrep_core::{HitKind, SearchHit};
 use ast_sgrep_plugins::budget::{plan_cost, render, select};
-use ast_sgrep_plugins::{DetailLevel, OutputBudget, OutputFormat};
-use ast_sgrep_testkit::canonicalize_text;
-use serde_json::{json, Value};
+use ast_sgrep_plugins::{DetailLevel, OutputBudget};
+use ast_sgrep_testkit::{
+    batch_request, catalog_call, config_at, golden_text_pretty, indexed_codemode_repo,
+    indexed_repo_files, sample_search_hit, session_at,
+};
+use serde_json::json;
 
-fn session_at(root: &std::path::Path) -> CodeModeSession {
-    CodeModeSession::new(SessionConfig {
-        root: root.to_path_buf(),
-        index_path: None,
-        limit: 5,
-        use_embed: false,
-        default_format: OutputFormat::AgentCapsule,
-    })
-}
-
-fn config_at(root: &std::path::Path) -> SessionConfig {
-    SessionConfig {
-        root: root.to_path_buf(),
-        index_path: None,
-        limit: 5,
-        use_embed: false,
-        default_format: OutputFormat::AgentCapsule,
-    }
-}
-
-fn batch_request(calls: Vec<BatchCall>) -> BatchRequest {
-    BatchRequest {
-        root: None,
-        index_path: None,
-        use_embed: None,
-        limit: None,
-        parallel: None,
-        parallel_mode: None,
-        calls,
-    }
-}
-
-fn catalog_call(id: &str, query: &str) -> BatchCall {
-    BatchCall {
-        id: id.to_string(),
-        tool: "catalog_search".to_string(),
-        args: json!({"query": query}),
-    }
-}
-
-/// Fixed-content temp repo indexed through the public session API. Returns the
-/// tempdir (kept alive by the caller) plus a config for fresh sessions, so
-/// plan `call_count` assertions start from zero.
-fn indexed_repo(files: &[(&str, &str)]) -> (tempfile::TempDir, SessionConfig) {
-    let temp = tempfile::tempdir().expect("tempdir");
-    for (name, body) in files {
-        let path = temp.path().join(name);
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).expect("mkdir");
-        }
-        std::fs::write(&path, body).expect("write");
-    }
-    let config = SessionConfig {
-        root: temp.path().to_path_buf(),
-        index_path: Some(temp.path().join("index.db")),
-        limit: 5,
-        use_embed: false,
-        default_format: OutputFormat::AgentCapsule,
-    };
-    let mut indexer = CodeModeSession::new(config.clone());
-    indexer
-        .call("index_repo", json!({"force": false}))
-        .expect("index");
-    (temp, config)
-}
-
-fn sample_hit(excerpt: &str) -> SearchHit {
-    SearchHit {
-        kind: HitKind::Def,
-        file: "lib.rs".to_string(),
-        line_start: 1,
-        line_end: 3,
-        symbol: Some("alpha".to_string()),
-        caller: None,
-        callee: None,
-        language: Some("rust".to_string()),
-        score: 3.0,
-        signal: HitSignal::Exact,
-        contributors: vec![HitKind::Def],
-        margin: 0.0,
-        confidence: 0.0,
-        resolution: None,
-        embed_fields: None,
-        critic: Vec::new(),
-        excerpt: excerpt.to_string(),
-        byte_span: None,
-    }
-}
-
+/// INTENT=index→search→filter→select→golden-text flow with a hand-computed
+/// hit_count of 1 (unique token lives in exactly one file).
+/// KILLS=index-shape-golden-break.
+/// ABSORBS=indexed_plan_execute_shape_golden_flow.
 #[test]
 fn indexed_plan_execute_shape_golden_flow() {
-    // Full L4 flow: index -> search -> filter -> select -> golden text. The
-    // unique token appears in exactly one file, so the shaped hit_count is
-    // hand-computable end to end.
-    let (_temp, config) = indexed_repo(&[
-        ("src/a.rs", "pub fn needle_unique_xyz() {}\n"),
-        ("src/b.rs", "pub fn other_fn() {}\n"),
-    ]);
+    let (_temp, config) = indexed_codemode_repo("needle_unique_xyz");
     let plan = parse_plan(&json!({"steps": [
         {"id": "seed", "tool": "search",
          "args": {"query": "needle_unique_xyz", "format": "capsule", "limit": 5}},
@@ -142,15 +50,17 @@ fn indexed_plan_execute_shape_golden_flow() {
     assert!(result.ok);
     assert_eq!(result.call_count, 3);
     assert_eq!(result.return_value, json!({"hit_count": 1}));
-    let golden = canonicalize_text(&format!("{}\n", serde_json::to_string_pretty(&result.return_value).expect("pretty")));
-    assert_eq!(golden, "{\n  \"hit_count\": 1\n}\n");
+    assert_eq!(golden_text_pretty(&result.return_value), "{\n  \"hit_count\": 1\n}\n");
 }
 
+/// INTENT=batch catalog results feed a plan select: "search" matches 10
+/// tools (8 kind-hits + filter_hits + catalog_search), ordered search,find,
+/// and the plan projects the first 2 names.
+/// KILLS=cross-surface-wiring, catalog-drift (count 10 fails loudly on
+/// catalog change by design).
+/// ABSORBS=batch_output_feeds_plan_end_to_end.
 #[test]
 fn batch_output_feeds_plan_end_to_end() {
-    // Cross-surface flow: batch catalog results become plan select input.
-    // Hand-computed: "search" matches the 8 Search-kind tools (kind is in the
-    // haystack) plus filter_hits and catalog_search = 10, ordered search,find.
     let temp = tempfile::tempdir().expect("tempdir");
     let batch = run_batch(
         config_at(temp.path()),
@@ -175,11 +85,15 @@ fn batch_output_feeds_plan_end_to_end() {
     assert_eq!(result.return_value, json!([{"name": "search"}, {"name": "find"}]));
 }
 
+/// INTENT=same plan on two fresh sessions plus the direct-call path yield
+/// byte-identical canonical golden text; the batch leg agrees on the step
+/// payload. Text-level pin; the core suite pins the complementary
+/// Value-level rerun equality.
+/// KILLS=golden-text-nondeterminism.
+/// ABSORBS=rerun_determinism_freezes_golden_text.
 #[test]
 fn rerun_determinism_freezes_golden_text() {
-    // Same plan on two fresh sessions plus the direct-call path yield
-    // byte-identical canonical golden text; the batch leg agrees on the step
-    // payload. "chain" matches only the chain tool (name hit, no kind hit).
+    // "chain" matches only the chain tool (name hit, no kind hit).
     let raw = json!({"steps": [
         {"id": "a", "tool": "catalog_search", "args": {"query": "chain"}},
         {"id": "b", "tool": "select",
@@ -205,14 +119,11 @@ fn rerun_determinism_freezes_golden_text() {
         .expect("direct select");
     assert_eq!(r1.return_value, r2.return_value);
     assert_eq!(r1.return_value, shaped);
-    let golden = |v: &Value| {
-        canonicalize_text(&format!("{}\n", serde_json::to_string_pretty(v).expect("pretty")))
-    };
     // serde_json Map without preserve_order prints keys alphabetically.
     let hand = "{\n  \"capsule_default\": false,\n  \"kind\": \"search\",\n  \"name\": \"chain\",\n  \"read_only\": true\n}\n";
-    assert_eq!(golden(&r1.return_value), hand);
-    assert_eq!(golden(&r2.return_value), hand);
-    assert_eq!(golden(&shaped), hand);
+    assert_eq!(golden_text_pretty(&r1.return_value), hand);
+    assert_eq!(golden_text_pretty(&r2.return_value), hand);
+    assert_eq!(golden_text_pretty(&shaped), hand);
     let batch = run_batch(config_at(temp.path()), &batch_request(vec![catalog_call("c", "chain")]))
         .expect("batch runs");
     assert!(batch.all_ok);
@@ -222,11 +133,14 @@ fn rerun_determinism_freezes_golden_text() {
     );
 }
 
+/// INTENT=a 3-step plan with max_calls=2 dies at the $ref-consuming last step
+/// (ref resolution burns no budget: call_count==2); the spent session stays
+/// sticky while batch (own session) is unaffected; a max-3 session runs all
+/// 3 steps.
+/// KILLS=ref-burns-budget, isolation-leak.
+/// ABSORBS=budget_exhaustion_midplan_with_batch_isolation.
 #[test]
 fn budget_exhaustion_midplan_with_batch_isolation() {
-    // A 3-step plan with max_calls=2 dies at the $ref-consuming last step
-    // (ref resolution itself burns no budget: call_count==2, not 3); the
-    // spent session stays sticky while batch (own session) is unaffected.
     let raw = json!({"steps": [
         {"id": "a", "tool": "catalog_search", "args": {"query": "search"}},
         {"id": "b", "tool": "catalog_search", "args": {"query": "chain"}},
@@ -263,11 +177,13 @@ fn budget_exhaustion_midplan_with_batch_isolation() {
     assert_eq!(batch.call_count, 3);
 }
 
+/// INTENT=nonexistent root fails closed: pure catalog calls stay Ok,
+/// root-bound tools fail with Other, plans fail at the bound step, and batch
+/// keeps the failure per-call inside an Ok envelope.
+/// KILLS=fail-open-on-missing-root.
+/// ABSORBS=missing_root_fail_closed_pure_vs_bound.
 #[test]
 fn missing_root_fail_closed_pure_vs_bound() {
-    // Nonexistent root: pure catalog calls stay Ok; root-bound tools fail
-    // closed with Other; plans fail at the bound step; batch keeps the
-    // failure per-call inside an Ok envelope.
     let temp = tempfile::tempdir().expect("tempdir");
     let missing = temp.path().join("no-such-dir");
     let mut session = session_at(&missing);
@@ -307,10 +223,12 @@ fn missing_root_fail_closed_pure_vs_bound() {
     assert!(batch.results[0].error.is_some());
 }
 
+/// INTENT=root jail holds across surfaces: a contained subroot is Ok while a
+/// foreign root is refused with Other on direct, plan, and batch paths alike.
+/// KILLS=root-jail-escape.
+/// ABSORBS=root_escape_fail_closed_across_surfaces.
 #[test]
 fn root_escape_fail_closed_across_surfaces() {
-    // Contained subroot Ok; foreign root refused with Other on direct, plan,
-    // and batch paths alike. Discriminants only.
     let root = tempfile::tempdir().expect("root");
     std::fs::create_dir(root.path().join("child")).expect("child");
     let outside = tempfile::tempdir().expect("outside");
@@ -344,11 +262,13 @@ fn root_escape_fail_closed_across_surfaces() {
     assert!(batch.results[0].error.is_some());
 }
 
+/// INTENT=a select value one byte past the per-call cap fails as Other on
+/// direct and plan paths, and as a per-call failure (value dropped, error
+/// set) inside an otherwise-Ok batch envelope; small values stay Ok.
+/// KILLS=cap-bypass.
+/// ABSORBS=oversized_response_fail_closed_across_surfaces.
 #[test]
 fn oversized_response_fail_closed_across_surfaces() {
-    // A select value one byte past the per-call cap fails as Other on the
-    // direct and plan paths, and as a per-call failure (value dropped, error
-    // set) inside an otherwise-Ok batch envelope.
     assert_eq!(MAX_CALL_RESPONSE_BYTES, 1_048_576);
     let payload = "x".repeat(MAX_CALL_RESPONSE_BYTES + 1);
     let args = json!({"value": {"payload": payload}, "fields": ["payload"]});
@@ -385,11 +305,13 @@ fn oversized_response_fail_closed_across_surfaces() {
     );
 }
 
+/// INTENT=bump-before-dispatch: a plan dying on an unknown second step
+/// consumed 2 calls, not 1; bound-tool arg failures are Other while
+/// pure-tool arg failures are InvalidArgs; batch mirrors the split per-call.
+/// KILLS=bump-after-dispatch, taxonomy-collapse.
+/// ABSORBS=error_taxonomy_bump_order_and_bound_split.
 #[test]
 fn error_taxonomy_bump_order_and_bound_split() {
-    // Bump-before-dispatch: a plan dying on an unknown second step consumed
-    // 2 calls, not 1. Bound-tool arg failures are Other; pure-tool arg
-    // failures are InvalidArgs; batch mirrors the split per-call.
     let temp = tempfile::tempdir().expect("tempdir");
     let mut session = session_at(temp.path());
     let err = session
@@ -432,14 +354,16 @@ fn error_taxonomy_bump_order_and_bound_split() {
     assert!(batch.results[1].error.is_some());
 }
 
+/// INTENT=live session read text is the exact excerpt budget rendering
+/// shapes: 3 lines satisfy the Block verbatim rule, the default budget
+/// upgrades the single hit to Block, Signature is hand-computed, and cost
+/// equals body length.
+/// KILLS=read-render-skew.
+/// ABSORBS=session_read_agrees_with_budget_rendering.
 #[test]
 fn session_read_agrees_with_budget_rendering() {
-    // Differential end to end: live session read text is the exact excerpt
-    // that budget rendering shapes. 3 lines <= 12-line Block verbatim rule;
-    // default budget upgrades the single hit to Block; Signature is
-    // hand-computed (first line + first non-trivial body line).
     let text = "pub fn alpha() {\n    1\n}\n";
-    let (_temp, config) = indexed_repo(&[("lib.rs", text)]);
+    let (_temp, config) = indexed_repo_files(&[("lib.rs", text)]);
     let mut session = CodeModeSession::new(config);
     let window = session
         .call("read", json!({"path": "lib.rs", "start": 1, "end": 3}))
@@ -447,7 +371,7 @@ fn session_read_agrees_with_budget_rendering() {
     assert_eq!(window["count"], json!(1));
     let body = window["windows"][0]["text"].as_str().expect("text").to_string();
     assert_eq!(body, "pub fn alpha() {\n    1\n}");
-    let hit = sample_hit(&body);
+    let hit = sample_search_hit(&body);
     assert_eq!(render(&hit, DetailLevel::Full).body, body);
     assert_eq!(render(&hit, DetailLevel::Metadata).body, "");
     assert_eq!(
@@ -461,10 +385,13 @@ fn session_read_agrees_with_budget_rendering() {
     assert_eq!(plan_cost(&chosen), body.len());
 }
 
+/// INTENT=documented degenerate contracts: missing read/edit targets fail
+/// Other, empty step ids fail InvalidArgs at run, impossible thresholds yield
+/// 0 hits (Ok), and a single-call forced-parallel batch pins serial.
+/// KILLS=fail-open-on-degenerate.
+/// ABSORBS=degenerate_inputs_fail_closed_or_documented.
 #[test]
 fn degenerate_inputs_fail_closed_or_documented() {
-    // Empty root, missing files, empty step id, impossible threshold, and a
-    // single-call forced-parallel batch (len<=1 pins serial).
     let temp = tempfile::tempdir().expect("tempdir");
     let mut session = session_at(temp.path());
     let err = session

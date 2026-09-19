@@ -43,17 +43,14 @@ path = "../../tests/codemode/catalog.rs"
 name = "session_plan"
 path = "../../tests/codemode/session_plan.rs"
 [[test]]
-name = "oracle_foundry_pass1"
-path = "../../tests/codemode/oracle_foundry_pass1.rs"
+name = "oracle_core"
+path = "../../tests/codemode/oracle_core.rs"
 [[test]]
-name = "oracle_foundry_pass2"
-path = "../../tests/codemode/oracle_foundry_pass2.rs"
+name = "oracle_surface"
+path = "../../tests/codemode/oracle_surface.rs"
 [[test]]
-name = "oracle_foundry_pass3"
-path = "../../tests/codemode/oracle_foundry_pass3.rs"
-[[test]]
-name = "oracle_foundry_pass4"
-path = "../../tests/codemode/oracle_foundry_pass4.rs"
+name = "oracle_e2e"
+path = "../../tests/codemode/oracle_e2e.rs"
 [[test]]
 name = "recovery_contracts"
 path = "../../tests/codemode/recovery_contracts.rs"

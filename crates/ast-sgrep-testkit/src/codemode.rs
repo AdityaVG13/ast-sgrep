@@ -17,6 +17,8 @@ use ast_sgrep_codemode::{
     run_serve, BatchCall, BatchRequest, CallError, CodeModeSession, ParallelMode, ServeRequest,
     SessionConfig,
 };
+use ast_sgrep_core::search::HitSignal;
+use ast_sgrep_core::{HitKind, SearchHit};
 use ast_sgrep_plugins::OutputFormat;
 use serde_json::{json, Value};
 use std::io::Cursor;
@@ -155,4 +157,40 @@ pub fn serve_request_line(request: &ServeRequest) -> String {
         "{}\n",
         serde_json::to_string(request).expect("request serializes")
     )
+}
+
+/// INTENT: canonical budget-rendering hit — a Def hit over `lib.rs:1-3` with a
+/// caller-chosen multi-line excerpt. [`crate::mk_hit`] fixes a synthetic
+/// excerpt, but budget rendering is excerpt-only, so oracles need this ONE
+/// canonical shape. Pure constructor.
+pub fn sample_search_hit(excerpt: &str) -> SearchHit {
+    SearchHit {
+        kind: HitKind::Def,
+        file: "lib.rs".to_string(),
+        line_start: 1,
+        line_end: 3,
+        symbol: Some("alpha".to_string()),
+        caller: None,
+        callee: None,
+        language: Some("rust".to_string()),
+        score: 3.0,
+        signal: HitSignal::Exact,
+        contributors: vec![HitKind::Def],
+        margin: 0.0,
+        confidence: 0.0,
+        resolution: None,
+        embed_fields: None,
+        critic: Vec::new(),
+        excerpt: excerpt.to_string(),
+        byte_span: None,
+    }
+}
+
+/// INTENT: the 2-step catalog→select plan — the oracle determinism /
+/// return-default / budget fixture. Pure constructor.
+pub fn search_select_plan() -> Value {
+    json!({"steps": [
+        {"id": "a", "tool": "catalog_search", "args": {"query": "search"}},
+        {"id": "b", "tool": "select", "args": {"value": "$a", "fields": ["tools"]}},
+    ], "return": "$b"})
 }

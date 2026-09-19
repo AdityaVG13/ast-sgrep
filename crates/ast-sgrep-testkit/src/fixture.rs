@@ -39,6 +39,17 @@ pub fn set_mtime_secs(path: &Path, secs: u64) {
     assert_eq!(back, time, "mtime read-back for {}", path.display());
 }
 
+/// INTENT: byte-exact temp file for capped-read, SCIP-degrade, and mmap
+/// facets: the caller keeps the [`tempfile::NamedTempFile`] alive and reads
+/// via `.path()` / `.as_file()`. Panics on IO failure.
+pub fn write_temp(bytes: &[u8]) -> tempfile::NamedTempFile {
+    use std::io::Write;
+    let mut file = tempfile::NamedTempFile::new().expect("temp file");
+    file.write_all(bytes).expect("write");
+    file.flush().expect("flush");
+    file
+}
+
 /// Temp tree with `files` (`(relative path, body)` pairs; parents created).
 /// The caller keeps the [`tempfile::TempDir`] alive. Panics on IO failure.
 pub fn file_tree(files: &[(&str, &str)]) -> tempfile::TempDir {

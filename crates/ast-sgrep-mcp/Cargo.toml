@@ -36,14 +36,14 @@ tempfile.workspace = true
 name = "protocol"
 path = "../../tests/mcp/protocol.rs"
 [[test]]
-name = "oracle_foundry_pass2"
-path = "../../tests/mcp/oracle_foundry_pass2.rs"
+name = "oracle_validation"
+path = "../../tests/mcp/oracle_validation.rs"
 [[test]]
-name = "oracle_foundry_pass3"
-path = "../../tests/mcp/oracle_foundry_pass3.rs"
+name = "oracle_surface"
+path = "../../tests/mcp/oracle_surface.rs"
 [[test]]
-name = "oracle_foundry_pass4"
-path = "../../tests/mcp/oracle_foundry_pass4.rs"
+name = "oracle_flows"
+path = "../../tests/mcp/oracle_flows.rs"
 [[test]]
 name = "recovery_contracts"
 path = "../../tests/mcp/recovery_contracts.rs"

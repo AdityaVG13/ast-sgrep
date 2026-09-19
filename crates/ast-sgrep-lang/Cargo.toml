@@ -50,17 +50,20 @@ path = "../../tests/lang/pattern.rs"
 name = "candidate_kind_table"
 path = "../../tests/lang/candidate_kind_table.rs"
 [[test]]
-name = "oracle_foundry_pass1"
-path = "../../tests/lang/oracle_foundry_pass1.rs"
+name = "oracle_similarity"
+path = "../../tests/lang/oracle_similarity.rs"
 [[test]]
-name = "oracle_foundry_pass2"
-path = "../../tests/lang/oracle_foundry_pass2.rs"
+name = "oracle_rank"
+path = "../../tests/lang/oracle_rank.rs"
 [[test]]
-name = "oracle_foundry_pass3"
-path = "../../tests/lang/oracle_foundry_pass3.rs"
+name = "oracle_tokenize"
+path = "../../tests/lang/oracle_tokenize.rs"
 [[test]]
-name = "oracle_foundry_pass4"
-path = "../../tests/lang/oracle_foundry_pass4.rs"
+name = "oracle_pattern"
+path = "../../tests/lang/oracle_pattern.rs"
+[[test]]
+name = "oracle_pipeline"
+path = "../../tests/lang/oracle_pipeline.rs"
 [[test]]
 name = "error_api_pass1"
 path = "../../tests/lang/error_api_pass1.rs"

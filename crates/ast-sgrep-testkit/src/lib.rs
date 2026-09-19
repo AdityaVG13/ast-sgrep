@@ -6,11 +6,13 @@
 //! `ast-sgrep-lsp`. Default Bill is core + lang only.
 
 mod cli;
+mod cli_oracle;
 mod cli_recovery;
 #[cfg(feature = "codemode")]
 mod codemode;
 #[cfg(feature = "codemode")]
 mod codemode_recovery;
+mod core_oracle;
 mod core_recovery;
 mod fault;
 mod fixture;
@@ -29,6 +31,10 @@ pub use cli::{
     asgrep_bin, assert_failure_envelope, assert_success, parse_stdout, run, run_env, run_json,
     run_json_full, CliSession,
 };
+pub use cli_oracle::{
+    oracle_build_json, oracle_keyword_corpus, oracle_outline_corpus, oracle_run_json, oracle_run_raw,
+    oracle_search_corpus, run_drain_timeout, sorted_surface_keys, write_root_bytes, OracleCorpus,
+};
 pub use cli_recovery::{
     assert_doctor_unhealthy, assert_serve_parity, capture_baseline, run_in, run_index, run_outline_snapshot,
     run_reindex, run_search, run_status, run_timeout, search_answer_keys, seed_big_project,
@@ -40,14 +46,20 @@ pub use cli_recovery::kill9;
 #[cfg(feature = "codemode")]
 pub use codemode::{
     assert_json_byte_identical, batch_call, batch_request, batch_request_with_mode, catalog_call,
-    config_at, config_at_indexed, serve_lines, serve_request_line, session_at, session_at_indexed,
-    BUDGET_EXCEEDED, CALL_NOW_ONLY, DEFS_NEEDS_SYMBOL, MAX_QUERY_CHARS, SESSION_BUSY,
+    config_at, config_at_indexed, sample_search_hit, search_select_plan, serve_lines,
+    serve_request_line, session_at, session_at_indexed, BUDGET_EXCEEDED, CALL_NOW_ONLY,
+    DEFS_NEEDS_SYMBOL, MAX_QUERY_CHARS, SESSION_BUSY,
 };
 #[cfg(feature = "codemode")]
 pub use codemode_recovery::{
-    db_user_version, indexed_codemode_repo, load_batch_file, load_plan_file,
+    db_user_version, indexed_codemode_repo, indexed_repo_files, load_batch_file, load_plan_file,
     remove_db_with_sidecars, serve_transcript_indexed, set_db_user_version, status_counts,
     twin_repos,
+};
+pub use core_oracle::{
+    build_core_index, core_index_options, core_search_options, core_searcher, finish_options,
+    response_hit_keys_with_scores, sorted_hit_files, unit_channel_weights, write_core_fixture,
+    CorePipelineFixture,
 };
 pub use core_recovery::{
     assert_torn, build_and_quiet, corpus_session, home_names, quarantine_path,
@@ -55,12 +67,13 @@ pub use core_recovery::{
     RECOVERY_CORPUS,
 };
 pub use fault::{err_of, flip_bytes, remove_sqlite_sidecars, truncate_file, write_garbage};
-pub use fixture::{file_tree, sample_file, sample_root, set_mtime_secs, write_file};
+pub use fixture::{file_tree, sample_file, sample_root, set_mtime_secs, write_file, write_temp};
 pub use golden::{
     assert_golden, assert_golden_at, assert_golden_json, assert_golden_json_at,
-    canonicalize_chain_response, canonicalize_extraction, canonicalize_text, updating_goldens,
+    canonicalize_chain_response, canonicalize_extraction, canonicalize_text, golden_text_pretty,
+    updating_goldens,
 };
-pub use hit::{hit_keys, mk_hit, HitKey};
+pub use hit::{hit_key_bits, hit_keys, mk_hit, sorted_contributors, HitKey};
 pub use index::{
     core_search_hit_keys, index_sample, json_hit_keys, reopen_indexer, response_hit_keys,
     searcher_from, HitKey as SurfaceHitKey, IndexedFixture,
@@ -71,15 +84,15 @@ pub use lang::{
     ExpectedPattern, ExpectedSymbol, LanguageConformanceCase,
 };
 #[cfg(feature = "lsp")]
-pub use lsp::{lsp_search_hit_keys, sample_backend};
+pub use lsp::{edit_full_replace, edit_ranged, edit_ranged_len, lsp_search_hit_keys, sample_backend};
 pub use mcp::{
     assert_ping_ok, assert_tool_error_shape, assert_tool_success, assert_tools_list_ok,
-    big_tree, cancelled_notif, collect_responses, corrupt_index_db, expected_tool_names,
-    index_tree, indexed_tree, init_payload, initialized_notif, is_error, mcp_bin, ping,
-    response_by_id, rpc_pipeline, rpc_session, rpc_session_env, small_tree,
-    spawn_raw_no_handshake, tool_body, tool_call, tool_text, tools_list, LiveSession,
+    big_tree, cancelled_notif, collect_responses, corrupt_index_db, distinct_hit_paths,
+    expected_tool_names, index_tree, indexed_tree, init_payload, initialized_notif, is_error,
+    mcp_bin, multi_hit_tree, ping, response_by_id, rpc_pipeline, rpc_session, rpc_session_env,
+    small_tree, spawn_raw_no_handshake, tool_body, tool_call, tool_text, tools_list, LiveSession,
     TESTKIT_CLIENT_NAME,
 };
-pub use num::approx_eq;
+pub use num::{approx_eq, fold_rank_scored};
 pub use scrub::Scrubber;
 pub use verdict::TestVerdict;

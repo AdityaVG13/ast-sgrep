@@ -545,6 +545,45 @@ pub fn big_tree(files: usize) -> TempDir {
     temp
 }
 
+/// INTENT: distinct `<path_id>` prefixes across compact hit ids — the only
+/// cheap "distinct files" discriminant on the wire. Pure projection; panics
+/// when a hit id is not a `path:span` string.
+pub fn distinct_hit_paths(hits: &[Value]) -> std::collections::HashSet<String> {
+    hits.iter()
+        .map(|hit| {
+            hit[0]
+                .as_str()
+                .expect("hit id is a string")
+                .rsplit_once(':')
+                .expect("compact id carries a path id")
+                .0
+                .to_owned()
+        })
+        .collect()
+}
+
+/// INTENT: generated-name indexed fixture — six single-symbol files plus the
+/// target file, so limit 2 vs limit 8 differ. [`indexed_tree`] only takes
+/// literal `&[(&str, &str)]`, so generated names need owned strings. Bodies
+/// carry the shared `shared_token` stem the surface suites query. The caller
+/// keeps the [`TempDir`] alive. Panics on IO or index failure.
+pub fn multi_hit_tree() -> TempDir {
+    let mut owned: Vec<(String, String)> = (1..=6)
+        .map(|index| {
+            (
+                format!("src/m{index}.rs"),
+                format!("fn shared_token_{index}() {{}}\n"),
+            )
+        })
+        .collect();
+    owned.push(("src/lib.rs".to_owned(), "fn target_symbol() {}\n".to_owned()));
+    let refs: Vec<(&str, &str)> = owned
+        .iter()
+        .map(|(path, body)| (path.as_str(), body.as_str()))
+        .collect();
+    indexed_tree(&refs)
+}
+
 /// Overwrite the durable `<root>/.asgrep/index.db` with deterministic
 /// non-SQLite bytes. Panics when no index db exists (the fault requires a
 /// planted index). Returns the bytes written for post-drill comparison.

@@ -200,17 +200,20 @@ path = "../../tests/core/trigram_shortcut.rs"
 name = "store_inert_memory"
 path = "../../tests/core/store_inert_memory.rs"
 [[test]]
-name = "oracle_foundry_pass1"
-path = "../../tests/core/oracle_foundry_pass1.rs"
+name = "oracle_limits"
+path = "../../tests/core/oracle_limits.rs"
 [[test]]
-name = "oracle_foundry_pass2"
-path = "../../tests/core/oracle_foundry_pass2.rs"
+name = "oracle_query"
+path = "../../tests/core/oracle_query.rs"
 [[test]]
-name = "oracle_foundry_pass3"
-path = "../../tests/core/oracle_foundry_pass3.rs"
+name = "oracle_scoring"
+path = "../../tests/core/oracle_scoring.rs"
 [[test]]
-name = "oracle_foundry_pass4"
-path = "../../tests/core/oracle_foundry_pass4.rs"
+name = "oracle_stages"
+path = "../../tests/core/oracle_stages.rs"
+[[test]]
+name = "oracle_pipeline"
+path = "../../tests/core/oracle_pipeline.rs"
 [[test]]
 name = "error_api_pass1"
 path = "../../tests/core/error_api_pass1.rs"

@@ -17,6 +17,27 @@ pub fn mk_hit(kind: HitKind, file: &str, line: u32, score: f64) -> SearchHit {
         byte_span: None,
     })
 }
+/// INTENT: order-sensitive hit identity (file, span, exact score and
+/// confidence bits) for fixpoint/determinism asserts. Pure projection.
+pub fn hit_key_bits(hit: &SearchHit) -> (String, u32, u32, u64, u64) {
+    (
+        hit.file.clone(),
+        hit.line_start,
+        hit.line_end,
+        hit.score.to_bits(),
+        hit.confidence.to_bits(),
+    )
+}
+
+/// INTENT: order-free contributor comparison for merge asserts: contributor
+/// kinds as sorted wire names. Pure projection.
+pub fn sorted_contributors(hit: &SearchHit) -> Vec<&'static str> {
+    let mut kinds: Vec<&'static str> =
+        hit.contributors.iter().map(|kind| kind.as_str()).collect();
+    kinds.sort_unstable();
+    kinds
+}
+
 /// Canonical cross-format hit identity: (file, line_start, kind, symbol, callee, caller).
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct HitKey {

@@ -35,6 +35,12 @@ pub fn updating_goldens() -> bool {
     }
 }
 
+/// INTENT: pretty-print + canonicalize golden idiom — the composed step
+/// every golden leg repeats. Pure.
+pub fn golden_text_pretty(value: &Value) -> String {
+    canonicalize_text(&format!("{}\n", pretty_json(value)))
+}
+
 /// UTF-8 text with `\r\n` → `\n` and trailing per-line whitespace stripped.
 pub fn canonicalize_text(input: &str) -> String {
     let unified = input.replace("\r\n", "\n");

@@ -1,7 +1,53 @@
 use crate::index::{index_sample, json_hit_keys, HitKey, IndexedFixture};
 use ast_sgrep_core::IndexOptions;
+use ast_sgrep_lsp::types::{Position, Range, TextDocumentContentChangeEvent};
 use ast_sgrep_lsp::{settings::AsgrepSettings, LspBackend};
 use std::path::Path;
+
+/// INTENT: full-document replace edit event (no range): the literal struct
+/// would bury the text intent in noise. Pure constructor.
+pub fn edit_full_replace(text: &str) -> TextDocumentContentChangeEvent {
+    TextDocumentContentChangeEvent {
+        range: None,
+        range_length: None,
+        text: text.to_string(),
+    }
+}
+
+/// INTENT: ranged edit event without `rangeLength`: delegates to
+/// [`edit_ranged_len`] so the two ranged builders cannot drift apart. Pure
+/// constructor.
+pub fn edit_ranged(
+    start: (u32, u32),
+    end: (u32, u32),
+    text: &str,
+) -> TextDocumentContentChangeEvent {
+    edit_ranged_len(start, end, None, text)
+}
+
+/// INTENT: ranged edit event with an explicit `rangeLength`: the
+/// rangeLength-bearing form the precedence facet pins. Pure constructor.
+pub fn edit_ranged_len(
+    start: (u32, u32),
+    end: (u32, u32),
+    range_length: Option<u32>,
+    text: &str,
+) -> TextDocumentContentChangeEvent {
+    TextDocumentContentChangeEvent {
+        range: Some(Range {
+            start: Position {
+                line: start.0,
+                character: start.1,
+            },
+            end: Position {
+                line: end.0,
+                character: end.1,
+            },
+        }),
+        range_length,
+        text: text.to_string(),
+    }
+}
 pub fn sample_backend() -> (IndexedFixture, LspBackend) {
     let indexed = index_sample(IndexOptions {
         force_reindex: true,

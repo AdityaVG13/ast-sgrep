@@ -38,6 +38,27 @@ pub fn indexed_codemode_repo(token: &str) -> (TempDir, SessionConfig) {
     (temp, config)
 }
 
+/// INTENT: indexed session over caller-chosen `(name, body)` files.
+/// [`indexed_codemode_repo`] fixes a two-file src-tree shape; proofs needing a
+/// different shape (e.g. a single root-level file) need the file list to stay
+/// caller-chosen. Panics on IO or index failure.
+pub fn indexed_repo_files(files: &[(&str, &str)]) -> (TempDir, SessionConfig) {
+    let temp = tempfile::tempdir().expect("tempdir");
+    for (name, body) in files {
+        let path = temp.path().join(name);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).expect("mkdir");
+        }
+        std::fs::write(&path, body).expect("write");
+    }
+    let config = crate::codemode::config_at_indexed(temp.path(), &temp.path().join("index.db"));
+    let mut indexer = CodeModeSession::new(config.clone());
+    indexer
+        .call("index_repo", json!({"force": false}))
+        .expect("index");
+    (temp, config)
+}
+
 /// INTENT: byte-identical twin repos (the never-faulted oracle): twin A is
 /// faulted and repaired, twin B is pristine, and recovery proves them equal.
 /// Search/read/edit values are root-relative, so full-Value equality across
