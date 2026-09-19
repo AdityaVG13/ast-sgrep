@@ -41,7 +41,16 @@ export function bounded(text: string): string {
 export function success(
   command: string,
   response: MachineEnvelope,
-  extra: { query?: string; mode?: string; activationMs?: number; backend?: string } = {},
+  extra: {
+    query?: string;
+    mode?: string;
+    activationMs?: number;
+    backend?: string;
+    freshness?: "stale";
+    indexState?: "empty" | "ready";
+    excerptLines?: number;
+    notes?: string[];
+  } = {},
 ) {
   const text = command === "status"
     ? formatStatusResult(response)
@@ -52,14 +61,47 @@ export function success(
         : command === "read"
           ? formatReadResult(response)
           : formatSearchResult(response, { command, ...extra });
+  // Notes qualify the answer the agent is about to trust (stale index, empty
+  // index): they stay in the model-visible text, not only in the details bag.
+  const body = (extra.notes ?? []).length > 0
+    ? `${text}\n${(extra.notes ?? []).map((note) => `  ! ${note}`).join("\n")}`
+    : text;
   return {
-    content: [{ type: "text" as const, text: bounded(text) }],
+    content: [{ type: "text" as const, text: bounded(body) }],
     // The tool execute owns its machine command: normalize the envelope's
     // command (native catalog names like index_status/index_repo must surface
     // as the machine commands status/index/reindex).
     details: { ok: true, command, response: { ...response, command }, ...extra },
   };
 }
+
+/**
+ * Failure families the native session raises as *text*: the NAPI boundary
+ * carries `err.to_string()`, so the code has to be reconstructed from the
+ * message instead of being read off a struct. Everything here maps to
+ * OPERATIONAL_ERROR — a real answer about the index, not a mystery failure.
+ *
+ * Keep this list bounded and message-precise: an unrecognised failure stays
+ * UNEXPECTED_ERROR, which is honest, while a false positive would hide one.
+ */
+const OPERATIONAL_FAILURES: ReadonlyArray<{ pattern: RegExp; hint?: string }> = [
+  {
+    pattern: /database is locked|database table is locked/i,
+    hint: "another process holds the index write lock (a concurrent asgrep index build); retry in a few seconds, or scope the search with in:/fileFilter",
+  },
+  {
+    pattern: /index changed while preparing|retry the rebuild/i,
+    hint: "the index changed while this query was preparing; retry once the running index build finishes",
+  },
+  {
+    pattern: /index is empty|index does not exist|failed to open index|failed to resolve index path|index schema version|unsupported schema|newer than supported/i,
+  },
+  {
+    pattern: /database disk image is malformed|file is not a database|not a database/i,
+    hint: "the index file is damaged; run /asgrep-reindex to rebuild it",
+  },
+  { pattern: /unable to open database file|no such table/i },
+];
 
 export function errorDetails(cause: unknown, signal?: AbortSignal): { code: string; message: string; details: Readonly<Record<string, unknown>> } {
   if (signal?.aborted) {
@@ -77,6 +119,19 @@ export function errorDetails(cause: unknown, signal?: AbortSignal): { code: stri
       code: "SESSION_CLOSED",
       message: "asgrep session closed; retry the search",
       details: {},
+    };
+  }
+  // An aborted call is not a mystery failure: the caller's deadline or cancel
+  // fired. (Checked after timeout so a timed-out abort still reads as TIMEOUT.)
+  if ((cause instanceof Error && cause.name === "AbortError") || /aborted|was cancelled|operation cancelled/i.test(message)) {
+    return { code: "CANCELLED", message: "cancelled", details: {} };
+  }
+  for (const family of OPERATIONAL_FAILURES) {
+    if (!family.pattern.test(message)) continue;
+    return {
+      code: "OPERATIONAL_ERROR",
+      message,
+      details: family.hint ? { hint: family.hint } : {},
     };
   }
   return { code: "UNEXPECTED_ERROR", message, details: {} };

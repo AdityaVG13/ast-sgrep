@@ -44,6 +44,7 @@ No Rust toolchain or separate MCP server is required. The npm package selects th
 | `asgrep_search` | Run one natural, structural, symbol, graph, semantic, word, literal, or regex lookup. |
 | `asgrep_index` | Create, refresh, or explicitly rebuild the current project index. |
 | `asgrep_status` | Inspect the selected root, index, backend, counts, and capabilities. |
+| `asgrep_read`, `asgrep_edit` | One-shot file window / exact-string edit. Registered on every host, but **kept out of the active tool set when the host already provides built-in `read` and `edit`** (pi does), because Pi sends only active tools to the model. Sessions started with `--no-builtin-tools`, MCP-style hosts, and any host without tool-set control keep them active; `ASGREP_KEEP_FILE_TOOLS=1` pins them active anywhere. |
 
 The package also registers `/asgrep-doctor`, `/asgrep-status`, `/asgrep-index`, and `/asgrep-reindex`.
 

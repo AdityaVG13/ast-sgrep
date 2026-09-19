@@ -67,6 +67,10 @@ export declare function success(command: string, response: MachineEnvelope, extr
     mode?: string;
     activationMs?: number;
     backend?: string;
+    freshness?: "stale";
+    indexState?: "empty" | "ready";
+    excerptLines?: number;
+    notes?: string[];
 }): {
     content: {
         type: "text";
@@ -77,6 +81,10 @@ export declare function success(command: string, response: MachineEnvelope, extr
         mode?: string;
         activationMs?: number;
         backend?: string;
+        freshness?: "stale";
+        indexState?: "empty" | "ready";
+        excerptLines?: number;
+        notes?: string[];
         ok: boolean;
         command: string;
         response: {

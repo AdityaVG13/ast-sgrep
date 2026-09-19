@@ -4,7 +4,8 @@
  * and workspace event hooks that serve them.
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { isAbsolute } from "node:path";
+import { existsSync } from "node:fs";
+import { dirname, isAbsolute, join, relative, sep } from "node:path";
 import { Type } from "typebox";
 import {
   createAsgrepConnector,
@@ -24,20 +25,13 @@ import {
 import { AstSgrepRuntime, FreshnessCoordinator, RuntimeError } from "../runtime/runtime.js";
 import type { MachineEnvelope, RunOptions } from "../runtime/types.js";
 import type { FreshnessRuntime } from "../runtime/freshness.js";
+import { RESOLVED_ROOT } from "../runtime/types.js";
 import {
   ASGREP_PROMPT_GUIDELINES,
   ASGREP_PROMPT_SNIPPET,
-  formatCodemodeCall,
   formatCodemodeResult,
-  formatEditCall,
-  formatIndexCall,
-  formatReadCall,
-  formatSearchCall,
-  formatStatusCall,
-  presentText,
-  type PresentTheme,
 } from "../ui/present.js";
-import { renderAsgrepResult } from "../ui/card.js";
+import { EMPTY_CALL, renderAsgrepResult } from "../ui/card.js";
 import {
   bounded,
   errorDetails,
@@ -57,60 +51,52 @@ const MAX_LIMIT = 100;
 const MAX_EXCERPT_LINES = 100;
 
 const searchParameters = Type.Object({
-  query: Type.String({ minLength: 1, maxLength: 4_096, description: "Natural-language query, symbol, or structural pattern" }),
-  mode: Type.Optional(Type.Union([
-    Type.Literal("natural"),
-    Type.Literal("pattern"),
-    Type.Literal("defs"),
-    Type.Literal("callers"),
-    Type.Literal("chain"),
-    Type.Literal("semantic"),
-    Type.Literal("word"),
-    Type.Literal("literal"),
-    Type.Literal("regex"),
-    Type.Literal("imports"),
-  ], { default: "natural", description: "Search strategy (CLI-aligned modes)" })),
-  limit: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_LIMIT, default: DEFAULT_LIMIT })),
-  excerptLines: Type.Optional(Type.Integer({ minimum: 0, maximum: MAX_EXCERPT_LINES, default: 0, description: "Opt in to excerpt body lines" })),
-  in: Type.Optional(Type.String({ minLength: 1, maxLength: 512, description: "Directory or glob to bound the search (in:path)" })),
-  lang: Type.Optional(Type.String({ minLength: 1, maxLength: 32, description: "Language id or extension (rs, ts, py)" })),
-  fileFilter: Type.Optional(Type.String({ minLength: 1, maxLength: 512, description: "Repository-relative glob; alias of in" })),
+  query: Type.String({ maxLength: 4_096, description: "Query, symbol, or pattern" }),
+  mode: Type.Optional(Type.Unsafe<SearchMode>({
+    type: "string",
+    enum: ["natural", "pattern", "defs", "callers", "chain", "semantic", "word", "literal", "regex", "imports"],
+    default: "natural",
+    description: "Search strategy",
+  })),
+  limit: Type.Optional(Type.Integer({ default: DEFAULT_LIMIT })),
+  excerptLines: Type.Optional(Type.Integer({ default: 0, description: "Inline N excerpt lines per hit" })),
+  in: Type.Optional(Type.String({ maxLength: 512, description: "Bound to a directory or glob" })),
+  lang: Type.Optional(Type.String({ maxLength: 32, description: "Language filter (rs, ts, py)" })),
 }, { additionalProperties: false });
 
 const indexParameters = Type.Object({
   force: Type.Optional(Type.Boolean({ default: false, description: "Rebuild the index from scratch" })),
 }, { additionalProperties: false });
 
-const statusParameters = Type.Object({}, { additionalProperties: false });
 
 const editParameters = Type.Object({
-  path: Type.Optional(Type.String({ minLength: 1, maxLength: 512, description: "Repository-relative file to edit" })),
-  oldText: Type.Optional(Type.String({ description: "Exact text to replace — must match exactly once in the file" })),
-  newText: Type.Optional(Type.String({ description: "Replacement text" })),
+  path: Type.Optional(Type.String({ maxLength: 512, description: "File to edit" })),
+  oldText: Type.Optional(Type.String({ description: "Exact text to replace (must match once)" })),
+  newText: Type.Optional(Type.String({ description: "Replacement" })),
   edits: Type.Optional(Type.Array(Type.Object({
     path: Type.Optional(Type.String({ minLength: 1, maxLength: 512 })),
     oldText: Type.String({ minLength: 1 }),
     newText: Type.String(),
-  }), { maxItems: 64, description: "Multi-edit entries; top-level path is the default for entries that omit it" })),
+  }), { maxItems: 64, description: "Multi-edit entries; top-level path is the default" })),
 }, { additionalProperties: false });
 
 const readParameters = Type.Object({
-  path: Type.Optional(Type.String({ minLength: 1, maxLength: 512, description: "Repository-relative file path" })),
-  ref: Type.Optional(Type.String({ minLength: 1, description: "Hit ref (path#L12-L40) from a search result" })),
-  refs: Type.Optional(Type.Array(Type.String({ minLength: 1 }), { maxItems: 24, description: "Multiple refs to read in one call" })),
-  start: Type.Optional(Type.Integer({ minimum: 1 })),
-  end: Type.Optional(Type.Integer({ minimum: 1 })),
-  contextLines: Type.Optional(Type.Integer({ minimum: 0, maximum: 40 })),
-  maxChars: Type.Optional(Type.Integer({ minimum: 64, maximum: 64_000 })),
+  path: Type.Optional(Type.String({ maxLength: 512, description: "File to read" })),
+  ref: Type.Optional(Type.String({ description: "Hit ref path#L12-L40" })),
+  refs: Type.Optional(Type.Array(Type.String(), { maxItems: 24, description: "Several refs in one call" })),
+  start: Type.Optional(Type.Integer()),
+  end: Type.Optional(Type.Integer()),
+  contextLines: Type.Optional(Type.Integer()),
+  maxChars: Type.Optional(Type.Integer()),
 }, { additionalProperties: false });
 
 const codemodeParameters = Type.Object({
   code: Type.String({
     minLength: 1,
     maxLength: 32_000,
-    description: "JavaScript: async () => { ... } or a bare body with return. Call asgrep.search(\"query\"), asgrep.defs(\"Symbol\"). Prefer Promise.all. Return only the shaped final value.",
+    description: "JavaScript: async () => { ... } or a bare body with return. The returned value is the tool result.",
   }),
-  timeoutMs: Type.Optional(Type.Integer({ minimum: 1_000, maximum: 120_000, description: "Hard timeout in ms (default 30000)" })),
+  timeoutMs: Type.Optional(Type.Integer({ description: "Timeout ms (default 30000)" })),
 }, { additionalProperties: false });
 
 type SearchMode = "natural" | "pattern" | "defs" | "callers" | "chain" | "semantic" | "word" | "literal" | "regex" | "imports";
@@ -152,6 +138,56 @@ function scopedSearchQuery(params: { query: string; in?: string; fileFilter?: st
 function withSearchLang(argv: string[], lang: string | undefined): string[] {
   const trimmed = lang?.trim();
   return trimmed ? ["--lang", trimmed, ...argv] : argv;
+}
+
+/**
+ * pi ships `read`, `edit`, `write`, `bash`, `grep`, `find`, `ls` built in, so on
+ * a normal Pi host our one-shot file tools would be paid for twice and never
+ * needed. They stay REGISTERED — an MCP-style host, a `--no-builtin-tools`
+ * session, or a host that drops the built-ins still gets them — but they are
+ * left out of the active set when the host already provides read+edit. Pi only
+ * sends ACTIVE tools (schema, snippet, guidelines) to the model, so this is the
+ * difference between ~296 tokens per request and nothing.
+ *
+ * ASGREP_KEEP_FILE_TOOLS=1 pins them active regardless.
+ */
+/**
+ * Tools that MUTATE the index never ride the warm session: its calls are
+ * serialized, so a write there blocks every read queued behind it.
+ *
+ * Exported so the routing contract is testable without a live session.
+ */
+export function writesOffSession(tool: string): boolean {
+  return tool === "index_repo";
+}
+
+export function hostProvidesFileTools(pi: ExtensionAPI, env: NodeJS.ProcessEnv = process.env): boolean {
+  if (env.ASGREP_KEEP_FILE_TOOLS === "1") return false;
+  const api = pi as unknown as { getActiveTools?: () => string[] };
+  try {
+    if (typeof api.getActiveTools !== "function") return false;
+    // Active by name, whatever supplies it: pi's built-ins, a wrapped host tool,
+    // or another extension. Our own tools are named asgrep_read/asgrep_edit, so
+    // this can only be somebody else's reader/editor.
+    const active = api.getActiveTools();
+    return active.includes("read") && active.includes("edit");
+  } catch {
+    return false;
+  }
+}
+
+/** Drop our file tools from the active set; capability stays registered. */
+function deactivateRedundantFileTools(pi: ExtensionAPI): void {
+  const api = pi as unknown as { getActiveTools?: () => string[]; setActiveTools?: (names: string[]) => void };
+  try {
+    if (typeof api.getActiveTools !== "function" || typeof api.setActiveTools !== "function") return;
+    const active = api.getActiveTools();
+    const redundant = new Set(["asgrep_read", "asgrep_edit"]);
+    const next = active.filter((name) => !redundant.has(name));
+    if (next.length !== active.length) api.setActiveTools(next);
+  } catch {
+    // A host without tool-set control keeps today's behaviour.
+  }
 }
 
 export function registerAstSgrepTools(
@@ -198,8 +234,85 @@ export function registerAstSgrepTools(
     poolConfigured = true;
   };
 
-  const resolveRoot = async (cwd: string): Promise<string> =>
-    runtime.resolveRoot ? await runtime.resolveRoot({ cwd }) : cwd;
+  /**
+   * Context for a follow-up call at an already-resolved root. The marker keeps
+   * a configured root from being re-applied against it: that re-resolution is
+   * how a subdirectory anchor silently turned back into the subdirectory.
+   */
+  const rootedAt = (root: string): { cwd: string; [RESOLVED_ROOT]: true } => ({ cwd: root, [RESOLVED_ROOT]: true });
+
+  /**
+   * Cold checkout: build the index in the background at session start.
+   *
+   * Returns immediately when the index file already exists (the common case),
+   * so a warm session pays one stat while a cold one gets its first search
+   * answered from a warm index instead of waiting behind the build.
+   */
+  const warmColdIndex = async (root: string): Promise<void> => {
+    // Opt out on very large checkouts where the startup walk is not worth it:
+    // ASGREP_NO_WARM_INDEX=1.
+    if ((runtime.nativeEnv?.() ?? {}).ASGREP_NO_WARM_INDEX === "1") return;
+    const indexPathFor = runtime.resolveIndexPath;
+    if (typeof indexPathFor !== "function") return;
+    try {
+      if (existsSync(indexPathFor.call(runtime, root))) return;
+    } catch {
+      return;
+    }
+    await runCli(["index", ".", "--json", "--no-embed"], rootedAt(root));
+  };
+
+  const resolveRoot = async (context: { cwd: string }): Promise<string> =>
+    runtime.resolveRoot ? await runtime.resolveRoot(context) : context.cwd;
+
+  /**
+   * One index per checkout. Pi hands us the session cwd; when that cwd sits
+   * inside a checkout that already owns an index, that index serves it —
+   * scoped to the cwd — instead of a second multi-hundred-MB `.asgrep` growing
+   * beside it. An explicit ASGREP_INDEX_PATH already shares one index across
+   * every root, so it is left alone.
+   */
+  const anchorRoot = async (cwd: string): Promise<{ root: string; scope?: string }> => {
+    const root = await resolveRoot({ cwd });
+    const resolveIndexPath = runtime.resolveIndexPath;
+    if (typeof resolveIndexPath !== "function") return { root };
+    const env = runtime.nativeEnv?.() ?? {};
+    const configured = env.ASGREP_INDEX_PATH;
+    if (typeof configured === "string" && configured !== "") return { root };
+    const indexAt = (dir: string): boolean => {
+      try {
+        return existsSync(resolveIndexPath.call(runtime, dir));
+      } catch {
+        return false;
+      }
+    };
+    if (indexAt(root)) return { root };
+    // Scope the walk to this checkout: an index that merely lives above the git
+    // work tree root (a home directory, a shared scratch tree) belongs to no
+    // project here and must not capture this session's searches.
+    let workTree: string | undefined;
+    for (let dir = root;; dir = dirname(dir)) {
+      if (existsSync(join(dir, ".git"))) { workTree = dir; break; }
+      const parent = dirname(dir);
+      if (dir === parent) break;
+    }
+    const within = (dir: string): boolean => workTree === undefined || dir === workTree || dir.startsWith(workTree + sep);
+    for (let dir = dirname(root);; dir = dirname(dir)) {
+      const parent = dirname(dir);
+      if (dir === parent) break;
+      if (!within(dir)) break;
+      if (!indexAt(dir)) continue;
+      const scope = relative(dir, root).split(sep).join("/");
+      return scope !== "" && scope !== "." ? { root: dir, scope } : { root: dir };
+    }
+    // Nothing indexed in this checkout yet: the index belongs at its root, not
+    // in whichever subdirectory this session happens to sit in.
+    if (workTree !== undefined && workTree !== root) {
+      const scope = relative(workTree, root).split(sep).join("/");
+      return scope !== "" && scope !== "." ? { root: workTree, scope } : { root: workTree };
+    }
+    return { root };
+  };
 
   /**
    * Closed backend availability after sticky acquire fails.
@@ -285,7 +398,12 @@ export function registerAstSgrepTools(
     options: RunOptions = {},
   ): Promise<MachineEnvelope> => {
     ensurePool();
-    const root = await resolveRoot(context.cwd);
+    const root = await resolveRoot(context);
+    // Writes never ride the warm session. Its calls are serialized, so an index
+    // running there blocks every read queued behind it (measured p100: a search
+    // waited 9.2s for a background reindex). Index work goes out of process;
+    // SQLite WAL lets readers keep their own snapshot meanwhile.
+    if (writesOffSession(tool)) return runCli(argvFor(tool, args), context, options);
     const sticky = await callSticky(root, tool, args, options);
     if (sticky) return asEnvelope(sticky);
     // Cold CLI only when a real binary resolves -- never remap missing natives to BINARY_RESOLUTION_FAILED.
@@ -295,7 +413,7 @@ export function registerAstSgrepTools(
   // Freshness + tools share the same warm in-process Searcher as Code Mode.
   const warmRuntime: FreshnessRuntime = {
     run: (args, context, options) => runtime.run(args, context, options),
-    resolveRoot: (context) => resolveRoot(context.cwd),
+    resolveRoot: (context) => resolveRoot(context),
     nativeCall,
   };
   // Optional runtime capabilities pass through when present — bound, since
@@ -309,35 +427,81 @@ export function registerAstSgrepTools(
   }
   if (runtime.rebuildIncompatibleIndex) {
     warmRuntime.rebuildIncompatibleIndex = async (context, options) => {
-      const root = await resolveRoot(context.cwd);
+      const root = await resolveRoot(context);
       await pool.invalidate(root);
       return runtime.rebuildIncompatibleIndex!(context, options);
     };
   }
 
-  /** Freshness gate shared by the one-shot tools: ensureFresh with a bounded
-   * timeout fallback, or a scoped-path index when the query carries in:/fileFilter. */
-  const freshRoot = async (cwd: string, signal: AbortSignal | undefined, scopedPath?: string): Promise<string> => {
+  /**
+   * Freshness gate shared by the one-shot tools: ensureFresh with a bounded
+   * timeout fallback, or a scoped-path index when the query carries in:/fileFilter.
+   *
+   * Bounded means serve-stale, not fail: a caller that ran out of freshness
+   * budget still queries the current index and is told the result may be stale.
+   * The session is never torn down here — the shared refresh runs on it, so
+   * invalidating would kill the index work the caller just stopped waiting for
+   * and leave the root permanently stale.
+   */
+  const freshRoot = async (
+    cwd: string,
+    signal: AbortSignal | undefined,
+    scopedPath?: string,
+  ): Promise<{ root: string; scope?: string; freshness?: "stale" }> => {
     const options = signal ? { signal } : {};
-    if (scopedPath) {
-      const root = await resolveRoot(cwd);
+    const anchor = await anchorRoot(cwd);
+    const scope = anchor.scope;
+    // A subtree refresh still lands in the checkout's own index.
+    const target = scopedPath ? (scope ? `${scope}/${scopedPath}` : scopedPath) : undefined;
+    if (target) {
       try {
-        await nativeCall("index_repo", { paths: [scopedPath] }, { cwd }, options);
+        await nativeCall("index_repo", { paths: [target] }, rootedAt(anchor.root), options);
       } catch (cause) {
         if (!isFreshnessTimeout(cause, signal)) throw cause;
-        await pool.invalidate(root).catch(() => undefined);
+        return { root: anchor.root, ...(scope ? { scope } : {}), freshness: "stale" as const };
       }
-      return root;
+      return { root: anchor.root, ...(scope ? { scope } : {}) };
     }
     try {
-      return await freshness.ensureFresh(warmRuntime, { cwd }, options);
+      const resolved = await freshness.ensureFresh(warmRuntime, rootedAt(anchor.root), options);
+      // The contract is a root string; a host/test double that returns nothing
+      // must not hand an undefined cwd to the runtime.
+      const root = typeof resolved === "string" && resolved !== "" ? resolved : anchor.root;
+      return { root, ...(scope ? { scope } : {}) };
     } catch (cause) {
       if (!isFreshnessTimeout(cause, signal)) throw cause;
-      const root = await resolveRoot(cwd);
-      await pool.invalidate(root).catch(() => undefined);
-      return root;
+      return { root: anchor.root, ...(scope ? { scope } : {}), freshness: "stale" as const };
     }
   };
+
+  /** Anchor the caller's own in:/fileFilter scope under the checkout root. */
+  const withAnchorScope = <T extends { in?: string; fileFilter?: string }>(params: T, scope: string | undefined): T => {
+    if (!scope) return params;
+    const nested = params.in ?? params.fileFilter;
+    const combined = typeof nested === "string" && nested.trim() ? `${scope}/${nested.replace(/^(?:\.\/)+/u, "")}` : scope;
+    return { ...params, in: combined };
+  };
+
+  /** An index with no files is not a no-match: it answers nothing at all. */
+  const probeIndexState = async (
+    root: string,
+    context: { cwd: string },
+    options: RunOptions,
+  ): Promise<{ files: number; semanticChunks?: number } | undefined> => {
+    try {
+      const status = await machineCall(root, "index_status", {}, ["status", ".", "--json"], context, options);
+      if (typeof status.file_count !== "number") return undefined;
+      const probe: { files: number; semanticChunks?: number } = { files: status.file_count };
+      if (typeof status.semantic_chunk_count === "number") probe.semanticChunks = status.semantic_chunk_count;
+      return probe;
+    } catch {
+      // Coverage is a note on an answer, never a failure of its own.
+      return undefined;
+    }
+  };
+
+  const zeroHitResponse = (response: { hits?: unknown; ok?: unknown }): boolean =>
+    response.ok !== false && Array.isArray(response.hits) && response.hits.length === 0;
 
   /** Typed sticky call first, argv fallback when no session — the shape every
    * one-shot tool shares. */
@@ -419,13 +583,23 @@ export function registerAstSgrepTools(
   });
   pi.on("session_start", (_event, ctx) => {
     watchWorkspaceChanges();
+    // Built-in read/edit present and active: keep ours registered (other hosts
+    // need them) but off the model's tool list.
+    if (hostProvidesFileTools(pi)) deactivateRedundantFileTools(pi);
     // Warm the in-process Searcher at session start so the first asgrep
     // search does not pay NAPI/SQLite open on the user's first lookup.
     void (async () => {
       try {
         ensurePool();
-        const root = await resolveRoot(ctx.cwd);
+        const root = await resolveRoot({ cwd: ctx.cwd });
         await Promise.all([pool.acquire(root), warmCodemodeSandbox()]);
+        // Cold checkout: build the index now, in the background, out of process.
+        // Session start (system prompt, first model turn) is a second or two of
+        // free time, and a lexical/AST index of a few thousand files takes a few
+        // hundred ms — so the first search answers from a warm index instead of
+        // waiting behind a build (measured cold first search: 271ms and rising
+        // with repo size). Failures stay silent: the search path owns recovery.
+        await warmColdIndex(root);
       } catch {
         // Doctor reports backend errors; a failed warmup must not block the session.
       }
@@ -447,27 +621,17 @@ export function registerAstSgrepTools(
     promptSnippet: ASGREP_PROMPT_SNIPPET,
     promptGuidelines: [...ASGREP_PROMPT_GUIDELINES],
     description: [
-      "Primary code-search tool for this project. Call it whenever you need to find, trace, or understand code — do not wait for the user to mention asgrep.",
-      "Write JavaScript that calls asgrep.search, asgrep.defs, asgrep.callers, asgrep.read, and asgrep.edit. Positional args work: search(\"auth\"), defs(\"Foo\"). Compose with await / Promise.all, filter in code, return only the shaped final value.",
-      "Runs in-process (native addon) with a warm Searcher for the Pi session.",
-      "",
+      "Code search (in-process, warm Searcher): use it for any code lookup instead of grep.",
+      "Write JavaScript; the returned value is your result.",
       CODEMODE_TYPES_FOR_MODEL,
-      "",
-      "Example:",
-      "async () => {",
-      "  const seed = await asgrep.search('auth refresh', { limit: 5 });",
-      "  const hit = seed.hits?.[0];",
-      "  if (!hit?.symbol) return { seed, next: seed.suggested_next };",
-      "  const [defs, window] = await Promise.all([",
-      "    asgrep.defs(hit.symbol, { limit: 5 }),",
-      "    asgrep.read({ refs: [hit.ref] }),",
-      "  ]);",
-      "  return { symbol: hit.symbol, defs: defs.hits, window };",
-      "}",
+      "Example: async () => (await asgrep.search(\"auth\", { limit: 5 })).hits",
     ].join("\n"),
     parameters: codemodeParameters,
-    renderCall(args, theme, context) {
-      return presentText(formatCodemodeCall(args.code, theme as PresentTheme), context.lastComponent);
+    // The card owns its own frame: no host Box padding/background around it,
+    // and no duplicate title line above it.
+    renderShell: "self",
+    renderCall() {
+      return EMPTY_CALL;
     },
     renderResult(result, options, theme, context) {
       return renderAsgrepResult(result, options, theme, context);
@@ -485,11 +649,11 @@ export function registerAstSgrepTools(
           : timeoutSignal;
         const options = { signal: operationSignal };
         ensurePool();
-        const root = await freshRoot(ctx.cwd, signal);
+        const { root, scope, freshness: fresh } = await freshRoot(ctx.cwd, signal);
         const { env, binary } = nativeLaunch();
         // In-process NAPI first; CLI sticky only if addon missing.
         const sticky: StickyWorker | null = await pool.acquire(root);
-        const bundle = createAsgrepConnector(buildBatchHost(sticky, env, binary), { cwd: ctx.cwd }, options);
+        const bundle = createAsgrepConnector(buildBatchHost(sticky, env, binary), rootedAt(root), { ...options, ...(scope ? { scope } : {}) });
         bundle.resetStats();
         const codemodeOptions: {
           stats: () => ReturnType<typeof bundle.stats>;
@@ -535,6 +699,7 @@ export function registerAstSgrepTools(
             wallMs: outcome.wallMs,
             activationMs,
             backend: pool.backend(),
+            ...(fresh ? { freshness: fresh } : {}),
           },
         };
       } catch (cause) {
@@ -548,11 +713,12 @@ export function registerAstSgrepTools(
   pi.registerTool({
     name: "asgrep_search",
     label: "asgrep search",
-    promptSnippet: "One-shot asgrep search (natural, defs, callers, pattern, chain, semantic)",
-    description: "One-shot search. Prefer asgrep for anything multi-step, parallel, or filtered. Call this on your own whenever a single lookup is enough.",
+    promptSnippet: "One-shot asgrep search",
+    description: "One-shot search. Use asgrep (Code Mode) for anything multi-step, parallel, or filtered.",
     parameters: searchParameters,
-    renderCall(args, theme, context) {
-      return presentText(formatSearchCall(args, theme as PresentTheme), context.lastComponent);
+    renderShell: "self",
+    renderCall() {
+      return EMPTY_CALL;
     },
     renderResult(result, options, theme, context) {
       return renderAsgrepResult(result, options, theme, context);
@@ -564,17 +730,42 @@ export function registerAstSgrepTools(
       try {
         ensurePool();
         const scopedPath = (typeof params.in === "string" ? params.in : undefined)
-          ?? (typeof params.fileFilter === "string" ? params.fileFilter : undefined)
           ?? extractInPath(params.query);
-        const root = await freshRoot(ctx.cwd, signal, scopedPath);
-        const [tool, args] = searchToolCall(params);
-        const response = await machineCall(root, tool, args, searchArgs(params), { cwd: ctx.cwd }, options);
+        const fresh = await freshRoot(ctx.cwd, signal, scopedPath);
+        // The checkout owns the index; the caller's scope rides under it.
+        const anchored = withAnchorScope(params, fresh.scope);
+        const [tool, args] = searchToolCall(anchored);
+        const response = await machineCall(fresh.root, tool, args, searchArgs(anchored), rootedAt(fresh.root), options);
+        const notes: string[] = [];
+        if (fresh.freshness === "stale") {
+          notes.push("index refresh is still running; this answer came from the current index and may be stale");
+        }
+        let indexState: "empty" | "ready" | undefined;
+        if (zeroHitResponse(response)) {
+          const probe = await probeIndexState(fresh.root, rootedAt(fresh.root), options);
+          if (probe) {
+            indexState = probe.files === 0 ? "empty" : "ready";
+            if (indexState === "empty") {
+              notes.push("index has 0 files: this repository is not indexed -- run /asgrep-index (or asgrep.indexRepo()) and retry");
+            } else if ((params.mode ?? "natural") === "semantic" && probe.semanticChunks === 0) {
+              // Freshness refreshes index lexical/AST only, so a semantic query
+              // on a cold repo has nothing to rank yet.
+              notes.push("no embeddings yet: this index was built lexical-only -- run /asgrep-index (or asgrep.indexRepo()) to build vectors");
+            }
+          }
+        }
         report(onUpdate, "search", "completed");
         return success("search", response, {
           query: params.query,
           mode: params.mode ?? "natural",
           activationMs: performance.now() - started,
           backend: pool.backend(),
+          // Drives excerpt rendering in the model-facing text: capsules carry
+          // body text whether or not it was asked for.
+          excerptLines: params.excerptLines ?? 0,
+          ...(fresh.freshness ? { freshness: fresh.freshness } : {}),
+          ...(indexState ? { indexState } : {}),
+          ...(notes.length > 0 ? { notes } : {}),
         });
       } catch (cause) {
         return failure("search", cause, signal);
@@ -587,11 +778,12 @@ export function registerAstSgrepTools(
   pi.registerTool({
     name: "asgrep_edit",
     label: "asgrep edit",
-    promptSnippet: "Edit a file by exact-string replace (asgrep_edit; use asgrep for multi-step)",
-    description: "Edit a file by exact-string replace — oldText must match exactly once. edits[] applies many edits atomically. Prefer the asgrep tool for anything multi-step or filtered.",
+    promptSnippet: "Exact-string edit",
+    description: "Edit by exact-string replace; oldText must match once. edits[] applies many atomically.",
     parameters: editParameters,
-    renderCall(args, theme, context) {
-      return presentText(formatEditCall(args, theme as PresentTheme), context.lastComponent);
+    renderShell: "self",
+    renderCall() {
+      return EMPTY_CALL;
     },
     renderResult(result, options, theme, context) {
       return renderAsgrepResult(result, options, theme, context);
@@ -601,12 +793,12 @@ export function registerAstSgrepTools(
       try {
         ensurePool();
         const options = signal ? { signal } : {};
-        const root = await freshRoot(ctx.cwd, signal);
+        const { root, scope, freshness: fresh } = await freshRoot(ctx.cwd, signal);
         const sticky = await pool.acquire(root);
-        const bundle = createAsgrepConnector({ run: (a, c, o) => runtime.run(a, c, o), sticky }, { cwd: ctx.cwd }, options);
+        const bundle = createAsgrepConnector({ run: (a, c, o) => runtime.run(a, c, o), sticky }, rootedAt(root), { ...options, ...(scope ? { scope } : {}) });
         const response = await bundle.asgrep.edit(params);
         report(onUpdate, "edit", "completed");
-        return success("edit", response as MachineEnvelope, { backend: pool.backend() });
+        return success("edit", response as MachineEnvelope, { backend: pool.backend(), ...(fresh ? { freshness: fresh } : {}) });
       } catch (cause) {
         return failure("edit", cause, signal);
       }
@@ -616,11 +808,12 @@ export function registerAstSgrepTools(
   pi.registerTool({
     name: "asgrep_read",
     label: "asgrep read",
-    promptSnippet: "Read file windows or hit refs (asgrep_read; use asgrep for multi-step)",
-    description: "Read a file window or resolve hit refs (path#L1-L40) into content. Prefer the asgrep tool for composed lookups.",
+    promptSnippet: "Read file window or hit ref",
+    description: "Read a file window or resolve hit refs (path#L1-L40).",
     parameters: readParameters,
-    renderCall(args, theme, context) {
-      return presentText(formatReadCall(args, theme as PresentTheme), context.lastComponent);
+    renderShell: "self",
+    renderCall() {
+      return EMPTY_CALL;
     },
     renderResult(result, options, theme, context) {
       return renderAsgrepResult(result, options, theme, context);
@@ -630,12 +823,12 @@ export function registerAstSgrepTools(
       try {
         ensurePool();
         const options = signal ? { signal } : {};
-        const root = await freshRoot(ctx.cwd, signal);
+        const { root, scope, freshness: fresh } = await freshRoot(ctx.cwd, signal);
         const sticky = await pool.acquire(root);
-        const bundle = createAsgrepConnector({ run: (a, c, o) => runtime.run(a, c, o), sticky }, { cwd: ctx.cwd }, options);
+        const bundle = createAsgrepConnector({ run: (a, c, o) => runtime.run(a, c, o), sticky }, rootedAt(root), { ...options, ...(scope ? { scope } : {}) });
         const response = await bundle.asgrep.read(params);
         report(onUpdate, "read", "completed");
-        return success("read", response as MachineEnvelope, { backend: pool.backend() });
+        return success("read", response as MachineEnvelope, { backend: pool.backend(), ...(fresh ? { freshness: fresh } : {}) });
       } catch (cause) {
         return failure("read", cause, signal);
       }
@@ -645,11 +838,12 @@ export function registerAstSgrepTools(
   pi.registerTool({
     name: "asgrep_index",
     label: "asgrep index",
-    promptSnippet: "Build or rebuild the asgrep index",
-    description: "Build or rebuild the index. Prefer asgrep.indexRepo inside asgrep.",
+    promptSnippet: "Build or rebuild the index",
+    description: "Build or rebuild the index (embeddings included).",
     parameters: indexParameters,
-    renderCall(args, theme, context) {
-      return presentText(formatIndexCall(args.force === true, theme as PresentTheme), context.lastComponent);
+    renderShell: "self",
+    renderCall() {
+      return EMPTY_CALL;
     },
     renderResult(result, options, theme, context) {
       return renderAsgrepResult(result, options, theme, context);
@@ -661,42 +855,23 @@ export function registerAstSgrepTools(
       try {
         ensurePool();
         const options = signal ? { signal } : {};
-        const root = await freshRoot(ctx.cwd, signal);
-        const response = await machineCall(root, "index_repo", { force }, [command, ".", "--json"], { cwd: ctx.cwd }, options);
+        const { root, freshness: fresh } = await freshRoot(ctx.cwd, signal);
+        // Always out of process: an index inside the warm session would block
+        // every read queued behind it (measured 9.2s p100 for a search during a
+        // reindex). The explicit path keeps embeddings; implicit refreshes skip
+        // them (see runtime/freshness.ts).
+        const response = await runCli([command, ".", "--json"], rootedAt(root), options);
         report(onUpdate, command, "completed");
-        return success(command, response);
+        return success(command, response, { ...(fresh ? { freshness: fresh } : {}) });
       } catch (cause) {
         return failure(command, cause, signal);
       }
     },
   });
 
-  pi.registerTool({
-    name: "asgrep_status",
-    label: "asgrep status",
-    promptSnippet: "asgrep index and backend status",
-    description: "Index/runtime status. Prefer asgrep.indexStatus inside asgrep.",
-    parameters: statusParameters,
-    renderCall(_args, theme, context) {
-      return presentText(formatStatusCall(theme as PresentTheme), context.lastComponent);
-    },
-    renderResult(result, options, theme, context) {
-      return renderAsgrepResult(result, options, theme, context);
-    },
-    async execute(_toolCallId, _params, signal, onUpdate, ctx) {
-      report(onUpdate, "status", "started");
-      try {
-        ensurePool();
-        const options = signal ? { signal } : {};
-        const root = await freshRoot(ctx.cwd, signal);
-        const response = await machineCall(root, "index_status", {}, ["status", ".", "--json"], { cwd: ctx.cwd }, options);
-        report(onUpdate, "status", "completed");
-        return success("status", response);
-      } catch (cause) {
-        return failure("status", cause, signal);
-      }
-    },
-  });
+  // No asgrep_status tool: index/runtime status is a diagnostic, not a lookup.
+  // The model reads it in Code Mode (asgrep.indexStatus()) and humans have
+  // /asgrep-status, so the schema does not carry it on every request.
 }
 
 /** Map one-shot search params to typed sticky tool+args. Data-driven mode table. */
