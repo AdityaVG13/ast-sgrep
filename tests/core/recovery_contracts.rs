@@ -28,6 +28,40 @@ fn sibling_db(session: &IsolatedIndexSession, name: &str) -> PathBuf {
     session.index_path.parent().unwrap().join(name)
 }
 
+/// INTENT: a root nested inside an indexed checkout says where the index it is
+/// not finding lives, instead of reporting its own emptiness as the whole story.
+/// FACETS: nested default-layout root names the enclosing index; a root with no
+/// indexed ancestor keeps the plain fail-closed message.
+/// KILLS: opaque-missing-index, hint-without-enclosing-index, wrong-ancestor-hint.
+#[test]
+fn missing_index_names_the_enclosing_checkout() {
+    let session = isolated_index_session();
+    let checkout = session.corpus_root.join("checkout");
+    let default_db = checkout.join(".asgrep").join("index.db");
+    drop(IndexStore::open(&checkout, Some(&default_db)).unwrap());
+    let nested = checkout.join("crates").join("kernel").join("src");
+    std::fs::create_dir_all(&nested).unwrap();
+
+    let err = err_of(IndexStore::open_readonly(
+        &nested,
+        Some(&nested.join(".asgrep").join("index.db")),
+    ));
+    let message = err.to_string();
+    assert!(message.contains("index is empty"), "{message}");
+    assert!(
+        message.contains(&default_db.display().to_string()),
+        "the enclosing index must be named: {message}"
+    );
+
+    let orphan = session.index_path.parent().unwrap().join("orphan-root");
+    std::fs::create_dir_all(&orphan).unwrap();
+    let orphan_message = err_of(IndexStore::open_readonly(&orphan, None)).to_string();
+    assert!(
+        !orphan_message.contains("enclosing index"),
+        "no ancestor index, no hint: {orphan_message}"
+    );
+}
+
 /// INTENT: every store open/peek path fails with its documented discriminant
 /// and never creates, migrates, or repairs as a side effect.
 /// FACETS: torn→Database×2, zero-byte→Other/peek-0/writable-init,
@@ -488,3 +522,72 @@ fn cold_start_state_serves_as_zero() {
         assert_eq!(read_writer_generation(&stamp_session.corpus_root, Some(&db)), 0);
     }
 }
+
+/// INTENT: one `.asgrep` per checkout. A writable open inside an indexed tree
+/// refuses to create a second index and names the one that already exists.
+/// FACETS: nested root refuses with the enclosing path; explicit index path
+/// keeps its own location.
+/// KILLS: silent-second-index, wrong-enclosing-pointer, guard-on-explicit-path.
+#[test]
+fn writable_open_refuses_a_second_index_inside_an_indexed_checkout() {
+    let session = isolated_index_session();
+    let checkout = session.corpus_root.join("checkout");
+    let default_db = checkout.join(".asgrep").join("index.db");
+    drop(IndexStore::open(&checkout, Some(&default_db)).unwrap());
+    let nested = checkout.join("crates").join("kernel");
+    std::fs::create_dir_all(&nested).unwrap();
+
+    let message = err_of(IndexStore::open(&nested, None)).to_string();
+    assert!(
+        message.contains("refusing to create a second index"),
+        "nested writable open must refuse: {message}"
+    );
+    assert!(
+        message.contains(&default_db.display().to_string()),
+        "the enclosing index must be named: {message}"
+    );
+    assert!(
+        !nested.join(".asgrep").exists(),
+        "the refusal must not leave a partial index directory"
+    );
+
+    // An explicit index path is a deliberate separate index, never nested magic.
+    let explicit = nested.join("own.db");
+    drop(IndexStore::open(&nested, Some(&explicit)).unwrap());
+    assert!(explicit.is_file(), "explicit index paths stay allowed");
+}
+
+
+/// INTENT: the one-index rule is scoped to the checkout. An index that merely
+/// lives above the git work tree root (a home dir, a shared scratch tree) is not
+/// this project's and must not block a new project from indexing itself.
+/// FACETS: same-work-tree ancestor refuses; outside-the-work-tree index ignored.
+/// KILLS: global-parent-index-capture, work-tree-blind-walk.
+#[test]
+fn only_the_checkout_own_index_blocks_a_second_one() {
+    let session = isolated_index_session();
+    let outer = session.corpus_root.join("outer");
+    // A parent that happens to hold an index, with no checkout of its own.
+    drop(IndexStore::open(&outer, None).unwrap());
+
+    let checkout = outer.join("fresh-project");
+    std::fs::create_dir_all(checkout.join(".git")).unwrap();
+    let nested = checkout.join("src");
+    std::fs::create_dir_all(&nested).unwrap();
+
+    // The outer index is outside this work tree: the new project indexes itself.
+    drop(IndexStore::open(&checkout, None).unwrap());
+    assert!(
+        checkout.join(".asgrep").join("index.db").is_file(),
+        "a fresh project under an indexed parent must still be able to index"
+    );
+
+    // Inside the work tree the checkout's own index now blocks a nested one.
+    let message = err_of(IndexStore::open(&nested, None)).to_string();
+    assert!(
+        message.contains("refusing to create a second index"),
+        "same-checkout nesting must still refuse: {message}"
+    );
+    assert!(!nested.join(".asgrep").exists());
+}
+

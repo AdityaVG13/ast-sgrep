@@ -6,7 +6,7 @@ use crate::Result;
 use ast_sgrep_lang::PatternNode;
 use rusqlite::{params, Connection, OpenFlags};
 use std::collections::{HashMap, HashSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 // 6 = symbols_name_lower. 7 = semantic-layout-v2 wipe. 8 = unstemmed code FTS.
 // 9 = repository lexicon. 10 = per-field semantic vectors (name/docs/body/graph).
@@ -33,6 +33,60 @@ const SYM_LOC: &str = "SELECT f.path, s.name, f.language, s.line_start, s.line_e
 pub type IndexedLineRow = (Arc<str>, u32, String, Option<Arc<str>>);
 pub type ImportQueryRow = (String, Option<String>, String, u32);
 pub type CallRow = (String, u32, String, String);
+
+/// Nearest ancestor (never the root itself) holding the default-layout index,
+/// searched only up to and including the git work tree root: a parent that
+/// merely happens to hold an index (a home directory, a shared scratch tree) is
+/// not this project's checkout and must not capture a new project.
+/// Silent when an env override moves indexes elsewhere.
+fn enclosing_index_db(root: &Path) -> Option<PathBuf> {
+    if std::env::var_os("ASGREP_INDEX_PATH").is_some() || std::env::var_os("ASGREP_USE_CACHE").is_some() {
+        return None;
+    }
+    let start = if root.is_file() { root.parent()? } else { root };
+    let work_tree = start.ancestors().find(|dir| dir.join(".git").exists());
+    start
+        .ancestors()
+        .skip(1)
+        .take_while(|dir| work_tree.is_none_or(|tree| dir.starts_with(tree)))
+        .map(|dir| dir.join(super::INDEX_DIR).join(super::INDEX_DB))
+        .find(|candidate| candidate.is_file())
+}
+
+/// No index file at this root. Say which file is missing and, when the root sits
+/// inside an indexed checkout, name that index: a nested directory answering
+/// "index is empty" reads as a broken index instead of a missing one. Keeps the
+/// documented `index is empty` fail-closed phrase (docs/validation/negative-ledgers.md).
+fn missing_index_error(root: &Path, db_path: &Path) -> crate::StoreError {
+    if let Some(enclosing) = enclosing_index_db(root) {
+        return crate::StoreError::Other(format!(
+            "index is empty for {}: no index file at {}; this checkout is indexed at {} -- run the command at that root, or pass --index-path for a separate index",
+            root.display(),
+            db_path.display(),
+            enclosing.display()
+        ));
+    }
+    crate::StoreError::Other(format!(
+        "index is empty for {}: no index file at {}; run: asgrep index {} --json",
+        root.display(),
+        db_path.display(),
+        root.display()
+    ))
+}
+
+/// Writable open with the default layout inside an indexed checkout: refuse to
+/// create a second `.asgrep` under the tree. The caller either works at the
+/// checkout root or asks for a deliberate separate index path.
+fn second_index_error(root: &Path, db_path: &Path, enclosing: &Path) -> crate::StoreError {
+    let enclosing_root = enclosing.parent().and_then(|dir| dir.parent()).unwrap_or(enclosing);
+    crate::StoreError::Other(format!(
+        "refusing to create a second index at {} (root {}): the enclosing checkout is already indexed at {} -- run: asgrep index {} --json, or pass --index-path for a separate index",
+        db_path.display(),
+        root.display(),
+        enclosing.display(),
+        enclosing_root.display()
+    ))
+}
 
 #[derive(Debug, Clone)]
 pub(crate) struct CallEvidenceRow {
@@ -311,20 +365,28 @@ impl IndexStore {
         })?;
         if read_only {
             if !db_path.is_file() {
-                return Err(crate::StoreError::Other(format!(
-                    "index is empty for {}; run: asgrep index {} --json",
-                    root.display(),
-                    root.display()
-                )));
+                return Err(missing_index_error(root, &db_path));
             }
-        } else if let Some(p) = db_path.parent() {
-            std::fs::create_dir_all(p).map_err(|e| {
-                crate::StoreError::Other(format!(
-                    "failed to create index directory {} (root {}): {e}",
-                    p.display(),
-                    root.display()
-                ))
-            })?;
+        } else {
+            // Default layout, writable: never grow a second `.asgrep` inside a
+            // checkout that already owns one (the root's own index is fine).
+            if index_path.is_none()
+                && std::env::var_os("ASGREP_INDEX_PATH").is_none()
+                && !db_path.is_file()
+            {
+                if let Some(enclosing) = enclosing_index_db(root) {
+                    return Err(second_index_error(root, &db_path, &enclosing));
+                }
+            }
+            if let Some(p) = db_path.parent() {
+                std::fs::create_dir_all(p).map_err(|e| {
+                    crate::StoreError::Other(format!(
+                        "failed to create index directory {} (root {}): {e}",
+                        p.display(),
+                        root.display()
+                    ))
+                })?;
+            }
         }
         // Preserve rusqlite's error code so explicit reindex can distinguish a
         // corrupt/non-database file from permission, locking, and IO failures.
