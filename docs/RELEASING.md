@@ -2,6 +2,39 @@
 
 This repository publishes npm packages and public crates from one source commit with separate, explicit release identities. Publishing is irreversible: prepare and verify locally, then wait for explicit human approval before any external registry command or protected release-environment approval.
 
+## Official release happy path (copy-paste)
+
+One terminal, five steps. Everything below the checklist is reference for when something deviates.
+
+```bash
+# 1. Bump versions on main, then prove the tree is coherent:
+#    Cargo workspace, npm launcher + 5 platforms, release-contract.json
+#    (canonical + extension + launcherRange), Homebrew formula, docs.
+npm run check:pi-contract && npm run check:pi-dist && npm run check:pi-release
+git commit -am "release: ast-sgrep X.Y.Z" && git push origin main
+
+# 2. Signed tag on the release commit (SSH signature; tag message = release title):
+git tag -s vX.Y.Z -m "ast-sgrep X.Y.Z: <one-line summary>"
+git verify-tag vX.Y.Z && git push origin refs/tags/vX.Y.Z
+
+# 3. Dispatch the official release from the tag (NOT from main):
+gh workflow run pi-npm-release.yml --ref vX.Y.Z \
+  -f release_tag=vX.Y.Z -f publish=true -f layer=family
+
+# 4. Wait ~30 min for builds + verify, then approve the one
+#    `npm-production` deployment gate on the run page ("Review pending
+#    deployments"). Nothing else needs a click.
+
+# 5. Verify all seven packages are live at the release versions:
+for p in ast-sgrep @ast-sgrep/darwin-arm64 @ast-sgrep/darwin-x64 \
+         @ast-sgrep/linux-arm64-gnu @ast-sgrep/linux-x64-gnu \
+         @ast-sgrep/win32-x64-msvc pi-ast-sgrep; do
+  printf '%-32s %s\n' "$p" "$(npm view "$p" version 2>/dev/null)"
+done
+```
+
+Rules of the road: never dispatch from `main` (the gate requires tag == checkout == workflow commit); never move a tag after publication starts — a broken pre-publish tag may be re-signed and force-pushed exactly once, then left alone; reruns are idempotent (live tarballs with matching integrity are skipped, order is native → launcher → extension); if the OIDC publish fails, the one-time escape hatch is a repo `NPM_TOKEN` secret plus `-f bootstrap_token=true` on a fresh dispatch.
+
 ## Pi npm package family
 
 The npm release publishes the canonical family at the contract's canonical version, only from the human-approved official tag and commit:
