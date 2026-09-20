@@ -8,9 +8,9 @@ class AstSgrep < Formula
   # Homebrew tracks the latest *published* tag, not the workspace Cargo.toml version.
   # When bumping releases, update url/version/sha256 together; do not assume
   # CARGO_PKG_VERSION == formula version until the matching tag is published.
-  url "https://github.com/AdityaVG13/ast-sgrep/archive/refs/tags/v1.4.0.tar.gz"
-  version "1.4.0"
-  sha256 "8ca0b4e15219da1ad5318d673fa0f05716ff28bdd011595a04f0452d4c039200"
+  url "https://github.com/AdityaVG13/ast-sgrep/archive/refs/tags/v2.5.0.tar.gz"
+  version "2.5.0"
+  sha256 "99a27953a463c720a71e88876a087269e17dfaa6d2b752e119be012226726cb3"
   license "MIT"
 
   depends_on "rust" => :build
