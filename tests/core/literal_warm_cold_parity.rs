@@ -15,19 +15,16 @@
 //!    (corpus) literal hits agree on file, line, score bits, and excerpt.
 //!    (Over-cap candidate sets may legitimately differ: posting-order cap vs
 //!    scan-order cap. All fixtures here stay under cap.)
-//! C3 hybrid file-set parity — the hybrid prefilter fallback (cold) admits
-//!    the same files as the corpus distinct-files scan (warm) for under-cap
-//!    unprefixed queries. Scores/counts/excerpts are deliberately NOT
-//!    compared: the warm token lookup returns each file's first line as a
-//!    cheap stub (`hits_from_file_ids`), which merges differently downstream
-//!    than the cold fallback's actual first matching line (e.g. 6 warm hits
-//!    vs 3 cold for one 3-file query — the warm extras are non-matching
-//!    first-line stubs). That warm-path presentation quirk is pre-existing
-//!    behavior, out of scope for this change; the funnel's load-bearing
-//!    contract is the admitted file set, pinned here.
+//! C3 hybrid parity — the hybrid prefilter fallback (cold) and the corpus
+//!    distinct-files scan (warm) must agree hit-for-hit on under-cap
+//!    unprefixed queries: same files, same representative lines, same
+//!    scores. The warm token lookup locates the actual first matching line
+//!    per file via bounded memchr (`hits_from_file_ids`), not a first-line
+//!    stub: a stub merges differently downstream and surfaces non-matching
+//!    excerpts as evidence.
 //!    (Over-budget symbol queries are excluded: the warmed in-memory symbol
 //!    table and the cold SQL LIKE fallback select different over-cap sets —
-//!    likewise pre-existing and untouched.)
+//!    a pre-existing warm/cold divergence untouched by this change.)
 use ast_sgrep_core::{IndexOptions, Indexer, SearchOptions, Searcher};
 use std::fs;
 use tempfile::TempDir;
@@ -172,27 +169,27 @@ fn c3_cold_and_warmed_hybrid_identifier_agree() {
     let warmed = searcher_for(root);
     warmed.warm_search_path().unwrap();
     for query in ["ZZQUUX", "beta_shared_rare_token"] {
-        let cold_files: std::collections::BTreeSet<_> = cold
+        let cold_hits: Vec<_> = cold
             .search(query)
             .unwrap()
             .hits
             .iter()
-            .map(|hit| hit.file.clone())
+            .map(hit_key)
             .collect();
         assert!(
-            !cold_files.is_empty(),
+            !cold_hits.is_empty(),
             "fixture must answer hybrid {query}; both-empty agreement proves nothing"
         );
-        let warm_files: std::collections::BTreeSet<_> = warmed
+        let warm_hits: Vec<_> = warmed
             .search(query)
             .unwrap()
             .hits
             .iter()
-            .map(|hit| hit.file.clone())
+            .map(hit_key)
             .collect();
         assert_eq!(
-            cold_files, warm_files,
-            "cold/warm hybrid file-set divergence for {query}"
+            cold_hits, warm_hits,
+            "cold/warm hybrid divergence for {query}"
         );
     }
 }

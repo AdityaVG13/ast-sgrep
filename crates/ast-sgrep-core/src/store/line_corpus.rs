@@ -19,6 +19,35 @@ fn is_ident_byte(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b == b'_'
 }
 
+/// First ASCII case-insensitive substring offset, allocation-free: skip to a
+/// first-byte candidate with `memchr2`, then verify with byte-wise folding
+/// (non-ASCII bytes compare opaquely, so UTF-8 content is safe).
+fn find_ascii_ci(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    if needle.is_empty() {
+        return Some(0);
+    }
+    if needle.len() > haystack.len() {
+        return None;
+    }
+    let first_lo = needle[0].to_ascii_lowercase();
+    let first_up = needle[0].to_ascii_uppercase();
+    let mut from = 0;
+    while from + needle.len() <= haystack.len() {
+        let Some(off) = memchr::memchr2(first_lo, first_up, &haystack[from..]) else {
+            return None;
+        };
+        let pos = from + off;
+        if pos + needle.len() > haystack.len() {
+            return None;
+        }
+        if haystack[pos..pos + needle.len()].eq_ignore_ascii_case(needle) {
+            return Some(pos);
+        }
+        from = pos + 1;
+    }
+    None
+}
+
 fn add_token_file(map: &mut HashMap<String, Vec<u32>>, token: String, fi: u32) {
     let entry = map.entry(token).or_default();
     if entry.last().copied() != Some(fi) {
@@ -345,7 +374,7 @@ impl LineCorpus {
         {
             let key = needle.to_ascii_lowercase();
             if let Some(file_ids) = self.token_files.get(&key) {
-                return self.hits_from_file_ids(file_ids, file_cap, already);
+                return self.hits_from_file_ids(needle, file_ids, file_cap, already);
             }
         }
         let finder = memchr::memmem::Finder::new(needle.as_bytes());
@@ -384,6 +413,7 @@ impl LineCorpus {
 
     fn hits_from_file_ids<'a>(
         &'a self,
+        needle: &str,
         file_ids: &[u32],
         file_cap: usize,
         already: &HashSet<String>,
@@ -403,6 +433,16 @@ impl LineCorpus {
                 rest.push(fi);
             }
         }
+        // Representative is the actual first matching line, located by an
+        // ASCII case-insensitive memchr bounded to each admitted file's
+        // bytes (stops at the first hit; far cheaper than the whole-blob
+        // scan the token map exists to skip). A first-line stub would merge
+        // differently downstream than the cold fallback's matching line and
+        // surface non-matching excerpts as evidence. Case-insensitive (not
+        // the exact-case probe the memchr path uses) because prefilter terms
+        // are case-folded while file bytes keep their case, and the cold
+        // fallback this must agree with scans case-insensitively. A miss
+        // keeps the stub rather than dropping an admitted file.
         let mut hits = Vec::new();
         for &fi in preferred.iter().chain(rest.iter()) {
             let Some(&line_i) = self.file_first_line.get(fi as usize) else {
@@ -411,7 +451,19 @@ impl LineCorpus {
             if line_i == u32::MAX {
                 continue;
             }
-            hits.push(self.hit(line_i as usize));
+            let stub = line_i as usize;
+            let start = self.starts.get(stub).copied().unwrap_or(0) as usize;
+            let end = self
+                .file_byte_ends
+                .get(fi as usize)
+                .copied()
+                .unwrap_or(self.bytes.len() as u32) as usize;
+            let lo = start.min(end).min(self.bytes.len());
+            let hi = end.min(self.bytes.len());
+            let line = find_ascii_ci(&self.bytes[lo..hi], needle.as_bytes())
+                .and_then(|rel| self.line_index_at_byte(lo + rel))
+                .unwrap_or(stub);
+            hits.push(self.hit(line));
             if hits.len() >= file_cap {
                 break;
             }
