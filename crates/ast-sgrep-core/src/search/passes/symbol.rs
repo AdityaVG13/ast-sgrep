@@ -21,6 +21,10 @@ fn mode_sql_limit(options: &SearchOptions) -> usize {
 const TYPE_SYMBOL_WEIGHT: f64 = 0.65;
 const SYMBOL_KIND_ORDER: &str =
     " ORDER BY CASE WHEN s.kind IN ('function','method') THEN 0 ELSE 1 END, s.id";
+/// Path-deterministic twin of [`cmp_symbol_rows`] for the hybrid lane: the
+/// cold window must sort (kind group, path, line, name) like the warmed
+/// table, never rowid order (parallel indexing scrambles `s.id`).
+const SYMBOL_PATH_ORDER: &str = " ORDER BY CASE WHEN s.kind IN ('function','method') THEN 0 WHEN s.kind IN ('type','enum','class','interface','struct') THEN 1 ELSE 2 END, f.path, s.line_start, s.name";
 const SYMBOL_SELECT: &str = "SELECT f.path, f.language, s.name, s.kind, s.line_start, s.line_end
          FROM symbols s JOIN files f ON f.id = s.file_id";
 const CALLER_SELECT: &str = "SELECT f.path, f.language, c.caller, c.callee, c.line_no
@@ -40,7 +44,7 @@ pub(crate) struct WarmedSymbolTable {
 impl WarmedSymbolTable {
     pub(crate) fn load(store: &IndexStore) -> Result<Self> {
         const WARMED_SYMBOL_CAP: usize = 262_144;
-        let rows = query_symbol_spans(store, "", Vec::new(), WARMED_SYMBOL_CAP)?;
+        let rows = query_symbol_spans(store, "", Vec::new(), SYMBOL_KIND_ORDER, WARMED_SYMBOL_CAP)?;
         let mut names_lower = Vec::with_capacity(rows.len());
         let mut by_file: HashMap<String, Vec<usize>> = HashMap::new();
         for (i, row) in rows.iter().enumerate() {
@@ -84,37 +88,9 @@ impl WarmedSymbolTable {
             }
         }
         let rows = &self.rows;
-        matched.sort_by(|&left, &right| {
-            let (left, right) = (&rows[left], &rows[right]);
-            kind_rank(left.3.as_str())
-                .cmp(&kind_rank(right.3.as_str()))
-                .then_with(|| left.0.cmp(&right.0))
-                .then_with(|| left.4.cmp(&right.4))
-                .then_with(|| left.2.cmp(&right.2))
-        });
-        // Functions otherwise spend the 32-row budget before enums/structs
-        // (`Durability`, `SnapshotStamp`) that conceptual gold names.
-        let other_keep = ((limit / 2).max(4)).min(limit);
-        let mut fns = Vec::new();
-        let mut types = Vec::new();
-        let mut others = Vec::new();
-        for &i in &matched {
-            let kind = rows[i].3.as_str();
-            if matches!(kind, "function" | "method") {
-                fns.push(i);
-            } else if is_type_symbol_kind(kind) {
-                types.push(i);
-            } else {
-                others.push(i);
-            }
-        }
-        types.truncate(other_keep);
-        let leftover = other_keep.saturating_sub(types.len());
-        others.truncate(leftover);
-        fns.truncate(limit.saturating_sub(types.len() + others.len()));
-        fns.into_iter()
-            .chain(types)
-            .chain(others)
+        matched.sort_by(|&left, &right| cmp_symbol_rows(&rows[left], &rows[right]));
+        quota_partition(matched, |&i| kind_rank(rows[i].3.as_str()), limit)
+            .into_iter()
             .map(|i| rows[i].clone())
             .collect()
     }
@@ -126,6 +102,48 @@ fn kind_rank(kind: &str) -> u8 {
         "type" | "enum" | "class" | "interface" | "struct" => 1,
         _ => 2,
     }
+}
+
+/// Canonical symbol-row order shared by the warmed table and the cold SQL
+/// lane: (kind group, path, line, name). Deterministic across index builds
+/// — never rowid order, which parallel indexing scrambles.
+fn cmp_symbol_rows(left: &SymbolSpanRow, right: &SymbolSpanRow) -> std::cmp::Ordering {
+    kind_rank(left.3.as_str())
+        .cmp(&kind_rank(right.3.as_str()))
+        .then_with(|| left.0.cmp(&right.0))
+        .then_with(|| left.4.cmp(&right.4))
+        .then_with(|| left.2.cmp(&right.2))
+}
+
+/// Quota buckets shared by the warmed table and the cold SQL lane: input
+/// must already be in [`cmp_symbol_rows`] order; output is functions first,
+/// then reserved type/other slots. Without the reservation, functions crowd
+/// minority kinds off over-budget pages. Groups are [`kind_rank`] codes
+/// (0 = function/method, 1 = type family, 2 = other) so callers can bucket
+/// indices without borrowing rows.
+fn quota_partition<T>(
+    items: Vec<T>,
+    group_of: impl Fn(&T) -> u8,
+    limit: usize,
+) -> Vec<T> {
+    // Functions otherwise spend the whole budget before enums/structs
+    // (`Durability`, `SnapshotStamp`) that conceptual gold names.
+    let other_keep = ((limit / 2).max(4)).min(limit);
+    let mut fns = Vec::new();
+    let mut types = Vec::new();
+    let mut others = Vec::new();
+    for item in items {
+        match group_of(&item) {
+            0 => fns.push(item),
+            1 => types.push(item),
+            _ => others.push(item),
+        }
+    }
+    types.truncate(other_keep);
+    let leftover = other_keep.saturating_sub(types.len());
+    others.truncate(leftover);
+    fns.truncate(limit.saturating_sub(types.len() + others.len()));
+    fns.into_iter().chain(types).chain(others).collect()
 }
 
 fn is_type_symbol_kind(kind: &str) -> bool {
@@ -398,10 +416,11 @@ fn query_symbol_spans(
     store: &IndexStore,
     where_clause: &str,
     bind: Vec<String>,
+    order: &str,
     limit: usize,
 ) -> Result<Vec<SymbolSpanRow>> {
     let sql = format!(
-        "{SYMBOL_SELECT}{where_clause}{SYMBOL_KIND_ORDER} LIMIT ?{}",
+        "{SYMBOL_SELECT}{where_clause}{order} LIMIT ?{}",
         bind.len() + 1
     );
     query_limit_map(store.connection(), &sql, bind, limit, read_symbol_span_row)
@@ -545,7 +564,19 @@ pub(crate) fn symbol_pass_for_files_warmed(
         let (mut where_clause, mut bind) =
             like_terms_filter("s.name", &parsed.terms, options.lang_filter.as_deref());
         restrict_to_files(&mut where_clause, &mut bind, Some(allowed_files));
-        query_symbol_spans(store, &where_clause, bind, sql_limit)?
+        // Same selection contract as the warmed table: a path-ordered wide
+        // window (not a rowid-ordered head-cut) through the shared quotas.
+        // Under-cap windows cover every match, so cold and warmed agree
+        // exactly; over-cap windows stay deterministic and quota-balanced.
+        let mut rows = query_symbol_spans(
+            store,
+            &where_clause,
+            bind,
+            SYMBOL_PATH_ORDER,
+            SYMBOL_SQL_LIMIT,
+        )?;
+        rows.sort_by(cmp_symbol_rows);
+        quota_partition(rows, |row| kind_rank(row.3.as_str()), sql_limit)
     };
     let mut hits = symbol_span_rows_to_hits_opts(
         store,
@@ -602,7 +633,13 @@ pub fn anchor_pass_for_files(
     let (mut where_clause, mut bind) =
         like_terms_filter("s.name", &terms, options.lang_filter.as_deref());
     restrict_to_files(&mut where_clause, &mut bind, Some(allowed_files));
-    let rows = query_symbol_spans(store, &where_clause, bind, SYMBOL_SQL_LIMIT)?;
+    let rows = query_symbol_spans(
+        store,
+        &where_clause,
+        bind,
+        SYMBOL_KIND_ORDER,
+        SYMBOL_SQL_LIMIT,
+    )?;
     let term_count = parsed.terms.len();
     symbol_span_rows_to_hits_opts(
         store,
@@ -645,7 +682,13 @@ pub fn anchor_pass(
     }
     let terms = vec![anchor_symbol];
     let (where_clause, bind) = like_terms_filter("s.name", &terms, options.lang_filter.as_deref());
-    let rows = query_symbol_spans(store, &where_clause, bind, SYMBOL_SQL_LIMIT)?;
+    let rows = query_symbol_spans(
+        store,
+        &where_clause,
+        bind,
+        SYMBOL_KIND_ORDER,
+        SYMBOL_SQL_LIMIT,
+    )?;
     let term_count = parsed.terms.len();
     symbol_span_rows_to_hits(store, rows, options, parsed, HitKind::Anchor, |name| {
         let matched = parsed
@@ -671,7 +714,7 @@ pub(crate) fn def_hits_for_terms(
     }
     let (where_clause, bind) =
         like_terms_filter("s.name", &parsed.terms, options.lang_filter.as_deref());
-    let rows = query_symbol_spans(store, &where_clause, bind, limit)?;
+    let rows = query_symbol_spans(store, &where_clause, bind, SYMBOL_KIND_ORDER, limit)?;
     symbol_span_rows_to_hits(store, rows, options, parsed, HitKind::Def, |name| {
         score_def(&parsed.terms, name)
     })
@@ -759,7 +802,13 @@ pub fn search_defs(
         return Ok(vec![]);
     }
     let (where_clause, bind) = exact_eq_filter("s.name", name, options.lang_filter.as_deref());
-    let rows = query_symbol_spans(store, &where_clause, bind, mode_sql_limit(options))?;
+    let rows = query_symbol_spans(
+        store,
+        &where_clause,
+        bind,
+        SYMBOL_KIND_ORDER,
+        mode_sql_limit(options),
+    )?;
     symbol_span_rows_to_hits(store, rows, options, &q, HitKind::Def, |n| {
         score_def(&q.terms, n)
     })
@@ -782,4 +831,75 @@ pub fn search_imports(
             SearchHit::import(path, language, module_path, line_no)
         })
         .collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn row(path: &str, name: &str, kind: &str, line: u32) -> SymbolSpanRow {
+        (
+            path.to_string(),
+            Some("python".to_string()),
+            name.to_string(),
+            kind.to_string(),
+            line,
+            line,
+        )
+    }
+
+    #[test]
+    fn quota_buckets_reserve_minority_slots_over_budget() {
+        // 10 functions + 3 classes, budget 8: other_keep = max(8/2,4) = 4,
+        // so all 3 classes survive and functions take the remaining 5.
+        let mut rows = Vec::new();
+        for i in 0..10 {
+            rows.push(row(
+                &format!("src/m{i}.py"),
+                &format!("qzz_f{i}"),
+                "function",
+                1,
+            ));
+        }
+        for i in 0..3 {
+            rows.push(row(
+                &format!("src/c{i}.py"),
+                &format!("qzz_C{i}"),
+                "class",
+                1,
+            ));
+        }
+        rows.sort_by(cmp_symbol_rows);
+        let kept = quota_partition(rows, |row| kind_rank(row.3.as_str()), 8);
+        assert_eq!(kept.len(), 8);
+        let kinds: Vec<&str> = kept.iter().map(|row| row.3.as_str()).collect();
+        assert_eq!(
+            kinds,
+            vec![
+                "function", "function", "function", "function", "function", "class", "class",
+                "class",
+            ],
+            "functions first, then every surviving class"
+        );
+        // Within-bucket order is (path, line, name): deterministic across
+        // index builds, never rowid order.
+        let names: Vec<&str> = kept.iter().map(|row| row.2.as_str()).collect();
+        assert_eq!(
+            names,
+            vec!["qzz_f0", "qzz_f1", "qzz_f2", "qzz_f3", "qzz_f4", "qzz_C0", "qzz_C1", "qzz_C2",]
+        );
+    }
+
+    #[test]
+    fn quota_partition_is_noop_under_budget() {
+        let mut rows = vec![
+            row("src/b.py", "qzz_b", "function", 3),
+            row("src/a.py", "qzz_A", "class", 1),
+        ];
+        rows.sort_by(cmp_symbol_rows);
+        let kept = quota_partition(rows, |row| kind_rank(row.3.as_str()), 32);
+        assert_eq!(kept.len(), 2);
+        assert_eq!(kept[0].2, "qzz_b");
+        assert_eq!(kept[1].2, "qzz_A");
+    }
 }

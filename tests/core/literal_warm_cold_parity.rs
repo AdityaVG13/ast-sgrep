@@ -22,16 +22,20 @@
 //!    per file via bounded memchr (`hits_from_file_ids`), not a first-line
 //!    stub: a stub merges differently downstream and surfaces non-matching
 //!    excerpts as evidence.
-//!    (Over-budget symbol queries are excluded: the warmed in-memory symbol
-//!    table and the cold SQL LIKE fallback select different over-cap sets —
-//!    a pre-existing warm/cold divergence untouched by this change.)
+//! C4 mixed-kind symbol parity — over-budget symbol queries with minority
+//!    kinds must agree too: both paths sort by (kind, path, line, name) and
+//!    apply the same quota buckets (functions plus reserved type/other
+//!    slots), so the cold SQL window and the warmed table select the same
+//!    rows. (A rowid-ordered head-cut with no quotas would crowd minority
+//!    kinds out of the cold page while the warmed page reserves them slots.)
 use ast_sgrep_core::{IndexOptions, Indexer, SearchOptions, Searcher};
 use std::fs;
 use tempfile::TempDir;
 
-// 20 files x 28 defs x 2 lines + 4 marker lines = 1124 indexed lines: above
-// BMH_LINE_THRESHOLD (1000) so the cold path is the trigram scan, not
-// literal_sql (except the short-needle query, which pins literal_sql).
+// 20 files x (28 fill defs + 3 qzz fns) x 2 lines + 5 classes x 2 lines +
+// 4 marker lines = 1254 indexed lines: above BMH_LINE_THRESHOLD (1000) so
+// the cold path is the trigram scan, not literal_sql (except the
+// short-needle query, which pins literal_sql).
 const FILLER_FILES: usize = 20;
 const FILLER_DEFS: usize = 28;
 
@@ -52,6 +56,15 @@ fn setup() -> TempDir {
             body.push_str(&format!(
                 "def fill_{f}_{i}(value):\n    return value * {i} + {f}\n"
             ));
+        }
+        // C4 vehicles: 60 single-kind functions plus 5 minority-kind classes
+        // sharing one rare term, so quota bucketing (not a head-cut) decides
+        // the over-budget symbol page.
+        for k in 0..3 {
+            body.push_str(&format!("def qzz_f{f}_{k}(value):\n    return value\n"));
+        }
+        if f < 5 {
+            body.push_str(&format!("class qzz_C{f}:\n    pass\n"));
         }
         if f == 0 {
             body.push_str("ALPHA_ZZQUUX_MARKER_PAYLOAD sentinel\n");
@@ -192,4 +205,37 @@ fn c3_cold_and_warmed_hybrid_identifier_agree() {
             "cold/warm hybrid divergence for {query}"
         );
     }
+}
+
+#[test]
+fn c4_cold_and_warmed_mixed_kind_symbol_query_agree() {
+    let temp = setup();
+    let root = temp.path();
+    let cold = searcher_for(root);
+    let warmed = searcher_for(root);
+    warmed.warm_search_path().unwrap();
+    // 60 functions + 5 classes share `qzz` (over the 50-row symbol budget):
+    // both paths must select the same quota-balanced rows.
+    let cold_hits: Vec<_> = cold
+        .search("qzz")
+        .unwrap()
+        .hits
+        .iter()
+        .map(hit_key)
+        .collect();
+    assert!(
+        !cold_hits.is_empty(),
+        "fixture must answer hybrid qzz; both-empty agreement proves nothing"
+    );
+    let warm_hits: Vec<_> = warmed
+        .search("qzz")
+        .unwrap()
+        .hits
+        .iter()
+        .map(hit_key)
+        .collect();
+    assert_eq!(
+        cold_hits, warm_hits,
+        "cold/warm mixed-kind symbol divergence for qzz"
+    );
 }
