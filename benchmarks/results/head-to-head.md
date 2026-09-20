@@ -7,6 +7,25 @@
 This file reports only measurements already recorded in repository artifacts.
 It does not combine or extrapolate runs. Lower latency is better.
 
+## 2026-09-20 measured (self corpus, ~650 tracked files, working tree)
+
+**Status: `reproducible-in-tree`.** CLI `hyperfine` on a `git ls-files` copy
+plus warm-server legs. Raw protocol: [`speed.md`](speed.md) (one-shot
+literal fix row; binary from a working tree atop `ccbccf19` — re-run after
+commit to re-pin).
+
+| Win class | asgrep p95 | Comparator p95 | Result |
+|---|---:|---:|---|
+| Warm lexical (`literal:SearchHit`, one-shot) | 7.9 ms | ripgrep 13.0 ms | **asgrep** (1.65×) |
+| Warm lexical (one-shot vs warm servers) | 7.9 ms | tgrep 7.5 ms, fff 0.5 ms | near tgrep p95 (tgrep leads p50); fff wins warm latency (ranked 54, latency-only) |
+| Plain scan (`grep -rn`) | 7.9 ms | grep 50.2 ms | **asgrep** (6.4×) |
+| Structural (`pattern:SearchHit`) | 10.2 ms | ast-grep 63.3 ms | **asgrep** (6.2×); latency-only, not match-set |
+| Warm semantic NL | 18.5 ms | — | indexed semantic; no scan-tool analogue |
+
+Warm lexical is indexed-vs-scan: asgrep's index is built before timing;
+ripgrep/grep scan on each query. fff surfaces 54 ranked matches where
+exhaustive tools find ~300 lines — its cell is latency-only by design.
+
 ## 2026-08-28 measured (self corpus, 445 tracked files)
 
 **Status: `reproducible-in-tree`.** CLI `hyperfine` on a `git ls-files` copy.

@@ -619,6 +619,42 @@ impl IndexStore {
             }
         }
     }
+    /// Resident RAM corpus without loading: `None` when no warmed corpus is
+    /// cached (or it went stale). One-shot queries use this so a single
+    /// `literal:` does not pay the full `lines` table materialization plus
+    /// token-index build (flamegraph 2026-09-20: ~95% of one-shot wall under
+    /// `literal_pass` -> `line_corpus`, 3/3 captures); they fall back to the
+    /// trigram/SQL path instead. Warm sessions (`warm_search_path`,
+    /// codemode-serve) load once and keep the memchr scan. A stale entry is
+    /// reported as `None`, not reloaded: the next explicit warm revalidates.
+    pub(crate) fn line_corpus_if_cached(
+        &self,
+    ) -> Result<Option<std::sync::Arc<crate::store::line_corpus::LineCorpus>>> {
+        if self.line_corpus_disabled.get() {
+            return Ok(None);
+        }
+        let cached = match self.line_corpus.borrow().as_ref() {
+            Some(cached) => std::sync::Arc::clone(cached),
+            None => return Ok(None),
+        };
+        let index_v = self.index_data_version()?;
+        let Ok(pragma_v) = self
+            .conn
+            .query_row("PRAGMA data_version", [], |row| row.get::<_, i64>(0))
+        else {
+            return Ok(None);
+        };
+        if cached.index_data_version == index_v && cached.pragma_data_version == pragma_v {
+            return Ok(Some(cached));
+        }
+        Ok(None)
+    }
+    /// True when a fresh RAM corpus is resident (no load as a side effect).
+    /// Lets callers and health checks observe whether the session paid the
+    /// one-time corpus materialization without paying it themselves.
+    pub fn has_resident_line_corpus(&self) -> bool {
+        self.line_corpus_if_cached().ok().flatten().is_some()
+    }
     pub fn set_meta(&self, key: &str, value: &str) -> Result<()> {
         self.conn.prepare_cached( "INSERT INTO meta(key, value) VALUES(?1, ?2) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
         )?.execute(params![key, value])?;

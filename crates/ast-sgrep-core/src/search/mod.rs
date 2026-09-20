@@ -235,11 +235,12 @@ impl Searcher {
         // additionally swaps in the empty in-memory store before this runs.
         // Fresh/unreadable bindings keep the historical behavior.
         let foreign_root = foreign_root_bound(&store, &options.root).unwrap_or(false);
-        // Line corpus loads LAZILY: its only consumer is `literal_pass`
-        // (`store.line_corpus()?`), which version-checks and caches on first
-        // use. An eager warm here materialized the whole `lines ⋈ files`
-        // table on EVERY search (pattern/regex callers never touch it) — a
-        // DB-proportional worker CPU block.
+        // Line corpus loads only via explicit `warm_search_path`: its
+        // consumers (`literal_pass`, cascade prefilter) use the cached-only
+        // probe and fall back to trigram/SQL. Loading on first use
+        // materialized the whole `lines ⋈ files` table plus the token index
+        // on EVERY one-shot search — flamegraph 2026-09-20 put ~95% of
+        // one-shot literal wall there (3/3 captures).
         Self {
             store,
             inert: foreign_root,
@@ -1591,7 +1592,9 @@ fn literal_prefilter_pass(
             })
             .then_with(|| left.cmp(right))
     });
-    let corpus = store.line_corpus()?;
+    // Cached-only (one-shot literal discipline): the prefilter already
+    // handles `None` via the per-term `literal_pass` fallback below.
+    let corpus = store.line_corpus_if_cached()?;
     let file_cap = match corpus.as_ref() {
         Some(corpus) => CASCADE_PREFILTER_FILE_LIMIT.min(corpus.file_count().max(1)),
         None => CASCADE_PREFILTER_FILE_LIMIT,
@@ -1665,7 +1668,12 @@ fn literal_prefilter_pass(
     for term in terms {
         let extra = user_first.is_some_and(|user| !user.contains(term.as_str()));
         let hits = literal_pass(store, &prefilter_options, &ParsedQuery::literal(term))?;
-        for hit in hits {
+        for mut hit in hits {
+            // Presence semantics, matching the corpus branch above (score
+            // 1.0 per distinct file): this funnel feeds fusion, and a
+            // rank-decay here would score identical file sets differently
+            // on cold (this fallback) vs warmed (corpus) sessions.
+            hit.score = 1.0;
             if files.insert(hit.file.clone()) {
                 if !extra {
                     user_files.insert(hit.file.clone());

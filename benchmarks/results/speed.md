@@ -6,6 +6,66 @@ trace back to a dated row here or carry its own reproduce command.
 
 Status tags: [`benchmarks/README.md`](../README.md).
 
+## 2026-09-20 one-shot literal fix (self corpus, working tree)
+
+**Status: `reproducible-in-tree`.** Same workdir protocol as the bake-off row
+below, after the one-shot literal fix (no implicit RAM-corpus load; trigram
+path for cold queries). Binary built from a working tree atop `ccbccf19`
+with that fix uncommitted — re-run after commit to re-pin.
+
+| Provenance | value |
+|------------|-------|
+| date | 2026-09-20 |
+| commit | working tree atop `ccbccf19` (one-shot literal fix, uncommitted) |
+| machine | Apple M5 Max, 18 cores (arm64), macOS 26.6.2, APFS SSD |
+| corpus | tracked files → rsync workdir: **646 files** indexed at timing time (649 after the tgrep sidecar landed; scan blocks ran before it) |
+| build | `cargo build --profile release-perf -p ast-sgrep-cli --bin asgrep` |
+| rustc | 1.98.0 |
+| tools | ripgrep 15.1.0, BSD grep 2.6.0, ast-grep 0.45.3, tgrep 1.0.9 (warm server, `--shell=none` client timing), fff-mcp 0.10.6 (warm server, `benchmarks/fff_grep_leg.mjs`), hyperfine 1.20.0 |
+| index | schema 16, hashed semantic embedder; 6,296 symbols; `index.db` **231 MiB** |
+
+p95 is nearest-rank on hyperfine's raw samples: `idx = floor((n - 1) * 95 / 100)`.
+
+| Surface | n | p50 | p95 | comparator p95 | note |
+|---------|--:|----:|----:|-------------:|------|
+| warm `literal:SearchHit` | 15 | 7.6 ms | **7.9 ms** | rg 13.0 ms, grep 50.2 ms, tgrep 7.5 ms | asgrep beats rg 1.65×; near warm-tgrep p95 (tgrep leads p50 4.7 vs 7.6) |
+| fff warm `grep SearchHit` | 15 | 0.4 ms | **0.5 ms** | — | fff-mcp 0.10.6 warm server; ranked 20/54 shown vs ~300 literal lines — latency-only, not match-set |
+| warm `pattern:SearchHit` | 12 | 9.7 ms | **10.2 ms** | ast-grep 63.3 ms | asgrep wins 6×; path untouched by the fix |
+| warm `semantic 'credential renewal'` | 12 | 17.8 ms | **18.5 ms** | — | range 16.9–19.0 ms; the bake-off 2.34 s did not reproduce (see note) |
+| cold index (`asgrep index .`) | 8 | 14.1 s | **22.3 s** | — | range 13.9–23.5 s; outliers from system load, path untouched |
+| serve distinct-query p50/p99 | 240 | 1.7–1.9 ms | (p99) 4.4–6.3 ms | — | `warm_distinct.mjs`, 2 rounds; warm corpus intact |
+
+Notes:
+
+- The 171 ms → 7.9 ms literal drop is the fix, not corpus drift: same
+  corpus class as the bake-off row (646 vs 649 indexed files), same query.
+  Flamegraph (3/3 captures) put ~95% of one-shot wall under `literal_pass`
+  → `LineCorpus::load`; cold queries now take the trigram path.
+- Over-cap selection changed with the path: `SearchHit` has 298 matching
+  lines and the lane caps at 100 candidates, so the shown 16 are the
+  path-ordered head of the first-100 FTS postings rather than the global
+  path-ordered head. All shown hits verified true matches; under-cap
+  queries are hit-identical across paths (`literal_warm_cold_parity`).
+- tgrep timed with `--shell=none` after the scan blocks (its `.tgrep/`
+  sidecar postdates them); one 8.1 ms outlier in 15 runs. asgrep is a
+  cold one-shot process here vs tgrep's warm server.
+- rg showed a statistical-outliers warning, but separation is clean: rg
+  min 11.1 ms > asgrep max 8.3 ms across the interleaved block.
+- fff leg: `node benchmarks/fff_grep_leg.mjs <corpus> SearchHit 15`.
+  Spawn-to-first-result 68 ms (scan + content index + first query); warm
+  calls p50 0.4 / p95 0.5 ms. fff surfaces 54 ranked matches where
+  exhaustive tools find ~300 lines — it owns sub-ms ranked file-finding,
+  not exhaustive grep. Closing the serve-path gap (1.8 ms vs 0.4 ms) is
+  the next warm-latency bead; it needs its own flamegraph first.
+- The bake-off row's 2.34 s NL-semantic cell is voided as load
+  contamination, not a code regression: the same query on the same
+  workdir index times 17.8/18.5 ms (n=12, tight) on the fixed binary and
+  10–20 ms on a HEAD-built control binary (5/5 fast after a cold-cache
+  first run). The bake-off session ran under another agent's build storm
+  (the same storm that voided a literal series); no flamegraph is owed
+  for a hotspot that does not reproduce. Same-corpus control for the
+  literal fix: HEAD binary 170–180 ms (CPU-bound) vs fixed 7.6 ms.
+
 ## 2026-09-19 warm distinct-query latency (self corpus)
 
 **Status: `reproducible-in-tree`.**

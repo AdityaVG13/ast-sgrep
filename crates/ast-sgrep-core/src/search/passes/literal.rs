@@ -19,7 +19,11 @@ pub fn literal_pass(
         Some(t) if !t.is_empty() => t,
         _ => return Ok(Vec::new()),
     };
-    if let Some(corpus) = store.line_corpus()? {
+    // Cached-only: a one-shot query must not pay the full `lines`
+    // materialization + token-index build (flamegraph 2026-09-20). Warmed
+    // sessions (codemode-serve) hold the corpus and keep the memchr scan;
+    // everyone else takes the trigram/SQL path below.
+    if let Some(corpus) = store.line_corpus_if_cached()? {
         return scan_line_corpus(&corpus, store, options, parsed, needle);
     }
     if store.indexed_line_count_at_least(BMH_LINE_THRESHOLD)? && needle.chars().count() >= 3 {
@@ -184,6 +188,12 @@ fn scan_trigram_matches(
     drop(_tri_span);
     drop(stmt);
     hits.sort_by(|a, b| a.file.cmp(&b.file).then(a.line_start.cmp(&b.line_start)));
+    // Same rank-decayed scores as the corpus/SQL literal paths: warm (corpus)
+    // and cold (trigram) searches must agree hit-for-hit, and `finish` sorts
+    // by score, so flat 1.0s would order ties differently.
+    for (rank, hit) in hits.iter_mut().enumerate() {
+        hit.score = 1.0 / (1.0 + rank as f64 * 0.01);
+    }
     hits.truncate(retained_limit(options));
     attach_context(store, options, &mut hits)?;
     Ok(hits)

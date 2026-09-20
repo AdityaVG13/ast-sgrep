@@ -22,6 +22,7 @@ This changelog follows [Keep a Changelog](https://keepachangelog.com/) conventio
 - Pattern-node excerpts are reconstructed from `lines` at search time instead of duplicating source text in `pattern_nodes`.
 - `--lang` aliases include every indexed source extension (`ts`, `h`, `hpp`, `py`, `rs`, …) so SQL filters match stored language ids.
 - `pi-ast-sgrep` installs and runs against official launchers behind the canonical version: CLI envelopes accept the same binary major, and `read`/`edit`/`find` fall back to extension-side implementations when the launcher predates the native tools. The `>=2.1.0` floor that made `pi-ast-sgrep@2.2.0` uninstallable (npm ETARGET / bun "failed to resolve") is now `>=2.0.0`.
+- One-shot `literal:`/`word:` search no longer loads the full RAM line corpus (full `lines` scan plus token indexing on every cold query). Cold queries take the trigram/SQL path; warmed sessions (`codemode-serve`) keep the memchr scan. One-shot `literal:SearchHit` drops from 171 ms to 7.9 ms p95 on the self corpus (beats ripgrep 13.0 ms); under-cap queries are hit-identical across paths.
 
 ### Changed
 

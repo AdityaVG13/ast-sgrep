@@ -131,6 +131,9 @@ path = "../../tests/core/regex_class_literal.rs"
 name = "literal_diff"
 path = "../../tests/core/literal_diff.rs"
 [[test]]
+name = "literal_warm_cold_parity"
+path = "../../tests/core/literal_warm_cold_parity.rs"
+[[test]]
 name = "correctness_batch"
 path = "../../tests/core/correctness_batch.rs"
 [[test]]

@@ -183,12 +183,13 @@ These are **checked-in run summaries**, not portable guarantees. Hardware, corpu
 
 | Recorded comparison | Status | Published result | Evidence |
 |---------------------|--------|------------------|----------|
+| 2026-09-20 self corpus (~650 tracked files) | `reproducible-in-tree` | Warm literal 7.9 ms vs rg 13.0 ms; `pattern:SearchHit` 10.2 ms vs ast-grep 63.3 ms; semantic NL 18.5 ms; fff warm 0.5 ms (ranked, latency-only) | [speed.md](benchmarks/results/speed.md) |
 | 2026-08-28 self corpus (445 tracked files) | `reproducible-in-tree` | Cold index 4.58 s p95; warm literal 19.0 ms vs rg 11.1 ms; `pattern:SearchHit` 129 ms vs ast-grep 26.5 ms; semantic NL 20.3 ms | [speed.md](benchmarks/results/speed.md) |
 | Warm lexical / structural at 23k–100k | `historical` / `UNREPRODUCIBLE` | Large speedups in that dump; latency-only for structural | [head-to-head.md](benchmarks/results/head-to-head.md) |
 | Cross-tool bake-off | `UNREPRODUCIBLE` | Mixed; inspect every row | [bakeoff.md](benchmarks/results/bakeoff.md) |
 | Known regressions | `UNREPRODUCIBLE` | Published without suppression | [losses.md](benchmarks/results/losses.md) |
 
-Measured 2026-08-28 on Apple M5 Max from `2285ce29` (`release-perf`, rustc 1.98.0): a `git ls-files` copy of this tree (445 files, 4.6 MiB source; 398 indexed). Cold index **4.58 s p95** (schema 14, hashed semantic-v2 dim 256; `index.db` 104 MiB; IVF sidecar not built at this size). Warm `literal:SearchHit` **19.0 ms p95** vs ripgrep **11.1 ms**. Warm `pattern:SearchHit` **129 ms p95** vs ast-grep **26.5 ms** (latency-only, not match-set). Semantic NL **20.3 ms p95**. On this small self tree, ripgrep and ast-grep win those two CLI races; the 23k/100k historical dump is a different corpus. Full protocol in [speed.md](benchmarks/results/speed.md).
+Measured 2026-09-20 on Apple M5 Max from a working tree atop `ccbccf19` (`release-perf`, rustc 1.98.0): a `git ls-files` copy of this tree (~650 files indexed, schema 16, `index.db` 231 MiB). Warm `literal:SearchHit` **7.9 ms p95** vs ripgrep **13.0 ms** (asgrep 1.65×), near warm-tgrep p95 (7.5 ms; tgrep leads p50); `grep -rn` 50.2 ms. Warm `pattern:SearchHit` **10.2 ms p95** vs ast-grep **63.3 ms** (latency-only, not match-set). Semantic NL **18.5 ms p95**. fff-mcp warm `grep` answers in **0.5 ms p95** but surfaces 54 ranked matches where exhaustive tools find ~300 lines (latency-only by design). The 2026-08-28 row (445 files; rg and ast-grep won those two CLI races) is kept in [speed.md](benchmarks/results/speed.md) for history. Full protocol there.
 
 Canonical table: [head-to-head.md](benchmarks/results/head-to-head.md). Index: [benchmarks/README.md](benchmarks/README.md).
 

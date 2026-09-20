@@ -20,10 +20,10 @@
         "end": 11,
         "start": 8
       },
-      "margin": 0.022524195703906374,
+      "margin": 0.02283110107475035,
       "preview": "def process_request(input)",
       "ref": "src/app.rb#L8-L11",
-      "score": 0.11665221989745476,
+      "score": 0.11695912526829874,
       "signal": "structural",
       "symbol": "process_request",
       "why": [
