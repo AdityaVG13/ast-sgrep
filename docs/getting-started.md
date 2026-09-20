@@ -10,7 +10,7 @@ This guide walks through install, first index, everyday queries, and common conf
 pi install npm:pi-ast-sgrep
 ```
 
-Open Pi in the project you want to search. The extension immediately provides the primary `asgrep` Code Mode tool, plus `asgrep_search`, `asgrep_index`, and `asgrep_status`; `/asgrep-doctor`, `/asgrep-status`, `/asgrep-index`, and `/asgrep-reindex`; and the `ast-sgrep` skill. The first search lazily creates the index, so no separate setup command is required. Start with:
+Open Pi in the project you want to search. The extension immediately provides the primary `asgrep` Code Mode tool, plus `asgrep_search`, `asgrep_edit`, `asgrep_read`, and `asgrep_index` (status is a `/asgrep-status` command, not a tool); `/asgrep-doctor`, `/asgrep-status`, `/asgrep-index`, and `/asgrep-reindex`; and the `ast-sgrep` skill. The first search lazily creates the index, so no separate setup command is required. Start with:
 
 1. `/asgrep-doctor` if native availability or configuration is uncertain.
 2. `/asgrep-status` to inspect the current project.

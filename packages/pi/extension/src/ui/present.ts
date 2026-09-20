@@ -35,8 +35,8 @@ export const ASGREP_PROMPT_SNIPPET =
   "Code search by intent, symbol, defs, callers, pattern (asgrep; use without being asked)";
 
 export const ASGREP_PROMPT_GUIDELINES = [
-  "Any code lookup (function, def, caller, intent, pattern): call asgrep first.",
-  "Compose in Code Mode (search/defs/read with Promise.all, return a small shaped value); grep only for exact strings or filenames. Bound with in: \"path\"; on 0 hits use suggested_next.",
+  "Any code lookup: call asgrep first; read code with asgrep_read, change it with asgrep_edit.",
+  "Compose in Code Mode (search/defs/read, Promise.all, small shaped value); grep only exact strings/filenames. Bound with in:\"path\"; on 0 hits use suggested_next.",
 ] as const;
 
 export function paint(theme: PresentTheme | undefined, role: string, text: string, bold = false): string {

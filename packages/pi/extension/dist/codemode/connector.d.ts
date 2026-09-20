@@ -1,6 +1,6 @@
 import type { MachineEnvelope } from "../runtime/runtime.js";
-import type { ChainArgs, EditArgs, FindArgs, ReadArgs, SearchArgs } from "./types.js";
 import { type BatchCapableHost, type DispatchCall, type DispatchStats } from "./dispatch.js";
+import type { ChainArgs, EditArgs, FindArgs, ReadArgs, SearchArgs } from "./types.js";
 /**
  * Spawn/CLI transport. Hosts provide argv `run` only — never a typed twin.
  * Typed entry lives solely on {@link DispatchSurface} (dispatcher output).

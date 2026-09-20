@@ -11,6 +11,9 @@ import { resolveBinary, resolveCodemodeAddon } from "../../../packages/pi/launch
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, "../../..");
 const launcherDir = join(repoRoot, "packages/pi/launcher");
+// Fixtures must carry the shipping launcher version: resolveHost rejects any
+// platform manifest whose version differs from the launcher.
+const launcherVersion = JSON.parse(readFileSync(join(launcherDir, "package.json"), "utf8")).version;
 const targets = [
   { id: "darwin-arm64", name: "@ast-sgrep/darwin-arm64", platform: "darwin", arch: "arm64", libc: "", executable: "asgrep" },
   { id: "darwin-x64", name: "@ast-sgrep/darwin-x64", platform: "darwin", arch: "x64", libc: "", executable: "asgrep" },
@@ -24,7 +27,7 @@ function fixture(target = targets[0], changes = {}) {
   mkdirSync(packageDir);
   const manifest = {
     name: target.name,
-    version: changes.version ?? "2.0.0",
+    version: changes.version ?? launcherVersion,
     os: [target.platform],
     cpu: [target.arch],
     ...(target.libc ? { libc: [target.libc] } : {})
@@ -47,7 +50,9 @@ function fixture(target = targets[0], changes = {}) {
       ?? (digest + "  " + target.executable + "\n" + addonDigest + "  ast-sgrep-codemode.node\n");
     writeFileSync(join(packageDir, "checksum.sha256"), checksum);
   }
-  return { root, manifestPath, executablePath, addonPath, options: { platform: target.platform, arch: target.arch, libc: target.libc, requireResolve: () => manifestPath } };
+  // env: {} keeps resolution hermetic: ambient ASGREP_BIN/AST_SGREP_BINARY
+  // overrides would otherwise bypass the fixture entirely.
+  return { root, manifestPath, executablePath, addonPath, options: { platform: target.platform, arch: target.arch, libc: target.libc, env: {}, requireResolve: () => manifestPath } };
 }
 function expectCode(code, action, pathPart) {
   assert.throws(action, error => {
@@ -296,8 +301,11 @@ test("packed launcher install executes both aliases and preserves argv", () => {
     writeFileSync(join(fixtureDir, "package.json"), JSON.stringify({ private: true, dependencies: { "ast-sgrep": "file:" + launcherTar, [host.name]: "file:" + platformTar } }));
     const install = spawnSync("npm", ["install", "--ignore-scripts", "--no-audit", "--no-fund"], { cwd: fixtureDir, encoding: "utf8" });
     assert.equal(install.status, 0, install.stderr);
+    // Strip binary overrides: the staged fixture — not the developer's
+    // ASGREP_BIN — must win, or the argv echo never runs.
+    const { ASGREP_BIN: _ignoredBin, AST_SGREP_BINARY: _ignoredLegacyBin, ...cleanEnv } = process.env;
     for (const alias of ["asgrep", "ast-sgrep"]) {
-      const result = spawnSync(join(fixtureDir, "node_modules/.bin", alias), ["space value", "--flag=✓"], { encoding: "utf8", env: { ...process.env, PATH: process.env.PATH } });
+      const result = spawnSync(join(fixtureDir, "node_modules/.bin", alias), ["space value", "--flag=✓"], { encoding: "utf8", env: { ...cleanEnv, PATH: process.env.PATH } });
       assert.equal(result.status, 0, result.stderr);
       assert.deepEqual(JSON.parse(result.stdout), ["space value", "--flag=✓"]);
     }

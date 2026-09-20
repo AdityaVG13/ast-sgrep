@@ -115,10 +115,27 @@ function getBinary(config: RuntimeConfig, env: NodeJS.ProcessEnv, resolver: Bina
 
 function byteLength(value: string): number { return Buffer.byteLength(value, "utf8"); }
 
-/** Present-field version identity checks. Pass `requireIdentity` for version --json. */
+/**
+ * Binary-generation check. The extension tracks main ahead of official
+ * launcher releases (severed lane), so any binary of the same major is
+ * accepted: features gate on envelope content and the index negotiates its
+ * schema with the binary. A different major or an unparseable version still
+ * fails closed, as does a missing version when identity is required.
+ */
+function binaryMajor(version: unknown): number | undefined {
+  if (typeof version !== "string") return undefined;
+  const major = version.match(/^(\d+)\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/)?.[1];
+  return major === undefined ? undefined : Number(major);
+}
+
+// RUNTIME_VERSION is contract-pinned semver, so this is total. A malformed
+// constant (-1) would reject every binary — fail closed.
+const RUNTIME_MAJOR: number = binaryMajor(RUNTIME_VERSION) ?? -1;
+
+/** Present-field version checks. Pass `requireIdentity` for version --json. */
 function assertVersionTriple(envelope: Partial<MachineEnvelope>, requireIdentity = false): void {
   // Compound guards (same short-circuit as nested if): check only when required or field present.
-  if ((requireIdentity || envelope.version !== undefined) && envelope.version !== RUNTIME_VERSION) {
+  if ((requireIdentity || envelope.version !== undefined) && binaryMajor(envelope.version) !== RUNTIME_MAJOR) {
     throw new RuntimeError("VERSION_MISMATCH", "ast-sgrep binary version does not match the extension", { expected: RUNTIME_VERSION, actual: envelope.version });
   }
   if ((requireIdentity || envelope.machine_schema_version !== undefined) && envelope.machine_schema_version !== MACHINE_SCHEMA_VERSION) {

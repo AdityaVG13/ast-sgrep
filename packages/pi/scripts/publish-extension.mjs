@@ -59,5 +59,10 @@ run('npm', ['run', 'build'], { cwd: extensionDir });
 const distDrift = run('git', ['status', '--porcelain', '--', 'packages/pi/extension/dist']).trim();
 if (distDrift) fail('dist drift after build — commit the rebuilt dist first\n' + distDrift);
 
+// The launcherRange must resolve to a published launcher: without this, a
+// missing canonical family ships an extension nobody can install (2026-09-19:
+// pi-ast-sgrep@2.2.0 required ast-sgrep@>=2.1.0 <3 with only 2.0.0 live).
+run(process.execPath, ['packages/pi/scripts/check-launcher-resolves.mjs']);
+
 console.log(`publishing pi-ast-sgrep@${version} (local dogfood lane; the pi-v tag lane remains the attested path)`);
 run('npm', ['publish', '--access', 'public'], { cwd: extensionDir, inherit: true });

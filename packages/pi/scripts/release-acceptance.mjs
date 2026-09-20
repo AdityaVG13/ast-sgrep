@@ -4,6 +4,7 @@ import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
+import { assertLauncherRangeResolves, fetchPublishedVersions } from './check-launcher-resolves.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const fail = (code, message) => { throw new Error(`${code}: ${message}`); };
@@ -257,6 +258,19 @@ const gateExtension = async () => {
   const spec = `${state.extension.name}@${state.extension.version}`;
   const observed = await registryVersions(state, option('registry-snapshot'), [spec]);
   gateExtensionState(state, { clean, refType, tag, commit, tagCommit }, observed);
+  // The launcherRange must resolve to a published launcher: without this, a
+  // missing canonical family ships an extension nobody can install (2026-09-19:
+  // pi-ast-sgrep@2.2.0 required ast-sgrep@>=2.1.0 <3 with only 2.0.0 live).
+  const snapshotPath = option('registry-snapshot');
+  let published;
+  if (snapshotPath) {
+    published = (await readJson(path.resolve(snapshotPath))).launcherVersions;
+    if (!Array.isArray(published)) fail('ASGREP_RELEASE_REGISTRY', 'extension registry snapshot must include launcherVersions: [...]');
+  } else {
+    published = fetchPublishedVersions(state.launcher.name);
+  }
+  const hits = assertLauncherRangeResolves({ launcher: state.launcher.name, range: extensionSpec(state).launcherRange, extension: spec, canonical: state.version, versions: published });
+  console.log(`[pi-release] launcherRange ${extensionSpec(state).launcherRange} resolves: ${hits.map((version) => `${state.launcher.name}@${version}`).join(', ')}`);
   console.log(`[pi-release] gate accepted signed ${tag} at ${commit}; extension ${spec} pending publication`);
 };
 const gate = async () => {
@@ -357,6 +371,9 @@ const selfTest = async () => {
   expect('extension-dep-skew', () => validateExtensionAlignment({ ...state, extension: { ...state.extension, dependencies: { [state.launcher.name]: '2.0.0' } } }));
   expect('extension-wrong-tag', () => gateExtensionState(state, { ...extInput, tag: state.contract.canonicalVersion.tag }, { [extSpec]: null }));
   expect('extension-duplicate', () => gateExtensionState(state, extInput, { [extSpec]: state.extension.version }));
+  // 2026-09-19 incident: the extension floor sat above every published launcher.
+  expect('extension-launcher-unresolved', () => assertLauncherRangeResolves({ launcher: state.launcher.name, range: extensionSpec(state).launcherRange, extension: extSpec, canonical: state.version, versions: [] }));
+  if (assertLauncherRangeResolves({ launcher: state.launcher.name, range: extensionSpec(state).launcherRange, extension: extSpec, canonical: state.version, versions: [state.version] }).join() !== state.version) fail('ASGREP_RELEASE_SELF_TEST', 'a published canonical launcher must satisfy the extension launcherRange');
   console.log(`[pi-release] gate self-test accepted canonical + extension lane input and rejected ${rejected.join(', ')}`);
   console.log(`[pi-release] publish order: ${packageOrder(state).join(' -> ')}`);
   console.log('[pi-release] publication: disabled (self-test only)');

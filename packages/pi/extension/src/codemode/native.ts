@@ -8,6 +8,10 @@
  * 1. `ASGREP_CODEMODE_NAPI_PATH` (dev override)
  * 2. `@ast-sgrep/<platform>/ast-sgrep-codemode.node` via launcher (release install)
  * 3. Local `extension/native/` / cargo `target/release` (dev builds)
+ *
+ * Severed-lane policy: the in-process binding requires an exact native
+ * generation (an ABI mismatch risks crashes, not errors). Older launchers
+ * serve Code Mode over CLI sticky/batch/spawn instead — same tools, slower.
  */
 
 import { createRequire } from "node:module";

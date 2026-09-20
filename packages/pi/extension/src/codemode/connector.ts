@@ -1,15 +1,27 @@
 import type { MachineEnvelope } from "../runtime/runtime.js";
-import { coerceHostArgs } from "./guest-api.js";
-import { defined } from "./types.js";
-import type { ChainArgs, EditArgs, FindArgs, ReadArgs, SearchArgs } from "./types.js";
 import {
+  argvFor,
+  asEnvelope,
   createCodemodeDispatcher,
   type BatchCapableHost,
   type DispatchCall,
   type DispatchStats,
 } from "./dispatch.js";
+import { editFilesFallback, readWindowsFallback } from "./fallback.js";
+import { coerceHostArgs } from "./guest-api.js";
+import { defined } from "./types.js";
+import type { ChainArgs, EditArgs, FindArgs, ReadArgs, SearchArgs } from "./types.js";
 
 const DEFAULT_LIMIT = 8;
+
+/** Native tools the extension serves itself when the launcher predates them. */
+const NATIVE_FALLBACK_TOOLS = new Set(["read", "edit", "find"]);
+
+/** Stable unknown-tool prefix, byte-identical in every native generation. */
+function isUnknownToolError(cause: unknown): boolean {
+  const message = cause instanceof Error ? cause.message : String(cause);
+  return message.includes("unknown tool:");
+}
 
 /**
  * Spawn/CLI transport. Hosts provide argv `run` only — never a typed twin.
@@ -119,8 +131,32 @@ export function createAsgrepConnector(
     return { signal: combined };
   };
 
-  const call = (tool: string, args: Record<string, unknown>, signal?: AbortSignal) =>
-    dispatcher.host.call(tool, args, context, callOptions(signal));
+  // Unknown-tool fallback engages once per tool: after the first miss the
+  // native attempt is skipped for this bundle (a backend cannot gain tools
+  // mid-session). Any other error still propagates untouched, unmemoized.
+  const nativeMissing = new Set<string>();
+  const fallbackCall = async (tool: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<MachineEnvelope> => {
+    if (tool === "find") return host.run(argvFor("find", args), context, signal === undefined ? {} : { signal });
+    const value = tool === "read"
+      ? await readWindowsFallback(context.cwd, args, signal)
+      : await editFilesFallback(context.cwd, args, signal);
+    return asEnvelope(value, tool);
+  };
+  const call = async (tool: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<MachineEnvelope> => {
+    const opts = callOptions(signal);
+    if (NATIVE_FALLBACK_TOOLS.has(tool) && nativeMissing.has(tool)) return fallbackCall(tool, args, opts.signal);
+    try {
+      return await dispatcher.host.call(tool, args, context, opts);
+    } catch (cause) {
+      // No memo check here: concurrent same-tool misses must all fall back —
+      // the memo only skips future native attempts, never a fresh miss.
+      if (NATIVE_FALLBACK_TOOLS.has(tool) && isUnknownToolError(cause)) {
+        nativeMissing.add(tool);
+        return fallbackCall(tool, args, opts.signal);
+      }
+      throw cause;
+    }
+  };
 
   const searchPayload = (method: "search" | "find" | "semantic", input: SearchArgs): Record<string, unknown> => {
     const scoped = coerceHostArgs(method, withScope({ ...input }) as Record<string, unknown>);

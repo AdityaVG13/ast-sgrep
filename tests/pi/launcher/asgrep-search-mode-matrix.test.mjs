@@ -59,9 +59,11 @@ function searchArgs(params) {
 }
 
 test("schema mode literals are declared in extension source", () => {
-  for (const mode of SCHEMA_MODES) {
-    assert.match(indexTs, new RegExp(`Type\\.Literal\\("${mode}"\\)`), mode);
-  }
+  // Modes ship as a TypeBox enum spelled literally (lean tool surface); the
+  // file invariant is schema modes == tested modes, both directions.
+  const decl = indexTs.match(/enum:\s*\[([^\]]*)\]/);
+  assert.ok(decl, "search mode enum declaration");
+  assert.deepEqual(JSON.parse(`[${decl[1]}]`).sort(), [...SCHEMA_MODES].sort());
 });
 
 test("every schema mode has argv routing coverage", () => {

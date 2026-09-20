@@ -1,7 +1,15 @@
+import { argvFor, asEnvelope, createCodemodeDispatcher, } from "./dispatch.js";
+import { editFilesFallback, readWindowsFallback } from "./fallback.js";
 import { coerceHostArgs } from "./guest-api.js";
 import { defined } from "./types.js";
-import { createCodemodeDispatcher, } from "./dispatch.js";
 const DEFAULT_LIMIT = 8;
+/** Native tools the extension serves itself when the launcher predates them. */
+const NATIVE_FALLBACK_TOOLS = new Set(["read", "edit", "find"]);
+/** Stable unknown-tool prefix, byte-identical in every native generation. */
+function isUnknownToolError(cause) {
+    const message = cause instanceof Error ? cause.message : String(cause);
+    return message.includes("unknown tool:");
+}
 function clampLimit(limit) {
     if (limit === undefined)
         return DEFAULT_LIMIT;
@@ -58,7 +66,35 @@ export function createAsgrepConnector(host, context, options = {}) {
         }
         return { signal: combined };
     };
-    const call = (tool, args, signal) => dispatcher.host.call(tool, args, context, callOptions(signal));
+    // Unknown-tool fallback engages once per tool: after the first miss the
+    // native attempt is skipped for this bundle (a backend cannot gain tools
+    // mid-session). Any other error still propagates untouched, unmemoized.
+    const nativeMissing = new Set();
+    const fallbackCall = async (tool, args, signal) => {
+        if (tool === "find")
+            return host.run(argvFor("find", args), context, signal === undefined ? {} : { signal });
+        const value = tool === "read"
+            ? await readWindowsFallback(context.cwd, args, signal)
+            : await editFilesFallback(context.cwd, args, signal);
+        return asEnvelope(value, tool);
+    };
+    const call = async (tool, args, signal) => {
+        const opts = callOptions(signal);
+        if (NATIVE_FALLBACK_TOOLS.has(tool) && nativeMissing.has(tool))
+            return fallbackCall(tool, args, opts.signal);
+        try {
+            return await dispatcher.host.call(tool, args, context, opts);
+        }
+        catch (cause) {
+            // No memo check here: concurrent same-tool misses must all fall back —
+            // the memo only skips future native attempts, never a fresh miss.
+            if (NATIVE_FALLBACK_TOOLS.has(tool) && isUnknownToolError(cause)) {
+                nativeMissing.add(tool);
+                return fallbackCall(tool, args, opts.signal);
+            }
+            throw cause;
+        }
+    };
     const searchPayload = (method, input) => {
         const scoped = coerceHostArgs(method, withScope({ ...input }));
         const payload = {

@@ -28,7 +28,7 @@ export type EnvelopeLike = {
     [key: string]: unknown;
 };
 export declare const ASGREP_PROMPT_SNIPPET = "Code search by intent, symbol, defs, callers, pattern (asgrep; use without being asked)";
-export declare const ASGREP_PROMPT_GUIDELINES: readonly ["Any code lookup (function, def, caller, intent, pattern): call asgrep first.", "Compose in Code Mode (search/defs/read with Promise.all, return a small shaped value); grep only for exact strings or filenames. Bound with in: \"path\"; on 0 hits use suggested_next."];
+export declare const ASGREP_PROMPT_GUIDELINES: readonly ["Any code lookup: call asgrep first; read code with asgrep_read, change it with asgrep_edit.", "Compose in Code Mode (search/defs/read, Promise.all, small shaped value); grep only exact strings/filenames. Bound with in:\"path\"; on 0 hits use suggested_next."];
 export declare function paint(theme: PresentTheme | undefined, role: string, text: string, bold?: boolean): string;
 export declare function hitLocation(hit: HitLike): string;
 export declare function hitLabel(hit: HitLike): string;

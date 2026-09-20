@@ -4,13 +4,12 @@ This repository publishes npm packages and public crates from one source commit 
 
 ## Pi npm package family
 
-The npm release is one atomic versioned family at `2.0.0`, published only from the human-approved official `v2.0.0` tag and commit:
+The npm release publishes the canonical family at the contract's canonical version, only from the human-approved official tag and commit:
 
 1. the five host-constrained native packages: `@ast-sgrep/darwin-arm64`, `@ast-sgrep/darwin-x64`, `@ast-sgrep/linux-arm64-gnu`, `@ast-sgrep/linux-x64-gnu`, and `@ast-sgrep/win32-x64-msvc`;
-2. the `ast-sgrep` launcher, whose optional native dependencies use that exact version;
-3. the `pi-ast-sgrep` extension, whose launcher dependency uses that exact version.
+2. the `ast-sgrep` launcher, whose optional native dependencies use that exact version.
 
-The extension, launcher, and five native npm packages share npm version `2.0.0`. The packaged executable is built from this release commit and reports native CLI version `2.0.0`; that expected CLI identity is recorded separately in [the release contract](../packages/pi/release-contract.json). All artifacts share one source commit and recorded checksums. Pi validation does not run automatically on pull requests, pushes to `main`, or tag pushes; both Pi workflows are manual `workflow_dispatch` actions. npm and crates.io are independently approved registry operations over the same source release; neither waits for or proves completion of the other.
+The `pi-ast-sgrep` extension is NOT part of the lockstep family: it versions independently under `packages.extension.version` and resolves its launcher through the declared `packages.extension.launcherRange` (see the extension lane below). The packaged executable is built from the release commit and reports the native CLI version recorded separately in [the release contract](../packages/pi/release-contract.json). Family artifacts share one source commit and recorded checksums. Pi validation does not run automatically on pull requests, pushes to `main`, or tag pushes; both Pi workflows are manual `workflow_dispatch` actions. npm and crates.io are independently approved registry operations over the same source release; neither waits for or proves completion of the other.
 
 ## Pi extension lane (pi-ast-sgrep)
 

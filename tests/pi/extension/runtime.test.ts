@@ -176,6 +176,22 @@ describe("machine compatibility", () => {
     await runtime(pi, project, { environment: {} }).checkCompatibility({ cwd: project }); assert.deepEqual(pi.calls[0]?.args, ["version", "--json"]);
     await errorCode(() => runtime(new FakePi(valid()), project, { environment: {} }).checkCompatibility({ cwd: project }), "VERSION_MISMATCH");
   });
+  it("accepts an older same-major binary for extension-ahead dogfooding", async () => {
+    const { project } = await fixture();
+    // The official launcher lags the extension: the same major must work.
+    const older = valid({ version: "2.0.0", machine_schema_version: MACHINE_SCHEMA_VERSION });
+    const envelope = await runtime(new FakePi(older), project, { environment: {} }).run([], { cwd: project });
+    assert.equal(envelope.version, "2.0.0");
+    await runtime(new FakePi(older), project, { environment: {} }).checkCompatibility({ cwd: project });
+    // Prerelease/dev builds of the same major are accepted too.
+    await runtime(new FakePi(valid({ version: "2.3.0-alpha.1" })), project, { environment: {} }).run([], { cwd: project });
+  });
+  it("still rejects major skew and unparseable binary versions", async () => {
+    const { project } = await fixture();
+    await errorCode(() => runtime(new FakePi(valid({ version: "3.0.0" })), project, { environment: {} }).run([], { cwd: project }), "VERSION_MISMATCH");
+    await errorCode(() => runtime(new FakePi(valid({ version: "not-a-version" })), project, { environment: {} }).run([], { cwd: project }), "VERSION_MISMATCH");
+    await errorCode(() => runtime(new FakePi(valid({ version: "3.0.0" })), project, { environment: {} }).checkCompatibility({ cwd: project }), "VERSION_MISMATCH");
+  });
 });
 describe("index format upgrades", () => {
   it("treats dotted non-.db index paths as directories", async () => {
@@ -184,6 +200,16 @@ describe("index format upgrades", () => {
     await createIndex(join(configuredDirectory, "index.db"), INDEX_FORMAT_VERSION, "current");
     const subject = runtime(new FakePi(), project, { environment: { ASGREP_INDEX_PATH: "index.cache.v1" } });
     assert.equal(await subject.inspectIndexCompatibility({ cwd: project }), "ready");
+  });
+  it("treats the configured binary's older schema as ready on an official launcher", async () => {
+    const { project } = await fixture();
+    const indexPath = join(project, ".asgrep", "index.db");
+    await createIndex(indexPath, 12, "official");
+    const pi = new FakePi(async (_options, args) => {
+      assert.deepEqual(args, ["version", "--json"]);
+      return valid({ command: "version", version: "2.0.0", machine_schema_version: MACHINE_SCHEMA_VERSION, index_schema_version: 12 });
+    });
+    assert.equal(await runtime(pi, project, { environment: {} }).inspectIndexCompatibility({ cwd: project }), "ready");
   });
   it("rebuilds an incompatible index in place so warm sessions retain the same inode", async () => {
     const { project } = await fixture();

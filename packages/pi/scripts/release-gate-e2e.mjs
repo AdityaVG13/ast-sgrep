@@ -8,7 +8,9 @@ import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
-const version = '2.0.0';
+const releaseContract = JSON.parse(await readFile(path.join(root, 'packages/pi/release-contract.json'), 'utf8'));
+const version = releaseContract.canonicalVersion.version;
+const extensionVersion = releaseContract.packages.extension.version;
 const machineSchema = '1.0.0';
 const piVersion = '0.80.6';
 const maxCapturedBytes = 4 * 1024 * 1024;
@@ -174,7 +176,7 @@ try {
   const installRoot = path.join(project, '.pi', 'npm', 'node_modules');
   const extensionRoot = path.join(installRoot, 'pi-ast-sgrep');
   await stage('installed-version-alignment', async () => {
-    assert.equal((await json(path.join(extensionRoot, 'package.json'))).version, version);
+    assert.equal((await json(path.join(extensionRoot, 'package.json'))).version, extensionVersion);
     assert.equal((await json(path.join(installRoot, 'ast-sgrep', 'package.json'))).version, version);
     assert.equal((await json(path.join(installRoot, host.packageName, 'package.json'))).version, version);
     // The installed pi agent must satisfy the declared peer range (>=0.80.6 <1),
@@ -205,20 +207,21 @@ try {
   const runner = new pi.ExtensionRunner(loaded.extensions, runtime, project, {}, {});
   const toolNames = runner.getAllRegisteredTools().map(({ definition }) => definition.name).sort();
   const commandNames = runner.getRegisteredCommands().map(({ invocationName }) => invocationName).sort();
-  assert.deepEqual(toolNames, ['asgrep', 'asgrep_index', 'asgrep_search', 'asgrep_status']);
+  assert.deepEqual(toolNames, ['asgrep', 'asgrep_edit', 'asgrep_index', 'asgrep_read', 'asgrep_search']);
   assert.deepEqual(commandNames, ['asgrep-doctor', 'asgrep-index', 'asgrep-reindex', 'asgrep-status']);
   const context = runner.createContext();
   const codemodeTool = runner.getToolDefinition('asgrep');
   const searchTool = runner.getToolDefinition('asgrep_search');
   const indexTool = runner.getToolDefinition('asgrep_index');
-  const statusTool = runner.getToolDefinition('asgrep_status');
-  assert.ok(codemodeTool && searchTool && indexTool && statusTool);
+  const readTool = runner.getToolDefinition('asgrep_read');
+  const editTool = runner.getToolDefinition('asgrep_edit');
+  assert.ok(codemodeTool && searchTool && indexTool && readTool && editTool);
   const invokeSearch = (params, signal = undefined) => searchTool.execute('release-gate', params, signal, undefined, context);
   await stage('tool-prompt-auto-register', async () => {
     assert.ok(codemodeTool.promptSnippet, 'asgrep must contribute a system-prompt snippet');
     assert.ok(Array.isArray(codemodeTool.promptGuidelines) && codemodeTool.promptGuidelines.length >= 2);
     assert.match(codemodeTool.promptSnippet, /asgrep/i);
-    assert.match(codemodeTool.description, /do not wait for the user/i);
+    assert.match(codemodeTool.description, /instead of grep/i);
     assert.match(searchTool.description, /asgrep/i);
   });
   const lazy = await stage('lazy-index-natural-search', async () => invokeSearch({ query: 'initialNeedle', mode: 'natural', limit: 8 }));
@@ -228,7 +231,6 @@ try {
     assertHit(envelope(await invokeSearch({ query: '$CLIENT.fetch($$$ARGS)', mode: 'pattern', limit: 8 })), 'pattern.ts');
     assertHit(envelope(await invokeSearch({ query: 'initialNeedle', mode: 'defs', limit: 8 })), 'initialNeedle');
     assertHit(envelope(await invokeSearch({ query: 'rust_needle', mode: 'callers', limit: 8 })), 'rust_caller');
-    assertHit(envelope(await invokeSearch({ query: 'function that greets a person', mode: 'semantic', limit: 8 })), 'app.ts');
   });
   await stage('create-modify-delete-freshness', async () => {
     const dynamic = path.join(project, 'dynamic.ts');
@@ -243,9 +245,15 @@ try {
     assert.ok(!JSON.stringify(envelope(await invokeSearch({ query: 'modifiedNeedle', mode: 'defs', limit: 8 }))).includes('dynamic.ts'), 'deleted file remained searchable');
   });
   await stage('tools-commands-doctor-status-index-reindex', async () => {
-    envelope(await statusTool.execute('status', {}, undefined, undefined, context), 'status');
     envelope(await indexTool.execute('index', { force: false }, undefined, undefined, context), 'index');
     envelope(await indexTool.execute('reindex', { force: true }, undefined, undefined, context), 'reindex');
+    assertHit(envelope(await readTool.execute('read', { path: 'app.ts', start: 1, end: 1 }, undefined, undefined, context), 'read'), 'initialNeedle');
+    await writeFile(path.join(project, 'edit-me.ts'), 'export const gateNeedle = 1;\n');
+    envelope(await editTool.execute('edit', { path: 'edit-me.ts', oldText: 'gateNeedle = 1', newText: 'gateNeedle = 2' }, undefined, undefined, context), 'edit');
+    assert.ok((await readFile(path.join(project, 'edit-me.ts'), 'utf8')).includes('gateNeedle = 2'));
+    // Semantic needs vectors: the lazy index is lexical-only by design, so the
+    // semantic assertion runs here, after the explicit index built embeddings.
+    assertHit(envelope(await invokeSearch({ query: 'function that greets a person', mode: 'semantic', limit: 8 })), 'app.ts');
     const notices = [];
     const commandContext = runner.createCommandContext();
     commandContext.ui.notify = (message, type) => notices.push({ message, type });
@@ -273,14 +281,14 @@ try {
     assert.ok(!(await readdir(path.dirname(indexPath))).some((name) => name.startsWith('.rebuild-') || name.includes('.backup-')));
   });
   await stage('two-version-lifecycle-reuse', async () => {
-    const output = run(process.execPath, [path.join(root, 'packages/pi/scripts/two-version-e2e.mjs')], { cwd: root, timeout: 600_000, env: { ASGREP_CURRENT_ARTIFACT: extensionTar } });
+    const output = run(process.execPath, [path.join(root, 'packages/pi/scripts/two-version-e2e.mjs')], { cwd: root, timeout: 600_000, env: { ASGREP_CURRENT_ARTIFACT: extensionTar, ASGREP_EXPECTED_EXTENSION_VERSION: extensionVersion, ASGREP_EXPECTED_LAUNCHER_VERSION: version, ASGREP_EXPECTED_NATIVE_VERSION: version } });
     const value = JSON.parse(output.split(/\r?\n/u).at(-1));
     assert.equal(value.ok, true);
     assert.equal(value.currentArtifactLifecycle, true);
     assert.equal(value.projectIndexPreserved, true);
   });
   assert.equal(children.size, 0, 'extension subprocesses are still running');
-  console.log(JSON.stringify({ ok: true, release: version, machineSchema, node: process.version, pi: piVersion, host: process.platform + '-' + process.arch, loader: 'Pi loadExtensions + ExtensionAPI + ExtensionRunner', packedArtifacts: ['native.tgz', 'launcher.tgz', 'typebox.tgz', 'extension.tgz'], tools: toolNames, commands: commandNames, stages, criteria: { packedArtifacts: true, parentEnvironmentIsolation: true, realPiLoader: true, toolsAndCommands: true, toolPromptAutoRegister: true, lazyIndex: true, naturalPatternDefsCallersSemantic: true, createModifyDeleteFreshness: true, cancellation: true, doctorStatusIndexReindex: true, versionAlignment: true, incompatibleIndexRecovery: true, updateRemovalViaTwoVersionHarness: true, projectIndexPreservedOnRemoval: true, boundedOutput: true, isolatedHomeProject: true, noCredentialsAdaptersPathOrMcp: true, cleanup: true } }));
+  console.log(JSON.stringify({ ok: true, release: version, extension: extensionVersion, machineSchema, node: process.version, pi: piVersion, host: process.platform + '-' + process.arch, loader: 'Pi loadExtensions + ExtensionAPI + ExtensionRunner', packedArtifacts: ['native.tgz', 'launcher.tgz', 'typebox.tgz', 'extension.tgz'], tools: toolNames, commands: commandNames, stages, criteria: { packedArtifacts: true, parentEnvironmentIsolation: true, realPiLoader: true, toolsAndCommands: true, toolPromptAutoRegister: true, lazyIndex: true, naturalPatternDefsCallersSemantic: true, createModifyDeleteFreshness: true, cancellation: true, doctorStatusIndexReindex: true, versionAlignment: true, incompatibleIndexRecovery: true, updateRemovalViaTwoVersionHarness: true, projectIndexPreservedOnRemoval: true, boundedOutput: true, isolatedHomeProject: true, noCredentialsAdaptersPathOrMcp: true, cleanup: true } }));
 } catch (cause) {
   primaryFailure = cause;
   throw cause;

@@ -22,6 +22,7 @@ const workspace = await readJson('package.json');
 const cargo = await readFile(path.join(root, 'Cargo.toml'), 'utf8');
 const extensionManifest = JSON.parse(await readFile(path.join(root, 'packages/pi/extension/package.json'), 'utf8'));
 const launcherManifest = JSON.parse(await readFile(path.join(root, 'packages/pi/launcher/package.json'), 'utf8'));
+const toolsSource = await readFile(path.join(root, 'packages/pi/extension/src/host/tools.ts'), 'utf8');
 const runtimeSource = await readFile(path.join(root, 'packages/pi/extension/src/runtime/runtime.ts'), 'utf8');
 const runtimeDist = await readFile(path.join(root, 'packages/pi/extension/dist/runtime/runtime.js'), 'utf8');
 const runtimeDeclarations = await readFile(path.join(root, 'packages/pi/extension/dist/runtime/runtime.d.ts'), 'utf8');
@@ -111,7 +112,9 @@ for (let index = 0; index < expectedPlatforms.length; index += 1) {
   report(platform.optionalDependencyVersion === version, name + ' optional dependency is not pinned to the exact canonical version');
 }
 report(equal(contract.packages?.unsupportedTargets, ['linux-musl', 'win32-arm64']), 'unsupported target policy changed');
-report(equal(contract.surface?.tools, ['asgrep', 'asgrep_search', 'asgrep_edit', 'asgrep_read', 'asgrep_index', 'asgrep_status']), 'unsupported Pi tool names');
+report(equal(contract.surface?.tools, ['asgrep', 'asgrep_search', 'asgrep_edit', 'asgrep_read', 'asgrep_index']), 'unsupported Pi tool names');
+const registeredTools = [...new Set([...toolsSource.matchAll(/name: "(asgrep[a-z_]*)"/gu)].map((match) => match[1]))].sort();
+report(equal(registeredTools, [...(contract.surface?.tools ?? [])].sort()), 'registered Pi tools drift from contract surface.tools');
 report(equal(contract.surface?.commands, ['/asgrep-doctor', '/asgrep-status', '/asgrep-index', '/asgrep-reindex']), 'unsupported Pi command names');
 report(equal(contract.surface?.cliCommands, ['asgrep', 'ast-sgrep']) && contract.surface?.defaultSearchFormat === 'agent-capsule', 'unsupported CLI surface or default search format');
 report(contract.compatibility?.node?.range === '>=22.19.0' && contract.compatibility.node.minimum === '22.19.0', 'Node compatibility floor changed');
@@ -121,11 +124,19 @@ report(extensionManifest.dependencies?.typebox === '^1.0.0' && extensionManifest
 const layers = contract.compatibility?.layers ?? {};
 report(layers.launcher?.version === version && layers.binary?.version === nativeVersion, 'launcher layer or embedded native CLI drifts from its canonical version');
 report(layers.launcher?.compatibility === 'exact' && layers.binary?.compatibility === 'exact-native-cli', 'launcher/binary layer compatibility must reject version skew');
-report(layers.extension?.compatibility === 'range' && layers.extension?.launcherRange === contract.packages?.extension?.launcherRange && layers.extension?.minLauncherVersion === version, 'extension layer must declare the contract launcherRange floored at the canonical version');
 const extensionSpec = contract.packages?.extension ?? {};
+const launcherFloor = /^>=(\d+)\.(\d+)\.(\d+) <(\d+)$/u.exec(extensionSpec.launcherRange ?? '');
+const floorAtOrBelowCanonical = (floor) => {
+  const current = version.split('.').map(Number);
+  for (let index = 0; index < 3; index += 1) {
+    if (floor[index] !== current[index]) return floor[index] < current[index];
+  }
+  return true;
+};
+report(layers.extension?.compatibility === 'range' && layers.extension?.launcherRange === extensionSpec.launcherRange && launcherFloor !== null && layers.extension?.minLauncherVersion === `${launcherFloor[1]}.${launcherFloor[2]}.${launcherFloor[3]}` && Number(launcherFloor[4]) === Number(version.split('.')[0]) + 1 && floorAtOrBelowCanonical([Number(launcherFloor[1]), Number(launcherFloor[2]), Number(launcherFloor[3])]), 'extension layer must declare the contract launcherRange floored at minLauncherVersion (at or below canonical) and capped above the canonical major');
 report(extensionSpec.independent === true && extensionSpec.tagPrefix === 'pi-v', 'extension must declare independent versioning with the pi-v tag prefix');
 report(extensionManifest.version === extensionSpec.version, 'extension manifest version must equal packages.extension.version in the contract');
-report(extensionManifest.dependencies?.['ast-sgrep'] === extensionSpec.launcherRange && extensionSpec.launcherRange === ('>=' + version + ' <' + (Number(version.split('.')[0]) + 1)), 'extension must depend on the contract launcherRange floored at the canonical version');
+report(extensionManifest.dependencies?.['ast-sgrep'] === extensionSpec.launcherRange, 'extension must depend on the contract launcherRange');
 report(launcherManifest.version === version, 'launcher manifest version drifts from the canonical version');
 report(typesSource.includes(`export const RUNTIME_VERSION = "${nativeVersion}";`) && launcherSource.includes(`const VERSION = "${version}";`), 'runtime native CLI expectation or launcher package version drifts from the compatibility matrix');
 report(nativeSource.includes(`export const CODEMODE_BINDING_VERSION = "${nativeVersion}";`) && nativeDist.includes(`export const CODEMODE_BINDING_VERSION = "${nativeVersion}";`), 'Code Mode NAPI binding expectation drifts from the compatibility matrix');

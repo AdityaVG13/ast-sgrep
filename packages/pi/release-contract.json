@@ -9,7 +9,7 @@
       "npm-launcher",
       "native-platform-packages"
     ],
-    "driftPolicy": "The npm launcher, native platform packages, and release metadata MUST equal the canonical npm version; the embedded native CLI MUST equal nativeCliVersion. The pi-extension package is deliberately decoupled: it versions independently under packages.extension and may be published ahead of the canonical family via its own signed pi-v<version> tag lane. Mixed launcher/platform versions or unexpected CLI versions are still rejected.",
+    "driftPolicy": "The npm launcher, native platform packages, and release metadata MUST equal the canonical npm version; the embedded native CLI MUST equal nativeCliVersion. The pi-extension package is deliberately decoupled: it versions independently under packages.extension and may be published ahead of the canonical family via its own signed pi-v<version> tag lane. Its launcher floor (layers.extension.minLauncherVersion) may lag the canonical version; the extension MUST install and function against any launcher satisfying launcherRange. Mixed launcher/platform versions or unexpected CLI versions are still rejected.",
     "nativeCliVersion": "2.1.0",
     "nativeCliSource": "Cargo.toml#workspace.package.version"
   },
@@ -17,10 +17,10 @@
     "extension": {
       "name": "pi-ast-sgrep",
       "directory": "packages/pi/extension",
-      "version": "2.2.0",
+      "version": "2.2.1",
       "independent": true,
       "tagPrefix": "pi-v",
-      "launcherRange": ">=2.1.0 <3",
+      "launcherRange": ">=2.0.0 <3",
       "policy": "The extension is the dogfooding surface and releases independently of the canonical family. Each release MUST (a) equal packages.extension.version, (b) declare dependencies.ast-sgrep exactly equal to launcherRange, (c) be built from the committed dist of its signed pi-v<version> tag, and (d) degrade gracefully when the resolved launcher predates a feature's native fields."
     },
     "launcher": {
@@ -130,9 +130,9 @@
     "layers": {
       "extension": {
         "compatibility": "range",
-        "launcherRange": ">=2.1.0 <3",
-        "minLauncherVersion": "2.1.0",
-        "policy": "Extension accepts any launcher satisfying launcherRange; machine-schema assertions fail closed on incompatible envelopes. Features requiring newer native fields gate on envelope content, not version."
+        "launcherRange": ">=2.0.0 <3",
+        "minLauncherVersion": "2.0.0",
+        "policy": "Extension accepts any launcher satisfying launcherRange, including official releases behind the canonical version; machine-schema assertions fail closed on incompatible envelopes. Binary identity accepts the same major; the in-process NAPI binding requires an exact native generation while CLI lanes cover older ones. Features requiring newer native fields gate on envelope content, not version; tools the launcher predates fall back to extension-side implementations with native-identical shapes."
       },
       "launcher": {
         "version": "2.1.0",
@@ -194,8 +194,7 @@
       "asgrep_search",
       "asgrep_edit",
       "asgrep_read",
-      "asgrep_index",
-      "asgrep_status"
+      "asgrep_index"
     ],
     "commands": [
       "/asgrep-doctor",
@@ -255,8 +254,8 @@
   "updates": {
     "mainBranch": "Pack and test relevant artifacts; never publish a stable npm version.",
     "officialTag": "Every human-approved official version tag prepares and publishes all npm layers at the canonical version in platform, launcher, extension order.",
-    "extensionTag": "A human-approved signed pi-v<version> tag publishes only pi-ast-sgrep at packages.extension.version, built from that tag's committed dist. Extension releases never carry binaries and never republish launcher or platform packages.",
-    "extensionLocalPublish": "The extension is the dogfooding lane: npm run publish:pi-extension may publish locally from a fully committed tree; it enforces contract version agreement, the launcherRange dependency, a rebuilt and committed dist, and the contract check before invoking npm publish. Provenance attestation and OIDC remain exclusive to the signed pi-v tag lane.",
+    "extensionTag": "A human-approved signed pi-v<version> tag publishes only pi-ast-sgrep at packages.extension.version, built from that tag's committed dist. Extension releases never carry binaries and never republish launcher or platform packages. The gate refuses a tag whose launcherRange resolves to no published launcher version.",
+    "extensionLocalPublish": "The extension is the dogfooding lane: npm run publish:pi-extension may publish locally from a fully committed tree; it enforces contract version agreement, the launcherRange dependency, a rebuilt and committed dist, the contract check, and registry resolution of the launcherRange before invoking npm publish. A missing canonical family blocks the extension instead of shipping an uninstallable dependency. Provenance attestation and OIDC remain exclusive to the signed pi-v tag lane.",
     "selection": "Pi/npm update selects the extension at its own released version; the launcher and platform packages (CLI + Code Mode NAPI addon) resolve through the extension's declared launcherRange, keeping launcher<->platform lockstep.",
     "runtimeDownloads": false,
     "partialPublishRecovery": "Resume only when every live package at the version has registry integrity identical to the preserved release tarball; otherwise move forward with a new immutable version."

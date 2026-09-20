@@ -21,6 +21,7 @@ This changelog follows [Keep a Changelog](https://keepachangelog.com/) conventio
 - `--path` on search is a hidden alias of `--file-filter` so agents do not hard-fail.
 - Pattern-node excerpts are reconstructed from `lines` at search time instead of duplicating source text in `pattern_nodes`.
 - `--lang` aliases include every indexed source extension (`ts`, `h`, `hpp`, `py`, `rs`, …) so SQL filters match stored language ids.
+- `pi-ast-sgrep` installs and runs against official launchers behind the canonical version: CLI envelopes accept the same binary major, and `read`/`edit`/`find` fall back to extension-side implementations when the launcher predates the native tools. The `>=2.1.0` floor that made `pi-ast-sgrep@2.2.0` uninstallable (npm ETARGET / bun "failed to resolve") is now `>=2.0.0`.
 
 ### Changed
 
@@ -29,6 +30,8 @@ This changelog follows [Keep a Changelog](https://keepachangelog.com/) conventio
 - Repository hygiene: drop campaign scripts and process docs; keep only clone-required `scripts/` (`rustc-capped`, `cpu-limit-exec.py`, `verify-forbid-soundness`).
 - Keep search, index, and Pi behavior tests under `tests/`. Drop campaign fuzz, benches, keep-gates, process suites, and crate-source `#[cfg(test)]` stubs.
 - Public `benchmarks/results/` drops campaign process docs (`FLOOR_PROMOTION_PROTOCOL`, fusion scorecard) and the 600-line missing-harness speed dump. Live CLI latency is the 2026-08-28 self-corpus row in `speed.md`. CI no longer installs `cargo-fuzz` against a crate that is not shipped.
+- Extension publish lanes (local dogfood + signed `pi-v` tag) refuse to publish when `launcherRange` resolves to no published launcher version.
+- Release gates follow the severed version model: the e2e asserts per-layer versions, `check-contract` verifies the registered Pi tool surface against the contract, the inventory drops the removed `asgrep_status` tool, and the retired two-version upgrade path is deleted from the e2e harness.
 
 ## Version Timeline
 

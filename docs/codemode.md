@@ -139,7 +139,7 @@ The in-process path removes per-search process startup and reuses one open
 searcher. This review did not retain a clean before/after benchmark fixture, so
 no numeric speedup is claimed.
 
-Direct tools (`asgrep_search`, `asgrep_index`, `asgrep_status`) remain for simple one-shot lookups. Prefer Code Mode whenever the task needs composition, parallel lookups, or filtering before the model sees data.
+Direct tools (`asgrep_search`, `asgrep_edit`, `asgrep_read`, `asgrep_index`) remain for simple one-shot lookups. Prefer Code Mode whenever the task needs composition, parallel lookups, or filtering before the model sees data.
 
 Example the model writes:
 

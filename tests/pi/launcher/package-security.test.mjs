@@ -24,18 +24,9 @@ function walkSources(dir, suffix) {
   }
   return out;
 }
-const parseRelease = (value) => {
-  const match = String(value).match(/^(\d+)\.(\d+)\.(\d+)$/);
-  return match ? [Number(match[1]), Number(match[2]), Number(match[3])] : null;
-};
-// The extension may ship patch releases above canonical (check-contract.mjs
-// applies the same carve-out); every other layer must match exactly.
-const isExtensionPatchOf = (extensionVersion, canonical) => {
-  if (extensionVersion === canonical) return true;
-  const actual = parseRelease(extensionVersion);
-  const expected = parseRelease(canonical);
-  return Boolean(actual && expected && actual[0] === expected[0] && actual[1] === expected[1] && actual[2] > expected[2]);
-};
+// The extension versions independently under signed pi-v tags (severed lane):
+// its version must equal contract packages.extension.version, never canonical.
+const extensionVersion = contract.packages.extension.version;
 const productionDependencies = (manifest) => ({
   ...manifest.dependencies,
   ...manifest.optionalDependencies,
@@ -50,7 +41,7 @@ test("every public npm package carries license and source provenance", () => {
   for (const [directory, repositoryDirectory] of packages) {
     const manifest = readJson(join(directory, "package.json"));
     if (manifest.name === "pi-ast-sgrep") {
-      assert.ok(isExtensionPatchOf(manifest.version, canonicalVersion), manifest.name + " must be canonical or a patch above it");
+      assert.equal(manifest.version, extensionVersion, manifest.name + " must equal contract packages.extension.version");
     } else {
       assert.equal(manifest.version, canonicalVersion, manifest.name);
     }
@@ -64,12 +55,12 @@ test("every public npm package carries license and source provenance", () => {
   }
 });
 
-test("launcher native dependency family is exact and extension launcher dependency is exact", () => {
+test("launcher native dependency family is exact and extension launcher dependency is the contract range", () => {
   const launcher = readJson(join(launcherDir, "package.json"));
   const extension = readJson(join(extensionDir, "package.json"));
   assert.deepEqual(Object.keys(launcher.optionalDependencies).sort(), targets.map((target) => target.package).sort());
   for (const dependency of Object.values(launcher.optionalDependencies)) assert.equal(dependency, canonicalVersion);
-  assert.equal(extension.dependencies[launcher.name], canonicalVersion);
+  assert.equal(extension.dependencies[launcher.name], contract.packages.extension.launcherRange);
 });
 
 test("package runtime has no telemetry, credential integration, or network downloader", () => {

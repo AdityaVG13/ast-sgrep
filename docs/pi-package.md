@@ -6,7 +6,7 @@
 pi install npm:pi-ast-sgrep
 ```
 
-This is the canonical package-user guide for the `2.0.0` contract. npm availability is established only by an authorized release, not by this repository documentation. For a project-local Pi installation, add `-l` to Pi package-management commands.
+This is the canonical package-user guide for the current contract (`2.1.0`; live versions in `packages/pi/release-contract.json`). npm availability is established only by an authorized release, not by this repository documentation. For a project-local Pi installation, add `-l` to Pi package-management commands.
 
 
 ## Pi packages.md compliance
@@ -26,13 +26,13 @@ This package follows [Pi packages](https://github.com/earendil-works/pi/blob/mai
 
 Alpine/musl Linux, Windows arm64, and other hosts are unsupported. On an unsupported host, or when npm omitted the matching optional native package, `/asgrep-doctor` reports a binary-resolution error; the package does not compile Rust, search `PATH`, contact MCP, or download a fallback executable. Install on a supported host rather than bypassing this check.
 
-The `pi-ast-sgrep` extension depends on `ast-sgrep` 2.0.0, which selects one of five host-constrained native packages. Launcher and native packages stay at 2.0.0; the extension may ship a patch (currently 2.0.2) that keeps that native CLI identity. The embedded executable reports native CLI version `2.0.0`; the runtime verifies that identity separately from the npm package version.
+The `pi-ast-sgrep` extension depends on `ast-sgrep` through the contract `launcherRange` (currently `>=2.0.0 <3`), which selects one of five host-constrained native packages. Launcher and native packages move in lockstep at the canonical version; the extension versions independently and keeps working against older launchers in its range. The embedded executable reports the native CLI version recorded in the contract; the runtime verifies that identity separately from the npm package version.
 
 ## What is available immediately
 
 Restart Pi after installation if the current session does not reload package resources. The package contributes:
 
-- Tools: **`asgrep`** (primary — JS Code Mode on an **in-process NAPI** `CodeModeSession`), plus `asgrep_search`, `asgrep_index`, and `asgrep_status` for one-shot search/index/status. Search tools share one warm in-process Searcher per project root — no CLI spawn on the hot path (MCP-class native feel). The tools register `promptSnippet` and `promptGuidelines` so Pi calls asgrep for code lookup without a skill file.
+- Tools: **`asgrep`** (primary — JS Code Mode on an **in-process NAPI** `CodeModeSession`), plus `asgrep_search`, `asgrep_edit`, `asgrep_read`, and `asgrep_index` for one-shot search/edit/read/index. Search tools share one warm in-process Searcher per project root — no CLI spawn on the hot path (MCP-class native feel). The tools register `promptSnippet` and `promptGuidelines` so Pi calls asgrep for code lookup without a skill file. There is no `asgrep_status` tool: status is a diagnostic read in Code Mode or via `/asgrep-status`, not a lookup.
 - Commands: `/asgrep-doctor`, `/asgrep-status`, `/asgrep-index`, and `/asgrep-reindex`. These commands accept no arguments.
 
 Start in the project you want Pi to search. A first search (Code Mode or direct) checks index health and lazily creates the index when it is missing, so an explicit setup command is optional. To build it before searching, run `/asgrep-index`.
@@ -61,7 +61,7 @@ For a single lookup, `asgrep_search` still works:
 
 Use `natural` when you know the intent but not the spelling, `pattern` for a structural pattern, and `chain` to trace relationships. Limits are 1–100 (default 8). Result excerpts are off by default; request `excerptLines` only after narrowing the result set.
 
-`asgrep_index` accepts `{"force":false}`; set `force` to `true` only when a full rebuild is needed. `asgrep_status` accepts `{}`. The slash commands provide the same operational paths for interactive use.
+`asgrep_index` accepts `{"force":false}`; set `force` to `true` only when a full rebuild is needed. `asgrep_read` takes a file window or hit ref; `asgrep_edit` takes exact-string replacements. Runtime status has no tool: use `/asgrep-status` or read it in Code Mode. The slash commands provide the same operational paths for interactive use.
 
 ## Project data and freshness
 
@@ -167,7 +167,7 @@ Deleting `.asgrep` is irreversible but does not delete source files; a later sea
 
 ## Release cadence and provenance
 
-Pi release validation does not run automatically on pull requests, pushes to `main`, or tag pushes. Both Pi workflows are manual `workflow_dispatch` actions. Manually dispatch **Pi native artifacts** (`.github/workflows/pi-native-artifacts.yml`) for a safe dry-run that packs and tests without publishing. An official Pi/npm release is one human-approved `v2.0.0` tag and commit for the five native npm packages, launcher, and extension. Its contract separately pins the embedded native CLI at `2.0.0`. The `Pi npm official release` workflow must be dispatched against that exact tag with `publish=true`.
+Pi release validation does not run automatically on pull requests, pushes to `main`, or tag pushes. Both Pi workflows are manual `workflow_dispatch` actions. Manually dispatch **Pi native artifacts** (`.github/workflows/pi-native-artifacts.yml`) for a safe dry-run that packs and tests without publishing. An official Pi/npm release is one human-approved `vX.Y.Z` tag and commit for the five native npm packages and launcher at the canonical version; the extension ships independently under its own `pi-v` tags (see `docs/RELEASING.md`). The contract separately pins the embedded native CLI. The `Pi npm official release` workflow must be dispatched against that exact tag with `publish=true`.
 
 Before the first external publication, a human must verify package-name ownership and approve the protected publishing environment. A partial npm publication is recovered by releasing a new immutable version, never by overwriting a published version.
 
