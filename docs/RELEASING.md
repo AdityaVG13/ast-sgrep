@@ -33,7 +33,7 @@ for p in ast-sgrep @ast-sgrep/darwin-arm64 @ast-sgrep/darwin-x64 \
 done
 ```
 
-Rules of the road: never dispatch from `main` (the gate requires tag == checkout == workflow commit); never move a tag after publication starts — a broken pre-publish tag may be re-signed and force-pushed exactly once, then left alone; reruns are idempotent (live tarballs with matching integrity are skipped, order is native → launcher → extension); if the OIDC publish fails, the one-time escape hatch is a repo `NPM_TOKEN` secret plus `-f bootstrap_token=true` on a fresh dispatch.
+Rules of the road: never dispatch from `main` (the gate requires tag == checkout == workflow commit); never move a tag after publication starts — a broken pre-publish tag may be re-signed and force-pushed again only while nothing is published, and every move must be followed by clearing that tag's unconsumed npm release assets (fresh commit SHA + fresh Windows timestamps would fail the byte-compare); reruns are idempotent (live tarballs with matching integrity are skipped, order is native → launcher → extension); if the OIDC publish fails, the one-time escape hatch is a repo `NPM_TOKEN` secret plus `-f bootstrap_token=true` on a fresh dispatch.
 
 ## Pi npm package family
 

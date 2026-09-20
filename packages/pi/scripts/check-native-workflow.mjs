@@ -79,7 +79,7 @@ const validateOfficial = (text, signersText = allowedSignersText) => {
   const build = workflow.jobs?.['build-native'];
   const verify = workflow.jobs?.['verify-release'];
   const publish = workflow.jobs?.publish;
-  const bootstrapToken = "${{ inputs.bootstrap_token == 'true' && secrets.NPM_TOKEN || '' }}";
+  const bootstrapToken = "${{ inputs.bootstrap_token && secrets.NPM_TOKEN || '' }}";
   report(build?.strategy?.matrix === '${{ fromJSON(needs.release-gate.outputs.matrix) }}' && build?.['runs-on'] === '${{ matrix.runner }}', 'official native build must use the authoritative native matrix once');
   const gateRuns = (gate?.steps ?? []).map(activeRun);
   const sshSetup = 'git config --local gpg.format ssh\ngit config --local gpg.ssh.allowedSignersFile \"$GITHUB_WORKSPACE/packages/pi/release/allowed-signers\"';
@@ -140,9 +140,9 @@ const officialMutations = [
   officialText.replace("github.ref_name == inputs.release_tag", "github.ref_name != inputs.release_tag"),
   officialText.replace("      bootstrap_token:\n        description: One-time first-publication npm token bootstrap; leave off for all subsequent publications\n        required: true\n        type: boolean\n        default: false", "      bootstrap_token:\n        description: One-time first-publication npm token bootstrap; leave off for all subsequent publications\n        required: true\n        type: boolean\n        default: true"),
   officialText.replace("      bootstrap_token:", "      bootstrap_token_removed:"),
-  officialText.replace("      NODE_AUTH_TOKEN: ${{ inputs.bootstrap_token == 'true' && secrets.NPM_TOKEN || '' }}", "      NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}"),
-  officialText.replace("      NODE_AUTH_TOKEN: ${{ inputs.bootstrap_token == 'true' && secrets.NPM_TOKEN || '' }}", "      # NODE_AUTH_TOKEN omitted"),
-  officialText.replace("      NODE_AUTH_TOKEN: ${{ inputs.bootstrap_token == 'true' && secrets.NPM_TOKEN || '' }}", "      NODE_AUTH_TOKEN: ${{ inputs.bootstrap_token == 'true' && secrets.NPM_TOKEN }}"),
+  officialText.replace("      NODE_AUTH_TOKEN: ${{ inputs.bootstrap_token && secrets.NPM_TOKEN || '' }}", "      NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}"),
+  officialText.replace("      NODE_AUTH_TOKEN: ${{ inputs.bootstrap_token && secrets.NPM_TOKEN || '' }}", "      # NODE_AUTH_TOKEN omitted"),
+  officialText.replace("      NODE_AUTH_TOKEN: ${{ inputs.bootstrap_token && secrets.NPM_TOKEN || '' }}", "      NODE_AUTH_TOKEN: ${{ inputs.bootstrap_token && secrets.NPM_TOKEN }}"),
   officialText.replace("      - name: Configure SSH tag verification\n        run: |\n          git config --local gpg.format ssh\n          git config --local gpg.ssh.allowedSignersFile \"$GITHUB_WORKSPACE/packages/pi/release/allowed-signers\"\n", ''),
   officialText.replace('packages/pi/release/allowed-signers', 'packages/pi/release/wrong-signers')
 ];

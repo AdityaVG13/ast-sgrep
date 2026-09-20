@@ -306,12 +306,12 @@ const publish = async () => {
   const expectedPrior = layer === 'native' ? [] : layer === 'launcher' ? manifest.artifacts.filter((item) => item.layer === 'native').map((item) => item.name) : manifest.artifacts.filter((item) => item.layer !== 'extension').map((item) => item.name);
   if (JSON.stringify(receipt.published) !== JSON.stringify(expectedPrior)) fail('ASGREP_RELEASE_PUBLISH_ORDER', `${layer} cannot publish after [${receipt.published.join(', ')}]`);
   const selected = manifest.artifacts.filter((artifact) => artifact.layer === layer);
-  const observed = await registryVersions(state, undefined, manifest.packageOrder.map((name) => `${name}@${manifest.version}`));
+  const observed = await registryVersions(state, undefined, manifest.packageOrder.map((name) => `${name}@${expectedArtifactVersion(state, name)}`));
   const publishDelayMs = Math.max(0, Number(process.env.ASGREP_PUBLISH_DELAY_MS ?? '0'));
   const published = [];
   for (const artifact of selected) {
-    if (observed[`${artifact.name}@${manifest.version}`] !== null) {
-      console.log(`[pi-release] skip ${artifact.name}@${manifest.version}: already live (idempotent re-run)`);
+    if (observed[`${artifact.name}@${expectedArtifactVersion(state, artifact.name)}`] !== null) {
+      console.log(`[pi-release] skip ${artifact.name}@${expectedArtifactVersion(state, artifact.name)}: already live (idempotent re-run)`);
     } else {
       if (publishDelayMs > 0) await delay(publishDelayMs);
       run('npm', ['publish', path.join(directory, artifact.filename), '--access', 'public', '--provenance'], { stdio: 'inherit' });

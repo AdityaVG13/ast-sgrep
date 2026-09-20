@@ -363,7 +363,7 @@ jobs:
         run: |
           mkdir -p npm-packs
           api="repos/${{ github.repository }}/releases"
-          release_id="$(gh api "$api" --jq ".[] | select(.tag_name == "${{ github.ref_name }}") | .id" | head -1)"
+          release_id="$(gh api "$api" --jq ".[] | select(.tag_name == \"${{ github.ref_name }}\") | .id" | head -1)"
           test -n "$release_id" || { echo "release ${{ github.ref_name }} not found" >&2; exit 1; }
           gh api "$api/$release_id/assets" --jq '.[] | [.name, .id] | @tsv' | while IFS=$'\t' read -r name id; do
             case "$name" in
