@@ -46,9 +46,10 @@ fn hybrid_query_cascades_lexical_files_into_structural_and_semantic_stages() {
         .collect::<HashSet<_>>();
     assert_eq!(identities.len(), response.hits.len());
     assert!(response.hits.iter().all(|hit| !hit.contributors.is_empty()));
-    assert!(response.hits.iter().any(|hit| hit
-        .contributors
-        .contains(&ast_sgrep_core::search::HitKind::Embed)));
+    // No Embed-contributor assertion here: since ba3fa030 the semantic
+    // channel is a fallback that stays silent when structural evidence
+    // answers (as it does for this exact-symbol query). The semantic stage
+    // is pinned below on a zero-overlap query instead.
     assert!(
         response.hits.iter().any(|hit| hit.contributors.len() > 1),
         "fixture must exercise multi-channel fusion: {:#?}",
@@ -61,6 +62,22 @@ fn hybrid_query_cascades_lexical_files_into_structural_and_semantic_stages() {
             .all(|hit| lexical_files.contains(&hit.file)),
         "later stages leaked outside lexical survivors: {:#?}",
         response.hits
+    );
+
+    // Semantic stage: a zero-overlap conceptual query must surface embed
+    // evidence (the fallback-open path). No lexical containment here — a
+    // semantic hit outside the lexical file set is the channel working.
+    let semantic = searcher.search("credential renewal").unwrap();
+    assert!(
+        !semantic.hits.is_empty(),
+        "zero-overlap query must return hits"
+    );
+    assert!(
+        semantic.hits.iter().any(|hit| hit
+            .contributors
+            .contains(&ast_sgrep_core::search::HitKind::Embed)),
+        "fallback-open query must surface embed evidence: {:#?}",
+        semantic.hits
     );
 }
 

@@ -66,23 +66,29 @@ fn surface_equivalence_multi_mode_hit_keys() {
 ///
 /// `--no-embed` parity alone does not close this bead. Same corpus/index;
 /// search with embed on (CLI default, core use_embed=true, LSP no_embed=false):
-/// - non-empty embed-kind keys on every surface (no soft-skip)
 /// - sorted embed hit-keys agree across CLI / core / LSP
 /// - full sorted key sets also agree (hybrid fusion identity)
+/// - non-empty embed-kind keys where the semantic channel fires (no soft-skip)
+///
+/// Since ba3fa030 the semantic channel is a fallback: it stays silent when
+/// structural evidence answers. Only the zero-overlap query carries the
+/// non-empty requirement; the structurally answered queries still pin
+/// cross-surface parity on identical (embed-silent) output.
 #[test]
 fn surface_equivalence_embed_on_hit_keys() {
     const LIMIT: usize = 32;
     let session = CliSession::sample(asgrep_bin());
 
-    // NL / semantic-leaning queries that exercise hashed embed on the sample
-    // fixture (credential theme + auth_refresh). Hashed backend -- no network.
-    let cases: &[&str] = &[
-        "credential renewal",
-        "how does auth refresh work",
-        "auth_refresh",
+    // (query, expect_embed): `credential renewal` is zero-overlap (embed
+    // fires); the auth_refresh queries are structurally answered (embed
+    // correctly silent). Hashed backend -- no network.
+    let cases: &[(&str, bool)] = &[
+        ("credential renewal", true),
+        ("how does auth refresh work", false),
+        ("auth_refresh", false),
     ];
 
-    for &query in cases {
+    for &(query, expect_embed) in cases {
         // CLI: production default is embed-on (do NOT pass --no-embed).
         let cli_json = session.search_json(query, &["--limit", "32"]);
         let cli = sorted_keys(json_hit_keys(&cli_json));
@@ -110,20 +116,25 @@ fn surface_equivalence_embed_on_hit_keys() {
         let core_embed = embed_keys(&core);
         let lsp_embed = embed_keys(&lsp);
 
-        // Hard fail: empty embed channel after hashed semantic index is a bug,
-        // not a soft-skip (mock-free e2e gap lbx1.13 negative).
-        assert!(
-            !core_embed.is_empty(),
-            "embed-on core must emit kind=embed hits for {query:?}; keys={core:?}"
-        );
-        assert!(
-            !cli_embed.is_empty(),
-            "embed-on CLI must emit kind=embed hits for {query:?}; keys={cli:?}"
-        );
-        assert!(
-            !lsp_embed.is_empty(),
-            "embed-on LSP must emit kind=embed hits for {query:?}; keys={lsp:?}"
-        );
+        // Hard fail: empty embed channel where the semantic fallback fires
+        // is a bug, not a soft-skip (mock-free e2e gap lbx1.13 negative).
+        // Queries the structural evidence answers skip this: embed silence
+        // there is intended fallback behavior, and the parity asserts below
+        // still bind all three surfaces to identical output.
+        if expect_embed {
+            assert!(
+                !core_embed.is_empty(),
+                "embed-on core must emit kind=embed hits for {query:?}; keys={core:?}"
+            );
+            assert!(
+                !cli_embed.is_empty(),
+                "embed-on CLI must emit kind=embed hits for {query:?}; keys={cli:?}"
+            );
+            assert!(
+                !lsp_embed.is_empty(),
+                "embed-on LSP must emit kind=embed hits for {query:?}; keys={lsp:?}"
+            );
+        }
 
         assert_eq!(
             cli_embed, core_embed,

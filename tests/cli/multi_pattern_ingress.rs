@@ -154,8 +154,16 @@ fn batch_accepts_pattern_prefixed_values() {
 #[test]
 fn batch_limit_applies_per_pattern() {
     let session = CliSession::sample(asgrep_bin());
-    // `def $A($$$B):` matches six defs in main.py on the sample fixture.
-    let mut args = batch_args(&session, &["def $A($$$B):", "console.log($$$A)"]);
+    // Vehicle: `def $A` matches all ten defs on the sample fixture
+    // (main.py + app.rb). (The previous vehicle, `def $A($$$B):`, matches
+    // nothing — verified against ast-grep 0.45.3, which also returns zero
+    // for the trailing-colon form — so the limit was never exercised.)
+    let uncut = single_pattern_session(&session, "def $A");
+    assert!(
+        uncut["hits"].as_array().map_or(0, Vec::len) > 1,
+        "vehicle must match several hits or the limit assertion is vacuous"
+    );
+    let mut args = batch_args(&session, &["def $A", "console.log($$$A)"]);
     // Insert a global --limit 1 in front of the subcommand.
     let pos = args.iter().position(|a| a == "--no-auto-index").unwrap() + 1;
     args.insert(pos, "1".into());
@@ -164,7 +172,7 @@ fn batch_limit_applies_per_pattern() {
         .run_success(&args.iter().map(String::as_str).collect::<Vec<_>>());
     let envelope: Value = serde_json::from_slice(&out.stdout).expect("batch envelope json");
     let by_pattern = hits_by_pattern(&envelope);
-    let def_hits = by_pattern.get("def $A($$$B):").expect("decl pattern tag");
+    let def_hits = by_pattern.get("def $A").expect("decl pattern tag");
     assert_eq!(
         def_hits.len(),
         1,
